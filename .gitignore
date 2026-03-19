@@ -1,0 +1,23 @@
+# Data — NEVER commit
+data/
+reports/*.html
+
+# Environments
+venv/
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keys
+.env
+*.pem
+*.key
+
+# IDE
+.vscode/
+.idea/
