@@ -5,18 +5,19 @@ An AI-powered stock screening and backtesting system for the Indian NSE market, 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    ANALYTICS & RANKING LAYER                     │
-│  AIQScreener │ RegimeDetect │ MLEngine │ RiskManager            │
-│  Ranker      │ Backtester  │ Visualizations                     │
-├──────────────┴──────────────┴───────────────────────────────────┤
-│                   FEATURE STORE & COMPUTE LAYER                  │
-│  DuckDB SQL — RSI │ ADX │ SMA │ EMA │ MACD │ ATR │ BB │ ROC │ ST│
-│  → data/feature_store/<feature>/NSE/<symbol>.parquet            │
-├─────────────────────────────────────────────────────────────────┤
-│                   DATA INGESTION & STORAGE LAYER                 │
-│  DhanCollector │ DuckDB (ACID+TT) │ SQLite masterdata.db         │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                   ANALYTICS & RANKING LAYER                       │
+│  AIQScreener │ RegimeDetect │ MLEngine │ RiskManager             │
+│  Ranker      │ Backtester  │ Visualizations                        │
+├──────────────┴──────────────┴────────────────────────────────────┤
+│                  FEATURE STORE & COMPUTE LAYER                     │
+│  DuckDB SQL — RSI │ ADX │ SMA │ EMA │ MACD │ ATR │ BB │ ROC │ ST │
+│  → data/feature_store/<feature>/NSE/<symbol>.parquet             │
+├──────────────────────────────────────────────────────────────────┤
+│                  DATA INGESTION & STORAGE LAYER                    │
+│  DhanCollector │ DuckDB (ACID+TT) │ SQLite masterdata.db           │
+│  TokenManager (auto-renew expired tokens)                          │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## File Structure
@@ -25,11 +26,11 @@ An AI-powered stock screening and backtesting system for the Indian NSE market, 
 ai-trading-system/
 ├── ai_trading_system/          # Core DB utilities
 │   ├── __init__.py
-│   └── match_and_create_table.py   # CSV → SQLite stock_details table
-├── analytics/                   # AI Analytics Package (NEW)
+│   └── match_and_create_table.py   # CSV → SQLite stock_details
+├── analytics/                   # AI Analytics Package
 │   ├── __init__.py
 │   ├── regime_detector.py        # ADX-based TREND/MEAN_REV classification
-│   ├── ranker.py                 # Multi-factor weighted ranking (4 factors)
+│   ├── ranker.py                 # Multi-factor ranking (4 factors + 1yr penalty)
 │   ├── ml_engine.py              # XGBoost + walk-forward validation
 │   ├── risk_manager.py           # ATR position sizing, portfolio risk budget
 │   ├── backtester.py             # Event-driven backtest (5 strategies)
@@ -38,7 +39,9 @@ ai-trading-system/
 │   └── test_analytics.py
 ├── collectors/                   # Data ingestion
 │   ├── __init__.py
-│   ├── dhan_collector.py         # DhanHQ API → DuckDB OHLCV (main)
+│   ├── dhan_collector.py         # DhanHQ API → DuckDB (main, with token renew)
+│   ├── token_manager.py           # Auto-renew expired Dhan access tokens
+│   ├── daily_update_runner.py    # CLI runner for daily EOD pipeline
 │   ├── masterdata.py
 │   ├── nse_collector.py
 │   └── zerodha_sector_collector.py
@@ -47,16 +50,15 @@ ai-trading-system/
 │   └── settings.py
 ├── dashboard/
 │   ├── __init__.py
-│   └── app.py                    # ⭐ Streamlit Command Center (4 tabs)
-│       ├── Overview: market stats, sector distribution, score histogram
-│       ├── Ranking: adjustable weights, DuckDB query, filters, select stock
+│   └── app.py                    # Streamlit Command Center (4 tabs)
+│       ├── Overview: stats, sector distribution (top 100), score histogram
+│       ├── Ranking: adjustable weights, DuckDB query, sector filter
 │       ├── Chart: interactive Plotly OHLCV + RSI + MACD + MAs + Supertrend
 │       └── Portfolio: ATR-based position sizing, risk budget
-
 ├── data/                         # All data — DO NOT commit to git
 │   ├── masterdata.db             # SQLite — stock_details + symbols
-│   ├── ohlcv.duckdb              # DuckDB — OHLCV catalog + snapshots
-│   ├── feature_store/            # Feature Parquet store (150 MB)
+│   ├── ohlcv.duckdb             # DuckDB — OHLCV catalog + snapshots
+│   ├── feature_store/             # Feature Parquet store (150 MB)
 │   │   ├── adx/NSE/<symbol>.parquet
 │   │   ├── atr/NSE/<symbol>.parquet
 │   │   ├── bb/NSE/<symbol>.parquet
@@ -67,14 +69,16 @@ ai-trading-system/
 │   │   ├── rsi/NSE/<symbol>.parquet
 │   │   ├── sma/NSE/<symbol>.parquet
 │   │   └── supertrend/NSE/<symbol>.parquet
-│   ├── features/run_000001/      # Immutable OHLCV snapshots (Parquet)
+│   ├── features/run_000001/       # Immutable OHLCV snapshots
 │   ├── backtests/
 │   ├── raw/
 │   └── signals/
+├── docs/
+│   └── data-flow.md              # Detailed pipeline diagrams
 ├── features/                     # Feature computation
 │   ├── __init__.py
-│   ├── feature_store.py         # DuckDB SQL feature computation (9 indicators)
-│   ├── indicators.py            # Legacy pandas-based indicators
+│   ├── feature_store.py           # DuckDB SQL feature computation (9 indicators)
+│   ├── indicators.py             # Legacy pandas-based indicators
 │   ├── compute_all_features.py
 │   └── test_feature_store.py
 ├── legacy/                       # Superseded — use analytics/ instead
@@ -84,31 +88,35 @@ ai-trading-system/
 │   ├── risk/risk_manager.py
 │   └── signals/pattern_detector.py
 ├── models/                       # Saved XGBoost model files
-├── reports/                       # Generated HTML reports
+├── reports/                      # Generated HTML reports
 ├── test/
 │   ├── __init__.py
 │   └── test_create_table.py
-├── venv/                          # Python virtual environment
-├── .env                           # API keys (not committed)
+├── venv/                         # Python virtual environment
+├── .env                          # API keys (not committed)
+├── .env.example
+├── .gitignore
 ├── main.py
 ├── run_pipeline.py               # Legacy pipeline
+├── run_daily_update.ps1          # Daily EOD update runner (PowerShell)
+├── setup_daily_task.ps1          # Windows Task Scheduler setup
 └── requirements.txt
 ```
 
 ## Tech Stack
 
-| Component | Technology | Version |
-|---|---|---|
-| Database (OHLCV) | DuckDB | >= 0.8.0 |
-| Database (Master) | SQLite3 | built-in |
-| DataFrames | pandas | >= 2.0.0 |
-| ML | XGBoost | >= 2.0.0 |
-| Visualization | Plotly | >= 5.17.0 |
-| Dashboard | Streamlit | >= 1.28.0 |
-| API | DhanHQ | python-dhanhq |
-| Indicators | pandas-ta, talib-binary | |
-| Backtesting | vectorbt | >= 0.25.0 |
-| Stats | quantstats | |
+| Component | Technology |
+|---|---|
+| Database (OHLCV) | DuckDB >= 0.8.0 |
+| Database (Master) | SQLite3 (built-in) |
+| DataFrames | pandas >= 2.0.0 |
+| ML | XGBoost >= 2.0.0 |
+| Visualization | Plotly >= 5.17.0 |
+| Dashboard | Streamlit >= 1.28.0 |
+| API | DhanHQ (python-dhanhq) |
+| Indicators | DuckDB SQL (vectorized), pandas-ta, talib-binary |
+| Backtesting | vectorbt >= 0.25.0 |
+| Stats | quantstats |
 
 ## Data Flow
 
@@ -119,7 +127,8 @@ See [docs/data-flow.md](docs/data-flow.md) for the full pipeline diagrams.
 1. **Symbol Setup**: `all-stock-non-sme.csv` (1346 rows) → `masterdata.db::stock_details` (1306 matched NSE symbols)
 2. **OHLCV Ingestion**: `DhanCollector.ingest()` → `ohlcv.duckdb::_catalog` + Parquet snapshots (342,172 rows)
 3. **Feature Computation**: `FeatureStore.compute_all_features()` → 9 indicators → `feature_store/<feature>/NSE/<symbol>.parquet` (2.76M rows, 150 MB)
-4. **Screener Pipeline**: `AIQScreener.screen()` → regime + rank + ML signals + risk sizing + backtest + report
+4. **Screener Pipeline**: `AIQScreener.screen()` → regime + rank (+ 1yr penalty) + ML signals + risk sizing + backtest + report
+5. **Daily Update**: `run_daily_update.ps1` → incremental OHLCV fetch + feature recompute (2 batches × 700 symbols)
 
 ## DuckDB Quirks (important for debugging)
 
@@ -146,19 +155,20 @@ See [docs/data-flow.md](docs/data-flow.md) for the full pipeline diagrams.
 DHAN_API_KEY=your_api_key
 DHAN_CLIENT_ID=your_client_id
 DHAN_ACCESS_TOKEN=your_access_token
+DHAN_REFRESH_TOKEN=your_refresh_token
 ```
 
 ## Usage
 
 ```powershell
-# Activate venv
-.\venv\Scripts\Activate.ps1
+# Dashboard (Streamlit)
+powershell -ExecutionPolicy Bypass -Command "cd ai-trading-system; .\venv\Scripts\python.exe -m streamlit run dashboard\app.py"
 
-# Run full screener pipeline
-python -c "from analytics.screener import AIQScreener; s = AIQScreener(); result = s.screen(top_n=20); print(result)"
+# Full screener pipeline
+python -c "from analytics.screener import AIQScreener; s = AIQScreener(); print(s.screen(top_n=20))"
 
 # Ingest OHLCV data
-python -c "from collectors.dhan_collector import DhanCollector; c = DhanCollector(); c.ingest()"
+python -c "from collectors.dhan_collector import DhanCollector; DhanCollector().ingest()"
 
 # Compute all features
 python features/compute_all_features.py
@@ -167,39 +177,39 @@ python features/compute_all_features.py
 pytest test/ -v
 ```
 
-## Known State
-
-- Market regime: **RANGE_BOUND** (0% trending) → use MEAN_REV strategy
-- Currently using synthetic OHLCV data (demo mode when API unavailable)
-- 1,306 symbols with full feature coverage
-
 ## Daily EOD Update
 
 After market close (3:30 PM IST), run the daily pipeline to fetch today's candles and update features:
 
 ```powershell
-# OHLCV + Features (full update)
+# OHLCV + Features (full update — recommended after market close)
 powershell -ExecutionPolicy Bypass -File "run_daily_update.ps1"
 
-# OHLCV only (faster, run features separately)
+# OHLCV only (faster, run features separately after)
 powershell -ExecutionPolicy Bypass -File "run_daily_update.ps1" -SymbolsOnly
 
 # Features only (recompute all indicators)
 powershell -ExecutionPolicy Bypass -File "run_daily_update.ps1" -FeaturesOnly
 
-# Force overwrite (re-fetch all rows)
+# Force overwrite (re-fetch all rows, ignores existing dates)
 powershell -ExecutionPolicy Bypass -File "run_daily_update.ps1" -Force
 ```
 
 **Stale data handling:**
-- System automatically detects gaps (weekends, holidays, missed days)
-- Fetches from `(last_stored_date + 1)` onwards per symbol
+- System reads last stored date per symbol from DuckDB automatically
+- Fetches from `(last_stored_date + 1)` → today (handles weekends, holidays, gaps)
 - Symbols with no prior data get 7-day lookback
-- Summary report shows: up-to-date / stale (>1 day gap) / no-data counts
+- Status report after each run: up-to-date / stale (>1 day gap) / no-data counts
 - Dhan API rate limits apply — 2 batches of 700 symbols
 
 **Schedule automatically (Windows Task Scheduler):**
 ```powershell
 .\setup_daily_task.ps1   # Sets Mon-Fri at 3:45 PM IST
 ```
+
+## Known State
+
+- Market regime: **RANGE_BOUND** (0% trending) → use MEAN_REV strategy
+- Currently using synthetic OHLCV data (demo mode when API unavailable)
+- 1,306 symbols with full feature coverage
 - Average full pipeline runtime: ~4 seconds
