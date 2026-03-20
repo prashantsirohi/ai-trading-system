@@ -149,7 +149,7 @@ class StockRanker:
             ]
         )
 
-        scores = self._apply_1yr_penalty(scores, weights)
+        # scores = self._apply_1yr_penalty(scores, weights)
 
         scores = scores.sort_values("composite_score", ascending=False)
         scores = scores[scores["composite_score"] >= min_score]
@@ -402,8 +402,13 @@ class StockRanker:
             .fillna(False)
             .astype(int)
         )
+        above_sma20 = data["close"] > data["sma_20"].replace(0, np.nan)
+        above_sma50 = data["close"] > data["sma_50"].replace(0, np.nan)
+        dir_mult = pd.Series(1.0, index=data.index)
+        dir_mult[~above_sma50] = 0.0
+        dir_mult[~above_sma20 & above_sma50] = 0.5
         data["trend_score"] = (
-            data["adx_score"].fillna(0) * 0.6
+            data["adx_score"].fillna(0) * 0.6 * dir_mult
             + data["sma20_aligned"] * 25
             + data["sma50_aligned"] * 15
         )
