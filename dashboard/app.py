@@ -180,12 +180,12 @@ def plot_candlestick_with_features(
         return fig
 
     fig = make_subplots(
-        rows=4,
+        rows=5,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.03,
-        row_heights=[0.5, 0.17, 0.17, 0.17],
-        subplot_titles=("Price + MAs", "Volume", "RSI", "MACD"),
+        row_heights=[0.40, 0.14, 0.14, 0.14, 0.18],
+        subplot_titles=("Price + MAs", "Volume", "RSI", "MACD", "Supertrend"),
     )
 
     fig.add_trace(
@@ -244,7 +244,8 @@ def plot_candlestick_with_features(
     if "supertrend" in features:
         st_df = features["supertrend"].copy()
         st_df = st_df[st_df.index.isin(ohlcv.index)]
-        if "st_signal" in st_df.columns and "close" in ohlcv.columns:
+        if "st_signal" in st_df.columns:
+            st_signal = st_df["st_signal"].reindex(ohlcv.index).ffill().fillna(0)
             up = st_df["st_upper"].reindex(ohlcv.index).ffill()
             down = st_df["st_lower"].reindex(ohlcv.index).ffill()
             fig.add_trace(
@@ -253,7 +254,7 @@ def plot_candlestick_with_features(
                     y=up,
                     name="ST Upper",
                     line=dict(color="#00BCD4", width=1),
-                    opacity=0.6,
+                    opacity=0.5,
                 ),
                 row=1,
                 col=1,
@@ -264,9 +265,38 @@ def plot_candlestick_with_features(
                     y=down,
                     name="ST Lower",
                     line=dict(color="#FF5722", width=1),
-                    opacity=0.6,
+                    opacity=0.5,
                 ),
                 row=1,
+                col=1,
+            )
+            bullish_mask = st_signal > 0
+            bearish_mask = st_signal < 0
+            colors_st = np.where(
+                bullish_mask, "#26a69a", np.where(bearish_mask, "#ef5350", "#9E9E9E")
+            )
+            fig.add_trace(
+                go.Bar(
+                    x=st_df.index,
+                    y=np.where(bullish_mask, 1, np.where(bearish_mask, -1, 0)),
+                    marker_color=colors_st,
+                    name="ST Signal",
+                    opacity=0.8,
+                ),
+                row=5,
+                col=1,
+            )
+            fig.add_annotation(
+                x=st_df.index[-1] if not st_df.empty else ohlcv.index[-1],
+                y=st_signal.iloc[-1] if not st_df.empty else 0,
+                text=f"ST: {'BULL' if st_signal.iloc[-1] > 0 else 'BEAR'}",
+                showarrow=True,
+                arrowhead=2,
+                font=dict(
+                    color="#26a69a" if st_signal.iloc[-1] > 0 else "#ef5350",
+                    size=12,
+                ),
+                row=5,
                 col=1,
             )
 
@@ -331,7 +361,7 @@ def plot_candlestick_with_features(
     fig.update_layout(
         title=f"{symbol} — Price Chart & Indicators",
         template="plotly_dark",
-        height=750,
+        height=950,
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         xaxis_rangeslider_visible=False,
