@@ -1,23 +1,92 @@
-# Data — NEVER commit
-data/
-reports/*.html
+# ============================================================
+# Data — large, regenerated, never commit
+# ============================================================
+data/                  # OHLCV DuckDB, SQLite, feature store, snapshots
+reports/*.html         # Generated HTML reports
+logs/                  # Log files
+*.log
 
+# ============================================================
 # Environments
 venv/
 .venv/
+streamlit/             # Duplicate unused venv
+run/                   # Duplicate unused venv
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 .ruff_cache/
+.mypy_cache/
+.hypothesis/
 
+# ============================================================
 # OS
+# ============================================================
 .DS_Store
 Thumbs.db
+Desktop.ini
+~$*
 
-# Keys
+# ============================================================
+# Secrets & Keys — never commit
+# ============================================================
 .env
+.env.local
+.env.*.local
 *.pem
 *.key
+*.crt
+credentials.json
+secrets.json
 
-# IDE
+# ============================================================
+# IDE & Editors
+# ============================================================
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.vim/
+*.sublime-*
+
+# ============================================================
+# Streamlit & Dashboards
+# ============================================================
+.streamlit/secrets.toml
+
+# ============================================================
+# Models — track .gitkeep, ignore checkpoint files
+# ============================================================
+models/*.pkl
+models/*.joblib
+models/*.onnx
+models/checkpoints/
+models/*.ckpt
+
+# ============================================================
+# Temp / Scratch — one-off scripts with hardcoded paths
+# ============================================================
+temp/
+tmp/
+*.tmp
+*.bak
+check_*.py
+debug_*.py
+temp_*.py
+export_excel.py
+-files               # Stray file from command errors
