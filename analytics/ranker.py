@@ -27,10 +27,11 @@ class StockRanker:
     """
 
     WEIGHTS = {
-        "relative_strength": 0.35,
-        "volume_intensity": 0.25,
+        "relative_strength": 0.30,
+        "volume_intensity": 0.20,
         "trend_persistence": 0.15,
-        "proximity_highs": 0.30,
+        "proximity_highs": 0.20,
+        "delivery_pct": 0.15,
     }
 
     def __init__(
@@ -130,12 +131,14 @@ class StockRanker:
         scores = self._compute_volume_intensity(scores)
         scores = self._compute_trend_persistence(scores, date)
         scores = self._compute_proximity_highs(scores, date)
+        scores = self._compute_delivery(scores, date)
 
         for factor, col in [
             ("relative_strength", "rel_strength"),
             ("volume_intensity", "vol_intensity"),
             ("trend_persistence", "trend_score"),
             ("proximity_highs", "prox_high"),
+            ("delivery_pct", "delivery_pct"),
         ]:
             scores[f"{col}_score"] = scores[col].rank(pct=True) * 100
 
@@ -146,6 +149,7 @@ class StockRanker:
                 ("vol_intensity", weights["volume_intensity"]),
                 ("trend_score", weights["trend_persistence"]),
                 ("prox_high", weights["proximity_highs"]),
+                ("delivery_pct", weights["delivery_pct"]),
             ]
         )
 
@@ -166,6 +170,7 @@ class StockRanker:
             "vol_intensity_score",
             "trend_score_score",
             "prox_high_score",
+            "delivery_pct_score",
         ]
         available = [c for c in cols if c in scores.columns]
         return scores[available].reset_index(drop=True)
@@ -463,6 +468,43 @@ class StockRanker:
             1 - (data["close"] / data["high_52w"].replace(0, np.nan))
         ).fillna(0.5) * 100
 
+        return data
+
+    def _compute_delivery(
+        self,
+        data: pd.DataFrame,
+        date: str,
+    ) -> pd.DataFrame:
+        """
+        Delivery Quality score: higher delivery % indicates institutional buying.
+        Uses raw delivery_pct; NaN defaults to 20 (typical market average).
+        """
+        try:
+            conn = self._get_conn()
+            cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
+            del_data = conn.execute(f"""
+                SELECT symbol_id, exchange, delivery_pct
+                FROM _delivery
+                WHERE timestamp <= '{cutoff_ts}'
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY symbol_id, exchange
+                    ORDER BY timestamp DESC
+                ) = 1
+            """).fetchdf()
+            conn.close()
+
+            if not del_data.empty:
+                data = data.merge(
+                    del_data[["symbol_id", "exchange", "delivery_pct"]],
+                    on=["symbol_id", "exchange"],
+                    how="left",
+                )
+        except Exception as e:
+            logger.warning(f"Could not compute delivery factor: {e}")
+
+        if "delivery_pct" not in data.columns:
+            data["delivery_pct"] = np.nan
+        data["delivery_pct"] = data["delivery_pct"].fillna(20.0)
         return data
 
     def rank_with_fundamentals(

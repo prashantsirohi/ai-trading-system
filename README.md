@@ -30,24 +30,23 @@ ai-trading-system/
 │   ├── __init__.py
 │   ├── feature_reader.py        # DuckDB-backed partitioned parquet reader
 │   ├── regime_detector.py       # ADX-based TREND/MEAN_REV classification
-│   ├── ranker.py                # Multi-factor ranking (4 factors + 1yr penalty)
+│   ├── ranker.py                # Multi-factor ranking (5 factors)
+│   ├── rank_backtester.py       # Cross-sectional backtest + grid search + train/test
 │   ├── ml_engine.py             # XGBoost + walk-forward validation
 │   ├── risk_manager.py          # ATR position sizing, portfolio risk budget
 │   ├── backtester.py            # Event-driven backtest (5 strategies)
 │   ├── visualizations.py         # Plotly charts, QuantStats tearsheets
-│   ├── screener.py              # AIQScreener — ties all layers
-│   └── test_analytics.py
+│   └── screener.py              # AIQScreener — ties all layers
 ├── collectors/                  # Data ingestion
 │   ├── __init__.py
 │   ├── dhan_collector.py        # DhanHQ API → DuckDB (main, with token renew)
+│   ├── delivery_collector.py     # NSE MTO archive → delivery % → DuckDB + parquet
 │   ├── token_manager.py         # Auto-renew expired Dhan tokens via TOTP
 │   ├── ingest_full.py           # Full inception-date ingestion (all 1,306 symbols)
 │   ├── compute_features_batch.py # Fast DuckDB COPY feature computation
 │   ├── delete_stale.py         # Remove stale 1-year data, re-ingest full
-│   ├── run_full_rank.py        # Full ranking of all 1,306 stocks → CSV
-│   ├── daily_update_runner.py  # CLI runner for daily EOD pipeline
-│   ├── masterdata.py
-│   └── nse_collector.py
+│   ├── run_full_rank.py        # Full ranking of all stocks → CSV
+│   └── daily_update_runner.py  # CLI runner for daily EOD pipeline
 ├── config/
 │   ├── __init__.py
 │   └── settings.py
@@ -60,11 +59,15 @@ ai-trading-system/
 │       └── Portfolio: ATR-based position sizing, risk budget
 ├── data/                        # All data — DO NOT commit to git
 │   ├── masterdata.db           # SQLite — stock_details + symbols
-│   ├── ohlcv.duckdb            # DuckDB — OHLCV catalog + snapshots
-│   └── feature_store/           # Feature Parquet store (791.6 MB total)
+│   ├── ohlcv.duckdb            # DuckDB — OHLCV catalog + delivery table
+│   │   ├── _catalog            # 4,029,570 OHLCV rows, 1,306 symbols
+│   │   └── _delivery           # 657,506 delivery records, 2,606 symbols
+│   ├── raw/NSE_MTO/            # Raw NSE MTO .DAT files (delivery data)
+│   └── feature_store/           # Feature Parquet store (~792 MB total)
 │       ├── adx/NSE/             # 6 DuckDB-partitioned files (~98MB)
 │       ├── atr/NSE/             # 6 DuckDB-partitioned files (~43MB)
 │       ├── bb/NSE/              # 6 DuckDB-partitioned files (~95MB)
+│       ├── delivery/NSE/         # 6 DuckDB-partitioned files (delivery parquet)
 │       ├── ema/NSE/             # 1,306 per-symbol files (~24MB)
 │       ├── fundamental/NSE/      # 1,306 per-symbol files
 │       ├── macd/NSE/            # 1,306 per-symbol files (~19MB)
@@ -129,7 +132,9 @@ See [docs/data-flow.md](docs/data-flow.md) for the full pipeline diagrams.
 3. **Feature Computation**: `compute_features_batch.py` → 9 indicators → `feature_store/` (791.6 MB total)
    - DuckDB-partitioned (fast): RSI, SMA, ATR, ADX, BB, ROC, Supertrend (6 files each)
    - Per-symbol parquet (pandas fallback): EMA, MACD (1,306 files each)
-4. **Screener Pipeline**: `AIQScreener.screen()` → regime + rank (+ 1yr penalty) + ML signals + risk sizing + backtest + report
+4. **Screener Pipeline**: `AIQScreener.screen()` → regime + 5-factor rank (+ delivery + 1yr penalty) + ML signals + risk sizing + backtest + report
+   - 5-factor: relative_strength 30%, volume_intensity 20%, trend_persistence 15%, proximity_highs 20%, delivery_pct 15%
+   - Top 25% filter: picks top-N from top quartile stocks only
 5. **Daily Update**: `run_daily_update.ps1` → incremental OHLCV fetch + feature recompute
 6. **Full Ranking**: `run_full_rank.ps1` → 614 stocks ranked in ~13s → `rankings_latest.csv`
 
@@ -218,8 +223,19 @@ powershell -File "run_daily_update.ps1" -Force
 ## Known State
 
 - **OHLCV data**: 1,306 symbols, 4,029,570 rows, inception (2001-2004) → 2026-03-18
-- **Feature store**: 791.6 MB total, all 9 indicators computed
-- **Rankings**: 614 stocks with scores (from full ranking run)
-- **Top ranked**: HCC (99.09), EPACKPEB (96.78), IFGLEXPOR (96.30), FISCHER (94.63), HLEGLAS (94.12)
+- **Delivery data**: 657,506 records from NSE MTO archive (2025-01-01 → 2026-03-19), 2,606 symbols
+- **Feature store**: ~792 MB total, all indicators + delivery features computed
+- **Rankings**: 614 stocks scored with 5-factor model
+- **Top ranked (5-factor, Mar 2026)**: IFGLEXPOR (87.58), VERANDA (87.45), ASALCBR (84.22), AJMERA (83.92), ELECON (81.74)
+- **Backtest (5-factor, Mar 2025–Mar 2026)**: -6.33% total, -3.8% annualized, Sharpe -0.15, MaxDD -24.18%, 55% win rate, 20 rebalance periods
 - **ML top features**: Bollinger Bands, Supertrend, ATR (XGBoost trained on 5 symbols, 2024-2025)
 - **Backtest**: BREAKOUT and MEAN_REV strategies verified with real data
+
+## NSE Delivery Data
+
+NSE switched from old bhavcopy CSV format (with delivery columns) to UDiFF format (no delivery). Working source: **NSE MTO Archive** at `https://nsearchives.nseindia.com/archives/equities/mto/MTO_{DDMMYYYY}.DAT`
+
+- Plain text `.DAT` format, comma-separated
+- Only `EQ` series is relevant; others (GS, TB, bonds, etc.) are filtered out
+- Columns: symbol, QtyTraded (volume), DelivQty, %Deliv (delivery %)
+- Covers both 2025 and 2026 dates (old bhavcopy only went to Apr 2024)
