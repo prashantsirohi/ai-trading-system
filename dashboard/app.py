@@ -101,18 +101,38 @@ def load_ohlcv(symbol: str, exchange: str = "NSE", days: int = 365) -> pd.DataFr
 def load_features(symbol: str, exchange: str = "NSE") -> Dict[str, pd.DataFrame]:
     """Load all available feature DataFrames for a symbol."""
     features = {}
-    feature_names = [
-        "rsi",
-        "adx",
-        "sma",
-        "ema",
-        "macd",
-        "atr",
-        "bb",
-        "roc",
-        "supertrend",
-    ]
-    for feat in feature_names:
+    partitioned_features = {
+        "rsi": ("rsi", "close, rsi"),
+        "adx": ("adx", "close, adx_plus, adx_minus, adx_value"),
+        "atr": ("atr", "close, atr_value"),
+        "bb": ("bb", "close, bb_upper, bb_middle, bb_lower"),
+        "roc": ("roc", "close, roc_period, roc_value"),
+        "supertrend": ("supertrend", "close, atr_value, st_upper, st_lower, st_signal"),
+    }
+    per_symbol_features = ["ema", "macd"]
+
+    conn = duckdb.connect(OHLCV_DB, read_only=True)
+    try:
+        for feat, (subdir, cols) in partitioned_features.items():
+            pattern = os.path.join(
+                FEATURE_STORE, subdir, exchange, "*.parquet"
+            ).replace("\\", "/")
+            if os.path.exists(os.path.join(FEATURE_STORE, subdir, exchange)):
+                result = conn.execute(
+                    f"""
+                    SELECT timestamp, {cols} FROM read_parquet('{pattern}')
+                    WHERE symbol_id = '{symbol}' AND exchange = '{exchange}'
+                    ORDER BY timestamp
+                    """
+                ).fetchdf()
+                if not result.empty:
+                    result["timestamp"] = pd.to_datetime(result["timestamp"])
+                    result.set_index("timestamp", inplace=True)
+                    features[feat] = result
+    finally:
+        conn.close()
+
+    for feat in per_symbol_features:
         path = os.path.join(FEATURE_STORE, feat, exchange, f"{symbol}.parquet")
         if os.path.exists(path):
             df = pd.read_parquet(path)
@@ -120,6 +140,7 @@ def load_features(symbol: str, exchange: str = "NSE") -> Dict[str, pd.DataFrame]
                 df["timestamp"] = pd.to_datetime(df["timestamp"])
                 df.set_index("timestamp", inplace=True)
             features[feat] = df
+
     return features
 
 
@@ -223,16 +244,26 @@ def plot_candlestick_with_features(
     if "supertrend" in features:
         st_df = features["supertrend"].copy()
         st_df = st_df[st_df.index.isin(ohlcv.index)]
-        if "supertrend" in st_df.columns and "close" in ohlcv.columns:
-            above = ohlcv["close"][ohlcv.index.isin(st_df.index)]
-            below = ohlcv["close"][ohlcv.index.isin(st_df.index)]
-            up = st_df["supertrend"].reindex(ohlcv.index).ffill()
+        if "st_signal" in st_df.columns and "close" in ohlcv.columns:
+            up = st_df["st_upper"].reindex(ohlcv.index).ffill()
+            down = st_df["st_lower"].reindex(ohlcv.index).ffill()
             fig.add_trace(
                 go.Scatter(
                     x=ohlcv.index,
                     y=up,
-                    name="Supertrend",
+                    name="ST Upper",
                     line=dict(color="#00BCD4", width=1),
+                    opacity=0.6,
+                ),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=ohlcv.index,
+                    y=down,
+                    name="ST Lower",
+                    line=dict(color="#FF5722", width=1),
                     opacity=0.6,
                 ),
                 row=1,
@@ -279,19 +310,23 @@ def plot_candlestick_with_features(
     if "macd" in features:
         macd_df = features["macd"].copy()
         macd_df = macd_df[macd_df.index.isin(ohlcv.index)]
-        macd_cols = [c for c in ["macd", "signal", "histogram"] if c in macd_df.columns]
-        colors = {"macd": "#2196F3", "signal": "#FF9800", "histogram": "#9E9E9E"}
-        for col in macd_cols:
-            fig.add_trace(
-                go.Scatter(
-                    x=macd_df.index,
-                    y=macd_df[col],
-                    name=col.upper(),
-                    line=dict(color=colors.get(col, "#9E9E9E"), width=1.5),
-                ),
-                row=4,
-                col=1,
-            )
+        col_map = {
+            "macd_line": ("MACD", "#2196F3"),
+            "macd_signal_9": ("Signal", "#FF9800"),
+            "macd_histogram": ("Histogram", "#9E9E9E"),
+        }
+        for col, (label, color) in col_map.items():
+            if col in macd_df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=macd_df.index,
+                        y=macd_df[col],
+                        name=label,
+                        line=dict(color=color, width=1.5),
+                    ),
+                    row=4,
+                    col=1,
+                )
 
     fig.update_layout(
         title=f"{symbol} — Price Chart & Indicators",

@@ -69,8 +69,8 @@ class AlphaEngine:
         horizons: List[int] = None,
     ) -> pd.DataFrame:
         """
-        Load all features + targets for training.
-        Features are loaded from feature_store/ Parquet files.
+        Load all features + targets for training using DuckDB for efficient joins.
+        Features are loaded from feature_store/ Parquet files via DuckDB.
         Targets: forward returns at multiple horizons.
         """
         if horizons is None:
@@ -79,84 +79,79 @@ class AlphaEngine:
         conn = self._get_conn()
         try:
             date_filter = ""
-            params: List = []
             if from_date:
-                date_filter += " AND timestamp >= ?"
-                params.append(from_date)
+                date_filter += f" AND timestamp >= '{from_date}'"
             if to_date:
-                date_filter += " AND timestamp <= ?"
-                params.append(to_date)
+                date_filter += f" AND timestamp <= '{to_date}'"
 
-            ohlcv = conn.execute(
-                f"""
+            symbol_filter = ""
+            if symbols:
+                sym_list = ", ".join(f"'{s}'" for s in symbols)
+                symbol_filter += f" AND symbol_id IN ({sym_list})"
+
+            ohlcv = conn.execute(f"""
                 SELECT symbol_id, exchange, timestamp, close, high, low, open, volume
                 FROM _catalog
                 WHERE exchange = '{exchange}'
                   AND timestamp IS NOT NULL
                   {date_filter}
+                  {symbol_filter}
                 ORDER BY symbol_id, timestamp
-            """,
-                params,
-            ).fetchdf()
-        finally:
-            conn.close()
+            """).fetchdf()
 
-        if symbols:
-            ohlcv = ohlcv[ohlcv["symbol_id"].isin(symbols)]
+            ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"])
+            conn.execute("CREATE TEMP VIEW temp_ohlcv AS SELECT * FROM ohlcv")
+        finally:
+            pass
 
         logger.info(f"Loaded {len(ohlcv):,} OHLCV rows for training")
 
-        feat_dfs = []
-        for feat_name in [
-            "rsi",
-            "adx",
-            "sma",
-            "ema",
-            "macd",
-            "atr",
-            "bb",
-            "roc",
-            "supertrend",
-        ]:
-            feat_path = os.path.join(self.feature_store_dir, feat_name, exchange)
-            if not os.path.exists(feat_path):
-                continue
-            import glob
+        feat_cfg = [
+            ("rsi", "rsi", ["rsi"]),
+            ("adx", "adx", ["adx_plus", "adx_minus", "adx_value"]),
+            ("atr", "atr", ["atr_value"]),
+            ("bb", "bb", ["bb_upper", "bb_middle", "bb_lower"]),
+            ("supertrend", "st", ["st_upper", "st_lower", "st_signal"]),
+        ]
 
-            files = glob.glob(os.path.join(feat_path, "*.parquet"))
-            if not files:
+        feat_cols_sql = "t.symbol_id, t.exchange, t.timestamp, t.close, t.high, t.low, t.open, t.volume"
+        join_clauses = []
+        for feat_name, alias, feat_cols in feat_cfg:
+            feat_path = os.path.join(
+                self.feature_store_dir, feat_name, exchange, "*.parquet"
+            ).replace("\\", "/")
+            if not os.path.exists(
+                os.path.join(self.feature_store_dir, feat_name, exchange)
+            ):
                 continue
-            try:
-                df = pd.concat(pd.read_parquet(f) for f in files)
-                feat_dfs.append(df)
-                logger.info(f"  Loaded {feat_name}: {len(df):,} rows")
-            except Exception as e:
-                logger.warning(f"  Failed to load {feat_name}: {e}")
+            select_cols = ", ".join(f"{c}" for c in feat_cols)
+            join_clauses.append(f"""
+            LEFT JOIN (
+                SELECT symbol_id, exchange, timestamp, {select_cols}
+                FROM read_parquet('{feat_path}')
+                WHERE exchange = '{exchange}'
+                  AND timestamp >= '{from_date or "1900-01-01"}'
+                  AND timestamp <= '{to_date or "2100-01-01"}'
+                  {symbol_filter}
+            ) {alias} ON t.symbol_id = {alias}.symbol_id
+                       AND t.exchange = {alias}.exchange
+                       AND t.timestamp = {alias}.timestamp
+            """)
+            feat_cols_sql += ", " + ", ".join(f"{alias}.{c}" for c in feat_cols)
+            logger.info(f"  Joined {feat_name}: {feat_cols}")
 
-        features = ohlcv.copy()
-        for fdf in feat_dfs:
-            fdf["timestamp"] = pd.to_datetime(fdf["timestamp"])
-            merge_cols = ["symbol_id", "exchange", "timestamp"]
-            feat_cols = [
-                c
-                for c in fdf.columns
-                if c
-                not in (
-                    "symbol_id",
-                    "exchange",
-                    "timestamp",
-                    "close",
-                    "open",
-                    "high",
-                    "low",
-                    "volume",
-                )
-            ]
-            merge_df = fdf[["symbol_id", "exchange", "timestamp"] + feat_cols].copy()
-            merge_df = merge_df.drop_duplicates(["symbol_id", "exchange", "timestamp"])
-            features = features.merge(
-                merge_df, on=merge_cols[:2] + ["timestamp"], how="left"
-            )
+        query = f"""
+            SELECT {feat_cols_sql}
+            FROM temp_ohlcv t
+            {"".join(join_clauses)}
+            ORDER BY t.symbol_id, t.timestamp
+        """
+        features = conn.execute(query).fetchdf()
+        conn.execute("DROP VIEW temp_ohlcv")
+
+        conn.close()
+
+        features["timestamp"] = pd.to_datetime(features["timestamp"])
 
         for h in horizons:
             features[f"return_{h}d"] = (

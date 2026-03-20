@@ -327,22 +327,19 @@ class StockRanker:
           - ADX score (normalized 0-100) from feature store
           - Price above SMA(20) and SMA(50) -> alignment bonus
         """
-        import glob
-
         adx_path = os.path.join(self.feature_store_dir, "adx", "NSE")
         if os.path.exists(adx_path):
             try:
-                files = glob.glob(os.path.join(adx_path, "*.parquet"))
-                if files:
-                    adx_df = pd.concat(pd.read_parquet(f) for f in files[:500])
-                    adx_df["timestamp"] = pd.to_datetime(adx_df["timestamp"])
-                    cutoff = pd.to_datetime(date)
-                    adx_df = adx_df[adx_df["timestamp"] <= cutoff]
-                    adx_latest = (
-                        adx_df.groupby(["symbol_id", "exchange"])["adx_14"]
-                        .last()
-                        .reset_index()
-                    )
+                conn = self._get_conn()
+                cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
+                adx_latest = conn.execute(f"""
+                    SELECT symbol_id, exchange, adx_value AS adx_14
+                    FROM read_parquet('{adx_path}/*.parquet')
+                    WHERE timestamp <= '{cutoff_ts}'
+                    QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp DESC) = 1
+                """).fetchdf()
+                conn.close()
+                if not adx_latest.empty:
                     data = data.merge(
                         adx_latest, on=["symbol_id", "exchange"], how="left"
                     )

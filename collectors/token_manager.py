@@ -6,6 +6,13 @@ import logging
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
+try:
+    import pyotp
+
+    HAS_PYOTP = True
+except ImportError:
+    HAS_PYOTP = False
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
@@ -78,24 +85,41 @@ class DhanTokenManager:
         return expiry <= threshold
 
     def is_token_expired(self) -> bool:
-        """Check if token is already expired"""
+        """Check if token is expired by attempting a lightweight API call."""
+        if not self.access_token:
+            return True
+
+        url = f"{self.base_url}/profile"
+        headers = {
+            "access-token": self.access_token,
+            "dhanClientId": self.client_id,
+        }
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code in (401, 403):
+                return True
+            result = resp.json()
+            if isinstance(result, dict) and result.get("status") == "failure":
+                err_code = result.get("remarks", {}).get("error_code", "")
+                if err_code in ("DH-901", "DH-905"):
+                    return True
+        except Exception:
+            pass
+
         expiry = self.get_token_expiry()
         return datetime.now() >= expiry
 
     def renew_token(self) -> dict:
         """
-        Renew the access token using the existing token.
-        This API expires the current token and provides a new token with 24 hours validity.
+        Renew the access token.
+        If the existing token is expired (user-generated), falls back to
+        OAuth token generation using client_id + PIN + TOTP.
         """
-        if not self.access_token:
-            logger.warning("No existing access token. Need to generate new token.")
-            return self.generate_token()
-
         if not self.client_id:
             logger.error("Client ID is required")
             return {"status": "error", "message": "Client ID is required"}
 
-        url = f"{self.base_url}/RenewToken"
+        url = f"{self.base_url}/renewAccessToken"
         headers = {
             "access-token": self.access_token,
             "dhanClientId": self.client_id,
@@ -124,36 +148,62 @@ class DhanTokenManager:
                         "access_token": new_token,
                         "expiry_time": expiry_time,
                     }
-                else:
-                    logger.error(f"Token renewal failed: {result}")
-                    return {"status": "error", "message": result}
-            else:
-                logger.error(
-                    f"HTTP error during token renewal: {response.status_code} - {response.text}"
-                )
-                return {
-                    "status": "error",
-                    "message": f"HTTP {response.status_code}: {response.text}",
-                }
+
+            logger.warning(
+                f"Token renewal failed ({response.status_code}): {response.text}. "
+                f"Falling back to OAuth token generation..."
+            )
+            return self.generate_token()
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"Request error during token renewal: {e}")
-            return {"status": "error", "message": str(e)}
+            logger.warning(
+                f"Request error during token renewal: {e}. "
+                f"Falling back to OAuth token generation..."
+            )
+            return self.generate_token()
 
     def generate_token(self) -> dict:
         """
         Generate a new access token using client ID, PIN, and TOTP.
-        Requires TOTP to be set up in Dhan account.
+        If DHAN_TOTP is a base32 secret, auto-generates the current 6-digit code.
+        If DHAN_TOTP is a 6-digit code, uses it directly.
         """
         if not self.client_id or not self.pin:
             logger.error("Client ID and PIN are required for token generation")
             return {"status": "error", "message": "Client ID and PIN are required"}
 
+        totp_secret = os.getenv("DHAN_TOTP", "")
+        if not totp_secret:
+            logger.error("DHAN_TOTP is required but not set in .env")
+            return {"status": "error", "message": "DHAN_TOTP not set in .env"}
+
+        if (
+            HAS_PYOTP
+            and len(totp_secret) >= 16
+            and all(
+                c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=" for c in totp_secret.upper()
+            )
+        ):
+            totp_code = pyotp.TOTP(totp_secret).now()
+            logger.info(f"Auto-generated TOTP code from base32 secret")
+        elif len(totp_secret) == 6 and totp_secret.isdigit():
+            totp_code = totp_secret
+            logger.info("Using provided 6-digit TOTP code")
+        else:
+            logger.error(
+                f"DHAN_TOTP format not recognized: '{totp_secret[:10]}...'. "
+                f"Provide either a 6-digit code or a base32 secret."
+            )
+            return {
+                "status": "error",
+                "message": f"Invalid TOTP format: {totp_secret[:10]}",
+            }
+
         url = f"{self.auth_url}/app/generateAccessToken"
         params = {
             "dhanClientId": self.client_id,
             "pin": self.pin,
-            "totp": os.getenv("DHAN_TOTP", ""),
+            "totp": totp_code,
         }
 
         try:

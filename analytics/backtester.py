@@ -84,8 +84,8 @@ class EventBacktester:
         TREND_FOLLOW event: Supertrend flips bullish + ADX above threshold.
         """
         df = df.sort_values("timestamp")
-        adx = df.get("adx_14", pd.Series(50, index=df.index))
-        st_dir = df.get("supertrend_dir_10_3", pd.Series(1, index=df.index))
+        adx = df.get("adx_value", pd.Series(50, index=df.index))
+        st_dir = df.get("st_signal", pd.Series(1, index=df.index))
 
         prev_st = st_dir.shift(1).fillna(1)
         signal = (st_dir == 1) & (prev_st == -1) & (adx >= adx_threshold)
@@ -102,8 +102,8 @@ class EventBacktester:
         MEAN_REV event: RSI oversold/overbought + ADX below threshold.
         """
         df = df.sort_values("timestamp")
-        rsi = df.get("rsi_14", pd.Series(50, index=df.index))
-        adx = df.get("adx_14", pd.Series(50, index=df.index))
+        rsi = df.get("rsi", pd.Series(50, index=df.index))
+        adx = df.get("adx_value", pd.Series(50, index=df.index))
 
         signal = ((rsi < rsi_lower) | (rsi > rsi_upper)) & (adx < adx_threshold)
         return signal
@@ -284,38 +284,34 @@ class EventBacktester:
 
         ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"])
 
-        atr_path = os.path.join(
-            self.feature_store_dir, "atr", exchange, f"{symbol}.parquet"
-        )
-        adx_path = os.path.join(
-            self.feature_store_dir, "adx", exchange, f"{symbol}.parquet"
-        )
-        st_path = os.path.join(
-            self.feature_store_dir, "supertrend", exchange, f"{symbol}.parquet"
-        )
+        feat_cfg = [
+            ("rsi", ["rsi"]),
+            ("atr", ["atr_value"]),
+            ("adx", ["adx_plus", "adx_minus", "adx_value"]),
+            ("supertrend", ["st_upper", "st_lower", "st_signal"]),
+        ]
 
-        for fpath, suffix in [(atr_path, "atr"), (adx_path, "adx"), (st_path, "st")]:
-            if os.path.exists(fpath):
+        for feat_name, feat_cols in feat_cfg:
+            feat_path = os.path.join(
+                self.feature_store_dir, feat_name, exchange, "*.parquet"
+            ).replace("\\", "/")
+            if os.path.exists(
+                os.path.join(self.feature_store_dir, feat_name, exchange)
+            ):
+                conn2 = duckdb.connect(self.ohlcv_db_path, read_only=True)
                 try:
-                    fdf = pd.read_parquet(fpath)
+                    feat_select = ", ".join(feat_cols)
+                    fdf = conn2.execute(f"""
+                        SELECT timestamp, {feat_select}
+                        FROM read_parquet('{feat_path}')
+                        WHERE symbol_id = '{symbol}' AND exchange = '{exchange}'
+                        ORDER BY timestamp
+                    """).fetchdf()
+                finally:
+                    conn2.close()
+                if not fdf.empty:
                     fdf["timestamp"] = pd.to_datetime(fdf["timestamp"])
-                    keep_cols = ["timestamp"]
-                    for c in fdf.columns:
-                        if c not in (
-                            "symbol_id",
-                            "exchange",
-                            "timestamp",
-                            "close",
-                            "open",
-                            "high",
-                            "low",
-                            "volume",
-                        ):
-                            keep_cols.append(c)
-                    fdf = fdf[keep_cols].drop_duplicates("timestamp")
                     ohlcv = ohlcv.merge(fdf, on="timestamp", how="left")
-                except Exception:
-                    pass
 
         ohlcv = ohlcv.sort_values("timestamp")
 
@@ -340,7 +336,7 @@ class EventBacktester:
         entry_row = ohlcv.loc[entry_idx]
         entry_date = entry_row["timestamp"]
         entry_price = float(entry_row["close"])
-        atr = float(entry_row.get("atr_14", entry_price * 0.02))
+        atr = float(entry_row.get("atr_value", entry_price * 0.02))
         if pd.isna(atr) or atr <= 0:
             atr = entry_price * 0.02
 

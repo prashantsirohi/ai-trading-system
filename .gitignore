@@ -73,6 +73,11 @@ secrets.json
 # Models — track .gitkeep, ignore checkpoint files
 # ============================================================
 models/*.pkl
+
+# ============================================================
+# Rankings — generated output
+# ============================================================
+rankings*.csv
 models/*.joblib
 models/*.onnx
 models/checkpoints/

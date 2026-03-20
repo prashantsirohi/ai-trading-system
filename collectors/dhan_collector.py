@@ -451,19 +451,35 @@ class DhanCollector:
                 to_date=to_date,
             )
 
-            if data and isinstance(data, dict) and "data" in data:
-                df = pd.DataFrame(data["data"])
-            elif data and isinstance(data, list):
-                df = pd.DataFrame(data)
+            if not data or not isinstance(data, dict):
+                return None
+
+            inner = data.get("data", data)
+            if not isinstance(inner, dict):
+                return None
+
+            open_arr = inner.get("open", [])
+            if not open_arr or not isinstance(open_arr, list):
+                return None
+
+            df = pd.DataFrame(
+                {
+                    "open": inner.get("open", []),
+                    "high": inner.get("high", []),
+                    "low": inner.get("low", []),
+                    "close": inner.get("close", []),
+                    "volume": inner.get("volume", []),
+                }
+            )
+
+            if "timestamp" in inner and inner["timestamp"]:
+                df["timestamp"] = pd.to_datetime(inner["timestamp"], unit="s")
+            elif "date" in inner and inner["date"]:
+                df["timestamp"] = pd.to_datetime(inner["date"])
             else:
                 return None
 
-            if "date" not in df.columns:
-                return None
-
-            df["timestamp"] = pd.to_datetime(df["date"])
             df.set_index("timestamp", inplace=True)
-            df.drop("date", axis=1, inplace=True)
 
             rename = {}
             for c in df.columns:
