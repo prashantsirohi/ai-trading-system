@@ -1,22 +1,31 @@
 # AI Trading System — NSE India
 
-An AI-powered stock screening and backtesting system for the Indian NSE market, built on a four-layer modern data stack.
+An AI-powered stock screening and backtesting system for the Indian NSE market, built on a modern data stack with RS (Relative Strength) analysis, Telegram reporting, and Google Sheets integration.
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                  ANALYTICS & RANKING LAYER                       │
-│  AIQScreener │ RegimeDetector │ AlphaEngine │ RiskManager         │
-│  StockRanker  │ EventBacktester │ Visualizations                  │
+│                    CHANNEL & REPORTING LAYER                      │
+│  TelegramReporter │ GoogleSheetsManager │ AIAnalyzer (OpenRouter)│
+│  Portfolio SWOT Analysis │ QuantStats Tearsheets                  │
 ├──────────────────────────────────────────────────────────────────┤
-│                  FEATURE STORE & COMPUTE LAYER                     │
+│                    ANALYTICS & RANKING LAYER                       │
+│  AIQScreener │ RegimeDetector │ AlphaEngine │ RiskManager         │
+│  StockRanker │ EventBacktester │ Visualizations                  │
+├──────────────────────────────────────────────────────────────────┤
+│                    RS FEATURE LAYER (Sector & Stock)              │
+│  compute_sector_rs.py → sector_rs.parquet (500 days × 21 sectors)│
+│  Stock vs Sector RS → stock_vs_sector.parquet (500 days × 1000)  │
+│  EW Index → ew_index.parquet                                      │
+├──────────────────────────────────────────────────────────────────┤
+│                    FEATURE STORE & COMPUTE LAYER                   │
 │  DuckDB SQL — RSI │ ADX │ SMA │ ATR │ BB │ ROC │ Supertrend     │
-│  (6 partitioned parquet files each, ~700MB)                      │
-│  Pandas — EMA │ MACD (per-symbol parquet, ~43MB)                 │
+│  (6 partitioned parquet files each)                               │
+│  Pandas — EMA │ MACD (per-symbol parquet)                         │
 │  → data/feature_store/<feature>/NSE/*.parquet                    │
 ├──────────────────────────────────────────────────────────────────┤
-│                  DATA INGESTION & STORAGE LAYER                   │
+│                    DATA INGESTION & STORAGE LAYER                 │
 │  DhanCollector │ DuckDB (ACID+TT) │ SQLite masterdata.db         │
 │  TokenManager (auto-renew via TOTP base32 secret)                 │
 └──────────────────────────────────────────────────────────────────┘
@@ -37,16 +46,25 @@ ai-trading-system/
 │   ├── backtester.py            # Event-driven backtest (5 strategies)
 │   ├── visualizations.py         # Plotly charts, QuantStats tearsheets
 │   └── screener.py              # AIQScreener — ties all layers
+├── channel/                     # Reporting & Integration
+│   ├── telegram_reporter.py     # Telegram bot for sending reports
+│   ├── google_sheets_manager.py # Google Sheets OAuth2 integration
+│   ├── portfolio_analyzer.py    # Portfolio with SWOT analysis
+│   ├── ai_analyzer.py           # AI analysis via OpenRouter (free models)
+│   └── oauth_flow.py            # Google OAuth2 helper
 ├── collectors/                  # Data ingestion
 │   ├── __init__.py
 │   ├── dhan_collector.py        # DhanHQ API → DuckDB (main, with token renew)
 │   ├── delivery_collector.py     # NSE MTO archive → delivery % → DuckDB + parquet
-│   ├── token_manager.py         # Auto-renew expired Dhan tokens via TOTP
-│   ├── ingest_full.py           # Full inception-date ingestion (all 1,306 symbols)
-│   ├── compute_features_batch.py # Fast DuckDB COPY feature computation
-│   ├── delete_stale.py         # Remove stale 1-year data, re-ingest full
-│   ├── run_full_rank.py        # Full ranking of all stocks → CSV
+│   , token_manager.py         # Auto-renew expired Dhan tokens via TOTP
+│   , ingest_full.py           # Full inception-date ingestion (all 1,306 symbols)
+│   , compute_features_batch.py # Fast DuckDB COPY feature computation
+│   , delete_stale.py         # Remove stale 1-year data, re-ingest full
+│   , run_full_rank.py        # Full ranking of all stocks → CSV
 │   └── daily_update_runner.py  # CLI runner for daily EOD pipeline
+│
+│   # RS Features (new)
+│   └── compute_sector_rs.py    # Compute Sector & Stock RS features
 ├── config/
 │   ├── __init__.py
 │   └── settings.py
@@ -58,23 +76,27 @@ ai-trading-system/
 │       ├── Chart: interactive Plotly OHLCV + RSI + MACD + MAs + Supertrend
 │       └── Portfolio: ATR-based position sizing, risk budget
 ├── data/                        # All data — DO NOT commit to git
-│   ├── masterdata.db           # SQLite — stock_details + symbols
+│   ├── masterdata.db           # SQLite — stock_details (1,000 stocks) + nse500
 │   ├── ohlcv.duckdb            # DuckDB — OHLCV catalog + delivery table
-│   │   ├── _catalog            # 4,029,570 OHLCV rows, 1,306 symbols
+│   │   ├── _catalog            # ~3.17M OHLCV rows, 1,000 symbols
 │   │   └── _delivery           # 657,506 delivery records, 2,606 symbols
 │   ├── raw/NSE_MTO/            # Raw NSE MTO .DAT files (delivery data)
-│   └── feature_store/           # Feature Parquet store (~792 MB total)
-│       ├── adx/NSE/             # 6 DuckDB-partitioned files (~98MB)
-│       ├── atr/NSE/             # 6 DuckDB-partitioned files (~43MB)
-│       ├── bb/NSE/              # 6 DuckDB-partitioned files (~95MB)
-│       ├── delivery/NSE/         # 6 DuckDB-partitioned files (delivery parquet)
-│       ├── ema/NSE/             # 1,306 per-symbol files (~24MB)
+│   └── feature_store/           # Feature Parquet store
+│       ├── all_symbols/         # RS features (new)
+│       │   ├── sector_rs.parquet     # 500 days × 21 sectors
+│       │   ├── stock_vs_sector.parquet # 500 days × 1,000 stocks
+│       │   └── ew_index.parquet       # Equal-weight index
+│       ├── adx/NSE/             # 6 DuckDB-partitioned files
+│       ├── atr/NSE/             # 6 DuckDB-partitioned files
+│       ├── bb/NSE/              # 6 DuckDB-partitioned files
+│       ├── delivery/NSE/         # 6 DuckDB-partitioned files
+│       ├── ema/NSE/             # 1,306 per-symbol files
 │       ├── fundamental/NSE/      # 1,306 per-symbol files
-│       ├── macd/NSE/            # 1,306 per-symbol files (~19MB)
-│       ├── roc/NSE/             # 6 DuckDB-partitioned files (~245MB)
-│       ├── rsi/NSE/             # 6 DuckDB-partitioned files (~49MB)
-│       ├── sma/NSE/             # 6 DuckDB-partitioned files (~140MB)
-│       └── supertrend/NSE/       # 6 DuckDB-partitioned files (~79MB)
+│       ├── macd/NSE/            # 1,306 per-symbol files
+│       ├── roc/NSE/             # 6 DuckDB-partitioned files
+│       ├── rsi/NSE/             # 6 DuckDB-partitioned files
+│       ├── sma/NSE/             # 6 DuckDB-partitioned files
+│       └── supertrend/NSE/       # 6 DuckDB-partitioned files
 ├── docs/
 │   └── data-flow.md             # Detailed pipeline diagrams
 ├── features/                    # Feature computation
@@ -177,7 +199,7 @@ DHAN_TOTP=YOUR_BASE32_TOTP_SECRET   # 32-char base32 secret for auto token renew
 # Dashboard (Streamlit)
 powershell -File "run_dashboard.ps1"
 
-# Full ranking of all 1,306 stocks → rankings_latest.csv
+# Full ranking of all 1000 stocks → rankings_latest.csv
 powershell -File "run_full_rank.ps1"
 
 # Full OHLCV ingestion from inception dates

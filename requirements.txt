@@ -17,3 +17,9 @@ plotly>=5.17.0
 
 python-dotenv>=1.0.0
 requests>=2.31.0
+
+python-telegram-bot>=20.0
+quantstats>=0.0.62
+gspread>=5.0
+google-auth>=2.0
+google-auth-oauthlib>=1.0
