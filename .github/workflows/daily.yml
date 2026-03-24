@@ -24,16 +24,11 @@ jobs:
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: requirements.txt
       
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install pandas numpy pyarrow "duckdb>=1.0"
-          python -m pip install scikit-learn xgboost
-          python -m pip install streamlit plotly
-          python -m pip install python-dotenv requests pyotp loguru
-          python -m pip install gspread google-auth google-auth-oauthlib
-          python -m pip install dhanhq
+          python -m pip install -r requirements.txt
       
       - name: Configure environment
         run: |
