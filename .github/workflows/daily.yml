@@ -77,8 +77,8 @@ jobs:
         with:
           name: trading-data
           path: |
-            data/
-            !data/**/*.duckdb
+            data/feature_store/
+            data/features/
           retention-days: 7
       
       - name: Upload logs
