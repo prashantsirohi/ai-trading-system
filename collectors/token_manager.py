@@ -2,9 +2,9 @@ import os
 import json
 import requests
 import time
-import logging
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from utils.logger import logger
 
 try:
     import pyotp
@@ -12,11 +12,6 @@ try:
     HAS_PYOTP = True
 except ImportError:
     HAS_PYOTP = False
-
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
 
 
 class DhanTokenManager:
@@ -119,7 +114,7 @@ class DhanTokenManager:
             logger.error("Client ID is required")
             return {"status": "error", "message": "Client ID is required"}
 
-        url = f"{self.base_url}/renewAccessToken"
+        url = f"{self.base_url}/RenewToken"
         headers = {
             "access-token": self.access_token,
             "dhanClientId": self.client_id,

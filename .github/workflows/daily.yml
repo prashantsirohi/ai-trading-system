@@ -1,0 +1,68 @@
+name: Daily Trading System
+
+on:
+  schedule:
+    # Run at 4:30 PM IST (11:00 AM UTC) Mon-Fri
+    - cron: '0 11 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force run (skip holiday/weekend)'
+        required: false
+        default: 'false'
+
+jobs:
+  daily-pipeline:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install loguru>=0.7.0
+      
+      - name: Configure environment
+        run: |
+          # Create .env file with secrets
+          echo "DHAN_CLIENT_ID=${{ secrets.DHAN_CLIENT_ID }}" > .env
+          echo "DHAN_CLIENT_SECRET=${{ secrets.DHAN_CLIENT_SECRET }}" >> .env
+          echo "DHAN_TOTP_SECRET=${{ secrets.DHAN_TOTP_SECRET }}" >> .env
+          echo "GOOGLE_SPREADSHEET_ID=${{ secrets.GOOGLE_SPREADSHEET_ID }}" >> .env
+          # Set ENV to github for light data
+          echo "ENV=github" >> .env
+      
+      - name: Truncate old data (keep only 1 year)
+        run: |
+          python -c "from utils.data_config import truncate_old_data; truncate_old_data()"
+      
+      - name: Download latest OHLCV data
+        run: |
+          python collectors/daily_update_runner.py --symbols-only
+      
+      - name: Compute features
+        run: |
+          python collectors/compute_features_batch.py
+      
+      - name: Run stock scan
+        run: |
+          python -m channel.stock_scan
+      
+      - name: Run sector dashboard
+        run: |
+          python -m channel.sector_dashboard
+      
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-logs
+          path: logs/
+          retention-days: 7

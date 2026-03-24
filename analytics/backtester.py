@@ -1,12 +1,9 @@
 import os
-import logging
 import duckdb
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict, Literal, Callable
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 
 class EventBacktester:

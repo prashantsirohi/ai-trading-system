@@ -17,6 +17,8 @@ plotly>=5.17.0
 
 python-dotenv>=1.0.0
 requests>=2.31.0
+pyotp>=2.9.0
+loguru>=0.7.0
 
 python-telegram-bot>=20.0
 quantstats>=0.0.62

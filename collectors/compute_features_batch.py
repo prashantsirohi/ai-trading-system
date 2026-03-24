@@ -12,7 +12,6 @@ Usage:
 import os
 import sys
 import time
-import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import List
@@ -22,17 +21,11 @@ project_root = os.path.dirname(script_dir)
 sys.path.insert(0, project_root)
 
 from dotenv import load_dotenv
+from utils.logger import logger
 
 load_dotenv(os.path.join(project_root, ".env"))
 
 import duckdb
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger(__name__)
 
 DB_PATH = os.path.join(project_root, "data", "ohlcv.duckdb")
 FEATURE_DIR = os.path.join(project_root, "data", "feature_store")

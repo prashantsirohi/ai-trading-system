@@ -4,7 +4,6 @@ import sqlite3
 import random
 import json
 import os
-import logging
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -14,9 +13,7 @@ import requests
 from dhanhq import dhanhq
 from features.feature_store import FeatureStore
 from collectors.token_manager import DhanTokenManager
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 
 class DhanCollector:
@@ -1294,6 +1291,189 @@ class DhanCollector:
         except Exception as e:
             logger.warning(f"Could not read last dates from DuckDB: {e}")
         return dates
+
+    MARKETFEED_OHLC_URL = "https://api.dhan.co/v2/marketfeed/ohlc"
+
+    def _fetch_bulk_ohlc(self, security_ids: List[str]) -> Optional[pd.DataFrame]:
+        """Fetch today's OHLC for multiple securities in single API call."""
+        if not self.use_api or not self.dhan:
+            return None
+
+        self._ensure_valid_token()
+        access_token = os.getenv("DHAN_ACCESS_TOKEN", "")
+        client_id = os.getenv("DHAN_CLIENT_ID", "")
+
+        if not access_token or not client_id:
+            logger.error("Missing DHAN_ACCESS_TOKEN or DHAN_CLIENT_ID")
+            return None
+
+        self._rate_limit_wait()
+
+        headers = {
+            "access-token": access_token,
+            "client-id": client_id,
+            "Content-Type": "application/json",
+        }
+
+        payload = {"instruments": {"NSE_EQ": security_ids}}
+
+        try:
+            response = requests.post(
+                self.MARKETFEED_OHLC_URL, headers=headers, json=payload, timeout=60
+            )
+
+            if response.status_code == 401:
+                logger.warning("Token expired, attempting renewal...")
+                self._ensure_valid_token()
+                headers["access-token"] = os.getenv("DHAN_ACCESS_TOKEN", "")
+                response = requests.post(
+                    self.MARKETFEED_OHLC_URL, headers=headers, json=payload, timeout=60
+                )
+
+            if response.status_code != 200:
+                logger.error(
+                    f"Bulk OHLC API error {response.status_code}: {response.text}"
+                )
+                return None
+
+            data = response.json()
+            if "data" not in data:
+                return None
+
+            processed = []
+            today = datetime.now()
+
+            for sec_id, details in data.get("data", {}).items():
+                ohlc = details.get("ohlc", {})
+                if not ohlc:
+                    continue
+
+                row = {
+                    "security_id": sec_id,
+                    "timestamp": today,
+                    "open": ohlc.get("open"),
+                    "high": ohlc.get("high"),
+                    "low": ohlc.get("low"),
+                    "close": ohlc.get("close"),
+                    "volume": details.get("volume"),
+                }
+                processed.append(row)
+
+            if not processed:
+                return None
+
+            df = pd.DataFrame(processed)
+            logger.info(
+                f"Bulk OHLC fetched {len(df)} rows for {len(security_ids)} securities"
+            )
+            return df
+
+        except Exception as e:
+            logger.error(f"Bulk OHLC fetch failed: {e}")
+            return None
+
+    def run_daily_update_bulk(
+        self,
+        exchanges: List[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run daily EOD update using bulk OHLC API.
+        Fetches today's OHLC for all NSE symbols in ~1-2 API calls (1000 per call).
+        Much faster than per-symbol fetching.
+
+        Note: This only fetches TODAY's data, not historical backfill.
+        Use run_daily_update() for symbols with stale data.
+        """
+        if exchanges is None:
+            exchanges = ["NSE"]
+
+        symbols = self.get_symbols_from_masterdb(exchanges=exchanges)
+        if not symbols:
+            return {"error": "No symbols found in masterdb"}
+
+        security_ids = [s["security_id"] for s in symbols if s.get("security_id")]
+        logger.info(
+            f"[Bulk Daily Update] Fetching OHLC for {len(security_ids)} securities..."
+        )
+
+        t0 = time.time()
+        df = self._fetch_bulk_ohlc(security_ids)
+
+        if df is None or df.empty:
+            return {
+                "error": "No data fetched from bulk API",
+                "duration_sec": time.time() - t0,
+            }
+
+        symbol_map = {s["security_id"]: s for s in symbols}
+        df["symbol_id"] = df["security_id"].map(
+            lambda x: symbol_map.get(str(x), {}).get("symbol_id", "")
+        )
+        df["exchange"] = "NSE"
+
+        conn = self._get_duckdb_conn()
+        try:
+            conn.execute("BEGIN TRANSACTION")
+
+            conn.execute("""
+                DELETE FROM _catalog
+                WHERE symbol_id IN (SELECT DISTINCT symbol_id FROM df)
+                  AND exchange = 'NSE'
+                  AND timestamp::date = CURRENT_DATE
+            """)
+
+            conn.execute("""
+                INSERT INTO _catalog
+                    (symbol_id, security_id, exchange, timestamp,
+                     open, high, low, close, volume)
+                SELECT symbol_id, CAST(security_id AS TEXT), exchange, timestamp,
+                       open, high, low, close, volume
+                FROM df
+                WHERE symbol_id != ''
+            """)
+
+            rows_written = conn.execute("SELECT CHANGES()").fetchone()[0]
+            conn.commit()
+
+            duration = time.time() - t0
+            logger.info(
+                f"[Bulk Daily Update] Wrote {rows_written} rows in {duration:.1f}s"
+            )
+
+            feat_result = {}
+            if rows_written > 0:
+                updated_symbols = (
+                    df[df["symbol_id"] != ""]["symbol_id"].unique().tolist()
+                )
+                feat_result = self.fs.compute_and_store_features(
+                    symbols=updated_symbols,
+                    exchanges=exchanges,
+                    feature_types=[
+                        "rsi",
+                        "adx",
+                        "sma",
+                        "ema",
+                        "macd",
+                        "atr",
+                        "bb",
+                        "roc",
+                        "supertrend",
+                    ],
+                )
+
+            return {
+                "n_symbols": len(security_ids),
+                "rows_written": rows_written,
+                "duration_sec": round(duration, 2),
+                "feature_result": feat_result,
+            }
+
+        except Exception as e:
+            conn.execute("ROLLBACK")
+            logger.error(f"Bulk daily update failed: {e}")
+            return {"error": str(e), "duration_sec": time.time() - t0}
+        finally:
+            conn.close()
 
     def run_daily_update(
         self,

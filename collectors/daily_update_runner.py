@@ -1,6 +1,6 @@
 """
 Daily EOD Update Runner
-========================
+=======================
 Usage:
     python daily_update_runner.py                          # Full update (OHLCV + Features)
     python daily_update_runner.py --symbols-only          # OHLCV only
@@ -16,7 +16,6 @@ the last date already stored in DuckDB.
 import os
 import sys
 import argparse
-import logging
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
@@ -24,16 +23,10 @@ sys.path.insert(0, project_root)
 
 from collectors.dhan_collector import DhanCollector
 from features.feature_store import FeatureStore
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 
-def run(symbols_only: bool, features_only: bool, batch_size: int):
+def run(symbols_only: bool, features_only: bool, batch_size: int, bulk: bool):
     collector = DhanCollector()
 
     if features_only:
@@ -70,6 +63,15 @@ def run(symbols_only: bool, features_only: bool, batch_size: int):
             ],
         )
         logger.info(f"Feature computation complete: {result}")
+        return
+
+    if bulk:
+        logger.info("=" * 60)
+        logger.info("MODE: Bulk OHLC - Fast single API call for today's data")
+        logger.info("=" * 60)
+
+        result = collector.run_daily_update_bulk(exchanges=["NSE"])
+        logger.info(f"Bulk daily update result: {result}")
         return
 
     if symbols_only:
@@ -126,12 +128,18 @@ def main():
     parser.add_argument(
         "--force", action="store_true", help="Force update even if today's data exists"
     )
+    parser.add_argument(
+        "--bulk",
+        action="store_true",
+        help="Use bulk OHLC API (fast, today only). Use for quick daily updates.",
+    )
     args = parser.parse_args()
 
     run(
         symbols_only=args.symbols_only,
         features_only=args.features_only,
         batch_size=args.batch_size,
+        bulk=args.bulk,
     )
 
 

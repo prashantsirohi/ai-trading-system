@@ -1,15 +1,12 @@
 import os
 import time
-import logging
 import duckdb
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict, Literal, Tuple
 import xgboost as xgb
 from sklearn.metrics import roc_auc_score, mean_squared_error
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 
 class AlphaEngine:
