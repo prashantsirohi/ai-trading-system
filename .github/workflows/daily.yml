@@ -50,6 +50,15 @@ jobs:
           path: data/
         continue-on-error: true
       
+      - name: Check if data exists
+        id: data-check
+        run: |
+          if [ -d "data/feature_store/all_symbols" ]; then
+            echo "has_data=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_data=false" >> $GITHUB_OUTPUT
+          fi
+      
       - name: Download latest OHLCV data
         run: |
           python collectors/daily_update_runner.py --symbols-only
@@ -59,10 +68,12 @@ jobs:
           python collectors/compute_features_batch.py
       
       - name: Run stock scan
+        if: steps.data-check.outputs.has_data == 'true'
         run: |
           python -m channel.stock_scan
       
       - name: Run sector dashboard
+        if: steps.data-check.outputs.has_data == 'true'
         run: |
           python -m channel.sector_dashboard
       
