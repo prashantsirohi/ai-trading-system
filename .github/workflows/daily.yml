@@ -38,10 +38,17 @@ jobs:
           echo "GOOGLE_SPREADSHEET_ID=${{ secrets.GOOGLE_SPREADSHEET_ID }}" >> .env
           # Set ENV to github for light data
           echo "ENV=github" >> .env
+          
+          # Create Google token.json for Sheets API
+          echo '${{ secrets.GOOGLE_TOKEN }}' > token.json
       
-      - name: Truncate old data (keep only 1 year)
-        run: |
-          python -c "from utils.data_config import truncate_old_data; truncate_old_data()"
+      - name: Download latest data artifact
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: daily.yml
+          name: trading-data
+          path: data/
+        continue-on-error: true
       
       - name: Download latest OHLCV data
         run: |
@@ -58,6 +65,13 @@ jobs:
       - name: Run sector dashboard
         run: |
           python -m channel.sector_dashboard
+      
+      - name: Upload data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-data
+          path: data/
+          retention-days: 7
       
       - name: Upload logs
         if: always()
