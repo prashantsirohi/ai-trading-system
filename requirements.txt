@@ -8,7 +8,6 @@ finta
 # ta-lib requires C compilation, install manually if needed
 
 vectorbt>=0.25.0
-numpy-indicator>=0.2.3
 
 scikit-learn>=1.3.0
 xgboost>=2.0.0
