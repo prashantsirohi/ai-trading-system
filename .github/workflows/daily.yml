@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install pandas numpy pyarrow duckdb
-          pip install pandas-ta==0.3.14b
+          pip install finta
           pip install vectorbt numpy-indicator
           pip install scikit-learn xgboost
           pip install streamlit plotly
