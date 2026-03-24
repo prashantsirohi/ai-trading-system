@@ -68,16 +68,9 @@ jobs:
         run: |
           python collectors/daily_update_runner.py --symbols-only
       
-      - name: Compute features (optional - skip if data exists)
+      - name: Compute features
         run: |
-          python -c "
-          import os
-          if os.path.exists('data/feature_store/all_symbols/sector_rs.parquet'):
-              print('Features already exist, skipping computation')
-          else:
-              import subprocess
-              subprocess.run(['python', 'collectors/compute_features_batch.py'])
-          "
+          echo "Skipping feature computation - using existing features from artifact"
       
       - name: Run stock scan
         if: steps.data-check.outputs.has_data == 'true'
