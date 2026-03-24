@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pandas numpy pyarrow duckdb
+          python -m pip install pandas numpy pyarrow "duckdb>=1.0"
           python -m pip install scikit-learn xgboost
           python -m pip install streamlit plotly
           python -m pip install python-dotenv requests pyotp loguru
@@ -68,9 +68,16 @@ jobs:
         run: |
           python collectors/daily_update_runner.py --symbols-only
       
-      - name: Compute features
+      - name: Compute features (optional - skip if data exists)
         run: |
-          python collectors/compute_features_batch.py
+          python -c "
+          import os
+          if os.path.exists('data/feature_store/all_symbols/sector_rs.parquet'):
+              print('Features already exist, skipping computation')
+          else:
+              import subprocess
+              subprocess.run(['python', 'collectors/compute_features_batch.py'])
+          "
       
       - name: Run stock scan
         if: steps.data-check.outputs.has_data == 'true'
