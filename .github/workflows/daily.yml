@@ -58,8 +58,7 @@ jobs:
       
       - name: Debug - list data directory
         run: |
-          ls -la data/ 2>/dev/null || echo "data dir not found"
-          ls -la data/feature_store/ 2>/dev/null || echo "feature_store not found"
+          find data/ -type f 2>/dev/null | head -20
       
       - name: Download latest OHLCV data
         run: |
@@ -89,7 +88,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: trading-data
-          path: data/
+          path: |
+            data/
+            !data/**/*.duckdb
           retention-days: 7
       
       - name: Upload logs
