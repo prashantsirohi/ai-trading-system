@@ -73,7 +73,11 @@ jobs:
       
       - name: Run sector dashboard
         run: |
-          python -m channel.sector_dashboard
+          if [ -d "data/feature_store/all_symbols" ]; then
+            python -m channel.sector_dashboard
+          else
+            echo "SKIP: No feature data"
+          fi
       
       - name: Upload logs
         if: always()
@@ -83,9 +87,9 @@ jobs:
           path: logs/
           retention-days: 7
       
-      - name: Save feature cache
-        uses: actions/cache@v4
+      - name: Upload feature data
+        uses: actions/upload-artifact@v4
         with:
-          path: data/feature_store/
-          key: features-${{ github.run_id }}
-          save-always: true
+          name: features
+          path: data/feature_store/all_symbols/
+          retention-days: 7
