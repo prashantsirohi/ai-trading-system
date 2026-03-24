@@ -63,17 +63,9 @@ jobs:
         run: |
           echo "Skipping feature computation - using existing features from artifact"
       
-      - name: Download data for stock scan
-        uses: dawidd6/action-download-artifact@v3
-        with:
-          workflow: daily.yml
-          name: trading-data
-          path: data/
-        continue-on-error: true
-      
       - name: Run stock scan
         run: |
-          ls -la data/ 2>/dev/null && ls -la data/feature_store/ 2>/dev/null || echo "No data"
+          ls -la data/
           python -m channel.stock_scan
       
       - name: Run sector dashboard
