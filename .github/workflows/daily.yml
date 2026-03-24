@@ -42,24 +42,34 @@ jobs:
           echo '${{ secrets.GOOGLE_TOKEN }}' > token.json
       
       - name: Cache feature data
+        id: cache-feature
         uses: actions/cache@v4
         with:
           path: data/feature_store/
           key: features-${{ github.run_id }}
           restore-keys: features-
       
-      - name: Download latest OHLCV data
+      - name: Check cache restore
         run: |
-          python collectors/daily_update_runner.py --symbols-only
+          if [ -d "data/feature_store/all_symbols" ]; then
+            echo "Cache restored - features exist"
+          else
+            echo "No cache - need to fetch data"
+          fi
       
-      - name: Compute features
+      - name: Download initial data if no cache
+        if: steps.cache-feature.outputs.cache-hit != 'true'
         run: |
-          echo "Skipping feature computation - using cached features"
+          echo "This is first run - no cached data available"
+          echo "Please run locally first to create initial data"
       
       - name: Run stock scan
         run: |
-          ls -laR data/feature_store/
-          python -m channel.stock_scan
+          if [ -d "data/feature_store/all_symbols" ]; then
+            python -m channel.stock_scan
+          else
+            echo "SKIP: No feature data - run locally first to create initial data"
+          fi
       
       - name: Run sector dashboard
         run: |
