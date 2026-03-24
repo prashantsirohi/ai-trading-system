@@ -65,7 +65,7 @@ jobs:
       
       - name: Run stock scan
         run: |
-          ls -la data/
+          ls -laR data/feature_store/
           python -m channel.stock_scan
       
       - name: Run sector dashboard
