@@ -55,15 +55,6 @@ jobs:
           path: data/
         continue-on-error: true
       
-      - name: Check if data exists
-        id: data-check
-        run: |
-          if [ -d "data/feature_store/all_symbols" ]; then
-            echo "has_data=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_data=false" >> $GITHUB_OUTPUT
-          fi
-      
       - name: Download latest OHLCV data
         run: |
           python collectors/daily_update_runner.py --symbols-only
@@ -73,14 +64,20 @@ jobs:
           echo "Skipping feature computation - using existing features from artifact"
       
       - name: Run stock scan
-        if: steps.data-check.outputs.has_data == 'true'
         run: |
-          python -m channel.stock_scan
+          if [ -d "data/feature_store/all_symbols" ]; then
+            python -m channel.stock_scan
+          else
+            echo "No feature data - skipping stock scan"
+          fi
       
       - name: Run sector dashboard
-        if: steps.data-check.outputs.has_data == 'true'
         run: |
-          python -m channel.sector_dashboard
+          if [ -d "data/feature_store/all_symbols" ]; then
+            python -m channel.sector_dashboard
+          else
+            echo "No feature data - skipping sector dashboard"
+          fi
       
       - name: Upload data artifact
         uses: actions/upload-artifact@v4
