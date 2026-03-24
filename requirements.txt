@@ -2,12 +2,7 @@ pandas>=2.0.0
 numpy>=1.24.0
 pyarrow>=12.0.0
 duckdb>=0.8.0
-
-finta
-# pandas-ta not available for Python 3.11, use finta instead
-# ta-lib requires C compilation, install manually if needed
-
-vectorbt>=0.25.0
+# pandas-ta, numpy-indicator not available for Python 3.11
 
 scikit-learn>=1.3.0
 xgboost>=2.0.0
@@ -20,8 +15,6 @@ requests>=2.31.0
 pyotp>=2.9.0
 loguru>=0.7.0
 
-python-telegram-bot>=20.0
-quantstats>=0.0.62
 gspread>=5.0
 google-auth>=2.0
 google-auth-oauthlib>=1.0

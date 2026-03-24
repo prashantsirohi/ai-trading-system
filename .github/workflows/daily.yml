@@ -27,12 +27,10 @@ jobs:
       - name: Install dependencies
         run: |
           pip install pandas numpy pyarrow duckdb
-          pip install finta
-          pip install vectorbt
           pip install scikit-learn xgboost
           pip install streamlit plotly
           pip install python-dotenv requests pyotp loguru
-          pip install python-telegram-bot quantstats gspread google-auth google-auth-oauthlib
+          pip install gspread google-auth google-auth-oauthlib
       
       - name: Configure environment
         run: |
