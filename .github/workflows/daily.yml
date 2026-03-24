@@ -53,7 +53,7 @@ jobs:
       
       - name: Debug - list data directory
         run: |
-          find data/ -type f 2>/dev/null | head -20
+          ls -laR data/feature_store/
       
       - name: Download latest OHLCV data
         run: |
