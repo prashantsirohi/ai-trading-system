@@ -261,3 +261,23 @@ NSE switched from old bhavcopy CSV format (with delivery columns) to UDiFF forma
 - Only `EQ` series is relevant; others (GS, TB, bonds, etc.) are filtered out
 - Columns: symbol, QtyTraded (volume), DelivQty, %Deliv (delivery %)
 - Covers both 2025 and 2026 dates (old bhavcopy only went to Apr 2024)
+
+---
+
+## TODO / Known Issues
+
+### GitHub Actions Setup (In Progress)
+
+**Current Problem:**
+- GitHub Actions workflow runs but lacks cached feature data on first run
+- Feature data (~800MB) needs to be shared between runs
+- Solutions being explored: Cache vs Artifacts
+
+**Steps to resolve:**
+1. First run locally: `python run/daily_pipeline.py --force`
+2. This creates local feature data in `data/feature_store/`
+3. GitHub Actions can then use cache for subsequent runs
+
+**Workaround:**
+- Run workflow with `ENV=github` locally first to generate feature data
+- Or manually upload initial feature data to GitHub Releases
