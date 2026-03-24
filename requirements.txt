@@ -3,9 +3,9 @@ numpy>=1.24.0
 pyarrow>=12.0.0
 duckdb>=0.8.0
 
-pandas-ta==0.3.14b
-ta-lib; platform_system == "Windows"
-# For Linux, install separately: pip install ta-lib
+finta
+# pandas-ta not available for Python 3.11, use finta instead
+# ta-lib requires C compilation, install manually if needed
 
 vectorbt>=0.25.0
 numpy-indicator>=0.2.3
