@@ -26,8 +26,13 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          pip install loguru>=0.7.0
+          pip install pandas numpy pyarrow duckdb
+          pip install pandas-ta==0.3.14b
+          pip install vectorbt numpy-indicator
+          pip install scikit-learn xgboost
+          pip install streamlit plotly
+          pip install python-dotenv requests pyotp loguru
+          pip install python-telegram-bot quantstats gspread google-auth google-auth-oauthlib
       
       - name: Configure environment
         run: |
