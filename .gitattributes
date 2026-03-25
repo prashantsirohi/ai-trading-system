@@ -14,6 +14,9 @@
 *.example text eol=lf
 
 # Binary files — don't touch
-*.parquet binary
 *.db binary
 *.duckdb binary
+
+# Git LFS for parquet files (large data)
+*.parquet filter=lfs diff=lfs merge=lfs -text
+data/**/*.parquet filter=lfs diff=lfs merge=lfs -text
