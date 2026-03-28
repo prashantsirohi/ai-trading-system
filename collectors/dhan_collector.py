@@ -294,9 +294,8 @@ class DhanCollector:
                     sd."Industry Group" AS industry_group,
                     sd."Industry" AS industry,
                     sd.MCAP,
-                    s.exchange
+                    sd.exchange
                 FROM stock_details sd
-                LEFT JOIN symbols s ON s.security_id = sd.Security_id
                 WHERE sd.Security_id IS NOT NULL
                   AND sd.Security_id != ''
             """
@@ -304,7 +303,7 @@ class DhanCollector:
 
             if exchanges:
                 placeholders = ",".join("?" * len(exchanges))
-                query += f" AND s.exchange IN ({placeholders})"
+                query += f" AND sd.exchange IN ({placeholders})"
                 params.extend(exchanges)
 
             query += " ORDER BY sd.Security_id"
@@ -321,11 +320,10 @@ class DhanCollector:
                     "industry_group": r[3],
                     "industry": r[4],
                     "mcap": r[5],
-                    "exchange": r[6] or "NSE",
+                    "exchange": r[6] if r[6] else "NSE",
                 }
                 for r in cur.fetchall()
             ]
-            conn.close()
             logger.info(f"Loaded {len(rows)} symbols from stock_details")
             return rows
 
@@ -444,19 +442,48 @@ class DhanCollector:
                 security_id=clean_sid,
                 exchange_segment=exchange_segment,
                 instrument_type="EQUITY",
+                expiry_code=0,
                 from_date=from_date,
                 to_date=to_date,
             )
 
+            # DEBUG: Print raw response
+            print(f"[DEBUG] {security_id}: API Response type: {type(data)}")
+            if isinstance(data, dict):
+                print(f"[DEBUG] {security_id}: Keys: {data.keys()}")
+                inner = data.get("data", data)
+                if isinstance(inner, dict):
+                    print(f"[DEBUG] {security_id}: Inner keys: {inner.keys()}")
+                    if inner.get("close"):
+                        print(
+                            f"[DEBUG] {security_id}: close sample: {inner['close'][:3]}"
+                        )
+                    if inner.get("timestamp"):
+                        print(
+                            f"[DEBUG] {security_id}: timestamp sample: {inner['timestamp'][:3]}"
+                        )
+
             if not data or not isinstance(data, dict):
+                print(f"[WARN] {security_id}: No data returned")
                 return None
 
             inner = data.get("data", data)
             if not isinstance(inner, dict):
+                print(f"[WARN] {security_id}: Invalid inner data type: {type(inner)}")
                 return None
+
+            # DEBUG: Log inner keys and sample values
+            print(f"[DEBUG] {security_id}: Inner keys: {inner.keys()}")
+            if inner.get("close"):
+                logger.debug(f"Sample close: {inner['close'][:3]}")
+            if inner.get("timestamp"):
+                logger.debug(f"Sample timestamp: {inner['timestamp'][:3]}")
+            if inner.get("date"):
+                logger.debug(f"Sample date: {inner['date'][:3]}")
 
             open_arr = inner.get("open", [])
             if not open_arr or not isinstance(open_arr, list):
+                logger.warning(f"No open data for {security_id}")
                 return None
 
             df = pd.DataFrame(
@@ -470,10 +497,23 @@ class DhanCollector:
             )
 
             if "timestamp" in inner and inner["timestamp"]:
-                df["timestamp"] = pd.to_datetime(inner["timestamp"], unit="s")
+                # Check if it's epoch or Julian
+                ts_sample = inner["timestamp"][0] if inner["timestamp"] else 0
+                logger.debug(
+                    f"Timestamp sample value: {ts_sample} (type: {type(ts_sample)})"
+                )
+
+                # If timestamp looks like Julian date (very large number), use different conversion
+                if ts_sample > 100000000:  # Likely Julian date
+                    df["timestamp"] = pd.to_datetime(
+                        inner["timestamp"], unit="D", origin="1899-12-30"
+                    )
+                else:  # Standard epoch
+                    df["timestamp"] = pd.to_datetime(inner["timestamp"], unit="s")
             elif "date" in inner and inner["date"]:
                 df["timestamp"] = pd.to_datetime(inner["date"])
             else:
+                logger.warning(f"No timestamp or date field for {security_id}")
                 return None
 
             df.set_index("timestamp", inplace=True)
@@ -521,6 +561,87 @@ class DhanCollector:
                         _retry_after_renewal=True,
                     )
             logger.warning(f"Error fetching {security_id}: {e}")
+            return None
+
+    def _fetch_intraday(
+        self,
+        security_id: str,
+        exchange: str,
+        from_date: str,
+        to_date: str,
+        session: requests.Session = None,
+    ) -> Optional[pd.DataFrame]:
+        """Fetch intraday minute data (last 5 trading days)."""
+        clean_sid = security_id
+        try:
+            if security_id.endswith(".0"):
+                clean_sid = security_id[:-2]
+        except Exception:
+            pass
+
+        exchange_segment = "NSE_EQ" if exchange.upper() == "NSE" else "BSE_EQ"
+
+        try:
+            # Intraday data - last 5 days
+            data = self.dhan.intraday_minute_data(
+                security_id=clean_sid,
+                exchange_segment=exchange_segment,
+                instrument_type="EQUITY",
+                from_date=from_date,
+                to_date=to_date,
+                interval=15,  # 15-minute candles
+            )
+
+            print(f"[DEBUG] {security_id}: Intraday response type: {type(data)}")
+            if isinstance(data, dict):
+                print(f"[DEBUG] {security_id}: Keys: {data.keys()}")
+
+            if not data or not isinstance(data, dict):
+                logger.warning(f"No intraday data for {security_id}")
+                return None
+
+            inner = data.get("data", data)
+            if not isinstance(inner, dict):
+                logger.warning(f"Invalid intraday inner for {security_id}")
+                return None
+
+            open_arr = inner.get("open", [])
+            if not open_arr or not isinstance(open_arr, list):
+                logger.warning(f"No intraday open for {security_id}")
+                return None
+
+            df = pd.DataFrame(
+                {
+                    "open": inner.get("open", []),
+                    "high": inner.get("high", []),
+                    "low": inner.get("low", []),
+                    "close": inner.get("close", []),
+                    "volume": inner.get("volume", []),
+                }
+            )
+
+            # Handle timestamp - epoch format
+            if "timestamp" in inner and inner["timestamp"]:
+                df["timestamp"] = pd.to_datetime(inner["timestamp"], unit="s")
+            elif "date" in inner and inner["date"]:
+                df["timestamp"] = pd.to_datetime(inner["date"])
+            else:
+                return None
+
+            df.set_index("timestamp", inplace=True)
+
+            # Get last candle of each day (close)
+            df["date"] = df.index.date
+            df = df.groupby("date").last().reset_index()
+            df["timestamp"] = pd.to_datetime(df["date"]) + pd.Timedelta(
+                hours=18, minutes=30
+            )
+            df = df.set_index("timestamp").drop(columns=["date"])
+
+            return df
+
+        except Exception as e:
+            logger.warning(f"Error fetching intraday {security_id}: {e}")
             return None
 
     async def fetch_batch(

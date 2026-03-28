@@ -32,10 +32,11 @@ jobs:
         run: |
           # Create .env file with secrets
           echo "DHAN_CLIENT_ID=${{ secrets.DHAN_CLIENT_ID }}" > .env
-          echo "DHAN_CLIENT_SECRET=${{ secrets.DHAN_CLIENT_SECRET }}" >> .env
-          echo "DHAN_TOTP_SECRET=${{ secrets.DHAN_TOTP_SECRET }}" >> .env
+          echo "DHAN_API_KEY=${{ secrets.DHAN_API_KEY }}" >> .env
+          echo "DHAN_PIN=${{ secrets.DHAN_PIN }}" >> .env
+          echo "DHAN_TOTP=${{ secrets.DHAN_TOTP }}" >> .env
           echo "GOOGLE_SPREADSHEET_ID=${{ secrets.GOOGLE_SPREADSHEET_ID }}" >> .env
-          # Set ENV to github for light data
+             # Set ENV to github for light data
           echo "ENV=github" >> .env
           
           # Create Google token.json for Sheets API

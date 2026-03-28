@@ -4,78 +4,20 @@ import sqlite3
 import numpy as np
 from pathlib import Path
 
-INDUSTRY_TO_SECTOR = {
-    "Banks": "Banks",
-    "Finance": "Finance",
-    "Insurance": "Finance",
-    "Capital Markets": "Finance",
-    "Financial Technology (Fintech)": "Finance",
-    "IT - Software": "IT",
-    "IT - Services": "IT",
-    "FMCG": "FMCG",
-    "Diversified FMCG": "FMCG",
-    "Personal Products": "FMCG",
-    "Beverages": "FMCG",
-    "Food Products": "FMCG",
-    "Household Products": "FMCG",
-    "Cigarettes & Tobacco Products": "FMCG",
-    "Petroleum Products": "Energy",
-    "Oil": "Energy",
-    "Gas": "Energy",
-    "Consumable Fuels": "Energy",
-    "Power": "Power",
-    "Ferrous Metals": "Metals",
-    "Non - Ferrous Metals": "Metals",
-    "Diversified Metals": "Metals",
-    "Metals & Minerals Trading": "Metals",
-    "Minerals & Mining": "Mining",
-    "Automobiles": "Automobiles",
-    "Auto Components": "Auto Components",
-    "Agricultural, Commercial & Construction Vehicles": "Auto Components",
-    "Pharmaceuticals & Biotechnology": "Pharma",
-    "Healthcare Services": "Healthcare",
-    "Healthcare Equipment & Supplies": "Healthcare",
-    "Industrial Products": "Industrial",
-    "Industrial Manufacturing": "Industrial",
-    "Electrical Equipment": "Industrial",
-    "Construction": "Industrial",
-    "Cement & Cement Products": "Industrial",
-    "Consumer Durables": "Consumer",
-    "Retailing": "Consumer",
-    "Entertainment": "Consumer",
-    "Leisure Services": "Consumer",
-    "Other Consumer Services": "Consumer",
-    "Textiles & Apparels": "Consumer",
-    "Realty": "Realty",
-    "Transport Infrastructure": "Infrastructure",
-    "Chemicals & Petrochemicals": "Chemicals",
-    "Fertilizers & Agrochemicals": "Chemicals",
-    "Telecom - Services": "Services",
-    "Telecom -  Equipment & Accessories": "Services",
-    "Transport Services": "Services",
-    "Commercial Services & Supplies": "Services",
-    "Agricultural Food & other Products": "Services",
-    "Aerospace & Defense": "Aerospace",
-    "Paper, Forest & Jute Products": "Materials",
-    "Diversified": "Diversified",
-}
-
 
 def load_all_symbols_with_sector():
     """Load all symbols from stock_details with sector mapping"""
     conn = sqlite3.connect("data/masterdata.db")
 
     rows = conn.execute("""
-        SELECT Symbol, [Industry Group]
+        SELECT Symbol, Sector
         FROM stock_details
         WHERE Symbol IS NOT NULL
     """).fetchall()
 
     conn.close()
 
-    sector_map = {}
-    for sym, industry in rows:
-        sector_map[sym] = INDUSTRY_TO_SECTOR.get(industry, "Other")
+    sector_map = {sym: sector for sym, sector in rows if sector}
 
     return sector_map
 
@@ -111,9 +53,12 @@ def compute_all_symbols_rs():
     conn_duck.close()
     print(f"  Fetched {len(ohlcv)} rows for {len(all_symbols)} symbols")
 
-    print("\nStep 3: Pivoting to wide format...")
-    close_df = ohlcv.pivot(index="timestamp", columns="symbol_id", values="close")
+    print("\nStep 3: Deduplicating by date and pivoting...")
+    ohlcv["date"] = pd.to_datetime(ohlcv["timestamp"]).dt.normalize()
+    ohlcv = ohlcv.drop_duplicates(subset=["date", "symbol_id"], keep="last")
+    close_df = ohlcv.pivot(index="date", columns="symbol_id", values="close")
     close_df = close_df.sort_index()
+    close_df = close_df.dropna(how="all", axis=1)
     print(f"  Wide format: {close_df.shape}")
 
     print("\nStep 4: Computing daily returns...")
@@ -237,9 +182,15 @@ def compute_all_symbols_rs():
     output_dir = Path("data/feature_store/all_symbols")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    rs_sector.index = pd.to_datetime(rs_sector.index).normalize()
+    rs_sector = rs_sector[~rs_sector.index.duplicated(keep="last")]
+    rs_sector = rs_sector.dropna(how="all")
     rs_sector.to_parquet(output_dir / "sector_rs.parquet", index=True)
     print(f"  Saved sector RS: {rs_sector.shape}")
 
+    rs_vs_sector.index = pd.to_datetime(rs_vs_sector.index).normalize()
+    rs_vs_sector = rs_vs_sector[~rs_vs_sector.index.duplicated(keep="last")]
+    rs_vs_sector = rs_vs_sector.dropna(how="all")
     rs_vs_sector.to_parquet(output_dir / "stock_vs_sector.parquet", index=True)
     print(f"  Saved stock vs sector RS: {rs_vs_sector.shape}")
 

@@ -28,61 +28,12 @@ logger.disable("googleapiclient")
 logger.disable("google.auth")
 
 
-SECTOR_TO_INDUSTRY = {
-    "IT": ["IT - Software", "IT - Services", "IT - Hardware"],
-    "Banks": ["Banks"],
-    "Finance": [
-        "Finance",
-        "Capital Markets",
-        "Insurance",
-        "Financial Technology (Fintech)",
-    ],
-    "Automobiles": ["Automobiles"],
-    "Pharma": ["Pharmaceuticals & Biotechnology"],
-    "Healthcare": ["Healthcare Equipment & Supplies", "Healthcare Services"],
-    "FMCG": [
-        "Beverages",
-        "Household Products",
-        "Personal Products",
-        "Diversified FMCG",
-        "Food Products",
-    ],
-    "Consumer": [
-        "Consumer Durables",
-        "Retailing",
-        "Textiles & Apparels",
-        "Other Consumer Services",
-    ],
-    "Energy": ["Oil", "Gas", "Consumable Fuels", "Petroleum Products"],
-    "Power": ["Power", "Other Utilities"],
-    "Metals": ["Ferrous Metals", "Non - Ferrous Metals", "Diversified Metals"],
-    "Mining": ["Minerals & Mining", "Metals & Minerals Trading"],
-    "Chemicals": ["Chemicals & Petrochemicals", "Fertilizers & Agrochemicals"],
-    "Infrastructure": ["Construction", "Transport Infrastructure"],
-    "Realty": ["Realty"],
-    "Aerospace": ["Aerospace & Defense"],
-    "Services": [
-        "Commercial Services & Supplies",
-        "Transport Services",
-        "Media",
-        "Leisure Services",
-        "Entertainment",
-    ],
-    "Industrial": [
-        "Industrial Manufacturing",
-        "Industrial Products",
-        "Electrical Equipment",
-    ],
-    "Diversified": ["Diversified"],
-    "Auto Components": ["Auto Components"],
-}
-
-
 def load_sector_rs() -> pd.DataFrame:
     """Load sector RS from parquet, normalize dates."""
     df = pq.read_table("data/feature_store/all_symbols/sector_rs.parquet").to_pandas()
     df.index = pd.to_datetime(df.index).normalize()
-    return df.groupby(df.index).last()
+    df = df[~df.index.duplicated(keep="last")]
+    return df
 
 
 def load_stock_vs_sector() -> pd.DataFrame:
@@ -91,7 +42,8 @@ def load_stock_vs_sector() -> pd.DataFrame:
         "data/feature_store/all_symbols/stock_vs_sector.parquet"
     ).to_pandas()
     df.index = pd.to_datetime(df.index).normalize()
-    return df.groupby(df.index).last()
+    df = df[~df.index.duplicated(keep="last")]
+    return df
 
 
 def load_sector_mapping() -> pd.DataFrame:
@@ -99,18 +51,20 @@ def load_sector_mapping() -> pd.DataFrame:
     import sqlite3
 
     conn = sqlite3.connect("data/masterdata.db")
-    df = pd.read_sql('SELECT Symbol, "Industry Group" FROM stock_details', conn)
+    df = pd.read_sql("SELECT Symbol, Sector FROM stock_details", conn)
     conn.close()
-    df.columns = ["symbol", "industry_group"]
+    df.columns = ["symbol", "sector"]
     return df
 
 
-def map_industry_to_sector(industry: str) -> str:
-    """Map industry group to main sector."""
-    for sector, industries in SECTOR_TO_INDUSTRY.items():
-        if industry in industries:
-            return sector
-    return "Other"
+def load_sector_map() -> dict:
+    """Load symbol to sector mapping as dictionary."""
+    import sqlite3
+
+    conn = sqlite3.connect("data/masterdata.db")
+    rows = conn.execute("SELECT Symbol, Sector FROM stock_details").fetchall()
+    conn.close()
+    return {sym: sector for sym, sector in rows if sector}
 
 
 def compute_stock_rs_full(
@@ -162,10 +116,6 @@ def scan_stocks(
     6. Rank final stocks
     """
     today = sector_rs.index[-1]
-    sector_mapping = sector_mapping.copy()
-    sector_mapping["sector"] = sector_mapping["industry_group"].apply(
-        map_industry_to_sector
-    )
     sector_map = dict(zip(sector_mapping["symbol"], sector_mapping["sector"]))
 
     sector_ranks = get_sector_ranks(sector_rs)
@@ -214,6 +164,10 @@ def scan_stocks(
 
     df = df[df["sector"].isin(selected_sectors)]
 
+    if df.empty:
+        logger.warning("No stocks after sector filter - returning empty result")
+        return df
+
     df["acceleration"] = df["rs_20"] - df["rs_50"]
 
     def classify(row):
@@ -227,8 +181,8 @@ def scan_stocks(
             return ("REJECT", "Weak vs sector + falling")
 
     results = df.apply(classify, axis=1)
-    df["category"] = results.str[0]
-    df["why"] = results.str[1]
+    df["category"] = results.apply(lambda x: x[0])
+    df["why"] = results.apply(lambda x: x[1])
 
     df["score"] = 0.5 * df["rs"] + 0.3 * df["rs_20"] + 0.2 * (df["rs_vs_sector"] + 0.5)
 
@@ -288,10 +242,6 @@ def run(local_only: bool = False):
     sector_rs = load_sector_rs()
     stock_vs_sector = load_stock_vs_sector()
     sector_mapping = load_sector_mapping()
-
-    sector_mapping["sector"] = sector_mapping["industry_group"].apply(
-        map_industry_to_sector
-    )
 
     logger.info(
         f"Loaded {len(sector_rs.columns)} sectors, {len(sector_mapping)} stocks"

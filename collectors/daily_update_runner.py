@@ -63,6 +63,13 @@ def run(symbols_only: bool, features_only: bool, batch_size: int, bulk: bool):
             ],
         )
         logger.info(f"Feature computation complete: {result}")
+
+        logger.info("Computing sector RS and relative strength...")
+        from compute_sector_rs import compute_all_symbols_rs
+
+        compute_all_symbols_rs()
+        logger.info("Sector RS computation complete")
+
         return
 
     if bulk:
@@ -107,6 +114,11 @@ def run(symbols_only: bool, features_only: bool, batch_size: int, bulk: bool):
     logger.info(f"  Symbols errors  : {result.get('symbols_errors', 0)}")
     logger.info(f"  Duration        : {result.get('duration_sec', 0):.1f}s")
     logger.info("=" * 60)
+    logger.info("Computing sector RS and relative strength...")
+    from compute_sector_rs import compute_all_symbols_rs
+
+    compute_all_symbols_rs()
+    logger.info("Sector RS computation complete")
     logger.info("")
     logger.info("TIP: Recompute features for updated symbols:")
     logger.info("  python collectors/daily_update_runner.py --features-only")

@@ -133,55 +133,8 @@ def load_sector_map() -> Dict[str, str]:
         base_dir = Path(__file__).parent.parent
         conn = sqlite3.connect(base_dir / "data/masterdata.db")
 
-        INDUSTRY_TO_SECTOR = {
-            "Banks": "Banks",
-            "Finance": "Finance",
-            "Capital Markets": "Finance",
-            "IT - Software": "IT",
-            "IT - Services": "IT",
-            "Pharmaceuticals & Biotechnology": "Pharma",
-            "Power": "Power",
-            "Ferrous Metals": "Metals",
-            "Automobiles": "Automobiles",
-            "Auto Components": "Auto Components",
-            "Realty": "Realty",
-            "Chemicals & Petrochemicals": "Chemicals",
-            "Consumer Durables": "Consumer",
-            "Retailing": "Consumer",
-            "Industrial Products": "Industrial",
-            "FMCG": "FMCG",
-            "Diversified FMCG": "FMCG",
-            "Aerospace & Defense": "Aerospace",
-            "Healthcare Services": "Healthcare",
-            "Insurance": "Finance",
-            "Financial Technology (Fintech)": "Finance",
-            "Petroleum Products": "Energy",
-            "Gas": "Energy",
-            "Oil": "Energy",
-            "Non - Ferrous Metals": "Metals",
-            "Minerals & Mining": "Mining",
-            "Textiles & Apparels": "Consumer",
-            "Construction": "Industrial",
-            "Cement & Cement Products": "Industrial",
-            "Transport Infrastructure": "Infrastructure",
-            "Telecom - Services": "Services",
-            "Telecom -  Equipment & Accessories": "Services",
-            "Commercial Services & Supplies": "Services",
-            "Personal Products": "FMCG",
-            "Food Products": "FMCG",
-            "Beverages": "FMCG",
-            "Fertilizers & Agrochemicals": "Chemicals",
-            "Electrical Equipment": "Industrial",
-            "Industrial Manufacturing": "Industrial",
-            "Leisure Services": "Consumer",
-            "Diversified": "Diversified",
-            "Aerospace & Defence": "Aerospace",
-        }
-
-        rows = conn.execute(
-            "SELECT Symbol, [Industry Group] FROM stock_details"
-        ).fetchall()
-        sector_map = {sym: INDUSTRY_TO_SECTOR.get(ind, "Other") for sym, ind in rows}
+        rows = conn.execute("SELECT Symbol, Sector FROM stock_details").fetchall()
+        sector_map = {sym: sector for sym, sector in rows if sector}
         conn.close()
         return sector_map
     except Exception as e:
@@ -535,7 +488,7 @@ class PortfolioManager:
 
     def _authenticate(self):
         try:
-            from google_sheets_manager import GoogleSheetsManager
+            from channel.google_sheets_manager import GoogleSheetsManager
 
             manager = GoogleSheetsManager()
             if manager.client:

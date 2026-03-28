@@ -1,9 +1,13 @@
 # ============================================================
 # Data — large, regenerated, never commit
 # ============================================================
-data/                  # OHLCV DuckDB, SQLite, feature store, snapshots
-reports/*.html         # Generated HTML reports
-logs/                  # Log files
+# NOTE: masterdata.db is tracked - add with: git add -f data/masterdata.db
+data/ohlcv.duckdb
+data/feature_store/
+data/*.db
+data/*.parquet
+reports/*.html
+logs/
 *.log
 
 # ============================================================

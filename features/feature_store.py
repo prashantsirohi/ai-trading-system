@@ -48,9 +48,11 @@ class FeatureStore:
 
         self.ohlcv_db_path = ohlcv_db_path
         self.feature_store_dir = feature_store_dir
+        self.db_path = ohlcv_db_path
         os.makedirs(self.feature_store_dir, exist_ok=True)
 
         self._init_feature_registry()
+        self._init_metadata_tables()
 
     # ------------------------------------------------------------------ #
     #  DuckDB helpers                                                    #
@@ -65,28 +67,73 @@ class FeatureStore:
 
     def _init_feature_registry(self):
         conn = self._get_conn()
+
+        # Create sequence if not exists
+        try:
+            conn.execute("CREATE SEQUENCE IF NOT EXISTS _feat_id_seq START 1")
+        except:
+            pass
+
+        conn.commit()
+
+    def create_snapshot(self, description: str = None) -> int:
+        """Create snapshot of current state."""
+        conn = self._get_conn()
+
+        # Get OHLCV range
+        ohlcv_range = conn.execute("""
+            SELECT MIN(timestamp)::date, MAX(timestamp)::date, COUNT(DISTINCT symbol_id)
+            FROM _catalog
+        """).fetchone()
+
+        # Get features count
+        features_count = conn.execute("""
+            SELECT COUNT(*) FROM _feature_registry WHERE status = 'completed'
+        """).fetchone()[0]
+
+        # Get next snapshot_id
+        conn.execute("SELECT COALESCE(MAX(snapshot_id), 0) + 1 FROM _snapshots")
+        result = conn.execute(
+            "SELECT COALESCE(MAX(snapshot_id), 0) + 1 FROM _snapshots"
+        ).fetchone()[0]
+
+        # Update existing running snapshot to completed
         conn.execute("""
-            CREATE SEQUENCE IF NOT EXISTS _feat_id_seq START 1
+            UPDATE _snapshots 
+            SET status = 'completed', snapshot_ts = CURRENT_TIMESTAMP
+            WHERE status = 'running'
         """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS _feature_registry (
-                feature_id      BIGINT  PRIMARY KEY DEFAULT nextval('_feat_id_seq'),
-                feature_name    TEXT    NOT NULL,
-                symbol_id      TEXT,
-                exchange       TEXT,
-                computed_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                rows_computed  BIGINT,
-                lookback_days  INTEGER,
-                params         TEXT,
-                feature_file   TEXT,
-                status         TEXT    DEFAULT 'pending',
-                note           TEXT
-            )
+
+        # Create new snapshot
+        conn.execute(
+            """
+            INSERT INTO _snapshots (snapshot_id, snapshot_ts, symbols_processed, rows_written, from_date, to_date, status, note)
+            VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, 'completed', ?)
+        """,
+            (
+                result,
+                ohlcv_range[2],
+                features_count,
+                str(ohlcv_range[0]),
+                str(ohlcv_range[1]),
+                description or f"Daily snapshot",
+            ),
+        )
+
+        # Update all features with snapshot_id
+        conn.execute(f"""
+            UPDATE _feature_registry 
+            SET snapshot_id = {result}
+            WHERE snapshot_id IS NULL
         """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_feat_name
-            ON _feature_registry(feature_name, symbol_id, exchange)
-        """)
+
+        conn.commit()
+
+        logger.info(
+            f"Created snapshot: {result} ({ohlcv_range[2]} symbols, OHLCV: {ohlcv_range[0]} to {ohlcv_range[1]})"
+        )
+
+        return result
         conn.commit()
         conn.close()
         logger.info("Feature registry initialized")
@@ -131,7 +178,247 @@ class FeatureStore:
         conn.close()
         return feat_id
 
-    def list_features(self, feature_name: str = None) -> pd.DataFrame:
+    # ------------------------------------------------------------------ #
+    #  Iceberg-lite Metadata Tables                                       #
+    # ------------------------------------------------------------------ #
+
+    def _init_metadata_tables(self):
+        """Initialize metadata tables for Iceberg-lite architecture."""
+        conn = self._get_conn()
+
+        # File registry - tracks all parquet files
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS _file_registry (
+                file_id INTEGER PRIMARY KEY,
+                file_path VARCHAR,
+                table_name VARCHAR,
+                feature_name VARCHAR,
+                min_date DATE,
+                max_date DATE,
+                row_count INTEGER,
+                snapshot_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Ingestion status - tracks what's been updated
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS _ingestion_status (
+                symbol_id VARCHAR,
+                exchange VARCHAR,
+                table_name VARCHAR,
+                last_updated TIMESTAMP,
+                last_date DATE,
+                status VARCHAR DEFAULT 'pending',
+                PRIMARY KEY (symbol_id, exchange, table_name)
+            )
+        """)
+
+        conn.commit()
+        conn.close()
+
+    # ------------------------------------------------------------------ #
+    #  Partitioned Storage (Iceberg-lite)                                 #
+    # ------------------------------------------------------------------ #
+
+    def _get_partition_path(self, table_name: str, year: int, month: int) -> str:
+        """Get partition path: data/features/table_name/year=YYYY/month=MM/"""
+        return os.path.join(
+            self.feature_store_dir, table_name, f"year={year}", f"month={month:02d}"
+        )
+
+    def store_partitioned(
+        self,
+        table_name: str,
+        df: pd.DataFrame,
+        snapshot_id: int = None,
+    ) -> int:
+        """
+        Store data in partitioned Parquet format (Iceberg-lite).
+        Path: table_name/year=YYYY/month=MM/symbol.parquet
+
+        Atomic write: write to temp, then rename.
+        """
+        if df.empty:
+            return 0
+
+        # Add date column if missing
+        if "date" not in df.columns:
+            df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+
+        rows_written = 0
+        conn = self._get_conn()
+
+        # Group by partition
+        df["year"] = pd.to_datetime(df["date"]).dt.year
+        df["month"] = pd.to_datetime(df["date"]).dt.month
+
+        for (year, month), partition_df in df.groupby(["year", "month"]):
+            partition_path = self._get_partition_path(table_name, year, month)
+            os.makedirs(partition_path, exist_ok=True)
+
+            # Group by symbol within partition
+            for symbol in partition_df["symbol_id"].unique():
+                sym_df = partition_df[partition_df["symbol_id"] == symbol].copy()
+
+                # Atomic write: temp file then rename
+                temp_path = os.path.join(partition_path, f"{symbol}.tmp.parquet")
+                final_path = os.path.join(partition_path, f"{symbol}.parquet")
+
+                sym_df.drop(columns=["year", "month"], errors="ignore").to_parquet(
+                    temp_path, index=False
+                )
+
+                # Atomic rename
+                if os.path.exists(final_path):
+                    os.remove(final_path)
+                os.rename(temp_path, final_path)
+
+                # Register file
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO _file_registry (file_path, table_name, feature_name, min_date, max_date, row_count, snapshot_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                        (
+                            final_path,
+                            table_name,
+                            table_name,
+                            sym_df["date"].min(),
+                            sym_df["date"].max(),
+                            len(sym_df),
+                            snapshot_id,
+                        ),
+                    )
+                except:
+                    pass
+
+                rows_written += len(sym_df)
+
+        # Update ingestion status
+        for symbol in df["symbol_id"].unique():
+            sym_df = df[df["symbol_id"] == symbol]
+            try:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO _ingestion_status 
+                    (symbol_id, exchange, table_name, last_updated, last_date, status)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, 'completed')
+                """,
+                    (
+                        symbol,
+                        sym_df["exchange"].iloc[0]
+                        if "exchange" in sym_df.columns
+                        else "NSE",
+                        table_name,
+                        sym_df["date"].max(),
+                    ),
+                )
+            except:
+                pass
+
+        conn.commit()
+        conn.close()
+
+        # Cleanup temp files
+        for f in os.listdir(self.feature_store_dir):
+            if f.endswith(".tmp.parquet"):
+                try:
+                    os.remove(os.path.join(self.feature_store_dir, f))
+                except:
+                    pass
+
+        return rows_written
+
+    def load_partitioned(
+        self,
+        table_name: str,
+        symbol_id: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        snapshot_id: int = None,
+    ) -> pd.DataFrame:
+        """Load data from partitioned storage with optional time travel."""
+        import glob
+
+        # If snapshot_id specified, load from that snapshot's files
+        if snapshot_id:
+            conn = self._get_conn()
+            files = conn.execute(
+                """
+                SELECT file_path FROM _file_registry 
+                WHERE table_name = ? AND snapshot_id = ?
+            """,
+                (table_name, snapshot_id),
+            ).fetchall()
+            conn.close()
+
+            if files:
+                dfs = [pd.read_parquet(f[0]) for f in files]
+                df = pd.concat(dfs, ignore_index=True)
+            else:
+                return pd.DataFrame()
+        else:
+            # Load from current data
+            pattern = os.path.join(
+                self.feature_store_dir, table_name, "**", "*.parquet"
+            )
+            files = glob.glob(pattern, recursive=True)
+
+            if not files:
+                return pd.DataFrame()
+
+            dfs = [pd.read_parquet(f) for f in files]
+            df = pd.concat(dfs, ignore_index=True)
+
+        # Filter by symbol
+        if symbol_id:
+            df = df[df["symbol_id"] == symbol_id]
+
+        # Filter by date range
+        if start_date:
+            df = df[df["date"] >= pd.to_datetime(start_date).date()]
+        if end_date:
+            df = df[df["date"] <= pd.to_datetime(end_date).date()]
+
+        return df
+
+    def get_table_info(self, table_name: str = None) -> pd.DataFrame:
+        """Get info about partitioned tables."""
+        conn = self._get_conn()
+        try:
+            if table_name:
+                df = conn.execute(
+                    """
+                    SELECT 
+                        table_name,
+                        COUNT(*) as num_files,
+                        SUM(row_count) as total_rows,
+                        MIN(min_date) as earliest_date,
+                        MAX(max_date) as latest_date
+                    FROM _file_registry
+                    WHERE table_name = ?
+                    GROUP BY table_name
+                """,
+                    (table_name,),
+                ).fetchdf()
+            else:
+                df = conn.execute("""
+                    SELECT 
+                        table_name,
+                        COUNT(*) as num_files,
+                        SUM(row_count) as total_rows,
+                        MIN(min_date) as earliest_date,
+                        MAX(max_date) as latest_date
+                    FROM _file_registry
+                    GROUP BY table_name
+                """).fetchdf()
+            return df
+        finally:
+            conn.close()
+
+    def create_snapshot(self, description: str = None) -> int:
         conn = self._get_conn()
         try:
             if feature_name:
@@ -159,6 +446,85 @@ class FeatureStore:
             conn.close()
 
     # ------------------------------------------------------------------ #
+    #  Incremental computation helpers                                   #
+    # ------------------------------------------------------------------ #
+
+    def get_last_feature_date(
+        self, feature_name: str, symbol_id: str = None, exchange: str = "NSE"
+    ) -> str:
+        """Get the last date for which a feature was computed."""
+        conn = self._get_conn()
+        try:
+            if symbol_id:
+                result = conn.execute(
+                    f"""
+                    SELECT MAX(date) FROM feat_{feature_name} 
+                    WHERE symbol_id = ? AND exchange = ?
+                """,
+                    (symbol_id, exchange),
+                ).fetchone()[0]
+            else:
+                result = conn.execute(
+                    f"SELECT MAX(date) FROM feat_{feature_name}"
+                ).fetchone()[0]
+            return str(result) if result else None
+        except:
+            return None
+        finally:
+            conn.close()
+
+    def compute_incremental(
+        self,
+        feature_name: str,
+        symbol_id: str,
+        exchange: str = "NSE",
+        compute_method=None,
+        lookback_days: int = 50,
+    ) -> int:
+        """
+        Compute features incrementally - only for new dates since last computation.
+        Returns number of new rows computed.
+
+        Args:
+            feature_name: Name of the feature table
+            symbol_id: Stock symbol
+            exchange: Exchange (default NSE)
+            compute_method: Function to compute the feature
+            lookback_days: Days of historical data to include for rolling calculations
+        """
+        import datetime
+
+        last_date = self.get_last_feature_date(feature_name, symbol_id, exchange)
+
+        if last_date:
+            # Add lookback days for rolling calculations
+            last_dt = datetime.datetime.strptime(
+                last_date, "%Y-%m-%d"
+            ) - datetime.timedelta(days=lookback_days)
+            start_date = last_dt.strftime("%Y-%m-%d")
+            df = compute_method(symbol_id, exchange, start_date=start_date)
+        else:
+            df = compute_method(symbol_id, exchange)
+
+        if df.empty:
+            return 0
+
+        # Add date column if not present
+        if "date" not in df.columns:
+            df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+
+        # Filter to only new rows (after last_date) if incremental
+        if last_date:
+            last_date_dt = pd.to_datetime(last_date).date()
+            df = df[df["date"] > last_date_dt]
+
+        if df.empty:
+            return 0
+
+        rows = self.store_features_duckdb(feature_name, df)
+        return rows
+
+    # ------------------------------------------------------------------ #
     #  Core: compute features via DuckDB vectorized SQL                  #
     # ------------------------------------------------------------------ #
 
@@ -169,6 +535,8 @@ class FeatureStore:
         symbol_id: str = None,
         exchange: str = "NSE",
         params: dict = None,
+        start_date: str = None,
+        end_date: str = None,
     ) -> pd.DataFrame:
         """
         Execute a DuckDB SQL template over the OHLCV catalog.
@@ -179,13 +547,37 @@ class FeatureStore:
         try:
             if symbol_id:
                 query = sql_template.replace("{symbol}", f"'{symbol_id}'")
-                order_pos = query.upper().rfind("ORDER BY")
-                insert_pos = order_pos if order_pos != -1 else len(query)
-                query = (
-                    query[:insert_pos]
-                    + f" AND exchange = '{exchange}'"
-                    + query[insert_pos:]
-                )
+
+                # Add date filters
+                date_conditions = []
+                if start_date:
+                    date_conditions.append(f"timestamp > '{start_date}'")
+                if end_date:
+                    date_conditions.append(f"timestamp <= '{end_date}'")
+
+                if date_conditions:
+                    order_pos = query.upper().rfind("ORDER BY")
+                    insert_pos = order_pos if order_pos != -1 else len(query)
+                    where_clause = " AND ".join(date_conditions)
+                    query = (
+                        query[:insert_pos]
+                        + f" AND {where_clause}"
+                        + (
+                            f" AND exchange = '{exchange}'"
+                            if "exchange" not in where_clause
+                            else ""
+                        )
+                        + query[insert_pos:]
+                    )
+                elif exchange:
+                    order_pos = query.upper().rfind("ORDER BY")
+                    insert_pos = order_pos if order_pos != -1 else len(query)
+                    query = (
+                        query[:insert_pos]
+                        + f" AND exchange = '{exchange}'"
+                        + query[insert_pos:]
+                    )
+
                 df = conn.execute(query).fetchdf()
             else:
                 query = sql_template.replace("{symbol}", "symbol_id")
@@ -193,6 +585,28 @@ class FeatureStore:
             return df
         finally:
             conn.close()
+
+    def _append_to_parquet(self, new_df: pd.DataFrame, path: str) -> pd.DataFrame:
+        """
+        Append new rows to existing parquet file, avoiding duplicates by timestamp.
+        Returns the final DataFrame (existing + new).
+        """
+        if new_df.empty:
+            return pd.DataFrame()
+
+        if os.path.exists(path):
+            existing = pd.read_parquet(path)
+            if not existing.empty and "timestamp" in existing.columns:
+                max_ts = existing["timestamp"].max()
+                new_df = new_df[new_df["timestamp"] > max_ts]
+                if new_df.empty:
+                    return existing
+                combined = pd.concat([existing, new_df], ignore_index=True)
+                combined.to_parquet(path, index=False)
+                return combined
+
+        new_df.to_parquet(path, index=False)
+        return new_df
 
     # ------------------------------------------------------------------ #
     #  Individual feature computations                                   #
@@ -203,6 +617,8 @@ class FeatureStore:
         symbol_id: str = None,
         exchange: str = "NSE",
         period: int = 14,
+        start_date: str = None,
+        end_date: str = None,
     ) -> pd.DataFrame:
         """
         Relative Strength Index (RSI).
@@ -264,6 +680,8 @@ class FeatureStore:
             symbol_id=symbol_id,
             exchange=exchange,
             params={"period": period},
+            start_date=start_date,
+            end_date=end_date,
         )
         return df
 
@@ -272,6 +690,8 @@ class FeatureStore:
         symbol_id: str = None,
         exchange: str = "NSE",
         period: int = 14,
+        start_date: str = None,
+        end_date: str = None,
     ) -> pd.DataFrame:
         """
         Average Directional Index (ADX) with +DI and -DI.
@@ -358,6 +778,8 @@ class FeatureStore:
             symbol_id=symbol_id,
             exchange=exchange,
             params={"period": period},
+            start_date=start_date,
+            end_date=end_date,
         )
         return df
 
@@ -366,6 +788,8 @@ class FeatureStore:
         symbol_id: str = None,
         exchange: str = "NSE",
         windows: List[int] = None,
+        start_date: str = None,
+        end_date: str = None,
     ) -> pd.DataFrame:
         """
         Simple Moving Average for multiple windows via DuckDB vectorized SQL.
@@ -382,6 +806,16 @@ class FeatureStore:
             f"ROUND(AVG(close) OVER w{w}, 4) AS sma_{w}" for w in windows
         )
 
+        # Build date filter
+        date_filter = ""
+        if start_date or end_date:
+            conditions = []
+            if start_date:
+                conditions.append(f"timestamp > '{start_date}'")
+            if end_date:
+                conditions.append(f"timestamp <= '{end_date}'")
+            date_filter = " AND " + " AND ".join(conditions)
+
         sql = f"""
             WITH ranked AS (
                 SELECT
@@ -394,6 +828,7 @@ class FeatureStore:
                 WHERE symbol_id = {{symbol}}
                   AND exchange = '{exchange}'
                   AND timestamp IS NOT NULL
+                  {date_filter}
                 WINDOW w AS (ORDER BY timestamp)
             )
             SELECT
@@ -421,12 +856,24 @@ class FeatureStore:
         symbol_id: str = None,
         exchange: str = "NSE",
         windows: List[int] = None,
+        start_date: str = None,
+        end_date: str = None,
     ) -> pd.DataFrame:
         """
         Exponential Moving Average using DuckDB's EMA via exponential smoothing.
         """
         if windows is None:
             windows = [12, 26, 50, 200]
+
+        # Build date filter
+        date_filter = ""
+        if start_date or end_date:
+            conditions = []
+            if start_date:
+                conditions.append(f"timestamp > '{start_date}'")
+            if end_date:
+                conditions.append(f"timestamp <= '{end_date}'")
+            date_filter = " AND " + " AND ".join(conditions)
 
         conn = self._get_conn()
         try:
@@ -438,6 +885,7 @@ class FeatureStore:
                 WHERE symbol_id = {{symbol}}
                   AND exchange = '{exchange}'
                   AND timestamp IS NOT NULL
+                  {date_filter}
                 WINDOW w AS (ORDER BY timestamp)
             """
             if symbol_id:
@@ -570,6 +1018,8 @@ class FeatureStore:
         symbol_id: str = None,
         exchange: str = "NSE",
         period: int = 14,
+        start_date: str = None,
+        end_date: str = None,
     ) -> pd.DataFrame:
         """
         Average True Range.
@@ -618,6 +1068,8 @@ class FeatureStore:
             symbol_id=symbol_id,
             exchange=exchange,
             params={"period": period},
+            start_date=start_date,
+            end_date=end_date,
         )
         return df
 
@@ -627,6 +1079,8 @@ class FeatureStore:
         exchange: str = "NSE",
         period: int = 20,
         std_dev: float = 2.0,
+        start_date: str = None,
+        end_date: str = None,
     ) -> pd.DataFrame:
         """
         Bollinger Bands.
@@ -661,6 +1115,8 @@ class FeatureStore:
             symbol_id=symbol_id,
             exchange=exchange,
             params={"period": period, "std_dev": std_dev},
+            start_date=start_date,
+            end_date=end_date,
         )
         return df
 
@@ -669,6 +1125,8 @@ class FeatureStore:
         symbol_id: str = None,
         exchange: str = "NSE",
         periods: List[int] = None,
+        start_date: str = None,
+        end_date: str = None,
     ) -> pd.DataFrame:
         """
         Rate of Change.
@@ -676,6 +1134,16 @@ class FeatureStore:
         """
         if periods is None:
             periods = [1, 5, 10, 20]
+
+        # Build date filter
+        date_filter = ""
+        if start_date or end_date:
+            conditions = []
+            if start_date:
+                conditions.append(f"timestamp > '{start_date}'")
+            if end_date:
+                conditions.append(f"timestamp <= '{end_date}'")
+            date_filter = " AND " + " AND ".join(conditions)
 
         conn = self._get_conn()
         try:
@@ -693,6 +1161,7 @@ class FeatureStore:
                     WHERE symbol_id = {{symbol}}
                       AND exchange = '{exchange}'
                       AND timestamp IS NOT NULL
+                      {date_filter}
                     WINDOW w AS (ORDER BY timestamp)
                 """
                 if symbol_id:
@@ -971,6 +1440,226 @@ class FeatureStore:
             conn.close()
 
     # ------------------------------------------------------------------ #
+    #  DuckDB-based Feature Storage (Phase 1 restructuring)             #
+    # ------------------------------------------------------------------ #
+
+    def _ensure_feature_table(self, feature_name: str, df: pd.DataFrame = None):
+        """Create feature table if not exists, with columns from df schema."""
+        conn = self._get_conn()
+        table_name = f"feat_{feature_name}"
+        try:
+            conn.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
+            conn.close()
+            return
+        except:
+            pass
+
+        conn = self._get_conn()
+        try:
+            if df is not None and not df.empty:
+                feat_cols = self._get_feature_columns(df)
+                col_defs = [
+                    "symbol_id VARCHAR",
+                    "exchange VARCHAR",
+                    "timestamp TIMESTAMP",
+                    "date DATE",
+                ]
+                for col in feat_cols:
+                    col_defs.append(f'"{col}" DOUBLE')
+
+                create_sql = f"""
+                    CREATE TABLE IF NOT EXISTS {table_name} (
+                        {", ".join(col_defs)},
+                        PRIMARY KEY (symbol_id, exchange, timestamp)
+                    )
+                """
+                conn.execute(create_sql)
+            else:
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {table_name} (
+                        symbol_id VARCHAR,
+                        exchange VARCHAR,
+                        timestamp TIMESTAMP,
+                        date DATE,
+                        PRIMARY KEY (symbol_id, exchange, timestamp)
+                    )
+                """)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _get_feature_columns(self, df: pd.DataFrame) -> List[str]:
+        """Get feature columns (exclude metadata)."""
+        return [
+            c
+            for c in df.columns
+            if c not in ("symbol_id", "exchange", "timestamp", "date")
+        ]
+
+    def store_features_duckdb(
+        self,
+        feature_name: str,
+        df: pd.DataFrame,
+    ) -> int:
+        """Store features in DuckDB table using DuckDB's native append."""
+        if df.empty:
+            return 0
+
+        df = df.copy()
+        if "date" not in df.columns:
+            df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+
+        self._ensure_feature_table(feature_name, df)
+
+        conn = self._get_conn()
+        try:
+            conn.execute(f"INSERT INTO feat_{feature_name} BY NAME SELECT * FROM df")
+            conn.commit()
+            rows = len(df)
+        except Exception as e:
+            logger.warning(f"Insert error: {e}")
+            rows = 0
+        finally:
+            conn.close()
+
+        return rows
+
+        df = df.copy()
+        if "date" not in df.columns:
+            df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+
+        self._ensure_feature_table(feature_name, df)
+
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS temp_staging AS SELECT * FROM df LIMIT 0"
+            )
+            for col in df.columns:
+                pass
+            conn.commit()
+        except Exception as e:
+            pass
+        finally:
+            conn.close()
+
+        return 0
+
+    def load_features_duckdb(
+        self,
+        feature_name: str,
+        symbol_id: str = None,
+        exchange: str = None,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """Load features from DuckDB table."""
+        conn = self._get_conn()
+        table_name = f"feat_{feature_name}"
+
+        try:
+            conn.execute(f"SELECT * FROM {table_name} LIMIT 1")
+        except:
+            conn.close()
+            return pd.DataFrame()
+
+        conn = self._get_conn()
+        try:
+            conditions = []
+            if symbol_id:
+                conditions.append(f"symbol_id = '{symbol_id}'")
+            if exchange:
+                conditions.append(f"exchange = '{exchange}'")
+            if start_date:
+                conditions.append(f"date >= '{start_date}'")
+            if end_date:
+                conditions.append(f"date <= '{end_date}'")
+
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+            df = conn.execute(f"""
+                SELECT * FROM {table_name}
+                WHERE {where_clause}
+                ORDER BY symbol_id, timestamp
+            """).fetchdf()
+            return df
+        finally:
+            conn.close()
+
+    def migrate_parquet_to_duckdb(self, feature_name: str = None) -> Dict[str, int]:
+        """Migrate existing parquet files to DuckDB tables."""
+        imported = {}
+        feature_dirs = []
+
+        if feature_name:
+            for exc in ["NSE", "BSE"]:
+                path = os.path.join(self.feature_store_dir, feature_name, exc)
+                if os.path.exists(path):
+                    feature_dirs.append((feature_name, exc, path))
+        else:
+            for root, dirs, files in os.walk(self.feature_store_dir):
+                parts = root.split(os.sep)
+                if len(parts) >= 3 and parts[-2] in ["NSE", "BSE"]:
+                    feat_name = parts[-3]
+                    exc = parts[-2]
+                    if any(f.endswith(".parquet") for f in files):
+                        feature_dirs.append((feat_name, exc, root))
+
+        for feat_name, exc, dir_path in feature_dirs:
+            logger.info(f"Migrating {feat_name}/{exc}...")
+            parquet_files = [f for f in os.listdir(dir_path) if f.endswith(".parquet")]
+
+            self._ensure_feature_table(feat_name)
+            conn = self._get_conn()
+            total_rows = 0
+
+            try:
+                max_ts = conn.execute(
+                    f"SELECT MAX(timestamp) FROM feat_{feat_name}"
+                ).fetchone()[0]
+            except:
+                max_ts = None
+
+            for pf in parquet_files:
+                try:
+                    df = pd.read_parquet(os.path.join(dir_path, pf))
+                    if "date" not in df.columns:
+                        df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+                    if max_ts:
+                        df = df[df["timestamp"] > max_ts]
+                    if df.empty:
+                        continue
+
+                    feat_cols = self._get_feature_columns(df)
+                    cols_sql = ", ".join(
+                        ["symbol_id", "exchange", "timestamp", "date"] + feat_cols
+                    )
+
+                    for _, row in df.iterrows():
+                        vals = [
+                            row["symbol_id"],
+                            row["exchange"],
+                            row["timestamp"],
+                            row["date"],
+                        ]
+                        vals += [row.get(c) for c in feat_cols]
+                        placeholders = ",".join(["?"] * len(vals))
+                        conn.execute(
+                            f"INSERT OR IGNORE INTO feat_{feat_name} ({cols_sql}) VALUES ({placeholders})",
+                            vals,
+                        )
+                        total_rows += 1
+
+                except Exception as e:
+                    logger.warning(f"Error migrating {pf}: {e}")
+
+            conn.commit()
+            imported[f"{feat_name}/{exc}"] = total_rows
+            logger.info(f"Migrated {total_rows} rows for {feat_name}/{exc}")
+            conn.close()
+
+        return imported
+
+    # ------------------------------------------------------------------ #
     #  Bulk feature computation + persistence                            #
     # ------------------------------------------------------------------ #
 
@@ -980,10 +1669,11 @@ class FeatureStore:
         exchanges: List[str] = None,
         feature_types: List[str] = None,
         warehouse_dir: str = None,
+        use_duckdb: bool = False,
     ) -> Dict[str, int]:
         """
         Compute all technical features for all (or specified) symbols
-        and write them to the feature store as partitioned Parquet.
+        and write them to the feature store.
 
         Args:
             symbols: List of symbol_ids. Defaults to all in OHLCV catalog.
@@ -991,6 +1681,7 @@ class FeatureStore:
             feature_types: List of features to compute.
                           Defaults to all: ['rsi', 'adx', 'sma', 'ema', 'macd', 'atr', 'bb', 'roc'].
             warehouse_dir: Where to write Parquet files. Defaults to feature_store_dir.
+            use_duckdb: If True, store in DuckDB tables. If False, use Parquet files.
 
         Returns:
             Dict mapping feature_type -> number of rows written.
@@ -1046,21 +1737,31 @@ class FeatureStore:
                         if df.empty:
                             continue
 
-                        feat_dir = os.path.join(warehouse_dir, feat_type, exc)
-                        os.makedirs(feat_dir, exist_ok=True)
-
-                        out_path = os.path.join(feat_dir, f"{sym}.parquet")
-                        df.to_parquet(out_path, index=False)
-                        total_rows += len(df)
-
-                        self.register_feature(
-                            feature_name=feat_type,
-                            symbol_id=sym,
-                            exchange=exc,
-                            rows_computed=len(df),
-                            feature_file=out_path,
-                            status="completed",
-                        )
+                        if use_duckdb:
+                            rows_added = self.store_features_duckdb(feat_type, df)
+                            total_rows += rows_added
+                            self.register_feature(
+                                feature_name=feat_type,
+                                symbol_id=sym,
+                                exchange=exc,
+                                rows_computed=rows_added,
+                                feature_file=f"duckdb:feat_{feat_type}",
+                                status="completed",
+                            )
+                        else:
+                            feat_dir = os.path.join(warehouse_dir, feat_type, exc)
+                            os.makedirs(feat_dir, exist_ok=True)
+                            out_path = os.path.join(feat_dir, f"{sym}.parquet")
+                            df = self._append_to_parquet(df, out_path)
+                            total_rows += len(df)
+                            self.register_feature(
+                                feature_name=feat_type,
+                                symbol_id=sym,
+                                exchange=exc,
+                                rows_computed=len(df),
+                                feature_file=out_path,
+                                status="completed",
+                            )
                     except Exception as e:
                         logger.warning(
                             f"Error computing {feat_type} for {sym}/{exc}: {e}"
@@ -1093,28 +1794,39 @@ class FeatureStore:
         self,
         symbol_id: str,
         exchange: str = "NSE",
+        use_duckdb: bool = False,
     ) -> pd.DataFrame:
         """
-        Compute all technicals and store to Parquet in one call.
+        Compute all technicals and store to feature store.
         Returns the merged DataFrame.
         """
         df = self.compute_all_technicals(symbol_id, exchange)
         if df.empty:
             return df
 
-        out_dir = os.path.join(self.feature_store_dir, "all_technicals", exchange)
-        os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, f"{symbol_id}.parquet")
-        df.to_parquet(out_path, index=False)
-
-        self.register_feature(
-            feature_name="all_technicals",
-            symbol_id=symbol_id,
-            exchange=exchange,
-            rows_computed=len(df),
-            feature_file=out_path,
-            status="completed",
-        )
+        if use_duckdb:
+            rows_added = self.store_features_duckdb("all_technicals", df)
+            self.register_feature(
+                feature_name="all_technicals",
+                symbol_id=symbol_id,
+                exchange=exchange,
+                rows_computed=rows_added,
+                feature_file="duckdb:feat_all_technicals",
+                status="completed",
+            )
+        else:
+            out_dir = os.path.join(self.feature_store_dir, "all_technicals", exchange)
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, f"{symbol_id}.parquet")
+            df = self._append_to_parquet(df, out_path)
+            self.register_feature(
+                feature_name="all_technicals",
+                symbol_id=symbol_id,
+                exchange=exchange,
+                rows_computed=len(df),
+                feature_file=out_path,
+                status="completed",
+            )
         return df
 
     # ------------------------------------------------------------------ #
