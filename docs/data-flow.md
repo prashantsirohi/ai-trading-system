@@ -157,10 +157,24 @@ CREATE TABLE _ingestion_status (
 analytics/screener.py
   │
   ├── RegimeDetector.get_market_regime()
-  │     ADX median → TREND (>25) | MEAN_REV (<=25)
+  │     Directional regime using:
+  │       - ADX median / trending participation
+  │       - % above 50 DMA
+  │       - % above 200 DMA
+  │       - short and medium breadth
+  │     Output examples:
+  │       - STRONG_BULL_TREND
+  │       - STRONG_BEAR_TREND
+  │       - RANGE_BOUND
   │
   ├── StockRanker.rank_stocks()
-  │     5-factor: 30% RS, 20% volume, 15% trend, 20% highs, 15% delivery
+  │     6-factor technical score:
+  │       25% relative strength
+  │       18% volume intensity
+  │       15% trend persistence
+  │       17% proximity to highs
+  │       10% delivery
+  │       15% sector strength
   │
   ├── AlphaEngine.get_ml_signals()
   │     XGBoost walk-forward validation
@@ -177,9 +191,10 @@ analytics/screener.py
 ```
 dashboard/app.py (Streamlit)
   │
-  ├── Overview: Stats, sector distribution
-  ├── Ranking: 5-factor ranked stocks
+  ├── Overview: stats, freshness, pipeline health
+  ├── Ranking: 6-factor technical ranked stocks
   ├── Chart: Interactive OHLCV + indicators
+  ├── Pipeline: run payload, sectors, breakout scan, warnings
   └── Portfolio: Position sizing, risk budget
 ```
 

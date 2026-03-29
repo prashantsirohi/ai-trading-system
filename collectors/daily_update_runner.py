@@ -23,11 +23,25 @@ sys.path.insert(0, project_root)
 
 from collectors.dhan_collector import DhanCollector
 from features.feature_store import FeatureStore
+from utils.data_domains import ensure_domain_layout
 from utils.logger import logger
 
 
-def run(symbols_only: bool, features_only: bool, batch_size: int, bulk: bool):
-    collector = DhanCollector()
+def run(
+    symbols_only: bool,
+    features_only: bool,
+    batch_size: int,
+    bulk: bool,
+    symbol_limit: int | None = None,
+    data_domain: str = "operational",
+):
+    paths = ensure_domain_layout(project_root=project_root, data_domain=data_domain)
+    collector = DhanCollector(
+        db_path=str(paths.ohlcv_db_path),
+        masterdb_path=str(paths.master_db_path),
+        feature_store_dir=str(paths.feature_store_dir),
+        data_domain=data_domain,
+    )
 
     if features_only:
         logger.info("=" * 60)
@@ -42,11 +56,17 @@ def run(symbols_only: bool, features_only: bool, batch_size: int, bulk: bool):
                 "SELECT DISTINCT symbol_id FROM _catalog WHERE exchange = 'NSE'"
             ).fetchall()
             symbols = [r[0] for r in syms]
+            if symbol_limit is not None:
+                symbols = symbols[:symbol_limit]
         finally:
             conn.close()
 
         logger.info(f"Computing features for {len(symbols)} symbols...")
-        fs = FeatureStore()
+        fs = FeatureStore(
+            ohlcv_db_path=str(paths.ohlcv_db_path),
+            feature_store_dir=str(paths.feature_store_dir),
+            data_domain=data_domain,
+        )
         result = fs.compute_and_store_features(
             symbols=symbols,
             exchanges=["NSE"],
@@ -67,7 +87,11 @@ def run(symbols_only: bool, features_only: bool, batch_size: int, bulk: bool):
         logger.info("Computing sector RS and relative strength...")
         from compute_sector_rs import compute_all_symbols_rs
 
-        compute_all_symbols_rs()
+        compute_all_symbols_rs(
+            db_path=str(paths.ohlcv_db_path),
+            feature_store_dir=str(paths.feature_store_dir),
+            masterdb_path=str(paths.master_db_path),
+        )
         logger.info("Sector RS computation complete")
 
         return
@@ -77,7 +101,10 @@ def run(symbols_only: bool, features_only: bool, batch_size: int, bulk: bool):
         logger.info("MODE: Bulk OHLC - Fast single API call for today's data")
         logger.info("=" * 60)
 
-        result = collector.run_daily_update_bulk(exchanges=["NSE"])
+        result = collector.run_daily_update_bulk(
+            exchanges=["NSE"],
+            symbol_limit=symbol_limit,
+        )
         logger.info(f"Bulk daily update result: {result}")
         return
 
@@ -90,6 +117,7 @@ def run(symbols_only: bool, features_only: bool, batch_size: int, bulk: bool):
             exchanges=["NSE"],
             batch_size=batch_size,
             max_concurrent=10,
+            symbol_limit=symbol_limit,
         )
         logger.info(f"Daily update result: {result}")
         logger.info("")
@@ -106,6 +134,7 @@ def run(symbols_only: bool, features_only: bool, batch_size: int, bulk: bool):
         exchanges=["NSE"],
         batch_size=batch_size,
         max_concurrent=10,
+        symbol_limit=symbol_limit,
     )
 
     logger.info("=" * 60)
@@ -117,7 +146,11 @@ def run(symbols_only: bool, features_only: bool, batch_size: int, bulk: bool):
     logger.info("Computing sector RS and relative strength...")
     from compute_sector_rs import compute_all_symbols_rs
 
-    compute_all_symbols_rs()
+    compute_all_symbols_rs(
+        db_path=str(paths.ohlcv_db_path),
+        feature_store_dir=str(paths.feature_store_dir),
+        masterdb_path=str(paths.master_db_path),
+    )
     logger.info("Sector RS computation complete")
     logger.info("")
     logger.info("TIP: Recompute features for updated symbols:")
@@ -145,6 +178,18 @@ def main():
         action="store_true",
         help="Use bulk OHLC API (fast, today only). Use for quick daily updates.",
     )
+    parser.add_argument(
+        "--symbol-limit",
+        type=int,
+        default=None,
+        help="Limit the live symbol universe for canary/test runs.",
+    )
+    parser.add_argument(
+        "--data-domain",
+        choices=["operational", "research"],
+        default="operational",
+        help="Resolved storage domain for this run.",
+    )
     args = parser.parse_args()
 
     run(
@@ -152,6 +197,8 @@ def main():
         features_only=args.features_only,
         batch_size=args.batch_size,
         bulk=args.bulk,
+        symbol_limit=args.symbol_limit,
+        data_domain=args.data_domain,
     )
 
 

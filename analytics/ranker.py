@@ -1,8 +1,10 @@
 import os
+import sqlite3
 import duckdb
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict
+from utils.data_domains import ensure_domain_layout
 from utils.logger import logger
 
 
@@ -24,36 +26,106 @@ class StockRanker:
     """
 
     WEIGHTS = {
-        "relative_strength": 0.30,
-        "volume_intensity": 0.20,
+        "relative_strength": 0.25,
+        "volume_intensity": 0.18,
         "trend_persistence": 0.15,
-        "proximity_highs": 0.20,
-        "delivery_pct": 0.15,
+        "proximity_highs": 0.17,
+        "delivery_pct": 0.10,
+        "sector_strength": 0.15,
     }
 
     def __init__(
         self,
         ohlcv_db_path: str = None,
         feature_store_dir: str = None,
+        data_domain: str = "operational",
     ):
+        paths = ensure_domain_layout(
+            project_root=os.path.dirname(os.path.dirname(__file__)),
+            data_domain=data_domain,
+        )
         if ohlcv_db_path is None:
-            ohlcv_db_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "ohlcv.duckdb",
-            )
+            ohlcv_db_path = str(paths.ohlcv_db_path)
         if feature_store_dir is None:
-            feature_store_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "feature_store",
-            )
+            feature_store_dir = str(paths.feature_store_dir)
         self.ohlcv_db_path = ohlcv_db_path
         self.feature_store_dir = feature_store_dir
+        self.data_domain = data_domain
+        self.master_db_path = str(paths.master_db_path)
+        self._sector_rs_cache: pd.DataFrame | None = None
+        self._stock_vs_sector_cache: pd.DataFrame | None = None
+        self._sector_map_cache: dict[str, str] | None = None
         os.makedirs(self.feature_store_dir, exist_ok=True)
 
     def _get_conn(self):
-        return duckdb.connect(self.ohlcv_db_path)
+        return duckdb.connect(self.ohlcv_db_path, read_only=True)
+
+    def _normalize_symbol_exchange_columns(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Repair rows where symbol_id/exchange were swapped in legacy operational loads."""
+        if data.empty or "symbol_id" not in data.columns or "exchange" not in data.columns:
+            return data
+
+        normalized = data.copy()
+        valid_exchanges = {"NSE", "BSE"}
+        swap_mask = normalized["symbol_id"].isin(valid_exchanges) & ~normalized["exchange"].isin(valid_exchanges)
+        if swap_mask.any():
+            logger.warning(
+                "Detected %s rows with swapped symbol_id/exchange columns; normalizing in ranker",
+                int(swap_mask.sum()),
+            )
+            original_symbol = normalized.loc[swap_mask, "symbol_id"].copy()
+            normalized.loc[swap_mask, "symbol_id"] = normalized.loc[swap_mask, "exchange"].astype(str)
+            normalized.loc[swap_mask, "exchange"] = original_symbol.astype(str)
+        return normalized
+
+    def _load_sector_inputs(self) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, str]]:
+        """Lazily load sector leadership inputs for ranking."""
+        if (
+            self._sector_rs_cache is not None
+            and self._stock_vs_sector_cache is not None
+            and self._sector_map_cache is not None
+        ):
+            return (
+                self._sector_rs_cache,
+                self._stock_vs_sector_cache,
+                self._sector_map_cache,
+            )
+
+        all_symbols_dir = os.path.join(self.feature_store_dir, "all_symbols")
+        sector_rs_path = os.path.join(all_symbols_dir, "sector_rs.parquet")
+        stock_vs_sector_path = os.path.join(all_symbols_dir, "stock_vs_sector.parquet")
+
+        if os.path.exists(sector_rs_path):
+            sector_rs = pd.read_parquet(sector_rs_path)
+            sector_rs.index = pd.to_datetime(sector_rs.index).normalize()
+            sector_rs = sector_rs[~sector_rs.index.duplicated(keep="last")]
+        else:
+            sector_rs = pd.DataFrame()
+
+        if os.path.exists(stock_vs_sector_path):
+            stock_vs_sector = pd.read_parquet(stock_vs_sector_path)
+            stock_vs_sector.index = pd.to_datetime(stock_vs_sector.index).normalize()
+            stock_vs_sector = stock_vs_sector[
+                ~stock_vs_sector.index.duplicated(keep="last")
+            ]
+        else:
+            stock_vs_sector = pd.DataFrame()
+
+        sector_map: dict[str, str] = {}
+        if os.path.exists(self.master_db_path):
+            conn = sqlite3.connect(self.master_db_path)
+            try:
+                rows = conn.execute(
+                    "SELECT Symbol, Sector FROM stock_details WHERE Symbol IS NOT NULL"
+                ).fetchall()
+                sector_map = {symbol: sector for symbol, sector in rows if sector}
+            finally:
+                conn.close()
+
+        self._sector_rs_cache = sector_rs
+        self._stock_vs_sector_cache = stock_vs_sector
+        self._sector_map_cache = sector_map
+        return sector_rs, stock_vs_sector, sector_map
 
     def rank_all(
         self,
@@ -101,19 +173,16 @@ class StockRanker:
                 SELECT
                     symbol_id,
                     exchange,
-                    timestamp,
-                    close,
-                    volume,
-                    high,
-                    low,
-                    open
+                    MAX(timestamp) AS timestamp,
+                    arg_max(close, timestamp) AS close,
+                    arg_max(volume, timestamp) AS volume,
+                    arg_max(high, timestamp) AS high,
+                    arg_max(low, timestamp) AS low,
+                    arg_max(open, timestamp) AS open
                 FROM _catalog
                 WHERE exchange IN ({",".join(f"'{e}'" for e in exchanges)})
                   AND timestamp IS NOT NULL
-                QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY symbol_id, exchange
-                    ORDER BY timestamp DESC
-                ) = 1
+                GROUP BY symbol_id, exchange
             """).fetchdf()
         finally:
             conn.close()
@@ -123,12 +192,14 @@ class StockRanker:
             return pd.DataFrame()
 
         all_data["timestamp"] = pd.to_datetime(all_data["timestamp"])
+        all_data = self._normalize_symbol_exchange_columns(all_data)
 
         scores = self._compute_relative_strength(all_data, date, benchmark_symbol)
         scores = self._compute_volume_intensity(scores)
         scores = self._compute_trend_persistence(scores, date)
         scores = self._compute_proximity_highs(scores, date)
         scores = self._compute_delivery(scores, date)
+        scores = self._compute_sector_strength(scores, date)
 
         for factor, col in [
             ("relative_strength", "rel_strength"),
@@ -139,6 +210,14 @@ class StockRanker:
         ]:
             scores[f"{col}_score"] = scores[col].rank(pct=True) * 100
 
+        scores["sector_rs_score"] = scores["sector_rs_value"].rank(pct=True) * 100
+        scores["stock_vs_sector_score"] = (
+            scores["stock_vs_sector_value"].rank(pct=True) * 100
+        )
+        scores["sector_strength_score"] = (
+            scores["sector_rs_score"] * 0.6 + scores["stock_vs_sector_score"] * 0.4
+        )
+
         scores["composite_score"] = sum(
             scores[f"{col}_score"] * w
             for col, w in [
@@ -148,7 +227,7 @@ class StockRanker:
                 ("prox_high", weights["proximity_highs"]),
                 ("delivery_pct", weights["delivery_pct"]),
             ]
-        )
+        ) + scores["sector_strength_score"] * weights["sector_strength"]
 
         # scores = self._apply_1yr_penalty(scores, weights)
 
@@ -168,6 +247,7 @@ class StockRanker:
             "trend_score_score",
             "prox_high_score",
             "delivery_pct_score",
+            "sector_strength_score",
         ]
         available = [c for c in cols if c in scores.columns]
         return scores[available].reset_index(drop=True)
@@ -268,6 +348,7 @@ class StockRanker:
             )
             conn.close()
 
+            ret_data = self._normalize_symbol_exchange_columns(ret_data)
             ret_data = ret_data.dropna(subset=["return_pct"])
             ret_data = ret_data.drop_duplicates(["symbol_id", "exchange"])
             data = data.merge(
@@ -309,6 +390,7 @@ class StockRanker:
         finally:
             conn.close()
 
+        vol_data = self._normalize_symbol_exchange_columns(vol_data)
         data = data.merge(
             vol_data[["symbol_id", "exchange", "vol_20_avg", "vol_20_max"]],
             on=["symbol_id", "exchange"],
@@ -334,16 +416,23 @@ class StockRanker:
             try:
                 conn = self._get_conn()
                 cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
-                adx_latest = conn.execute(f"""
-                    SELECT symbol_id, exchange, adx_value AS adx_14
+                adx_latest = conn.execute(
+                    f"""
+                    SELECT *
                     FROM read_parquet('{adx_path}/*.parquet')
                     WHERE timestamp <= '{cutoff_ts}'
                     QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp DESC) = 1
-                """).fetchdf()
+                    """
+                ).fetchdf()
                 conn.close()
                 if not adx_latest.empty:
+                    adx_latest = self._normalize_symbol_exchange_columns(adx_latest)
+                    if "adx_14" not in adx_latest.columns and "adx_value" in adx_latest.columns:
+                        adx_latest["adx_14"] = adx_latest["adx_value"]
                     data = data.merge(
-                        adx_latest, on=["symbol_id", "exchange"], how="left"
+                        adx_latest[["symbol_id", "exchange", "adx_14"]],
+                        on=["symbol_id", "exchange"],
+                        how="left",
                     )
             except Exception as e:
                 logger.warning(f"ADX load failed: {e}")
@@ -380,6 +469,7 @@ class StockRanker:
             """).fetchdf()
             conn.close()
 
+            sma_latest = self._normalize_symbol_exchange_columns(sma_latest)
             data = data.merge(
                 sma_latest[["symbol_id", "exchange", "sma_20", "sma_50"]],
                 on=["symbol_id", "exchange"],
@@ -450,6 +540,7 @@ class StockRanker:
             """).fetchdf()
             conn.close()
 
+            highs = self._normalize_symbol_exchange_columns(highs)
             data = data.merge(
                 highs[["symbol_id", "exchange", "high_52w"]],
                 on=["symbol_id", "exchange"],
@@ -491,6 +582,7 @@ class StockRanker:
             conn.close()
 
             if not del_data.empty:
+                del_data = self._normalize_symbol_exchange_columns(del_data)
                 data = data.merge(
                     del_data[["symbol_id", "exchange", "delivery_pct"]],
                     on=["symbol_id", "exchange"],
@@ -502,6 +594,36 @@ class StockRanker:
         if "delivery_pct" not in data.columns:
             data["delivery_pct"] = np.nan
         data["delivery_pct"] = data["delivery_pct"].fillna(20.0)
+        return data
+
+    def _compute_sector_strength(
+        self,
+        data: pd.DataFrame,
+        date: str,
+    ) -> pd.DataFrame:
+        """Add sector leadership and stock-vs-sector relative strength inputs."""
+        sector_rs, stock_vs_sector, sector_map = self._load_sector_inputs()
+        if sector_rs.empty or stock_vs_sector.empty or not sector_map:
+            data["sector_rs_value"] = 0.5
+            data["stock_vs_sector_value"] = 0.0
+            return data
+
+        cutoff = pd.to_datetime(date).normalize()
+        sector_slice = sector_rs.loc[sector_rs.index <= cutoff]
+        stock_vs_slice = stock_vs_sector.loc[stock_vs_sector.index <= cutoff]
+        if sector_slice.empty or stock_vs_slice.empty:
+            data["sector_rs_value"] = 0.5
+            data["stock_vs_sector_value"] = 0.0
+            return data
+
+        latest_sector = sector_slice.ffill().iloc[-1]
+        latest_stock_vs = stock_vs_slice.ffill().iloc[-1]
+
+        data["sector_name"] = data["symbol_id"].map(sector_map)
+        data["sector_rs_value"] = data["sector_name"].map(latest_sector.to_dict())
+        data["stock_vs_sector_value"] = data["symbol_id"].map(latest_stock_vs.to_dict())
+        data["sector_rs_value"] = data["sector_rs_value"].fillna(0.5)
+        data["stock_vs_sector_value"] = data["stock_vs_sector_value"].fillna(0.0)
         return data
 
     def rank_with_fundamentals(

@@ -8,6 +8,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import duckdb
+import json
+import sqlite3
 import plotly.graph_objects as go
 import plotly.express as px
 import plotly.subplots as make_subplots
@@ -16,6 +18,7 @@ import os
 import sys
 import time
 import logging
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 
@@ -31,10 +34,15 @@ from analytics.visualizations import Visualizer
 logging.getLogger("streamlit").setLevel(logging.WARNING)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OHLCV_DB = os.path.join(PROJECT_ROOT, "data", "ohlcv.duckdb")
-FEATURE_STORE = os.path.join(PROJECT_ROOT, "data", "feature_store")
-MASTER_DB = os.path.join(PROJECT_ROOT, "data", "masterdata.db")
-REPORTS_DIR = os.path.join(PROJECT_ROOT, "reports")
+
+from utils.data_domains import get_domain_paths
+
+DOMAIN_PATHS = get_domain_paths(PROJECT_ROOT, "operational")
+OHLCV_DB = str(DOMAIN_PATHS.ohlcv_db_path)
+FEATURE_STORE = str(DOMAIN_PATHS.feature_store_dir)
+MASTER_DB = str(DOMAIN_PATHS.master_db_path)
+REPORTS_DIR = str(DOMAIN_PATHS.reports_dir)
+PIPELINE_RUNS_DIR = str(DOMAIN_PATHS.pipeline_runs_dir)
 
 
 def get_db_stats() -> Dict:
@@ -55,6 +63,263 @@ def get_db_stats() -> Dict:
         return {"rows": total_rows, "symbols": total_syms, "latest_date": latest_str}
     except Exception as e:
         return {"rows": 0, "symbols": 0, "latest_date": "Error", "error": str(e)}
+
+
+def get_dashboard_health(payload: Dict | None = None) -> Dict[str, object]:
+    """Collect lightweight operational health checks for the dashboard."""
+    checks: list[dict[str, object]] = []
+    summary: dict[str, object] = {}
+    payload = payload or {}
+
+    pending_symbols = 0
+    unexpected_symbols = 0
+    try:
+        conn = duckdb.connect(OHLCV_DB, read_only=True)
+        try:
+            latest_ohlcv = conn.execute(
+                "SELECT MAX(CAST(timestamp AS DATE)) FROM _catalog WHERE exchange = 'NSE'"
+            ).fetchone()[0]
+            latest_delivery = conn.execute(
+                "SELECT MAX(CAST(timestamp AS DATE)) FROM _delivery WHERE exchange = 'NSE'"
+            ).fetchone()[0]
+            swapped_catalog = conn.execute(
+                "SELECT COUNT(*) FROM _catalog WHERE symbol_id IN ('NSE','BSE') AND exchange NOT IN ('NSE','BSE')"
+            ).fetchone()[0]
+            swapped_delivery = conn.execute(
+                "SELECT COUNT(*) FROM _delivery WHERE symbol_id IN ('NSE','BSE') AND exchange NOT IN ('NSE','BSE')"
+            ).fetchone()[0]
+            catalog_symbols = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT DISTINCT symbol_id FROM _catalog WHERE exchange = 'NSE'"
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "summary": {"error": str(exc)},
+            "checks": [{"name": "db_connection", "status": "error", "detail": str(exc)}],
+        }
+
+    try:
+        master_conn = sqlite3.connect(MASTER_DB)
+        try:
+            master_symbols = {
+                row[0]
+                for row in master_conn.execute(
+                    "SELECT DISTINCT Symbol FROM stock_details WHERE exchange = 'NSE'"
+                ).fetchall()
+            }
+        finally:
+            master_conn.close()
+        pending_symbols = len(master_symbols - catalog_symbols)
+        unexpected_symbols = len(catalog_symbols - master_symbols)
+    except Exception as exc:
+        checks.append(
+            {
+                "name": "universe_alignment",
+                "status": "error",
+                "detail": f"Failed to compare master universe: {exc}",
+            }
+        )
+
+    latest_payload_path = payload.get("_artifact_path")
+    latest_payload_time = None
+    payload_age_minutes = None
+    if latest_payload_path and Path(latest_payload_path).exists():
+        latest_payload_time = datetime.fromtimestamp(Path(latest_payload_path).stat().st_mtime)
+        payload_age_minutes = round((datetime.now() - latest_payload_time).total_seconds() / 60, 1)
+
+    delivery_lag_days = None
+    if latest_ohlcv and latest_delivery:
+        delivery_lag_days = (pd.Timestamp(latest_ohlcv) - pd.Timestamp(latest_delivery)).days
+
+    checks.append(
+        {
+            "name": "pipeline_payload",
+            "status": "ok" if latest_payload_path else "warn",
+            "detail": latest_payload_path or "No dashboard payload found",
+        }
+    )
+    checks.append(
+        {
+            "name": "delivery_freshness",
+            "status": "ok" if delivery_lag_days is not None and delivery_lag_days <= 3 else "warn",
+            "detail": f"Delivery lag: {delivery_lag_days} day(s)" if delivery_lag_days is not None else "No delivery data",
+        }
+    )
+    checks.append(
+        {
+            "name": "catalog_schema",
+            "status": "ok" if swapped_catalog == 0 else "error",
+            "detail": f"Swapped _catalog rows: {swapped_catalog}",
+        }
+    )
+    checks.append(
+        {
+            "name": "delivery_schema",
+            "status": "ok" if swapped_delivery == 0 else "error",
+            "detail": f"Swapped _delivery rows: {swapped_delivery}",
+        }
+    )
+    checks.append(
+        {
+            "name": "universe_alignment",
+            "status": "ok" if pending_symbols == 0 and unexpected_symbols == 0 else "warn",
+            "detail": (
+                f"Pending symbols: {pending_symbols}, unexpected symbols: {unexpected_symbols}"
+            ),
+        }
+    )
+
+    overall_status = "ok"
+    if any(check["status"] == "error" for check in checks):
+        overall_status = "error"
+    elif any(check["status"] == "warn" for check in checks):
+        overall_status = "warn"
+
+    summary.update(
+        {
+            "latest_ohlcv_date": str(latest_ohlcv) if latest_ohlcv else None,
+            "latest_delivery_date": str(latest_delivery) if latest_delivery else None,
+            "delivery_lag_days": delivery_lag_days,
+            "payload_age_minutes": payload_age_minutes,
+            "swapped_catalog_rows": int(swapped_catalog),
+            "swapped_delivery_rows": int(swapped_delivery),
+            "pending_symbol_count": int(pending_symbols),
+            "unexpected_symbol_count": int(unexpected_symbols),
+        }
+    )
+    return {"status": overall_status, "summary": summary, "checks": checks}
+
+
+def load_latest_dashboard_payload() -> Dict:
+    """Load the most recent rank-stage dashboard payload if present."""
+    runs_dir = Path(PIPELINE_RUNS_DIR)
+    if not runs_dir.exists():
+        return {}
+
+    candidates = sorted(
+        runs_dir.glob("*/rank/attempt_*/dashboard_payload.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        return {}
+
+    latest_path = candidates[0]
+    with latest_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    payload["_artifact_path"] = str(latest_path)
+    return payload
+
+
+def load_latest_rank_fallback() -> Dict:
+    """Build a minimal payload from the latest rank artifacts when no dashboard payload exists yet."""
+    runs_dir = Path(PIPELINE_RUNS_DIR)
+    if not runs_dir.exists():
+        return {}
+
+    ranked_candidates = sorted(
+        runs_dir.glob("*/rank/attempt_*/ranked_signals.csv"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not ranked_candidates:
+        return {}
+
+    ranked_path = ranked_candidates[0]
+    rank_dir = ranked_path.parent
+    ranked_df = pd.read_csv(ranked_path)
+    breakout_path = rank_dir / "breakout_scan.csv"
+    stock_scan_path = rank_dir / "stock_scan.csv"
+    sector_path = rank_dir / "sector_dashboard.csv"
+
+    breakout_df = pd.read_csv(breakout_path) if breakout_path.exists() else pd.DataFrame()
+    stock_scan_df = pd.read_csv(stock_scan_path) if stock_scan_path.exists() else pd.DataFrame()
+    sector_df = pd.read_csv(sector_path) if sector_path.exists() else pd.DataFrame()
+
+    top_sector = None
+    if not sector_df.empty:
+        sector_col = "Sector" if "Sector" in sector_df.columns else sector_df.columns[0]
+        top_sector = sector_df.iloc[0].get(sector_col)
+
+    return {
+        "summary": {
+            "run_id": ranked_path.parts[-4],
+            "ranked_count": int(len(ranked_df)),
+            "breakout_count": int(len(breakout_df)),
+            "stock_scan_count": int(len(stock_scan_df)),
+            "sector_count": int(len(sector_df)),
+            "top_symbol": ranked_df.iloc[0].get("symbol_id") if not ranked_df.empty else None,
+            "top_sector": top_sector,
+        },
+        "ranked_signals": ranked_df.head(10).to_dict(orient="records"),
+        "breakout_scan": breakout_df.head(10).to_dict(orient="records"),
+        "stock_scan": stock_scan_df.head(10).to_dict(orient="records"),
+        "sector_dashboard": sector_df.head(10).to_dict(orient="records"),
+        "warnings": ["Dashboard payload missing; showing latest rank artifacts fallback."],
+        "_artifact_path": str(ranked_path),
+    }
+
+
+def normalize_rank_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Repair rank outputs if symbol/exchange columns were swapped upstream."""
+    if df is None or df.empty or "symbol_id" not in df.columns or "exchange" not in df.columns:
+        return df
+    normalized = df.copy()
+    valid_exchanges = {"NSE", "BSE"}
+    swap_mask = normalized["symbol_id"].isin(valid_exchanges) & ~normalized["exchange"].isin(valid_exchanges)
+    if swap_mask.any():
+        original = normalized.loc[swap_mask, "symbol_id"].copy()
+        normalized.loc[swap_mask, "symbol_id"] = normalized.loc[swap_mask, "exchange"].astype(str)
+        normalized.loc[swap_mask, "exchange"] = original.astype(str)
+    return normalized
+
+
+def reorder_columns(df: pd.DataFrame, preferred: list[str]) -> pd.DataFrame:
+    """Move important columns to the front while preserving the remaining order."""
+    if df is None or df.empty:
+        return df
+    ordered = [column for column in preferred if column in df.columns]
+    remaining = [column for column in df.columns if column not in ordered]
+    return df[ordered + remaining]
+
+
+def is_suspicious_rank_df(df: pd.DataFrame) -> bool:
+    """Detect stale legacy ranking frames that collapse factors to ~50."""
+    if df is None or df.empty:
+        return False
+
+    factor_cols = [
+        col
+        for col in [
+            "rel_strength_score",
+            "vol_intensity_score",
+            "trend_score_score",
+            "prox_high_score",
+            "delivery_pct_score",
+            "sector_strength_score",
+        ]
+        if col in df.columns
+    ]
+    if not factor_cols:
+        return False
+
+    sample = df.head(50)
+    unique_counts = [sample[col].nunique(dropna=False) for col in factor_cols]
+    if all(count <= 1 for count in unique_counts):
+        return True
+
+    suspicious_value = 50.052192066805844
+    near_flat = 0
+    for col in factor_cols:
+        series = pd.to_numeric(sample[col], errors="coerce").dropna()
+        if not series.empty and np.isclose(series, suspicious_value, atol=0.01).all():
+            near_flat += 1
+    return near_flat >= max(2, len(factor_cols) // 2)
 
 
 def get_sectors() -> List[str]:
@@ -102,12 +367,14 @@ def load_features(symbol: str, exchange: str = "NSE") -> Dict[str, pd.DataFrame]
     """Load all available feature DataFrames for a symbol."""
     features = {}
     partitioned_features = {
-        "rsi": ("rsi", "close, rsi"),
-        "adx": ("adx", "close, adx_plus, adx_minus, adx_value"),
-        "atr": ("atr", "close, atr_value"),
-        "bb": ("bb", "close, bb_upper, bb_middle, bb_lower"),
-        "roc": ("roc", "close, roc_period, roc_value"),
-        "supertrend": ("supertrend", "close, atr_value, st_upper, st_lower, st_signal"),
+        "rsi": ("rsi", "close, rs, rsi_14 AS rsi"),
+        "adx": ("adx", "adx_14 AS adx_value, plus_di_14 AS adx_plus, minus_di_14 AS adx_minus"),
+        "atr": ("atr", "atr_14 AS atr_value"),
+        "roc": ("roc", "close, roc_20 AS roc_value"),
+        "supertrend": (
+            "supertrend",
+            "close, supertrend_10_3 AS st_upper, supertrend_10_3 AS st_lower, supertrend_dir_10_3 AS st_signal",
+        ),
     }
     per_symbol_features = ["ema", "macd"]
 
@@ -127,10 +394,34 @@ def load_features(symbol: str, exchange: str = "NSE") -> Dict[str, pd.DataFrame]
                 ).fetchdf()
                 if not result.empty:
                     result["timestamp"] = pd.to_datetime(result["timestamp"])
+                    result["timestamp"] = result["timestamp"].dt.normalize()
                     result.set_index("timestamp", inplace=True)
                     features[feat] = result
     finally:
         conn.close()
+
+    bb_dir = os.path.join(FEATURE_STORE, "bb", exchange)
+    if os.path.exists(bb_dir):
+        pattern = os.path.join(bb_dir, "*.parquet").replace("\\", "/")
+        conn = duckdb.connect(OHLCV_DB, read_only=True)
+        try:
+            result = conn.execute(
+                f"""
+                SELECT timestamp, close, bb_upper, bb_middle, bb_lower
+                FROM read_parquet('{pattern}')
+                WHERE symbol_id = '{symbol}' AND exchange = '{exchange}'
+                ORDER BY timestamp
+                """
+            ).fetchdf()
+        except Exception:
+            result = pd.DataFrame()
+        finally:
+            conn.close()
+        if not result.empty:
+            result["timestamp"] = pd.to_datetime(result["timestamp"])
+            result["timestamp"] = result["timestamp"].dt.normalize()
+            result.set_index("timestamp", inplace=True)
+            features["bb"] = result
 
     for feat in per_symbol_features:
         path = os.path.join(FEATURE_STORE, feat, exchange, f"{symbol}.parquet")
@@ -138,6 +429,7 @@ def load_features(symbol: str, exchange: str = "NSE") -> Dict[str, pd.DataFrame]
             df = pd.read_parquet(path)
             if "timestamp" in df.columns:
                 df["timestamp"] = pd.to_datetime(df["timestamp"])
+                df["timestamp"] = df["timestamp"].dt.normalize()
                 df.set_index("timestamp", inplace=True)
             features[feat] = df
 
@@ -424,6 +716,20 @@ def style_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def build_dashboard_weights() -> Dict[str, float]:
+    """Merge sidebar slider weights with ranker defaults for hidden factors."""
+    defaults = StockRanker.WEIGHTS.copy()
+    defaults.update(
+        {
+            "relative_strength": st.session_state.weights["rs"] / 100,
+            "volume_intensity": st.session_state.weights["vol"] / 100,
+            "trend_persistence": st.session_state.weights["trend"] / 100,
+            "proximity_highs": st.session_state.weights["high"] / 100,
+        }
+    )
+    return defaults
+
+
 def main():
     st.set_page_config(
         page_title="AI Trading Command Center",
@@ -454,6 +760,38 @@ def main():
         st.session_state.weights = {"rs": 35, "vol": 25, "trend": 15, "high": 30}
     if "last_refresh" not in st.session_state:
         st.session_state.last_refresh = None
+    if "rank_df_source" not in st.session_state:
+        st.session_state.rank_df_source = None
+
+    dashboard_payload = load_latest_dashboard_payload() or load_latest_rank_fallback()
+    dashboard_health = get_dashboard_health(dashboard_payload)
+    if st.session_state.rank_df is not None:
+        st.session_state.rank_df = normalize_rank_df(st.session_state.rank_df)
+        score_col = "custom_score" if "custom_score" in st.session_state.rank_df.columns else "composite_score"
+        is_flat_scores = (
+            score_col in st.session_state.rank_df.columns
+            and not st.session_state.rank_df.empty
+            and st.session_state.rank_df[score_col].nunique(dropna=False) <= 1
+        )
+        if is_flat_scores or is_suspicious_rank_df(st.session_state.rank_df):
+            st.session_state.rank_df = None
+            st.session_state.rank_df_source = None
+
+    latest_artifact_path = dashboard_payload.get("_artifact_path") if dashboard_payload else None
+    if dashboard_payload and st.session_state.rank_df is None:
+        seeded_rank_df = normalize_rank_df(pd.DataFrame(dashboard_payload.get("ranked_signals", [])))
+        if not seeded_rank_df.empty and not is_suspicious_rank_df(seeded_rank_df):
+            st.session_state.rank_df = seeded_rank_df
+            st.session_state.rank_df_source = latest_artifact_path
+    elif (
+        dashboard_payload
+        and latest_artifact_path
+        and st.session_state.rank_df_source not in {None, "live_query", latest_artifact_path}
+    ):
+        seeded_rank_df = normalize_rank_df(pd.DataFrame(dashboard_payload.get("ranked_signals", [])))
+        if not seeded_rank_df.empty and not is_suspicious_rank_df(seeded_rank_df):
+            st.session_state.rank_df = seeded_rank_df
+            st.session_state.rank_df_source = latest_artifact_path
 
     with st.sidebar:
         st.header("⚙️ Settings")
@@ -463,6 +801,9 @@ def main():
             st.metric("Symbols", f"{stats.get('symbols', 0):,}")
             st.metric("OHLCV Rows", f"{stats.get('rows', 0):,}")
             st.metric("Latest Date", stats.get("latest_date", "—"))
+            health_summary = dashboard_health.get("summary", {})
+            st.metric("Delivery Date", health_summary.get("latest_delivery_date", "—"))
+            st.metric("Delivery Lag", health_summary.get("delivery_lag_days", "—"))
             if st.button("🔄 Refresh Rankings", use_container_width=True):
                 st.session_state.rank_df = None
                 st.rerun()
@@ -544,6 +885,10 @@ def main():
                     regime_color = {
                         "TREND": "🟢",
                         "STRONG_TREND": "🟢🟢",
+                        "STRONG_BULL_TREND": "🟢🟢",
+                        "BULLISH_MIXED": "🟢",
+                        "STRONG_BEAR_TREND": "🔻",
+                        "BEARISH_MIXED": "🟠",
                         "MEAN_REV": "🟡",
                         "RANGE_BOUND": "🔴",
                         "MIXED": "🟡",
@@ -551,9 +896,18 @@ def main():
                     st.markdown(f"**Regime:** {regime_color} {regime}")
                     st.caption(f"ADX Median: {regime_info.get('adx_median', 'N/A')}")
                     st.caption(f"Trending %: {regime_info.get('trending_pct', 'N/A')}")
+                    st.caption(
+                        "Breadth: "
+                        f"{regime_info.get('pct_above_50', 'N/A')}% >50DMA, "
+                        f"{regime_info.get('pct_above_200', 'N/A')}% >200DMA"
+                    )
                     strategy = {
                         "TREND": "Trend-Follow",
                         "STRONG_TREND": "Trend-Follow",
+                        "STRONG_BULL_TREND": "Trend-Follow",
+                        "BULLISH_MIXED": "Selective Longs",
+                        "STRONG_BEAR_TREND": "Defensive / Capital Protection",
+                        "BEARISH_MIXED": "Low Exposure / Defensive",
                         "MEAN_REV": "Mean Reversion",
                         "RANGE_BOUND": "Mean Reversion",
                         "MIXED": "Mixed / Low Exposure",
@@ -565,9 +919,104 @@ def main():
         st.divider()
         st.caption(f"Last refresh: {st.session_state.last_refresh or 'Never'}")
 
-    tab_overview, tab_ranking, tab_chart, tab_portfolio = st.tabs(
-        ["📋 Overview", "🏆 Ranking", "📈 Chart", "💼 Portfolio"]
+    tab_pipeline, tab_overview, tab_ranking, tab_chart, tab_portfolio = st.tabs(
+        ["🧭 Pipeline", "📋 Overview", "🏆 Ranking", "📈 Chart", "💼 Portfolio"]
     )
+
+    with tab_pipeline:
+        st.subheader("🧭 Unified Pipeline Dashboard")
+        health_cols = st.columns(4)
+        with health_cols[0]:
+            st.metric("Health", str(dashboard_health.get("status", "unknown")).upper())
+        with health_cols[1]:
+            st.metric("OHLCV Date", dashboard_health.get("summary", {}).get("latest_ohlcv_date", "—"))
+        with health_cols[2]:
+            st.metric("Delivery Date", dashboard_health.get("summary", {}).get("latest_delivery_date", "—"))
+        with health_cols[3]:
+            st.metric("Payload Age (min)", dashboard_health.get("summary", {}).get("payload_age_minutes", "—"))
+
+        with st.expander("🩺 Self Check", expanded=False):
+            checks_df = pd.DataFrame(dashboard_health.get("checks", []))
+            if not checks_df.empty:
+                st.dataframe(checks_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No health checks available.")
+
+        if not dashboard_payload:
+            st.info("No dashboard payload found yet. Run the rank stage first.")
+        else:
+            summary = dashboard_payload.get("summary", {})
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.metric("Run Date", summary.get("run_date", "—"))
+            with c2:
+                st.metric("Top Symbol", summary.get("top_symbol", "—"))
+            with c3:
+                st.metric("Breakouts", summary.get("breakout_count", 0))
+            with c4:
+                st.metric("Leading Sector", summary.get("top_sector", "—"))
+
+            st.caption(f"Payload: `{dashboard_payload.get('_artifact_path', 'n/a')}`")
+
+            col_left, col_right = st.columns([1, 1])
+            with col_left:
+                st.markdown("**Top Ranked Signals**")
+                ranked_df = normalize_rank_df(pd.DataFrame(dashboard_payload.get("ranked_signals", [])))
+                if ranked_df.empty:
+                    st.info("No ranked signals in payload.")
+                else:
+                    ranked_df = reorder_columns(
+                        ranked_df,
+                        [
+                            "symbol_id",
+                            "exchange",
+                            "composite_score",
+                            "close",
+                            "rel_strength_score",
+                            "sector_strength_score",
+                            "vol_intensity_score",
+                            "trend_score_score",
+                            "prox_high_score",
+                            "delivery_pct_score",
+                        ],
+                    )
+                    st.dataframe(ranked_df, use_container_width=True, hide_index=True)
+
+                st.markdown("**Breakout Monitor**")
+                breakout_df = pd.DataFrame(dashboard_payload.get("breakout_scan", []))
+                if breakout_df.empty:
+                    st.info("No breakout candidates in payload.")
+                else:
+                    st.dataframe(breakout_df, use_container_width=True, hide_index=True)
+
+            with col_right:
+                st.markdown("**Sector Dashboard**")
+                sector_df = pd.DataFrame(dashboard_payload.get("sector_dashboard", []))
+                if sector_df.empty:
+                    st.info("No sector dashboard rows in payload.")
+                else:
+                    sector_df = reorder_columns(
+                        sector_df,
+                        ["Sector", "RS", "Momentum", "Quadrant", "Top Stocks"],
+                    )
+                    st.dataframe(sector_df, use_container_width=True, hide_index=True)
+
+                st.markdown("**Stock Scan**")
+                stock_scan_df = pd.DataFrame(dashboard_payload.get("stock_scan", []))
+                if stock_scan_df.empty:
+                    st.info("No stock scan rows in payload.")
+                else:
+                    stock_scan_df = reorder_columns(
+                        stock_scan_df,
+                        ["Symbol", "symbol_id", "category", "score", "sector", "why"],
+                    )
+                    st.dataframe(stock_scan_df, use_container_width=True, hide_index=True)
+
+                warnings = dashboard_payload.get("warnings", [])
+                if warnings:
+                    st.markdown("**Warnings**")
+                    for warning in warnings:
+                        st.warning(warning)
 
     with tab_overview:
         col1, col2, col3, col4 = st.columns(4)
@@ -606,7 +1055,9 @@ def main():
                         rank_df = ranker.rank_all(
                             date=None, exchanges=["NSE"], min_score=0.0, top_n=None
                         )
+                        rank_df = normalize_rank_df(rank_df)
                         st.session_state.rank_df = rank_df
+                        st.session_state.rank_df_source = "live_query"
                         st.session_state.last_refresh = datetime.now().strftime(
                             "%H:%M:%S"
                         )
@@ -700,12 +1151,7 @@ def main():
                     ranker = StockRanker(
                         ohlcv_db_path=OHLCV_DB, feature_store_dir=FEATURE_STORE
                     )
-                    weights_dict = {
-                        "relative_strength": st.session_state.weights["rs"] / 100,
-                        "volume_intensity": st.session_state.weights["vol"] / 100,
-                        "trend_persistence": st.session_state.weights["trend"] / 100,
-                        "proximity_highs": st.session_state.weights["high"] / 100,
-                    }
+                    weights_dict = build_dashboard_weights()
                     rank_df = ranker.rank_all(
                         date=None,
                         exchanges=["NSE"],
@@ -713,22 +1159,25 @@ def main():
                         top_n=None,
                         weights=weights_dict,
                     )
+                    rank_df = normalize_rank_df(rank_df)
                     st.session_state.rank_df = rank_df
+                    st.session_state.rank_df_source = "live_query"
                     st.session_state.last_refresh = datetime.now().strftime("%H:%M:%S")
                 st.success(f"Ranked {len(rank_df):,} stocks in {time.time() - t0:.1f}s")
 
     with tab_ranking:
         st.subheader("🏆 Multi-Factor Stock Ranking")
 
-        weights_dict = {
-            "relative_strength": st.session_state.weights["rs"] / 100,
-            "volume_intensity": st.session_state.weights["vol"] / 100,
-            "trend_persistence": st.session_state.weights["trend"] / 100,
-            "proximity_highs": st.session_state.weights["high"] / 100,
-        }
+        weights_dict = build_dashboard_weights()
         force_refresh = st.button("🔄 Refresh Rankings", use_container_width=True)
 
-        if st.session_state.rank_df is None or force_refresh:
+        needs_live_query = (
+            st.session_state.rank_df is None
+            or force_refresh
+            or st.session_state.rank_df_source != "live_query"
+        )
+
+        if needs_live_query:
             with st.spinner("Running ranking query across all symbols..."):
                 t0 = time.time()
                 try:
@@ -742,7 +1191,9 @@ def main():
                         top_n=None,
                         weights=weights_dict,
                     )
+                    rank_df = normalize_rank_df(rank_df)
                     st.session_state.rank_df = rank_df
+                    st.session_state.rank_df_source = "live_query"
                     st.session_state.last_refresh = datetime.now().strftime("%H:%M:%S")
                     st.success(
                         f"Ranked {len(rank_df):,} stocks in {time.time() - t0:.1f}s"
@@ -791,6 +1242,8 @@ def main():
                 "vol_intensity_score",
                 "trend_score_score",
                 "prox_high_score",
+                "delivery_pct_score",
+                "sector_strength_score",
             ]
             cols_show = [c for c in cols_show if c in top_df.columns]
             rename_cols = {
@@ -801,6 +1254,8 @@ def main():
                 "vol_intensity_score": "Vol",
                 "trend_score_score": "Trend",
                 "prox_high_score": "Highs",
+                "delivery_pct_score": "Delivery",
+                "sector_strength_score": "Sector",
             }
             display_df = top_df[cols_show].rename(columns=rename_cols)
             display_df.columns = [rename_cols.get(c, c) for c in display_df.columns]

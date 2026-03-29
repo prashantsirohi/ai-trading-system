@@ -13,6 +13,7 @@ import requests
 from dhanhq import dhanhq
 from features.feature_store import FeatureStore
 from collectors.token_manager import DhanTokenManager
+from utils.data_domains import ensure_domain_layout
 from utils.logger import logger
 
 
@@ -54,23 +55,20 @@ class DhanCollector:
         masterdb_path: str = None,
         feature_store_dir: str = None,
         max_concurrent: int = 5,
+        data_domain: str = "operational",
     ):
+        paths = ensure_domain_layout(
+            project_root=os.path.dirname(os.path.dirname(__file__)),
+            data_domain=data_domain,
+        )
         if warehouse_dir is None:
-            warehouse_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)), "data", "features"
-            )
+            warehouse_dir = str(paths.root_dir / "features")
         if db_path is None:
-            db_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)), "data", "ohlcv.duckdb"
-            )
+            db_path = str(paths.ohlcv_db_path)
         if masterdb_path is None:
-            masterdb_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)), "data", "masterdata.db"
-            )
+            masterdb_path = str(paths.master_db_path)
         if feature_store_dir is None:
-            feature_store_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)), "data", "feature_store"
-            )
+            feature_store_dir = str(paths.feature_store_dir)
 
         self.api_key = api_key
         self.client_id = client_id
@@ -80,6 +78,7 @@ class DhanCollector:
         self.masterdb_path = masterdb_path
         self.feature_store_dir = feature_store_dir
         self.max_concurrent = max_concurrent
+        self.data_domain = data_domain
         self.base_url = "https://api.dhan.co/v2"
         self.request_timestamps: List[float] = []
         self.daily_request_count = 0
@@ -102,6 +101,7 @@ class DhanCollector:
         self.fs = FeatureStore(
             ohlcv_db_path=self.db_path,
             feature_store_dir=self.feature_store_dir,
+            data_domain=self.data_domain,
         )
 
     def _init_dhan_client(self):
@@ -251,9 +251,53 @@ class DhanCollector:
             ON _snapshots(snapshot_ts)
         """)
 
+        self._ensure_catalog_compatibility(conn)
+
         conn.commit()
         conn.close()
         logger.info(f"DuckDB initialized: {self.db_path}")
+
+    def _ensure_catalog_compatibility(self, conn):
+        """Log legacy schema gaps without mutating live tables that may have dependencies."""
+        expected_columns = {
+            "_catalog": {"security_id", "parquet_file", "ingestion_version", "ingestion_ts"},
+            "_catalog_history": {"security_id", "parquet_file", "ingestion_version", "ingestion_ts"},
+        }
+
+        for table_name, expected in expected_columns.items():
+            actual = self._get_table_columns(conn, table_name)
+            missing = sorted(expected - actual)
+            if missing:
+                logger.warning(
+                    "Legacy DuckDB schema detected for %s; compatibility mode will skip missing columns: %s",
+                    table_name,
+                    ", ".join(missing),
+                )
+
+    def _get_table_columns(self, conn, table_name: str) -> set[str]:
+        rows = conn.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = ?
+            """,
+            (table_name,),
+        ).fetchall()
+        return {row[0] for row in rows}
+
+    def _build_insert_select_sql(self, table_name: str, available_values: dict[str, str], conn) -> str:
+        """Build an insert/select statement using only columns present in the target table."""
+        target_columns = self._get_table_columns(conn, table_name)
+        ordered_columns = [column for column in available_values if column in target_columns]
+        columns_sql = ", ".join(ordered_columns)
+        values_sql = ", ".join(available_values[column] for column in ordered_columns)
+        return f"""
+            INSERT INTO {table_name}
+                ({columns_sql})
+            SELECT
+                {values_sql}
+            FROM df
+        """
 
     def _get_duckdb_conn(self):
         conn = duckdb.connect(self.db_path)
@@ -447,33 +491,27 @@ class DhanCollector:
                 to_date=to_date,
             )
 
-            # DEBUG: Print raw response
-            print(f"[DEBUG] {security_id}: API Response type: {type(data)}")
+            logger.debug(f"{security_id}: API Response type: {type(data)}")
             if isinstance(data, dict):
-                print(f"[DEBUG] {security_id}: Keys: {data.keys()}")
+                logger.debug(f"{security_id}: Keys: {list(data.keys())}")
                 inner = data.get("data", data)
                 if isinstance(inner, dict):
-                    print(f"[DEBUG] {security_id}: Inner keys: {inner.keys()}")
+                    logger.debug(f"{security_id}: Inner keys: {list(inner.keys())}")
                     if inner.get("close"):
-                        print(
-                            f"[DEBUG] {security_id}: close sample: {inner['close'][:3]}"
-                        )
+                        logger.debug(f"{security_id}: close sample: {inner['close'][:3]}")
                     if inner.get("timestamp"):
-                        print(
-                            f"[DEBUG] {security_id}: timestamp sample: {inner['timestamp'][:3]}"
-                        )
+                        logger.debug(f"{security_id}: timestamp sample: {inner['timestamp'][:3]}")
 
             if not data or not isinstance(data, dict):
-                print(f"[WARN] {security_id}: No data returned")
+                logger.warning(f"{security_id}: No data returned")
                 return None
 
             inner = data.get("data", data)
             if not isinstance(inner, dict):
-                print(f"[WARN] {security_id}: Invalid inner data type: {type(inner)}")
+                logger.warning(f"{security_id}: Invalid inner data type: {type(inner)}")
                 return None
 
-            # DEBUG: Log inner keys and sample values
-            print(f"[DEBUG] {security_id}: Inner keys: {inner.keys()}")
+            logger.debug(f"{security_id}: Inner keys: {list(inner.keys())}")
             if inner.get("close"):
                 logger.debug(f"Sample close: {inner['close'][:3]}")
             if inner.get("timestamp"):
@@ -592,9 +630,9 @@ class DhanCollector:
                 interval=15,  # 15-minute candles
             )
 
-            print(f"[DEBUG] {security_id}: Intraday response type: {type(data)}")
+            logger.debug(f"{security_id}: Intraday response type: {type(data)}")
             if isinstance(data, dict):
-                print(f"[DEBUG] {security_id}: Keys: {data.keys()}")
+                logger.debug(f"{security_id}: Keys: {list(data.keys())}")
 
             if not data or not isinstance(data, dict):
                 logger.warning(f"No intraday data for {security_id}")
@@ -748,19 +786,26 @@ class DhanCollector:
                     IN (SELECT symbol_id, exchange, timestamp FROM df)
                 """)
 
+                df["parquet_file"] = filepath
+                df["ingestion_version"] = snapshot_id
                 conn.execute(
-                    """
-                    INSERT INTO _catalog
-                        (symbol_id, security_id, exchange, timestamp,
-                         open, high, low, close, volume,
-                         parquet_file, ingestion_version)
-                    SELECT
-                        symbol_id, security_id, exchange, timestamp,
-                        open, high, low, close, volume,
-                        ?, ?
-                    FROM df
-                """,
-                    (filepath, snapshot_id),
+                    self._build_insert_select_sql(
+                        "_catalog",
+                        {
+                            "symbol_id": "symbol_id",
+                            "security_id": "security_id",
+                            "exchange": "exchange",
+                            "timestamp": "timestamp",
+                            "open": "open",
+                            "high": "high",
+                            "low": "low",
+                            "close": "close",
+                            "volume": "volume",
+                            "parquet_file": "parquet_file",
+                            "ingestion_version": "ingestion_version",
+                        },
+                        conn,
+                    )
                 )
 
                 conn.execute(
@@ -800,26 +845,51 @@ class DhanCollector:
         conn = self._get_duckdb_conn()
         try:
             conn.execute("BEGIN TRANSACTION")
+            current_max_raw = conn.execute(
+                "SELECT COALESCE(MAX(snapshot_id), 0) FROM _snapshots"
+            ).fetchone()
+            current_max = int(current_max_raw[0]) if current_max_raw else 0
             snap_id_raw = conn.execute("SELECT nextval('_snap_id_seq')").fetchone()
-            snap_id = int(snap_id_raw[0]) if snap_id_raw else 1
+            seq_value = int(snap_id_raw[0]) if snap_id_raw else 1
+            # Older local DBs can have a stale sequence; never reuse an
+            # existing snapshot id even if nextval() lags behind.
+            snap_id = max(seq_value, current_max + 1)
 
             conn.execute(
                 "INSERT INTO _snapshots (snapshot_id, status) VALUES (?, 'running')",
                 (snap_id,),
             )
 
+            catalog_columns = self._get_table_columns(conn, "_catalog")
+            history_columns = self._get_table_columns(conn, "_catalog_history")
+            shared_columns = [
+                column
+                for column in (
+                    "symbol_id",
+                    "security_id",
+                    "exchange",
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "parquet_file",
+                    "ingestion_version",
+                    "ingestion_ts",
+                )
+                if column in catalog_columns and column in history_columns
+            ]
+            history_insert_columns = ["snapshot_id", *shared_columns]
+            history_select_columns = ["?", *shared_columns]
             conn.execute(
-                """
+                f"""
                 INSERT INTO _catalog_history
-                    (snapshot_id, symbol_id, security_id, exchange, timestamp,
-                     open, high, low, close, volume,
-                     parquet_file, ingestion_version, ingestion_ts)
+                    ({", ".join(history_insert_columns)})
                 SELECT
-                    ?, symbol_id, security_id, exchange, timestamp,
-                    open, high, low, close, volume,
-                    parquet_file, ingestion_version, ingestion_ts
+                    {", ".join(history_select_columns)}
                 FROM _catalog
-            """,
+                """,
                 (snap_id,),
             )
 
@@ -1343,7 +1413,7 @@ class DhanCollector:
         pass
 
     def get_pending_symbols(self) -> List[dict]:
-        """Return symbols not yet in DuckDB catalog."""
+        """Return full masterdb symbol records not yet present in DuckDB."""
         conn = self._get_duckdb_conn()
         try:
             df = conn.execute("""
@@ -1354,17 +1424,85 @@ class DhanCollector:
 
             all_syms = self.get_symbols_from_masterdb()
             pending = [
-                {
-                    "symbol_id": s["symbol_id"],
-                    "security_id": s["security_id"],
-                    "exchange": s["exchange"],
-                }
-                for s in all_syms
-                if (s["symbol_id"], s["exchange"]) not in cataloged
+                s for s in all_syms if (s["symbol_id"], s["exchange"]) not in cataloged
             ]
             return pending
         finally:
             conn.close()
+
+    def backfill_pending_symbols(
+        self,
+        days_back: int = 365,
+        exchanges: List[str] = None,
+        max_concurrent: int = None,
+    ) -> Dict[str, Any]:
+        """
+        Backfill symbols present in masterdb but missing from the OHLCV catalog.
+
+        This keeps operational data aligned with the latest stock universe
+        without requiring a full reingestion.
+        """
+        if exchanges is None:
+            exchanges = ["NSE"]
+
+        pending = [
+            s for s in self.get_pending_symbols() if s.get("exchange") in set(exchanges)
+        ]
+        if not pending:
+            return {
+                "pending_before": 0,
+                "symbols_processed": 0,
+                "rows_written": 0,
+                "from_date": None,
+                "to_date": None,
+                "features_computed": {},
+            }
+
+        from_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+        to_date = datetime.now().strftime("%Y-%m-%d")
+        snapshot_id = self._create_snapshot()
+        dfs = asyncio.run(
+            self.fetch_batch(
+                pending,
+                from_date,
+                to_date,
+                max_concurrent=max_concurrent or self.max_concurrent,
+            )
+        )
+        rows_written = self._write_batch(dfs, snapshot_id, from_date, to_date)
+        updated_symbols = [
+            df.attrs.get("symbol_info", {}).get("symbol_id")
+            for df in dfs
+            if getattr(df, "attrs", None)
+        ]
+        updated_symbols = [s for s in updated_symbols if s]
+
+        feat_result = {}
+        if updated_symbols:
+            feat_result = self.fs.compute_and_store_features(
+                symbols=updated_symbols,
+                exchanges=exchanges,
+                feature_types=[
+                    "rsi",
+                    "adx",
+                    "sma",
+                    "ema",
+                    "macd",
+                    "atr",
+                    "bb",
+                    "roc",
+                    "supertrend",
+                ],
+            )
+
+        return {
+            "pending_before": len(pending),
+            "symbols_processed": len(updated_symbols),
+            "rows_written": rows_written,
+            "from_date": from_date,
+            "to_date": to_date,
+            "features_computed": feat_result,
+        }
 
     def get_download_stats(self) -> dict:
         """Return download statistics."""
@@ -1496,6 +1634,7 @@ class DhanCollector:
     def run_daily_update_bulk(
         self,
         exchanges: List[str] = None,
+        symbol_limit: int | None = None,
     ) -> Dict[str, Any]:
         """
         Run daily EOD update using bulk OHLC API.
@@ -1511,6 +1650,8 @@ class DhanCollector:
         symbols = self.get_symbols_from_masterdb(exchanges=exchanges)
         if not symbols:
             return {"error": "No symbols found in masterdb"}
+        if symbol_limit is not None:
+            symbols = symbols[:symbol_limit]
 
         security_ids = [s["security_id"] for s in symbols if s.get("security_id")]
         logger.info(
@@ -1543,15 +1684,25 @@ class DhanCollector:
                   AND timestamp::date = CURRENT_DATE
             """)
 
-            conn.execute("""
-                INSERT INTO _catalog
-                    (symbol_id, security_id, exchange, timestamp,
-                     open, high, low, close, volume)
-                SELECT symbol_id, CAST(security_id AS TEXT), exchange, timestamp,
-                       open, high, low, close, volume
-                FROM df
-                WHERE symbol_id != ''
-            """)
+            df["security_id"] = df["security_id"].astype(str)
+            conn.execute(
+                self._build_insert_select_sql(
+                    "_catalog",
+                    {
+                        "symbol_id": "symbol_id",
+                        "security_id": "security_id",
+                        "exchange": "exchange",
+                        "timestamp": "timestamp",
+                        "open": "open",
+                        "high": "high",
+                        "low": "low",
+                        "close": "close",
+                        "volume": "volume",
+                    },
+                    conn,
+                )
+                + "\nWHERE symbol_id != ''"
+            )
 
             rows_written = conn.execute("SELECT CHANGES()").fetchone()[0]
             conn.commit()
@@ -1602,6 +1753,7 @@ class DhanCollector:
         batch_size: int = 700,
         max_concurrent: int = 10,
         days_history: int = 7,
+        symbol_limit: int | None = None,
     ) -> Dict[str, Any]:
         """
         Run daily EOD update after market close.
@@ -1632,6 +1784,8 @@ class DhanCollector:
         symbols = self.get_symbols_from_masterdb(exchanges=exchanges)
         if not symbols:
             return {"error": "No symbols found in masterdb"}
+        if symbol_limit is not None:
+            symbols = symbols[:symbol_limit]
 
         today_str = datetime.now().strftime("%Y-%m-%d")
         last_dates = self._get_last_dates(exchanges=exchanges)
@@ -1862,18 +2016,26 @@ class DhanCollector:
                     (symbol_id, exchange),
                 )
 
+                df["parquet_file"] = None
+                df["ingestion_version"] = None
                 conn.execute(
-                    """
-                    INSERT INTO _catalog
-                        (symbol_id, security_id, exchange, timestamp,
-                         open, high, low, close, volume,
-                         parquet_file, ingestion_version)
-                    SELECT
-                        symbol_id, security_id, exchange, timestamp,
-                        open, high, low, close, volume,
-                        NULL, NULL
-                    FROM df
-                    """,
+                    self._build_insert_select_sql(
+                        "_catalog",
+                        {
+                            "symbol_id": "symbol_id",
+                            "security_id": "security_id",
+                            "exchange": "exchange",
+                            "timestamp": "timestamp",
+                            "open": "open",
+                            "high": "high",
+                            "low": "low",
+                            "close": "close",
+                            "volume": "volume",
+                            "parquet_file": "parquet_file",
+                            "ingestion_version": "ingestion_version",
+                        },
+                        conn,
+                    )
                 )
                 rows_written += len(df)
 

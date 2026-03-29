@@ -1,7 +1,6 @@
 import os
 import io
 import asyncio
-import logging
 from pathlib import Path
 from typing import Optional, List, Union
 
@@ -22,8 +21,7 @@ except ImportError:
     raise ImportError(
         "python-telegram-bot is required. Install with: pip install python-telegram-bot"
     )
-
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 
 class TelegramReporter:

@@ -1,0 +1,292 @@
+"""Single-agent pipeline orchestrator with stage isolation and governance metadata."""
+
+from __future__ import annotations
+
+import argparse
+import uuid
+from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional
+
+from analytics.dq import DataQualityEngine
+from analytics.registry import RegistryStore
+from run.alerts import AlertManager
+from run.preflight import PreflightChecker
+from run.stages import FeaturesStage, IngestStage, PublishStage, RankStage
+from run.stages.base import PublishStageError, StageContext, StageResult
+from utils.data_domains import ensure_domain_layout
+from utils.logger import log_context, logger
+
+
+PIPELINE_ORDER = ["ingest", "features", "rank", "publish"]
+
+
+class PipelineOrchestrator:
+    """Executes the 4-stage resilient pipeline with retry-safe metadata."""
+
+    def __init__(
+        self,
+        project_root: Path | str,
+        registry: Optional[RegistryStore] = None,
+        dq_engine: Optional[DataQualityEngine] = None,
+        alert_manager: Optional[AlertManager] = None,
+        stages: Optional[Dict[str, object]] = None,
+    ):
+        self.project_root = Path(project_root)
+        self.registry = registry or RegistryStore(self.project_root)
+        self.dq_engine = dq_engine or DataQualityEngine(self.registry)
+        self.alert_manager = alert_manager or AlertManager(self.registry)
+        self.preflight_checker = PreflightChecker(self.project_root)
+        self.stages = stages or {
+            "ingest": IngestStage(),
+            "features": FeaturesStage(),
+            "rank": RankStage(),
+            "publish": PublishStage(),
+        }
+
+    def run_pipeline(
+        self,
+        run_id: Optional[str] = None,
+        stage_names: Optional[Iterable[str]] = None,
+        run_date: Optional[str] = None,
+        trigger: str = "manual",
+        params: Optional[Dict] = None,
+    ) -> Dict:
+        params = params or {}
+        stage_names = self._normalize_stage_names(stage_names)
+        run_date = run_date or date.today().isoformat()
+        run_id = run_id or self._build_run_id(run_date)
+        data_domain = params.get("data_domain", "operational")
+        domain_paths = ensure_domain_layout(project_root=self.project_root, data_domain=data_domain)
+        new_run = not self.registry.run_exists(run_id)
+
+        if new_run:
+            self.registry.create_run(
+                run_id=run_id,
+                pipeline_name="daily_pipeline",
+                run_date=run_date,
+                trigger=trigger,
+                metadata={"requested_stages": list(stage_names), "params": params},
+            )
+        else:
+            self.registry.append_run_metadata_event(
+                run_id,
+                {
+                    "event_type": "retry_requested",
+                    "requested_at": datetime.now(timezone.utc).isoformat(),
+                    "requested_stages": list(stage_names),
+                    "trigger": trigger,
+                    "params": params,
+                },
+            )
+        with log_context(run_id=run_id):
+            if params.get("preflight", True):
+                preflight = self.preflight_checker.run(stage_names, params)
+                run_metadata = self.registry.get_run(run_id).get("metadata", {})
+                run_metadata["preflight"] = preflight
+                self.registry.update_run(run_id, status="running", metadata=run_metadata)
+                if preflight["status"] != "passed":
+                    message = f"Preflight failed: {preflight['blocking_failures']}"
+                    self.alert_manager.emit(
+                        run_id=run_id,
+                        alert_type="preflight_failed",
+                        severity="critical",
+                        message=message,
+                    )
+                    self.registry.update_run(
+                        run_id,
+                        status="failed",
+                        current_stage=stage_names[0] if stage_names else None,
+                        error_class="PreflightFailed",
+                        error_message=message,
+                        finished=True,
+                    )
+                    raise RuntimeError(message)
+
+            final_status = "completed"
+
+            for stage_name in stage_names:
+                self.registry.update_run(run_id, status="running", current_stage=stage_name)
+                attempt_number = self.registry.next_stage_attempt(run_id, stage_name)
+                stage_run_id = self.registry.start_stage(run_id, stage_name, attempt_number)
+                artifacts = self.registry.get_artifact_map(run_id)
+                context = StageContext(
+                    project_root=self.project_root,
+                    db_path=domain_paths.ohlcv_db_path,
+                    run_id=run_id,
+                    run_date=run_date,
+                    stage_name=stage_name,
+                    attempt_number=attempt_number,
+                    registry=self.registry,
+                    params=params,
+                    artifacts=artifacts,
+                )
+
+                with log_context(run_id=run_id, stage_name=stage_name, attempt_number=attempt_number):
+                    try:
+                        stage = self.stages[stage_name]
+                        result: StageResult = stage.run(context)
+                        context.artifacts.setdefault(stage_name, {})
+                        for artifact in result.artifacts:
+                            self.registry.record_artifact(run_id, stage_name, attempt_number, artifact)
+                            context.artifacts[stage_name][artifact.artifact_type] = artifact
+
+                        if stage_name in {"ingest", "features", "rank"}:
+                            self.dq_engine.evaluate(context, result)
+
+                        self.registry.finish_stage(
+                            stage_run_id,
+                            status="completed",
+                            metadata=result.metadata,
+                        )
+                    except PublishStageError as exc:
+                        final_status = "completed_with_publish_errors"
+                        self.alert_manager.emit(
+                            run_id=run_id,
+                            alert_type="publish_degraded",
+                            severity="high",
+                            stage_name=stage_name,
+                            message=str(exc),
+                        )
+                        self.registry.finish_stage(
+                            stage_run_id,
+                            status="failed",
+                            error_class=exc.__class__.__name__,
+                            error_message=str(exc),
+                        )
+                        self.registry.update_run(
+                            run_id,
+                            status=final_status,
+                            current_stage=stage_name,
+                            error_class=exc.__class__.__name__,
+                            error_message=str(exc),
+                            finished=True,
+                        )
+                        break
+                    except Exception as exc:
+                        final_status = "failed"
+                        severity = "critical" if exc.__class__.__name__ == "DataQualityCriticalError" else "high"
+                        alert_type = "critical_dq_failure" if exc.__class__.__name__ == "DataQualityCriticalError" else "pipeline_failure"
+                        self.alert_manager.emit(
+                            run_id=run_id,
+                            alert_type=alert_type,
+                            severity=severity,
+                            stage_name=stage_name,
+                            message=str(exc),
+                        )
+                        self.registry.finish_stage(
+                            stage_run_id,
+                            status="failed",
+                            error_class=exc.__class__.__name__,
+                            error_message=str(exc),
+                        )
+                        self.registry.update_run(
+                            run_id,
+                            status=final_status,
+                            current_stage=stage_name,
+                            error_class=exc.__class__.__name__,
+                            error_message=str(exc),
+                            finished=True,
+                        )
+                        raise
+
+            if final_status == "completed":
+                self.registry.update_run(
+                    run_id,
+                    status=final_status,
+                    current_stage=stage_names[-1],
+                    error_class="",
+                    error_message="",
+                    finished=True,
+                )
+
+        return {
+            "run_id": run_id,
+            "status": final_status,
+            "stages": self.registry.get_stage_runs(run_id),
+            "run": self.registry.get_run(run_id),
+        }
+
+    def _normalize_stage_names(self, stage_names: Optional[Iterable[str]]) -> List[str]:
+        if stage_names is None:
+            return list(PIPELINE_ORDER)
+        requested = list(stage_names)
+        invalid = [stage for stage in requested if stage not in PIPELINE_ORDER]
+        if invalid:
+            raise ValueError(f"Unknown stages requested: {invalid}")
+        return requested
+
+    def _build_run_id(self, run_date: str) -> str:
+        return f"pipeline-{run_date}-{uuid.uuid4().hex[:8]}"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Resilient trading pipeline orchestrator")
+    parser.add_argument("--run-id", help="Reuse an existing run_id, typically for stage retries")
+    parser.add_argument(
+        "--stages",
+        default="ingest,features,rank,publish",
+        help="Comma-separated stage list. Example: publish",
+    )
+    parser.add_argument("--run-date", help="Logical trading date, defaults to today")
+    parser.add_argument("--force", action="store_true", help="Preserved for compatibility with wrappers")
+    parser.add_argument("--batch-size", type=int, default=700)
+    parser.add_argument("--bulk", action="store_true")
+    parser.add_argument("--top-n", type=int, default=None)
+    parser.add_argument("--min-score", type=float, default=50.0)
+    parser.add_argument(
+        "--data-domain",
+        choices=["operational", "research"],
+        default="operational",
+        help="Select the data/storage domain backing this run.",
+    )
+    parser.add_argument("--local-publish", action="store_true", help="Skip networked publish targets")
+    parser.add_argument("--smoke", action="store_true", help="Run a self-contained local smoke flow")
+    parser.add_argument("--symbol-limit", type=int, default=None, help="Limit live symbol universe for canary runs")
+    parser.add_argument("--canary", action="store_true", help="Run a smaller live canary flow")
+    parser.add_argument("--skip-preflight", action="store_true", help="Skip local readiness checks")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    project_root = Path(__file__).resolve().parents[1]
+    orchestrator = PipelineOrchestrator(project_root)
+    if args.canary and args.stages == "ingest,features,rank,publish":
+        stage_names = ["ingest", "features", "rank"]
+    else:
+        stage_names = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
+    result = orchestrator.run_pipeline(
+        run_id=args.run_id,
+        stage_names=stage_names,
+        run_date=args.run_date,
+        params={
+            "force": args.force,
+            "batch_size": args.batch_size,
+            "bulk": args.bulk,
+            "top_n": args.top_n,
+            "min_score": args.min_score,
+            "data_domain": args.data_domain,
+            "local_publish": args.local_publish,
+            "smoke": args.smoke,
+            "symbol_limit": args.symbol_limit if args.symbol_limit is not None else (25 if args.canary else None),
+            "canary": args.canary,
+            "preflight": not args.skip_preflight,
+        },
+    )
+
+    logger.info("Pipeline run complete")
+    logger.info("run_id=%s status=%s", result["run_id"], result["status"])
+    for stage in result["stages"]:
+        logger.info(
+            "stage=%s attempt=%s status=%s",
+            stage["stage_name"],
+            stage["attempt_number"],
+            stage["status"],
+        )
+
+
+if __name__ == "__main__":
+    main()

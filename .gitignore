@@ -6,6 +6,7 @@ data/ohlcv.duckdb
 data/feature_store/
 data/*.db
 data/*.parquet
+data/pipeline_runs/
 reports/*.html
 logs/
 *.log

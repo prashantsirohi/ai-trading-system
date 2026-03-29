@@ -1,5 +1,4 @@
 import os
-import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass, field
@@ -16,7 +15,7 @@ try:
 except ImportError:
     pass
 
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 
 class PositionType(Enum):

@@ -3,6 +3,7 @@ import duckdb
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict, Literal, Callable
+from utils.data_domains import ensure_domain_layout
 from utils.logger import logger
 
 
@@ -36,22 +37,20 @@ class EventBacktester:
         ohlcv_db_path: str = None,
         feature_store_dir: str = None,
         initial_capital: float = 1_000_000,
+        data_domain: str = "research",
     ):
+        paths = ensure_domain_layout(
+            project_root=os.path.dirname(os.path.dirname(__file__)),
+            data_domain=data_domain,
+        )
         if ohlcv_db_path is None:
-            ohlcv_db_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "ohlcv.duckdb",
-            )
+            ohlcv_db_path = str(paths.ohlcv_db_path)
         if feature_store_dir is None:
-            feature_store_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "feature_store",
-            )
+            feature_store_dir = str(paths.feature_store_dir)
         self.ohlcv_db_path = ohlcv_db_path
         self.feature_store_dir = feature_store_dir
         self.initial_capital = initial_capital
+        self.data_domain = data_domain
 
     def _get_conn(self):
         return duckdb.connect(self.ohlcv_db_path)
@@ -281,11 +280,20 @@ class EventBacktester:
 
         ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"])
 
+        # The feature store uses versioned indicator column names; normalize
+        # them here so event logic stays stable across domains.
         feat_cfg = [
-            ("rsi", ["rsi"]),
-            ("atr", ["atr_value"]),
-            ("adx", ["adx_plus", "adx_minus", "adx_value"]),
-            ("supertrend", ["st_upper", "st_lower", "st_signal"]),
+            ("rsi", ["rsi_14 AS rsi"]),
+            ("atr", ["atr_14 AS atr_value"]),
+            ("adx", ["plus_di_14 AS adx_plus", "minus_di_14 AS adx_minus", "adx_14 AS adx_value"]),
+            (
+                "supertrend",
+                [
+                    "supertrend_10_3 AS st_upper",
+                    "supertrend_10_3 AS st_lower",
+                    "supertrend_dir_10_3 AS st_signal",
+                ],
+            ),
         ]
 
         for feat_name, feat_cols in feat_cfg:

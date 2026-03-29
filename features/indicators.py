@@ -2,13 +2,10 @@ import os
 from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
-import logging
+from utils.logger import logger
 
 ta = None
 talib = None
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 class FeatureEngine:

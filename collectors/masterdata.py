@@ -2,13 +2,10 @@ import os
 import sqlite3
 import requests
 import pandas as pd
-import logging
 import io
 from datetime import datetime
 from typing import Optional, Dict, List
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 
 class MasterDataCollector:

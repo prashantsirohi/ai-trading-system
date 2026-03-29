@@ -1,6 +1,6 @@
 import os
+import sqlite3
 import sys
-import logging
 import warnings
 from datetime import datetime, timedelta
 from typing import Tuple, Dict, List, Optional
@@ -8,16 +8,15 @@ from typing import Tuple, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import duckdb
-import vectorbt as vbt
+from utils.data_domains import ensure_domain_layout
+from utils.logger import logger
 
 warnings.filterwarnings("ignore")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-logger = logging.getLogger(__name__)
 
 
 class RankBacktester:
     """
-    Backtest framework for finding optimal ranking factor weights using vectorbt.
+    Backtest framework for finding optimal ranking factor weights.
 
     Pipeline:
       Step 1  Equal Weight Baseline      â€” 25/25/25/25 weights
@@ -30,11 +29,12 @@ class RankBacktester:
     """
 
     DEFAULT_WEIGHTS = {
-        "relative_strength": 0.30,
-        "volume_intensity": 0.20,
+        "relative_strength": 0.25,
+        "volume_intensity": 0.18,
         "trend_persistence": 0.15,
-        "proximity_highs": 0.20,
-        "delivery_pct": 0.15,
+        "proximity_highs": 0.17,
+        "delivery_pct": 0.10,
+        "sector_strength": 0.15,
     }
 
     def __init__(
@@ -43,28 +43,107 @@ class RankBacktester:
         feature_store_dir: str = None,
         top_n: int = 20,
         rebalance_days: int = 21,
+        data_domain: str = "research",
     ):
+        paths = ensure_domain_layout(
+            project_root=os.path.dirname(os.path.dirname(__file__)),
+            data_domain=data_domain,
+        )
         if ohlcv_db_path is None:
-            ohlcv_db_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "..",
-                "data",
-                "ohlcv.duckdb",
-            )
+            ohlcv_db_path = str(paths.ohlcv_db_path)
         if feature_store_dir is None:
-            feature_store_dir = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "..",
-                "data",
-                "feature_store",
-            )
+            feature_store_dir = str(paths.feature_store_dir)
         self.ohlcv_db_path = ohlcv_db_path
         self.feature_store_dir = feature_store_dir
         self.top_n = top_n
         self.rebalance_days = rebalance_days
+        self.data_domain = data_domain
+        self.master_db_path = str(paths.master_db_path)
+        self._sector_rs_cache: Optional[pd.DataFrame] = None
+        self._stock_vs_sector_cache: Optional[pd.DataFrame] = None
+        self._sector_map_cache: Optional[dict[str, str]] = None
 
     def _get_conn(self):
         return duckdb.connect(self.ohlcv_db_path)
+
+    def _load_sector_inputs(self) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, str]]:
+        """Lazily load sector leadership artifacts once per backtest process."""
+        if (
+            self._sector_rs_cache is not None
+            and self._stock_vs_sector_cache is not None
+            and self._sector_map_cache is not None
+        ):
+            return (
+                self._sector_rs_cache,
+                self._stock_vs_sector_cache,
+                self._sector_map_cache,
+            )
+
+        all_symbols_dir = os.path.join(self.feature_store_dir, "all_symbols")
+        sector_rs_path = os.path.join(all_symbols_dir, "sector_rs.parquet")
+        stock_vs_sector_path = os.path.join(all_symbols_dir, "stock_vs_sector.parquet")
+
+        if os.path.exists(sector_rs_path):
+            sector_rs = pd.read_parquet(sector_rs_path)
+            sector_rs.index = pd.to_datetime(sector_rs.index).normalize()
+            sector_rs = sector_rs[~sector_rs.index.duplicated(keep="last")]
+        else:
+            sector_rs = pd.DataFrame()
+
+        if os.path.exists(stock_vs_sector_path):
+            stock_vs_sector = pd.read_parquet(stock_vs_sector_path)
+            stock_vs_sector.index = pd.to_datetime(stock_vs_sector.index).normalize()
+            stock_vs_sector = stock_vs_sector[~stock_vs_sector.index.duplicated(keep="last")]
+        else:
+            stock_vs_sector = pd.DataFrame()
+
+        sector_map: dict[str, str] = {}
+        if os.path.exists(self.master_db_path):
+            conn = sqlite3.connect(self.master_db_path)
+            try:
+                rows = conn.execute(
+                    "SELECT Symbol, Sector FROM stock_details WHERE Symbol IS NOT NULL"
+                ).fetchall()
+                sector_map = {symbol: sector for symbol, sector in rows if sector}
+            finally:
+                conn.close()
+
+        self._sector_rs_cache = sector_rs
+        self._stock_vs_sector_cache = stock_vs_sector
+        self._sector_map_cache = sector_map
+        return sector_rs, stock_vs_sector, sector_map
+
+    def _attach_sector_strength(
+        self,
+        latest: pd.DataFrame,
+        date: str,
+    ) -> pd.DataFrame:
+        """Merge sector leadership metrics for the requested ranking date."""
+        sector_rs, stock_vs_sector, sector_map = self._load_sector_inputs()
+        if sector_rs.empty or stock_vs_sector.empty or not sector_map:
+            latest["sector_rs_value"] = 0.5
+            latest["stock_vs_sector_value"] = 0.0
+            return latest
+
+        cutoff = pd.to_datetime(date).normalize()
+        sector_slice = sector_rs.loc[sector_rs.index <= cutoff]
+        stock_vs_slice = stock_vs_sector.loc[stock_vs_sector.index <= cutoff]
+        if sector_slice.empty or stock_vs_slice.empty:
+            latest["sector_rs_value"] = 0.5
+            latest["stock_vs_sector_value"] = 0.0
+            return latest
+
+        latest_sector = sector_slice.ffill().iloc[-1]
+        latest_stock_vs_sector = stock_vs_slice.ffill().iloc[-1]
+
+        latest["sector_name"] = latest["symbol_id"].map(sector_map)
+        latest["sector_rs_value"] = latest["sector_name"].map(latest_sector.to_dict())
+        latest["stock_vs_sector_value"] = latest["symbol_id"].map(
+            latest_stock_vs_sector.to_dict()
+        )
+        latest["sector_rs_value"] = latest["sector_rs_value"].fillna(0.5)
+        latest["stock_vs_sector_value"] = latest["stock_vs_sector_value"].fillna(0.0)
+        return latest
 
     # â”€â”€â”€ Step 1: Load data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -135,7 +214,7 @@ class RankBacktester:
             ).replace("\\", "/")
             if os.path.exists(os.path.join(self.feature_store_dir, "adx", exchange)):
                 adx_df = conn.execute(f"""
-                    SELECT symbol_id, exchange, adx_value
+                    SELECT symbol_id, exchange, adx_14 AS adx_value
                     FROM read_parquet('{adx_path}')
                     WHERE timestamp <= '{cutoff_ts}'
                     QUALIFY ROW_NUMBER() OVER (
@@ -186,23 +265,30 @@ class RankBacktester:
                 how="left",
             )
 
-            del_df = conn.execute(f"""
-                SELECT symbol_id, exchange, delivery_pct
-                FROM _delivery
-                WHERE timestamp <= '{cutoff_ts}'
-                QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY symbol_id, exchange
-                    ORDER BY timestamp DESC
-                ) = 1
-            """).fetchdf()
-            latest = latest.merge(
-                del_df[["symbol_id", "exchange", "delivery_pct"]],
-                on=["symbol_id", "exchange"],
-                how="left",
-            )
+            # Research data may not include delivery snapshots yet. Use a neutral
+            # fallback so the factor stays present without crashing the backtest.
+            try:
+                del_df = conn.execute(f"""
+                    SELECT symbol_id, exchange, delivery_pct
+                    FROM _delivery
+                    WHERE timestamp <= '{cutoff_ts}'
+                    QUALIFY ROW_NUMBER() OVER (
+                        PARTITION BY symbol_id, exchange
+                        ORDER BY timestamp DESC
+                    ) = 1
+                """).fetchdf()
+                latest = latest.merge(
+                    del_df[["symbol_id", "exchange", "delivery_pct"]],
+                    on=["symbol_id", "exchange"],
+                    how="left",
+                )
+            except duckdb.Error:
+                latest["delivery_pct"] = np.nan
             latest["delivery_pct"] = latest["delivery_pct"].fillna(20.0)
         finally:
             conn.close()
+
+        latest = self._attach_sector_strength(latest, date)
 
         latest["rel_strength"] = (
             (latest["close"] - latest["close_20d_ago"])
@@ -237,6 +323,8 @@ class RankBacktester:
                 "trend_score",
                 "prox_high",
                 "delivery_pct",
+                "sector_rs_value",
+                "stock_vs_sector_value",
                 "close",
             ]
         ]
@@ -265,12 +353,21 @@ class RankBacktester:
         ]:
             df[f"{col}_pct"] = df[col].rank(pct=True) * 100
 
+        df["sector_rs_pct"] = df["sector_rs_value"].rank(pct=True) * 100
+        df["stock_vs_sector_pct"] = df["stock_vs_sector_value"].rank(pct=True) * 100
+        # Favor stocks in strong sectors, while still rewarding names outperforming
+        # their own sector peers.
+        df["sector_strength_pct"] = (
+            df["sector_rs_pct"] * 0.6 + df["stock_vs_sector_pct"] * 0.4
+        )
+
         df["composite_score"] = (
             df["rel_strength_pct"] * weights["relative_strength"]
             + df["vol_intensity_pct"] * weights["volume_intensity"]
             + df["trend_score_pct"] * weights["trend_persistence"]
             + df["prox_high_pct"] * weights["proximity_highs"]
             + df["delivery_pct_pct"] * weights["delivery_pct"]
+            + df["sector_strength_pct"] * weights["sector_strength"]
         )
         df = df.sort_values("composite_score", ascending=False)
         return df.reset_index(drop=True)
@@ -301,11 +398,10 @@ class RankBacktester:
 
         for i in range(0, n_dates, self.rebalance_days):
             rebal_date = dates[min(i, n_dates - 1)]
-            year_ago = rebal_date - timedelta(days=400)
-            year_ago_str = year_ago.strftime("%Y-%m-%d")
+            rebal_date_str = rebal_date.strftime("%Y-%m-%d")
 
             logger.info(f"  Ranking for {rebal_date.date()}...")
-            ranked = self.rank_stocks(year_ago_str, weights, exchange)
+            ranked = self.rank_stocks(rebal_date_str, weights, exchange)
             cutoff = ranked["composite_score"].quantile(0.75)
             eligible = ranked[ranked["composite_score"] >= cutoff]
             top_symbols = eligible.head(self.top_n)["symbol_id"].tolist()
@@ -316,7 +412,7 @@ class RankBacktester:
 
         return signals
 
-    # â”€â”€â”€ Step 3 & 5: Run backtest via vectorbt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â”€â”€â”€ Step 3 & 5: Run backtest via internal portfolio simulation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def run_backtest(
         self,

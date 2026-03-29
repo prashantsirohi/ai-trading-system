@@ -1,6 +1,5 @@
 import os
-import io
-import logging
+import time
 from datetime import datetime, timedelta
 from typing import Optional, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -8,20 +7,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import duckdb
 import requests
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from collectors.nse_delivery_scraper import NseHistoricalDeliveryScraper
+from utils.data_domains import ensure_domain_layout
+from utils.logger import logger
 
 
 class DeliveryCollector:
     """
-    Downloads NSE MTO (Market Turnover with Deliverables) files and extracts delivery data.
+    Downloads NSE delivery data and writes it into the shared delivery store.
 
-    Data source: https://nsearchives.nseindia.com/archives/equities/mto/MTO_{DDMMYYYY}.DAT
-    File format:
-      - Header rows (skip): "Security Wise Delivery Position...", "10,MTO,...", "Trade Date...", header row
-      - Data rows: RecordType,SrNo,Name,Series,QtyTraded,DelivQty,%Deliv
-      - Only "EQ" (equity) series is relevant
+    Supported sources:
+      - `mto`: NSE MTO daily archive files
+      - `nse_securitywise`: NSE security-wise historical CSV endpoint
 
     Storage:
       - DuckDB table: ohlcv.duckdb::_delivery (symbol_id, exchange, timestamp, delivery_pct, volume, delivery_qty)
@@ -31,48 +28,91 @@ class DeliveryCollector:
     MTO_URL = (
         "https://nsearchives.nseindia.com/archives/equities/mto/MTO_{date_str}.DAT"
     )
+    NSE_HOME_URL = "https://www.nseindia.com/"
+    ARCHIVE_REFERER = "https://www.nseindia.com/all-reports-derivatives"
 
     def __init__(
         self,
         ohlcv_db_path: str = None,
         feature_store_dir: str = None,
         raw_dir: str = None,
+        data_domain: str = "operational",
+        source: str = "mto",
+        fallback_source: str | None = "nse_securitywise",
+        masterdb_path: str | None = None,
     ):
+        paths = ensure_domain_layout(
+            project_root=os.path.dirname(os.path.dirname(__file__)),
+            data_domain=data_domain,
+        )
         if ohlcv_db_path is None:
-            ohlcv_db_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "ohlcv.duckdb",
-            )
+            ohlcv_db_path = str(paths.ohlcv_db_path)
         if feature_store_dir is None:
-            feature_store_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "feature_store",
-            )
+            feature_store_dir = str(paths.feature_store_dir)
         if raw_dir is None:
-            raw_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "raw",
-                "NSE_MTO",
-            )
+            raw_dir = os.path.join(str(paths.root_dir), "raw", "NSE_MTO")
         self.ohlcv_db_path = ohlcv_db_path
         self.feature_store_dir = feature_store_dir
         self.raw_dir = raw_dir
+        self.data_domain = data_domain
+        self.source = source
+        self.fallback_source = fallback_source
+        self.masterdb_path = masterdb_path or str(paths.master_db_path)
         os.makedirs(raw_dir, exist_ok=True)
 
         self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "application/json",
-                "Accept-Language": "en-US,en;q=0.9",
-            }
+        self._bootstrap_session()
+        self.security_scraper = NseHistoricalDeliveryScraper(
+            masterdb_path=self.masterdb_path,
+            raw_dir=os.path.join(str(paths.root_dir), "raw", "NSE_security_delivery"),
+            data_domain=data_domain,
         )
 
     def _get_conn(self):
         return duckdb.connect(self.ohlcv_db_path)
+
+    def _bootstrap_session(self) -> None:
+        """Prime the session with browser-like headers and NSE cookies."""
+        self.session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": self.ARCHIVE_REFERER,
+                "Connection": "keep-alive",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+            }
+        )
+        try:
+            self.session.get(self.NSE_HOME_URL, timeout=20)
+        except requests.RequestException as exc:
+            logger.debug("NSE session bootstrap failed: %s", exc)
+
+    def _download_mto_file(self, url: str, date_str: str) -> bytes:
+        """Download one MTO file with light retry/backoff and session refresh."""
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                resp = self.session.get(url, timeout=30)
+                if resp.status_code in {401, 403}:
+                    self._bootstrap_session()
+                    time.sleep(min(2**attempt, 5))
+                    resp = self.session.get(url, timeout=30)
+                if resp.status_code == 404:
+                    raise requests.HTTPError(
+                        f"404 Not Found for {date_str}", response=resp
+                    )
+                resp.raise_for_status()
+                return resp.content
+            except requests.RequestException as exc:
+                last_error = exc
+                if getattr(exc, "response", None) is not None and exc.response.status_code == 404:
+                    break
+                time.sleep(min(2**attempt, 5))
+        if last_error is None:
+            raise RuntimeError(f"Failed to download MTO {date_str}")
+        raise last_error
 
     def _ensure_delivery_table(self):
         conn = self._get_conn()
@@ -110,13 +150,19 @@ class DeliveryCollector:
         try:
             if not os.path.exists(mto_path):
                 logger.info(f"Downloading MTO {date_str}...")
-                resp = self.session.get(url, timeout=30)
-                resp.raise_for_status()
+                content = self._download_mto_file(url, date_str)
                 with open(mto_path, "wb") as f:
-                    f.write(resp.content)
+                    f.write(content)
 
             with open(mto_path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
+        except requests.HTTPError as e:
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            if status_code == 404:
+                logger.info("MTO %s not available in archive", date_str)
+            else:
+                logger.warning(f"Failed MTO {date_str}: {e}")
+            return pd.DataFrame()
         except Exception as e:
             logger.warning(f"Failed MTO {date_str}: {e}")
             return pd.DataFrame()
@@ -176,25 +222,95 @@ class DeliveryCollector:
         from_date: str,
         to_date: str,
         n_workers: int = 4,
+        symbols: list[str] | None = None,
+        save_raw: bool = False,
     ) -> int:
         """
         Download bhavcopy for all trading days in [from_date, to_date].
         Returns number of records ingested.
         """
         self._ensure_delivery_table()
+        if self.source == "nse_securitywise":
+            return self._fetch_range_securitywise(
+                from_date=from_date,
+                to_date=to_date,
+                n_workers=n_workers,
+                symbols=symbols,
+                save_raw=save_raw,
+            )
 
         dates = pd.bdate_range(from_date, to_date)
         total = 0
+        missing_dates: list[pd.Timestamp] = []
 
         with ThreadPoolExecutor(max_workers=n_workers) as ex:
             futures = {ex.submit(self.fetch_bhavcopy, d): d for d in dates}
             for fut in as_completed(futures):
                 df = fut.result()
                 if df.empty:
+                    missing_dates.append(futures[fut])
                     continue
                 total += self._upsert_delivery(df)
 
+        if missing_dates and self.fallback_source == "nse_securitywise":
+            fallback_from = min(missing_dates).strftime("%Y-%m-%d")
+            fallback_to = max(missing_dates).strftime("%Y-%m-%d")
+            logger.warning(
+                "MTO missed %s trading day(s); falling back to NSE security-wise delivery for %s -> %s",
+                len(missing_dates),
+                fallback_from,
+                fallback_to,
+            )
+            total += self._fetch_range_securitywise(
+                from_date=fallback_from,
+                to_date=fallback_to,
+                n_workers=n_workers,
+                symbols=symbols,
+                save_raw=save_raw,
+            )
+
         logger.info(f"Delivery fetch complete: {total} records inserted")
+        return total
+
+    def _fetch_range_securitywise(
+        self,
+        from_date: str,
+        to_date: str,
+        n_workers: int = 4,
+        symbols: list[str] | None = None,
+        save_raw: bool = False,
+    ) -> int:
+        """Backfill delivery data using the NSE security-wise historical endpoint."""
+        target_symbols = symbols or self.security_scraper.get_nse_symbols()
+        total = 0
+
+        with ThreadPoolExecutor(max_workers=n_workers) as ex:
+            futures = {
+                ex.submit(
+                    self.security_scraper.fetch_symbol_history,
+                    symbol,
+                    from_date,
+                    to_date,
+                    save_raw,
+                ): symbol
+                for symbol in target_symbols
+            }
+            for fut in as_completed(futures):
+                symbol = futures[fut]
+                try:
+                    df = fut.result()
+                except Exception as exc:
+                    logger.warning("Security-wise delivery fetch failed for %s: %s", symbol, exc)
+                    continue
+                if df.empty:
+                    continue
+                total += self._upsert_delivery(df)
+
+        logger.info(
+            "Security-wise delivery fetch complete: %s rows inserted for %s symbols",
+            total,
+            len(target_symbols),
+        )
         return total
 
     def _upsert_delivery(self, df: pd.DataFrame) -> int:

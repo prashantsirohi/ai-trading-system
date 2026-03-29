@@ -1,6 +1,5 @@
 import os
 import json
-import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
@@ -13,7 +12,7 @@ try:
 except ImportError:
     pass
 
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 
 @dataclass

@@ -8,7 +8,6 @@ Usage:
 """
 
 import argparse
-import logging
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -17,8 +16,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pyarrow.parquet import ParquetWriter
-
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 
 def compact_feature(feature_dir: str, month: str = None) -> str:
@@ -85,11 +83,6 @@ def main():
     )
 
     args = parser.parse_args()
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
-
     base_path = Path(__file__).parent.parent / "data" / "feature_store"
 
     features = (

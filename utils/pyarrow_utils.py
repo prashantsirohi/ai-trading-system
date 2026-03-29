@@ -1,4 +1,3 @@
-import logging
 from pathlib import Path
 from typing import List, Optional
 
@@ -6,8 +5,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
-
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 
 def read_parquet(

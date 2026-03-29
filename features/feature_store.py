@@ -6,10 +6,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
-import logging
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from utils.data_domains import ensure_domain_layout
+from utils.logger import logger
 
 
 class FeatureStore:
@@ -32,23 +30,21 @@ class FeatureStore:
         self,
         ohlcv_db_path: str = None,
         feature_store_dir: str = None,
+        data_domain: str = "operational",
     ):
+        paths = ensure_domain_layout(
+            project_root=os.path.dirname(os.path.dirname(__file__)),
+            data_domain=data_domain,
+        )
         if ohlcv_db_path is None:
-            ohlcv_db_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "ohlcv.duckdb",
-            )
+            ohlcv_db_path = str(paths.ohlcv_db_path)
         if feature_store_dir is None:
-            feature_store_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "feature_store",
-            )
+            feature_store_dir = str(paths.feature_store_dir)
 
         self.ohlcv_db_path = ohlcv_db_path
         self.feature_store_dir = feature_store_dir
         self.db_path = ohlcv_db_path
+        self.data_domain = data_domain
         os.makedirs(self.feature_store_dir, exist_ok=True)
 
         self._init_feature_registry()
@@ -74,7 +70,25 @@ class FeatureStore:
         except:
             pass
 
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS _feature_registry (
+                feature_id BIGINT PRIMARY KEY DEFAULT nextval('_feat_id_seq'),
+                feature_name VARCHAR NOT NULL,
+                symbol_id VARCHAR,
+                exchange VARCHAR,
+                computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                rows_computed INTEGER DEFAULT 0,
+                lookback_days INTEGER DEFAULT 0,
+                params VARCHAR,
+                feature_file VARCHAR,
+                snapshot_id BIGINT,
+                status VARCHAR DEFAULT 'completed',
+                note VARCHAR
+            )
+        """)
+
         conn.commit()
+        conn.close()
 
     def create_snapshot(self, description: str = None) -> int:
         """Create snapshot of current state."""
@@ -718,16 +732,23 @@ class FeatureStore:
             tr_dm AS (
                 SELECT
                     symbol_id, exchange, timestamp,
-                    MAX(high) - MIN(low) AS tr,
                     GREATEST(
                         ABS(high - prev_close),
                         ABS(low - prev_close),
                         ABS(high - low)
                     ) AS true_range,
-                    GREATEST(high - prev_close, prev_close - low, 0) AS plus_dm,
-                    GREATEST(prev_close - low, high - prev_close, 0) AS minus_dm
+                    CASE
+                        WHEN (high - prev_high) > (prev_low - low) AND (high - prev_high) > 0
+                        THEN (high - prev_high)
+                        ELSE 0
+                    END AS plus_dm,
+                    CASE
+                        WHEN (prev_low - low) > (high - prev_high) AND (prev_low - low) > 0
+                        THEN (prev_low - low)
+                        ELSE 0
+                    END AS minus_dm
                 FROM ohlc
-                GROUP BY symbol_id, exchange, timestamp, high, low, close, prev_close
+                WHERE prev_close IS NOT NULL
             ),
             smoothed AS (
                 SELECT

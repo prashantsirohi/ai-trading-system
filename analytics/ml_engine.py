@@ -6,6 +6,7 @@ import numpy as np
 from typing import Optional, List, Dict, Literal, Tuple
 import xgboost as xgb
 from sklearn.metrics import roc_auc_score, mean_squared_error
+from utils.data_domains import ensure_domain_layout
 from utils.logger import logger
 
 
@@ -31,27 +32,22 @@ class AlphaEngine:
         ohlcv_db_path: str = None,
         feature_store_dir: str = None,
         model_dir: str = None,
+        data_domain: str = "research",
     ):
+        paths = ensure_domain_layout(
+            project_root=os.path.dirname(os.path.dirname(__file__)),
+            data_domain=data_domain,
+        )
         if ohlcv_db_path is None:
-            ohlcv_db_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "ohlcv.duckdb",
-            )
+            ohlcv_db_path = str(paths.ohlcv_db_path)
         if feature_store_dir is None:
-            feature_store_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "feature_store",
-            )
+            feature_store_dir = str(paths.feature_store_dir)
         if model_dir is None:
-            model_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "models",
-            )
+            model_dir = str(paths.model_dir)
         self.ohlcv_db_path = ohlcv_db_path
         self.feature_store_dir = feature_store_dir
         self.model_dir = model_dir
+        self.data_domain = data_domain
         os.makedirs(model_dir, exist_ok=True)
 
     def _get_conn(self):

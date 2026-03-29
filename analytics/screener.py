@@ -1,14 +1,12 @@
 import os
 import time
-import logging
 import duckdb
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from utils.data_domains import ensure_domain_layout
+from utils.logger import logger
 
 
 class AIQScreener:
@@ -38,6 +36,7 @@ class AIQScreener:
         feature_store_dir: str = None,
         model_dir: str = None,
         output_dir: str = None,
+        data_domain: str = "operational",
     ):
         from analytics.regime_detector import RegimeDetector
         from analytics.ranker import StockRanker
@@ -46,33 +45,24 @@ class AIQScreener:
         from analytics.backtester import EventBacktester
         from analytics.visualizations import Visualizer
 
+        paths = ensure_domain_layout(
+            project_root=os.path.dirname(os.path.dirname(__file__)),
+            data_domain=data_domain,
+        )
         if ohlcv_db_path is None:
-            ohlcv_db_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "ohlcv.duckdb",
-            )
+            ohlcv_db_path = str(paths.ohlcv_db_path)
         if feature_store_dir is None:
-            feature_store_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "feature_store",
-            )
+            feature_store_dir = str(paths.feature_store_dir)
         if model_dir is None:
-            model_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "models",
-            )
+            model_dir = str(paths.model_dir)
         if output_dir is None:
-            output_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "reports",
-            )
+            output_dir = str(paths.reports_dir)
 
         self.ohlcv_db_path = ohlcv_db_path
         self.feature_store_dir = feature_store_dir
         self.model_dir = model_dir
         self.output_dir = output_dir
+        self.data_domain = data_domain
         os.makedirs(output_dir, exist_ok=True)
 
         self.regime_detector = RegimeDetector(
@@ -182,7 +172,15 @@ class AIQScreener:
             ml_signals["prediction"] = 1
             ml_signals["direction"] = "LONG"
 
-        regime_mult = 1.0 if self._current_regime == "STRONG_TREND" else 0.7
+        regime_mult = {
+            "STRONG_BULL_TREND": 1.0,
+            "STRONG_TREND": 1.0,
+            "BULLISH_MIXED": 0.85,
+            "MIXED": 0.7,
+            "RANGE_BOUND": 0.6,
+            "BEARISH_MIXED": 0.45,
+            "STRONG_BEAR_TREND": 0.3,
+        }.get(self._current_regime, 0.6)
         portfolio = self.risk_manager.build_portfolio(
             signals=ml_signals,
             capital=capital,
@@ -202,7 +200,7 @@ class AIQScreener:
             top_syms = ml_signals.head(10)["symbol_id"].tolist()
             event_type = (
                 "TREND_FOLLOW"
-                if self._current_regime in ("STRONG_TREND", "MIXED")
+                if self._current_regime in ("STRONG_TREND", "STRONG_BULL_TREND", "BULLISH_MIXED", "MIXED")
                 else "MEAN_REV"
             )
             bt = self.backtester.run_event_backtest(

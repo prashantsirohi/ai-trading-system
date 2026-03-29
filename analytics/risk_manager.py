@@ -1,12 +1,10 @@
 import os
-import logging
 import duckdb
 import pandas as pd
 import numpy as np
 from typing import Optional, Dict, List
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from utils.data_domains import ensure_domain_layout
+from utils.logger import logger
 
 
 class RiskManager:
@@ -35,22 +33,20 @@ class RiskManager:
         ohlcv_db_path: str = None,
         feature_store_dir: str = None,
         config: Dict = None,
+        data_domain: str = "operational",
     ):
+        paths = ensure_domain_layout(
+            project_root=os.path.dirname(os.path.dirname(__file__)),
+            data_domain=data_domain,
+        )
         if ohlcv_db_path is None:
-            ohlcv_db_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "ohlcv.duckdb",
-            )
+            ohlcv_db_path = str(paths.ohlcv_db_path)
         if feature_store_dir is None:
-            feature_store_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "data",
-                "feature_store",
-            )
+            feature_store_dir = str(paths.feature_store_dir)
         self.ohlcv_db_path = ohlcv_db_path
         self.feature_store_dir = feature_store_dir
         self.config = {**self.DEFAULT_RISK, **(config or {})}
+        self.data_domain = data_domain
 
     def _get_conn(self):
         return duckdb.connect(self.ohlcv_db_path)
@@ -102,9 +98,14 @@ class RiskManager:
                 "regime_multiplier": regime_multiplier,
             }
 
-        regime_mult = (
-            regime_multiplier if regime == "TREND" else regime_multiplier * 0.6
-        )
+        trend_like = {"TREND", "STRONG_TREND", "STRONG_BULL_TREND", "BULLISH_MIXED"}
+        bear_like = {"STRONG_BEAR_TREND", "BEARISH_MIXED"}
+        if regime in trend_like:
+            regime_mult = regime_multiplier
+        elif regime in bear_like:
+            regime_mult = regime_multiplier * 0.5
+        else:
+            regime_mult = regime_multiplier * 0.6
 
         stop_distance = atr * self.config["atr_multiplier_stop"]
         stop_loss = close - stop_distance

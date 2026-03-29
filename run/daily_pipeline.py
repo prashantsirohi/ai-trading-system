@@ -1,33 +1,35 @@
 """
-Daily Pipeline
-=============
-Orchestrates daily trading system tasks:
-1. Check trading holiday (exit if holiday)
-2. Check weekday (exit if weekend)
-3. Run daily update (OHLCV + features)
-4. If Saturday: portfolio analysis + stock_scan + sector_dashboard
-5. If weekday: stock_scan + sector_dashboard
+Daily Pipeline wrapper.
+
+This keeps the historical entrypoint while delegating execution to the
+resilient 4-stage orchestrator:
+1. ingest
+2. features
+3. rank
+4. publish
 
 Usage:
     python run/daily_pipeline.py
-    python run/daily_pipeline.py --force   # Skip holiday/weekend checks
+    python run/daily_pipeline.py --force
+    python run/daily_pipeline.py --local-publish
+    python run/daily_pipeline.py --smoke --local-publish
 """
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
 sys.path.insert(0, project_root)
 
 from dotenv import load_dotenv
+from run.orchestrator import PipelineOrchestrator
 from utils.logger import logger
 from utils.data_config import (
     should_truncate_data,
     truncate_old_data,
-    DATA_RETENTION_YEARS,
-    FEATURE_STORE_DIR,
+    data_retention_years,
 )
 import sqlite3
 
@@ -35,7 +37,7 @@ load_dotenv(os.path.join(project_root, ".env"))
 
 logger.info(f"Environment: {os.getenv('ENV', 'local')}")
 logger.info(
-    f"Data retention: {DATA_RETENTION_YEARS if DATA_RETENTION_YEARS else 'All'} years"
+    f"Data retention: {data_retention_years() if data_retention_years() else 'All'} years"
 )
 
 
@@ -60,23 +62,6 @@ def is_weekend(date: datetime = None) -> bool:
     if date is None:
         date = datetime.now()
     return date.weekday() >= 5
-
-
-def run_daily_update():
-    """Run daily OHLCV update and feature computation."""
-    from collectors.daily_update_runner import run as run_daily
-
-    logger.info("Running daily OHLCV update...")
-    run_daily(symbols_only=False, features_only=False, batch_size=500, bulk=False)
-    logger.info("Daily update complete")
-
-    # Create snapshot for reproducibility
-    from features.feature_store import FeatureStore
-    from datetime import datetime
-
-    fs = FeatureStore()
-    snapshot_id = fs.create_snapshot(f"Daily pipeline {datetime.now().date()}")
-    logger.info(f"Created snapshot: {snapshot_id}")
 
 
 def run_portfolio_analysis():
@@ -173,36 +158,26 @@ def run_portfolio_analysis():
         logger.warning(f"Portfolio analysis skipped: {e}")
 
 
-def run_stock_scan():
-    """Run stock scanner."""
-    from channel.stock_scan import run as run_scan
-
-    logger.info("Running stock scan...")
-    run_scan(local_only=False)
-    logger.info("Stock scan complete")
-
-
-def run_sector_dashboard():
-    """Run sector dashboard."""
-    from channel.sector_dashboard import run as run_dashboard
-
-    logger.info("Running sector dashboard...")
-    run_dashboard(local_only=False)
-    logger.info("Sector dashboard complete")
-
-
-def main(force: bool = False):
+def main(
+    force: bool = False,
+    local_publish: bool = False,
+    smoke: bool = False,
+    stages: str = "ingest,features,rank,publish",
+    canary: bool = False,
+    symbol_limit: int | None = None,
+    skip_preflight: bool = False,
+    data_domain: str = "operational",
+):
     now = datetime.now()
     today = now.strftime("%Y-%m-%d")
-    is_saturday = now.weekday() == 5
 
     logger.info("=" * 60)
     logger.info(f"DAILY PIPELINE - {today}")
     logger.info("=" * 60)
 
     # Truncate old data if running in github/prod mode
-    if should_truncate_data():
-        truncate_old_data()
+    if should_truncate_data(data_domain):
+        truncate_old_data(data_domain=data_domain)
 
     if not force:
         if is_trading_holiday(now):
@@ -214,18 +189,29 @@ def main(force: bool = False):
             logger.info(f"⛔ {today} is {day_name}. Weekend - exiting.")
             return
 
-    run_daily_update()
-
-    logger.info("Weekday detected - running daily tasks:")
-    logger.info("  - Portfolio analysis")
-    logger.info("  - Stock scan")
-    logger.info("  - Sector dashboard")
-    run_portfolio_analysis()
-    run_stock_scan()
-    run_sector_dashboard()
+    orchestrator = PipelineOrchestrator(project_root)
+    result = orchestrator.run_pipeline(
+        stage_names=(
+            ["ingest", "features", "rank"]
+            if canary and stages == "ingest,features,rank,publish"
+            else [stage.strip() for stage in stages.split(",") if stage.strip()]
+        ),
+        run_date=today,
+        params={
+            "force": force,
+            "batch_size": 700,
+            "bulk": False,
+            "local_publish": local_publish,
+            "smoke": smoke,
+            "canary": canary,
+            "symbol_limit": symbol_limit if symbol_limit is not None else (25 if canary else None),
+            "preflight": not skip_preflight,
+            "data_domain": data_domain,
+        },
+    )
 
     logger.info("=" * 60)
-    logger.info("PIPELINE COMPLETE")
+    logger.info(f"PIPELINE COMPLETE - run_id={result['run_id']} status={result['status']}")
     logger.info("=" * 60)
 
 
@@ -236,6 +222,52 @@ if __name__ == "__main__":
     parser.add_argument(
         "--force", action="store_true", help="Skip holiday/weekend checks"
     )
+    parser.add_argument(
+        "--local-publish",
+        action="store_true",
+        help="Skip networked Telegram/Google Sheets delivery and write a local publish summary instead",
+    )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Run a self-contained local smoke flow with synthetic data",
+    )
+    parser.add_argument(
+        "--stages",
+        default="ingest,features,rank,publish",
+        help="Comma-separated stage list. Example: publish",
+    )
+    parser.add_argument(
+        "--canary",
+        action="store_true",
+        help="Run a limited real canary flow with a smaller live symbol universe.",
+    )
+    parser.add_argument(
+        "--symbol-limit",
+        type=int,
+        default=None,
+        help="Limit live symbol universe size for canary runs.",
+    )
+    parser.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help="Skip local readiness checks before running live stages.",
+    )
+    parser.add_argument(
+        "--data-domain",
+        choices=["operational", "research"],
+        default="operational",
+        help="Select the storage domain for this wrapper.",
+    )
     args = parser.parse_args()
 
-    main(force=args.force)
+    main(
+        force=args.force,
+        local_publish=args.local_publish,
+        smoke=args.smoke,
+        stages=args.stages,
+        canary=args.canary,
+        symbol_limit=args.symbol_limit,
+        skip_preflight=args.skip_preflight,
+        data_domain=args.data_domain,
+    )
