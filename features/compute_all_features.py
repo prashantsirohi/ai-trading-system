@@ -1,42 +1,66 @@
-import sys
-import time
+"""Convenience script to recompute the full operational feature store."""
 
-sys.path.insert(0, r"C:\Users\DIO\Opencode\ai-trading-system")
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+from core.bootstrap import ensure_project_root_on_path
+
+project_root = ensure_project_root_on_path(__file__)
 
 from features.feature_store import FeatureStore
 
-fs = FeatureStore(
-    ohlcv_db_path=r"C:\Users\DIO\Opencode\ai-trading-system\data\ohlcv.duckdb",
-    feature_store_dir=r"C:\Users\DIO\Opencode\ai-trading-system\data\feature_store",
-)
 
-conn = fs._get_conn()
-syms_df = conn.execute("""
-    SELECT DISTINCT symbol_id FROM _catalog
-    WHERE exchange = 'NSE'
-    ORDER BY symbol_id
-""").fetchdf()
-conn.close()
+def main() -> None:
+    fs = FeatureStore(
+        ohlcv_db_path=Path(project_root) / "data" / "ohlcv.duckdb",
+        feature_store_dir=Path(project_root) / "data" / "feature_store",
+    )
 
-symbols = syms_df["symbol_id"].tolist()
-print(f"Total symbols: {len(symbols)}")
+    conn = fs._get_conn()
+    syms_df = conn.execute(
+        """
+        SELECT DISTINCT symbol_id FROM _catalog
+        WHERE exchange = 'NSE'
+        ORDER BY symbol_id
+        """
+    ).fetchdf()
+    conn.close()
 
-feature_types = ["rsi", "adx", "sma", "ema", "macd", "atr", "bb", "roc", "supertrend"]
+    symbols = syms_df["symbol_id"].tolist()
+    print(f"Total symbols: {len(symbols)}")
 
-t0 = time.time()
-result = fs.compute_and_store_features(
-    symbols=symbols,
-    exchanges=["NSE"],
-    feature_types=feature_types,
-)
+    feature_types = [
+        "rsi",
+        "adx",
+        "sma",
+        "ema",
+        "macd",
+        "atr",
+        "bb",
+        "roc",
+        "supertrend",
+    ]
 
-total_rows = sum(v for v in result.values())
-elapsed = time.time() - t0
+    t0 = time.time()
+    result = fs.compute_and_store_features(
+        symbols=symbols,
+        exchanges=["NSE"],
+        feature_types=feature_types,
+    )
 
-print(f"\nAll features computed and stored in {elapsed:.1f}s")
-print(f"Total rows written: {total_rows:,}")
-for k, v in result.items():
-    print(f"  {k}: {v:,} rows")
+    total_rows = sum(v for v in result.values())
+    elapsed = time.time() - t0
 
-reg = fs.list_features()
-print(f"\nFeature Registry: {len(reg)} entries total")
+    print(f"\nAll features computed and stored in {elapsed:.1f}s")
+    print(f"Total rows written: {total_rows:,}")
+    for key, value in result.items():
+        print(f"  {key}: {value:,} rows")
+
+    reg = fs.list_features()
+    print(f"\nFeature Registry: {len(reg)} entries total")
+
+
+if __name__ == "__main__":
+    main()

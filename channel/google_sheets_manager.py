@@ -4,13 +4,10 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
 
 import pandas as pd
+from core.runtime_config import GoogleSheetsRuntimeConfig
+from utils.env import load_project_env
 
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv()
-except ImportError:
-    pass
+load_project_env(__file__)
 
 try:
     import gspread
@@ -40,22 +37,19 @@ class GoogleSheetsManager:
         token_path: Optional[Union[str, Path]] = None,
     ):
         self._base_dir = Path(__file__).parent.parent
+        runtime = GoogleSheetsRuntimeConfig.from_env(self._base_dir)
 
         if credentials_path:
             self.credentials_path = credentials_path
-        elif os.getenv("GOOGLE_SHEETS_CREDENTIALS"):
-            self.credentials_path = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
         else:
-            self.credentials_path = self._base_dir / "client_secret.json"
+            self.credentials_path = runtime.credentials_path
 
         if token_path:
             self.token_path = token_path
-        elif os.getenv("GOOGLE_TOKEN_PATH"):
-            self.token_path = os.getenv("GOOGLE_TOKEN_PATH")
         else:
-            self.token_path = self._base_dir / "token.json"
+            self.token_path = runtime.token_path
 
-        self.spreadsheet_id = spreadsheet_id or os.getenv("GOOGLE_SPREADSHEET_ID")
+        self.spreadsheet_id = spreadsheet_id or runtime.spreadsheet_id
         self.client = None
         self.spreadsheet = None
         self._authenticate()

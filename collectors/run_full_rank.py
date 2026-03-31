@@ -4,16 +4,17 @@ Full screener run: rank all 1,306 stocks with real data.
 
 import os, sys, time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from core.bootstrap import ensure_project_root_on_path
+project_root = str(ensure_project_root_on_path(__file__))
 
-from dotenv import load_dotenv
+from utils.env import load_project_env
 
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
+load_project_env(__file__)
 
 from analytics.ranker import StockRanker
 
-DB = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "ohlcv.duckdb")
-FEAT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "feature_store")
+DB = os.path.join(project_root, "data", "ohlcv.duckdb")
+FEAT = os.path.join(project_root, "data", "feature_store")
 
 ranker = StockRanker(ohlcv_db_path=DB, feature_store_dir=FEAT)
 

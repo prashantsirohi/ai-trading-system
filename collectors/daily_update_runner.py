@@ -17,9 +17,9 @@ import os
 import sys
 import argparse
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
-sys.path.insert(0, project_root)
+from core.bootstrap import ensure_project_root_on_path
+
+project_root = str(ensure_project_root_on_path(__file__))
 
 from collectors.dhan_collector import DhanCollector
 from features.feature_store import FeatureStore
@@ -34,8 +34,12 @@ def run(
     bulk: bool,
     symbol_limit: int | None = None,
     data_domain: str = "operational",
+    symbols: list[str] | None = None,
+    full_rebuild: bool = False,
+    feature_tail_bars: int = 252,
 ):
     paths = ensure_domain_layout(project_root=project_root, data_domain=data_domain)
+    incremental_features = data_domain == "operational" and not full_rebuild
     collector = DhanCollector(
         db_path=str(paths.ohlcv_db_path),
         masterdb_path=str(paths.master_db_path),
@@ -48,18 +52,19 @@ def run(
         logger.info("MODE: Features Only - recomputing all features")
         logger.info("=" * 60)
 
-        import duckdb
+        if symbols is None:
+            import duckdb
 
-        conn = duckdb.connect(collector.db_path, read_only=True)
-        try:
-            syms = conn.execute(
-                "SELECT DISTINCT symbol_id FROM _catalog WHERE exchange = 'NSE'"
-            ).fetchall()
-            symbols = [r[0] for r in syms]
-            if symbol_limit is not None:
-                symbols = symbols[:symbol_limit]
-        finally:
-            conn.close()
+            conn = duckdb.connect(collector.db_path, read_only=True)
+            try:
+                syms = conn.execute(
+                    "SELECT DISTINCT symbol_id FROM _catalog WHERE exchange = 'NSE'"
+                ).fetchall()
+                symbols = [r[0] for r in syms]
+                if symbol_limit is not None:
+                    symbols = symbols[:symbol_limit]
+            finally:
+                conn.close()
 
         logger.info(f"Computing features for {len(symbols)} symbols...")
         fs = FeatureStore(
@@ -81,11 +86,14 @@ def run(
                 "roc",
                 "supertrend",
             ],
+            incremental=incremental_features,
+            tail_bars=feature_tail_bars,
+            full_rebuild=full_rebuild,
         )
         logger.info(f"Feature computation complete: {result}")
 
         logger.info("Computing sector RS and relative strength...")
-        from compute_sector_rs import compute_all_symbols_rs
+        from features.compute_sector_rs import compute_all_symbols_rs
 
         compute_all_symbols_rs(
             db_path=str(paths.ohlcv_db_path),
@@ -104,6 +112,7 @@ def run(
         result = collector.run_daily_update_bulk(
             exchanges=["NSE"],
             symbol_limit=symbol_limit,
+            compute_features=False,
         )
         logger.info(f"Bulk daily update result: {result}")
         return
@@ -118,6 +127,7 @@ def run(
             batch_size=batch_size,
             max_concurrent=10,
             symbol_limit=symbol_limit,
+            compute_features=False,
         )
         logger.info(f"Daily update result: {result}")
         logger.info("")
@@ -135,6 +145,7 @@ def run(
         batch_size=batch_size,
         max_concurrent=10,
         symbol_limit=symbol_limit,
+        compute_features=False,
     )
 
     logger.info("=" * 60)
@@ -143,8 +154,42 @@ def run(
     logger.info(f"  Symbols errors  : {result.get('symbols_errors', 0)}")
     logger.info(f"  Duration        : {result.get('duration_sec', 0):.1f}s")
     logger.info("=" * 60)
+    updated_symbols = result.get("updated_symbols") or None
+    if updated_symbols or full_rebuild:
+        target_symbols = None if full_rebuild else updated_symbols
+        logger.info(
+            "Recomputing features for %s symbols (mode=%s, tail_bars=%s)",
+            "all" if target_symbols is None else len(target_symbols),
+            "incremental" if incremental_features else "full_rebuild",
+            feature_tail_bars,
+        )
+        fs = FeatureStore(
+            ohlcv_db_path=str(paths.ohlcv_db_path),
+            feature_store_dir=str(paths.feature_store_dir),
+            data_domain=data_domain,
+        )
+        feat_result = fs.compute_and_store_features(
+            symbols=target_symbols,
+            exchanges=["NSE"],
+            feature_types=[
+                "rsi",
+                "adx",
+                "sma",
+                "ema",
+                "macd",
+                "atr",
+                "bb",
+                "roc",
+                "supertrend",
+            ],
+            incremental=incremental_features,
+            tail_bars=feature_tail_bars,
+            full_rebuild=full_rebuild,
+        )
+        logger.info(f"Feature computation complete: {feat_result}")
+
     logger.info("Computing sector RS and relative strength...")
-    from compute_sector_rs import compute_all_symbols_rs
+    from features.compute_sector_rs import compute_all_symbols_rs
 
     compute_all_symbols_rs(
         db_path=str(paths.ohlcv_db_path),
@@ -190,6 +235,17 @@ def main():
         default="operational",
         help="Resolved storage domain for this run.",
     )
+    parser.add_argument(
+        "--full-rebuild",
+        action="store_true",
+        help="Force full feature recomputation instead of incremental tail updates.",
+    )
+    parser.add_argument(
+        "--feature-tail-bars",
+        type=int,
+        default=252,
+        help="Tail window to recompute for incremental operational feature updates.",
+    )
     args = parser.parse_args()
 
     run(
@@ -199,6 +255,8 @@ def main():
         bulk=args.bulk,
         symbol_limit=args.symbol_limit,
         data_domain=args.data_domain,
+        full_rebuild=args.full_rebuild,
+        feature_tail_bars=args.feature_tail_bars,
     )
 
 

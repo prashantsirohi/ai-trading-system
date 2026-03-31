@@ -67,7 +67,7 @@ PipelineOrchestrator
 - Canary support:
   - optional `symbol_limit` restricts feature recomputation to the canary universe
 - Sector-strength universe:
-  - `compute_sector_rs.py` now builds sector leadership from a liquidity-filtered broad universe
+  - `features/compute_sector_rs.py` now builds sector leadership from a liquidity-filtered broad universe
   - default rule is top `800` symbols by recent median traded value with at least `180` recent trading days
 - Output artifacts:
   - `feature_snapshot`

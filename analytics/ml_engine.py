@@ -1,13 +1,23 @@
+from __future__ import annotations
+
 import os
 import time
 import duckdb
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict, Literal, Tuple
-import xgboost as xgb
-from sklearn.metrics import roc_auc_score, mean_squared_error
 from utils.data_domains import ensure_domain_layout
 from utils.logger import logger
+
+try:
+    import xgboost as xgb
+except ImportError:  # pragma: no cover - optional dependency boundary
+    xgb = None
+
+try:
+    from sklearn.metrics import roc_auc_score
+except ImportError:  # pragma: no cover - optional dependency boundary
+    roc_auc_score = None
 
 
 class AlphaEngine:
@@ -49,6 +59,36 @@ class AlphaEngine:
         self.model_dir = model_dir
         self.data_domain = data_domain
         os.makedirs(model_dir, exist_ok=True)
+        self.engine_name = "xgboost"
+
+    def _require_xgboost(self) -> None:
+        if xgb is None:
+            raise ImportError(
+                "xgboost is not installed. Install it with `python -m pip install xgboost`."
+            )
+
+    def _safe_auc(self, y_true, y_pred_proba: np.ndarray) -> float:
+        y_true_arr = np.asarray(y_true)
+        y_pred_arr = np.asarray(y_pred_proba)
+        if y_true_arr.size == 0:
+            return 0.5
+        positives = y_true_arr == 1
+        negatives = y_true_arr == 0
+        n_pos = int(positives.sum())
+        n_neg = int(negatives.sum())
+        if n_pos == 0 or n_neg == 0:
+            return 0.5
+        if roc_auc_score is not None:
+            try:
+                return float(roc_auc_score(y_true_arr, y_pred_arr))
+            except ValueError:
+                pass
+        order = np.argsort(y_pred_arr)
+        ranks = np.empty_like(order, dtype=float)
+        ranks[order] = np.arange(1, len(y_pred_arr) + 1, dtype=float)
+        pos_rank_sum = ranks[positives].sum()
+        auc = (pos_rank_sum - (n_pos * (n_pos + 1) / 2.0)) / (n_pos * n_neg)
+        return float(auc)
 
     def _get_conn(self):
         return duckdb.connect(self.ohlcv_db_path)
@@ -100,11 +140,11 @@ class AlphaEngine:
         logger.info(f"Loaded {len(ohlcv):,} OHLCV rows for training")
 
         feat_cfg = [
-            ("rsi", "rsi", ["rsi"]),
-            ("adx", "adx", ["adx_plus", "adx_minus", "adx_value"]),
-            ("atr", "atr", ["atr_value"]),
-            ("bb", "bb", ["bb_upper", "bb_middle", "bb_lower"]),
-            ("supertrend", "st", ["st_upper", "st_lower", "st_signal"]),
+            ("rsi", "rsi", ["rsi_14 AS rsi"]),
+            ("adx", "adx", ["plus_di_14 AS adx_plus", "minus_di_14 AS adx_minus", "adx_14 AS adx_value"]),
+            ("atr", "atr", ["atr_14 AS atr_value"]),
+            ("bb", "bb", ["bb_upper_20_2sd AS bb_upper", "bb_middle_20 AS bb_middle", "bb_lower_20_2sd AS bb_lower"]),
+            ("supertrend", "st", ["supertrend_10_3 AS st_upper", "supertrend_10_3 AS st_lower", "supertrend_dir_10_3 AS st_signal"]),
         ]
 
         feat_cols_sql = "t.symbol_id, t.exchange, t.timestamp, t.close, t.high, t.low, t.open, t.volume"
@@ -117,7 +157,7 @@ class AlphaEngine:
                 os.path.join(self.feature_store_dir, feat_name, exchange)
             ):
                 continue
-            select_cols = ", ".join(f"{c}" for c in feat_cols)
+            select_cols = ", ".join(feat_cols)
             join_clauses.append(f"""
             LEFT JOIN (
                 SELECT symbol_id, exchange, timestamp, {select_cols}
@@ -130,8 +170,9 @@ class AlphaEngine:
                        AND t.exchange = {alias}.exchange
                        AND t.timestamp = {alias}.timestamp
             """)
-            feat_cols_sql += ", " + ", ".join(f"{alias}.{c}" for c in feat_cols)
-            logger.info(f"  Joined {feat_name}: {feat_cols}")
+            projected_cols = [column.split(" AS ")[-1].strip() for column in feat_cols]
+            feat_cols_sql += ", " + ", ".join(f"{alias}.{c}" for c in projected_cols)
+            logger.info(f"  Joined {feat_name}: {projected_cols}")
 
         query = f"""
             SELECT {feat_cols_sql}
@@ -150,8 +191,12 @@ class AlphaEngine:
             features[f"return_{h}d"] = (
                 features.groupby("symbol_id")["close"].shift(-h) / features["close"] - 1
             )
+            forward_returns = features[f"return_{h}d"]
+            cross_sectional_cutoff = features.groupby("timestamp")[f"return_{h}d"].transform(
+                lambda series: series.quantile(0.6)
+            )
             features[f"target_{h}d"] = (
-                features[f"return_{h}d"] > features[f"return_{h}d"].quantile(0.6)
+                forward_returns >= cross_sectional_cutoff
             ).astype(int)
 
         features = features.dropna(subset=["close", "volume"])
@@ -189,15 +234,20 @@ class AlphaEngine:
             in ("float64", "float32", "int64", "int32", "float16", "int16")
         ]
 
+    def _default_model_path(self, horizon: int = 5) -> str:
+        return os.path.join(self.model_dir, f"{self.engine_name}_h{horizon}.json")
+
     def train(
         self,
         train_df: pd.DataFrame,
         horizon: int = 5,
         regime: str = "ALL",
+        **_: Dict,
     ) -> Tuple[xgb.XGBClassifier, Dict]:
         """
         Train an XGBoost classifier for a given horizon and regime.
         """
+        self._require_xgboost()
         target_col = f"target_{horizon}d"
         feature_cols = self._feature_cols(train_df)
 
@@ -314,10 +364,7 @@ class AlphaEngine:
             y_pred_proba = model.predict_proba(X_test)[:, 1]
             y_pred = model.predict(X_test)
 
-            try:
-                auc = roc_auc_score(y_test, y_pred_proba)
-            except ValueError:
-                auc = 0.5
+            auc = self._safe_auc(y_test, y_pred_proba)
 
             actual_returns = test_df["return_5d"].dropna()
             pred_signals = test_df.loc[actual_returns.index, "return_5d"]
@@ -373,6 +420,7 @@ class AlphaEngine:
         Predict alpha scores for current/recent signals.
         Returns symbol, prediction probability, predicted direction.
         """
+        self._require_xgboost()
         if symbols is None:
             conn = self._get_conn()
             try:
@@ -392,7 +440,7 @@ class AlphaEngine:
         )
 
         if model is None:
-            model_path = os.path.join(self.model_dir, f"xgb_h{horizon}.json")
+            model_path = self._default_model_path(horizon)
             if os.path.exists(model_path):
                 model = xgb.XGBClassifier()
                 model.load_model(model_path)
@@ -449,12 +497,15 @@ class AlphaEngine:
         return result
 
     def save_model(self, model: xgb.XGBClassifier, horizon: int = 5):
-        path = os.path.join(self.model_dir, f"xgb_h{horizon}.json")
+        self._require_xgboost()
+        path = self._default_model_path(horizon)
         model.save_model(path)
         logger.info(f"Model saved to {path}")
+        return path
 
     def load_model(self, horizon: int = 5) -> Optional[xgb.XGBClassifier]:
-        path = os.path.join(self.model_dir, f"xgb_h{horizon}.json")
+        self._require_xgboost()
+        path = self._default_model_path(horizon)
         if not os.path.exists(path):
             return None
         model = xgb.XGBClassifier()

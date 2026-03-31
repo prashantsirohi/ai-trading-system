@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from typing import Callable, Dict, Optional
 
 import duckdb
@@ -36,6 +37,21 @@ class FeaturesStage:
 
         from collectors.daily_update_runner import run as run_daily_update
 
+        ingest_artifact = context.artifact_for("ingest", "ingest_summary")
+        updated_symbols = None
+        if ingest_artifact is not None:
+            try:
+                with open(ingest_artifact.uri, "r", encoding="utf-8") as handle:
+                    ingest_summary = json.load(handle)
+                updated_symbols = ingest_summary.get("updated_symbols") or None
+            except Exception:
+                updated_symbols = None
+
+        full_rebuild = bool(
+            context.params.get("full_rebuild", False)
+            or context.params.get("data_domain") == "research"
+        )
+
         run_daily_update(
             symbols_only=False,
             features_only=True,
@@ -43,6 +59,9 @@ class FeaturesStage:
             bulk=bool(context.params.get("bulk", False)),
             symbol_limit=context.params.get("symbol_limit"),
             data_domain=context.params.get("data_domain", "operational"),
+            symbols=updated_symbols,
+            full_rebuild=full_rebuild,
+            feature_tail_bars=int(context.params.get("feature_tail_bars", 252)),
         )
 
         snapshot_id, feature_rows, feature_registry_entries = self._record_snapshot(context)
@@ -51,6 +70,8 @@ class FeaturesStage:
             "snapshot_id": int(snapshot_id),
             "feature_rows": feature_rows,
             "feature_registry_entries": int(feature_registry_entries),
+            "feature_mode": "full_rebuild" if full_rebuild else "incremental",
+            "target_symbol_count": len(updated_symbols or []),
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
 

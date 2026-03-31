@@ -2,7 +2,7 @@
 Portfolio Analysis Examples
 
 Usage:
-    python portfolio_example.py
+    python -m channel.portfolio_example
 
 This module provides:
 - Portfolio tracking with positions
@@ -11,12 +11,13 @@ This module provides:
 - Google Sheets integration
 """
 
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from core.bootstrap import ensure_project_root_on_path
 
-from portfolio_analyzer import Portfolio, PortfolioManager, PositionType
+ensure_project_root_on_path(__file__)
+
+from channel.portfolio_analyzer import Portfolio, PortfolioManager, PositionType
 
 
 def example_create_portfolio():

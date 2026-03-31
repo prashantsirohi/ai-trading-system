@@ -22,7 +22,7 @@ Setup:
    Or add them to .env file
 
 Usage:
-    from telegram_reporter import TelegramReporter
+    from publishers.telegram import TelegramReporter
 
     reporter = TelegramReporter()
 
@@ -44,7 +44,11 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-from telegram_reporter import TelegramReporter
+from core.bootstrap import ensure_project_root_on_path
+
+ensure_project_root_on_path(__file__)
+
+from publishers.telegram import TelegramReporter
 
 
 def create_sample_returns(start_date: str = "2024-01-01", days: int = 252) -> pd.Series:

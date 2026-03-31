@@ -2,9 +2,9 @@ import os
 import sys
 import logging
 from datetime import datetime
-from dotenv import load_dotenv
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from core.bootstrap import ensure_project_root_on_path
+ensure_project_root_on_path(__file__)
 
 from collectors import DhanCollector, NSECollector
 from features import FeatureEngine
@@ -14,12 +14,15 @@ from ai import SignalRanker
 from risk import RiskManager
 from execution import DhanExecutor
 from config import CONFIG
+from utils.env import load_project_env
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+load_project_env(__file__)
 
 
 class AITradingSystem:
@@ -190,8 +193,6 @@ class AITradingSystem:
 
 def main():
     """Main entry point"""
-    load_dotenv()
-
     config = CONFIG.from_env()
 
     system = AITradingSystem(config)

@@ -7,13 +7,9 @@ from enum import Enum
 
 import pandas as pd
 import numpy as np
+from utils.env import load_project_env
 
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv()
-except ImportError:
-    pass
+load_project_env(__file__)
 
 from utils.logger import logger
 
@@ -487,7 +483,7 @@ class PortfolioManager:
 
     def _authenticate(self):
         try:
-            from channel.google_sheets_manager import GoogleSheetsManager
+            from publishers.google_sheets import GoogleSheetsManager
 
             manager = GoogleSheetsManager()
             if manager.client:

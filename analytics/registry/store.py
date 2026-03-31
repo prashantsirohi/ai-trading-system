@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import duckdb
 
-from run.stages.base import StageArtifact
+from core.contracts import StageArtifact
 
 
 DEFAULT_RULES = [
@@ -175,7 +175,10 @@ class RegistryStore:
 
     def __init__(self, project_root: Path | str, db_path: Optional[Path | str] = None):
         self.project_root = Path(project_root)
-        self.db_path = Path(db_path) if db_path else self.project_root / "data" / "ohlcv.duckdb"
+        # Keep governance/control-plane metadata in a dedicated database so
+        # live OHLCV writers and long-running readers do not block alerting,
+        # model governance, or pipeline run tracking.
+        self.db_path = Path(db_path) if db_path else self.project_root / "data" / "control_plane.duckdb"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._apply_migrations()
         self.seed_default_rules()
@@ -917,6 +920,256 @@ class RegistryStore:
             return int(conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
         finally:
             conn.close()
+
+    def replace_shadow_predictions(
+        self,
+        prediction_date: str,
+        rows: List[Dict[str, Any]],
+        artifact_uri: Optional[str] = None,
+    ) -> int:
+        conn = self._connect()
+        try:
+            conn.execute(
+                "DELETE FROM model_shadow_prediction WHERE prediction_date = ?",
+                [prediction_date],
+            )
+            inserted = 0
+            for row in rows:
+                prediction_id = row.get("prediction_id") or f"pred-{uuid.uuid4().hex[:12]}"
+                conn.execute(
+                    """
+                    INSERT INTO model_shadow_prediction (
+                        prediction_id, prediction_date, symbol_id, exchange, close,
+                        technical_score, technical_rank, technical_top_decile,
+                        ml_5d_prob, ml_5d_rank, ml_5d_top_decile,
+                        ml_20d_prob, ml_20d_rank, ml_20d_top_decile,
+                        blend_5d_score, blend_5d_rank, blend_5d_top_decile,
+                        blend_20d_score, blend_20d_rank, blend_20d_top_decile,
+                        artifact_uri, created_at, metadata_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    """,
+                    [
+                        prediction_id,
+                        prediction_date,
+                        row["symbol_id"],
+                        row.get("exchange", "NSE"),
+                        row.get("close"),
+                        row.get("technical_score"),
+                        row.get("technical_rank"),
+                        bool(row.get("technical_top_decile", False)),
+                        row.get("ml_5d_prob"),
+                        row.get("ml_5d_rank"),
+                        bool(row.get("ml_5d_top_decile", False)),
+                        row.get("ml_20d_prob"),
+                        row.get("ml_20d_rank"),
+                        bool(row.get("ml_20d_top_decile", False)),
+                        row.get("blend_5d_score"),
+                        row.get("blend_5d_rank"),
+                        bool(row.get("blend_5d_top_decile", False)),
+                        row.get("blend_20d_score"),
+                        row.get("blend_20d_rank"),
+                        bool(row.get("blend_20d_top_decile", False)),
+                        artifact_uri or row.get("artifact_uri"),
+                        self._json(row.get("metadata")),
+                    ],
+                )
+                inserted += 1
+        finally:
+            conn.close()
+        return inserted
+
+    def get_latest_shadow_prediction_date(self) -> Optional[str]:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT MAX(prediction_date) FROM model_shadow_prediction"
+            ).fetchone()
+        finally:
+            conn.close()
+        return str(row[0]) if row and row[0] is not None else None
+
+    def get_shadow_overlay(
+        self,
+        prediction_date: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        try:
+            if prediction_date is None:
+                prediction_date = self.get_latest_shadow_prediction_date()
+            if prediction_date is None:
+                return []
+            limit_clause = f"LIMIT {int(limit)}" if limit else ""
+            rows = conn.execute(
+                f"""
+                SELECT prediction_date, symbol_id, exchange, close, technical_score, technical_rank,
+                       ml_5d_prob, ml_5d_rank, ml_20d_prob, ml_20d_rank,
+                       blend_5d_score, blend_5d_rank, blend_20d_score, blend_20d_rank,
+                       technical_top_decile, ml_5d_top_decile, ml_20d_top_decile,
+                       blend_5d_top_decile, blend_20d_top_decile, artifact_uri
+                FROM model_shadow_prediction
+                WHERE prediction_date = ?
+                ORDER BY technical_rank
+                {limit_clause}
+                """,
+                [prediction_date],
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            {
+                "prediction_date": row[0],
+                "symbol_id": row[1],
+                "exchange": row[2],
+                "close": row[3],
+                "technical_score": row[4],
+                "technical_rank": row[5],
+                "ml_5d_prob": row[6],
+                "ml_5d_rank": row[7],
+                "ml_20d_prob": row[8],
+                "ml_20d_rank": row[9],
+                "blend_5d_score": row[10],
+                "blend_5d_rank": row[11],
+                "blend_20d_score": row[12],
+                "blend_20d_rank": row[13],
+                "technical_top_decile": row[14],
+                "ml_5d_top_decile": row[15],
+                "ml_20d_top_decile": row[16],
+                "blend_5d_top_decile": row[17],
+                "blend_20d_top_decile": row[18],
+                "artifact_uri": row[19],
+            }
+            for row in rows
+        ]
+
+    def replace_shadow_outcomes(self, rows: List[Dict[str, Any]]) -> int:
+        conn = self._connect()
+        try:
+            inserted = 0
+            for row in rows:
+                conn.execute(
+                    "DELETE FROM model_shadow_outcome WHERE prediction_id = ? AND horizon = ?",
+                    [row["prediction_id"], int(row["horizon"])],
+                )
+                conn.execute(
+                    """
+                    INSERT INTO model_shadow_outcome (
+                        outcome_id, prediction_id, prediction_date, symbol_id, exchange,
+                        horizon, future_date, realized_return, hit, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    [
+                        row.get("outcome_id") or f"out-{uuid.uuid4().hex[:12]}",
+                        row["prediction_id"],
+                        row["prediction_date"],
+                        row["symbol_id"],
+                        row.get("exchange", "NSE"),
+                        int(row["horizon"]),
+                        row.get("future_date"),
+                        float(row["realized_return"]),
+                        bool(row["hit"]),
+                    ],
+                )
+                inserted += 1
+        finally:
+            conn.close()
+        return inserted
+
+    def get_unscored_shadow_predictions(self, horizon: int) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT p.prediction_id, p.prediction_date, p.symbol_id, p.exchange
+                FROM model_shadow_prediction p
+                LEFT JOIN model_shadow_outcome o
+                  ON o.prediction_id = p.prediction_id
+                 AND o.horizon = ?
+                WHERE o.prediction_id IS NULL
+                ORDER BY p.prediction_date, p.symbol_id
+                """,
+                [int(horizon)],
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            {
+                "prediction_id": row[0],
+                "prediction_date": str(row[1]),
+                "symbol_id": row[2],
+                "exchange": row[3],
+            }
+            for row in rows
+        ]
+
+    def get_shadow_period_summary(
+        self,
+        *,
+        grain: str,
+        horizon: int,
+        periods: int = 12,
+    ) -> List[Dict[str, Any]]:
+        if grain not in {"week", "month"}:
+            raise ValueError(f"Unsupported grain: {grain}")
+        if horizon not in {5, 20}:
+            raise ValueError(f"Unsupported horizon: {horizon}")
+
+        ml_flag = f"ml_{horizon}d_top_decile"
+        blend_flag = f"blend_{horizon}d_top_decile"
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                WITH base AS (
+                    SELECT
+                        DATE_TRUNC('{grain}', p.prediction_date) AS period_start,
+                        o.realized_return,
+                        o.hit,
+                        p.technical_top_decile,
+                        p.{ml_flag} AS ml_top_decile,
+                        p.{blend_flag} AS blend_top_decile
+                    FROM model_shadow_prediction p
+                    JOIN model_shadow_outcome o
+                      ON o.prediction_id = p.prediction_id
+                     AND o.horizon = ?
+                ),
+                unioned AS (
+                    SELECT period_start, 'technical' AS variant, realized_return, hit
+                    FROM base WHERE technical_top_decile
+                    UNION ALL
+                    SELECT period_start, 'ml' AS variant, realized_return, hit
+                    FROM base WHERE ml_top_decile
+                    UNION ALL
+                    SELECT period_start, 'blend' AS variant, realized_return, hit
+                    FROM base WHERE blend_top_decile
+                )
+                SELECT
+                    period_start,
+                    variant,
+                    COUNT(*) AS picks,
+                    AVG(hit::DOUBLE) AS hit_rate,
+                    AVG(realized_return) AS avg_return
+                FROM unioned
+                GROUP BY 1, 2
+                ORDER BY period_start DESC, variant
+                LIMIT ?
+                """,
+                [int(horizon), int(periods * 3)],
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            {
+                "period_start": str(row[0]),
+                "variant": row[1],
+                "picks": int(row[2]),
+                "hit_rate": float(row[3]) if row[3] is not None else None,
+                "avg_return": float(row[4]) if row[4] is not None else None,
+            }
+            for row in rows
+        ]
 
     def _json(self, payload: Optional[Dict[str, Any]]) -> Optional[str]:
         if payload is None:

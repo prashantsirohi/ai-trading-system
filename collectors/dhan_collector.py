@@ -1635,6 +1635,9 @@ class DhanCollector:
         self,
         exchanges: List[str] = None,
         symbol_limit: int | None = None,
+        compute_features: bool = False,
+        full_rebuild: bool = False,
+        feature_tail_bars: int = 252,
     ) -> Dict[str, Any]:
         """
         Run daily EOD update using bulk OHLC API.
@@ -1713,7 +1716,7 @@ class DhanCollector:
             )
 
             feat_result = {}
-            if rows_written > 0:
+            if compute_features and rows_written > 0:
                 updated_symbols = (
                     df[df["symbol_id"] != ""]["symbol_id"].unique().tolist()
                 )
@@ -1731,6 +1734,9 @@ class DhanCollector:
                         "roc",
                         "supertrend",
                     ],
+                    incremental=not full_rebuild,
+                    tail_bars=feature_tail_bars,
+                    full_rebuild=full_rebuild,
                 )
 
             return {
@@ -1754,6 +1760,9 @@ class DhanCollector:
         max_concurrent: int = 10,
         days_history: int = 7,
         symbol_limit: int | None = None,
+        compute_features: bool = False,
+        full_rebuild: bool = False,
+        feature_tail_bars: int = 252,
     ) -> Dict[str, Any]:
         """
         Run daily EOD update after market close.
@@ -1857,7 +1866,7 @@ class DhanCollector:
         duration = time.time() - t0
 
         feat_result = {}
-        if all_updated_symbols:
+        if compute_features and all_updated_symbols:
             feat_result = self.fs.compute_and_store_features(
                 symbols=all_updated_symbols,
                 exchanges=exchanges,
@@ -1872,6 +1881,9 @@ class DhanCollector:
                     "roc",
                     "supertrend",
                 ],
+                incremental=not full_rebuild,
+                tail_bars=feature_tail_bars,
+                full_rebuild=full_rebuild,
             )
             logger.info(f"[Daily Update] Features updated: {feat_result}")
 

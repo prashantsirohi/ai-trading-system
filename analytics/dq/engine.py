@@ -10,7 +10,7 @@ import duckdb
 import pandas as pd
 
 from analytics.registry import RegistryStore
-from run.stages.base import DataQualityCriticalError, StageContext, StageResult
+from core.contracts import DataQualityCriticalError, StageContext, StageResult
 
 
 @dataclass
@@ -230,7 +230,7 @@ class DataQualityEngine:
         return self._scalar(db_path, "SELECT COUNT(*) FROM _catalog")
 
     def _scalar(self, db_path: Path, query: str) -> int:
-        conn = duckdb.connect(str(db_path))
+        conn = duckdb.connect(str(db_path), read_only=True)
         try:
             row = conn.execute(query).fetchone()
             return int(row[0]) if row else 0

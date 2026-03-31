@@ -9,21 +9,19 @@ Usage:
     python -m channel.sector_dashboard --local    # Skip Google Sheets update
 """
 
-import os
-import sys
 from datetime import datetime
 
 import pandas as pd
 import pyarrow.parquet as pq
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
-sys.path.insert(0, project_root)
+from core.bootstrap import ensure_project_root_on_path
 
-from dotenv import load_dotenv
+project_root = str(ensure_project_root_on_path(__file__))
+
+from utils.env import load_project_env
 from utils.logger import logger
 
-load_dotenv(os.path.join(project_root, ".env"))
+load_project_env(__file__)
 
 logger.disable("googleapiclient")
 logger.disable("google.auth")
@@ -199,35 +197,11 @@ def get_top_stocks_per_sector(
 
 
 def update_google_sheets(dashboard: pd.DataFrame):
-    """Update Google Sheets with dashboard (appends rows)."""
+    """Backward-compatible Google Sheets publish wrapper."""
     try:
-        from channel.google_sheets_manager import GoogleSheetsManager
+        from publishers.google_sheets import publish_sector_dashboard
 
-        gs = GoogleSheetsManager()
-        spreadsheet_id = os.getenv("GOOGLE_SPREADSHEET_ID")
-
-        if not spreadsheet_id:
-            logger.warning("GOOGLE_SPREADSHEET_ID not set, skipping sheet update")
-            return
-
-        dashboard_with_index = dashboard.reset_index()
-        dashboard_with_index.rename(columns={"index": "Sector"}, inplace=True)
-
-        sheet = gs.get_or_create_sheet("Sector Dashboard")
-
-        if sheet:
-            existing = sheet.get_all_values()
-            is_empty = not existing or existing == [[]]
-            if is_empty:
-                gs.append_rows(
-                    dashboard_with_index, "Sector Dashboard", include_header=True
-                )
-            else:
-                gs.append_rows(
-                    dashboard_with_index, "Sector Dashboard", include_header=False
-                )
-
-        logger.info(f"Dashboard appended to Google Sheets ({len(dashboard)} sectors)")
+        publish_sector_dashboard(dashboard)
 
     except Exception as e:
         logger.error(f"Google Sheets update failed: {e}")

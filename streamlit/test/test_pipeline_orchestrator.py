@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import os
-import sys
 from datetime import date
 from pathlib import Path
 
 import duckdb
 import pandas as pd
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from analytics.registry import RegistryStore
 from collectors.delivery_collector import DeliveryCollector
@@ -102,7 +99,7 @@ def test_stage_boundaries_and_registry_rows(tmp_path: Path) -> None:
     assert registry.count_rows("pipeline_stage_run") == 4
     assert registry.count_rows("pipeline_artifact") >= 4
     assert registry.count_rows("dq_result") >= 8
-    conn = duckdb.connect(str(project_root / "data" / "ohlcv.duckdb"))
+    conn = duckdb.connect(str(registry.db_path))
     try:
         artifact_row = conn.execute(
             "SELECT uri, content_hash FROM pipeline_artifact WHERE stage_name = 'rank' AND artifact_type = 'ranked_signals'"
@@ -149,7 +146,7 @@ def test_dq_critical_failure_blocks_downstream(tmp_path: Path) -> None:
         assert False, "Expected critical DQ failure"
     except Exception as exc:
         assert "ingest_ohlc_consistency" in str(exc)
-    conn = duckdb.connect(str(project_root / "data" / "ohlcv.duckdb"))
+    conn = duckdb.connect(str(registry.db_path))
     try:
         run_id = conn.execute("SELECT run_id FROM pipeline_run").fetchone()[0]
     finally:
@@ -432,6 +429,12 @@ def test_data_domain_paths_separate_operational_and_research(tmp_path: Path) -> 
     assert operational.ohlcv_db_path != research.ohlcv_db_path
     assert research.ohlcv_db_path.name == "research_ohlcv.duckdb"
     assert operational.feature_store_dir != research.feature_store_dir
+
+
+def test_registry_store_uses_dedicated_control_plane_db(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+
+    assert registry.db_path == tmp_path / "data" / "control_plane.duckdb"
 
 
 def test_stage_context_writes_to_domain_specific_pipeline_runs_dir(tmp_path: Path) -> None:

@@ -1,5 +1,7 @@
 # Operations Runbook
 
+The repo auto-loads the local `.env` for the orchestrator, dashboard, publish test, and other credential-aware runtime entrypoints. Activate `.venv` before running commands; manually sourcing `.env` is usually not required.
+
 ## Daily Commands
 
 ### Production-style run
@@ -27,6 +29,18 @@
 ### Research training run
 - `python3 -m research.train_pipeline`
 
+### Breakout setup study
+- `python3 -m research.backtest_breakout_setups`
+
+### Shadow monitor refresh
+- `python3 -m research.shadow_monitor`
+
+### Research UI
+- `python3 -m streamlit run ui/research/app.py`
+
+### Execution UI
+- `python3 -m ui.execution.app`
+
 ### Model lifecycle checks
 - inspect `model_registry`
 - inspect `model_eval`
@@ -40,6 +54,8 @@
 5. `publisher_delivery_log` shows publish attempts, dedupe skips, and final status
 6. `model_registry`, `model_eval`, and `model_deployment` reflect model lifecycle events
 7. `pipeline_alert` records critical DQ failures, preflight failures, and publish-degraded runs
+8. Streamlit research UI renders all tabs without page exceptions
+9. NiceGUI execution UI shows live ranking, breakout, sector, and process panels
 
 ## Pre-Run Checklist
 - DuckDB file is writable: `data/ohlcv.duckdb`
@@ -97,7 +113,7 @@
 4. Re-run from a stable code revision.
 
 ## Known Operational Limits
-- Existing feature computation still relies on legacy code paths and can be heavy on large universes.
+- Operational features now support incremental tail recompute, but full rebuilds are still the recovery path after schema or indicator changes.
 - Sector strength is now computed from a liquidity-filtered broad universe by default:
   - top `800` names by recent median traded value
   - minimum `180` recent trading days
@@ -106,3 +122,4 @@
 - Smoke mode validates orchestration and governance, not live market connectivity.
 - `run.publish_test` validates channel plumbing, but it still depends on live external services being reachable.
 - Research entrypoints share core analytics code with production, but they should only use the research data domain and prior-year historical cutoff by default.
+- The breakout scanner now prioritizes structured setup families (`base_breakout`, `contraction_breakout`, `supertrend_flip_breakout`) instead of a generic 20-day-high list, so output counts can be much lower than older runs.

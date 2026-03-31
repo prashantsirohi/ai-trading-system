@@ -2,7 +2,7 @@
 Google Sheets Integration Examples
 
 Usage:
-    python google_sheets_example.py
+    python -m channel.google_sheets_example
 
 Setup:
     1. OAuth2: python oauth_flow.py (first time only)
@@ -10,13 +10,13 @@ Setup:
     3. Token: ../token.json (generated after auth)
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import pandas as pd
-from google_sheets_manager import GoogleSheetsManager, SectorReportSheets
+
+from core.bootstrap import ensure_project_root_on_path
+
+ensure_project_root_on_path(__file__)
+
+from publishers.google_sheets import GoogleSheetsManager, SectorReportSheets
 
 
 def example_basic_operations():

@@ -1,12 +1,15 @@
-import sys
-
-sys.path.insert(0, r"C:\Users\DIO\Opencode\ai-trading-system")
-from features.feature_store import FeatureStore
 import time
+from pathlib import Path
+
+from core.bootstrap import ensure_project_root_on_path
+
+project_root = ensure_project_root_on_path(__file__)
+
+from features.feature_store import FeatureStore
 
 fs = FeatureStore(
-    ohlcv_db_path=r"C:\Users\DIO\Opencode\ai-trading-system\data\ohlcv.duckdb",
-    feature_store_dir=r"C:\Users\DIO\Opencode\ai-trading-system\data\feature_store",
+    ohlcv_db_path=Path(project_root) / "data" / "ohlcv.duckdb",
+    feature_store_dir=Path(project_root) / "data" / "feature_store",
 )
 
 conn = fs._get_conn()

@@ -16,14 +16,14 @@ import argparse
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
-sys.path.insert(0, project_root)
+from core.bootstrap import ensure_project_root_on_path
 
-from dotenv import load_dotenv
+project_root = str(ensure_project_root_on_path(__file__))
+
+from utils.env import load_project_env
 from utils.logger import logger
 
-load_dotenv(os.path.join(project_root, ".env"))
+load_project_env(project_root)
 
 from collectors.dhan_collector import DhanCollector
 

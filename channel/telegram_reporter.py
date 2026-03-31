@@ -6,13 +6,10 @@ from typing import Optional, List, Union
 
 import pandas as pd
 import quantstats as qs
+from core.runtime_config import TelegramRuntimeConfig
+from utils.env import load_project_env
 
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv()
-except ImportError:
-    pass
+load_project_env(__file__)
 
 try:
     from telegram import Bot, InputFile
@@ -31,8 +28,9 @@ class TelegramReporter:
         chat_id: Optional[str] = None,
         report_dir: Optional[Path] = None,
     ):
-        self.bot_token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN")
-        self.chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID")
+        runtime = TelegramRuntimeConfig.from_env()
+        self.bot_token = bot_token or runtime.bot_token
+        self.chat_id = chat_id or runtime.chat_id
         self.report_dir = Path(report_dir) if report_dir else Path("reports")
         self.report_dir.mkdir(parents=True, exist_ok=True)
         self.bot = None

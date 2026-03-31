@@ -17,13 +17,13 @@ import sys
 import pandas as pd
 import requests
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
-sys.path.insert(0, project_root)
+from core.bootstrap import ensure_project_root_on_path
 
-from dotenv import load_dotenv
+project_root = str(ensure_project_root_on_path(__file__))
 
-load_dotenv(os.path.join(project_root, ".env"))
+from utils.env import load_project_env
+
+load_project_env(project_root)
 
 logging.basicConfig(
     level=logging.INFO,

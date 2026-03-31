@@ -67,6 +67,24 @@ Legacy wrapper:
 - `rank_backtester.py`
   - research backtesting for technical factor studies
 
+### `core/`
+- `contracts.py`
+  - shared stage and artifact contracts
+- `env.py`
+  - repo-local `.env` loading
+- `paths.py`
+  - operational/research path resolution
+- `logging.py`
+  - shared runtime logging context
+- `runtime_config.py`
+  - typed runtime credentials/config
+
+### `publishers/`
+- dedicated delivery adapters for:
+  - Google Sheets
+  - Telegram
+  - dashboard payload publishing
+
 ### `collectors/`
 - `dhan_collector.py`
   - operational OHLCV ingestion
@@ -81,14 +99,25 @@ Legacy wrapper:
 - `compute_sector_rs.py`
   - sector leadership from top-800 liquidity universe with operational fallback
 
+### `ui/`
+- `research/app.py`
+  - Streamlit research UI
+  - backtesting
+  - LightGBM review
+  - shadow monitor
+  - charts and factor analysis
+- `execution/app.py`
+  - NiceGUI execution UI
+  - live operational monitoring
+  - latest ranked signals
+  - breakout monitor
+  - shadow comparison
+- `services/`
+  - shared read/query layer for both UIs
+
 ### `dashboard/`
 - `app.py`
-  - Streamlit dashboard
-  - ranking
-  - charts
-  - pipeline health
-  - sector dashboard
-  - breakout scan
+  - compatibility wrapper to the research UI
 
 ## Data Layout
 
@@ -119,24 +148,39 @@ Factor scores are percentile-style `0-100` values computed cross-sectionally for
 
 ## Breakout Logic
 
-The rank stage also emits a dedicated breakout scan using:
+The rank stage also emits a dedicated breakout scan with setup families:
 
-- close above prior 20-day range high
-- volume expansion
-- bullish supertrend state
-- ADX confirmation
-- near-high context
+- `base_breakout`
+  - breakout above a compact 30-bar base with volume and trend confirmation
+- `contraction_breakout`
+  - breakout after tighter recent contraction inside a broader structure
+- `supertrend_flip_breakout`
+  - actual bullish supertrend flip followed by breakout confirmation
 
-## Dashboard
+Execution labels are regime-aware:
 
-Start Streamlit:
+- `ACTIONABLE_BREAKOUT`
+- `EARLY_BREAKOUT`
+- `RELATIVE_STRENGTH_BREAKOUT`
+- `COUNTER_TREND_BREAKOUT`
+
+## UI Split
+
+Research UI with Streamlit:
 
 ```bash
 . .venv/bin/activate
-python -m streamlit run dashboard/app.py
+python -m streamlit run ui/research/app.py
 ```
 
-The dashboard reads the latest operational rank artifacts and shows:
+Execution UI with NiceGUI:
+
+```bash
+. .venv/bin/activate
+python -m ui.execution.app
+```
+
+The research UI reads the latest operational rank artifacts plus research model outputs and shows:
 - pipeline health
 - ranked signals
 - factor profile
@@ -144,6 +188,17 @@ The dashboard reads the latest operational rank artifacts and shows:
 - sector dashboard
 - charts with technical indicators
 - regime and data freshness checks
+- LightGBM model review
+- shadow-monitor comparison
+
+The execution UI focuses on live operations:
+- latest operational payload
+- operational health and freshness
+- ranked signals and breakouts
+- sector leadership
+- shadow-monitor weekly/monthly challenger summaries
+- process management for Streamlit, NiceGUI, pipeline, and shadow-monitor jobs
+- one-click launch of the Streamlit research UI from the execution console
 
 ## Quick Start
 
@@ -155,10 +210,17 @@ python3 -m venv .venv
 pip install -r requirements.txt
 ```
 
+Repo-local runtime credentials are auto-loaded from `.env` by the orchestrator, dashboard, publish test, and the main channel integrations. In most cases you only need to activate `.venv`, not manually source `.env`.
+
 Run tests:
 
 ```bash
-python -m pytest -q test/test_pipeline_orchestrator.py
+python -m pytest -q \
+  streamlit/test/test_pipeline_orchestrator.py \
+  streamlit/test/test_feature_incremental.py \
+  streamlit/test/test_training_dataset.py \
+  streamlit/test/test_lightgbm_engine.py \
+  streamlit/test/test_shadow_monitor.py
 ```
 
 Run a smoke pipeline:
@@ -177,6 +239,18 @@ Retry publish only:
 
 ```bash
 python -m run.orchestrator --run-id <run_id> --stages publish
+```
+
+Run breakout-family backtest study:
+
+```bash
+python -m research.backtest_breakout_setups
+```
+
+Run shadow-monitor refresh:
+
+```bash
+python -m research.shadow_monitor
 ```
 
 Run a canary:
@@ -209,6 +283,7 @@ The system persists:
 ## Docs
 
 - [`docs/architecture_target.md`](docs/architecture_target.md)
+- [`docs/architecture_review.md`](docs/architecture_review.md)
 - [`docs/dq_rules.md`](docs/dq_rules.md)
 - [`docs/ops_runbook.md`](docs/ops_runbook.md)
 - [`docs/data-flow.md`](docs/data-flow.md)

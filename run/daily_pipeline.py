@@ -19,13 +19,11 @@ import os
 import sys
 from datetime import datetime
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
-sys.path.insert(0, project_root)
-
-from dotenv import load_dotenv
+from core.bootstrap import ensure_project_root_on_path
+project_root = str(ensure_project_root_on_path(__file__))
+from core.env import load_project_env
+from core.logging import logger
 from run.orchestrator import PipelineOrchestrator
-from utils.logger import logger
 from utils.data_config import (
     should_truncate_data,
     truncate_old_data,
@@ -33,7 +31,7 @@ from utils.data_config import (
 )
 import sqlite3
 
-load_dotenv(os.path.join(project_root, ".env"))
+load_project_env(project_root)
 
 logger.info(f"Environment: {os.getenv('ENV', 'local')}")
 logger.info(
@@ -68,7 +66,7 @@ def run_portfolio_analysis():
     """Run portfolio analysis from Google Sheets."""
     try:
         from channel.portfolio_analyzer import Portfolio, PortfolioManager
-        from channel.google_sheets_manager import GoogleSheetsManager
+        from publishers.google_sheets import GoogleSheetsManager
         import sqlite3
         import duckdb
         from collectors.yfinance_collector import YFinanceCollector

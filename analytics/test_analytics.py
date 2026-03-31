@@ -1,7 +1,9 @@
-import sys
 import os
+from pathlib import Path
 
-sys.path.insert(0, r"C:\Users\DIO\Opencode\ai-trading-system")
+from core.bootstrap import ensure_project_root_on_path
+
+project_root = ensure_project_root_on_path(__file__)
 
 from analytics import (
     RegimeDetector,
@@ -96,9 +98,7 @@ chart = viz.plot_technical_chart(
     "RELIANCE",
     from_date="2025-10-01",
     to_date="2026-03-18",
-    output_path=os.path.join(
-        os.path.dirname(__file__), "..", "reports", "RELIANCE_test.html"
-    ),
+    output_path=str(Path(project_root) / "reports" / "RELIANCE_test.html"),
 )
 print(f"  Chart generated: {chart is not None}")
 

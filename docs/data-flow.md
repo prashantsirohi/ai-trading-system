@@ -176,8 +176,11 @@ analytics/screener.py
   │       10% delivery
   │       15% sector strength
   │
-  ├── AlphaEngine.get_ml_signals()
-  │     XGBoost walk-forward validation
+  ├── LightGBM research workflow
+  │     - prepared OHLCV + engineered technical datasets
+  │     - separate 5D and 20D models
+  │     - walk-forward validation
+  │     - shadow-monitor challenger evaluation
   │
   ├── RiskManager.size_positions()
   │     ATR-based position sizing
@@ -186,16 +189,32 @@ analytics/screener.py
         5 strategies with QuantStats
 ```
 
-## 7. Dashboard
+## 7. UI Surfaces
 
 ```
-dashboard/app.py (Streamlit)
+ui/research/app.py (Streamlit)
   │
   ├── Overview: stats, freshness, pipeline health
+  ├── Long-Term Breadth: % above 20/50/200 SMA since 2010
   ├── Ranking: 6-factor technical ranked stocks
   ├── Chart: Interactive OHLCV + indicators
   ├── Pipeline: run payload, sectors, breakout scan, warnings
+  ├── ML: LightGBM review, feature importance, shadow monitor
   └── Portfolio: Position sizing, risk budget
+
+ui/execution/app.py (NiceGUI)
+  │
+  ├── Control: run launcher, publish retry, Streamlit launcher
+  ├── Ranking: latest technical ranks and charts
+  ├── Market: breakouts, sectors, market summary
+  ├── Operations: run inspection and alerts
+  ├── Shadow: weekly/monthly champion-challenger comparison
+  ├── Tasks: background jobs and live logs
+  └── Processes: project process listing and safe termination
+
+ui/services/
+  │
+  └── shared read/query and control layer for execution and research UIs
 ```
 
 ## 8. Query Examples

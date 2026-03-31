@@ -7,7 +7,8 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List
-from utils.data_domains import get_domain_paths
+from core.env import load_project_env
+from core.paths import get_domain_paths
 
 
 @dataclass
@@ -25,6 +26,7 @@ class PreflightChecker:
 
     def __init__(self, project_root: Path | str):
         self.project_root = Path(project_root)
+        load_project_env(self.project_root)
 
     def run(self, stage_names: Iterable[str], params: Dict) -> Dict[str, object]:
         checks: List[PreflightCheck] = [self._check_duckdb_writable(params.get("data_domain", "operational"))]

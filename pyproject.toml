@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-trading-system"
+version = "0.1.0"
+description = "Technical NSE trading pipeline with staged orchestration, DQ, and dashboarding."
+readme = "README.md"
+requires-python = ">=3.11"
+
+[project.scripts]
+ai-trading-pipeline = "run.orchestrator:main"
+ai-trading-publish-test = "run.publish_test:main"
+ai-trading-daily = "run.daily_pipeline:main"
+ai-trading-execution-ui = "ui.execution.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+  "analytics*",
+  "channel*",
+  "collectors*",
+  "config*",
+  "core*",
+  "dashboard*",
+  "features*",
+  "publishers*",
+  "research*",
+  "run*",
+  "ui*",
+  "utils*",
+]
+exclude = [
+  "data*",
+  "docs*",
+  "logs*",
+  "models*",
+  "reports*",
+  "sql*",
+  "streamlit*",
+  "test*",
+]

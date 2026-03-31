@@ -10,12 +10,15 @@ from typing import Dict, Iterable, List, Optional
 
 from analytics.dq import DataQualityEngine
 from analytics.registry import RegistryStore
+from core.contracts import PublishStageError, StageContext, StageResult
+from core.env import load_project_env
+from core.logging import log_context, logger
+from core.paths import ensure_domain_layout
 from run.alerts import AlertManager
 from run.preflight import PreflightChecker
 from run.stages import FeaturesStage, IngestStage, PublishStage, RankStage
-from run.stages.base import PublishStageError, StageContext, StageResult
-from utils.data_domains import ensure_domain_layout
-from utils.logger import log_context, logger
+
+load_project_env(__file__)
 
 
 PIPELINE_ORDER = ["ingest", "features", "rank", "publish"]
@@ -245,6 +248,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbol-limit", type=int, default=None, help="Limit live symbol universe for canary runs")
     parser.add_argument("--canary", action="store_true", help="Run a smaller live canary flow")
     parser.add_argument("--skip-preflight", action="store_true", help="Skip local readiness checks")
+    parser.add_argument(
+        "--full-rebuild",
+        action="store_true",
+        help="Force full feature recomputation instead of incremental operational tail updates.",
+    )
+    parser.add_argument(
+        "--feature-tail-bars",
+        type=int,
+        default=252,
+        help="Tail window used by incremental operational feature updates.",
+    )
     return parser
 
 
@@ -274,6 +288,8 @@ def main() -> None:
             "symbol_limit": args.symbol_limit if args.symbol_limit is not None else (25 if args.canary else None),
             "canary": args.canary,
             "preflight": not args.skip_preflight,
+            "full_rebuild": args.full_rebuild,
+            "feature_tail_bars": args.feature_tail_bars,
         },
     )
 

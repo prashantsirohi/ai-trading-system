@@ -8,21 +8,19 @@ Usage:
     python -m channel.stock_scan --local    # Skip Google Sheets update
 """
 
-import os
-import sys
 from datetime import datetime
 
 import pandas as pd
 import pyarrow.parquet as pq
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
-sys.path.insert(0, project_root)
+from core.bootstrap import ensure_project_root_on_path
 
-from dotenv import load_dotenv
+project_root = str(ensure_project_root_on_path(__file__))
+
+from utils.env import load_project_env
 from utils.logger import logger
 
-load_dotenv(os.path.join(project_root, ".env"))
+load_project_env(__file__)
 
 logger.disable("googleapiclient")
 logger.disable("google.auth")
@@ -204,29 +202,11 @@ def compute_sector_momentum_20(sector_rs: pd.DataFrame) -> pd.Series:
 
 
 def update_google_sheets(stocks: pd.DataFrame):
-    """Update Google Sheets with stock scan results."""
+    """Backward-compatible Google Sheets publish wrapper."""
     try:
-        from channel.google_sheets_manager import GoogleSheetsManager
+        from publishers.google_sheets import publish_stock_scan
 
-        gs = GoogleSheetsManager()
-        spreadsheet_id = os.getenv("GOOGLE_SPREADSHEET_ID")
-
-        if not spreadsheet_id:
-            logger.warning("GOOGLE_SPREADSHEET_ID not set, skipping sheet update")
-            return
-
-        stocks_with_index = stocks.reset_index()
-        stocks_with_index.rename(columns={"index": "Symbol"}, inplace=True)
-        stocks_with_index["report_date"] = pd.Timestamp.now().strftime("%Y-%m-%d")
-
-        sheet = gs.get_or_create_sheet("Stock Scan")
-
-        if sheet:
-            ws = gs.get_worksheet("Stock Scan")
-            ws.clear()
-            gs.append_rows(stocks_with_index, "Stock Scan", include_header=True)
-
-        logger.info(f"Stock scan updated in Google Sheets ({len(stocks)} stocks)")
+        publish_stock_scan(stocks)
 
     except Exception as e:
         logger.error(f"Google Sheets update failed: {e}")

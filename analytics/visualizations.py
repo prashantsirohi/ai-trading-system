@@ -1,9 +1,11 @@
 import os
 import logging
+import json
 import pandas as pd
 import numpy as np
 from datetime import datetime
 from typing import Optional, Dict, List
+from pathlib import Path
 
 try:
     import quantstats as qs
@@ -20,6 +22,20 @@ try:
     HAS_PLOTLY = True
 except ImportError:
     HAS_PLOTLY = False
+
+try:
+    import matplotlib
+
+    if "MPLCONFIGDIR" not in os.environ:
+        _mpl_dir = Path(os.path.dirname(os.path.dirname(__file__))) / "logs" / "matplotlib"
+        _mpl_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["MPLCONFIGDIR"] = str(_mpl_dir)
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    HAS_MATPLOTLIB = True
+except Exception:
+    HAS_MATPLOTLIB = False
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -608,3 +624,75 @@ class Visualizer:
 
         logger.info(f"Daily report generated: {output_dir}")
         return paths
+
+    def plot_feature_importance(
+        self,
+        metadata_path: str,
+        top_n: int = 20,
+        output_path: str = None,
+        title: str = None,
+    ) -> Optional[str]:
+        """
+        Generate a large Matplotlib horizontal bar chart for model feature importance.
+
+        Expects a model metadata JSON containing either:
+        - `importance` dict, or
+        - `top_features` list of [feature, value]
+        """
+        if not HAS_MATPLOTLIB:
+            logger.warning("Matplotlib not available")
+            return None
+
+        metadata_file = Path(metadata_path)
+        if not metadata_file.exists():
+            logger.warning("Feature importance metadata not found: %s", metadata_path)
+            return None
+
+        metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+        importance = metadata.get("importance") or {}
+        if not importance and metadata.get("top_features"):
+            importance = {name: value for name, value in metadata["top_features"]}
+        if not importance:
+            logger.warning("No feature importance data found in %s", metadata_path)
+            return None
+
+        series = pd.Series(importance, dtype=float).sort_values(ascending=False).head(top_n)
+        series = series.sort_values(ascending=True)
+
+        fig, ax = plt.subplots(figsize=(14, max(8, top_n * 0.45)))
+        bars = ax.barh(series.index, series.values, color="#2E86AB", alpha=0.9)
+
+        ax.set_title(
+            title
+            or f"Feature Importance: {metadata.get('engine', 'model')} "
+            f"(horizon={metadata.get('horizon', 'n/a')}d)",
+            fontsize=16,
+            pad=16,
+        )
+        ax.set_xlabel("Importance", fontsize=12)
+        ax.set_ylabel("Feature", fontsize=12)
+        ax.grid(axis="x", linestyle="--", alpha=0.3)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+        for bar in bars:
+            width = bar.get_width()
+            ax.text(
+                width,
+                bar.get_y() + bar.get_height() / 2,
+                f" {width:.1f}",
+                va="center",
+                ha="left",
+                fontsize=9,
+            )
+
+        fig.tight_layout()
+
+        if output_path is None:
+            output_name = metadata_file.stem.replace(".metadata", "") + "_feature_importance.png"
+            output_path = os.path.join(self.output_dir, output_name)
+
+        fig.savefig(output_path, dpi=180, bbox_inches="tight")
+        plt.close(fig)
+        logger.info("Feature importance chart saved to %s", output_path)
+        return output_path

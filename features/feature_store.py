@@ -614,13 +614,109 @@ class FeatureStore:
                 max_ts = existing["timestamp"].max()
                 new_df = new_df[new_df["timestamp"] > max_ts]
                 if new_df.empty:
+                    existing.attrs["rows_appended"] = 0
                     return existing
                 combined = pd.concat([existing, new_df], ignore_index=True)
                 combined.to_parquet(path, index=False)
+                combined.attrs["rows_appended"] = len(new_df)
                 return combined
 
         new_df.to_parquet(path, index=False)
+        new_df.attrs["rows_appended"] = len(new_df)
         return new_df
+
+    def _overwrite_parquet(self, df: pd.DataFrame, path: str) -> int:
+        """Overwrite a parquet file with a deterministic full rebuild."""
+        if df.empty:
+            return 0
+        ordered = df.sort_values("timestamp").reset_index(drop=True)
+        ordered.to_parquet(path, index=False)
+        return len(ordered)
+
+    def _replace_tail_in_parquet(
+        self,
+        new_df: pd.DataFrame,
+        path: str,
+        replace_from_ts: pd.Timestamp | None,
+    ) -> int:
+        """Replace the recent tail of a parquet file with recomputed rows."""
+        if new_df.empty:
+            return 0
+
+        new_df = new_df.copy()
+        new_df["timestamp"] = pd.to_datetime(new_df["timestamp"])
+        new_df = new_df.sort_values("timestamp").drop_duplicates(
+            subset=["symbol_id", "exchange", "timestamp"],
+            keep="last",
+        )
+
+        if not os.path.exists(path) or replace_from_ts is None:
+            new_df.to_parquet(path, index=False)
+            return len(new_df)
+
+        existing = pd.read_parquet(path)
+        if not existing.empty and "timestamp" in existing.columns:
+            existing["timestamp"] = pd.to_datetime(existing["timestamp"])
+            existing = existing[existing["timestamp"] < replace_from_ts]
+
+        combined = pd.concat([existing, new_df], ignore_index=True)
+        combined = combined.sort_values("timestamp").drop_duplicates(
+            subset=["symbol_id", "exchange", "timestamp"],
+            keep="last",
+        )
+        combined.to_parquet(path, index=False)
+        return len(new_df)
+
+    def _get_incremental_window(
+        self,
+        symbol_id: str,
+        exchange: str,
+        tail_bars: int,
+        warmup_bars: int,
+    ) -> tuple[str | None, pd.Timestamp | None]:
+        """
+        Return:
+        - compute_start_date: where raw OHLCV should start for safe recomputation
+        - replace_from_ts: feature rows at/after this timestamp should be replaced
+        """
+        conn = self._get_conn()
+        try:
+            replace_row = conn.execute(
+                """
+                SELECT MIN(timestamp) FROM (
+                    SELECT timestamp
+                    FROM _catalog
+                    WHERE symbol_id = ? AND exchange = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                ) tail
+                """,
+                [symbol_id, exchange, int(tail_bars)],
+            ).fetchone()
+            replace_from_ts = pd.to_datetime(replace_row[0]) if replace_row and replace_row[0] else None
+            if replace_from_ts is None:
+                return None, None
+
+            total_bars = int(tail_bars + warmup_bars)
+            compute_row = conn.execute(
+                """
+                SELECT MIN(timestamp) FROM (
+                    SELECT timestamp
+                    FROM _catalog
+                    WHERE symbol_id = ? AND exchange = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                ) windowed
+                """,
+                [symbol_id, exchange, total_bars],
+            ).fetchone()
+            compute_from_ts = pd.to_datetime(compute_row[0]) if compute_row and compute_row[0] else None
+            return (
+                compute_from_ts.strftime("%Y-%m-%d %H:%M:%S") if compute_from_ts is not None else None,
+                replace_from_ts,
+            )
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------ #
     #  Individual feature computations                                   #
@@ -955,6 +1051,8 @@ class FeatureStore:
         fast: int = 12,
         slow: int = 26,
         signal: int = 9,
+        start_date: str = None,
+        end_date: str = None,
     ) -> pd.DataFrame:
         """
         MACD (Moving Average Convergence Divergence).
@@ -964,6 +1062,12 @@ class FeatureStore:
         """
         conn = self._get_conn()
         try:
+            date_filter = ""
+            if start_date:
+                date_filter += f" AND timestamp > '{start_date}'"
+            if end_date:
+                date_filter += f" AND timestamp <= '{end_date}'"
+
             base = f"""
                 SELECT
                     symbol_id, exchange, timestamp, close
@@ -971,6 +1075,7 @@ class FeatureStore:
                 WHERE symbol_id = {{symbol}}
                   AND exchange = '{exchange}'
                   AND timestamp IS NOT NULL
+                  {date_filter}
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp) >= {slow}
                 ORDER BY timestamp
             """
@@ -1691,6 +1796,10 @@ class FeatureStore:
         feature_types: List[str] = None,
         warehouse_dir: str = None,
         use_duckdb: bool = False,
+        incremental: bool = False,
+        tail_bars: int = 252,
+        warmup_bars: int | None = None,
+        full_rebuild: bool = False,
     ) -> Dict[str, int]:
         """
         Compute all technical features for all (or specified) symbols
@@ -1728,18 +1837,25 @@ class FeatureStore:
             finally:
                 conn.close()
 
-        logger.info(f"Computing features for {len(symbols)} symbols: {feature_types}")
+        warmup_bars = int(warmup_bars or tail_bars)
+        incremental = bool(incremental and not full_rebuild)
+        mode = "incremental" if incremental else "full_rebuild" if full_rebuild else "full"
+
+        logger.info(
+            f"Computing features for {len(symbols)} symbols: {feature_types} "
+            f"(mode={mode}, tail_bars={tail_bars}, warmup_bars={warmup_bars})"
+        )
 
         feature_methods = {
-            "rsi": lambda sid, exc: self.compute_rsi(sid, exc),
-            "adx": lambda sid, exc: self.compute_adx(sid, exc),
-            "sma": lambda sid, exc: self.compute_sma(sid, exc),
-            "ema": lambda sid, exc: self.compute_ema(sid, exc),
-            "macd": lambda sid, exc: self.compute_macd(sid, exc),
-            "atr": lambda sid, exc: self.compute_atr(sid, exc),
-            "bb": lambda sid, exc: self.compute_bollinger_bands(sid, exc),
-            "roc": lambda sid, exc: self.compute_roc(sid, exc),
-            "supertrend": lambda sid, exc: self.compute_supertrend(sid, exc),
+            "rsi": lambda sid, exc, start, end: self.compute_rsi(sid, exc, start_date=start, end_date=end),
+            "adx": lambda sid, exc, start, end: self.compute_adx(sid, exc, start_date=start, end_date=end),
+            "sma": lambda sid, exc, start, end: self.compute_sma(sid, exc, start_date=start, end_date=end),
+            "ema": lambda sid, exc, start, end: self.compute_ema(sid, exc, start_date=start, end_date=end),
+            "macd": lambda sid, exc, start, end: self.compute_macd(sid, exc, start_date=start, end_date=end),
+            "atr": lambda sid, exc, start, end: self.compute_atr(sid, exc, start_date=start, end_date=end),
+            "bb": lambda sid, exc, start, end: self.compute_bollinger_bands(sid, exc, start_date=start, end_date=end),
+            "roc": lambda sid, exc, start, end: self.compute_roc(sid, exc, start_date=start, end_date=end),
+            "supertrend": lambda sid, exc, start, end: self.compute_supertrend(sid, exc, start_date=start, end_date=end),
         }
 
         rows_written = {}
@@ -1754,7 +1870,17 @@ class FeatureStore:
             for exc in exchanges:
                 for sym in symbols:
                     try:
-                        df = method(sym, exc)
+                        compute_start = None
+                        replace_from_ts = None
+                        if incremental:
+                            compute_start, replace_from_ts = self._get_incremental_window(
+                                symbol_id=sym,
+                                exchange=exc,
+                                tail_bars=tail_bars,
+                                warmup_bars=warmup_bars,
+                            )
+
+                        df = method(sym, exc, compute_start, None)
                         if df.empty:
                             continue
 
@@ -1773,13 +1899,32 @@ class FeatureStore:
                             feat_dir = os.path.join(warehouse_dir, feat_type, exc)
                             os.makedirs(feat_dir, exist_ok=True)
                             out_path = os.path.join(feat_dir, f"{sym}.parquet")
-                            df = self._append_to_parquet(df, out_path)
-                            total_rows += len(df)
+                            if incremental and os.path.exists(out_path) and replace_from_ts is not None:
+                                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                                df = df[df["timestamp"] >= replace_from_ts].copy()
+                                rows_added = self._replace_tail_in_parquet(
+                                    df,
+                                    out_path,
+                                    replace_from_ts,
+                                )
+                            elif full_rebuild or not os.path.exists(out_path):
+                                rows_added = self._overwrite_parquet(df, out_path)
+                            else:
+                                combined = self._append_to_parquet(df, out_path)
+                                rows_added = int(combined.attrs.get("rows_appended", 0))
+
+                            total_rows += rows_added
                             self.register_feature(
                                 feature_name=feat_type,
                                 symbol_id=sym,
                                 exchange=exc,
-                                rows_computed=len(df),
+                                rows_computed=rows_added,
+                                lookback_days=tail_bars if incremental else 0,
+                                params={
+                                    "mode": mode,
+                                    "tail_bars": tail_bars if incremental else None,
+                                    "warmup_bars": warmup_bars if incremental else None,
+                                },
                                 feature_file=out_path,
                                 status="completed",
                             )
@@ -1860,6 +2005,8 @@ class FeatureStore:
         exchange: str = "NSE",
         period: int = 10,
         multiplier: float = 3.0,
+        start_date: str = None,
+        end_date: str = None,
     ) -> pd.DataFrame:
         """
         Supertrend indicator using hybrid approach:
@@ -1876,9 +2023,11 @@ class FeatureStore:
                 FROM _catalog
                 WHERE symbol_id = ? AND exchange = ?
                   AND timestamp IS NOT NULL
+                  AND (? IS NULL OR timestamp > CAST(? AS TIMESTAMP))
+                  AND (? IS NULL OR timestamp <= CAST(? AS TIMESTAMP))
                 ORDER BY timestamp
             """,
-                (symbol_id, exchange),
+                (symbol_id, exchange, start_date, start_date, end_date, end_date),
             ).fetchdf()
         finally:
             conn.close()

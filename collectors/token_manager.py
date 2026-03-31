@@ -3,7 +3,10 @@ import json
 import requests
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from dotenv import load_dotenv
+from core.runtime_config import DhanRuntimeConfig
+from utils.env import find_project_env, load_project_env
 from utils.logger import logger
 
 try:
@@ -21,13 +24,16 @@ class DhanTokenManager:
     """
 
     def __init__(self, env_path: str = ".env"):
-        self.env_path = env_path
-        load_dotenv(env_path)
+        resolved_env = find_project_env(env_path) if env_path == ".env" else Path(env_path).resolve()
+        self.env_path = str(resolved_env) if resolved_env is not None else env_path
+        load_project_env(self.env_path, override=False)
+        load_dotenv(self.env_path, override=False)
 
-        self.client_id = os.getenv("DHAN_CLIENT_ID", "")
-        self.access_token = os.getenv("DHAN_ACCESS_TOKEN", "")
-        self.pin = os.getenv("DHAN_PIN", "")
-        self.api_key = os.getenv("DHAN_API_KEY", "")
+        runtime = DhanRuntimeConfig.from_env()
+        self.client_id = runtime.client_id
+        self.access_token = runtime.access_token
+        self.pin = runtime.pin
+        self.api_key = runtime.api_key
 
         self.base_url = "https://api.dhan.co/v2"
         self.auth_url = "https://auth.dhan.co"

@@ -21,6 +21,7 @@ class DataDomainPaths:
     feature_store_dir: Path
     master_db_path: Path
     pipeline_runs_dir: Path
+    dataset_dir: Path
     model_dir: Path
     reports_dir: Path
 
@@ -54,6 +55,7 @@ def get_domain_paths(
             feature_store_dir=data_root / "feature_store",
             master_db_path=data_root / "masterdata.db",
             pipeline_runs_dir=data_root / "pipeline_runs",
+            dataset_dir=data_root / "training_datasets",
             model_dir=root / "models",
             reports_dir=root / "reports",
         )
@@ -66,6 +68,7 @@ def get_domain_paths(
         feature_store_dir=domain_root / "feature_store",
         master_db_path=data_root / "masterdata.db",
         pipeline_runs_dir=domain_root / "pipeline_runs",
+        dataset_dir=domain_root / "training_datasets",
         model_dir=root / "models" / domain,
         reports_dir=root / "reports" / domain,
     )
@@ -80,6 +83,7 @@ def ensure_domain_layout(
     paths.root_dir.mkdir(parents=True, exist_ok=True)
     paths.feature_store_dir.mkdir(parents=True, exist_ok=True)
     paths.pipeline_runs_dir.mkdir(parents=True, exist_ok=True)
+    paths.dataset_dir.mkdir(parents=True, exist_ok=True)
     paths.model_dir.mkdir(parents=True, exist_ok=True)
     paths.reports_dir.mkdir(parents=True, exist_ok=True)
     return paths

@@ -46,7 +46,7 @@ class IngestStage:
                 data_domain=context.params.get("data_domain", "operational"),
             )
 
-        conn = duckdb.connect(str(context.db_path))
+        conn = duckdb.connect(str(context.db_path), read_only=True)
         try:
             catalog_rows, symbol_count, latest_ts = conn.execute(
                 """

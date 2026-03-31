@@ -142,9 +142,10 @@ class PublishStage:
         rank_artifact: StageArtifact,
         datasets: Dict[str, pd.DataFrame],
     ) -> Dict[str, Any]:
-        from channel.stock_scan import update_google_sheets as publish_stock_scan
+        from publishers.google_sheets import publish_stock_scan
 
-        publish_stock_scan(datasets["stock_scan"])
+        if not publish_stock_scan(datasets["stock_scan"]):
+            raise RuntimeError("stock scan publish returned False")
         return {"report_id": "stock_scan_sheet"}
 
     def _publish_dashboard_payload(
@@ -153,7 +154,7 @@ class PublishStage:
         rank_artifact: StageArtifact,
         datasets: Dict[str, pd.DataFrame],
     ) -> Dict[str, Any]:
-        from channel.dashboard_publisher import publish_dashboard_payload
+        from publishers.dashboard import publish_dashboard_payload
 
         ok = publish_dashboard_payload(datasets.get("dashboard_payload", {}))
         if not ok:
@@ -166,9 +167,10 @@ class PublishStage:
         rank_artifact: StageArtifact,
         datasets: Dict[str, pd.DataFrame],
     ) -> Dict[str, Any]:
-        from channel.sector_dashboard import update_google_sheets as publish_dashboard
+        from publishers.google_sheets import publish_sector_dashboard
 
-        publish_dashboard(datasets["sector_dashboard"])
+        if not publish_sector_dashboard(datasets["sector_dashboard"]):
+            raise RuntimeError("sector dashboard publish returned False")
         return {"report_id": "sector_dashboard_sheet"}
 
     def _publish_portfolio(
@@ -188,7 +190,7 @@ class PublishStage:
         rank_artifact: StageArtifact,
         datasets: Dict[str, pd.DataFrame],
     ) -> Dict[str, Any]:
-        from channel.telegram_reporter import TelegramReporter
+        from publishers.telegram import TelegramReporter
 
         reporter = TelegramReporter(report_dir=context.project_root / "reports")
         dashboard = datasets.get("dashboard_payload") or {}

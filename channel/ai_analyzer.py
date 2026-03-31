@@ -4,13 +4,9 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from datetime import datetime
+from utils.env import load_project_env
 
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv(Path(__file__).parent.parent / ".env")
-except ImportError:
-    pass
+load_project_env(__file__)
 
 from utils.logger import logger
 

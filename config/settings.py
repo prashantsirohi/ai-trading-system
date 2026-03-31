@@ -1,6 +1,9 @@
 import os
 from typing import Dict
 from dataclasses import dataclass, field
+from core.env import load_project_env
+
+load_project_env(__file__)
 
 
 @dataclass
