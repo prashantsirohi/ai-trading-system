@@ -102,7 +102,12 @@ def run(
         )
         logger.info("Sector RS computation complete")
 
-        return
+        return {
+            "mode": "features_only",
+            "symbols_targeted": len(symbols or []),
+            "feature_result": result,
+            "full_rebuild": bool(full_rebuild),
+        }
 
     if bulk:
         logger.info("=" * 60)
@@ -115,7 +120,7 @@ def run(
             compute_features=False,
         )
         logger.info(f"Bulk daily update result: {result}")
-        return
+        return result
 
     if symbols_only:
         logger.info("=" * 60)
@@ -133,7 +138,7 @@ def run(
         logger.info("")
         logger.info("TIP: Run features separately after OHLCV update:")
         logger.info("  python collectors/daily_update_runner.py --features-only")
-        return
+        return result
 
     logger.info("=" * 60)
     logger.info("MODE: Full Update - OHLCV + Features")
@@ -187,6 +192,7 @@ def run(
             full_rebuild=full_rebuild,
         )
         logger.info(f"Feature computation complete: {feat_result}")
+        result["feature_result"] = feat_result
 
     logger.info("Computing sector RS and relative strength...")
     from features.compute_sector_rs import compute_all_symbols_rs
@@ -200,6 +206,7 @@ def run(
     logger.info("")
     logger.info("TIP: Recompute features for updated symbols:")
     logger.info("  python collectors/daily_update_runner.py --features-only")
+    return result
 
 
 def main():

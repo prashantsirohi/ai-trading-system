@@ -165,6 +165,12 @@ def main(
     symbol_limit: int | None = None,
     skip_preflight: bool = False,
     data_domain: str = "operational",
+    include_delivery: bool = True,
+    publish_quantstats: bool = True,
+    quantstats_top_n: int = 20,
+    quantstats_min_overlap: int = 5,
+    quantstats_max_runs: int = 240,
+    quantstats_write_core_html: bool = False,
 ):
     now = datetime.now()
     today = now.strftime("%Y-%m-%d")
@@ -205,6 +211,12 @@ def main(
             "symbol_limit": symbol_limit if symbol_limit is not None else (25 if canary else None),
             "preflight": not skip_preflight,
             "data_domain": data_domain,
+            "include_delivery": include_delivery,
+            "publish_quantstats": publish_quantstats,
+            "quantstats_top_n": quantstats_top_n,
+            "quantstats_min_overlap": quantstats_min_overlap,
+            "quantstats_max_runs": quantstats_max_runs,
+            "quantstats_write_core_html": quantstats_write_core_html,
         },
     )
 
@@ -252,6 +264,44 @@ if __name__ == "__main__":
         help="Skip local readiness checks before running live stages.",
     )
     parser.add_argument(
+        "--skip-delivery-collect",
+        action="store_true",
+        help="Skip ingest-stage delivery collection (enabled by default).",
+    )
+    parser.add_argument(
+        "--skip-quantstats",
+        action="store_true",
+        help="Disable QuantStats dashboard tear sheet generation in publish stage.",
+    )
+    parser.add_argument(
+        "--publish-quantstats",
+        action="store_true",
+        help="Legacy alias (QuantStats publish is enabled by default).",
+    )
+    parser.add_argument(
+        "--quantstats-top-n",
+        type=int,
+        default=20,
+        help="Top-N ranked symbols used for dashboard tear sheet returns.",
+    )
+    parser.add_argument(
+        "--quantstats-min-overlap",
+        type=int,
+        default=5,
+        help="Minimum symbol overlap between consecutive rank runs.",
+    )
+    parser.add_argument(
+        "--quantstats-max-runs",
+        type=int,
+        default=240,
+        help="Maximum rank runs to inspect for building the tear sheet return stream.",
+    )
+    parser.add_argument(
+        "--quantstats-write-core-html",
+        action="store_true",
+        help="Also write raw QuantStats core HTML alongside the enriched dashboard tear sheet.",
+    )
+    parser.add_argument(
         "--data-domain",
         choices=["operational", "research"],
         default="operational",
@@ -268,4 +318,10 @@ if __name__ == "__main__":
         symbol_limit=args.symbol_limit,
         skip_preflight=args.skip_preflight,
         data_domain=args.data_domain,
+        include_delivery=not args.skip_delivery_collect,
+        publish_quantstats=not args.skip_quantstats,
+        quantstats_top_n=args.quantstats_top_n,
+        quantstats_min_overlap=args.quantstats_min_overlap,
+        quantstats_max_runs=args.quantstats_max_runs,
+        quantstats_write_core_html=args.quantstats_write_core_html,
     )

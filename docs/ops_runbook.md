@@ -7,15 +7,19 @@ The repo auto-loads the local `.env` for the orchestrator, dashboard, publish te
 ### Production-style run
 - `python3 -m run.orchestrator`
 - `python3 -m run.orchestrator --data-domain operational`
+- QuantStats tear sheet publish is enabled by default; disable with `--skip-quantstats`
 
 ### Legacy wrapper
 - `python3 run/daily_pipeline.py`
+- `python3 run/daily_pipeline.py --skip-delivery-collect` (offline/restricted network fallback)
+- QuantStats tear sheet publish is enabled by default; disable with `--skip-quantstats`
 
 ### Local smoke run
 - `python3 -m run.orchestrator --smoke --local-publish`
 
 ### Retry publish only
 - `python3 -m run.orchestrator --run-id <run_id> --stages publish`
+- `python3 -m run.orchestrator --run-id <run_id> --stages publish --skip-quantstats`
 
 ### Live canary run
 - `python3 -m run.orchestrator --canary --symbol-limit 25 --local-publish`
@@ -57,11 +61,19 @@ The repo auto-loads the local `.env` for the orchestrator, dashboard, publish te
 8. Streamlit research UI renders all tabs without page exceptions
 9. NiceGUI execution UI shows live ranking, breakout, sector, and process panels
 
+## Runtime Clarifications
+- DQ severities are `critical`, `high`, `medium`, and `low`.
+- Only `critical` DQ failures stop downstream stages. `high`/`medium`/`low` are persisted for operator review.
+- Ingest/features/rank are not auto-retried by the orchestrator; retries are operator-triggered by re-running stages.
+- Publish channel delivery has retry/backoff and idempotency dedupe via `publisher_delivery_log`.
+- `pipeline_alert` is a persisted control-plane record. Built-in alerting does not currently send standalone email/Telegram notifications directly from `AlertManager`.
+
 ## Pre-Run Checklist
 - DuckDB file is writable: `data/ohlcv.duckdb`
 - `.env` uses Unix line endings if the run will be shell-sourced
 - Provider credentials are valid for non-smoke runs
 - Google Sheets / Telegram credentials are present for networked publish runs
+- `quantstats` is installed if QuantStats publish is enabled
 - Prior failed run IDs are noted if a targeted retry is planned
 - Preflight passes, unless explicitly bypassed with `--skip-preflight`
 - Production runs use the `operational` data domain; research jobs must not point at live rolling storage.
@@ -95,6 +107,9 @@ The repo auto-loads the local `.env` for the orchestrator, dashboard, publish te
 - Check `publisher_delivery_log` to see which channels already delivered and which remain failed.
 - Review `pipeline_alert` for the emitted degraded-run alert.
 - If the failure mentions an unexpectedly empty artifact, compare the file contents with `pipeline_artifact.row_count` before retrying.
+- If the failure mentions `quantstats_subprocess_failed`, retry publish with:
+  - `--skip-quantstats` for immediate recovery, or
+  - reduced scope (`--quantstats-top-n`, `--quantstats-max-runs`) for a lighter tear sheet run.
 
 ## Rollback
 1. Revert the code to the last known good revision.
@@ -121,5 +136,30 @@ The repo auto-loads the local `.env` for the orchestrator, dashboard, publish te
 - Delivery idempotency is scoped to `run_id + channel + artifact hash`; a new artifact produces a new dedupe key.
 - Smoke mode validates orchestration and governance, not live market connectivity.
 - `run.publish_test` validates channel plumbing, but it still depends on live external services being reachable.
+- QuantStats tear sheet publish is file-based and does not require Google Sheets/Telegram connectivity, but it does require local historical rank artifacts and a stable local plotting/runtime environment.
 - Research entrypoints share core analytics code with production, but they should only use the research data domain and prior-year historical cutoff by default.
 - The breakout scanner now prioritizes structured setup families (`base_breakout`, `contraction_breakout`, `supertrend_flip_breakout`) instead of a generic 20-day-high list, so output counts can be much lower than older runs.
+
+## QuantStats Tear Sheet Publish
+
+Enable from orchestrator:
+- enabled by default during publish stage
+- disable with `python3 -m run.orchestrator --skip-quantstats`
+- optional tuning:
+  - `--quantstats-top-n <int>`
+  - `--quantstats-min-overlap <int>`
+  - `--quantstats-max-runs <int>`
+  - `--quantstats-write-core-html` (optional raw QuantStats HTML)
+
+Enable from legacy wrapper:
+- enabled by default
+- disable with `python3 run/daily_pipeline.py --skip-quantstats`
+
+Artifacts written to:
+- `reports/quantstats/dashboard_tearsheet_<run_id>.html`
+- `reports/quantstats/dashboard_tearsheet_<run_id>_returns.csv`
+- `reports/quantstats/dashboard_tearsheet_<run_id>_series.csv`
+- `reports/quantstats/dashboard_tearsheet_<run_id>.json`
+
+Optional:
+- `reports/quantstats/dashboard_tearsheet_<run_id>_quantstats.html` (only when `--quantstats-write-core-html` is set)

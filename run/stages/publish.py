@@ -48,12 +48,15 @@ class PublishStage:
         rank_artifact = context.require_artifact("rank", "ranked_signals")
         ranked_df = self._read_artifact(rank_artifact)
         scan_artifact = context.artifact_for("rank", "stock_scan")
+        breakout_artifact = context.artifact_for("rank", "breakout_scan")
         dashboard_artifact = context.artifact_for("rank", "sector_dashboard")
         dashboard_payload_artifact = context.artifact_for("rank", "dashboard_payload")
         stock_scan_df = self._read_artifact(scan_artifact) if scan_artifact else pd.DataFrame()
+        breakout_df = self._read_artifact(breakout_artifact) if breakout_artifact else pd.DataFrame()
         dashboard_df = self._read_artifact(dashboard_artifact) if dashboard_artifact else pd.DataFrame()
         datasets = {
             "ranked_signals": ranked_df,
+            "breakout_scan": breakout_df,
             "stock_scan": stock_scan_df,
             "sector_dashboard": dashboard_df,
             "dashboard_payload": self._read_json_artifact(dashboard_payload_artifact) if dashboard_payload_artifact else {},
@@ -126,6 +129,8 @@ class PublishStage:
             handlers["google_sheets_stock_scan"] = self._publish_stock_scan
         if not datasets["sector_dashboard"].empty:
             handlers["google_sheets_sector_dashboard"] = self._publish_sector_dashboard
+        if bool(context.params.get("publish_quantstats", True)):
+            handlers["quantstats_dashboard_tearsheet"] = self._publish_quantstats_dashboard
         return handlers
 
     def _publish_local_summary(
@@ -183,6 +188,47 @@ class PublishStage:
 
         run_portfolio_analysis()
         return {"report_id": "portfolio_sheet"}
+
+    def _publish_quantstats_dashboard(
+        self,
+        context: StageContext,
+        rank_artifact: StageArtifact,
+        datasets: Dict[str, pd.DataFrame],
+    ) -> Dict[str, Any]:
+        from publishers.quantstats_dashboard import publish_dashboard_quantstats_tearsheet
+
+        result = publish_dashboard_quantstats_tearsheet(
+            project_root=context.project_root,
+            run_id=context.run_id,
+            run_date=context.run_date,
+            top_n=int(context.params.get("quantstats_top_n", 20)),
+            min_overlap=int(context.params.get("quantstats_min_overlap", 5)),
+            max_runs=int(context.params.get("quantstats_max_runs", 240)),
+            latest_ranked_df=datasets.get("ranked_signals"),
+            latest_breakout_df=datasets.get("breakout_scan"),
+            latest_sector_df=datasets.get("sector_dashboard"),
+            breadth_start_date=str(context.params.get("quantstats_breadth_start_date", "2018-01-01")),
+            write_core_quantstats_html=bool(context.params.get("quantstats_write_core_html", False)),
+        )
+        if not result.get("ok"):
+            error_code = str(result.get("error", "quantstats tear sheet publish failed"))
+            non_critical = {
+                "insufficient_rank_history_for_tearsheet",
+                "pipeline_runs_dir_missing",
+                "quantstats_not_available",
+            }
+            if error_code in non_critical and not bool(context.params.get("quantstats_required", False)):
+                return {
+                    "report_id": "quantstats_dashboard_tearsheet",
+                    "status": "skipped",
+                    "reason": error_code,
+                }
+            raise RuntimeError(error_code)
+        return {
+            "report_id": "quantstats_dashboard_tearsheet",
+            "tearsheet_path": result.get("tearsheet_path"),
+            "observations": result.get("observations"),
+        }
 
     def _publish_telegram_summary(
         self,

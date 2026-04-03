@@ -4,6 +4,14 @@
 
 This document describes the current Iceberg-lite architecture that provides 90% of Apache Iceberg's benefits without the complexity.
 
+## Scope Note
+
+- This document is storage-focused (feature/OHLCV layout, snapshots, metadata tables).
+- Pipeline control-plane behavior (stage gating, DQ semantics, retry behavior, publish isolation) is documented in:
+  - `docs/ops_runbook.md`
+  - `docs/dq_rules.md`
+  - `docs/data-flow.md`
+
 ## Architecture Summary
 
 ```

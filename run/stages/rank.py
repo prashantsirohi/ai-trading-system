@@ -93,7 +93,7 @@ class RankStage:
         )
         ranked = ranker.rank_all(
             date=context.run_date,
-            min_score=float(context.params.get("min_score", 50.0)),
+            min_score=float(context.params.get("min_score", 0.0)),
             top_n=context.params.get("top_n"),
         )
 

@@ -236,7 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=700)
     parser.add_argument("--bulk", action="store_true")
     parser.add_argument("--top-n", type=int, default=None)
-    parser.add_argument("--min-score", type=float, default=50.0)
+    parser.add_argument("--min-score", type=float, default=0.0)
     parser.add_argument(
         "--data-domain",
         choices=["operational", "research"],
@@ -248,6 +248,44 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbol-limit", type=int, default=None, help="Limit live symbol universe for canary runs")
     parser.add_argument("--canary", action="store_true", help="Run a smaller live canary flow")
     parser.add_argument("--skip-preflight", action="store_true", help="Skip local readiness checks")
+    parser.add_argument(
+        "--skip-delivery-collect",
+        action="store_true",
+        help="Skip ingest-stage delivery collection (enabled by default).",
+    )
+    parser.add_argument(
+        "--skip-quantstats",
+        action="store_true",
+        help="Disable QuantStats dashboard tear sheet generation in publish stage.",
+    )
+    parser.add_argument(
+        "--publish-quantstats",
+        action="store_true",
+        help="Legacy alias (QuantStats publish is enabled by default).",
+    )
+    parser.add_argument(
+        "--quantstats-top-n",
+        type=int,
+        default=20,
+        help="Top-N ranked symbols used to build dashboard strategy returns for tear sheet.",
+    )
+    parser.add_argument(
+        "--quantstats-min-overlap",
+        type=int,
+        default=5,
+        help="Minimum symbol overlap between consecutive rank snapshots.",
+    )
+    parser.add_argument(
+        "--quantstats-max-runs",
+        type=int,
+        default=240,
+        help="Maximum historical rank runs to inspect for QuantStats return series.",
+    )
+    parser.add_argument(
+        "--quantstats-write-core-html",
+        action="store_true",
+        help="Also emit raw QuantStats core HTML alongside the enriched dashboard tear sheet.",
+    )
     parser.add_argument(
         "--full-rebuild",
         action="store_true",
@@ -288,6 +326,12 @@ def main() -> None:
             "symbol_limit": args.symbol_limit if args.symbol_limit is not None else (25 if args.canary else None),
             "canary": args.canary,
             "preflight": not args.skip_preflight,
+            "include_delivery": not args.skip_delivery_collect,
+            "publish_quantstats": not args.skip_quantstats,
+            "quantstats_top_n": args.quantstats_top_n,
+            "quantstats_min_overlap": args.quantstats_min_overlap,
+            "quantstats_max_runs": args.quantstats_max_runs,
+            "quantstats_write_core_html": args.quantstats_write_core_html,
             "full_rebuild": args.full_rebuild,
             "feature_tail_bars": args.feature_tail_bars,
         },

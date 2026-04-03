@@ -242,12 +242,30 @@ class StockRanker:
             "exchange",
             "close",
             "composite_score",
+            # Normalized factor scores.
             "rel_strength_score",
             "vol_intensity_score",
             "trend_score_score",
             "prox_high_score",
             "delivery_pct_score",
             "sector_strength_score",
+            # Raw factor metrics for attribution/explainability.
+            "rel_strength",
+            "vol_intensity",
+            "trend_score",
+            "prox_high",
+            "delivery_pct",
+            "sector_rs_value",
+            "stock_vs_sector_value",
+            "sector_name",
+            # Supporting context commonly needed in downstream UIs.
+            "high_52w",
+            "vol_20_avg",
+            "adx_14",
+            "sma_20",
+            "sma_50",
+            "volume",
+            "timestamp",
         ]
         available = [c for c in cols if c in scores.columns]
         return scores[available].reset_index(drop=True)

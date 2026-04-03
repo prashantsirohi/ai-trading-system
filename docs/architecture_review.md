@@ -18,6 +18,14 @@ This review recommends an incremental migration, not a rewrite.
 - The split between `operational` and `research` data domains is directionally correct.
 - The technical ranking system has a coherent factor model and working dashboard surface.
 
+## Behavioral Accuracy Notes
+
+- DQ severity policy is `critical/high/medium/low`; only `critical` failures hard-stop downstream stages.
+- Pipeline stage retries are operator-driven reruns, not automatic orchestrator retries for ingest/features/rank.
+- Automatic retry/backoff currently exists for publish-channel delivery attempts (idempotent via dedupe keys).
+- Alerting is persisted in the control plane (`pipeline_alert`) and logged; standalone alert fan-out is not wired directly in `AlertManager`.
+- Shadow monitoring is technical baseline vs LightGBM/blended overlays, not a separate production ranker replacement path.
+
 ## Critical Findings
 
 ### 1. Packaging and import discipline are weak

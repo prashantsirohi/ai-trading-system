@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Optional
 
 import duckdb
 
+from core.logging import logger
 from run.stages.base import StageArtifact, StageContext, StageResult
 
 
@@ -65,6 +65,7 @@ class IngestStage:
                 "latest_timestamp": str(latest_ts) if latest_ts is not None else None,
             }
         )
+        payload.update(self._run_delivery_collection(context, payload))
         return payload
 
     def _run_smoke(self, context: StageContext) -> Dict:
@@ -75,3 +76,82 @@ class IngestStage:
             "latest_timestamp": f"{context.run_date} 15:30:00",
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    def _run_delivery_collection(self, context: StageContext, ingest_payload: Dict) -> Dict:
+        include_delivery = bool(context.params.get("include_delivery", True))
+        if not include_delivery:
+            return {
+                "delivery_status": "skipped",
+                "delivery_reason": "disabled",
+            }
+
+        try:
+            from collectors.delivery_collector import DeliveryCollector
+
+            collector = DeliveryCollector(
+                ohlcv_db_path=str(context.db_path),
+                data_domain=context.params.get("data_domain", "operational"),
+            )
+            to_date = context.run_date
+            last_delivery_date = collector.get_last_delivery_date()
+
+            if last_delivery_date:
+                from_date = (
+                    datetime.fromisoformat(last_delivery_date) + timedelta(days=1)
+                ).date().isoformat()
+            else:
+                backfill_days = int(context.params.get("delivery_backfill_days", 30))
+                from_date = (
+                    datetime.fromisoformat(to_date) - timedelta(days=backfill_days)
+                ).date().isoformat()
+
+            if from_date > to_date:
+                return {
+                    "delivery_status": "skipped",
+                    "delivery_reason": "up_to_date",
+                    "delivery_from_date": from_date,
+                    "delivery_to_date": to_date,
+                    "delivery_last_date": last_delivery_date,
+                    "delivery_rows_ingested": 0,
+                    "delivery_feature_rows": 0,
+                }
+
+            workers = max(1, int(context.params.get("delivery_workers", 4)))
+            updated_symbols = ingest_payload.get("updated_symbols")
+            symbols: list[str] | None
+            if isinstance(updated_symbols, list):
+                symbols = sorted({str(symbol) for symbol in updated_symbols if symbol})
+            else:
+                symbols = None
+
+            rows_ingested = int(
+                collector.fetch_range(
+                    from_date=from_date,
+                    to_date=to_date,
+                    n_workers=workers,
+                    symbols=symbols,
+                )
+                or 0
+            )
+            feature_rows = 0
+            if bool(context.params.get("delivery_compute_features", True)) and rows_ingested > 0:
+                feature_rows = int(collector.compute_delivery_features(exchange="NSE") or 0)
+
+            return {
+                "delivery_status": "completed",
+                "delivery_from_date": from_date,
+                "delivery_to_date": to_date,
+                "delivery_last_date": collector.get_last_delivery_date(),
+                "delivery_rows_ingested": rows_ingested,
+                "delivery_feature_rows": feature_rows,
+            }
+        except Exception as exc:
+            if bool(context.params.get("delivery_required", False)):
+                raise
+            logger.warning("Delivery collection failed during ingest stage: %s", exc)
+            return {
+                "delivery_status": "failed",
+                "delivery_error": str(exc),
+                "delivery_rows_ingested": 0,
+                "delivery_feature_rows": 0,
+            }

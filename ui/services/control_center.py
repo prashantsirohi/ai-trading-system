@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 import duckdb
 
 from analytics.registry import RegistryStore
-from research import shadow_monitor as shadow_monitor_module
+import research.shadow_monitor as shadow_monitor_module
 from run.orchestrator import PipelineOrchestrator
 from utils.logger import logger
 

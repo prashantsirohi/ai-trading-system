@@ -278,6 +278,93 @@ def test_preflight_flags_crlf_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert env_check["severity"] == "high"
 
 
+def test_ingest_stage_runs_delivery_collection_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    _init_catalog(
+        tmp_path / "data" / "ohlcv.duckdb",
+        [("ABC", "NSE", "2026-03-28 15:30:00", 10.0, 11.0, 9.0, 10.5, 1_000)],
+    )
+    captured: dict[str, object] = {}
+
+    class FakeDeliveryCollector:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        def get_last_delivery_date(self):
+            return "2026-03-25"
+
+        def fetch_range(self, from_date, to_date, n_workers=4, symbols=None, save_raw=False):
+            captured["fetch_args"] = {
+                "from_date": from_date,
+                "to_date": to_date,
+                "n_workers": n_workers,
+                "symbols": symbols,
+                "save_raw": save_raw,
+            }
+            return 12
+
+        def compute_delivery_features(self, exchange="NSE"):
+            captured["feature_exchange"] = exchange
+            return 48
+
+    monkeypatch.setattr("collectors.delivery_collector.DeliveryCollector", FakeDeliveryCollector)
+
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="run-delivery",
+        run_date="2026-03-28",
+        stage_name="ingest",
+        attempt_number=1,
+        params={"include_delivery": True, "delivery_workers": 2},
+    )
+    stage = IngestStage(operation=lambda _context: {"updated_symbols": ["ABC", "ABC", "XYZ"]})
+
+    result = stage.run(context)
+
+    assert result.metadata["delivery_status"] == "completed"
+    assert result.metadata["delivery_from_date"] == "2026-03-26"
+    assert result.metadata["delivery_to_date"] == "2026-03-28"
+    assert result.metadata["delivery_rows_ingested"] == 12
+    assert result.metadata["delivery_feature_rows"] == 48
+    assert captured["fetch_args"]["symbols"] == ["ABC", "XYZ"]
+    assert captured["fetch_args"]["n_workers"] == 2
+
+
+def test_ingest_stage_skips_delivery_when_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    _init_catalog(
+        tmp_path / "data" / "ohlcv.duckdb",
+        [("ABC", "NSE", "2026-03-28 15:30:00", 10.0, 11.0, 9.0, 10.5, 1_000)],
+    )
+
+    class FailingDeliveryCollector:
+        def __init__(self, **kwargs):
+            raise AssertionError("Delivery collector should not be created when disabled")
+
+    monkeypatch.setattr("collectors.delivery_collector.DeliveryCollector", FailingDeliveryCollector)
+
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="run-delivery-disabled",
+        run_date="2026-03-28",
+        stage_name="ingest",
+        attempt_number=1,
+        params={"include_delivery": False},
+    )
+    stage = IngestStage(operation=lambda _context: {"updated_symbols": ["ABC"]})
+
+    result = stage.run(context)
+
+    assert result.metadata["delivery_status"] == "skipped"
+    assert result.metadata["delivery_reason"] == "disabled"
+
+
 def test_nse_delivery_scraper_normalizes_equity_rows(tmp_path: Path) -> None:
     project_root = tmp_path
     (project_root / "data").mkdir(parents=True, exist_ok=True)

@@ -22,38 +22,44 @@ collectors/dhan_collector.py
   → DuckDB ohlcv.duckdb::_catalog (238,607 rows, 1,000 symbols)
 ```
 
-**Note:** Dhan API returns corrupted data from March 19, 2026. Using yfinance as fallback.
-
-## 3. Daily EOD Update (Incremental)
+Delivery ingestion path (separate from OHLCV):
 
 ```
-run/daily_pipeline.py
+collectors/delivery_collector.py
+  → Source `mto` (NSE archive)
+  → Fallback `nse_securitywise` when archive dates are missing
+  → DuckDB ohlcv.duckdb::_delivery
+  → feature_store/delivery/NSE/*.parquet
+```
+
+## 3. Operational Pipeline (Staged)
+
+```
+run/orchestrator.py
   │
-  ├── 1. Check holiday/weekend
+  ├── Stage: ingest
+  │     ├── OHLCV update from configured market collector(s)
+  │     └── Delivery collection (`mto` with `nse_securitywise` fallback)
   │
-  ├── 2. OHLCV Update
-  │     ├── DhanCollector.run_daily_update()
-  │     │     → _get_last_dates() from _catalog
-  │     │     → Fetch from (last_date + 1) → today
-  │     │     → INSERT OR IGNORE (dedup)
-  │     │
-  │     └── yfinance fallback for current prices
-  │
-  ├── 3. Feature Computation (Incremental)
+  ├── Stage: features
   │     ├── FeatureStore.compute_incremental()
   │     │     → get_last_feature_date() per symbol
   │     │     → compute_* with start_date filter
   │     │     → Append to DuckDB tables
   │     │
-  │     └── Feature tables: feat_rsi, feat_adx, feat_atr, etc.
+  │     └── Sector leadership artifacts
   │
-  ├── 4. Create Snapshot
-  │     └── create_snapshot() → _snapshots table
+  ├── Stage: rank
+  │     ├── technical ranking (`ranked_signals.csv`)
+  │     ├── breakout scan (`breakout_scan.csv`)
+  │     ├── stock scan (`stock_scan.csv`)
+  │     └── sector dashboard (`sector_dashboard.csv`)
   │
-  └── 5. Google Sheets Update
-        ├── Stock Scan
-        ├── Sector Dashboard
-        └── Portfolio Analysis
+  └── Stage: publish
+        ├── Google Sheets targets
+        ├── Telegram summary
+        ├── dashboard payload publish
+        └── QuantStats dashboard tear sheet
 ```
 
 ## 4. Feature Computation (Iceberg-lite)
@@ -167,7 +173,7 @@ analytics/screener.py
   │       - STRONG_BEAR_TREND
   │       - RANGE_BOUND
   │
-  ├── StockRanker.rank_stocks()
+  ├── StockRanker.rank_all()
   │     6-factor technical score:
   │       25% relative strength
   │       18% volume intensity
@@ -180,13 +186,13 @@ analytics/screener.py
   │     - prepared OHLCV + engineered technical datasets
   │     - separate 5D and 20D models
   │     - walk-forward validation
-  │     - shadow-monitor challenger evaluation
+  │     - shadow-monitor technical vs ML/blended evaluation
   │
   ├── RiskManager.size_positions()
   │     ATR-based position sizing
   │
-  └── EventBacktester.backtest()
-        5 strategies with QuantStats
+  └── EventBacktester / RankBacktester
+        event-driven and cross-sectional backtest workflows
 ```
 
 ## 7. UI Surfaces
@@ -208,7 +214,7 @@ ui/execution/app.py (NiceGUI)
   ├── Ranking: latest technical ranks and charts
   ├── Market: breakouts, sectors, market summary
   ├── Operations: run inspection and alerts
-  ├── Shadow: weekly/monthly champion-challenger comparison
+  ├── Shadow: weekly/monthly technical vs ML/blended summaries
   ├── Tasks: background jobs and live logs
   └── Processes: project process listing and safe termination
 

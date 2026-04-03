@@ -1,142 +1,124 @@
 # AI Trading System
 
-A technical-only NSE trading pipeline with staged orchestration, DuckDB-backed lineage, data-quality gates, delivery-aware ranking, breakout scanning, and dashboard/publish surfaces.
+Production-oriented NSE technical research and execution platform with:
+- staged pipeline orchestration (`ingest -> features -> rank -> publish`)
+- DuckDB-backed control plane and artifact lineage
+- rule-based data quality gating
+- technical ranking and breakout scanning
+- dual UI architecture (Streamlit research + NiceGUI execution)
+- publish channels (Google Sheets, Telegram, dashboard payload, QuantStats tear sheet)
 
-## What It Does
+## 1. Architecture Overview
 
-- Ingests OHLCV into DuckDB
-- Computes technical features and sector-strength artifacts
-- Ranks stocks with a 6-factor technical model
-- Produces breakout, stock-scan, and sector-dashboard artifacts
-- Publishes summaries to local output and optional external channels
-- Tracks runs, stage attempts, artifacts, DQ results, alerts, and publish delivery logs
+The repository is intentionally split into bounded modules:
 
-## Current Technical Scope
+- `run/`: orchestration and stage execution contracts
+- `collectors/`: market and delivery ingestion
+- `features/`: indicator and sector-strength computation
+- `analytics/`: ranking, regime, DQ, registry, ML/shadow, backtesting
+- `publishers/`: external delivery adapters
+- `ui/`: operator and research interfaces
+- `core/`: shared runtime contracts, env/path/bootstrap/logging
+- `research/`: offline train/eval/backtest workflows
 
-The system currently focuses on technical screening and ranking only.
-
-Included:
-- relative strength
-- volume intensity
-- trend persistence
-- proximity to highs
-- delivery participation
-- sector strength
-- breakout scan
-- bearish/bullish market regime detection
-
-Not included:
-- fundamental scoring
-- Excel-driven screening logic
-
-## Stage Pipeline
+High-level runtime flow:
 
 ```text
-ingest -> features -> rank -> publish
+Data Providers -> Ingest -> Features -> Rank -> Publish
+                     |         |          |        |
+                     |         |          |        +--> Telegram / Sheets / QuantStats
+                     |         |          +--> ranked_signals / breakout_scan / sector_dashboard
+                     |         +--> feature snapshots + sector leadership artifacts
+                     +--> _catalog / _delivery
+
+Control Plane (DuckDB):
+pipeline_run, pipeline_stage_run, pipeline_artifact, dq_rule, dq_result,
+publisher_delivery_log, pipeline_alert, model_registry, model_eval, model_deployment
 ```
 
-Main entrypoint:
-- `python -m run.orchestrator`
+## 2. Data Domains and Storage
 
-Legacy wrapper:
-- `python run/daily_pipeline.py`
+The system uses two domains:
 
-## Main Components
+- `operational`: rolling live data for production monitoring and publish
+- `research`: historical/static-oriented data for training and backtests
 
-### `run/`
-- `orchestrator.py`
-  - staged pipeline runner
-- `stages/ingest.py`
-  - OHLCV stage contract
-- `stages/features.py`
-  - feature and snapshot stage
-- `stages/rank.py`
-  - ranking, breakout, stock-scan, sector dashboard, dashboard payload
-- `stages/publish.py`
-  - publish retry, dedupe, delivery log integration
-
-### `analytics/`
-- `ranker.py`
-  - 6-factor technical ranking engine
-- `regime_detector.py`
-  - directional market regime using ADX plus breadth
-- `dq/engine.py`
-  - DQ rule execution and severity gating
-- `registry/store.py`
-  - pipeline run/stage/artifact, DQ, alert, and model-governance persistence
-- `rank_backtester.py`
-  - research backtesting for technical factor studies
-
-### `core/`
-- `contracts.py`
-  - shared stage and artifact contracts
-- `env.py`
-  - repo-local `.env` loading
-- `paths.py`
-  - operational/research path resolution
-- `logging.py`
-  - shared runtime logging context
-- `runtime_config.py`
-  - typed runtime credentials/config
-
-### `publishers/`
-- dedicated delivery adapters for:
-  - Google Sheets
-  - Telegram
-  - dashboard payload publishing
-
-### `collectors/`
-- `dhan_collector.py`
-  - operational OHLCV ingestion
-- `delivery_collector.py`
-  - delivery ingestion with archive plus security-wise fallback
-- `nse_delivery_scraper.py`
-  - NSE security-wise delivery backend
-
-### `features/`
-- `feature_store.py`
-  - RSI, ADX, EMA, MACD, ATR, Bollinger Bands, ROC, Supertrend support
-- `compute_sector_rs.py`
-  - sector leadership from top-800 liquidity universe with operational fallback
-
-### `ui/`
-- `research/app.py`
-  - Streamlit research UI
-  - backtesting
-  - LightGBM review
-  - shadow monitor
-  - charts and factor analysis
-- `execution/app.py`
-  - NiceGUI execution UI
-  - live operational monitoring
-  - latest ranked signals
-  - breakout monitor
-  - shadow comparison
-- `services/`
-  - shared read/query layer for both UIs
-
-### `dashboard/`
-- `app.py`
-  - compatibility wrapper to the research UI
-
-## Data Layout
-
-Operational defaults:
+Primary paths (operational):
 - `data/ohlcv.duckdb`
 - `data/feature_store/`
 - `data/pipeline_runs/`
+- `data/control_plane.duckdb`
 
-Research defaults:
+Primary paths (research):
 - `data/research/research_ohlcv.duckdb`
 - `data/research/feature_store/`
 - `reports/research/`
 
-Raw local data and generated outputs should not be committed.
+Core tables:
+- `ohlcv.duckdb::_catalog`: OHLCV history
+- `ohlcv.duckdb::_delivery`: delivery percentage history
+- `control_plane.duckdb::pipeline_*`: run/stage/artifact lineage
+- `control_plane.duckdb::dq_*`: DQ rule + result history
+- `control_plane.duckdb::publisher_delivery_log`: publish attempts and dedupe
+- `control_plane.duckdb::model_*`: model governance and deployment trail
 
-## Ranking Model
+## 3. Staged Pipeline Design
 
-The current production ranking is technical-only and uses these weights:
+Entrypoint:
+- `python -m run.orchestrator`
 
+Stage order:
+- `ingest`
+- `features`
+- `rank`
+- `publish`
+
+Stage behavior:
+- each stage writes explicit artifacts
+- artifacts are versioned per `run_id/stage/attempt`
+- stage attempts are tracked in `pipeline_stage_run`
+- publish can be retried independently with the same `run_id`
+
+Important runtime semantics:
+- DQ severities are `critical`, `high`, `medium`, `low`
+- only `critical` failures block downstream execution
+- ingest/features/rank retries are operator-triggered reruns (not automatic loops)
+- publish channels have retry/backoff + idempotent dedupe
+
+## 4. Ingest and Delivery Collection
+
+OHLCV ingestion:
+- market data collectors write into `_catalog`
+- dedupe/upsert semantics preserve key uniqueness expectations
+
+Delivery ingestion:
+- `collectors/delivery_collector.py`
+- primary source: NSE archive MTO files
+- fallback source: NSE security-wise endpoint
+- outputs:
+  - `_delivery` in DuckDB
+  - `feature_store/delivery/NSE/*.parquet` features
+
+Delivery can be disabled for constrained runs:
+- `--skip-delivery-collect`
+
+## 5. Feature and Sector Pipeline
+
+Feature stage computes technical indicators and supporting artifacts:
+- RSI, ADX, ATR, EMA, SMA, MACD, ROC, Supertrend, etc.
+- incremental-tail updates for operational flows
+- full rebuild option for schema/logic transitions
+
+Sector leadership artifacts are produced for ranking context:
+- sector relative strength
+- stock vs sector performance context
+
+## 6. Ranking Engine (Technical-Only)
+
+Primary engine:
+- `analytics/ranker.py::StockRanker`
+
+Current factor model (cross-sectional, percentile-scored):
 - relative strength: `0.25`
 - volume intensity: `0.18`
 - trend persistence: `0.15`
@@ -144,65 +126,105 @@ The current production ranking is technical-only and uses these weights:
 - delivery percentage: `0.10`
 - sector strength: `0.15`
 
-Factor scores are percentile-style `0-100` values computed cross-sectionally for the current universe.
+Outputs in rank stage:
+- `ranked_signals.csv`
+- `breakout_scan.csv`
+- `stock_scan.csv`
+- `sector_dashboard.csv`
+- `dashboard_payload.json`
+- `rank_summary.json`
 
-## Breakout Logic
+Default ranking threshold:
+- orchestrator `--min-score` default is `0.0` (full-universe scoring retained unless overridden)
 
-The rank stage also emits a dedicated breakout scan with setup families:
+## 7. Breakout Scan Architecture
 
+Scanner:
+- `channel/breakout_scan.py`
+
+Setup families:
 - `base_breakout`
-  - breakout above a compact 30-bar base with volume and trend confirmation
 - `contraction_breakout`
-  - breakout after tighter recent contraction inside a broader structure
 - `supertrend_flip_breakout`
-  - actual bullish supertrend flip followed by breakout confirmation
 
-Execution labels are regime-aware:
+Uses:
+- structural breakout conditions
+- trend/ADX filters
+- volume ratio conditions
+- proximity-to-high context
+- regime/bias-aware execution labels
 
+Execution labels include:
 - `ACTIONABLE_BREAKOUT`
 - `EARLY_BREAKOUT`
 - `RELATIVE_STRENGTH_BREAKOUT`
 - `COUNTER_TREND_BREAKOUT`
 
-## UI Split
+## 8. DQ and Governance Control Plane
 
-Research UI with Streamlit:
+DQ engine:
+- `analytics/dq/engine.py`
 
-```bash
-. .venv/bin/activate
-python -m streamlit run ui/research/app.py
-```
+Governance store:
+- `analytics/registry/store.py`
 
-Execution UI with NiceGUI:
+Persisted governance records:
+- pipeline run + stage attempts + artifacts
+- DQ rules + DQ outcomes
+- publish delivery logs (delivered/retrying/failed/duplicate)
+- pipeline alerts
+- model registry, eval, deployment, rollback metadata
 
-```bash
-. .venv/bin/activate
-python -m ui.execution.app
-```
+Alert behavior:
+- alerts are persisted and logged
+- no standalone alert fan-out dispatcher is wired directly in `AlertManager` today
 
-The research UI reads the latest operational rank artifacts plus research model outputs and shows:
-- pipeline health
-- ranked signals
-- factor profile
-- breakout scan
-- sector dashboard
-- charts with technical indicators
-- regime and data freshness checks
-- LightGBM model review
-- shadow-monitor comparison
+## 9. Publish Architecture
 
-The execution UI focuses on live operations:
-- latest operational payload
-- operational health and freshness
-- ranked signals and breakouts
-- sector leadership
-- shadow-monitor weekly/monthly challenger summaries
-- process management for Streamlit, NiceGUI, pipeline, and shadow-monitor jobs
-- one-click launch of the Streamlit research UI from the execution console
+Publish stage:
+- `run/stages/publish.py`
 
-## Quick Start
+Delivery manager:
+- `run/publisher.py`
+- dedupe key: `run_id + channel + artifact hash`
+- retries with backoff for transient channel failures
 
-Create and activate the virtual environment:
+Channels:
+- Google Sheets portfolio/stock/sector/dashboard payload
+- Telegram summary
+- QuantStats dashboard tear sheet
+- local summary mode (`--local-publish`)
+
+## 10. ML and Shadow Monitoring
+
+ML engines:
+- legacy XGBoost support (`analytics/ml_engine.py`)
+- LightGBM workflow (`analytics/lightgbm_engine.py`, `research/train_lightgbm.py`, `research/run_lightgbm_workflow.py`)
+
+Shadow monitor:
+- `research/shadow_monitor.py`
+- helpers in `analytics/shadow_monitor.py`
+- compares technical baseline vs ML and blended overlays
+- persists predictions/outcomes for weekly/monthly summary views
+
+## 11. UI Architecture
+
+Research UI (Streamlit):
+- `ui/research/app.py`
+- deep analytics, ranking explainability, breakout evidence, sector views, ML/shadow review
+
+Execution UI (NiceGUI):
+- `ui/execution/app.py`
+- operations control center, run inspection, health checks, process/task controls
+- one-click launch of Streamlit research UI
+
+Shared UI services:
+- `ui/services/`
+- centralized query/control helpers to reduce duplicated business logic
+
+## 12. Command Reference
+
+Environment setup:
 
 ```bash
 python3 -m venv .venv
@@ -210,29 +232,28 @@ python3 -m venv .venv
 pip install -r requirements.txt
 ```
 
-Repo-local runtime credentials are auto-loaded from `.env` by the orchestrator, dashboard, publish test, and the main channel integrations. In most cases you only need to activate `.venv`, not manually source `.env`.
-
-Run tests:
+Primary pipeline run:
 
 ```bash
-python -m pytest -q \
-  streamlit/test/test_pipeline_orchestrator.py \
-  streamlit/test/test_feature_incremental.py \
-  streamlit/test/test_training_dataset.py \
-  streamlit/test/test_lightgbm_engine.py \
-  streamlit/test/test_shadow_monitor.py
+python -m run.orchestrator
 ```
 
-Run a smoke pipeline:
+Full operational run explicitly:
+
+```bash
+python -m run.orchestrator --data-domain operational
+```
+
+Smoke run:
 
 ```bash
 python -m run.orchestrator --smoke --local-publish
 ```
 
-Run a real operational rank refresh:
+Canary run:
 
 ```bash
-python -m run.orchestrator --stages rank --skip-preflight --data-domain operational
+python -m run.orchestrator --canary --symbol-limit 25 --local-publish
 ```
 
 Retry publish only:
@@ -241,64 +262,81 @@ Retry publish only:
 python -m run.orchestrator --run-id <run_id> --stages publish
 ```
 
-Run breakout-family backtest study:
+Skip delivery collection:
 
 ```bash
-python -m research.backtest_breakout_setups
+python -m run.orchestrator --skip-delivery-collect
 ```
 
-Run shadow-monitor refresh:
+Override ranking threshold:
+
+```bash
+python -m run.orchestrator --min-score 50
+```
+
+Research UI:
+
+```bash
+python -m streamlit run ui/research/app.py
+```
+
+Execution UI:
+
+```bash
+python -m ui.execution.app
+```
+
+Shadow refresh:
 
 ```bash
 python -m research.shadow_monitor
 ```
 
-Run a canary:
+## 13. QuantStats Tear Sheet Outputs
+
+Default outputs:
+- `reports/quantstats/dashboard_tearsheet_<run_id>.html`
+- `reports/quantstats/dashboard_tearsheet_<run_id>_returns.csv`
+- `reports/quantstats/dashboard_tearsheet_<run_id>_series.csv`
+- `reports/quantstats/dashboard_tearsheet_<run_id>.json`
+
+Optional:
+- `reports/quantstats/dashboard_tearsheet_<run_id>_quantstats.html` (with `--quantstats-write-core-html`)
+
+Return series construction uses consecutive ranked snapshots:
+- reads `data/pipeline_runs/*/rank/attempt_*/ranked_signals.csv`
+- selects prior-run top `N`
+- computes overlap-based forward return
+- aggregates equal-weight portfolio period returns
+
+## 14. Testing and Validation
+
+Representative test modules:
+- `streamlit/test/test_pipeline_orchestrator.py`
+- `streamlit/test/test_feature_incremental.py`
+- `streamlit/test/test_quantstats_dashboard_publish.py`
+- `streamlit/test/test_shadow_monitor.py`
+- `streamlit/test/test_dashboard_helpers.py`
+
+Run targeted suite:
 
 ```bash
-python -m run.orchestrator --canary --symbol-limit 25 --local-publish
+python -m pytest -q streamlit/test
 ```
 
-Test live publish channels:
+## 15. Known Operating Principles
 
-```bash
-python -m run.publish_test
-```
+- smoke mode validates orchestration/governance plumbing, not live market quality
+- publish is non-authoritative; publish failures can end as `completed_with_publish_errors`
+- research workflows should use the research domain by default
+- generated runtime data (`data/`, `reports/`) should not be committed
 
-## Governance and Metadata
+## 16. Related Documentation
 
-The system persists:
+- [docs/architecture.md](docs/architecture.md)
+- [docs/architecture_review.md](docs/architecture_review.md)
+- [docs/architecture_target.md](docs/architecture_target.md)
+- [docs/data-flow.md](docs/data-flow.md)
+- [docs/dq_rules.md](docs/dq_rules.md)
+- [docs/ops_runbook.md](docs/ops_runbook.md)
 
-- `pipeline_run`
-- `pipeline_stage_run`
-- `pipeline_artifact`
-- `dq_rule`
-- `dq_result`
-- `publisher_delivery_log`
-- `pipeline_alert`
-- `model_registry`
-- `model_eval`
-- `model_deployment`
-
-## Docs
-
-- [`docs/architecture_target.md`](docs/architecture_target.md)
-- [`docs/architecture_review.md`](docs/architecture_review.md)
-- [`docs/dq_rules.md`](docs/dq_rules.md)
-- [`docs/ops_runbook.md`](docs/ops_runbook.md)
-- [`docs/data-flow.md`](docs/data-flow.md)
-
-## Verified Status
-
-Latest technical sanity checks completed successfully:
-- compile checks passed
-- `test/test_pipeline_orchestrator.py`: `13 passed`
-- smoke pipeline completed
-- operational rank artifacts refreshed successfully
-- dashboard payload generated from live operational rank data
-
-## Notes
-
-- Smoke mode is synthetic and is meant only for orchestration verification.
-- The real dashboard should be read from the latest operational rank artifacts, not from smoke output.
-- Delivery collection uses archive data first and falls back to NSE security-wise delivery when needed.
