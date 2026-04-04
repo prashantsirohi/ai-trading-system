@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 from pathlib import Path
 
+from analytics.alpha.dataset_builder import AlphaDatasetBuilder
+from analytics.alpha.training import train_and_register_model
 from analytics.ml_engine import AlphaEngine
 from analytics.lightgbm_engine import LightGBMAlphaEngine
-from analytics.training_dataset import TrainingDatasetBuilder
 from analytics.registry import RegistryStore
 from utils.data_domains import ensure_domain_layout, research_static_end_date
 from utils.logger import log_context, logger
@@ -25,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-name", default="alpha_engine")
     parser.add_argument("--model-version", default="dev")
     parser.add_argument("--progress-interval", type=int, default=25)
+    parser.add_argument("--min-train-years", type=int, default=5)
     return parser
 
 
@@ -47,108 +47,53 @@ def main() -> None:
 
     with log_context(run_id="research-train", stage_name="train"):
         engine = build_engine(args.engine, paths=paths)
-        dataset_ref = f"research:{to_date}"
         if args.dataset_uri:
-            training_df, dataset_meta = TrainingDatasetBuilder.load_prepared_dataset(args.dataset_uri)
-            dataset_ref = dataset_meta.get("dataset_ref", dataset_ref)
+            training_df, dataset_meta = AlphaDatasetBuilder.load_prepared_dataset(args.dataset_uri)
             logger.info(
                 "Loaded prepared dataset ref=%s rows=%s path=%s",
-                dataset_ref,
+                dataset_meta.get("dataset_ref", f"research:{to_date}"),
                 len(training_df),
                 args.dataset_uri,
             )
         else:
-            training_df = engine.prepare_training_data(from_date=from_date, to_date=to_date)
-            dataset_meta = {}
-        model, metadata = engine.train(
-            training_df,
+            builder = AlphaDatasetBuilder(project_root=project_root, data_domain="research")
+            dataset_name = f"{args.model_name}_{args.model_version}_h{args.horizon}"
+            prepared = builder.prepare(
+                engine=engine,
+                dataset_name=dataset_name,
+                from_date=from_date,
+                to_date=to_date,
+                horizon=args.horizon,
+                validation_fraction=0.2,
+                register_dataset=True,
+            )
+            training_df, dataset_meta = AlphaDatasetBuilder.load_prepared_dataset(prepared.dataset_path)
+            logger.info(
+                "Prepared dataset for training ref=%s rows=%s path=%s",
+                dataset_meta["dataset_ref"],
+                len(training_df),
+                prepared.dataset_path,
+            )
+
+        trained = train_and_register_model(
+            engine=engine,
+            registry=RegistryStore(project_root),
+            training_df=training_df,
+            dataset_meta=dataset_meta,
             horizon=args.horizon,
-            validation_start=dataset_meta.get("validation_start"),
-            validation_fraction=dataset_meta.get("validation_fraction", 0.2),
-            show_progress=args.engine == "lightgbm",
-            progress_interval=args.progress_interval,
-        )
-        eval_metrics = {}
-        if args.engine == "lightgbm":
-            eval_metrics = engine.evaluate(
-                training_df,
-                model=model,
-                horizon=args.horizon,
-                validation_start=dataset_meta.get("validation_start"),
-                validation_fraction=dataset_meta.get("validation_fraction", 0.2),
-            )
-        artifact_path = Path(
-            engine.save_model(
-                model,
-                horizon=args.horizon,
-            )
-        )
-        target_artifact_path = artifact_path.with_name(
-            f"{args.model_name}_{args.model_version}{artifact_path.suffix}"
-        )
-        if artifact_path != target_artifact_path:
-            artifact_path.replace(target_artifact_path)
-            artifact_path = target_artifact_path
-
-        metadata_path = Path(paths.model_dir) / f"{args.model_name}_{args.model_version}.metadata.json"
-        metadata_payload = {
-            "engine": args.engine,
-            "horizon": args.horizon,
-            "from_date": from_date,
-            "to_date": to_date,
-            "training_rows": int(len(training_df)),
-            "training_symbols": int(training_df["symbol_id"].nunique()),
-            "feature_count": int(len(engine._feature_cols(training_df))),
-            "dataset_ref": dataset_ref,
-            "dataset_uri": args.dataset_uri,
-            "prepared_dataset": bool(args.dataset_uri),
-            "dataset_metadata": dataset_meta,
-            "evaluation": eval_metrics,
-            **metadata,
-        }
-        metadata_path.write_text(json.dumps(metadata_payload, indent=2), encoding="utf-8")
-        feature_schema_hash = hashlib.sha256(
-            ",".join(sorted(training_df.columns)).encode("utf-8")
-        ).hexdigest()
-
-        registry = RegistryStore(project_root)
-        model_id = registry.register_model(
             model_name=args.model_name,
             model_version=args.model_version,
-            artifact_uri=str(artifact_path),
-            feature_schema_hash=feature_schema_hash,
-            train_snapshot_ref=dataset_ref,
-            approval_status="pending",
-            metadata={
-                "engine": args.engine,
-                "metadata_uri": str(metadata_path),
-                "horizon": args.horizon,
-                "training_rows": int(len(training_df)),
-                "training_symbols": int(training_df["symbol_id"].nunique()),
-                "dataset_ref": dataset_ref,
-                "dataset_uri": args.dataset_uri,
-                "evaluation": eval_metrics,
-            },
+            progress_interval=args.progress_interval,
+            min_train_years=args.min_train_years,
         )
-        if eval_metrics:
-            registry.record_model_eval(
-                model_id,
-                {
-                    "validation_auc": eval_metrics.get("validation_auc", 0.0),
-                    "precision_at_10pct": eval_metrics.get("precision_at_10pct", 0.0),
-                    "avg_return_top_10pct": eval_metrics.get("avg_return_top_10pct", 0.0),
-                    "baseline_positive_rate": eval_metrics.get("baseline_positive_rate", 0.0),
-                },
-                dataset_ref=dataset_ref,
-                notes=f"{args.engine} prepared-dataset validation",
-            )
         logger.info(
-            "Research training complete model_id=%s engine=%s rows=%s artifact=%s eval=%s",
-            model_id,
+            "Research training complete model_id=%s engine=%s rows=%s artifact=%s eval=%s walkforward=%s",
+            trained["model_id"],
             args.engine,
             len(training_df),
-            artifact_path,
-            eval_metrics,
+            trained["artifact_uri"],
+            trained["evaluation"],
+            trained["walkforward"].get("summary", {}),
         )
 
 

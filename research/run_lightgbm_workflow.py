@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Dict, List
 
+from analytics.alpha.dataset_builder import AlphaDatasetBuilder
+from analytics.alpha.training import train_and_register_model
 from analytics.lightgbm_engine import LightGBMAlphaEngine
-from analytics.lightgbm_research import walk_forward_compare
 from analytics.registry import RegistryStore
-from analytics.training_dataset import TrainingDatasetBuilder
 from utils.data_domains import ensure_domain_layout, research_static_end_date
 from utils.logger import log_context, logger
 
@@ -32,92 +31,6 @@ def _parse_horizons(raw: str) -> List[int]:
     return [int(part.strip()) for part in raw.split(",") if part.strip()]
 
 
-def _train_and_register(
-    *,
-    engine: LightGBMAlphaEngine,
-    registry: RegistryStore,
-    training_df,
-    dataset_meta: Dict,
-    horizon: int,
-    model_name: str,
-    model_version: str,
-    progress_interval: int,
-) -> Dict:
-    model, metadata = engine.train(
-        training_df,
-        horizon=horizon,
-        validation_start=dataset_meta.get("validation_start"),
-        validation_fraction=dataset_meta.get("validation_fraction", 0.2),
-        show_progress=True,
-        progress_interval=progress_interval,
-    )
-    evaluation = engine.evaluate(
-        training_df,
-        model=model,
-        horizon=horizon,
-        validation_start=dataset_meta.get("validation_start"),
-        validation_fraction=dataset_meta.get("validation_fraction", 0.2),
-    )
-    artifact_path = Path(engine.save_model(model, horizon=horizon))
-    target_artifact_path = artifact_path.with_name(f"{model_name}_{model_version}{artifact_path.suffix}")
-    if artifact_path != target_artifact_path:
-        artifact_path.replace(target_artifact_path)
-        artifact_path = target_artifact_path
-
-    metadata_path = artifact_path.with_suffix(".metadata.json")
-    payload = {
-        "engine": "lightgbm",
-        "horizon": horizon,
-        "training_rows": int(len(training_df)),
-        "training_symbols": int(training_df["symbol_id"].nunique()),
-        "feature_count": int(len(engine._feature_cols(training_df))),
-        "dataset_ref": dataset_meta["dataset_ref"],
-        "dataset_uri": dataset_meta["dataset_uri"],
-        "prepared_dataset": True,
-        "dataset_metadata": dataset_meta,
-        "evaluation": evaluation,
-        **metadata,
-    }
-    metadata_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-    feature_schema_hash = hashlib.sha256(
-        ",".join(sorted(training_df.columns)).encode("utf-8")
-    ).hexdigest()
-    model_id = registry.register_model(
-        model_name=model_name,
-        model_version=model_version,
-        artifact_uri=str(artifact_path),
-        feature_schema_hash=feature_schema_hash,
-        train_snapshot_ref=dataset_meta["dataset_ref"],
-        approval_status="pending",
-        metadata={
-            "engine": "lightgbm",
-            "metadata_uri": str(metadata_path),
-            "dataset_ref": dataset_meta["dataset_ref"],
-            "dataset_uri": dataset_meta["dataset_uri"],
-            "evaluation": evaluation,
-            "horizon": horizon,
-        },
-    )
-    registry.record_model_eval(
-        model_id,
-        {
-            "validation_auc": evaluation.get("validation_auc", 0.0),
-            "precision_at_10pct": evaluation.get("precision_at_10pct", 0.0),
-            "avg_return_top_10pct": evaluation.get("avg_return_top_10pct", 0.0),
-            "baseline_positive_rate": evaluation.get("baseline_positive_rate", 0.0),
-        },
-        dataset_ref=dataset_meta["dataset_ref"],
-        notes="lightgbm workflow full-train validation",
-    )
-    return {
-        "model_id": model_id,
-        "artifact_uri": str(artifact_path),
-        "metadata_uri": str(metadata_path),
-        "evaluation": evaluation,
-    }
-
-
 def main() -> None:
     args = build_parser().parse_args()
     project_root = Path(__file__).resolve().parents[1]
@@ -126,7 +39,7 @@ def main() -> None:
     to_date = args.to_date or research_static_end_date()
 
     registry = RegistryStore(project_root)
-    builder = TrainingDatasetBuilder(project_root=project_root, data_domain="research")
+    builder = AlphaDatasetBuilder(project_root=project_root, data_domain="research")
     engine = LightGBMAlphaEngine(
         ohlcv_db_path=str(paths.ohlcv_db_path),
         feature_store_dir=str(paths.feature_store_dir),
@@ -152,11 +65,12 @@ def main() -> None:
                 to_date=to_date,
                 horizon=horizon,
                 validation_fraction=0.2,
+                register_dataset=True,
             )
-            training_df, dataset_meta = TrainingDatasetBuilder.load_prepared_dataset(prepared.dataset_path)
+            training_df, dataset_meta = AlphaDatasetBuilder.load_prepared_dataset(prepared.dataset_path)
             model_name = f"{args.model_prefix}_{horizon}d"
             model_version = f"{args.from_date}_{to_date}"
-            trained = _train_and_register(
+            trained = train_and_register_model(
                 engine=engine,
                 registry=registry,
                 training_df=training_df,
@@ -165,13 +79,9 @@ def main() -> None:
                 model_name=model_name,
                 model_version=model_version,
                 progress_interval=args.progress_interval,
-            )
-            walkforward = walk_forward_compare(
-                training_df,
-                engine=engine,
-                horizon=horizon,
                 min_train_years=args.min_train_years,
             )
+            walkforward = trained["walkforward"]
             result = {
                 "horizon": horizon,
                 "dataset_ref": dataset_meta["dataset_ref"],

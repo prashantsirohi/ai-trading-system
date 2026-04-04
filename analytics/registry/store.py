@@ -263,6 +263,195 @@ class RegistryStore:
         finally:
             conn.close()
 
+    def register_dataset(
+        self,
+        *,
+        dataset_ref: str,
+        dataset_uri: str,
+        data_domain: str,
+        engine_name: str | None = None,
+        feature_schema_version: str | None = None,
+        feature_schema_hash: str | None = None,
+        label_version: str | None = None,
+        target_column: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        horizon: int | None = None,
+        row_count: int | None = None,
+        symbol_count: int | None = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        conn = self._connect()
+        try:
+            existing = conn.execute(
+                "SELECT dataset_id FROM dataset_registry WHERE dataset_ref = ?",
+                [dataset_ref],
+            ).fetchone()
+            dataset_id = existing[0] if existing else f"dataset-{uuid.uuid4().hex[:12]}"
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE dataset_registry
+                    SET dataset_uri = ?,
+                        data_domain = ?,
+                        engine_name = ?,
+                        feature_schema_version = ?,
+                        feature_schema_hash = ?,
+                        label_version = ?,
+                        target_column = ?,
+                        from_date = ?,
+                        to_date = ?,
+                        horizon = ?,
+                        row_count = ?,
+                        symbol_count = ?,
+                        metadata_json = ?
+                    WHERE dataset_ref = ?
+                    """,
+                    [
+                        dataset_uri,
+                        data_domain,
+                        engine_name,
+                        feature_schema_version,
+                        feature_schema_hash,
+                        label_version,
+                        target_column,
+                        from_date,
+                        to_date,
+                        horizon,
+                        row_count,
+                        symbol_count,
+                        json.dumps(metadata or {}),
+                        dataset_ref,
+                    ],
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO dataset_registry
+                    (dataset_id, dataset_ref, dataset_uri, data_domain, engine_name,
+                     feature_schema_version, feature_schema_hash, label_version, target_column,
+                     from_date, to_date, horizon, row_count, symbol_count, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        dataset_id,
+                        dataset_ref,
+                        dataset_uri,
+                        data_domain,
+                        engine_name,
+                        feature_schema_version,
+                        feature_schema_hash,
+                        label_version,
+                        target_column,
+                        from_date,
+                        to_date,
+                        horizon,
+                        row_count,
+                        symbol_count,
+                        json.dumps(metadata or {}),
+                    ],
+                )
+            return dataset_id
+        finally:
+            conn.close()
+
+    def get_dataset(self, dataset_ref: str) -> Optional[Dict[str, Any]]:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT dataset_id, dataset_ref, dataset_uri, data_domain, engine_name,
+                       feature_schema_version, feature_schema_hash, label_version, target_column,
+                       from_date, to_date, horizon, row_count, symbol_count, created_at, metadata_json
+                FROM dataset_registry
+                WHERE dataset_ref = ?
+                """,
+                [dataset_ref],
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            return None
+
+        return {
+            "dataset_id": row[0],
+            "dataset_ref": row[1],
+            "dataset_uri": row[2],
+            "data_domain": row[3],
+            "engine_name": row[4],
+            "feature_schema_version": row[5],
+            "feature_schema_hash": row[6],
+            "label_version": row[7],
+            "target_column": row[8],
+            "from_date": str(row[9]) if row[9] is not None else None,
+            "to_date": str(row[10]) if row[10] is not None else None,
+            "horizon": row[11],
+            "row_count": row[12],
+            "symbol_count": row[13],
+            "created_at": row[14],
+            "metadata": json.loads(row[15]) if row[15] else {},
+        }
+
+    def list_datasets(
+        self,
+        *,
+        limit: int = 50,
+        data_domain: Optional[str] = None,
+        engine_name: Optional[str] = None,
+        horizon: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if data_domain is not None:
+            clauses.append("data_domain = ?")
+            params.append(data_domain)
+        if engine_name is not None:
+            clauses.append("engine_name = ?")
+            params.append(engine_name)
+        if horizon is not None:
+            clauses.append("horizon = ?")
+            params.append(int(horizon))
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT dataset_id, dataset_ref, dataset_uri, data_domain, engine_name,
+                       feature_schema_version, label_version, target_column,
+                       from_date, to_date, horizon, row_count, symbol_count, created_at, metadata_json
+                FROM dataset_registry
+                {where_sql}
+                ORDER BY created_at DESC, dataset_ref DESC
+                LIMIT ?
+                """,
+                [*params, int(limit)],
+            ).fetchall()
+        finally:
+            conn.close()
+
+        return [
+            {
+                "dataset_id": row[0],
+                "dataset_ref": row[1],
+                "dataset_uri": row[2],
+                "data_domain": row[3],
+                "engine_name": row[4],
+                "feature_schema_version": row[5],
+                "label_version": row[6],
+                "target_column": row[7],
+                "from_date": str(row[8]) if row[8] is not None else None,
+                "to_date": str(row[9]) if row[9] is not None else None,
+                "horizon": row[10],
+                "row_count": row[11],
+                "symbol_count": row[12],
+                "created_at": str(row[13]) if row[13] is not None else None,
+                "metadata": self._loads(row[14]),
+            }
+            for row in rows
+        ]
+
     def update_run(
         self,
         run_id: str,
@@ -813,6 +1002,53 @@ class RegistryStore:
             "metadata": self._loads(row[7]),
         }
 
+    def list_models(
+        self,
+        *,
+        limit: int = 50,
+        approval_status: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if approval_status is not None:
+            clauses.append("approval_status = ?")
+            params.append(approval_status)
+        if model_name is not None:
+            clauses.append("model_name = ?")
+            params.append(model_name)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT model_id, model_name, model_version, artifact_uri, training_snapshot_ref,
+                       approval_status, created_at, metadata_json
+                FROM model_registry
+                {where_sql}
+                ORDER BY created_at DESC, model_name, model_version
+                LIMIT ?
+                """,
+                [*params, int(limit)],
+            ).fetchall()
+        finally:
+            conn.close()
+
+        return [
+            {
+                "model_id": row[0],
+                "model_name": row[1],
+                "model_version": row[2],
+                "artifact_uri": row[3],
+                "train_snapshot_ref": row[4],
+                "approval_status": row[5],
+                "created_at": str(row[6]) if row[6] is not None else None,
+                "metadata": self._loads(row[7]),
+            }
+            for row in rows
+        ]
+
     def get_model_evals(self, model_id: str) -> List[Dict[str, Any]]:
         conn = self._connect()
         try:
@@ -859,6 +1095,54 @@ class RegistryStore:
                 "status": row[3],
                 "rollback_model_id": row[4],
                 "notes": row[5],
+            }
+            for row in rows
+        ]
+
+    def list_deployments(
+        self,
+        *,
+        limit: int = 50,
+        environment: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if environment is not None:
+            clauses.append("environment = ?")
+            params.append(environment)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT deployment_id, model_id, environment, status, approved_by,
+                       approved_at, deployed_at, rollback_model_id, notes
+                FROM model_deployment
+                {where_sql}
+                ORDER BY COALESCE(deployed_at, approved_at) DESC
+                LIMIT ?
+                """,
+                [*params, int(limit)],
+            ).fetchall()
+        finally:
+            conn.close()
+
+        return [
+            {
+                "deployment_id": row[0],
+                "model_id": row[1],
+                "environment": row[2],
+                "status": row[3],
+                "approved_by": row[4],
+                "approved_at": str(row[5]) if row[5] is not None else None,
+                "deployed_at": str(row[6]) if row[6] is not None else None,
+                "rollback_model_id": row[7],
+                "notes": row[8],
             }
             for row in rows
         ]
@@ -978,6 +1262,427 @@ class RegistryStore:
         finally:
             conn.close()
         return inserted
+
+    def replace_prediction_log(
+        self,
+        prediction_date: str,
+        rows: List[Dict[str, Any]],
+        *,
+        deployment_mode: str,
+        horizon: int,
+        model_id: Optional[str] = None,
+        artifact_uri: Optional[str] = None,
+    ) -> int:
+        conn = self._connect()
+        try:
+            if model_id is None:
+                conn.execute(
+                    """
+                    DELETE FROM prediction_log
+                    WHERE prediction_date = ?
+                      AND deployment_mode = ?
+                      AND horizon = ?
+                      AND model_id IS NULL
+                    """,
+                    [prediction_date, deployment_mode, int(horizon)],
+                )
+            else:
+                conn.execute(
+                    """
+                    DELETE FROM prediction_log
+                    WHERE prediction_date = ?
+                      AND deployment_mode = ?
+                      AND horizon = ?
+                      AND model_id = ?
+                    """,
+                    [prediction_date, deployment_mode, int(horizon), model_id],
+                )
+
+            inserted = 0
+            for row in rows:
+                prediction_log_id = row.get("prediction_log_id") or f"plog-{uuid.uuid4().hex[:12]}"
+                conn.execute(
+                    """
+                    INSERT INTO prediction_log (
+                        prediction_log_id, prediction_date, model_id, model_name, model_version,
+                        deployment_mode, horizon, symbol_id, exchange,
+                        score, probability, prediction, rank, artifact_uri, created_at, metadata_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    """,
+                    [
+                        prediction_log_id,
+                        prediction_date,
+                        model_id or row.get("model_id"),
+                        row.get("model_name"),
+                        row.get("model_version"),
+                        deployment_mode,
+                        int(horizon),
+                        row["symbol_id"],
+                        row.get("exchange", "NSE"),
+                        row.get("score"),
+                        row.get("probability"),
+                        row.get("prediction"),
+                        row.get("rank"),
+                        artifact_uri or row.get("artifact_uri"),
+                        self._json(row.get("metadata")),
+                    ],
+                )
+                inserted += 1
+        finally:
+            conn.close()
+        return inserted
+
+    def get_unscored_prediction_logs(
+        self,
+        horizon: int,
+        *,
+        deployment_mode: str,
+        model_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        try:
+            if model_id is None:
+                rows = conn.execute(
+                    """
+                    SELECT p.prediction_log_id, p.prediction_date, p.symbol_id, p.exchange,
+                           p.model_id, p.deployment_mode, p.horizon
+                    FROM prediction_log p
+                    LEFT JOIN shadow_eval s
+                      ON s.prediction_log_id = p.prediction_log_id
+                     AND s.horizon = p.horizon
+                    WHERE s.prediction_log_id IS NULL
+                      AND p.horizon = ?
+                      AND p.deployment_mode = ?
+                    ORDER BY p.prediction_date, p.symbol_id
+                    """,
+                    [int(horizon), deployment_mode],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT p.prediction_log_id, p.prediction_date, p.symbol_id, p.exchange,
+                           p.model_id, p.deployment_mode, p.horizon
+                    FROM prediction_log p
+                    LEFT JOIN shadow_eval s
+                      ON s.prediction_log_id = p.prediction_log_id
+                     AND s.horizon = p.horizon
+                    WHERE s.prediction_log_id IS NULL
+                      AND p.horizon = ?
+                      AND p.deployment_mode = ?
+                      AND p.model_id = ?
+                    ORDER BY p.prediction_date, p.symbol_id
+                    """,
+                    [int(horizon), deployment_mode, model_id],
+                ).fetchall()
+        finally:
+            conn.close()
+
+        return [
+            {
+                "prediction_log_id": row[0],
+                "prediction_date": str(row[1]),
+                "symbol_id": row[2],
+                "exchange": row[3],
+                "model_id": row[4],
+                "deployment_mode": row[5],
+                "horizon": int(row[6]),
+            }
+            for row in rows
+        ]
+
+    def replace_shadow_eval(self, rows: List[Dict[str, Any]]) -> int:
+        conn = self._connect()
+        try:
+            inserted = 0
+            for row in rows:
+                conn.execute(
+                    "DELETE FROM shadow_eval WHERE prediction_log_id = ? AND horizon = ?",
+                    [row["prediction_log_id"], int(row["horizon"])],
+                )
+                conn.execute(
+                    """
+                    INSERT INTO shadow_eval (
+                        shadow_eval_id, prediction_log_id, prediction_date, model_id, deployment_mode,
+                        horizon, symbol_id, exchange, future_date, realized_return, hit,
+                        created_at, metadata_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    """,
+                    [
+                        row.get("shadow_eval_id") or f"seval-{uuid.uuid4().hex[:12]}",
+                        row["prediction_log_id"],
+                        row["prediction_date"],
+                        row.get("model_id"),
+                        row["deployment_mode"],
+                        int(row["horizon"]),
+                        row["symbol_id"],
+                        row.get("exchange", "NSE"),
+                        row.get("future_date"),
+                        float(row["realized_return"]),
+                        bool(row["hit"]),
+                        self._json(row.get("metadata")),
+                    ],
+                )
+                inserted += 1
+        finally:
+            conn.close()
+        return inserted
+
+    def record_drift_metrics(self, rows: List[Dict[str, Any]]) -> int:
+        conn = self._connect()
+        try:
+            inserted = 0
+            for row in rows:
+                drift_metric_id = row.get("drift_metric_id") or f"drift-{uuid.uuid4().hex[:12]}"
+                conn.execute(
+                    """
+                    INSERT INTO drift_metric (
+                        drift_metric_id, measured_at, prediction_date, model_id, deployment_mode,
+                        horizon, metric_name, metric_value, threshold_value, status, metadata_json
+                    )
+                    VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        drift_metric_id,
+                        row.get("prediction_date"),
+                        row.get("model_id"),
+                        row.get("deployment_mode"),
+                        row.get("horizon"),
+                        row["metric_name"],
+                        float(row["metric_value"]),
+                        float(row["threshold_value"]) if row.get("threshold_value") is not None else None,
+                        row["status"],
+                        self._json(row.get("metadata")),
+                    ],
+                )
+                inserted += 1
+        finally:
+            conn.close()
+        return inserted
+
+    def get_latest_drift_metrics(
+        self,
+        *,
+        model_id: Optional[str] = None,
+        deployment_mode: Optional[str] = None,
+        horizon: Optional[int] = None,
+        prediction_date: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        clauses = []
+        params: List[Any] = []
+        if model_id is not None:
+            clauses.append("model_id = ?")
+            params.append(model_id)
+        if deployment_mode is not None:
+            clauses.append("deployment_mode = ?")
+            params.append(deployment_mode)
+        if horizon is not None:
+            clauses.append("horizon = ?")
+            params.append(int(horizon))
+        if prediction_date is not None:
+            clauses.append("prediction_date <= ?")
+            params.append(prediction_date)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT drift_metric_id, prediction_date, model_id, deployment_mode, horizon,
+                       metric_name, metric_value, threshold_value, status, metadata_json
+                FROM drift_metric
+                {where_sql}
+                ORDER BY measured_at DESC
+                """,
+                params,
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            {
+                "drift_metric_id": row[0],
+                "prediction_date": str(row[1]) if row[1] is not None else None,
+                "model_id": row[2],
+                "deployment_mode": row[3],
+                "horizon": row[4],
+                "metric_name": row[5],
+                "metric_value": row[6],
+                "threshold_value": row[7],
+                "status": row[8],
+                "metadata": self._loads(row[9]),
+            }
+            for row in rows
+        ]
+
+    def record_promotion_gate_results(self, model_id: str, rows: List[Dict[str, Any]]) -> int:
+        conn = self._connect()
+        try:
+            inserted = 0
+            for row in rows:
+                gate_result_id = row.get("gate_result_id") or f"gate-{uuid.uuid4().hex[:12]}"
+                conn.execute(
+                    """
+                    INSERT INTO promotion_gate_result (
+                        gate_result_id, model_id, evaluated_at, gate_name, status,
+                        metric_value, threshold_value, metadata_json
+                    )
+                    VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        gate_result_id,
+                        model_id,
+                        row["gate_name"],
+                        row["status"],
+                        float(row["metric_value"]) if row.get("metric_value") is not None else None,
+                        float(row["threshold_value"]) if row.get("threshold_value") is not None else None,
+                        self._json(row.get("metadata")),
+                    ],
+                )
+                inserted += 1
+        finally:
+            conn.close()
+        return inserted
+
+    def get_promotion_gate_results(self, model_id: str) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT gate_result_id, gate_name, status, metric_value, threshold_value, metadata_json
+                FROM promotion_gate_result
+                WHERE model_id = ?
+                ORDER BY evaluated_at, gate_name
+                """,
+                [model_id],
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            {
+                "gate_result_id": row[0],
+                "gate_name": row[1],
+                "status": row[2],
+                "metric_value": row[3],
+                "threshold_value": row[4],
+                "metadata": self._loads(row[5]),
+            }
+            for row in rows
+        ]
+
+    def get_prediction_monitor_summary(
+        self,
+        *,
+        model_id: str,
+        horizon: int,
+        deployment_mode: str = "shadow_ml",
+        lookback_days: int = 60,
+        as_of_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        as_of_sql = "COALESCE(?, CURRENT_DATE)"
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                f"""
+                WITH scoped_predictions AS (
+                    SELECT *
+                    FROM prediction_log
+                    WHERE model_id = ?
+                      AND horizon = ?
+                      AND deployment_mode = ?
+                      AND prediction_date BETWEEN ({as_of_sql} - INTERVAL {int(lookback_days)} DAY) AND {as_of_sql}
+                ),
+                ranked AS (
+                    SELECT
+                        p.prediction_log_id,
+                        p.prediction_date,
+                        p.rank,
+                        COUNT(*) OVER (PARTITION BY p.prediction_date) AS universe_count,
+                        s.realized_return,
+                        s.hit
+                    FROM scoped_predictions p
+                    LEFT JOIN shadow_eval s
+                      ON s.prediction_log_id = p.prediction_log_id
+                     AND s.horizon = p.horizon
+                ),
+                matured AS (
+                    SELECT *
+                    FROM ranked
+                    WHERE realized_return IS NOT NULL
+                ),
+                top_bucket AS (
+                    SELECT *
+                    FROM matured
+                    WHERE rank <= GREATEST(1, CAST(CEIL(universe_count * 0.1) AS INTEGER))
+                )
+                SELECT
+                    (SELECT COUNT(*) FROM scoped_predictions) AS prediction_rows,
+                    (SELECT COUNT(*) FROM matured) AS matured_rows,
+                    (SELECT AVG(hit::DOUBLE) FROM matured) AS overall_hit_rate,
+                    (SELECT AVG(realized_return) FROM matured) AS overall_avg_return,
+                    (SELECT COUNT(*) FROM top_bucket) AS top_decile_rows,
+                    (SELECT AVG(hit::DOUBLE) FROM top_bucket) AS top_decile_hit_rate,
+                    (SELECT AVG(realized_return) FROM top_bucket) AS top_decile_avg_return
+                """,
+                [model_id, int(horizon), deployment_mode, as_of_date, as_of_date],
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return {}
+        return {
+            "model_id": model_id,
+            "deployment_mode": deployment_mode,
+            "horizon": int(horizon),
+            "lookback_days": int(lookback_days),
+            "prediction_rows": int(row[0] or 0),
+            "matured_rows": int(row[1] or 0),
+            "overall_hit_rate": float(row[2]) if row[2] is not None else None,
+            "overall_avg_return": float(row[3]) if row[3] is not None else None,
+            "top_decile_rows": int(row[4] or 0),
+            "top_decile_hit_rate": float(row[5]) if row[5] is not None else None,
+            "top_decile_avg_return": float(row[6]) if row[6] is not None else None,
+        }
+
+    def get_prediction_score_values(
+        self,
+        *,
+        model_id: str,
+        horizon: int,
+        deployment_mode: str = "shadow_ml",
+        prediction_date: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> List[float]:
+        clauses = [
+            "model_id = ?",
+            "horizon = ?",
+            "deployment_mode = ?",
+        ]
+        params: List[Any] = [model_id, int(horizon), deployment_mode]
+        if prediction_date is not None:
+            clauses.append("prediction_date = ?")
+            params.append(prediction_date)
+        if from_date is not None:
+            clauses.append("prediction_date >= ?")
+            params.append(from_date)
+        if to_date is not None:
+            clauses.append("prediction_date <= ?")
+            params.append(to_date)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT COALESCE(probability, score)
+                FROM prediction_log
+                WHERE {' AND '.join(clauses)}
+                  AND COALESCE(probability, score) IS NOT NULL
+                ORDER BY prediction_date, rank
+                """,
+                params,
+            ).fetchall()
+        finally:
+            conn.close()
+        return [float(row[0]) for row in rows]
 
     def get_latest_shadow_prediction_date(self) -> Optional[str]:
         conn = self._connect()

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from analytics.alpha.drift import score_drift_rows
+from analytics.alpha.policy import evaluate_promotion_candidate
 from analytics.lightgbm_engine import LightGBMAlphaEngine
 from analytics.registry import RegistryStore
 from analytics.shadow_monitor import (
@@ -89,6 +91,10 @@ def main() -> None:
 
     registry = RegistryStore(project_root)
     inserted_predictions = 0
+    inserted_prediction_logs = 0
+    drift_metrics_recorded = 0
+    gate_results_recorded = 0
+    promotion_status: dict[int, str] = {}
     for prediction_day, frame in sorted(prediction_frames.items()):
         overlay_df = build_shadow_overlay(
             frame,
@@ -103,6 +109,12 @@ def main() -> None:
             "technical_weight": args.technical_weight,
             "ml_weight": args.ml_weight,
             "exchange": args.exchange,
+            "model_5d_id": model_5d_meta.get("model_id"),
+            "model_20d_id": model_20d_meta.get("model_id"),
+            "model_5d_name": model_5d_meta.get("model_name"),
+            "model_20d_name": model_20d_meta.get("model_name"),
+            "model_5d_version": model_5d_meta.get("model_version"),
+            "model_20d_version": model_20d_meta.get("model_version"),
             "model_5d_path": model_5d_meta["_model_path"],
             "model_20d_path": model_20d_meta["_model_path"],
             "model_5d_metadata": model_5d_meta["_metadata_path"],
@@ -120,26 +132,153 @@ def main() -> None:
             prediction_rows,
             artifact_uri=artifact_uri,
         )
+        for horizon, model_meta, probability_col, rank_col in (
+            (5, model_5d_meta, "ml_5d_prob", "ml_5d_rank"),
+            (20, model_20d_meta, "ml_20d_prob", "ml_20d_rank"),
+        ):
+            prediction_log_rows = []
+            for row in overlay_df.to_dict(orient="records"):
+                probability = row.get(probability_col)
+                prediction_log_rows.append(
+                    {
+                        "symbol_id": row["symbol_id"],
+                        "exchange": row.get("exchange", args.exchange),
+                        "model_id": model_meta.get("model_id"),
+                        "model_name": model_meta.get("model_name"),
+                        "model_version": model_meta.get("model_version"),
+                        "score": probability,
+                        "probability": probability,
+                        "prediction": int((probability or 0.0) >= 0.5),
+                        "rank": row.get(rank_col),
+                        "artifact_uri": artifact_uri,
+                        "metadata": {
+                            "technical_rank": row.get("technical_rank"),
+                            "technical_score": row.get("technical_score"),
+                            "blend_score": row.get(f"blend_{horizon}d_score"),
+                            "blend_rank": row.get(f"blend_{horizon}d_rank"),
+                            "top_decile": row.get(f"ml_{horizon}d_top_decile"),
+                        },
+                    }
+                )
+            inserted_prediction_logs += registry.replace_prediction_log(
+                prediction_day.date().isoformat(),
+                prediction_log_rows,
+                deployment_mode="shadow_ml",
+                horizon=horizon,
+                model_id=model_meta.get("model_id"),
+                artifact_uri=artifact_uri,
+            )
+            model_id = model_meta.get("model_id")
+            if model_id:
+                current_scores = [
+                    float(value)
+                    for value in overlay_df[probability_col].dropna().tolist()
+                ]
+                prior_end = (prediction_day - pd.Timedelta(days=1)).date().isoformat()
+                prior_start = (prediction_day - pd.Timedelta(days=60)).date().isoformat()
+                reference_scores = registry.get_prediction_score_values(
+                    model_id=model_id,
+                    horizon=horizon,
+                    deployment_mode="shadow_ml",
+                    from_date=prior_start,
+                    to_date=prior_end,
+                )
+                drift_rows = score_drift_rows(
+                    model_id=model_id,
+                    deployment_mode="shadow_ml",
+                    horizon=horizon,
+                    prediction_date=prediction_day.date().isoformat(),
+                    current_scores=current_scores,
+                    reference_scores=reference_scores,
+                )
+                if drift_rows:
+                    drift_metrics_recorded += registry.record_drift_metrics(drift_rows)
 
     matured_counts: dict[int, int] = {}
+    generic_matured_counts: dict[int, int] = {}
     for horizon in (5, 20):
         pending = registry.get_unscored_shadow_predictions(horizon)
         if not pending:
             matured_counts[horizon] = 0
+        else:
+            from_date = min(row["prediction_date"] for row in pending)
+            price_history = load_operational_price_history(
+                ohlcv_db_path=operational_paths.ohlcv_db_path,
+                exchange=args.exchange,
+                from_date=from_date,
+            )
+            outcome_rows = compute_matured_outcomes(price_history, pending, horizon=horizon)
+            matured_counts[horizon] = registry.replace_shadow_outcomes(outcome_rows)
+
+        generic_pending = registry.get_unscored_prediction_logs(
+            horizon,
+            deployment_mode="shadow_ml",
+        )
+        if not generic_pending:
+            generic_matured_counts[horizon] = 0
             continue
-        from_date = min(row["prediction_date"] for row in pending)
+        generic_from_date = min(row["prediction_date"] for row in generic_pending)
         price_history = load_operational_price_history(
             ohlcv_db_path=operational_paths.ohlcv_db_path,
             exchange=args.exchange,
-            from_date=from_date,
+            from_date=generic_from_date,
         )
-        outcome_rows = compute_matured_outcomes(price_history, pending, horizon=horizon)
-        matured_counts[horizon] = registry.replace_shadow_outcomes(outcome_rows)
+        generic_inputs = [
+            {
+                "prediction_id": row["prediction_log_id"],
+                "prediction_date": row["prediction_date"],
+                "symbol_id": row["symbol_id"],
+                "exchange": row["exchange"],
+            }
+            for row in generic_pending
+        ]
+        pending_by_id = {row["prediction_log_id"]: row for row in generic_pending}
+        generic_outcomes = compute_matured_outcomes(price_history, generic_inputs, horizon=horizon)
+        generic_rows = [
+            {
+                "prediction_log_id": row["prediction_id"],
+                "prediction_date": row["prediction_date"],
+                "model_id": pending_by_id.get(row["prediction_id"], {}).get("model_id"),
+                "symbol_id": row["symbol_id"],
+                "exchange": row["exchange"],
+                "deployment_mode": "shadow_ml",
+                "horizon": horizon,
+                "future_date": row["future_date"],
+                "realized_return": row["realized_return"],
+                "hit": row["hit"],
+            }
+            for row in generic_outcomes
+        ]
+        generic_matured_counts[horizon] = registry.replace_shadow_eval(generic_rows)
+
+    for horizon, model_meta in ((5, model_5d_meta), (20, model_20d_meta)):
+        model_id = model_meta.get("model_id")
+        if not model_id:
+            promotion_status[horizon] = "skipped_missing_model_id"
+            continue
+        policy_result = evaluate_promotion_candidate(
+            registry=registry,
+            model_id=model_id,
+            horizon=horizon,
+            deployment_mode="shadow_ml",
+            lookback_days=60,
+            as_of_date=prediction_ts.date().isoformat(),
+        )
+        gate_results_recorded += registry.record_promotion_gate_results(
+            model_id,
+            policy_result["gate_results"],
+        )
+        promotion_status[horizon] = policy_result["overall_status"]
 
     summary = {
         "prediction_date": prediction_ts.date().isoformat(),
         "prediction_rows": inserted_predictions,
+        "prediction_log_rows": inserted_prediction_logs,
+        "drift_metrics_recorded": drift_metrics_recorded,
+        "promotion_gate_results_recorded": gate_results_recorded,
+        "promotion_status": promotion_status,
         "matured_outcomes": matured_counts,
+        "shadow_eval_rows": generic_matured_counts,
         "overlay_uri": str(latest_overlay_path),
         "dated_overlay_uri": str(dated_overlay_path),
         "backfill_days": int(args.backfill_days),

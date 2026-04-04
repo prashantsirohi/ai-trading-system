@@ -15,11 +15,23 @@ from .control_center import (
     get_run_details,
     get_task_logs,
     launch_streamlit_dashboard_task,
+    launch_ml_workbench_task,
     list_project_processes,
     terminate_project_process,
     launch_pipeline_task,
     launch_shadow_monitor_task,
+    launch_prepare_dataset_task,
+    launch_train_model_task,
     list_operator_tasks,
+)
+from .ml_workbench import (
+    approve_workbench_model,
+    deploy_workbench_model,
+    rollback_workbench_deployment,
+    load_workbench_datasets,
+    load_workbench_models,
+    load_workbench_deployments,
+    load_model_workbench_detail,
 )
 
 __all__ = [
@@ -35,9 +47,19 @@ __all__ = [
     "get_run_details",
     "get_task_logs",
     "launch_streamlit_dashboard_task",
+    "launch_ml_workbench_task",
     "list_project_processes",
     "terminate_project_process",
     "launch_pipeline_task",
     "launch_shadow_monitor_task",
+    "launch_prepare_dataset_task",
+    "launch_train_model_task",
     "list_operator_tasks",
+    "approve_workbench_model",
+    "deploy_workbench_model",
+    "rollback_workbench_deployment",
+    "load_workbench_datasets",
+    "load_workbench_models",
+    "load_workbench_deployments",
+    "load_model_workbench_detail",
 ]

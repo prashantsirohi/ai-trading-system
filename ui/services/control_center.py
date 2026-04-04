@@ -69,6 +69,70 @@ def _create_task(task_type: str, label: str, metadata: Optional[Dict[str, Any]] 
     return task_id
 
 
+def _launch_subprocess_task(
+    *,
+    project_root: str | Path,
+    task_type: str,
+    label: str,
+    command: List[str],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Launch a Python subprocess in the background and stream logs into the task log."""
+    root = Path(project_root)
+    task_id = _create_task(task_type, label, metadata)
+
+    def _runner() -> None:
+        try:
+            _append_task_log(task_id, f"Running command: {' '.join(command)}")
+            proc = subprocess.Popen(
+                command,
+                cwd=root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                start_new_session=True,
+            )
+            _set_task(
+                task_id,
+                status="running",
+                metadata={
+                    **(_TASKS.get(task_id, {}).get("metadata") or {}),
+                    "pid": int(proc.pid),
+                    "command": " ".join(command),
+                },
+                result={"pid": int(proc.pid)},
+            )
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    message = line.rstrip()
+                    if message:
+                        _append_task_log(task_id, message)
+
+            exit_code = proc.wait()
+            if exit_code == 0:
+                _set_task(task_id, status="completed", finished_at=_now())
+                _append_task_log(task_id, f"Task completed with exit_code={exit_code}")
+            else:
+                _set_task(task_id, status="failed", finished_at=_now(), error=f"Process exited with code {exit_code}")
+                _append_task_log(task_id, f"Task failed with exit_code={exit_code}")
+        except Exception as exc:
+            _append_task_log(task_id, f"Task failed: {exc.__class__.__name__}: {exc}")
+            _set_task(
+                task_id,
+                status="failed",
+                finished_at=_now(),
+                error=f"{exc.__class__.__name__}: {exc}",
+                metadata={
+                    **(_TASKS.get(task_id, {}).get("metadata") or {}),
+                    "traceback": traceback.format_exc(),
+                },
+            )
+
+    threading.Thread(target=_runner, daemon=True).start()
+    return task_id
+
+
 def launch_pipeline_task(
     *,
     project_root: str | Path,
@@ -386,6 +450,133 @@ def launch_streamlit_dashboard_task(
     return task_id
 
 
+def launch_ml_workbench_task(
+    *,
+    project_root: str | Path,
+    port: int = 8503,
+) -> str:
+    """Launch the standalone ML workbench Streamlit app as a background process."""
+    return _launch_subprocess_task(
+        project_root=project_root,
+        task_type="ml_workbench",
+        label=f"Launch ML Workbench ({port})",
+        command=[
+            sys.executable,
+            "-m",
+            "streamlit",
+            "run",
+            "ui/ml/app.py",
+            "--server.port",
+            str(int(port)),
+            "--server.headless",
+            "true",
+        ],
+        metadata={"port": int(port), "url": f"http://localhost:{int(port)}"},
+    )
+
+
+def launch_prepare_dataset_task(
+    *,
+    project_root: str | Path,
+    label: str,
+    engine: str,
+    dataset_name: str,
+    from_date: str,
+    to_date: str,
+    horizon: int,
+    validation_fraction: float = 0.2,
+) -> str:
+    """Run dataset preparation in the background for the ML workbench."""
+    return _launch_subprocess_task(
+        project_root=project_root,
+        task_type="ml_prepare_dataset",
+        label=label,
+        command=[
+            sys.executable,
+            "-m",
+            "research.prepare_training_dataset",
+            "--engine",
+            engine,
+            "--dataset-name",
+            dataset_name,
+            "--from-date",
+            from_date,
+            "--to-date",
+            to_date,
+            "--horizon",
+            str(int(horizon)),
+            "--validation-fraction",
+            str(float(validation_fraction)),
+        ],
+        metadata={
+            "engine": engine,
+            "dataset_name": dataset_name,
+            "from_date": from_date,
+            "to_date": to_date,
+            "horizon": int(horizon),
+            "validation_fraction": float(validation_fraction),
+        },
+    )
+
+
+def launch_train_model_task(
+    *,
+    project_root: str | Path,
+    label: str,
+    engine: str,
+    model_name: str,
+    model_version: str,
+    horizon: int,
+    from_date: str,
+    to_date: str,
+    progress_interval: int = 25,
+    min_train_years: int = 5,
+    dataset_uri: Optional[str] = None,
+) -> str:
+    """Run research training in the background for the ML workbench."""
+    command = [
+        sys.executable,
+        "-m",
+        "research.train_pipeline",
+        "--engine",
+        engine,
+        "--model-name",
+        model_name,
+        "--model-version",
+        model_version,
+        "--horizon",
+        str(int(horizon)),
+        "--from-date",
+        from_date,
+        "--to-date",
+        to_date,
+        "--progress-interval",
+        str(int(progress_interval)),
+        "--min-train-years",
+        str(int(min_train_years)),
+    ]
+    if dataset_uri:
+        command.extend(["--dataset-uri", dataset_uri])
+
+    return _launch_subprocess_task(
+        project_root=project_root,
+        task_type="ml_train_model",
+        label=label,
+        command=command,
+        metadata={
+            "engine": engine,
+            "model_name": model_name,
+            "model_version": model_version,
+            "horizon": int(horizon),
+            "from_date": from_date,
+            "to_date": to_date,
+            "progress_interval": int(progress_interval),
+            "min_train_years": int(min_train_years),
+            "dataset_uri": dataset_uri,
+        },
+    )
+
+
 def list_project_processes(project_root: str | Path) -> List[Dict[str, Any]]:
     """List running OS processes that appear related to this project."""
     root = str(Path(project_root).resolve())
@@ -420,6 +611,8 @@ def list_project_processes(project_root: str | Path) -> List[Dict[str, Any]]:
         kind = "other"
         if "streamlit" in command and "ui/research/app.py" in command:
             kind = "streamlit_research"
+        elif "streamlit" in command and "ui/ml/app.py" in command:
+            kind = "streamlit_ml"
         elif "ui.execution.app" in command:
             kind = "nicegui_execution"
         elif "run.orchestrator" in command:

@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from analytics.alpha.dataset_builder import AlphaDatasetBuilder
+from analytics.registry import RegistryStore
 from analytics.training_dataset import TrainingDatasetBuilder
 
 
@@ -51,3 +53,28 @@ def test_prepare_training_dataset_writes_parquet_and_metadata(tmp_path: Path) ->
     assert metadata["dataset_ref"] == "research:training:sample_lightgbm"
     assert metadata["feature_columns"] == ["rsi", "adx_value"]
     assert metadata["target_column"] == "target_5d"
+    assert metadata["feature_schema_version"] == "v1"
+    assert metadata["target_version"] == "v1"
+
+
+def test_prepare_training_dataset_can_register_dataset(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+    builder = AlphaDatasetBuilder(project_root=tmp_path, data_domain="research", registry=registry)
+    prepared = builder.prepare(
+        engine=StubEngine(),
+        dataset_name="registered_lightgbm",
+        from_date="2024-01-01",
+        to_date="2024-01-12",
+        horizon=5,
+        validation_fraction=0.25,
+        register_dataset=True,
+    )
+
+    _, metadata = AlphaDatasetBuilder.load_prepared_dataset(prepared.dataset_path)
+    dataset_row = registry.get_dataset(metadata["dataset_ref"])
+
+    assert metadata["dataset_id"]
+    assert dataset_row is not None
+    assert dataset_row["dataset_uri"] == str(prepared.dataset_path)
+    assert dataset_row["feature_schema_version"] == "v1"
+    assert dataset_row["target_column"] == "target_5d"

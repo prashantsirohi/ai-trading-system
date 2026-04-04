@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from analytics.alpha.dataset_builder import AlphaDatasetBuilder
 from analytics.lightgbm_engine import LightGBMAlphaEngine
 from analytics.ml_engine import AlphaEngine
-from analytics.training_dataset import TrainingDatasetBuilder
 from utils.data_domains import ensure_domain_layout, research_static_end_date
 from utils.logger import log_context, logger
 
@@ -42,7 +42,7 @@ def main() -> None:
 
     with log_context(run_id="research-prepare-dataset", stage_name="prepare_dataset"):
         engine = _build_engine(args.engine, paths)
-        builder = TrainingDatasetBuilder(project_root=project_root, data_domain="research")
+        builder = AlphaDatasetBuilder(project_root=project_root, data_domain="research")
         prepared = builder.prepare(
             engine=engine,
             dataset_name=args.dataset_name,
@@ -50,6 +50,7 @@ def main() -> None:
             to_date=to_date,
             horizon=args.horizon,
             validation_fraction=args.validation_fraction,
+            register_dataset=True,
         )
         logger.info(
             "Prepared dataset complete ref=%s rows=%s symbols=%s",
