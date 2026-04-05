@@ -169,6 +169,7 @@ def train_and_register_model(
     model_version: str,
     progress_interval: int = 25,
     min_train_years: int = 5,
+    extra_metadata: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Train a model, run standard evaluation, and register artifacts."""
     model, metadata = engine.train(
@@ -220,6 +221,7 @@ def train_and_register_model(
             "evaluation": evaluation,
             "walkforward_summary": walkforward.get("summary", {}),
             "horizon": horizon,
+            **(extra_metadata or {}),
         },
     )
 
@@ -240,6 +242,7 @@ def train_and_register_model(
         "evaluation": evaluation,
         "walkforward": walkforward,
         **metadata,
+        **(extra_metadata or {}),
     }
     metadata_path.write_text(json.dumps(metadata_payload, indent=2), encoding="utf-8")
 

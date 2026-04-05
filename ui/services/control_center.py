@@ -32,12 +32,29 @@ def _now() -> str:
 
 def list_operator_tasks() -> List[Dict[str, Any]]:
     with _TASK_LOCK:
-        return list(sorted(_TASKS.values(), key=lambda item: item["started_at"], reverse=True))
+        rows = []
+        for task_id, payload in _TASKS.items():
+            row = {
+                "task_id": task_id,
+                "task_type": "",
+                "label": "",
+                "status": "unknown",
+                "started_at": "",
+                "finished_at": None,
+                "result": None,
+                "error": None,
+                "logs": [],
+                "metadata": {},
+            }
+            row.update(payload or {})
+            row["task_id"] = row.get("task_id") or task_id
+            rows.append(row)
+        return list(sorted(rows, key=lambda item: item.get("started_at", ""), reverse=True))
 
 
-def _set_task(task_id: str, **updates: Any) -> None:
+def _set_task(task_key: str, **updates: Any) -> None:
     with _TASK_LOCK:
-        task = _TASKS.setdefault(task_id, {})
+        task = _TASKS.setdefault(task_key, {})
         task.update(updates)
 
 
@@ -140,10 +157,15 @@ def launch_pipeline_task(
     stage_names: List[str],
     params: Optional[Dict[str, Any]] = None,
     run_id: Optional[str] = None,
+    run_date: Optional[str] = None,
 ) -> str:
     """Run a pipeline flow in the background and track it for the UI."""
     root = Path(project_root)
-    task_id = _create_task("pipeline", label, {"stages": list(stage_names), "params": params or {}, "run_id": run_id})
+    task_id = _create_task(
+        "pipeline",
+        label,
+        {"stages": list(stage_names), "params": params or {}, "run_id": run_id, "run_date": run_date},
+    )
 
     def _runner() -> None:
         try:
@@ -154,6 +176,7 @@ def launch_pipeline_task(
             result = orchestrator.run_pipeline(
                 run_id=resolved_run_id,
                 stage_names=stage_names,
+                run_date=run_date,
                 params=params or {},
             )
             for stage in result.get("stages", []):
@@ -573,6 +596,74 @@ def launch_train_model_task(
             "progress_interval": int(progress_interval),
             "min_train_years": int(min_train_years),
             "dataset_uri": dataset_uri,
+        },
+    )
+
+
+def launch_recipe_run_task(
+    *,
+    project_root: str | Path,
+    label: str,
+    recipe: str,
+    auto_approve: bool = False,
+    auto_deploy: bool = False,
+) -> str:
+    """Run a simplified research recipe in the background for the ML workbench."""
+    command = [
+        sys.executable,
+        "-m",
+        "research.run_recipe",
+        "--recipe",
+        recipe,
+    ]
+    if auto_approve:
+        command.append("--auto-approve")
+    if auto_deploy:
+        command.append("--auto-deploy")
+
+    return _launch_subprocess_task(
+        project_root=project_root,
+        task_type="ml_recipe_run",
+        label=label,
+        command=command,
+        metadata={
+            "recipe": recipe,
+            "auto_approve": bool(auto_approve),
+            "auto_deploy": bool(auto_deploy),
+        },
+    )
+
+
+def launch_recipe_bundle_task(
+    *,
+    project_root: str | Path,
+    label: str,
+    bundle: str,
+    auto_approve: bool = False,
+    auto_deploy: bool = False,
+) -> str:
+    """Run a bundled research preset in the background for the ML workbench."""
+    command = [
+        sys.executable,
+        "-m",
+        "research.run_recipe",
+        "--bundle",
+        bundle,
+    ]
+    if auto_approve:
+        command.append("--auto-approve")
+    if auto_deploy:
+        command.append("--auto-deploy")
+
+    return _launch_subprocess_task(
+        project_root=project_root,
+        task_type="ml_recipe_bundle",
+        label=label,
+        command=command,
+        metadata={
+            "bundle": bundle,
+            "auto_approve": bool(auto_approve),
+            "auto_deploy": bool(auto_deploy),
         },
     )
 

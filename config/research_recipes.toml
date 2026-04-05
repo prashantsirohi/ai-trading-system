@@ -1,0 +1,67 @@
+[recipes.breakout_5d]
+description = "Short swing breakout recipe focused on 5-day follow-through validation."
+engine = "lightgbm"
+horizon = 5
+from_date = "2018-01-01"
+to_date = "2025-12-31"
+dataset_name = "breakout_sector_h5"
+model_name = "breakout_sector_alpha"
+model_version = "h5_v1"
+validation_fraction = 0.20
+progress_interval = 25
+min_train_years = 5
+shadow_environment = "operational_shadow_5d"
+auto_approve = false
+auto_deploy = false
+
+[recipes.breakout_5d.validation]
+min_validation_auc = 0.55
+min_walkforward_auc = 0.55
+min_precision_at_10pct = 0.35
+
+[recipes.breakout_20d]
+description = "Positional breakout recipe focused on 20-day continuation validation."
+engine = "lightgbm"
+horizon = 20
+from_date = "2018-01-01"
+to_date = "2025-12-31"
+dataset_name = "breakout_sector_h20"
+model_name = "breakout_sector_alpha"
+model_version = "h20_v1"
+validation_fraction = 0.20
+progress_interval = 25
+min_train_years = 5
+shadow_environment = "operational_shadow_20d"
+auto_approve = false
+auto_deploy = false
+
+[recipes.breakout_20d.validation]
+min_validation_auc = 0.55
+min_walkforward_auc = 0.55
+min_precision_at_10pct = 0.35
+
+[recipes.sector_rotation_20d]
+description = "Sector leadership recipe for 20-day continuation research."
+engine = "lightgbm"
+horizon = 20
+from_date = "2018-01-01"
+to_date = "2025-12-31"
+dataset_name = "sector_rotation_h20"
+model_name = "sector_rotation_alpha"
+model_version = "h20_v1"
+validation_fraction = 0.20
+progress_interval = 25
+min_train_years = 5
+shadow_environment = "operational_shadow_20d"
+auto_approve = false
+auto_deploy = false
+
+[recipes.sector_rotation_20d.validation]
+min_validation_auc = 0.55
+min_walkforward_auc = 0.55
+min_precision_at_10pct = 0.35
+
+[bundles.daily_research]
+description = "Run the default 5D and 20D breakout research set and rank the best candidate."
+recipes = ["breakout_5d", "breakout_20d"]
+selection_metric = "walkforward_avg_validation_auc"

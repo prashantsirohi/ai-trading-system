@@ -12,9 +12,10 @@ import duckdb
 import pandas as pd
 import streamlit as st
 from core.paths import get_domain_paths
+from execution import ExecutionStore
 
 
-STAGE_NAMES = ("ingest", "features", "rank", "publish")
+STAGE_NAMES = ("ingest", "features", "rank", "execute", "publish")
 
 
 def _safe_sql_literal(value: str) -> str:
@@ -229,6 +230,7 @@ def load_ops_health_snapshot(
         "ingest": 36.0,
         "features": 36.0,
         "rank": 24.0,
+        "execute": 24.0,
         "publish": 48.0,
     }
     db_path = Path(project_root) / "data" / "control_plane.duckdb"
@@ -251,7 +253,7 @@ def load_ops_health_snapshot(
                     ) AS rn
                 FROM pipeline_stage_run
                 WHERE status = 'completed'
-                  AND stage_name IN ('ingest', 'features', 'rank', 'publish')
+                  AND stage_name IN ('ingest', 'features', 'rank', 'execute', 'publish')
             )
             SELECT stage_name, run_id, started_at, ended_at
             FROM latest
@@ -325,4 +327,136 @@ def load_ops_health_snapshot(
         "stale_stages": stale_stages,
         "dq_summary": dq_summary,
         "generated_at": now_utc.isoformat(),
+    }
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def load_trade_report(project_root: str) -> Dict[str, object]:
+    """Build a paper-trading P&L snapshot for the unified dashboard."""
+    store = ExecutionStore(project_root)
+    fills = pd.DataFrame(store.list_fills())
+    if fills.empty:
+        return {
+            "summary": {
+                "open_positions": 0,
+                "closed_trade_count": 0,
+                "win_rate": 0.0,
+                "realized_pnl": 0.0,
+                "unrealized_pnl": 0.0,
+                "total_pnl": 0.0,
+            },
+            "open_positions": pd.DataFrame(),
+            "closed_trades": pd.DataFrame(),
+            "fills": pd.DataFrame(),
+        }
+
+    fills["filled_at"] = pd.to_datetime(fills["filled_at"], errors="coerce")
+    fills = fills.sort_values(["filled_at", "fill_id"]).reset_index(drop=True)
+    latest_prices = _load_latest_prices(project_root)
+
+    open_rows: list[dict] = []
+    closed_rows: list[dict] = []
+    for (symbol_id, exchange), group in fills.groupby(["symbol_id", "exchange"], sort=True):
+        quantity = 0
+        avg_cost = 0.0
+        for row in group.to_dict(orient="records"):
+            fill_qty = int(row.get("quantity") or 0)
+            fill_price = float(row.get("price") or 0.0)
+            side = str(row.get("side", "BUY")).upper()
+            filled_at = row.get("filled_at")
+            if side == "BUY":
+                new_qty = quantity + fill_qty
+                if new_qty > 0:
+                    avg_cost = ((quantity * avg_cost) + (fill_qty * fill_price)) / new_qty
+                quantity = new_qty
+            else:
+                closed_qty = min(quantity, fill_qty)
+                realized_pnl = (fill_price - avg_cost) * closed_qty
+                closed_rows.append(
+                    {
+                        "symbol_id": symbol_id,
+                        "exchange": exchange,
+                        "closed_quantity": closed_qty,
+                        "entry_avg_price": round(avg_cost, 4),
+                        "exit_price": round(fill_price, 4),
+                        "realized_pnl": round(realized_pnl, 2),
+                        "filled_at": filled_at.isoformat() if pd.notna(filled_at) else None,
+                        "status": "win" if realized_pnl > 0 else "loss" if realized_pnl < 0 else "flat",
+                    }
+                )
+                quantity = max(0, quantity - fill_qty)
+                if quantity == 0:
+                    avg_cost = 0.0
+
+        if quantity > 0:
+            current_price = latest_prices.get((str(symbol_id), str(exchange)))
+            unrealized = ((current_price - avg_cost) * quantity) if current_price is not None else None
+            market_value = (current_price * quantity) if current_price is not None else None
+            open_rows.append(
+                {
+                    "symbol_id": symbol_id,
+                    "exchange": exchange,
+                    "quantity": int(quantity),
+                    "avg_entry_price": round(avg_cost, 4),
+                    "current_price": round(float(current_price), 4) if current_price is not None else None,
+                    "market_value": round(float(market_value), 2) if market_value is not None else None,
+                    "unrealized_pnl": round(float(unrealized), 2) if unrealized is not None else None,
+                    "return_pct": round(((current_price / avg_cost) - 1) * 100, 2) if current_price is not None and avg_cost else None,
+                }
+            )
+
+    open_df = pd.DataFrame(open_rows).sort_values("unrealized_pnl", ascending=False) if open_rows else pd.DataFrame()
+    closed_df = pd.DataFrame(closed_rows).sort_values("filled_at", ascending=False) if closed_rows else pd.DataFrame()
+    realized_pnl = float(closed_df["realized_pnl"].sum()) if not closed_df.empty else 0.0
+    unrealized_pnl = float(open_df["unrealized_pnl"].fillna(0.0).sum()) if not open_df.empty else 0.0
+    win_rate = (
+        float((closed_df["realized_pnl"] > 0).sum()) / float(len(closed_df))
+        if not closed_df.empty
+        else 0.0
+    )
+    return {
+        "summary": {
+            "open_positions": int(len(open_df)),
+            "closed_trade_count": int(len(closed_df)),
+            "win_rate": round(win_rate, 4),
+            "realized_pnl": round(realized_pnl, 2),
+            "unrealized_pnl": round(unrealized_pnl, 2),
+            "total_pnl": round(realized_pnl + unrealized_pnl, 2),
+        },
+        "open_positions": open_df,
+        "closed_trades": closed_df,
+        "fills": fills,
+    }
+
+
+def _load_latest_prices(project_root: str) -> dict[tuple[str, str], float]:
+    paths = get_domain_paths(project_root, "operational")
+    db_path = Path(paths.ohlcv_db_path)
+    if not db_path.exists():
+        return {}
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT symbol_id, exchange, close
+            FROM (
+                SELECT
+                    symbol_id,
+                    exchange,
+                    close,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY symbol_id, exchange
+                        ORDER BY timestamp DESC
+                    ) AS rn
+                FROM _catalog
+            )
+            WHERE rn = 1
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        (str(symbol_id), str(exchange)): float(close)
+        for symbol_id, exchange, close in rows
+        if close is not None
     }

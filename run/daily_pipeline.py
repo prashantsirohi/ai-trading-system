@@ -2,11 +2,12 @@
 Daily Pipeline wrapper.
 
 This keeps the historical entrypoint while delegating execution to the
-resilient 4-stage orchestrator:
+resilient pipeline orchestrator:
 1. ingest
 2. features
 3. rank
-4. publish
+4. execute
+5. publish
 
 Usage:
     python run/daily_pipeline.py
@@ -160,7 +161,7 @@ def main(
     force: bool = False,
     local_publish: bool = False,
     smoke: bool = False,
-    stages: str = "ingest,features,rank,publish",
+    stages: str = "ingest,features,rank,execute,publish",
     canary: bool = False,
     symbol_limit: int | None = None,
     skip_preflight: bool = False,
@@ -197,7 +198,7 @@ def main(
     result = orchestrator.run_pipeline(
         stage_names=(
             ["ingest", "features", "rank"]
-            if canary and stages == "ingest,features,rank,publish"
+            if canary and stages == "ingest,features,rank,execute,publish"
             else [stage.strip() for stage in stages.split(",") if stage.strip()]
         ),
         run_date=today,
@@ -244,7 +245,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--stages",
-        default="ingest,features,rank,publish",
+        default="ingest,features,rank,execute,publish",
         help="Comma-separated stage list. Example: publish",
     )
     parser.add_argument(

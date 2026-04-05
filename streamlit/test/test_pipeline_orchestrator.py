@@ -94,10 +94,10 @@ def test_stage_boundaries_and_registry_rows(tmp_path: Path) -> None:
     result = orchestrator.run_pipeline(run_date="2026-03-28", params={"preflight": False})
 
     assert result["status"] == "completed"
-    assert [stage["stage_name"] for stage in result["stages"]] == ["ingest", "features", "rank", "publish"]
+    assert [stage["stage_name"] for stage in result["stages"]] == ["ingest", "features", "rank", "execute", "publish"]
     assert registry.count_rows("pipeline_run") == 1
-    assert registry.count_rows("pipeline_stage_run") == 4
-    assert registry.count_rows("pipeline_artifact") >= 4
+    assert registry.count_rows("pipeline_stage_run") == 5
+    assert registry.count_rows("pipeline_artifact") >= 5
     assert registry.count_rows("dq_result") >= 8
     conn = duckdb.connect(str(registry.db_path))
     try:

@@ -42,6 +42,7 @@ from ui.research.data_access import (
     load_latest_rank_frames,
     load_ops_health_snapshot,
     load_rank_history_for_symbols,
+    load_trade_report,
 )
 from ui.research.dashboard_helpers import (
     build_rank_sparkline_payload,
@@ -2315,6 +2316,49 @@ def main():
 
     with tab_portfolio:
         st.subheader("💼 Portfolio Builder")
+
+        trade_report = load_trade_report(PROJECT_ROOT)
+        trade_summary = trade_report.get("summary", {}) or {}
+
+        st.markdown("**📒 Executed Trades & P&L**")
+        trade_cols = st.columns(6)
+        with trade_cols[0]:
+            st.metric("Open Positions", str(trade_summary.get("open_positions", 0)))
+        with trade_cols[1]:
+            st.metric("Closed Trades", str(trade_summary.get("closed_trade_count", 0)))
+        with trade_cols[2]:
+            st.metric("Win Rate", f"{float(trade_summary.get('win_rate', 0.0)) * 100:.2f}%")
+        with trade_cols[3]:
+            st.metric("Realized P&L", f"{float(trade_summary.get('realized_pnl', 0.0)):.2f}")
+        with trade_cols[4]:
+            st.metric("Unrealized P&L", f"{float(trade_summary.get('unrealized_pnl', 0.0)):.2f}")
+        with trade_cols[5]:
+            st.metric("Total P&L", f"{float(trade_summary.get('total_pnl', 0.0)):.2f}")
+
+        trade_left, trade_right = st.columns(2)
+        with trade_left:
+            st.markdown("**Open Positions**")
+            open_positions_df = trade_report.get("open_positions", pd.DataFrame())
+            if open_positions_df is None or open_positions_df.empty:
+                st.info("No open paper positions recorded yet.")
+            else:
+                st.dataframe(open_positions_df, use_container_width=True, hide_index=True, height=260)
+        with trade_right:
+            st.markdown("**Closed Trades**")
+            closed_trades_df = trade_report.get("closed_trades", pd.DataFrame())
+            if closed_trades_df is None or closed_trades_df.empty:
+                st.info("No closed trades recorded yet.")
+            else:
+                st.dataframe(closed_trades_df, use_container_width=True, hide_index=True, height=260)
+
+        with st.expander("Trade Ledger", expanded=False):
+            fills_df = trade_report.get("fills", pd.DataFrame())
+            if fills_df is None or fills_df.empty:
+                st.info("No execution fills recorded yet.")
+            else:
+                st.dataframe(fills_df, use_container_width=True, hide_index=True, height=260)
+
+        st.divider()
 
         if st.session_state.rank_df is None or st.session_state.rank_df.empty:
             st.info("Run ranking first in the Ranking tab.")

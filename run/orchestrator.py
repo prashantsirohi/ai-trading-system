@@ -16,16 +16,17 @@ from core.logging import log_context, logger
 from core.paths import ensure_domain_layout
 from run.alerts import AlertManager
 from run.preflight import PreflightChecker
-from run.stages import FeaturesStage, IngestStage, PublishStage, RankStage
+from run.stages import ExecuteStage, FeaturesStage, IngestStage, PublishStage, RankStage
 
 load_project_env(__file__)
 
 
-PIPELINE_ORDER = ["ingest", "features", "rank", "publish"]
+PIPELINE_ORDER = ["ingest", "features", "rank", "execute", "publish"]
+SUPPORTED_STAGES = ["ingest", "features", "rank", "execute", "publish"]
 
 
 class PipelineOrchestrator:
-    """Executes the 4-stage resilient pipeline with retry-safe metadata."""
+    """Executes the resilient pipeline with retry-safe metadata."""
 
     def __init__(
         self,
@@ -40,12 +41,16 @@ class PipelineOrchestrator:
         self.dq_engine = dq_engine or DataQualityEngine(self.registry)
         self.alert_manager = alert_manager or AlertManager(self.registry)
         self.preflight_checker = PreflightChecker(self.project_root)
-        self.stages = stages or {
+        default_stages = {
             "ingest": IngestStage(),
             "features": FeaturesStage(),
             "rank": RankStage(),
+            "execute": ExecuteStage(),
             "publish": PublishStage(),
         }
+        if stages:
+            default_stages.update(stages)
+        self.stages = default_stages
 
     def run_pipeline(
         self,
@@ -214,7 +219,7 @@ class PipelineOrchestrator:
         if stage_names is None:
             return list(PIPELINE_ORDER)
         requested = list(stage_names)
-        invalid = [stage for stage in requested if stage not in PIPELINE_ORDER]
+        invalid = [stage for stage in requested if stage not in SUPPORTED_STAGES]
         if invalid:
             raise ValueError(f"Unknown stages requested: {invalid}")
         return requested
@@ -228,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", help="Reuse an existing run_id, typically for stage retries")
     parser.add_argument(
         "--stages",
-        default="ingest,features,rank,publish",
+        default="ingest,features,rank,execute,publish",
         help="Comma-separated stage list. Example: publish",
     )
     parser.add_argument("--run-date", help="Logical trading date, defaults to today")
@@ -297,6 +302,59 @@ def build_parser() -> argparse.ArgumentParser:
         default=252,
         help="Tail window used by incremental operational feature updates.",
     )
+    parser.add_argument(
+        "--strategy-mode",
+        choices=["technical", "ml", "hybrid_confirm", "hybrid_overlay"],
+        default="technical",
+        help="Auto-trading policy used by the optional execute stage.",
+    )
+    parser.add_argument(
+        "--execution-top-n",
+        type=int,
+        default=5,
+        help="Target number of positions maintained by the execute stage.",
+    )
+    parser.add_argument(
+        "--execution-ml-horizon",
+        type=int,
+        default=5,
+        help="ML horizon used for confirm/overlay execution modes.",
+    )
+    parser.add_argument(
+        "--execution-ml-confirm-threshold",
+        type=float,
+        default=0.55,
+        help="Minimum ML probability required for hybrid/ml entry and hold decisions.",
+    )
+    parser.add_argument(
+        "--execution-capital",
+        type=float,
+        default=1_000_000,
+        help="Capital base used for risk sizing in the execute stage.",
+    )
+    parser.add_argument(
+        "--execution-fixed-quantity",
+        type=int,
+        default=None,
+        help="Optional fixed buy quantity for paper execution when risk sizing inputs are unavailable.",
+    )
+    parser.add_argument(
+        "--execution-regime",
+        default="TREND",
+        help="Market regime label passed into the execute-stage risk engine.",
+    )
+    parser.add_argument(
+        "--execution-regime-multiplier",
+        type=float,
+        default=1.0,
+        help="Risk multiplier applied by the execute stage.",
+    )
+    parser.add_argument(
+        "--paper-slippage-bps",
+        type=float,
+        default=5.0,
+        help="Paper-trading slippage in basis points for simulated fills.",
+    )
     return parser
 
 
@@ -306,7 +364,7 @@ def main() -> None:
 
     project_root = Path(__file__).resolve().parents[1]
     orchestrator = PipelineOrchestrator(project_root)
-    if args.canary and args.stages == "ingest,features,rank,publish":
+    if args.canary and args.stages == "ingest,features,rank,execute,publish":
         stage_names = ["ingest", "features", "rank"]
     else:
         stage_names = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
@@ -334,6 +392,15 @@ def main() -> None:
             "quantstats_write_core_html": args.quantstats_write_core_html,
             "full_rebuild": args.full_rebuild,
             "feature_tail_bars": args.feature_tail_bars,
+            "strategy_mode": args.strategy_mode,
+            "execution_top_n": args.execution_top_n,
+            "execution_ml_horizon": args.execution_ml_horizon,
+            "execution_ml_confirm_threshold": args.execution_ml_confirm_threshold,
+            "execution_capital": args.execution_capital,
+            "execution_fixed_quantity": args.execution_fixed_quantity,
+            "execution_regime": args.execution_regime,
+            "execution_regime_multiplier": args.execution_regime_multiplier,
+            "paper_slippage_bps": args.paper_slippage_bps,
         },
     )
 

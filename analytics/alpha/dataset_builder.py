@@ -55,6 +55,7 @@ class AlphaDatasetBuilder:
         exchange: str = "NSE",
         target_spec: Optional[TargetSpec] = None,
         register_dataset: bool = False,
+        extra_metadata: Optional[Dict[str, Any]] = None,
     ) -> PreparedDataset:
         target_spec = target_spec or TargetSpec(horizon=horizon)
         df = engine.prepare_training_data(
@@ -106,6 +107,8 @@ class AlphaDatasetBuilder:
                 else None
             ),
         }
+        if extra_metadata:
+            metadata.update(extra_metadata)
 
         if register_dataset:
             metadata["dataset_id"] = self._register_dataset(metadata)
