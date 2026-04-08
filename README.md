@@ -1,12 +1,20 @@
 # AI Trading System
 
 Production-oriented NSE technical research and execution platform with:
-- staged pipeline orchestration (`ingest -> features -> rank -> publish`)
+- staged pipeline orchestration (`ingest -> features -> rank -> execute -> publish`)
 - DuckDB-backed control plane and artifact lineage
 - rule-based data quality gating
 - technical ranking and breakout scanning
 - dual UI architecture (Streamlit research + NiceGUI execution)
 - publish channels (Google Sheets, Telegram, dashboard payload, QuantStats tear sheet)
+
+## 0. Operator Quick Link
+
+For an up-to-date, practical operations view of the runtime flow, trust model, and commands:
+- [`docs/high_level_operational_data_flow.md`](docs/high_level_operational_data_flow.md)
+- Visual system flow: [`3.1 Visual Data Flow Diagram`](docs/high_level_operational_data_flow.md#31-visual-data-flow-diagram)
+- Trust decision flow: [`3.2 Data Trust Quarantine Decision Flow`](docs/high_level_operational_data_flow.md#32-data-trust-quarantine-decision-flow)
+- SVG assets: [`operational_data_flow.svg`](docs/diagrams/operational_data_flow.svg), [`data_trust_decision_flow.svg`](docs/diagrams/data_trust_decision_flow.svg)
 
 ## 1. Architecture Overview
 
@@ -24,9 +32,10 @@ The repository is intentionally split into bounded modules:
 High-level runtime flow:
 
 ```text
-Data Providers -> Ingest -> Features -> Rank -> Publish
-                     |         |          |        |
-                     |         |          |        +--> Telegram / Sheets / QuantStats
+Data Providers -> Ingest -> Features -> Rank -> Execute -> Publish
+                     |         |          |         |         |
+                     |         |          |         |         +--> Telegram / Sheets / QuantStats
+                     |         |          |         +--> orders / fills / positions (paper/live adapters)
                      |         |          +--> ranked_signals / breakout_scan / sector_dashboard
                      |         +--> feature snapshots + sector leadership artifacts
                      +--> _catalog / _delivery
@@ -71,6 +80,7 @@ Stage order:
 - `ingest`
 - `features`
 - `rank`
+- `execute`
 - `publish`
 
 Stage behavior:
@@ -244,10 +254,10 @@ Full operational run explicitly:
 python -m run.orchestrator --data-domain operational
 ```
 
-Smoke run:
+Synthetic smoke mode is removed. Use a real canary run instead:
 
 ```bash
-python -m run.orchestrator --smoke --local-publish
+python -m run.orchestrator --canary --symbol-limit 25 --local-publish
 ```
 
 Canary run:
@@ -312,21 +322,20 @@ Return series construction uses consecutive ranked snapshots:
 ## 14. Testing and Validation
 
 Representative test modules:
-- `streamlit/test/test_pipeline_orchestrator.py`
-- `streamlit/test/test_feature_incremental.py`
-- `streamlit/test/test_quantstats_dashboard_publish.py`
-- `streamlit/test/test_shadow_monitor.py`
-- `streamlit/test/test_dashboard_helpers.py`
+- `tests/test_pipeline_orchestrator.py`
+- `tests/test_feature_incremental.py`
+- `tests/test_quantstats_dashboard_publish.py`
+- `tests/test_shadow_monitor.py`
+- `tests/test_dashboard_helpers.py`
 
 Run targeted suite:
 
 ```bash
-python -m pytest -q streamlit/test
+python -m pytest -q tests
 ```
 
 ## 15. Known Operating Principles
 
-- smoke mode validates orchestration/governance plumbing, not live market quality
 - publish is non-authoritative; publish failures can end as `completed_with_publish_errors`
 - research workflows should use the research domain by default
 - generated runtime data (`data/`, `reports/`) should not be committed
@@ -339,4 +348,3 @@ python -m pytest -q streamlit/test
 - [docs/data-flow.md](docs/data-flow.md)
 - [docs/dq_rules.md](docs/dq_rules.md)
 - [docs/ops_runbook.md](docs/ops_runbook.md)
-

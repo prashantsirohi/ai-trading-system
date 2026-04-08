@@ -39,13 +39,18 @@ from analytics.visualizations import Visualizer
 from core.env import load_project_env
 from core.paths import get_domain_paths
 from ui.research.data_access import (
+    load_data_trust_snapshot,
+    load_drilldown_history_for_symbols,
     load_latest_rank_frames,
     load_ops_health_snapshot,
     load_rank_history_for_symbols,
+    load_sector_history_for_sectors,
+    load_symbol_trust_snapshot,
     load_trade_report,
 )
 from ui.research.dashboard_helpers import (
     build_rank_sparkline_payload,
+    build_value_sparkline_payload,
     enrich_ranked_table_with_context,
 )
 from ui.research.widgets import (
@@ -96,10 +101,12 @@ def get_db_stats() -> Dict:
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 60)
-def get_research_breadth_year_bounds() -> tuple[int, int]:
-    """Return min/max year available in research OHLCV data."""
+def get_breadth_year_bounds(data_source: str = "operational") -> tuple[int, int]:
+    """Return min/max year available in the selected breadth data source."""
+    source = str(data_source or "operational").strip().lower()
+    db_path = OHLCV_DB if source == "operational" else RESEARCH_OHLCV_DB
     try:
-        conn = duckdb.connect(RESEARCH_OHLCV_DB, read_only=True)
+        conn = duckdb.connect(db_path, read_only=True)
         try:
             row = conn.execute(
                 """
@@ -122,9 +129,11 @@ def get_research_breadth_year_bounds() -> tuple[int, int]:
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 60)
-def load_research_breadth_history(start_date: str = "2010-01-01") -> pd.DataFrame:
-    """Load long-run breadth series for percent of stocks above key SMAs."""
-    conn = duckdb.connect(RESEARCH_OHLCV_DB, read_only=True)
+def load_breadth_history(start_date: str = "2010-01-01", data_source: str = "operational") -> pd.DataFrame:
+    """Load breadth series for percent of stocks above key SMAs."""
+    source = str(data_source or "operational").strip().lower()
+    db_path = OHLCV_DB if source == "operational" else RESEARCH_OHLCV_DB
+    conn = duckdb.connect(db_path, read_only=True)
     try:
         query = f"""
             WITH base AS (
@@ -608,6 +617,18 @@ def _sector_match_mask(df: pd.DataFrame, sector_col: str, group_col: str, target
     return exact_sector | exact_group | contains_sector | contains_group | loose_sector | loose_group
 
 
+def _label_match_mask(series: pd.Series, target_raw: str) -> pd.Series:
+    """Match a label series to the selected drilldown text using the same loose rules."""
+    target = str(target_raw).strip().lower()
+    target_key = _normalize_text_key(target_raw)
+    text = series.fillna("").astype(str).str.lower()
+    text_key = series.fillna("").astype(str).map(_normalize_text_key)
+    exact = text == target
+    contains = text.str.contains(target, regex=False, na=False) if target else pd.Series(False, index=series.index)
+    loose = text_key.str.contains(target_key, regex=False, na=False) if target_key else pd.Series(False, index=series.index)
+    return exact | contains | loose
+
+
 @st.cache_data(show_spinner=False, ttl=60 * 10)
 def load_symbol_sector_details() -> pd.DataFrame:
     """Load symbol-to-sector lookup from master DB."""
@@ -636,6 +657,23 @@ def load_symbol_sector_details() -> pd.DataFrame:
         return df
     except Exception:
         return pd.DataFrame(columns=["symbol_id", "company_name", "sector_name", "industry_group"])
+
+
+def resolve_drilldown_label_kind(label: str) -> str:
+    """Classify a drilldown label as Sector, Industry Group, or Mixed."""
+    details = load_symbol_sector_details()
+    if details.empty:
+        return "Sector / Industry"
+
+    sector_hits = _label_match_mask(details["sector_name"], label).sum()
+    group_hits = _label_match_mask(details["industry_group"], label).sum()
+    if sector_hits and not group_hits:
+        return "Sector"
+    if group_hits and not sector_hits:
+        return "Industry Group"
+    if group_hits and sector_hits:
+        return "Sector / Industry"
+    return "Sector / Industry"
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 10)
@@ -688,8 +726,13 @@ def build_sector_universe_frame(rank_df: pd.DataFrame, sector_name: str) -> tupl
     if not base.empty and "symbol_id" in base.columns:
         rank_base = _with_unique_column_names(base.copy())
         rank_base["symbol_id"] = rank_base["symbol_id"].astype(str).str.upper()
+        score_col = "custom_score" if "custom_score" in rank_base.columns else "composite_score"
+        if score_col in rank_base.columns:
+            rank_base = rank_base.sort_values(score_col, ascending=False, na_position="last").reset_index(drop=True)
+            rank_base["overall_rank"] = np.arange(1, len(rank_base) + 1)
         rank_cols_preferred = [
             "symbol_id",
+            "overall_rank",
             "custom_score",
             "composite_score",
             "close",
@@ -715,17 +758,22 @@ def build_sector_universe_frame(rank_df: pd.DataFrame, sector_name: str) -> tupl
         out = out.sort_values("symbol_id")
 
     out.reset_index(drop=True, inplace=True)
-    out.insert(0, "rank_position", np.arange(1, len(out) + 1))
     if score_col in out.columns:
-        out.insert(1, "ranked_flag", np.where(pd.to_numeric(out[score_col], errors="coerce").notna(), "Yes", "No"))
+        ranked_mask = pd.to_numeric(out[score_col], errors="coerce").notna()
+        out.insert(0, "ranked_flag", np.where(ranked_mask, "Yes", "No"))
+        sector_rank = pd.Series(pd.NA, index=out.index, dtype="Int64")
+        sector_rank.loc[ranked_mask] = np.arange(1, int(ranked_mask.sum()) + 1)
+        out.insert(1, "sector_rank", sector_rank)
     else:
-        out.insert(1, "ranked_flag", "No")
+        out.insert(0, "ranked_flag", "No")
+        out.insert(1, "sector_rank", pd.Series([pd.NA] * len(out), dtype="Int64"))
     return out, used_fallback_all
 
 
 def render_sector_drilldown_page(sector_name: str, rank_source_df: pd.DataFrame) -> None:
     """Render sector-level ranked company drilldown page."""
-    st.title(f"🏭 Sector Drilldown: {sector_name}")
+    label_kind = resolve_drilldown_label_kind(sector_name)
+    st.title(f"🏭 {label_kind} Drilldown: {sector_name}")
     options = get_sector_dropdown_options()
     c1, c2, c3 = st.columns([1, 4, 3])
     with c1:
@@ -733,13 +781,16 @@ def render_sector_drilldown_page(sector_name: str, rank_source_df: pd.DataFrame)
             st.query_params.clear()
             st.rerun()
     with c2:
-        st.caption("Showing full universe stocks for the selected sector, ordered by descending ranking score.")
+        st.caption(
+            f"Showing full universe stocks for the selected {label_kind.lower()}, "
+            "ordered by descending ranking score."
+        )
     with c3:
         if options:
             current_label = str(sector_name).strip()
             default_idx = options.index(current_label) if current_label in options else 0
             selected_sector = st.selectbox(
-                "Sector",
+                "Sector / Industry Group",
                 options=options,
                 index=default_idx,
                 key="sector_drilldown_selector",
@@ -772,8 +823,220 @@ def render_sector_drilldown_page(sector_name: str, rank_source_df: pd.DataFrame)
         median_score = pd.to_numeric(sector_ranked[score_col], errors="coerce").median() if score_col in sector_ranked.columns else np.nan
         st.metric("Median Score", f"{float(median_score):.2f}" if pd.notna(median_score) else "—")
 
+    sector_history_df = load_sector_history_for_sectors(
+        PIPELINE_RUNS_DIR,
+        (sector_name,),
+        max_runs=30,
+    )
+    if not sector_history_df.empty:
+        history_ordered = sector_history_df.sort_values(["run_order", "run_id"]).copy()
+        latest_rs = pd.to_numeric(history_ordered["rs_value"], errors="coerce").dropna()
+        latest_momentum = pd.to_numeric(history_ordered["momentum"], errors="coerce").dropna()
+        rs_trend_payload = build_value_sparkline_payload(
+            history_ordered,
+            key_col="sector_name",
+            value_col="rs_value",
+            max_points=12,
+            higher_is_better=True,
+        ).get(sector_name, {})
+        rank_trend_payload = build_value_sparkline_payload(
+            history_ordered,
+            key_col="sector_name",
+            value_col="rank_position",
+            max_points=12,
+            higher_is_better=False,
+        ).get(sector_name, {})
+        latest_rank = pd.to_numeric(history_ordered["rank_position"], errors="coerce").dropna()
+        trend_cols = st.columns(5)
+        with trend_cols[0]:
+            st.metric("Sector RS", f"{float(latest_rs.iloc[-1]):.3f}" if not latest_rs.empty else "—")
+        with trend_cols[1]:
+            delta_value = rs_trend_payload.get("delta_value")
+            st.metric("Δ RS", f"{float(delta_value):+.3f}" if delta_value is not None else "—")
+        with trend_cols[2]:
+            st.metric("RS Trend", str(rs_trend_payload.get("trend", "Flat")))
+        with trend_cols[3]:
+            st.metric("Sector Rank", f"{int(latest_rank.iloc[-1])}" if not latest_rank.empty else "—")
+        with trend_cols[4]:
+            delta_rank = rank_trend_payload.get("delta_value")
+            if delta_rank is None:
+                st.metric("Δ Sector Rank", "—")
+            else:
+                st.metric("Δ Sector Rank", f"{int(round(delta_rank)):+d}")
+
+        chart_df = history_ordered.copy()
+        chart_df["run_label"] = chart_df["run_date"].dt.strftime("%Y-%m-%d").fillna(chart_df["run_id"])
+        fig_sector = go.Figure()
+        fig_sector.add_trace(
+            go.Scatter(
+                x=chart_df["run_label"],
+                y=chart_df["rs_value"],
+                mode="lines+markers",
+                name="Sector RS",
+                line=dict(width=2, color="#0ea5e9"),
+                marker=dict(size=6),
+            )
+        )
+        if not latest_rank.empty:
+            fig_sector.add_trace(
+                go.Scatter(
+                    x=chart_df["run_label"],
+                    y=chart_df["rank_position"],
+                    mode="lines+markers",
+                    name="Sector Rank",
+                    line=dict(width=1.8, color="#7c3aed"),
+                    marker=dict(size=5),
+                    yaxis="y3",
+                )
+            )
+        if not latest_momentum.empty:
+            fig_sector.add_trace(
+                go.Scatter(
+                    x=chart_df["run_label"],
+                    y=chart_df["momentum"],
+                    mode="lines",
+                    name="Momentum",
+                    line=dict(width=1.5, color="#f97316", dash="dot"),
+                    yaxis="y2",
+                )
+            )
+            fig_sector.update_layout(
+                yaxis2=dict(
+                    title="Momentum",
+                    overlaying="y",
+                    side="right",
+                    showgrid=False,
+                )
+            )
+        if not latest_rank.empty:
+            fig_sector.update_layout(
+                yaxis3=dict(
+                    title="Sector Rank",
+                    overlaying="y",
+                    side="right",
+                    anchor="free",
+                    position=0.94,
+                    autorange="reversed",
+                    showgrid=False,
+                )
+            )
+        fig_sector.update_layout(
+            height=280,
+            margin=dict(l=20, r=20, t=10, b=20),
+            xaxis_title="Run",
+            yaxis_title="Sector RS",
+            legend_title="Metric",
+        )
+        st.markdown(f"**{label_kind} Trendline**")
+        st.plotly_chart(fig_sector, use_container_width=True)
+    else:
+        drilldown_history_df = load_drilldown_history_for_symbols(
+            PIPELINE_RUNS_DIR,
+            tuple(sector_ranked["symbol_id"].astype(str).tolist()),
+            max_runs=30,
+        )
+        if not drilldown_history_df.empty:
+            trend_payload = build_value_sparkline_payload(
+                drilldown_history_df.assign(group_label=sector_name),
+                key_col="group_label",
+                value_col="median_score",
+                max_points=12,
+                higher_is_better=True,
+            ).get(sector_name, {})
+            rank_payload = build_value_sparkline_payload(
+                drilldown_history_df.assign(group_label=sector_name),
+                key_col="group_label",
+                value_col="best_rank",
+                max_points=12,
+                higher_is_better=False,
+            ).get(sector_name, {})
+            latest_row = drilldown_history_df.iloc[-1]
+            fallback_cols = st.columns(5)
+            with fallback_cols[0]:
+                st.metric("Median Score", f"{float(latest_row.get('median_score', 0.0)):.2f}")
+            with fallback_cols[1]:
+                delta_value = trend_payload.get("delta_value")
+                st.metric("Δ Median Score", f"{float(delta_value):+.2f}" if delta_value is not None else "—")
+            with fallback_cols[2]:
+                st.metric("Score Trend", str(trend_payload.get("trend", "Flat")))
+            with fallback_cols[3]:
+                best_rank = latest_row.get("best_rank")
+                st.metric("Best Rank", f"{int(best_rank)}" if pd.notna(best_rank) else "—")
+            with fallback_cols[4]:
+                delta_rank = rank_payload.get("delta_value")
+                st.metric("Δ Best Rank", f"{int(round(delta_rank)):+d}" if delta_rank is not None else "—")
+
+            chart_df = drilldown_history_df.copy()
+            chart_df["run_label"] = chart_df["run_date"].dt.strftime("%Y-%m-%d").fillna(chart_df["run_id"])
+            fig_group = go.Figure()
+            fig_group.add_trace(
+                go.Scatter(
+                    x=chart_df["run_label"],
+                    y=chart_df["median_score"],
+                    mode="lines+markers",
+                    name="Median Score",
+                    line=dict(width=2, color="#0ea5e9"),
+                    marker=dict(size=6),
+                )
+            )
+            fig_group.add_trace(
+                go.Scatter(
+                    x=chart_df["run_label"],
+                    y=chart_df["best_rank"],
+                    mode="lines+markers",
+                    name="Best Rank",
+                    line=dict(width=1.8, color="#7c3aed"),
+                    marker=dict(size=5),
+                    yaxis="y2",
+                )
+            )
+            fig_group.update_layout(
+                yaxis2=dict(
+                    title="Best Rank",
+                    overlaying="y",
+                    side="right",
+                    autorange="reversed",
+                    showgrid=False,
+                ),
+                height=280,
+                margin=dict(l=20, r=20, t=10, b=20),
+                xaxis_title="Run",
+                yaxis_title="Median Score",
+                legend_title="Metric",
+            )
+            st.markdown(f"**{label_kind} Trendline**")
+            st.plotly_chart(fig_group, use_container_width=True)
+
+    trust_df = load_symbol_trust_snapshot(PROJECT_ROOT, sector_ranked["symbol_id"].astype(str).tolist())
+    if not trust_df.empty:
+        trust_df = trust_df.rename(
+            columns={
+                "provider": "trust_provider",
+                "validation_status": "trust_status",
+                "is_quarantined": "trust_quarantined",
+            }
+        )
+        trust_df["symbol_id"] = trust_df["symbol_id"].astype(str).str.upper()
+        sector_ranked["symbol_id"] = sector_ranked["symbol_id"].astype(str).str.upper()
+        sector_ranked = sector_ranked.merge(
+            trust_df[
+                [
+                    "symbol_id",
+                    "trust_provider",
+                    "trust_status",
+                    "validated_against",
+                    "repair_batch_id",
+                    "latest_trade_date",
+                    "trust_quarantined",
+                ]
+            ],
+            on="symbol_id",
+            how="left",
+        )
+
     display_cols = [
-        "rank_position",
+        "overall_rank",
+        "sector_rank",
         "ranked_flag",
         "symbol_id",
         "company_name",
@@ -787,13 +1050,18 @@ def render_sector_drilldown_page(sector_name: str, rank_source_df: pd.DataFrame)
         "prox_high_score",
         "delivery_pct_score",
         "sector_strength_score",
+        "trust_provider",
+        "trust_status",
+        "trust_quarantined",
+        "latest_trade_date",
     ]
     sector_ranked = sector_ranked.loc[:, ~pd.Index(sector_ranked.columns).duplicated(keep="first")]
     keep_cols = [col for col in display_cols if col in sector_ranked.columns]
     display_df = sector_ranked.loc[:, keep_cols]
     renamed = display_df.rename(
         columns={
-            "rank_position": "Rank",
+            "overall_rank": "Overall Rank",
+            "sector_rank": "Sector Rank",
             "ranked_flag": "Ranked",
             "symbol_id": "Symbol",
             "company_name": "Company",
@@ -808,6 +1076,10 @@ def render_sector_drilldown_page(sector_name: str, rank_source_df: pd.DataFrame)
             "prox_high_score": "Highs",
             "delivery_pct_score": "Delivery",
             "sector_strength_score": "Sector",
+            "trust_provider": "Provider",
+            "trust_status": "Trust Status",
+            "trust_quarantined": "Quarantined",
+            "latest_trade_date": "Latest Trade Date",
         }
     )
     renamed = _with_unique_column_names(renamed)
@@ -909,6 +1181,25 @@ def load_features(symbol: str, exchange: str = "NSE") -> Dict[str, pd.DataFrame]
             features[feat] = df
 
     return features
+
+
+def resolve_sector_drilldown_rank_source(
+    latest_rank_frames: Dict[str, pd.DataFrame],
+    session_rank_df: pd.DataFrame | None,
+    dashboard_payload: Dict[str, object] | None,
+) -> pd.DataFrame:
+    """Prefer the full rank artifact over cached/session summary tables for sector drilldown."""
+    latest_rank_df = normalize_rank_df(latest_rank_frames.get("ranked_signals", pd.DataFrame()))
+    if not latest_rank_df.empty:
+        return latest_rank_df
+
+    session_df = normalize_rank_df(session_rank_df if session_rank_df is not None else pd.DataFrame())
+    if not session_df.empty:
+        return session_df
+
+    if dashboard_payload:
+        return normalize_rank_df(pd.DataFrame(dashboard_payload.get("ranked_signals", [])))
+    return pd.DataFrame()
 
 
 def compute_dynamic_rank(
@@ -1246,6 +1537,7 @@ def main():
     dashboard_health = get_dashboard_health(dashboard_payload)
     latest_rank_frames = load_latest_rank_frames(PROJECT_ROOT)
     ops_snapshot = load_ops_health_snapshot(PROJECT_ROOT)
+    data_trust_snapshot = load_data_trust_snapshot(PROJECT_ROOT)
     render_ops_health_ribbon(ops_snapshot)
 
     if st.session_state.rank_df is not None:
@@ -1401,7 +1693,15 @@ def main():
 
         with st.expander("📊 Breadth History", expanded=False):
             try:
-                breadth_df = load_research_breadth_history()
+                source_label = st.radio(
+                    "Breadth Source",
+                    options=["Operational (live)", "Research (static)"],
+                    index=0,
+                    horizontal=True,
+                    key="breadth_history_source",
+                )
+                source_key = "operational" if source_label.startswith("Operational") else "research"
+                breadth_df = load_breadth_history(data_source=source_key)
                 if breadth_df.empty:
                     st.info("No breadth history available.")
                 else:
@@ -1452,9 +1752,14 @@ def main():
                         legend_title="Breadth",
                     )
                     st.plotly_chart(fig_breadth, use_container_width=True)
-                    st.caption(
-                        "Research universe breadth since 2010 using NSE symbols with enough history for each SMA window."
-                    )
+                    if source_key == "operational":
+                        st.caption(
+                            "Operational universe breadth using NSE symbols with enough history for each SMA window."
+                        )
+                    else:
+                        st.caption(
+                            "Research universe breadth (static snapshot) using NSE symbols with enough history for each SMA window."
+                        )
             except Exception as e:
                 st.warning(f"Could not load breadth history: {e}")
 
@@ -1464,11 +1769,11 @@ def main():
     requested_view = _query_param_value("view").strip().lower()
     requested_sector = unquote_plus(_query_param_value("sector").strip())
     if requested_view == "sector" and requested_sector:
-        rank_source_df = st.session_state.rank_df if st.session_state.rank_df is not None else pd.DataFrame()
-        if rank_source_df.empty:
-            rank_source_df = latest_rank_frames.get("ranked_signals", pd.DataFrame())
-        if rank_source_df.empty and dashboard_payload:
-            rank_source_df = normalize_rank_df(pd.DataFrame(dashboard_payload.get("ranked_signals", [])))
+        rank_source_df = resolve_sector_drilldown_rank_source(
+            latest_rank_frames,
+            st.session_state.rank_df,
+            dashboard_payload,
+        )
         render_sector_drilldown_page(requested_sector, rank_source_df)
         return
 
@@ -1488,12 +1793,37 @@ def main():
         with health_cols[3]:
             st.metric("Payload Age (min)", dashboard_health.get("summary", {}).get("payload_age_minutes", "—"))
 
+        trust_cols = st.columns(4)
+        latest_provider_stats = data_trust_snapshot.get("latest_provider_stats", {}) or {}
+        latest_repair_run = data_trust_snapshot.get("latest_repair_run") or {}
+        with trust_cols[0]:
+            st.metric("Data Trust", str(data_trust_snapshot.get("status", "unknown")).upper())
+        with trust_cols[1]:
+            st.metric("Latest Validated", data_trust_snapshot.get("latest_validated_date", "—"))
+        with trust_cols[2]:
+            st.metric("Fallback Ratio", f"{float(data_trust_snapshot.get('fallback_ratio_latest', 0.0) or 0.0) * 100:.1f}%")
+        with trust_cols[3]:
+            st.metric("Active Quarantine Symbols", int(data_trust_snapshot.get("active_quarantined_symbols", 0) or 0))
+
         with st.expander("🩺 Self Check", expanded=False):
             checks_df = pd.DataFrame(dashboard_health.get("checks", []))
             if not checks_df.empty:
                 st.dataframe(checks_df, use_container_width=True, hide_index=True)
             else:
                 st.info("No health checks available.")
+
+        with st.expander("🛡️ Data Trust", expanded=True):
+            provider_mix = latest_provider_stats.get("counts", {})
+            trust_summary_cols = st.columns(3)
+            with trust_summary_cols[0]:
+                st.caption("Latest Provider Mix")
+                st.json(provider_mix or {})
+            with trust_summary_cols[1]:
+                st.caption("Quarantined Dates")
+                st.write(data_trust_snapshot.get("active_quarantined_dates", []) or ["None"])
+            with trust_summary_cols[2]:
+                st.caption("Latest Repair Batch")
+                st.json(latest_repair_run or {})
 
         if not dashboard_payload:
             st.info("No dashboard payload found yet. Run the rank stage first.")
@@ -1597,6 +1927,80 @@ def main():
                 )
                 st.caption("Click a sector name to open the sector drilldown page.")
 
+                sector_history_df = load_sector_history_for_sectors(
+                    PIPELINE_RUNS_DIR,
+                    tuple(pipeline_sector_df["Sector"].astype(str).tolist()) if not pipeline_sector_df.empty and "Sector" in pipeline_sector_df.columns else (),
+                    max_runs=30,
+                )
+                sector_rs_payload = build_value_sparkline_payload(
+                    sector_history_df,
+                    key_col="sector_name",
+                    value_col="rs_value",
+                    max_points=10,
+                    higher_is_better=True,
+                )
+                sector_rank_payload = build_value_sparkline_payload(
+                    sector_history_df,
+                    key_col="sector_name",
+                    value_col="rank_position",
+                    max_points=10,
+                    higher_is_better=False,
+                )
+                if not pipeline_sector_df.empty and (sector_rs_payload or sector_rank_payload):
+                    sector_trend_df = pipeline_sector_df.copy()
+                    if "Sector" in sector_trend_df.columns:
+                        sector_trend_df["RS Trend"] = sector_trend_df["Sector"].astype(str).map(
+                            lambda sector: sector_rs_payload.get(str(sector), {}).get("trend", "Flat")
+                        )
+                        sector_trend_df["Δ RS"] = sector_trend_df["Sector"].astype(str).map(
+                            lambda sector: sector_rs_payload.get(str(sector), {}).get("delta_value", 0.0)
+                        )
+                        sector_trend_df["RS History"] = sector_trend_df["Sector"].astype(str).map(
+                            lambda sector: sector_rs_payload.get(str(sector), {}).get("sparkline", [np.nan])
+                        )
+                        sector_trend_df["Sector Rank Trend"] = sector_trend_df["Sector"].astype(str).map(
+                            lambda sector: sector_rank_payload.get(str(sector), {}).get("trend", "Flat")
+                        )
+                        sector_trend_df["Δ Sector Rank"] = sector_trend_df["Sector"].astype(str).map(
+                            lambda sector: sector_rank_payload.get(str(sector), {}).get("delta_value", 0.0)
+                        )
+                        sector_trend_df["Sector Rank History"] = sector_trend_df["Sector"].astype(str).map(
+                            lambda sector: sector_rank_payload.get(str(sector), {}).get("sparkline", [np.nan])
+                        )
+                        trend_display_df = reorder_columns(
+                            sector_trend_df,
+                            [
+                                "Sector",
+                                "RS",
+                                "Momentum",
+                                "Quadrant",
+                                "RS_rank",
+                                "RS Trend",
+                                "Δ RS",
+                                "RS History",
+                                "Sector Rank Trend",
+                                "Δ Sector Rank",
+                                "Sector Rank History",
+                            ],
+                        )
+                        st.markdown("**Sector Trendlines**")
+                        st.dataframe(
+                            trend_display_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "RS History": st.column_config.LineChartColumn(
+                                    "RS History",
+                                    help="Recent sector RS across pipeline runs.",
+                                ),
+                                "Sector Rank History": st.column_config.LineChartColumn(
+                                    "Sector Rank History",
+                                    help="Recent sector rank across pipeline runs. Lower is better.",
+                                )
+                            },
+                            height=280,
+                        )
+
                 st.markdown("**Stock Scan**")
                 if pipeline_stock_scan_df.empty:
                     st.info("No stock scan rows in payload.")
@@ -1635,26 +2039,38 @@ def main():
         st.divider()
 
         st.subheader("📊 Long-Term Breadth")
-        min_year, max_year = get_research_breadth_year_bounds()
+        source_options = ["Operational (live)", "Research (static)"]
+        controls = st.columns([1.6, 1.2, 1, 1, 1], gap="small")
+        with controls[0]:
+            breadth_source_label = st.selectbox(
+                "Breadth Source",
+                options=source_options,
+                index=0,
+                key="breadth_source",
+            )
+        breadth_source_key = "operational" if breadth_source_label.startswith("Operational") else "research"
+        min_year, max_year = get_breadth_year_bounds(data_source=breadth_source_key)
         year_options = list(range(min_year, max_year + 1))
         default_from_year = min_year if min_year in year_options else year_options[0]
-        controls = st.columns([1.2, 1, 1, 1], gap="small")
-        with controls[0]:
+        with controls[1]:
             from_year = st.selectbox(
                 "From Year",
                 options=year_options,
                 index=year_options.index(default_from_year),
                 key="breadth_from_year",
             )
-        with controls[1]:
-            show_20 = st.checkbox("20 SMA", value=True, key="breadth_show_20")
         with controls[2]:
-            show_50 = st.checkbox("50 SMA", value=True, key="breadth_show_50")
+            show_20 = st.checkbox("20 SMA", value=True, key="breadth_show_20")
         with controls[3]:
+            show_50 = st.checkbox("50 SMA", value=True, key="breadth_show_50")
+        with controls[4]:
             show_200 = st.checkbox("200 SMA", value=True, key="breadth_show_200")
 
         try:
-            breadth_df = load_research_breadth_history(start_date=f"{from_year}-01-01")
+            breadth_df = load_breadth_history(
+                start_date=f"{from_year}-01-01",
+                data_source=breadth_source_key,
+            )
             if breadth_df.empty:
                 st.info("No breadth history available.")
             else:
@@ -1718,6 +2134,10 @@ def main():
                         legend_title="Breadth",
                     )
                     st.plotly_chart(fig_breadth_overview, use_container_width=True)
+                st.caption(
+                    "Source: Operational (live rolling store)." if breadth_source_key == "operational"
+                    else "Source: Research (static store, typically up to prior year end)."
+                )
         except Exception as e:
             st.warning(f"Could not render long-term breadth chart: {e}")
 
@@ -2079,6 +2499,8 @@ def main():
 
         if symbol:
             col1, col2 = st.columns([1, 3])
+            symbol_trust_df = load_symbol_trust_snapshot(PROJECT_ROOT, [symbol])
+            symbol_trust = symbol_trust_df.iloc[0].to_dict() if not symbol_trust_df.empty else {}
             with col1:
                 st.subheader(f"📋 {symbol}")
                 ohlcv = load_ohlcv(symbol, days=365)
@@ -2095,6 +2517,10 @@ def main():
                     st.metric("Volume", f"{latest['volume']:,.0f}")
                     st.metric("52W High", f"₹{ohlcv['high'].max():.2f}")
                     st.metric("52W Low", f"₹{ohlcv['low'].min():.2f}")
+                    st.metric("Provider", str(symbol_trust.get("provider", "n/a")))
+                    st.metric("Trust", str(symbol_trust.get("validation_status", "n/a")))
+                    if bool(symbol_trust.get("is_quarantined")):
+                        st.error("This symbol currently has active quarantine rows in operational OHLC.")
 
                     features = load_features(symbol)
                     if not features:

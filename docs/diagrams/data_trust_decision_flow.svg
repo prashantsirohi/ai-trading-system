@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1320" viewBox="0 0 1400 1320">
+  <defs>
+    <style>
+      .title { font: 700 28px Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 15px Arial, sans-serif; fill: #0f172a; }
+      .small { font: 500 13px Arial, sans-serif; fill: #334155; }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155" />
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1400" height="1320" fill="#f8fafc" />
+  <text x="40" y="52" class="title">Data Trust + Quarantine Decision Flow (Graphical)</text>
+
+  <rect x="450" y="90" width="500" height="82" rx="12" ry="12" fill="#ffffff" stroke="#0ea5e9" stroke-width="2" />
+  <text x="485" y="128" class="label">Ingest writes OHLC with provider + validation lineage</text>
+  <text x="485" y="150" class="small">_catalog + _catalog_provenance + _catalog_quarantine updates</text>
+
+  <rect x="430" y="220" width="540" height="84" rx="12" ry="12" fill="#ffffff" stroke="#0ea5e9" stroke-width="2" />
+  <text x="470" y="260" class="label">Compute trust snapshot (load_data_trust_summary)</text>
+  <text x="470" y="282" class="small">latest_trade_date, quarantine, fallback ratio, unknown ratio</text>
+
+  <polygon points="700,370 860,450 700,530 540,450" fill="#fff7ed" stroke="#f97316" stroke-width="2" />
+  <text x="604" y="447" class="label">Latest trade date has</text>
+  <text x="620" y="468" class="label">active quarantine?</text>
+
+  <rect x="980" y="420" width="260" height="70" rx="12" ry="12" fill="#fee2e2" stroke="#dc2626" stroke-width="2" />
+  <text x="1058" y="458" class="label">status = BLOCKED</text>
+
+  <polygon points="700,595 870,675 700,755 530,675" fill="#fff7ed" stroke="#f97316" stroke-width="2" />
+  <text x="595" y="671" class="label">Any active quarantine</text>
+  <text x="616" y="693" class="label">dates in lookback?</text>
+
+  <polygon points="700,815 870,895 700,975 530,895" fill="#fff7ed" stroke="#f97316" stroke-width="2" />
+  <text x="570" y="891" class="label">Unknown-provider rows &gt; 0</text>
+  <text x="624" y="913" class="label">on latest date?</text>
+
+  <polygon points="700,1035 870,1115 700,1195 530,1115" fill="#fff7ed" stroke="#f97316" stroke-width="2" />
+  <text x="582" y="1111" class="label">Fallback ratio &gt; threshold?</text>
+
+  <rect x="980" y="640" width="260" height="70" rx="12" ry="12" fill="#fef3c7" stroke="#d97706" stroke-width="2" />
+  <text x="1050" y="678" class="label">status = DEGRADED</text>
+
+  <rect x="980" y="860" width="260" height="70" rx="12" ry="12" fill="#fef3c7" stroke="#d97706" stroke-width="2" />
+  <text x="1050" y="898" class="label">status = DEGRADED</text>
+
+  <rect x="980" y="1080" width="260" height="70" rx="12" ry="12" fill="#fef3c7" stroke="#d97706" stroke-width="2" />
+  <text x="1050" y="1118" class="label">status = DEGRADED</text>
+
+  <rect x="980" y="1200" width="260" height="70" rx="12" ry="12" fill="#dcfce7" stroke="#16a34a" stroke-width="2" />
+  <text x="1065" y="1238" class="label">status = TRUSTED</text>
+
+  <line x1="700" y1="172" x2="700" y2="220" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <line x1="700" y1="304" x2="700" y2="370" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+
+  <line x1="860" y1="450" x2="980" y2="455" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <text x="892" y="438" class="small">Yes</text>
+
+  <line x1="700" y1="530" x2="700" y2="595" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <text x="716" y="568" class="small">No</text>
+
+  <line x1="870" y1="675" x2="980" y2="675" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <text x="900" y="662" class="small">Yes</text>
+
+  <line x1="700" y1="755" x2="700" y2="815" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <text x="716" y="790" class="small">No</text>
+
+  <line x1="870" y1="895" x2="980" y2="895" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <text x="900" y="882" class="small">Yes</text>
+
+  <line x1="700" y1="975" x2="700" y2="1035" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <text x="716" y="1010" class="small">No</text>
+
+  <line x1="870" y1="1115" x2="980" y2="1115" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <text x="900" y="1102" class="small">Yes</text>
+
+  <line x1="700" y1="1195" x2="980" y2="1235" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <text x="780" y="1208" class="small">No</text>
+
+  <rect x="40" y="220" width="320" height="470" rx="14" ry="14" fill="#eff6ff" stroke="#2563eb" stroke-width="2" />
+  <text x="65" y="255" class="label">Downstream Impact</text>
+  <text x="65" y="292" class="small">BLOCKED:</text>
+  <text x="65" y="315" class="small">- features DQ fails (quarantine clear)</text>
+  <text x="65" y="338" class="small">- rank blocked unless override</text>
+  <text x="65" y="372" class="small">DEGRADED:</text>
+  <text x="65" y="395" class="small">- run continues with warnings</text>
+  <text x="65" y="418" class="small">- execute may be blocked if configured</text>
+  <text x="65" y="452" class="small">TRUSTED:</text>
+  <text x="65" y="475" class="small">- normal rank/execute/publish flow</text>
+  <text x="65" y="509" class="small">All states:</text>
+  <text x="65" y="532" class="small">- publish includes trust banner/notes</text>
+  <text x="65" y="555" class="small">- UI trust cards reflect status/metrics</text>
+
+  <line x1="1240" y1="455" x2="1320" y2="455" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <line x1="1240" y1="675" x2="1320" y2="675" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <line x1="1240" y1="895" x2="1320" y2="895" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <line x1="1240" y1="1115" x2="1320" y2="1115" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+  <line x1="1240" y1="1235" x2="1320" y2="1235" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow)" />
+
+  <rect x="1320" y="390" width="60" height="900" rx="10" ry="10" fill="#ffffff" stroke="#334155" stroke-width="2" />
+  <text x="1336" y="430" class="small" transform="rotate(90 1336,430)">status computed -> controls DQ gates, rank, execute and publish behavior</text>
+</svg>
