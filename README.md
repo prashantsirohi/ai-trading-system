@@ -152,23 +152,74 @@ Default ranking threshold:
 Scanner:
 - `channel/breakout_scan.py`
 
-Setup families:
-- `base_breakout`
-- `contraction_breakout`
-- `supertrend_flip_breakout`
+Canonical taxonomy (daily OHLC v2):
+- `resistance_breakout_50d`
+- `high_52w_breakout`
+- `consolidation_breakout`
+- `volatility_expansion_breakout`
+- `volume_confirmed_breakout` (confirmation flag, not standalone trigger)
+
+Legacy families remain available behind compatibility mapping:
+- `base_breakout` -> `resistance_breakout_50d`
+- `contraction_breakout` -> `consolidation_breakout`
+- `supertrend_flip_breakout` -> `volatility_expansion_breakout`
+
+Breakout rank semantics:
+- `breakout_score` and `breakout_rank` are computed in breakout scan only
+- main `composite_score` ranking remains unchanged in v1 rollout
+- state output is explicit: `qualified`, `watchlist`, `filtered_by_regime`
+
+### 7.1 Breakout Update (April 9, 2026)
+
+Layered breakout evaluation (kept permissive at detection level):
+- `breakout_detected`: structural setup detected
+- `filtered_by_regime`: market/sector gate result
+- `filtered_by_symbol_trend`: symbol trend-quality gate result
+
+Symbol trend tiering (`candidate_tier`):
+- `Tier A` = pass all 3 checks
+- `Tier B` = fail exactly 1 check
+- `Tier C` = fail 2+ checks
+
+Core symbol trend checks:
+- `close > sma200`
+- `sma50_slope_20d_pct > 0`
+- `near_52w_high_pct <= breakout_symbol_near_high_max_pct` (default `15.0`)
+
+`symbol_trend_score`:
+- `(pass_count / 3) * 100`
+
+`breakout_score` contract (separate from composite rank):
+- `+1` if `close > rolling_max_50`
+- `+2` if `close > rolling_max_252`
+- `+2` if consolidation/range-break condition is true
+- `+1` if `volume_ratio_20 >= 1.5`
+- `+2` if `rel_strength_score >= 80`
+
+State mapping:
+- if regime filter fails -> `filtered_by_regime`
+- else if tier is `C` -> `filtered_by_symbol_trend`
+- else if tier is `A` -> `qualified`
+- else -> `watchlist` (`Tier B`)
+
+Operational usage:
+- `execution_breakout_linkage=soft_gate` allows only `Tier A` qualified breakouts
+- dashboard publish sheet now shows breakouts as an explicit all-candidates section (`BREAKOUTS (all, unfiltered)`) for operator review
 
 Uses:
 - structural breakout conditions
 - trend/ADX filters
 - volume ratio conditions
 - proximity-to-high context
-- regime/bias-aware execution labels
+- regime/bias and breadth-aware qualification gates
+- sector RS thresholds for qualification
 
 Execution labels include:
 - `ACTIONABLE_BREAKOUT`
 - `EARLY_BREAKOUT`
 - `RELATIVE_STRENGTH_BREAKOUT`
-- `COUNTER_TREND_BREAKOUT`
+- `WATCHLIST_BREAKOUT`
+- `FILTERED_BREAKOUT`
 
 ## 8. DQ and Governance Control Plane
 
@@ -200,7 +251,7 @@ Delivery manager:
 - retries with backoff for transient channel failures
 
 Channels:
-- Google Sheets portfolio/stock/sector/dashboard payload
+- Google Sheets portfolio + single dated dashboard sheet (`YYYY-MM-DD`) with compact Sector/Ranks/Breakouts/Breadth sections
 - Telegram summary
 - QuantStats dashboard tear sheet
 - local summary mode (`--local-publish`)
@@ -282,6 +333,23 @@ Override ranking threshold:
 
 ```bash
 python -m run.orchestrator --min-score 50
+```
+
+Breakout v2 controls (separate from composite rank):
+
+```bash
+python -m run.orchestrator \
+  --breakout-engine v2 \
+  --breakout-market-bias-allowlist BULLISH,NEUTRAL \
+  --breakout-min-breadth-score 45 \
+  --breakout-sector-rs-percentile-min 60 \
+  --breakout-qualified-min-score 3
+```
+
+Optional execution linkage (default is informational-only / off):
+
+```bash
+python -m run.orchestrator --execution-breakout-linkage soft_gate
 ```
 
 Research UI:

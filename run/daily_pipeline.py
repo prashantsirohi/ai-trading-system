@@ -13,12 +13,11 @@ Usage:
     python run/daily_pipeline.py
     python run/daily_pipeline.py --force
     python run/daily_pipeline.py --local-publish
-    python run/daily_pipeline.py --smoke --local-publish
 """
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from core.bootstrap import ensure_project_root_on_path
 project_root = str(ensure_project_root_on_path(__file__))
@@ -165,6 +164,7 @@ def main(
     canary: bool = False,
     symbol_limit: int | None = None,
     skip_preflight: bool = False,
+    skip_publish_network_checks: bool = False,
     data_domain: str = "operational",
     include_delivery: bool = True,
     publish_quantstats: bool = True,
@@ -172,9 +172,36 @@ def main(
     quantstats_min_overlap: int = 5,
     quantstats_max_runs: int = 240,
     quantstats_write_core_html: bool = False,
+    validate_bhavcopy_after_ingest: bool = True,
+    bhavcopy_validation_date: str | None = None,
+    bhavcopy_validation_csv: str | None = None,
+    bhavcopy_validation_source: str = "auto",
+    bhavcopy_min_coverage: float = 0.9,
+    bhavcopy_max_mismatch_ratio: float = 0.05,
+    bhavcopy_close_tolerance_pct: float = 0.01,
+    dq_max_unknown_provider_pct: float = 0.0,
+    dq_max_unresolved_dates: int = 1,
+    dq_max_unresolved_symbol_dates: int = 10,
+    dq_max_unresolved_symbol_ratio_pct: float = 1.0,
+    dq_features_max_quarantined_symbols: int = 10,
+    dq_features_max_quarantined_symbol_ratio_pct: float = 1.0,
+    breakout_engine: str = "v2",
+    breakout_include_legacy_families: bool = True,
+    breakout_market_bias_allowlist: str = "BULLISH,NEUTRAL",
+    breakout_min_breadth_score: float = 45.0,
+    breakout_sector_rs_min: float | None = None,
+    breakout_sector_rs_percentile_min: float | None = 60.0,
+    breakout_qualified_min_score: int = 3,
+    breakout_symbol_near_high_max_pct: float = 15.0,
+    breakout_symbol_trend_gate_enabled: bool = True,
+    execution_breakout_linkage: str = "off",
 ):
+    if smoke:
+        raise RuntimeError("Smoke mode has been removed because synthetic pipeline data is no longer allowed.")
+
     now = datetime.now()
     today = now.strftime("%Y-%m-%d")
+    effective_validation_date = bhavcopy_validation_date or (now - timedelta(days=1)).strftime("%Y-%m-%d")
 
     logger.info("=" * 60)
     logger.info(f"DAILY PIPELINE - {today}")
@@ -206,11 +233,13 @@ def main(
             "force": force,
             "batch_size": 700,
             "bulk": False,
+            "nse_primary": True,
             "local_publish": local_publish,
             "smoke": smoke,
             "canary": canary,
             "symbol_limit": symbol_limit if symbol_limit is not None else (25 if canary else None),
             "preflight": not skip_preflight,
+            "preflight_publish_network_checks": not skip_publish_network_checks,
             "data_domain": data_domain,
             "include_delivery": include_delivery,
             "publish_quantstats": publish_quantstats,
@@ -218,6 +247,30 @@ def main(
             "quantstats_min_overlap": quantstats_min_overlap,
             "quantstats_max_runs": quantstats_max_runs,
             "quantstats_write_core_html": quantstats_write_core_html,
+            "validate_bhavcopy_after_ingest": validate_bhavcopy_after_ingest,
+            "bhavcopy_validation_required": validate_bhavcopy_after_ingest,
+            "bhavcopy_validation_date": effective_validation_date,
+            "bhavcopy_validation_csv": bhavcopy_validation_csv,
+            "bhavcopy_validation_source": bhavcopy_validation_source,
+            "bhavcopy_min_coverage": bhavcopy_min_coverage,
+            "bhavcopy_max_mismatch_ratio": bhavcopy_max_mismatch_ratio,
+            "bhavcopy_close_tolerance_pct": bhavcopy_close_tolerance_pct,
+            "dq_max_unknown_provider_pct": dq_max_unknown_provider_pct,
+            "dq_max_unresolved_dates": dq_max_unresolved_dates,
+            "dq_max_unresolved_symbol_dates": dq_max_unresolved_symbol_dates,
+            "dq_max_unresolved_symbol_ratio_pct": dq_max_unresolved_symbol_ratio_pct,
+            "dq_features_max_quarantined_symbols": dq_features_max_quarantined_symbols,
+            "dq_features_max_quarantined_symbol_ratio_pct": dq_features_max_quarantined_symbol_ratio_pct,
+            "breakout_engine": breakout_engine,
+            "breakout_include_legacy_families": breakout_include_legacy_families,
+            "breakout_market_bias_allowlist": breakout_market_bias_allowlist,
+            "breakout_min_breadth_score": breakout_min_breadth_score,
+            "breakout_sector_rs_min": breakout_sector_rs_min,
+            "breakout_sector_rs_percentile_min": breakout_sector_rs_percentile_min,
+            "breakout_qualified_min_score": breakout_qualified_min_score,
+            "breakout_symbol_near_high_max_pct": breakout_symbol_near_high_max_pct,
+            "breakout_symbol_trend_gate_enabled": breakout_symbol_trend_gate_enabled,
+            "execution_breakout_linkage": execution_breakout_linkage,
         },
     )
 
@@ -241,7 +294,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--smoke",
         action="store_true",
-        help="Run a self-contained local smoke flow with synthetic data",
+        help="Deprecated. Smoke mode is disabled because synthetic data is not allowed.",
     )
     parser.add_argument(
         "--stages",
@@ -263,6 +316,11 @@ if __name__ == "__main__":
         "--skip-preflight",
         action="store_true",
         help="Skip local readiness checks before running live stages.",
+    )
+    parser.add_argument(
+        "--skip-publish-network-checks",
+        action="store_true",
+        help="Skip preflight DNS checks for Telegram/Google publish endpoints.",
     )
     parser.add_argument(
         "--skip-delivery-collect",
@@ -303,6 +361,138 @@ if __name__ == "__main__":
         help="Also write raw QuantStats core HTML alongside the enriched dashboard tear sheet.",
     )
     parser.add_argument(
+        "--disable-bhavcopy-validation",
+        action="store_true",
+        help="Disable post-ingest bhavcopy validation gate (enabled by default).",
+    )
+    parser.add_argument(
+        "--bhavcopy-validation-date",
+        default=None,
+        help="Override validation date (YYYY-MM-DD). Defaults to today-1 in local time.",
+    )
+    parser.add_argument(
+        "--bhavcopy-validation-csv",
+        default=None,
+        help="Optional local bhavcopy CSV path used for post-ingest validation.",
+    )
+    parser.add_argument(
+        "--bhavcopy-validation-source",
+        choices=["auto", "bhavcopy", "yfinance"],
+        default="auto",
+        help="Reference source for post-ingest validation: bhavcopy, yfinance, or auto fallback.",
+    )
+    parser.add_argument(
+        "--bhavcopy-min-coverage",
+        type=float,
+        default=0.9,
+        help="Minimum catalog-vs-bhavcopy coverage ratio required to continue downstream stages.",
+    )
+    parser.add_argument(
+        "--bhavcopy-max-mismatch-ratio",
+        type=float,
+        default=0.05,
+        help="Maximum allowed mismatch ratio vs bhavcopy before pipeline is blocked.",
+    )
+    parser.add_argument(
+        "--bhavcopy-close-tolerance-pct",
+        type=float,
+        default=0.01,
+        help="Relative close-price tolerance used by bhavcopy mismatch detection.",
+    )
+    parser.add_argument(
+        "--dq-max-unknown-provider-pct",
+        type=float,
+        default=0.0,
+        help="Maximum allowed unknown-provider percentage before ingest DQ is blocked.",
+    )
+    parser.add_argument(
+        "--dq-max-unresolved-dates",
+        type=int,
+        default=1,
+        help="Maximum unresolved trade dates tolerated before ingest DQ blocks downstream stages.",
+    )
+    parser.add_argument(
+        "--dq-max-unresolved-symbol-dates",
+        type=int,
+        default=10,
+        help="Maximum unresolved symbol-date pairs tolerated before ingest DQ blocks downstream stages.",
+    )
+    parser.add_argument(
+        "--dq-max-unresolved-symbol-ratio-pct",
+        type=float,
+        default=1.0,
+        help="Maximum unresolved symbol-date ratio (percent of eligible symbols) tolerated before ingest DQ blocks downstream stages.",
+    )
+    parser.add_argument(
+        "--dq-features-max-quarantined-symbols",
+        type=int,
+        default=10,
+        help="Maximum active quarantined symbols tolerated in features trust window before blocking.",
+    )
+    parser.add_argument(
+        "--dq-features-max-quarantined-symbol-ratio-pct",
+        type=float,
+        default=1.0,
+        help="Maximum active quarantined symbol ratio (percent of latest universe) tolerated in features trust window before blocking.",
+    )
+    parser.add_argument(
+        "--breakout-engine",
+        choices=["legacy", "v2"],
+        default="v2",
+        help="Breakout scanner engine mode.",
+    )
+    parser.add_argument(
+        "--disable-breakout-legacy-families",
+        action="store_true",
+        help="When using breakout-v2, exclude mapped legacy setup families from results.",
+    )
+    parser.add_argument(
+        "--breakout-market-bias-allowlist",
+        default="BULLISH,NEUTRAL",
+        help="Comma-separated market bias values allowed for qualified breakout states.",
+    )
+    parser.add_argument(
+        "--breakout-min-breadth-score",
+        type=float,
+        default=45.0,
+        help="Minimum breadth score required for breakout qualification.",
+    )
+    parser.add_argument(
+        "--breakout-sector-rs-min",
+        type=float,
+        default=None,
+        help="Optional absolute minimum sector RS value required for breakout qualification.",
+    )
+    parser.add_argument(
+        "--breakout-sector-rs-percentile-min",
+        type=float,
+        default=60.0,
+        help="Minimum sector RS percentile required for breakout qualification.",
+    )
+    parser.add_argument(
+        "--breakout-qualified-min-score",
+        type=int,
+        default=3,
+        help="Minimum breakout score needed to mark a breakout as qualified.",
+    )
+    parser.add_argument(
+        "--breakout-symbol-near-high-max-pct",
+        type=float,
+        default=15.0,
+        help="Maximum allowed distance from 52W high (%%) for Tier-A symbol trend qualification.",
+    )
+    parser.add_argument(
+        "--disable-breakout-symbol-trend-gate",
+        action="store_true",
+        help="Disable symbol-level trend tier gate for breakout states.",
+    )
+    parser.add_argument(
+        "--execution-breakout-linkage",
+        choices=["off", "soft_gate"],
+        default="off",
+        help="Execution linkage mode for breakout signals.",
+    )
+    parser.add_argument(
         "--data-domain",
         choices=["operational", "research"],
         default="operational",
@@ -318,6 +508,7 @@ if __name__ == "__main__":
         canary=args.canary,
         symbol_limit=args.symbol_limit,
         skip_preflight=args.skip_preflight,
+        skip_publish_network_checks=args.skip_publish_network_checks,
         data_domain=args.data_domain,
         include_delivery=not args.skip_delivery_collect,
         publish_quantstats=not args.skip_quantstats,
@@ -325,4 +516,27 @@ if __name__ == "__main__":
         quantstats_min_overlap=args.quantstats_min_overlap,
         quantstats_max_runs=args.quantstats_max_runs,
         quantstats_write_core_html=args.quantstats_write_core_html,
+        validate_bhavcopy_after_ingest=not args.disable_bhavcopy_validation,
+        bhavcopy_validation_date=args.bhavcopy_validation_date,
+        bhavcopy_validation_csv=args.bhavcopy_validation_csv,
+        bhavcopy_validation_source=args.bhavcopy_validation_source,
+        bhavcopy_min_coverage=args.bhavcopy_min_coverage,
+        bhavcopy_max_mismatch_ratio=args.bhavcopy_max_mismatch_ratio,
+        bhavcopy_close_tolerance_pct=args.bhavcopy_close_tolerance_pct,
+        dq_max_unknown_provider_pct=args.dq_max_unknown_provider_pct,
+        dq_max_unresolved_dates=args.dq_max_unresolved_dates,
+        dq_max_unresolved_symbol_dates=args.dq_max_unresolved_symbol_dates,
+        dq_max_unresolved_symbol_ratio_pct=args.dq_max_unresolved_symbol_ratio_pct,
+        dq_features_max_quarantined_symbols=args.dq_features_max_quarantined_symbols,
+        dq_features_max_quarantined_symbol_ratio_pct=args.dq_features_max_quarantined_symbol_ratio_pct,
+        breakout_engine=args.breakout_engine,
+        breakout_include_legacy_families=not args.disable_breakout_legacy_families,
+        breakout_market_bias_allowlist=args.breakout_market_bias_allowlist,
+        breakout_min_breadth_score=args.breakout_min_breadth_score,
+        breakout_sector_rs_min=args.breakout_sector_rs_min,
+        breakout_sector_rs_percentile_min=args.breakout_sector_rs_percentile_min,
+        breakout_qualified_min_score=args.breakout_qualified_min_score,
+        breakout_symbol_near_high_max_pct=args.breakout_symbol_near_high_max_pct,
+        breakout_symbol_trend_gate_enabled=not args.disable_breakout_symbol_trend_gate,
+        execution_breakout_linkage=args.execution_breakout_linkage,
     )

@@ -35,6 +35,7 @@ class TelegramReporter:
         self.report_dir.mkdir(parents=True, exist_ok=True)
         self.bot = None
         self._loop = None
+        self.last_error: Optional[str] = None
 
         if self.bot_token:
             self.bot = Bot(token=self.bot_token)
@@ -49,10 +50,12 @@ class TelegramReporter:
 
     def _validate_config(self) -> bool:
         if not self.bot:
-            logger.error("Telegram bot not configured. Set TELEGRAM_BOT_TOKEN")
+            self.last_error = "Telegram bot not configured. Set TELEGRAM_BOT_TOKEN"
+            logger.error(self.last_error)
             return False
         if not self.chat_id:
-            logger.error("Telegram chat_id not set. Set TELEGRAM_CHAT_ID")
+            self.last_error = "Telegram chat_id not set. Set TELEGRAM_CHAT_ID"
+            logger.error(self.last_error)
             return False
         return True
 
@@ -65,8 +68,10 @@ class TelegramReporter:
                 text=text,
                 parse_mode=parse_mode,
             )
+            self.last_error = None
             return True
         except TelegramError as e:
+            self.last_error = str(e)
             logger.error(f"Failed to send message: {e}")
             return False
 
@@ -88,8 +93,10 @@ class TelegramReporter:
                     photo=InputFile(f, filename=Path(photo_path).name),
                     caption=caption,
                 )
+            self.last_error = None
             return True
         except TelegramError as e:
+            self.last_error = str(e)
             logger.error(f"Failed to send photo: {e}")
             return False
 
@@ -113,8 +120,10 @@ class TelegramReporter:
                     document=InputFile(f, filename=Path(doc_path).name),
                     caption=caption,
                 )
+            self.last_error = None
             return True
         except TelegramError as e:
+            self.last_error = str(e)
             logger.error(f"Failed to send document: {e}")
             return False
 

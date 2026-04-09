@@ -52,11 +52,17 @@ class GoogleSheetsManager:
         self.spreadsheet_id = spreadsheet_id or runtime.spreadsheet_id
         self.client = None
         self.spreadsheet = None
+        self.last_error: Optional[str] = None
         self._authenticate()
+
+    def _set_error(self, message: str) -> None:
+        self.last_error = message
 
     def _authenticate(self):
         if not GOOGLE_AVAILABLE:
-            logger.warning("Google libraries not installed")
+            message = "Google libraries not installed"
+            self._set_error(message)
+            logger.warning(message)
             return
 
         creds = None
@@ -69,6 +75,7 @@ class GoogleSheetsManager:
                 if creds and creds.valid:
                     self.client = gspread.authorize(creds)
                     logger.info("Authenticated via token.json")
+                    self.last_error = None
                     return
                 elif creds and creds.refresh_token:
                     creds.refresh(Request())
@@ -76,9 +83,12 @@ class GoogleSheetsManager:
                         f.write(creds.to_json())
                     self.client = gspread.authorize(creds)
                     logger.info("Token refreshed and authenticated")
+                    self.last_error = None
                     return
             except Exception as e:
-                logger.warning(f"Token auth failed: {e}")
+                message = f"Token auth failed: {e}"
+                self._set_error(message)
+                logger.warning(message)
 
         if Path(self.credentials_path).exists():
             with open(self.credentials_path, "r") as f:
@@ -91,44 +101,59 @@ class GoogleSheetsManager:
                     )
                     self.client = gspread.authorize(credentials)
                     logger.info("Authenticated via service account")
+                    self.last_error = None
                     return
                 except Exception as e:
-                    logger.warning(f"Service account auth failed: {e}")
+                    message = f"Service account auth failed: {e}"
+                    self._set_error(message)
+                    logger.warning(message)
 
             elif '"installed"' in content or '"web"' in content:
                 logger.warning("OAuth2 credentials need re-authentication")
                 logger.info("Run: python oauth_flow.py")
 
                 if not creds or not creds.valid:
-                    logger.warning("OAuth2 credentials need re-authentication")
+                    message = "OAuth2 credentials need re-authentication"
+                    self._set_error(message)
+                    logger.warning(message)
                     logger.info("Please generate OAuth2 token via OAuth flow")
                     return
 
                 self.client = gspread.authorize(creds)
                 logger.info("Authenticated via OAuth2")
+                self.last_error = None
                 return
 
-        logger.warning(f"Credentials file not found: {self.credentials_path}")
+        message = f"Credentials file not found: {self.credentials_path}"
+        self._set_error(message)
+        logger.warning(message)
         logger.info("Please set up Google Sheets authentication")
 
     def open_spreadsheet(
         self, spreadsheet_id: Optional[str] = None
     ) -> Optional[Spreadsheet]:
         if not self.client:
-            logger.error("Not authenticated")
+            message = self.last_error or "Not authenticated"
+            self._set_error(message)
+            logger.error(message)
             return None
 
         sheet_id = spreadsheet_id or self.spreadsheet_id
         if not sheet_id:
-            logger.error("No spreadsheet ID provided")
+            message = "No spreadsheet ID provided"
+            self._set_error(message)
+            logger.error(message)
             return None
 
         try:
             self.spreadsheet = self.client.open_by_key(sheet_id)
             logger.info(f"Opened spreadsheet: {self.spreadsheet.title}")
+            self.last_error = None
             return self.spreadsheet
         except Exception as e:
-            logger.error(f"Failed to open spreadsheet: {e}")
+            message = f"Failed to open spreadsheet: {e}"
+            self._set_error(message)
+            logger.error(message)
             return None
 
     def get_worksheet(self, sheet_name: str) -> Optional[Worksheet]:
@@ -141,7 +166,9 @@ class GoogleSheetsManager:
         try:
             return self.spreadsheet.worksheet(sheet_name)
         except Exception:
-            logger.error(f"Worksheet '{sheet_name}' not found")
+            message = f"Worksheet '{sheet_name}' not found"
+            self._set_error(message)
+            logger.error(message)
             return None
 
     def read_worksheet(self, sheet_name: str = "Sheet1") -> Optional[pd.DataFrame]:
@@ -153,9 +180,12 @@ class GoogleSheetsManager:
             data = worksheet.get_all_records()
             df = pd.DataFrame(data)
             logger.info(f"Read {len(df)} rows from '{sheet_name}'")
+            self.last_error = None
             return df
         except Exception as e:
-            logger.error(f"Failed to read worksheet: {e}")
+            message = f"Failed to read worksheet: {e}"
+            self._set_error(message)
+            logger.error(message)
             return None
 
     def write_dataframe(
@@ -198,9 +228,12 @@ class GoogleSheetsManager:
                 worksheet.update(data, range_name=start_cell)
 
             logger.info(f"Wrote {len(df)} rows to '{sheet_name}'")
+            self.last_error = None
             return True
         except Exception as e:
-            logger.error(f"Failed to write to worksheet: {e}")
+            message = f"Failed to write to worksheet: {e}"
+            self._set_error(message)
+            logger.error(message)
             return False
 
     def append_rows(
@@ -221,9 +254,12 @@ class GoogleSheetsManager:
 
             worksheet.append_rows(data)
             logger.info(f"Appended {len(df)} rows to '{sheet_name}'")
+            self.last_error = None
             return True
         except Exception as e:
-            logger.error(f"Failed to append rows: {e}")
+            message = f"Failed to append rows: {e}"
+            self._set_error(message)
+            logger.error(message)
             return False
 
     def clear_worksheet(self, sheet_name: str = "Sheet1") -> bool:
@@ -234,9 +270,12 @@ class GoogleSheetsManager:
         try:
             worksheet.clear()
             logger.info(f"Cleared worksheet '{sheet_name}'")
+            self.last_error = None
             return True
         except Exception as e:
-            logger.error(f"Failed to clear worksheet: {e}")
+            message = f"Failed to clear worksheet: {e}"
+            self._set_error(message)
+            logger.error(message)
             return False
 
     def list_worksheets(self) -> List[str]:
@@ -266,9 +305,12 @@ class GoogleSheetsManager:
         try:
             worksheet = self.spreadsheet.add_worksheet(title, rows, cols)
             logger.info(f"Created worksheet: {title}")
+            self.last_error = None
             return worksheet
         except Exception as e:
-            logger.error(f"Failed to create worksheet: {e}")
+            message = f"Failed to create worksheet: {e}"
+            self._set_error(message)
+            logger.error(message)
             return None
 
 

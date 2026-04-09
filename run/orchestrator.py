@@ -249,10 +249,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Select the data/storage domain backing this run.",
     )
     parser.add_argument("--local-publish", action="store_true", help="Skip networked publish targets")
-    parser.add_argument("--smoke", action="store_true", help="Run a self-contained local smoke flow")
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Deprecated. Smoke mode is disabled because synthetic data is not allowed.",
+    )
     parser.add_argument("--symbol-limit", type=int, default=None, help="Limit live symbol universe for canary runs")
     parser.add_argument("--canary", action="store_true", help="Run a smaller live canary flow")
     parser.add_argument("--skip-preflight", action="store_true", help="Skip local readiness checks")
+    parser.add_argument(
+        "--skip-publish-network-checks",
+        action="store_true",
+        help="Skip preflight DNS checks for Telegram/Google publish endpoints.",
+    )
     parser.add_argument(
         "--skip-delivery-collect",
         action="store_true",
@@ -355,12 +364,71 @@ def build_parser() -> argparse.ArgumentParser:
         default=5.0,
         help="Paper-trading slippage in basis points for simulated fills.",
     )
+    parser.add_argument(
+        "--breakout-engine",
+        choices=["legacy", "v2"],
+        default="v2",
+        help="Breakout scanner engine mode.",
+    )
+    parser.add_argument(
+        "--disable-breakout-legacy-families",
+        action="store_true",
+        help="When using breakout-v2, exclude mapped legacy setup families from results.",
+    )
+    parser.add_argument(
+        "--breakout-market-bias-allowlist",
+        default="BULLISH,NEUTRAL",
+        help="Comma-separated market bias values allowed for qualified breakout states.",
+    )
+    parser.add_argument(
+        "--breakout-min-breadth-score",
+        type=float,
+        default=45.0,
+        help="Minimum breadth score required for breakout qualification.",
+    )
+    parser.add_argument(
+        "--breakout-sector-rs-min",
+        type=float,
+        default=None,
+        help="Optional absolute minimum sector RS value required for breakout qualification.",
+    )
+    parser.add_argument(
+        "--breakout-sector-rs-percentile-min",
+        type=float,
+        default=60.0,
+        help="Minimum sector RS percentile required for breakout qualification.",
+    )
+    parser.add_argument(
+        "--breakout-qualified-min-score",
+        type=int,
+        default=3,
+        help="Minimum breakout score needed to mark a breakout as qualified.",
+    )
+    parser.add_argument(
+        "--breakout-symbol-near-high-max-pct",
+        type=float,
+        default=15.0,
+        help="Maximum allowed distance from 52W high (%%) for Tier-A symbol trend qualification.",
+    )
+    parser.add_argument(
+        "--disable-breakout-symbol-trend-gate",
+        action="store_true",
+        help="Disable symbol-level trend tier gate for breakout states.",
+    )
+    parser.add_argument(
+        "--execution-breakout-linkage",
+        choices=["off", "soft_gate"],
+        default="off",
+        help="Execution linkage mode for breakout signals.",
+    )
     return parser
 
 
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.smoke:
+        raise RuntimeError("Smoke mode has been removed because synthetic pipeline data is no longer allowed.")
 
     project_root = Path(__file__).resolve().parents[1]
     orchestrator = PipelineOrchestrator(project_root)
@@ -384,6 +452,7 @@ def main() -> None:
             "symbol_limit": args.symbol_limit if args.symbol_limit is not None else (25 if args.canary else None),
             "canary": args.canary,
             "preflight": not args.skip_preflight,
+            "preflight_publish_network_checks": not args.skip_publish_network_checks,
             "include_delivery": not args.skip_delivery_collect,
             "publish_quantstats": not args.skip_quantstats,
             "quantstats_top_n": args.quantstats_top_n,
@@ -401,6 +470,16 @@ def main() -> None:
             "execution_regime": args.execution_regime,
             "execution_regime_multiplier": args.execution_regime_multiplier,
             "paper_slippage_bps": args.paper_slippage_bps,
+            "breakout_engine": args.breakout_engine,
+            "breakout_include_legacy_families": not args.disable_breakout_legacy_families,
+            "breakout_market_bias_allowlist": args.breakout_market_bias_allowlist,
+            "breakout_min_breadth_score": args.breakout_min_breadth_score,
+            "breakout_sector_rs_min": args.breakout_sector_rs_min,
+            "breakout_sector_rs_percentile_min": args.breakout_sector_rs_percentile_min,
+            "breakout_qualified_min_score": args.breakout_qualified_min_score,
+            "breakout_symbol_near_high_max_pct": args.breakout_symbol_near_high_max_pct,
+            "breakout_symbol_trend_gate_enabled": not args.disable_breakout_symbol_trend_gate,
+            "execution_breakout_linkage": args.execution_breakout_linkage,
         },
     )
 

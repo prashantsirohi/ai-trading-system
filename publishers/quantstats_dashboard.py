@@ -58,7 +58,9 @@ def _parse_run_date(run_id: str, fallback_mtime: float) -> pd.Timestamp:
     match = re.match(r"^pipeline-(\d{4}-\d{2}-\d{2})-", str(run_id))
     if match:
         return pd.Timestamp(match.group(1))
-    return pd.Timestamp.utcfromtimestamp(float(fallback_mtime)).normalize()
+    # Keep run-date keys timezone-naive across both parsing paths so
+    # snapshot sorting/comparisons never mix naive and tz-aware timestamps.
+    return pd.Timestamp.utcfromtimestamp(float(fallback_mtime)).tz_localize(None).normalize()
 
 
 def _latest_ranked_snapshots(

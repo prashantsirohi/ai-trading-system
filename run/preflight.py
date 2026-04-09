@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import socket
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List
@@ -40,6 +41,8 @@ class PreflightChecker:
             if publish_requested or bool(params.get("publish_test", False)):
                 checks.extend(self._check_telegram())
                 checks.extend(self._check_google_sheets())
+                if bool(params.get("preflight_publish_network_checks", True)):
+                    checks.extend(self._check_publish_network())
 
         blocking = [check for check in checks if check.severity == "critical" and check.status == "failed"]
         return {
@@ -127,6 +130,20 @@ class PreflightChecker:
             )
         )
         return checks
+
+    def _check_publish_network(self) -> List[PreflightCheck]:
+        return [
+            self._dns_check("telegram_dns_api", "api.telegram.org", "critical"),
+            self._dns_check("google_dns_oauth2", "oauth2.googleapis.com", "critical"),
+            self._dns_check("google_dns_sheets", "sheets.googleapis.com", "critical"),
+        ]
+
+    def _dns_check(self, name: str, host: str, severity: str) -> PreflightCheck:
+        try:
+            socket.getaddrinfo(host, 443)
+            return PreflightCheck(name, "passed", severity, f"{host} resolves.")
+        except Exception as exc:
+            return PreflightCheck(name, "failed", severity, f"DNS resolve failed for {host}: {exc}")
 
     def _env_required(self, name: str, severity: str) -> PreflightCheck:
         value = os.getenv(name)
