@@ -1,8 +1,10 @@
 import os
 import io
 import asyncio
+import socket
+import ssl
 from pathlib import Path
-from typing import Optional, List, Union
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import quantstats as qs
@@ -14,6 +16,7 @@ load_project_env(__file__)
 try:
     from telegram import Bot, InputFile
     from telegram.error import TelegramError
+    from telegram.request import HTTPXRequest
 except ImportError:
     raise ImportError(
         "python-telegram-bot is required. Install with: pip install python-telegram-bot"
@@ -22,6 +25,8 @@ from utils.logger import logger
 
 
 class TelegramReporter:
+    TELEGRAM_HOST = "api.telegram.org"
+
     def __init__(
         self,
         bot_token: Optional[str] = None,
@@ -36,9 +41,19 @@ class TelegramReporter:
         self.bot = None
         self._loop = None
         self.last_error: Optional[str] = None
+        self.last_error_code: Optional[str] = None
+        self.last_health_check: Optional[Dict[str, str]] = None
+        self.send_attempts = runtime.send_attempts
+        self.dns_precheck_enabled = runtime.dns_precheck_enabled
 
         if self.bot_token:
-            self.bot = Bot(token=self.bot_token)
+            request = HTTPXRequest(
+                connect_timeout=runtime.connect_timeout_seconds,
+                read_timeout=runtime.read_timeout_seconds,
+                write_timeout=runtime.write_timeout_seconds,
+                pool_timeout=runtime.pool_timeout_seconds,
+            )
+            self.bot = Bot(token=self.bot_token, request=request)
 
     def _get_or_create_loop(self):
         try:
@@ -50,30 +65,103 @@ class TelegramReporter:
 
     def _validate_config(self) -> bool:
         if not self.bot:
+            self.last_error_code = "telegram_not_configured"
             self.last_error = "Telegram bot not configured. Set TELEGRAM_BOT_TOKEN"
             logger.error(self.last_error)
             return False
         if not self.chat_id:
+            self.last_error_code = "telegram_chat_missing"
             self.last_error = "Telegram chat_id not set. Set TELEGRAM_CHAT_ID"
             logger.error(self.last_error)
             return False
         return True
 
-    async def _send_message_async(self, text: str, parse_mode: str = "HTML") -> bool:
+    def _record_error(self, code: str, message: str) -> None:
+        self.last_error_code = code
+        self.last_error = message
+
+    def _reset_last_error(self) -> None:
+        self.last_error = None
+        self.last_error_code = None
+
+    def _health_check(self) -> bool:
+        if not self.dns_precheck_enabled:
+            self.last_health_check = {
+                "status": "skipped",
+                "kind": "telegram_dns_precheck_disabled",
+                "detail": "DNS precheck disabled by configuration.",
+            }
+            return True
+        try:
+            socket.getaddrinfo(self.TELEGRAM_HOST, 443)
+            self.last_health_check = {
+                "status": "ok",
+                "kind": "telegram_dns_ok",
+                "detail": f"Resolved {self.TELEGRAM_HOST}",
+            }
+            return True
+        except OSError as exc:
+            detail = f"Unable to resolve {self.TELEGRAM_HOST}: {exc}"
+            self.last_health_check = {
+                "status": "failed",
+                "kind": "telegram_dns_failure",
+                "detail": detail,
+            }
+            self._record_error("telegram_dns_failure", detail)
+            logger.warning("Telegram DNS precheck failed for %s: %s", self.TELEGRAM_HOST, exc)
+            return False
+
+    def _classify_exception(self, exc: Exception) -> Tuple[str, str]:
+        message = str(exc).strip() or exc.__class__.__name__
+        lowered = message.lower()
+        if isinstance(exc, ssl.SSLError) or "ssl" in lowered or "tls" in lowered or "record_layer_failure" in lowered:
+            return "telegram_ssl_failure", f"Telegram SSL failure: {message}"
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or "timed out" in lowered or "timeout" in lowered:
+            return "telegram_timeout", f"Telegram timeout: {message}"
+        if isinstance(exc, socket.gaierror) or "getaddrinfo" in lowered or "name or service not known" in lowered or "nodename nor servname provided" in lowered:
+            return "telegram_dns_failure", f"Telegram DNS failure: {message}"
+        if isinstance(exc, OSError) and ("temporary failure in name resolution" in lowered or "name resolution" in lowered):
+            return "telegram_dns_failure", f"Telegram DNS failure: {message}"
+        if isinstance(exc, TelegramError):
+            return "telegram_api_error", f"Telegram API error: {message}"
+        return "telegram_network_error", f"Telegram network failure: {message}"
+
+    async def _send_with_retry(
+        self,
+        sender: Callable[[], Awaitable[None]],
+    ) -> bool:
         if not self._validate_config():
             return False
-        try:
+        if not self._health_check():
+            return False
+        for attempt in range(1, self.send_attempts + 1):
+            try:
+                await sender()
+                self._reset_last_error()
+                return True
+            except Exception as exc:
+                code, detail = self._classify_exception(exc)
+                self._record_error(code, detail)
+                logger.error(
+                    "Telegram send failed on attempt %s/%s [%s]: %s",
+                    attempt,
+                    self.send_attempts,
+                    code,
+                    exc,
+                )
+                if attempt >= self.send_attempts:
+                    return False
+        return False
+
+    async def _send_message_async(self, text: str, parse_mode: str = "HTML") -> bool:
+        async def _sender() -> None:
             await self.bot.send_message(
                 chat_id=self.chat_id,
                 text=text,
                 parse_mode=parse_mode,
             )
-            self.last_error = None
-            return True
-        except TelegramError as e:
-            self.last_error = str(e)
-            logger.error(f"Failed to send message: {e}")
-            return False
+
+        return await self._send_with_retry(_sender)
 
     def send_message(self, text: str, parse_mode: str = "HTML") -> bool:
         loop = self._get_or_create_loop()
@@ -84,21 +172,15 @@ class TelegramReporter:
         photo_path: Union[str, Path],
         caption: Optional[str] = None,
     ) -> bool:
-        if not self._validate_config():
-            return False
-        try:
+        async def _sender() -> None:
             with open(photo_path, "rb") as f:
                 await self.bot.send_photo(
                     chat_id=self.chat_id,
                     photo=InputFile(f, filename=Path(photo_path).name),
                     caption=caption,
                 )
-            self.last_error = None
-            return True
-        except TelegramError as e:
-            self.last_error = str(e)
-            logger.error(f"Failed to send photo: {e}")
-            return False
+
+        return await self._send_with_retry(_sender)
 
     def send_photo(
         self, photo_path: Union[str, Path], caption: Optional[str] = None
@@ -111,21 +193,15 @@ class TelegramReporter:
         doc_path: Union[str, Path],
         caption: Optional[str] = None,
     ) -> bool:
-        if not self._validate_config():
-            return False
-        try:
+        async def _sender() -> None:
             with open(doc_path, "rb") as f:
                 await self.bot.send_document(
                     chat_id=self.chat_id,
                     document=InputFile(f, filename=Path(doc_path).name),
                     caption=caption,
                 )
-            self.last_error = None
-            return True
-        except TelegramError as e:
-            self.last_error = str(e)
-            logger.error(f"Failed to send document: {e}")
-            return False
+
+        return await self._send_with_retry(_sender)
 
     def send_document(
         self, doc_path: Union[str, Path], caption: Optional[str] = None

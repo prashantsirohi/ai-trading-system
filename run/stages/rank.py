@@ -25,7 +25,9 @@ class RankStage:
         self.ml_overlay_builder = ml_overlay_builder
 
     def run(self, context: StageContext) -> StageResult:
-        outputs = self._run_smoke(context) if context.params.get("smoke") else self._run_default(context)
+        if context.params.get("smoke"):
+            raise RuntimeError("Smoke mode is disabled because synthetic ranking artifacts have been removed.")
+        outputs = self._run_default(context)
         stage_metadata = outputs.pop("__stage_metadata__", {})
         dashboard_payload = outputs.pop("__dashboard_payload__", None)
         outputs, stage_metadata, dashboard_payload, pending_prediction_logs = self._apply_ml_overlay(
@@ -100,6 +102,7 @@ class RankStage:
         if self.operation is not None:
             return self.operation(context)
 
+        from analytics.data_trust import load_data_trust_summary
         from analytics.ranker import StockRanker
         from channel import sector_dashboard, stock_scan
         from channel.breakout_scan import scan_breakouts
@@ -108,6 +111,15 @@ class RankStage:
             project_root=context.project_root,
             data_domain=context.params.get("data_domain", "operational"),
         )
+        trust_summary = load_data_trust_summary(context.db_path, run_date=context.run_date)
+        if trust_summary.get("status") == "blocked" and not bool(context.params.get("allow_untrusted_rank", False)):
+            raise RuntimeError(
+                "Ranking blocked because active data quarantine remains for the current trust window."
+            )
+        if trust_summary.get("status") == "degraded":
+            warnings = [f"data trust degraded: fallback_ratio={float(trust_summary.get('fallback_ratio_latest', 0.0) or 0.0) * 100:.1f}%"]
+        else:
+            warnings = []
         ranker = StockRanker(
             ohlcv_db_path=str(context.db_path),
             feature_store_dir=str(paths.feature_store_dir),
@@ -120,14 +132,41 @@ class RankStage:
         )
 
         outputs: Dict[str, pd.DataFrame] = {"ranked_signals": ranked}
-        warnings: list[str] = []
-
         try:
+            breakout_market_bias_allowlist = context.params.get("breakout_market_bias_allowlist", "BULLISH,NEUTRAL")
+            if isinstance(breakout_market_bias_allowlist, str):
+                breakout_market_bias_allowlist = [
+                    item.strip()
+                    for item in breakout_market_bias_allowlist.split(",")
+                    if item.strip()
+                ]
             outputs["breakout_scan"] = scan_breakouts(
                 ohlcv_db_path=str(context.db_path),
                 feature_store_dir=str(paths.feature_store_dir),
                 master_db_path=str(paths.master_db_path),
                 date=context.run_date,
+                ranked_df=ranked,
+                breakout_engine=str(context.params.get("breakout_engine", "v2")),
+                include_legacy_families=bool(context.params.get("breakout_include_legacy_families", True)),
+                market_bias_allowlist=breakout_market_bias_allowlist,
+                min_breadth_score=float(context.params.get("breakout_min_breadth_score", 45.0)),
+                sector_rs_min=(
+                    float(context.params.get("breakout_sector_rs_min"))
+                    if context.params.get("breakout_sector_rs_min") not in (None, "")
+                    else None
+                ),
+                sector_rs_percentile_min=(
+                    float(context.params.get("breakout_sector_rs_percentile_min", 60.0))
+                    if context.params.get("breakout_sector_rs_percentile_min") not in (None, "")
+                    else None
+                ),
+                breakout_qualified_min_score=int(context.params.get("breakout_qualified_min_score", 3)),
+                breakout_symbol_trend_gate_enabled=bool(
+                    context.params.get("breakout_symbol_trend_gate_enabled", True)
+                ),
+                breakout_symbol_near_high_max_pct=float(
+                    context.params.get("breakout_symbol_near_high_max_pct", 15.0)
+                ),
             )
         except Exception as exc:
             outputs["breakout_scan"] = pd.DataFrame()
@@ -162,6 +201,7 @@ class RankStage:
         outputs["__stage_metadata__"] = {
             "degraded_outputs": warnings,
             "degraded_output_count": len(warnings),
+            "data_trust_status": trust_summary.get("status"),
         }
         outputs["__dashboard_payload__"] = self._build_dashboard_payload(
             context=context,
@@ -170,73 +210,9 @@ class RankStage:
             stock_scan_df=outputs.get("stock_scan", pd.DataFrame()),
             sector_dashboard_df=outputs.get("sector_dashboard", pd.DataFrame()),
             warnings=warnings,
+            trust_summary=trust_summary,
         )
         return outputs
-
-    def _run_smoke(self, context: StageContext) -> Dict[str, pd.DataFrame]:
-        ranked = pd.DataFrame(
-            [
-                {
-                    "symbol_id": "SMOKE",
-                    "exchange": "NSE",
-                    "close": 104.0,
-                    "composite_score": 88.5,
-                    "rel_strength_score": 90.0,
-                }
-            ]
-        )
-        stock_scan = pd.DataFrame(
-            [
-                {
-                    "Symbol": "SMOKE",
-                    "category": "BUY",
-                    "why": "Smoke test strength",
-                    "score": 88.5,
-                }
-            ]
-        )
-        sector_dashboard = pd.DataFrame(
-            [
-                {
-                    "Sector": "Smoke Sector",
-                    "RS": 0.9,
-                    "Momentum": 0.2,
-                    "Quadrant": "Leading",
-                }
-            ]
-        )
-        return {
-            "ranked_signals": ranked,
-            "breakout_scan": pd.DataFrame(
-                [
-                    {
-                        "symbol_id": "SMOKE",
-                        "sector": "Smoke Sector",
-                        "breakout_tag": "range_breakout_volume_supertrend",
-                        "setup_quality": 92.0,
-                    }
-                ]
-            ),
-            "stock_scan": stock_scan,
-            "sector_dashboard": sector_dashboard,
-            "__dashboard_payload__": self._build_dashboard_payload(
-                context=context,
-                ranked_df=ranked,
-                breakout_df=pd.DataFrame(
-                    [
-                        {
-                            "symbol_id": "SMOKE",
-                            "sector": "Smoke Sector",
-                            "breakout_tag": "range_breakout_volume_supertrend",
-                            "setup_quality": 92.0,
-                        }
-                    ]
-                ),
-                stock_scan_df=stock_scan,
-                sector_dashboard_df=sector_dashboard,
-                warnings=[],
-            ),
-        }
 
     def _apply_ml_overlay(
         self,
@@ -384,6 +360,7 @@ class RankStage:
         stock_scan_df: pd.DataFrame,
         sector_dashboard_df: pd.DataFrame,
         warnings: list[str],
+        trust_summary: Dict[str, Any] | None = None,
     ) -> Dict[str, object]:
         """Assemble a unified operator payload from the rank-stage artifacts."""
 
@@ -396,6 +373,22 @@ class RankStage:
         if not sector_dashboard_df.empty:
             sector_col = "Sector" if "Sector" in sector_dashboard_df.columns else sector_dashboard_df.columns[0]
             top_sector = sector_dashboard_df.iloc[0].get(sector_col)
+        breakout_state_counts: Dict[str, int] = {}
+        if breakout_df is not None and not breakout_df.empty and "breakout_state" in breakout_df.columns:
+            breakout_state_counts = (
+                breakout_df["breakout_state"]
+                .astype(str)
+                .value_counts()
+                .to_dict()
+            )
+        candidate_tier_counts: Dict[str, int] = {}
+        if breakout_df is not None and not breakout_df.empty and "candidate_tier" in breakout_df.columns:
+            candidate_tier_counts = (
+                breakout_df["candidate_tier"]
+                .astype(str)
+                .value_counts()
+                .to_dict()
+            )
 
         return {
             "summary": {
@@ -411,11 +404,24 @@ class RankStage:
                     else None
                 ),
                 "top_sector": top_sector,
+                "breakout_engine": str(context.params.get("breakout_engine", "v2")),
+                "breakout_qualified_count": int(breakout_state_counts.get("qualified", 0)),
+                "breakout_watchlist_count": int(breakout_state_counts.get("watchlist", 0)),
+                "breakout_filtered_count": int(
+                    breakout_state_counts.get("filtered_by_regime", 0)
+                    + breakout_state_counts.get("filtered_by_symbol_trend", 0)
+                ),
+                "breakout_state_counts": breakout_state_counts,
+                "breakout_tier_counts": candidate_tier_counts,
+                "data_trust_status": (trust_summary or {}).get("status", "unknown"),
+                "latest_trade_date": (trust_summary or {}).get("latest_trade_date"),
+                "latest_validated_date": (trust_summary or {}).get("latest_validated_date"),
             },
             "ranked_signals": _records(ranked_df, limit=10),
             "breakout_scan": _records(breakout_df, limit=10),
             "stock_scan": _records(stock_scan_df, limit=10),
             "sector_dashboard": _records(sector_dashboard_df, limit=10),
+            "data_trust": trust_summary or {},
             "warnings": warnings,
         }
 

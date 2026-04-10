@@ -37,6 +37,14 @@ class DhanTokenManager:
 
         self.base_url = "https://api.dhan.co/v2"
         self.auth_url = "https://auth.dhan.co"
+        self.enable_renew_token = self._env_flag("DHAN_ENABLE_RENEW_TOKEN", default=False)
+
+    @staticmethod
+    def _env_flag(name: str, default: bool = False) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return bool(default)
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
     def save_token(self, new_token: str, expiry_time: str = None):
         """Save the new access token to .env file"""
@@ -110,6 +118,27 @@ class DhanTokenManager:
         expiry = self.get_token_expiry()
         return datetime.now() >= expiry
 
+    @staticmethod
+    def _safe_json(response: requests.Response) -> dict:
+        """Parse JSON response defensively."""
+        try:
+            payload = response.json()
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _extract_error_code(payload: dict) -> str:
+        """Extract Dhan-style error code from response payload."""
+        if not isinstance(payload, dict):
+            return ""
+        return str(
+            payload.get("errorCode")
+            or payload.get("error_code")
+            or (payload.get("remarks") or {}).get("error_code")
+            or ""
+        )
+
     def renew_token(self) -> dict:
         """
         Renew the access token.
@@ -131,37 +160,82 @@ class DhanTokenManager:
         try:
             logger.info("Attempting to renew access token...")
             response = requests.post(url, headers=headers, timeout=30)
+            result = self._safe_json(response)
+            if response.status_code == 200 and (
+                result.get("status") == "success" or "accessToken" in result
+            ):
+                new_token = result.get("accessToken", result.get("access_token"))
+                expiry_time = result.get("expiryTime", result.get("expiry_time"))
+                self.save_token(new_token, expiry_time)
+                self.access_token = new_token
+                logger.info(f"Token renewed successfully. Expires at: {expiry_time}")
+                return {
+                    "status": "success",
+                    "access_token": new_token,
+                    "expiry_time": expiry_time,
+                    "source": "renew_token",
+                }
 
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("status") == "success" or "accessToken" in result:
-                    new_token = result.get("accessToken", result.get("access_token"))
-                    expiry_time = result.get("expiryTime", result.get("expiry_time"))
-
-                    self.save_token(new_token, expiry_time)
-                    self.access_token = new_token
-
-                    logger.info(
-                        f"Token renewed successfully. Expires at: {expiry_time}"
-                    )
-                    return {
-                        "status": "success",
-                        "access_token": new_token,
-                        "expiry_time": expiry_time,
-                    }
+            error_code = self._extract_error_code(result)
+            # Observed in production: RenewToken can return DH-905 even when
+            # the current token is still valid. In that case keep using it.
+            if error_code == "DH-905" and self.access_token and not self.is_token_expired():
+                logger.warning(
+                    "RenewToken returned DH-905 but existing token is still valid. "
+                    "Continuing with current token."
+                )
+                return {
+                    "status": "success",
+                    "access_token": self.access_token,
+                    "expiry_time": self.get_token_expiry().isoformat(),
+                    "source": "existing_token_after_dh905",
+                }
 
             logger.warning(
                 f"Token renewal failed ({response.status_code}): {response.text}. "
                 f"Falling back to OAuth token generation..."
             )
-            return self.generate_token()
+            generated = self.generate_token()
+            if generated.get("status") == "success":
+                generated.setdefault("source", "generate_access_token")
+                return generated
+            # If generation is rate-limited but token remains usable, preserve continuity.
+            if self.access_token and not self.is_token_expired():
+                logger.warning(
+                    "Token generation failed after renewal fallback, but existing token "
+                    "is still valid. Continuing with current token."
+                )
+                return {
+                    "status": "success",
+                    "access_token": self.access_token,
+                    "expiry_time": self.get_token_expiry().isoformat(),
+                    "source": "existing_token_after_generate_failure",
+                    "message": generated.get("message"),
+                }
+            return generated
 
         except requests.exceptions.RequestException as e:
             logger.warning(
                 f"Request error during token renewal: {e}. "
                 f"Falling back to OAuth token generation..."
             )
-            return self.generate_token()
+            generated = self.generate_token()
+            if generated.get("status") == "success":
+                generated.setdefault("source", "generate_access_token")
+                return generated
+            if self.access_token and not self.is_token_expired():
+                logger.warning(
+                    "Token generation failed after request error, but existing token "
+                    "is still valid. Continuing with current token."
+                )
+                return {
+                    "status": "success",
+                    "access_token": self.access_token,
+                    "expiry_time": self.get_token_expiry().isoformat(),
+                    "source": "existing_token_after_request_error",
+                    "message": generated.get("message"),
+                }
+            return generated
 
     def generate_token(self) -> dict:
         """
@@ -248,31 +322,45 @@ class DhanTokenManager:
     def ensure_valid_token(self, hours_before_expiry: int = 1) -> str:
         """
         Ensure we have a valid access token.
-        Renews if token is expiring within specified hours.
+        Default policy uses fresh TOTP generation for expired/expiring tokens.
+        RenewToken is only attempted when DHAN_ENABLE_RENEW_TOKEN=1.
         Returns the current access token.
         """
-        if not self.access_token:
-            logger.info("No access token found. Generating new token...")
+        def _generate_fresh_token(reason: str) -> str | None:
+            logger.info(reason)
             result = self.generate_token()
             if result.get("status") == "success":
+                self.access_token = result["access_token"]
                 return result["access_token"]
             return None
 
-        if self.is_token_expiring_soon(hours_before_expiry):
-            logger.info(
-                f"Token is expiring soon (within {hours_before_expiry} hour(s)). Renewing..."
+        if not self.access_token:
+            return _generate_fresh_token("No access token found. Generating new token...")
+
+        if self.is_token_expired():
+            return _generate_fresh_token(
+                "Token is expired or rejected by profile check. Generating fresh token via TOTP..."
             )
-            result = self.renew_token()
-            if result.get("status") == "success":
-                return result["access_token"]
-            else:
-                logger.warning(
-                    f"Token renewal failed: {result.get('message')}. Trying to generate new token..."
+
+        if self.is_token_expiring_soon(hours_before_expiry):
+            if self.enable_renew_token:
+                logger.info(
+                    "Token is expiring soon (within %s hour(s)). "
+                    "Trying RenewToken because DHAN_ENABLE_RENEW_TOKEN is enabled...",
+                    hours_before_expiry,
                 )
-                result = self.generate_token()
+                result = self.renew_token()
                 if result.get("status") == "success":
+                    self.access_token = result["access_token"]
                     return result["access_token"]
-                return None
+                logger.warning(
+                    "Token renewal failed: %s. Falling back to fresh token generation...",
+                    result.get("message"),
+                )
+            return _generate_fresh_token(
+                f"Token is expiring soon (within {hours_before_expiry} hour(s)). "
+                "Generating fresh token via TOTP..."
+            )
 
         return self.access_token
 

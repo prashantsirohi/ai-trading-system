@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,6 +87,33 @@ DEFAULT_RULES = [
         "owner": "pipeline",
     },
     {
+        "rule_id": "ingest_recent_universe_price_jump_anomaly",
+        "stage_name": "ingest",
+        "dataset_name": "_catalog",
+        "severity": "critical",
+        "rule_sql": None,
+        "description": "Recent universe-wide price jumps should not show broad anomalous spikes.",
+        "owner": "pipeline",
+    },
+    {
+        "rule_id": "ingest_provider_coverage_low",
+        "stage_name": "ingest",
+        "dataset_name": "_catalog",
+        "severity": "critical",
+        "rule_sql": None,
+        "description": "Primary provider coverage for the latest trading date is lower than expected.",
+        "owner": "pipeline",
+    },
+    {
+        "rule_id": "ingest_unresolved_dates_present",
+        "stage_name": "ingest",
+        "dataset_name": "_catalog_quarantine",
+        "severity": "critical",
+        "rule_sql": None,
+        "description": "Ingest should not leave unresolved dates quarantined for the requested run.",
+        "owner": "pipeline",
+    },
+    {
         "rule_id": "features_snapshot_created",
         "stage_name": "features",
         "dataset_name": "feature_snapshot",
@@ -115,6 +144,15 @@ DEFAULT_RULES = [
             FROM _catalog
         """,
         "description": "Feature runs should operate on recent catalog data.",
+        "owner": "pipeline",
+    },
+    {
+        "rule_id": "features_trust_quarantine_clear",
+        "stage_name": "features",
+        "dataset_name": "_catalog_quarantine",
+        "severity": "critical",
+        "rule_sql": None,
+        "description": "Features should not run while active quarantines exist for the current trust window.",
         "owner": "pipeline",
     },
     {
@@ -169,6 +207,9 @@ DEFAULT_RULES = [
     },
 ]
 
+_REGISTRY_INIT_LOCK = threading.Lock()
+_INITIALIZED_DB_PATHS: set[str] = set()
+
 
 class RegistryStore:
     """Persists run metadata and governance records into DuckDB."""
@@ -180,8 +221,7 @@ class RegistryStore:
         # model governance, or pipeline run tracking.
         self.db_path = Path(db_path) if db_path else self.project_root / "data" / "control_plane.duckdb"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._apply_migrations()
-        self.seed_default_rules()
+        self._ensure_initialized()
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
         return duckdb.connect(str(self.db_path))
@@ -191,6 +231,22 @@ class RegistryStore:
         if candidate_root.exists():
             return candidate_root
         return Path(__file__).resolve().parents[2] / "sql" / "migrations"
+
+    def _ensure_initialized(self) -> None:
+        db_key = str(self.db_path.resolve())
+        with _REGISTRY_INIT_LOCK:
+            if db_key in _INITIALIZED_DB_PATHS:
+                return
+            for attempt in range(3):
+                try:
+                    self._apply_migrations()
+                    self.seed_default_rules()
+                    _INITIALIZED_DB_PATHS.add(db_key)
+                    return
+                except duckdb.TransactionException:
+                    if attempt == 2:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
 
     def _apply_migrations(self) -> None:
         conn = self._connect()
@@ -1147,17 +1203,22 @@ class RegistryStore:
             for row in rows
         ]
 
-    def get_stage_runs(self, run_id: str) -> List[Dict[str, Any]]:
+    def get_stage_runs(self, run_id: str, *, started_after: str | None = None) -> List[Dict[str, Any]]:
         conn = self._connect()
         try:
+            where_sql = "WHERE run_id = ?"
+            params: list[Any] = [run_id]
+            if started_after is not None:
+                where_sql += " AND started_at >= ?"
+                params.append(started_after)
             rows = conn.execute(
-                """
-                SELECT stage_name, attempt_number, status, error_class, error_message
+                f"""
+                SELECT stage_name, attempt_number, status, error_class, error_message, started_at, ended_at
                 FROM pipeline_stage_run
-                WHERE run_id = ?
+                {where_sql}
                 ORDER BY started_at, attempt_number
                 """,
-                [run_id],
+                params,
             ).fetchall()
         finally:
             conn.close()
@@ -1168,6 +1229,8 @@ class RegistryStore:
                 "status": row[2],
                 "error_class": row[3],
                 "error_message": row[4],
+                "started_at": str(row[5]) if row[5] is not None else None,
+                "ended_at": str(row[6]) if row[6] is not None else None,
             }
             for row in rows
         ]
@@ -1197,6 +1260,189 @@ class RegistryStore:
             "error_message": row[6],
             "metadata": self._loads(row[7]),
         }
+
+    def create_operator_task(
+        self,
+        *,
+        task_id: str,
+        task_type: str,
+        label: str,
+        status: str = "running",
+        started_at: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        result: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO operator_task
+                (task_id, task_type, label, status, started_at, finished_at, result_json, error, metadata_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), NULL, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                [
+                    task_id,
+                    task_type,
+                    label,
+                    status,
+                    started_at,
+                    self._json(result),
+                    error,
+                    self._json(metadata),
+                ],
+            )
+        finally:
+            conn.close()
+
+    def update_operator_task(
+        self,
+        task_id: str,
+        *,
+        status: Optional[str] = None,
+        finished_at: Optional[str] = None,
+        result: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        assignments: list[str] = ["updated_at = CURRENT_TIMESTAMP"]
+        params: list[Any] = []
+        if status is not None:
+            assignments.append("status = ?")
+            params.append(status)
+        if finished_at is not None:
+            assignments.append("finished_at = ?")
+            params.append(finished_at)
+        if result is not None:
+            assignments.append("result_json = ?")
+            params.append(self._json(result))
+        if error is not None:
+            assignments.append("error = ?")
+            params.append(error)
+        if metadata is not None:
+            assignments.append("metadata_json = ?")
+            params.append(self._json(metadata))
+        conn = self._connect()
+        try:
+            conn.execute(
+                f"UPDATE operator_task SET {', '.join(assignments)} WHERE task_id = ?",
+                [*params, task_id],
+            )
+        finally:
+            conn.close()
+
+    def append_operator_task_log(self, task_id: str, message: str) -> int:
+        conn = self._connect()
+        try:
+            next_order = conn.execute(
+                """
+                SELECT COALESCE(MAX(log_order), 0) + 1
+                FROM operator_task_log
+                WHERE task_id = ?
+                """,
+                [task_id],
+            ).fetchone()[0]
+            conn.execute(
+                """
+                INSERT INTO operator_task_log (task_id, log_order, message, created_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                [task_id, int(next_order), message],
+            )
+            conn.execute(
+                "UPDATE operator_task SET updated_at = CURRENT_TIMESTAMP WHERE task_id = ?",
+                [task_id],
+            )
+            return int(next_order)
+        finally:
+            conn.close()
+
+    def get_operator_task(self, task_id: str) -> Dict[str, Any]:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT task_id, task_type, label, status, started_at, finished_at, result_json, error, metadata_json
+                FROM operator_task
+                WHERE task_id = ?
+                """,
+                [task_id],
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise KeyError(f"Unknown task_id: {task_id}")
+        return {
+            "task_id": row[0],
+            "task_type": row[1],
+            "label": row[2],
+            "status": row[3],
+            "started_at": str(row[4]) if row[4] is not None else None,
+            "finished_at": str(row[5]) if row[5] is not None else None,
+            "result": self._loads(row[6]),
+            "error": row[7],
+            "metadata": self._loads(row[8]),
+        }
+
+    def list_operator_tasks(self, limit: int = 100) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT task_id, task_type, label, status, started_at, finished_at, result_json, error, metadata_json
+                FROM operator_task
+                ORDER BY started_at DESC NULLS LAST, task_id DESC
+                LIMIT ?
+                """,
+                [int(limit)],
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            {
+                "task_id": row[0],
+                "task_type": row[1],
+                "label": row[2],
+                "status": row[3],
+                "started_at": str(row[4]) if row[4] is not None else None,
+                "finished_at": str(row[5]) if row[5] is not None else None,
+                "result": self._loads(row[6]),
+                "error": row[7],
+                "metadata": self._loads(row[8]),
+            }
+            for row in rows
+        ]
+
+    def get_operator_task_logs(
+        self,
+        task_id: str,
+        *,
+        after: int = 0,
+        limit: int = 300,
+    ) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT log_order, message, created_at
+                FROM operator_task_log
+                WHERE task_id = ?
+                  AND log_order > ?
+                ORDER BY log_order
+                LIMIT ?
+                """,
+                [task_id, int(after), int(limit)],
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            {
+                "log_cursor": int(row[0]),
+                "message": row[1],
+                "created_at": str(row[2]) if row[2] is not None else None,
+            }
+            for row in rows
+        ]
 
     def count_rows(self, table_name: str) -> int:
         conn = self._connect()
@@ -1875,6 +2121,94 @@ class RegistryStore:
             }
             for row in rows
         ]
+
+    def record_data_repair_run(
+        self,
+        *,
+        repair_run_id: str,
+        from_date: str,
+        to_date: str,
+        exchange: str,
+        status: str,
+        repaired_row_count: int = 0,
+        unresolved_symbol_count: int = 0,
+        unresolved_date_count: int = 0,
+        report_uri: str | None = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO data_repair_run
+                (repair_run_id, from_date, to_date, exchange, status, repaired_row_count,
+                 unresolved_symbol_count, unresolved_date_count, report_uri, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(repair_run_id) DO UPDATE SET
+                    status = excluded.status,
+                    repaired_row_count = excluded.repaired_row_count,
+                    unresolved_symbol_count = excluded.unresolved_symbol_count,
+                    unresolved_date_count = excluded.unresolved_date_count,
+                    report_uri = excluded.report_uri,
+                    metadata_json = excluded.metadata_json
+                """,
+                [
+                    repair_run_id,
+                    from_date,
+                    to_date,
+                    exchange,
+                    status,
+                    int(repaired_row_count),
+                    int(unresolved_symbol_count),
+                    int(unresolved_date_count),
+                    report_uri,
+                    self._json(metadata),
+                ],
+            )
+        finally:
+            conn.close()
+
+    def get_latest_data_repair_run(self, exchange: str = "NSE") -> Optional[Dict[str, Any]]:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT
+                    repair_run_id,
+                    created_at,
+                    from_date,
+                    to_date,
+                    exchange,
+                    status,
+                    repaired_row_count,
+                    unresolved_symbol_count,
+                    unresolved_date_count,
+                    report_uri,
+                    metadata_json
+                FROM data_repair_run
+                WHERE exchange = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                [exchange],
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        return {
+            "repair_run_id": row[0],
+            "created_at": str(row[1]) if row[1] is not None else None,
+            "from_date": str(row[2]) if row[2] is not None else None,
+            "to_date": str(row[3]) if row[3] is not None else None,
+            "exchange": row[4],
+            "status": row[5],
+            "repaired_row_count": int(row[6] or 0),
+            "unresolved_symbol_count": int(row[7] or 0),
+            "unresolved_date_count": int(row[8] or 0),
+            "report_uri": row[9],
+            "metadata": self._loads(row[10]),
+        }
 
     def _json(self, payload: Optional[Dict[str, Any]]) -> Optional[str]:
         if payload is None:

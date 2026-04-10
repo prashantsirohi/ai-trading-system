@@ -14,6 +14,7 @@ ai-trading-pipeline = "run.orchestrator:main"
 ai-trading-publish-test = "run.publish_test:main"
 ai-trading-daily = "run.daily_pipeline:main"
 ai-trading-execution-ui = "ui.execution.app:main"
+ai-trading-execution-api = "ui.execution_api.app:main"
 ai-trading-research-recipe = "research.run_recipe:main"
 
 [tool.setuptools.packages.find]

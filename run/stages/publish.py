@@ -19,6 +19,13 @@ class PublishStage:
     """Publishes already-ranked artifacts to delivery channels."""
 
     name = "publish"
+    CHANNEL_ROLES = {
+        "google_sheets_portfolio": "publish_of_record",
+        "google_sheets_dashboard": "publish_of_record",
+        "quantstats_dashboard_tearsheet": "publish_of_record",
+        "telegram_summary": "informational",
+        "local_summary": "diagnostic",
+    }
 
     def __init__(
         self,
@@ -74,6 +81,7 @@ class PublishStage:
                 artifact=rank_artifact,
                 sender=lambda channel_handler=handler: channel_handler(context, rank_artifact, datasets),
             )
+            delivery["delivery_role"] = self.CHANNEL_ROLES.get(channel, "publish_auxiliary")
             targets.append(delivery)
             if delivery["status"] == "failed":
                 failures.append(f"{channel}: {delivery.get('error_message', 'delivery failed')}")
@@ -186,8 +194,10 @@ class PublishStage:
     ) -> Dict[str, Any]:
         from run.daily_pipeline import run_portfolio_analysis
 
-        run_portfolio_analysis()
-        return {"report_id": "portfolio_sheet"}
+        result = run_portfolio_analysis()
+        if not isinstance(result, dict) or not bool(result.get("ok")):
+            raise RuntimeError(str((result or {}).get("error") or "Portfolio publish failed"))
+        return {"report_id": "portfolio_sheet", "positions": result.get("positions")}
 
     def _publish_quantstats_dashboard(
         self,
@@ -242,8 +252,13 @@ class PublishStage:
         message = self._build_telegram_tearsheet(context, datasets)
         if not reporter.send_message(message):
             detail = reporter.last_error or "unknown Telegram error"
+            if reporter.last_health_check and reporter.last_health_check.get("status") == "failed":
+                detail = f"{detail} | precheck={reporter.last_health_check.get('kind')}"
             raise RuntimeError(f"send_message returned False: {detail}")
-        return {"message_id": f"telegram-{context.run_id}"}
+        return {
+            "message_id": f"telegram-{context.run_id}",
+            "delivery_role": self.CHANNEL_ROLES["telegram_summary"],
+        }
 
     def _build_telegram_tearsheet(
         self,

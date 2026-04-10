@@ -1183,7 +1183,7 @@ def _render_tasks_tab() -> None:
     st.subheader("ML Task Log")
     tasks = [
         task
-        for task in list_operator_tasks()
+        for task in list_operator_tasks(PROJECT_ROOT)
         if task.get("task_type") in {"ml_prepare_dataset", "ml_train_model", "ml_recipe_run", "ml_recipe_bundle", "shadow_monitor", "ml_workbench", "pipeline"}
     ]
     if not tasks:
@@ -1207,7 +1207,7 @@ def _render_tasks_tab() -> None:
         st.info("Tasks are present but none expose a usable task id yet.")
         return
     selected_task = st.selectbox("Inspect Task Logs", options=list(task_options.keys()))
-    logs = get_task_logs(task_options[selected_task])
+    logs = get_task_logs(task_options[selected_task], PROJECT_ROOT)
     if logs:
         st.code("\n".join(logs[-200:]), language="text")
     else:

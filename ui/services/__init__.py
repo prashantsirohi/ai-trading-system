@@ -11,8 +11,10 @@ from .execution_data import (
     pivot_shadow_summary_frame,
 )
 from .control_center import (
+    find_latest_publishable_run,
     get_recent_runs,
     get_run_details,
+    get_operator_task,
     get_task_logs,
     launch_streamlit_dashboard_task,
     launch_ml_workbench_task,
@@ -25,6 +27,7 @@ from .control_center import (
     launch_recipe_run_task,
     launch_train_model_task,
     list_operator_tasks,
+    terminate_operator_task,
 )
 from .ml_workbench import (
     approve_workbench_model,
@@ -62,7 +65,9 @@ __all__ = [
     "load_shadow_summary_frame",
     "pivot_shadow_summary_frame",
     "get_recent_runs",
+    "find_latest_publishable_run",
     "get_run_details",
+    "get_operator_task",
     "get_task_logs",
     "launch_streamlit_dashboard_task",
     "launch_ml_workbench_task",
@@ -75,6 +80,7 @@ __all__ = [
     "launch_recipe_run_task",
     "launch_train_model_task",
     "list_operator_tasks",
+    "terminate_operator_task",
     "approve_workbench_model",
     "delete_workbench_recipe",
     "delete_workbench_recipe_bundle",

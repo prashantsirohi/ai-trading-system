@@ -20,7 +20,7 @@ import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
-from urllib.parse import unquote_plus
+from urllib.parse import quote, unquote_plus
 
 import streamlit.components.v1 as components
 
@@ -43,10 +43,12 @@ from ui.research.data_access import (
     load_drilldown_history_for_symbols,
     load_latest_rank_frames,
     load_ops_health_snapshot,
+    load_portfolio_workspace_report,
     load_rank_history_for_symbols,
     load_sector_history_for_sectors,
     load_symbol_trust_snapshot,
     load_trade_report,
+    save_trade_journal_note,
 )
 from ui.research.dashboard_helpers import (
     build_rank_sparkline_payload,
@@ -61,6 +63,10 @@ from ui.research.widgets import (
     render_sector_rotation_heatmap,
     render_symbol_rank_history,
 )
+from execution.service import ExecutionService
+from execution.store import ExecutionStore
+from execution.adapters import PaperExecutionAdapter
+from execution.models import OrderIntent
 logging.getLogger("streamlit").setLevel(logging.WARNING)
 
 PROJECT_ROOT = str(PROJECT_ROOT_PATH)
@@ -78,6 +84,16 @@ RESEARCH_OHLCV_DB = str(RESEARCH_DOMAIN_PATHS.ohlcv_db_path)
 RESEARCH_FEATURE_STORE = str(RESEARCH_DOMAIN_PATHS.feature_store_dir)
 RESEARCH_MODELS_DIR = str(RESEARCH_DOMAIN_PATHS.model_dir)
 RESEARCH_REPORTS_DIR = str(RESEARCH_DOMAIN_PATHS.reports_dir)
+
+
+def open_position_trade_ref(symbol_id: str, exchange: str = "NSE") -> str:
+    """Stable journal reference for an active position."""
+    return f"open:{str(exchange or 'NSE').upper()}:{str(symbol_id or '').upper()}"
+
+
+def closed_trade_ref(fill_id: str) -> str:
+    """Stable journal reference for a realized trade row."""
+    return f"closed:{str(fill_id or '').strip()}"
 
 
 def get_db_stats() -> Dict:
@@ -510,6 +526,22 @@ def reorder_columns(df: pd.DataFrame, preferred: list[str]) -> pd.DataFrame:
     ordered = [column for column in preferred if column in df.columns]
     remaining = [column for column in df.columns if column not in ordered]
     return df[ordered + remaining]
+
+
+def _build_tradingview_link(symbol: object) -> str:
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return ""
+    encoded = quote(sym, safe="._-")
+    return f"https://www.tradingview.com/chart/?symbol=NSE%3A{encoded}"
+
+
+def _with_symbol_hyperlink(df: pd.DataFrame, *, symbol_col: str) -> pd.DataFrame:
+    if df is None or df.empty or symbol_col not in df.columns:
+        return df
+    out = df.copy()
+    out[symbol_col] = out[symbol_col].map(_build_tradingview_link)
+    return out
 
 
 def is_suspicious_rank_df(df: pd.DataFrame) -> bool:
@@ -1496,6 +1528,549 @@ def build_dashboard_weights() -> Dict[str, float]:
     return defaults
 
 
+def _clear_portfolio_caches() -> None:
+    load_trade_report.clear()
+
+
+def _get_paper_execution_service() -> ExecutionService:
+    store = ExecutionStore(PROJECT_ROOT)
+    adapter = PaperExecutionAdapter()
+    return ExecutionService(
+        store,
+        adapter,
+        default_order_type="MARKET",
+        default_product_type="CNC",
+        default_validity="DAY",
+    )
+
+
+def _suggest_position_size(symbol_id: str, *, exchange: str = "NSE", capital: float = 1_000_000.0) -> dict:
+    try:
+        risk_manager = RiskManager(
+            ohlcv_db_path=OHLCV_DB,
+            feature_store_dir=FEATURE_STORE,
+        )
+        return risk_manager.compute_position_size(
+            symbol_id,
+            exchange=exchange,
+            capital=float(capital),
+            regime="TREND",
+            regime_multiplier=1.0,
+        )
+    except Exception:
+        return {}
+
+
+def _execute_portfolio_buy(
+    *,
+    candidate: dict,
+    price: float,
+    quantity: int,
+    thesis: str,
+    setup_note: str,
+    tags: str,
+) -> dict:
+    symbol_id = str(candidate.get("symbol_id") or "").strip().upper()
+    exchange = str(candidate.get("exchange") or "NSE").strip().upper()
+    service = _get_paper_execution_service()
+    intent = OrderIntent(
+        symbol_id=symbol_id,
+        exchange=exchange,
+        quantity=int(quantity),
+        side="BUY",
+        requested_price=float(price),
+        product_type="CNC",
+        metadata={
+            "strategy": "portfolio_manual_buy",
+            "thesis": thesis,
+            "setup_note": setup_note,
+            "tags": tags,
+            "source": "portfolio_tab",
+            "composite_score": candidate.get("composite_score"),
+            "breakout_score": candidate.get("breakout_score"),
+            "breakout_state": candidate.get("breakout_state"),
+            "candidate_tier": candidate.get("candidate_tier"),
+        },
+    )
+    result = service.submit_order(intent, market_price=float(price))
+    save_trade_journal_note(
+        PROJECT_ROOT,
+        trade_ref=open_position_trade_ref(symbol_id, exchange),
+        symbol_id=symbol_id,
+        exchange=exchange,
+        thesis=thesis,
+        setup_note=setup_note,
+        tags=tags,
+        metadata={"source": "portfolio_tab", "action": "buy"},
+    )
+    _clear_portfolio_caches()
+    return result
+
+
+def _execute_portfolio_sell(
+    *,
+    position: dict,
+    price: float,
+    quantity: int,
+    exit_note: str,
+) -> dict:
+    symbol_id = str(position.get("symbol_id") or "").strip().upper()
+    exchange = str(position.get("exchange") or "NSE").strip().upper()
+    service = _get_paper_execution_service()
+    intent = OrderIntent(
+        symbol_id=symbol_id,
+        exchange=exchange,
+        quantity=int(quantity),
+        side="SELL",
+        requested_price=float(price),
+        product_type="CNC",
+        metadata={
+            "strategy": "portfolio_manual_sell",
+            "exit_note": exit_note,
+            "source": "portfolio_tab",
+        },
+    )
+    result = service.submit_order(intent, market_price=float(price))
+    fills = result.get("fills", []) if isinstance(result, dict) else []
+    if fills:
+        save_trade_journal_note(
+            PROJECT_ROOT,
+            trade_ref=closed_trade_ref(str(fills[0].get("fill_id") or "")),
+            symbol_id=symbol_id,
+            exchange=exchange,
+            exit_note=exit_note,
+            metadata={"source": "portfolio_tab", "action": "sell"},
+        )
+    _clear_portfolio_caches()
+    return result
+
+
+def _render_portfolio_workspace(
+    *,
+    rank_df: pd.DataFrame | None,
+    latest_rank_frames: Dict[str, pd.DataFrame],
+) -> None:
+    st.subheader("💼 Portfolio Workspace")
+
+    workspace = load_portfolio_workspace_report(
+        PROJECT_ROOT,
+        ranked_df=rank_df,
+        breakout_df=latest_rank_frames.get("breakout_scan", pd.DataFrame()),
+    )
+    summary = workspace.get("summary", {}) or {}
+    candidates = workspace.get("candidates", pd.DataFrame())
+    open_positions_df = workspace.get("open_positions", pd.DataFrame())
+    closed_trades_df = workspace.get("closed_trades", pd.DataFrame())
+    journal_df = workspace.get("journal", pd.DataFrame())
+    realized_curve = workspace.get("realized_curve", pd.DataFrame())
+
+    summary_cols = st.columns(7)
+    summary_cols[0].metric("Open Positions", int(summary.get("open_positions", 0) or 0))
+    summary_cols[1].metric("Invested", f"₹{float(summary.get('invested_capital', 0.0) or 0.0):,.0f}")
+    summary_cols[2].metric("Market Value", f"₹{float(summary.get('market_value', 0.0) or 0.0):,.0f}")
+    summary_cols[3].metric("Realized P&L", f"₹{float(summary.get('realized_pnl', 0.0) or 0.0):,.0f}")
+    summary_cols[4].metric("Unrealized P&L", f"₹{float(summary.get('unrealized_pnl', 0.0) or 0.0):,.0f}")
+    summary_cols[5].metric("Total P&L", f"₹{float(summary.get('total_pnl', 0.0) or 0.0):,.0f}")
+    summary_cols[6].metric("Win Rate", f"{float(summary.get('win_rate', 0.0) or 0.0) * 100:.1f}%")
+
+    tab_filter, tab_current, tab_journal = st.tabs(
+        ["Filter & Add", "Current Portfolio", "Performance & Journal"]
+    )
+
+    with tab_filter:
+        st.markdown("**Screen, review, and add paper positions**")
+        if candidates is None or candidates.empty:
+            st.info("No ranking candidates available yet. Run the pipeline or refresh ranking first.")
+        else:
+            working = candidates.copy()
+            working["sector_name"] = working.get("sector_name", "").fillna("").astype(str)
+            working["company_name"] = working.get("company_name", "").fillna("").astype(str)
+            working["breakout_state"] = working.get("breakout_state", "").fillna("").astype(str)
+            working["candidate_tier"] = working.get("candidate_tier", "").fillna("").astype(str)
+
+            filter_cols = st.columns(4)
+            sectors = sorted([value for value in working["sector_name"].dropna().unique().tolist() if str(value).strip()])
+            selected_sectors = filter_cols[0].multiselect("Sector", sectors)
+            top_n = int(filter_cols[1].number_input("Top N Rank", min_value=5, max_value=max(5, len(working)), value=min(100, len(working)), step=5))
+            breakout_only = filter_cols[2].toggle("Breakout Only", value=False)
+            search_text = filter_cols[3].text_input("Search Symbol / Company", value="").strip().lower()
+
+            filter_cols2 = st.columns(4)
+            breakout_states = sorted([value for value in working["breakout_state"].dropna().unique().tolist() if str(value).strip()])
+            selected_breakout_states = filter_cols2[0].multiselect("Breakout State", breakout_states)
+            selected_tiers = filter_cols2[1].multiselect("Candidate Tier", ["A", "B", "C"])
+            min_composite = float(filter_cols2[2].number_input("Min Composite Score", value=0.0, step=1.0))
+            min_breakout = float(filter_cols2[3].number_input("Min Breakout Score", value=0.0, step=1.0))
+
+            filtered = working.copy()
+            if selected_sectors:
+                filtered = filtered[filtered["sector_name"].isin(selected_sectors)]
+            if breakout_only:
+                filtered = filtered[filtered["has_breakout"].fillna(False)]
+            if selected_breakout_states:
+                filtered = filtered[filtered["breakout_state"].isin(selected_breakout_states)]
+            if selected_tiers:
+                filtered = filtered[filtered["candidate_tier"].isin(selected_tiers)]
+            if "rank_position" in filtered.columns:
+                filtered = filtered[pd.to_numeric(filtered["rank_position"], errors="coerce").fillna(999999) <= top_n]
+            filtered = filtered[pd.to_numeric(filtered["composite_score"], errors="coerce").fillna(0.0) >= min_composite]
+            filtered = filtered[pd.to_numeric(filtered["breakout_score"], errors="coerce").fillna(0.0) >= min_breakout]
+            if search_text:
+                filtered = filtered[
+                    filtered["symbol_id"].astype(str).str.lower().str.contains(search_text, regex=False)
+                    | filtered["company_name"].astype(str).str.lower().str.contains(search_text, regex=False)
+                ]
+
+            st.caption(f"{len(filtered)} candidates after filters")
+
+            display = filtered.copy()
+            display["Select"] = False
+            screener_cols = [
+                "Select",
+                "symbol_id",
+                "company_name",
+                "sector_name",
+                "rank_position",
+                "composite_score",
+                "breakout_tag",
+                "breakout_state",
+                "candidate_tier",
+                "breakout_score",
+                "close",
+                "tradingview_url",
+            ]
+            screener_cols = [column for column in screener_cols if column in display.columns]
+            edited = st.data_editor(
+                display[screener_cols].head(250),
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Select": st.column_config.CheckboxColumn("Pick", default=False),
+                    "symbol_id": st.column_config.TextColumn("Symbol"),
+                    "company_name": st.column_config.TextColumn("Company"),
+                    "sector_name": st.column_config.TextColumn("Sector"),
+                    "rank_position": st.column_config.NumberColumn("Rank", format="%d"),
+                    "composite_score": st.column_config.NumberColumn("Composite", format="%.2f"),
+                    "breakout_tag": st.column_config.TextColumn("Breakout"),
+                    "breakout_state": st.column_config.TextColumn("State"),
+                    "candidate_tier": st.column_config.TextColumn("Tier"),
+                    "breakout_score": st.column_config.NumberColumn("Breakout Score", format="%.2f"),
+                    "close": st.column_config.NumberColumn("Close", format="%.2f"),
+                    "tradingview_url": st.column_config.LinkColumn("TradingView", display_text="Open"),
+                },
+                disabled=[column for column in screener_cols if column != "Select"],
+                key="portfolio_candidate_editor",
+            )
+
+            picked = edited[edited["Select"] == True] if "Select" in edited.columns else pd.DataFrame()
+            if len(picked) > 1:
+                st.warning("Select one stock at a time for the trade ticket. Using the first selected row.")
+            selected_symbol = str(picked.iloc[0]["symbol_id"]) if not picked.empty else ""
+
+            if selected_symbol:
+                candidate_row = filtered[filtered["symbol_id"].astype(str) == selected_symbol].head(1)
+                if not candidate_row.empty:
+                    candidate = candidate_row.iloc[0].to_dict()
+                    st.markdown(f"**Trade Ticket: {selected_symbol}**")
+                    risk_hint = _suggest_position_size(
+                        selected_symbol,
+                        exchange=str(candidate.get("exchange") or "NSE"),
+                        capital=1_000_000.0,
+                    )
+                    ticket_cols = st.columns(4)
+                    default_price = float(candidate.get("close") or 0.0)
+                    suggested_qty = int(risk_hint.get("shares") or 0)
+                    with st.form(f"portfolio_buy_form_{selected_symbol}", clear_on_submit=False):
+                        buy_price = ticket_cols[0].number_input("Price", min_value=0.0, value=max(default_price, 0.0), step=0.05, format="%.2f")
+                        buy_qty = ticket_cols[1].number_input("Quantity", min_value=1, value=max(suggested_qty, 1), step=1)
+                        ticket_cols[2].metric("Suggested Qty", suggested_qty)
+                        ticket_cols[3].metric("Risk Stop", f"₹{float(risk_hint.get('stop_loss', 0.0) or 0.0):,.2f}")
+                        thesis = st.text_input("Thesis", value=str(candidate.get("thesis") or ""))
+                        setup_note = st.text_area("Setup Note", value=str(candidate.get("symbol_trend_reasons") or ""))
+                        tags = st.text_input("Tags", value=str(candidate.get("candidate_tier") or ""))
+                        submitted = st.form_submit_button("Add to Portfolio", use_container_width=True)
+                    if submitted:
+                        result = _execute_portfolio_buy(
+                            candidate=candidate,
+                            price=float(buy_price),
+                            quantity=int(buy_qty),
+                            thesis=thesis,
+                            setup_note=setup_note,
+                            tags=tags,
+                        )
+                        st.success(
+                            f"Paper BUY executed for {selected_symbol}: {int(buy_qty)} shares at about ₹{float(buy_price):,.2f}."
+                        )
+                        st.caption(f"Order status: {result.get('status', 'unknown')}")
+                        st.rerun()
+
+    with tab_current:
+        st.markdown("**Live paper holdings with broker-style action grid**")
+        if open_positions_df is None or open_positions_df.empty:
+            st.info("No open paper positions recorded yet.")
+        else:
+            row_selected_symbol = _render_portfolio_holdings_broker_table(open_positions_df)
+            if row_selected_symbol:
+                st.session_state.portfolio_selected_symbol = row_selected_symbol
+
+            symbols = open_positions_df["symbol_id"].astype(str).tolist()
+            if st.session_state.portfolio_selected_symbol not in symbols:
+                st.session_state.portfolio_selected_symbol = symbols[0] if symbols else None
+
+            default_index = symbols.index(st.session_state.portfolio_selected_symbol) if st.session_state.portfolio_selected_symbol in symbols else 0
+            selected_holding = st.selectbox(
+                "Active Sell Ticket",
+                symbols,
+                index=default_index,
+                format_func=lambda symbol: f"{symbol} | {open_positions_df.loc[open_positions_df['symbol_id'].astype(str) == symbol, 'sell_reason'].iloc[0]}",
+            )
+            st.session_state.portfolio_selected_symbol = selected_holding
+
+            position_row = open_positions_df[open_positions_df["symbol_id"].astype(str) == str(selected_holding)].head(1)
+            if not position_row.empty:
+                position = position_row.iloc[0].to_dict()
+                st.markdown("**Sell Ticket**")
+                manage_cols = st.columns(4)
+                manage_cols[0].metric("Qty", int(position.get("quantity", 0) or 0))
+                manage_cols[1].metric("Avg Entry", f"₹{float(position.get('avg_entry_price', 0.0) or 0.0):,.2f}")
+                manage_cols[2].metric("Current", f"₹{float(position.get('current_price', 0.0) or 0.0):,.2f}")
+                manage_cols[3].metric("Suggestion", str(position.get("sell_suggestion") or "HOLD"))
+
+                with st.form(f"portfolio_sell_form_{selected_holding}", clear_on_submit=False):
+                    sell_mode = st.radio("Sell Type", ["Full", "Partial"], horizontal=True)
+                    max_qty = int(position.get("quantity") or 0)
+                    default_qty = max_qty if sell_mode == "Full" else max(1, max_qty // 2)
+                    sell_qty = st.number_input("Sell Quantity", min_value=1, max_value=max_qty, value=default_qty, step=1)
+                    sell_price = st.number_input(
+                        "Sell Price",
+                        min_value=0.0,
+                        value=float(position.get("current_price") or position.get("avg_entry_price") or 0.0),
+                        step=0.05,
+                        format="%.2f",
+                    )
+                    exit_note = st.text_area("Exit Note", value=str(position.get("sell_reason") or ""))
+                    sell_submitted = st.form_submit_button("Execute Sell", use_container_width=True)
+                if sell_submitted:
+                    result = _execute_portfolio_sell(
+                        position=position,
+                        price=float(sell_price),
+                        quantity=int(sell_qty),
+                        exit_note=exit_note,
+                    )
+                    st.success(
+                        f"Paper SELL executed for {selected_holding}: {int(sell_qty)} shares at about ₹{float(sell_price):,.2f}."
+                    )
+                    st.caption(f"Order status: {result.get('status', 'unknown')}")
+                    st.rerun()
+
+    with tab_journal:
+        st.markdown("**Performance history and editable trade journal**")
+        if realized_curve is not None and not realized_curve.empty:
+            fig_realized = go.Figure()
+            fig_realized.add_trace(
+                go.Scatter(
+                    x=realized_curve["filled_at"],
+                    y=realized_curve["cumulative_realized_pnl"],
+                    mode="lines+markers",
+                    name="Cumulative Realized P&L",
+                    line=dict(color="#22c55e", width=2),
+                )
+            )
+            fig_realized.update_layout(
+                height=320,
+                margin=dict(l=20, r=20, t=20, b=20),
+                yaxis_title="P&L (₹)",
+                xaxis_title="Trade Date",
+            )
+            st.plotly_chart(fig_realized, use_container_width=True)
+        else:
+            st.info("Realized performance curve will appear after closed trades exist.")
+
+        perf_cols = st.columns(2)
+        with perf_cols[0]:
+            st.markdown("**Closed Trades**")
+            if closed_trades_df is None or closed_trades_df.empty:
+                st.info("No closed trades recorded yet.")
+            else:
+                closed_cols = [
+                    "symbol_id",
+                    "sector_name",
+                    "closed_quantity",
+                    "entry_avg_price",
+                    "exit_price",
+                    "realized_pnl",
+                    "return_pct",
+                    "filled_at",
+                ]
+                closed_cols = [column for column in closed_cols if column in closed_trades_df.columns]
+                st.dataframe(closed_trades_df[closed_cols], use_container_width=True, hide_index=True, height=280)
+        with perf_cols[1]:
+            st.markdown("**Trade Journal**")
+            if journal_df is None or journal_df.empty:
+                st.info("Journal entries appear after buys or sells are recorded.")
+            else:
+                journal_cols = [
+                    "trade_ref",
+                    "journal_status",
+                    "symbol_id",
+                    "sector_name",
+                    "qty",
+                    "pnl_value",
+                    "thesis",
+                    "setup_note",
+                    "exit_note",
+                    "lesson_learned",
+                    "tags",
+                ]
+                journal_cols = [column for column in journal_cols if column in journal_df.columns]
+                st.dataframe(journal_df[journal_cols], use_container_width=True, hide_index=True, height=280)
+
+                journal_options = journal_df["trade_ref"].astype(str).tolist()
+                selected_trade_ref = st.selectbox("Edit Journal Entry", journal_options)
+                note_row = journal_df[journal_df["trade_ref"].astype(str) == str(selected_trade_ref)].head(1)
+                if not note_row.empty:
+                    note = note_row.iloc[0].to_dict()
+                    with st.form(f"journal_edit_form_{selected_trade_ref}", clear_on_submit=False):
+                        thesis = st.text_input("Thesis", value=str(note.get("thesis") or ""))
+                        setup_note = st.text_area("Setup Note", value=str(note.get("setup_note") or ""))
+                        exit_note = st.text_area("Exit Note", value=str(note.get("exit_note") or ""))
+                        lesson_learned = st.text_area("Lesson Learned", value=str(note.get("lesson_learned") or ""))
+                        tags = st.text_input("Tags", value=str(note.get("tags") or ""))
+                        note_saved = st.form_submit_button("Save Journal Note", use_container_width=True)
+                    if note_saved:
+                        save_trade_journal_note(
+                            PROJECT_ROOT,
+                            trade_ref=str(selected_trade_ref),
+                            symbol_id=str(note.get("symbol_id") or ""),
+                            exchange=str(note.get("exchange") or "NSE"),
+                            thesis=thesis,
+                            setup_note=setup_note,
+                            exit_note=exit_note,
+                            lesson_learned=lesson_learned,
+                            tags=tags,
+                            metadata={"source": "portfolio_tab", "action": "journal_edit"},
+                        )
+                        _clear_portfolio_caches()
+                        st.success("Journal note saved.")
+                        st.rerun()
+
+
+def _portfolio_badge_html(value: object, *, tone: str = "slate") -> str:
+    text = str(value or "—").strip() or "—"
+    return f"<span class='broker-badge broker-badge-{tone}'>{text}</span>"
+
+
+def _portfolio_pnl_html(value: object) -> str:
+    number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(number):
+        return "<div class='broker-cell-value broker-neutral'>—</div>"
+    tone = "broker-positive" if float(number) >= 0 else "broker-negative"
+    prefix = "+" if float(number) > 0 else ""
+    return f"<div class='broker-cell-value {tone}'>{prefix}{float(number):,.2f}</div>"
+
+
+def _portfolio_percent_html(value: object) -> str:
+    number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(number):
+        return "<div class='broker-cell-value broker-neutral'>—</div>"
+    tone = "broker-positive" if float(number) >= 0 else "broker-negative"
+    prefix = "+" if float(number) > 0 else ""
+    return f"<div class='broker-cell-value {tone}'>{prefix}{float(number):,.2f}%</div>"
+
+
+def _render_portfolio_holdings_broker_table(open_positions_df: pd.DataFrame) -> str | None:
+    header_cols = st.columns([1.4, 1.8, 0.75, 1.0, 1.0, 1.0, 1.0, 0.95, 1.0, 1.0, 0.9, 0.8], gap="small")
+    headers = [
+        "Symbol",
+        "Sector / Signal",
+        "Qty",
+        "Avg",
+        "LTP",
+        "Value",
+        "P&L",
+        "Return",
+        "Rank",
+        "Breakout",
+        "Signal",
+        "Action",
+    ]
+    for column, label in zip(header_cols, headers):
+        with column:
+            st.markdown(f"<div class='broker-header-cell'>{label}</div>", unsafe_allow_html=True)
+
+    selected_symbol: str | None = None
+    for row in open_positions_df.to_dict(orient="records"):
+        symbol_id = str(row.get("symbol_id") or "").strip()
+        tv_link = str(row.get("tradingview_url") or _build_tradingview_link(symbol_id))
+        sector_name = str(row.get("sector_name") or "—").strip() or "—"
+        breakout_state = str(row.get("breakout_state") or "—").strip() or "—"
+        candidate_tier = str(row.get("candidate_tier") or "—").strip() or "—"
+        suggestion = str(row.get("sell_suggestion") or "HOLD").strip().upper()
+        suggestion_tone = "emerald" if suggestion == "HOLD" else "amber"
+        tier_tone = "emerald" if candidate_tier == "A" else "amber" if candidate_tier == "B" else "rose"
+        breakout_tone = "emerald" if breakout_state == "qualified" else "amber" if breakout_state == "watchlist" else "rose"
+
+        row_cols = st.columns([1.4, 1.8, 0.75, 1.0, 1.0, 1.0, 1.0, 0.95, 1.0, 1.0, 0.9, 0.8], gap="small")
+        with row_cols[0]:
+            st.markdown(
+                (
+                    "<div class='broker-cell'>"
+                    f"<div class='broker-cell-title'><a href='{tv_link}' target='_blank'>{symbol_id}</a></div>"
+                    f"<div class='broker-cell-sub'>{str(row.get('company_name') or '').strip() or 'TradingView linked'}</div>"
+                    "</div>"
+                ),
+                unsafe_allow_html=True,
+            )
+        with row_cols[1]:
+            st.markdown(
+                (
+                    "<div class='broker-cell'>"
+                    f"<div class='broker-cell-title'>{sector_name}</div>"
+                    f"<div class='broker-cell-sub'>{str(row.get('sell_reason') or '').strip() or 'rank_and_breakout_intact'}</div>"
+                    "</div>"
+                ),
+                unsafe_allow_html=True,
+            )
+        with row_cols[2]:
+            st.markdown(f"<div class='broker-cell-value'>{int(row.get('quantity') or 0)}</div>", unsafe_allow_html=True)
+        with row_cols[3]:
+            st.markdown(f"<div class='broker-cell-value'>{float(row.get('avg_entry_price') or 0.0):,.2f}</div>", unsafe_allow_html=True)
+        with row_cols[4]:
+            st.markdown(f"<div class='broker-cell-value'>{float(row.get('current_price') or 0.0):,.2f}</div>", unsafe_allow_html=True)
+        with row_cols[5]:
+            st.markdown(f"<div class='broker-cell-value'>{float(row.get('market_value') or 0.0):,.0f}</div>", unsafe_allow_html=True)
+        with row_cols[6]:
+            st.markdown(_portfolio_pnl_html(row.get("unrealized_pnl")), unsafe_allow_html=True)
+        with row_cols[7]:
+            st.markdown(_portfolio_percent_html(row.get("return_pct")), unsafe_allow_html=True)
+        with row_cols[8]:
+            st.markdown(f"<div class='broker-cell-value'>#{int(row.get('rank_position') or 0) if str(row.get('rank_position') or '').strip() else '—'}</div>", unsafe_allow_html=True)
+        with row_cols[9]:
+            st.markdown(
+                (
+                    "<div class='broker-cell'>"
+                    f"{_portfolio_badge_html(breakout_state, tone=breakout_tone)}"
+                    f"<div class='broker-inline-gap'></div>{_portfolio_badge_html(candidate_tier, tone=tier_tone)}"
+                    "</div>"
+                ),
+                unsafe_allow_html=True,
+            )
+        with row_cols[10]:
+            st.markdown(
+                (
+                    "<div class='broker-cell'>"
+                    f"{_portfolio_badge_html(suggestion, tone=suggestion_tone)}"
+                    "</div>"
+                ),
+                unsafe_allow_html=True,
+            )
+        with row_cols[11]:
+            if st.button("Sell", key=f"portfolio_sell_row_{symbol_id}", use_container_width=True):
+                selected_symbol = symbol_id
+
+    return selected_symbol
+
+
 def main():
     st.set_page_config(
         page_title="AI Trading Command Center",
@@ -1513,6 +2088,98 @@ def main():
     section[data-testid="stSidebar"] > div {padding-top: 0.6rem;}
     div[data-testid="stTabs"] button {font-size: 0.86rem; padding-top: 0.35rem; padding-bottom: 0.35rem;}
     div[data-testid="stDataFrame"] [role="gridcell"] {padding-top: 0.15rem; padding-bottom: 0.15rem;}
+        .broker-header-cell {
+          font-size: 0.68rem;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          color: #8fa3b8;
+          padding: 0.15rem 0.1rem 0.55rem 0.1rem;
+          font-weight: 700;
+        }
+        .broker-cell {
+          background: linear-gradient(180deg, rgba(12, 18, 28, 0.96), rgba(20, 28, 40, 0.96));
+          border: 1px solid rgba(71, 85, 105, 0.42);
+          border-radius: 14px;
+          min-height: 58px;
+          padding: 0.6rem 0.72rem;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.06);
+        }
+        .broker-cell-title {
+          color: #f8fafc;
+          font-size: 0.94rem;
+          font-weight: 700;
+          line-height: 1.15;
+        }
+        .broker-cell-title a {
+          color: #f8fafc;
+          text-decoration: none;
+        }
+        .broker-cell-title a:hover {
+          color: #38bdf8;
+        }
+        .broker-cell-sub {
+          color: #94a3b8;
+          font-size: 0.73rem;
+          margin-top: 0.2rem;
+          line-height: 1.18;
+        }
+        .broker-cell-value {
+          background: linear-gradient(180deg, rgba(12, 18, 28, 0.96), rgba(20, 28, 40, 0.96));
+          border: 1px solid rgba(71, 85, 105, 0.42);
+          border-radius: 14px;
+          min-height: 58px;
+          padding: 0.6rem 0.72rem;
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          color: #e2e8f0;
+          font-size: 0.92rem;
+          font-weight: 700;
+          box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.06);
+        }
+        .broker-positive { color: #22c55e; }
+        .broker-negative { color: #f97316; }
+        .broker-neutral { color: #cbd5e1; }
+        .broker-badge {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0.18rem 0.5rem;
+          border-radius: 999px;
+          font-size: 0.67rem;
+          font-weight: 700;
+          letter-spacing: 0.03em;
+          white-space: nowrap;
+        }
+        .broker-badge-emerald {
+          background: rgba(34, 197, 94, 0.16);
+          color: #86efac;
+          border: 1px solid rgba(34, 197, 94, 0.28);
+        }
+        .broker-badge-amber {
+          background: rgba(245, 158, 11, 0.16);
+          color: #fcd34d;
+          border: 1px solid rgba(245, 158, 11, 0.28);
+        }
+        .broker-badge-rose {
+          background: rgba(244, 63, 94, 0.16);
+          color: #fda4af;
+          border: 1px solid rgba(244, 63, 94, 0.28);
+        }
+        .broker-badge-slate {
+          background: rgba(148, 163, 184, 0.12);
+          color: #cbd5e1;
+          border: 1px solid rgba(148, 163, 184, 0.2);
+        }
+        .broker-inline-gap {
+          height: 0.35rem;
+        }
+        div[data-testid="stButton"] button[kind="secondary"] {
+          border-radius: 12px;
+        }
     @media (max-width: 1200px) {
       .stMainBlockContainer {max-width: 100%;}
     }
@@ -1532,6 +2199,8 @@ def main():
         st.session_state.last_refresh = None
     if "rank_df_source" not in st.session_state:
         st.session_state.rank_df_source = None
+    if "portfolio_selected_symbol" not in st.session_state:
+        st.session_state.portfolio_selected_symbol = None
 
     dashboard_payload = load_latest_dashboard_payload() or load_latest_rank_fallback()
     dashboard_health = get_dashboard_health(dashboard_payload)
@@ -1812,7 +2481,7 @@ def main():
             else:
                 st.info("No health checks available.")
 
-        with st.expander("🛡️ Data Trust", expanded=True):
+        with st.expander("🛡️ Data Trust", expanded=False):
             provider_mix = latest_provider_stats.get("counts", {})
             trust_summary_cols = st.columns(3)
             with trust_summary_cols[0]:
@@ -1848,6 +2517,24 @@ def main():
                 st.metric("Breakouts", summary.get("breakout_count", 0))
             with c4:
                 st.metric("Leading Sector", summary.get("top_sector", "—"))
+            breakout_state_counts = summary.get("breakout_state_counts", {}) or {}
+            if breakout_state_counts:
+                state_cols = st.columns(3)
+                with state_cols[0]:
+                    st.metric("Qualified", int(summary.get("breakout_qualified_count", breakout_state_counts.get("qualified", 0) or 0)))
+                with state_cols[1]:
+                    st.metric("Watchlist", int(summary.get("breakout_watchlist_count", breakout_state_counts.get("watchlist", 0) or 0)))
+                with state_cols[2]:
+                    st.metric(
+                        "Filtered",
+                        int(
+                            summary.get(
+                                "breakout_filtered_count",
+                                (breakout_state_counts.get("filtered_by_regime", 0) or 0)
+                                + (breakout_state_counts.get("filtered_by_symbol_trend", 0) or 0),
+                            )
+                        ),
+                    )
 
             st.caption(f"Payload: `{dashboard_payload.get('_artifact_path', 'n/a')}`")
 
@@ -1891,11 +2578,17 @@ def main():
                             "Rank History",
                         ],
                     )
+                    ranked_display = _with_symbol_hyperlink(ranked_display, symbol_col="symbol_id")
                     st.dataframe(
                         ranked_display,
                         use_container_width=True,
                         hide_index=True,
                         column_config={
+                                "symbol_id": st.column_config.LinkColumn(
+                                    "Symbol",
+                                    help="Open symbol in TradingView.",
+                                    display_text=r".*symbol=NSE(?:%3A|:)([^&]+).*",
+                                ),
                             "Rank History": st.column_config.LineChartColumn(
                                 "Rank History",
                                 help="Recent rank trend across pipeline runs.",
@@ -1904,13 +2597,64 @@ def main():
                     )
 
                 st.markdown("**Breakout Monitor**")
-                if pipeline_breakout_df.empty:
-                    st.info("No breakout candidates in payload.")
+                show_filtered_pipeline = st.toggle(
+                    "Show Filtered Rows",
+                    value=False,
+                    key="pipeline_breakout_hide_filtered",
+                )
+                breakout_monitor_df = pipeline_breakout_df.copy()
+                if (
+                    not show_filtered_pipeline
+                    and not breakout_monitor_df.empty
+                    and "breakout_state" in breakout_monitor_df.columns
+                ):
+                    breakout_monitor_df = breakout_monitor_df[
+                        ~breakout_monitor_df["breakout_state"].astype(str).str.startswith("filtered_")
+                    ].copy()
+
+                if breakout_monitor_df.empty:
+                    if pipeline_breakout_df.empty:
+                        st.info("No breakout candidates in payload.")
+                    else:
+                        st.info("All breakout candidates are filtered by regime.")
                 else:
-                    st.dataframe(pipeline_breakout_df.head(20), use_container_width=True, hide_index=True)
+                    breakout_monitor_display = reorder_columns(
+                        breakout_monitor_df,
+                        [
+                            "symbol_id",
+                            "sector",
+                            "taxonomy_family",
+                            "setup_family",
+                            "breakout_score",
+                            "breakout_rank",
+                            "breakout_state",
+                            "candidate_tier",
+                            "symbol_trend_reasons",
+                            "filter_reason",
+                            "execution_label",
+                            "market_bias",
+                            "market_regime",
+                            "setup_quality",
+                        ],
+                    )
+                    breakout_monitor_display = _with_symbol_hyperlink(
+                        breakout_monitor_display, symbol_col="symbol_id"
+                    )
+                    st.dataframe(
+                        breakout_monitor_display.head(20),
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "symbol_id": st.column_config.LinkColumn(
+                                "Symbol",
+                                help="Open symbol in TradingView.",
+                                display_text=r".*symbol=NSE(?:%3A|:)([^&]+).*",
+                            )
+                        },
+                    )
                     st.markdown("**Breakout Evidence**")
                     render_breakout_evidence_cards(
-                        pipeline_breakout_df,
+                        breakout_monitor_df,
                         signal_date=summary.get("run_date"),
                         max_cards=6,
                     )
@@ -2407,12 +3151,18 @@ def main():
                     "sector_strength_score": "Sector",
                 }
                 display_df = top_df[cols_show].rename(columns=rename_cols)
+                display_df = _with_symbol_hyperlink(display_df, symbol_col="Symbol")
                 st.dataframe(
                     display_df,
                     use_container_width=True,
                     hide_index=False,
                     height=700,
                     column_config={
+                        "Symbol": st.column_config.LinkColumn(
+                            "Symbol",
+                            help="Open symbol in TradingView.",
+                            display_text=r".*symbol=NSE(?:%3A|:)([^&]+).*",
+                        ),
                         "Rank History": st.column_config.LineChartColumn(
                             "Rank History",
                             help="Recent rank trajectory across pipeline runs (lower is better).",
@@ -2464,6 +3214,50 @@ def main():
                 ranking_breakout_df = latest_rank_frames.get("breakout_scan", pd.DataFrame())
                 if ranking_breakout_df.empty and dashboard_payload:
                     ranking_breakout_df = pd.DataFrame(dashboard_payload.get("breakout_scan", []))
+                show_filtered_ranking = st.toggle(
+                    "Show Filtered Rows (Ranking)",
+                    value=False,
+                    key="ranking_breakout_hide_filtered",
+                )
+                if (
+                    not show_filtered_ranking
+                    and not ranking_breakout_df.empty
+                    and "breakout_state" in ranking_breakout_df.columns
+                ):
+                    ranking_breakout_df = ranking_breakout_df[
+                        ~ranking_breakout_df["breakout_state"].astype(str).str.startswith("filtered_")
+                    ].copy()
+                if not ranking_breakout_df.empty:
+                    ranking_breakout_display = reorder_columns(
+                        ranking_breakout_df,
+                        [
+                            "symbol_id",
+                            "taxonomy_family",
+                            "breakout_score",
+                            "breakout_rank",
+                            "breakout_state",
+                            "candidate_tier",
+                            "symbol_trend_reasons",
+                            "filter_reason",
+                        ],
+                    )
+                    ranking_breakout_display = _with_symbol_hyperlink(
+                        ranking_breakout_display,
+                        symbol_col="symbol_id",
+                    )
+                    st.dataframe(
+                        ranking_breakout_display.head(8),
+                        use_container_width=True,
+                        hide_index=True,
+                        height=220,
+                        column_config={
+                            "symbol_id": st.column_config.LinkColumn(
+                                "Symbol",
+                                help="Open symbol in TradingView.",
+                                display_text=r".*symbol=NSE(?:%3A|:)([^&]+).*",
+                            )
+                        },
+                    )
                 signal_date = (dashboard_payload or {}).get("summary", {}).get("run_date")
                 render_breakout_evidence_cards(
                     ranking_breakout_df,
@@ -2741,135 +3535,10 @@ def main():
                         st.dataframe(monthly_display, use_container_width=True, hide_index=True, height=240)
 
     with tab_portfolio:
-        st.subheader("💼 Portfolio Builder")
-
-        trade_report = load_trade_report(PROJECT_ROOT)
-        trade_summary = trade_report.get("summary", {}) or {}
-
-        st.markdown("**📒 Executed Trades & P&L**")
-        trade_cols = st.columns(6)
-        with trade_cols[0]:
-            st.metric("Open Positions", str(trade_summary.get("open_positions", 0)))
-        with trade_cols[1]:
-            st.metric("Closed Trades", str(trade_summary.get("closed_trade_count", 0)))
-        with trade_cols[2]:
-            st.metric("Win Rate", f"{float(trade_summary.get('win_rate', 0.0)) * 100:.2f}%")
-        with trade_cols[3]:
-            st.metric("Realized P&L", f"{float(trade_summary.get('realized_pnl', 0.0)):.2f}")
-        with trade_cols[4]:
-            st.metric("Unrealized P&L", f"{float(trade_summary.get('unrealized_pnl', 0.0)):.2f}")
-        with trade_cols[5]:
-            st.metric("Total P&L", f"{float(trade_summary.get('total_pnl', 0.0)):.2f}")
-
-        trade_left, trade_right = st.columns(2)
-        with trade_left:
-            st.markdown("**Open Positions**")
-            open_positions_df = trade_report.get("open_positions", pd.DataFrame())
-            if open_positions_df is None or open_positions_df.empty:
-                st.info("No open paper positions recorded yet.")
-            else:
-                st.dataframe(open_positions_df, use_container_width=True, hide_index=True, height=260)
-        with trade_right:
-            st.markdown("**Closed Trades**")
-            closed_trades_df = trade_report.get("closed_trades", pd.DataFrame())
-            if closed_trades_df is None or closed_trades_df.empty:
-                st.info("No closed trades recorded yet.")
-            else:
-                st.dataframe(closed_trades_df, use_container_width=True, hide_index=True, height=260)
-
-        with st.expander("Trade Ledger", expanded=False):
-            fills_df = trade_report.get("fills", pd.DataFrame())
-            if fills_df is None or fills_df.empty:
-                st.info("No execution fills recorded yet.")
-            else:
-                st.dataframe(fills_df, use_container_width=True, hide_index=True, height=260)
-
-        st.divider()
-
-        if st.session_state.rank_df is None or st.session_state.rank_df.empty:
-            st.info("Run ranking first in the Ranking tab.")
-        else:
-            rank_df = st.session_state.rank_df
-            score_col = (
-                "custom_score"
-                if "custom_score" in rank_df.columns
-                else "composite_score"
-            )
-            top_signals = rank_df.head(20).copy()
-
-            capital = st.number_input(
-                "💰 Capital (₹)", value=1_000_000.0, step=100_000.0, format="%.0f"
-            )
-
-            try:
-                rm = RiskManager(
-                    ohlcv_db_path=OHLCV_DB, feature_store_dir=FEATURE_STORE
-                )
-                top_signals["probability"] = top_signals[score_col] / 100
-                top_signals["prediction"] = 1
-                top_signals["direction"] = "LONG"
-
-                portfolio = rm.build_portfolio(
-                    signals=top_signals,
-                    capital=capital,
-                    regime="TREND",
-                    regime_multiplier=1.0,
-                )
-
-                if not portfolio.empty:
-                    display_port = portfolio.copy()
-                    display_port["weight_pct"] = (display_port["weight"] * 100).round(2)
-                    display_port["position_value"] = display_port[
-                        "position_value"
-                    ].round(0)
-                    display_port["shares"] = display_port["shares"].astype(int)
-                    display_port["stop_loss"] = display_port["stop_loss"].round(2)
-                    display_port["target"] = display_port["target"].round(2)
-                    display_port["risk_rupees"] = display_port["risk_rupees"].round(0)
-
-                    show_cols = [
-                        "symbol_id",
-                        "weight_pct",
-                        "position_value",
-                        "shares",
-                        "close",
-                        "stop_loss",
-                        "target",
-                        "risk_rupees",
-                    ]
-                    show_cols = [c for c in show_cols if c in display_port.columns]
-                    rename_p = {
-                        "symbol_id": "Symbol",
-                        "weight_pct": "Weight %",
-                        "position_value": "Pos Value (₹)",
-                        "shares": "Shares",
-                        "close": "Price",
-                        "stop_loss": "SL",
-                        "target": "Target",
-                        "risk_rupees": "Risk (₹)",
-                    }
-                    st.dataframe(
-                        display_port[show_cols].rename(columns=rename_p),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Positions", len(portfolio))
-                    with col2:
-                        total_w = portfolio["weight"].sum() * 100
-                        st.metric("Total Exposure", f"{total_w:.1f}%")
-                    with col3:
-                        total_risk = portfolio["risk_rupees"].sum()
-                        st.metric("Total Risk", f"₹{total_risk:,.0f}")
-                    with col4:
-                        risk_pct = (total_risk / capital * 100) if capital else 0
-                        st.metric("Risk % of Capital", f"{risk_pct:.1f}%")
-                else:
-                    st.warning("Could not size positions. Check ATR data availability.")
-            except Exception as e:
-                st.error(f"Portfolio builder error: {e}")
+        _render_portfolio_workspace(
+            rank_df=st.session_state.rank_df,
+            latest_rank_frames=latest_rank_frames,
+        )
 
 
 if __name__ == "__main__":

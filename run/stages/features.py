@@ -20,7 +20,9 @@ class FeaturesStage:
         self.operation = operation
 
     def run(self, context: StageContext) -> StageResult:
-        metadata = self._run_smoke(context) if context.params.get("smoke") else self._run_default(context)
+        if context.params.get("smoke"):
+            raise RuntimeError("Smoke mode is disabled because synthetic feature artifacts have been removed.")
+        metadata = self._run_default(context)
         artifact_path = context.write_json("feature_snapshot.json", metadata)
         artifact = StageArtifact.from_file(
             "feature_snapshot",
@@ -72,15 +74,6 @@ class FeaturesStage:
             "feature_registry_entries": int(feature_registry_entries),
             "feature_mode": "full_rebuild" if full_rebuild else "incremental",
             "target_symbol_count": len(updated_symbols or []),
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-    def _run_smoke(self, context: StageContext) -> Dict:
-        return {
-            "mode": "smoke",
-            "snapshot_id": 1,
-            "feature_rows": 1,
-            "feature_registry_entries": 1,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
 

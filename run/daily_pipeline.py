@@ -74,9 +74,12 @@ def run_portfolio_analysis():
         logger.info("Running portfolio analysis...")
 
         gs = GoogleSheetsManager()
-        gs.open_spreadsheet()
+        if not gs.open_spreadsheet():
+            raise RuntimeError(gs.last_error or "Unable to open Google spreadsheet")
 
         portfolio = Portfolio(name="My Portfolio", initial_cash=0)
+        data = []
+        price_map = {}
 
         # Load sector map from stock_details (Sector column)
         conn = sqlite3.connect("data/masterdata.db")
@@ -142,18 +145,31 @@ def run_portfolio_analysis():
 
                 # Save portfolio with current prices
                 pm = PortfolioManager()
-                if pm.sheets_client:
-                    pm.save_portfolio_to_sheet(portfolio, "PORTFOLIO")
-                    pm.save_swot_analysis(portfolio, "Portfolio Analysis")
-                    logger.info("Portfolio and SWOT analysis saved to Google Sheets")
+                if not pm.sheets_client:
+                    raise RuntimeError("Portfolio manager could not authenticate with Google Sheets")
+                saved_portfolio = pm.save_portfolio_to_sheet(portfolio, "PORTFOLIO")
+                saved_swot = pm.save_swot_analysis(portfolio, "Portfolio Analysis")
+                if not saved_portfolio or not saved_swot:
+                    raise RuntimeError("Portfolio or SWOT write failed")
+                logger.info("Portfolio and SWOT analysis saved to Google Sheets")
             else:
                 logger.info("No PORTFOLIO sheet found, skipping analysis")
         except Exception as e:
             logger.warning(f"Could not read PORTFOLIO sheet: {e}")
+            raise
 
         logger.info("Portfolio analysis complete")
+        return {
+            "ok": True,
+            "positions": len(portfolio.positions),
+            "source_rows": len(data),
+        }
     except Exception as e:
         logger.warning(f"Portfolio analysis skipped: {e}")
+        return {
+            "ok": False,
+            "error": str(e),
+        }
 
 
 def main(

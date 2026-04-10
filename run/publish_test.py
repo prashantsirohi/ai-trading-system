@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
+project_root = Path(__file__).resolve().parents[1]
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 from core.env import load_project_env
 from run.preflight import PreflightChecker
 from core.logging import logger
@@ -49,9 +53,8 @@ def run_publish_test(project_root: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run live publish target healthchecks")
     parser.parse_args()
-    project_root = Path(__file__).resolve().parents[1]
     load_project_env(project_root)
-    run_publish_test(project_root)
+    run_publish_test(Path(project_root))
 
 
 if __name__ == "__main__":

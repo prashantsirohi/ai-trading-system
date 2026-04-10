@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from execution.adapters import DhanExecutionAdapter, ExecutionAdapter, PaperExecutionAdapter
 from execution.autotrader import AutoTrader
-from execution.portfolio import PortfolioManager
+from execution.portfolio import PortfolioManager, closed_trade_ref, open_position_trade_ref
 from execution.service import ExecutionService
 from execution.store import ExecutionStore
 
@@ -74,4 +74,6 @@ __all__ = [
     "ExecutionStore",
     "PortfolioManager",
     "PaperExecutionAdapter",
+    "closed_trade_ref",
+    "open_position_trade_ref",
 ]

@@ -13,6 +13,7 @@ from core.bootstrap import ensure_project_root_on_path
 ensure_project_root_on_path(__file__)
 
 from ui.services import (  # noqa: E402
+    find_latest_publishable_run,
     get_execution_db_stats,
     get_execution_health,
     load_latest_rank_frames,
@@ -448,11 +449,11 @@ def build_execution_ui() -> None:
         toast_started("Rank refresh", task_id)
 
     def run_publish_retry() -> None:
-        recent_runs = get_recent_runs(PROJECT_ROOT, limit=1)
-        if not recent_runs:
-            ui.notify("No recent run found for publish retry.", type="warning", position="top")
+        publishable_run = find_latest_publishable_run(PROJECT_ROOT, limit=50)
+        if not publishable_run:
+            ui.notify("No publishable run found for publish retry.", type="warning", position="top")
             return
-        latest_run_id = recent_runs[0]["run_id"]
+        latest_run_id = str(publishable_run["run_id"])
         task_id = launch_pipeline_task(
             project_root=PROJECT_ROOT,
             label=f"Publish retry {latest_run_id}",
@@ -676,11 +677,11 @@ def build_execution_ui() -> None:
         task_log_area = ui.textarea(label="Current Task Log").props("readonly autogrow outlined").classes("w-full")
 
     def _populate_task_log() -> None:
-        tasks = list_operator_tasks()
+        tasks = list_operator_tasks(PROJECT_ROOT)
         running_ids = [task["task_id"] for task in tasks if task.get("status") == "running"]
         chosen = state["selected_task_id"] or (running_ids[0] if running_ids else (tasks[0]["task_id"] if tasks else None))
         state["selected_task_id"] = chosen
-        logs = get_task_logs(chosen) if chosen else []
+        logs = get_task_logs(chosen, PROJECT_ROOT) if chosen else []
         task_log_area.value = "\n".join(logs[-80:]) if logs else "No task logs yet."
 
     def refresh_all() -> None:
@@ -694,7 +695,7 @@ def build_execution_ui() -> None:
         monthly_5 = pivot_shadow_summary_frame(load_shadow_summary_frame("month", 5, periods=6, project_root=PROJECT_ROOT))
         monthly_20 = pivot_shadow_summary_frame(load_shadow_summary_frame("month", 20, periods=6, project_root=PROJECT_ROOT))
         recent_runs = get_recent_runs(PROJECT_ROOT, limit=12)
-        tasks = pd.DataFrame(list_operator_tasks())
+        tasks = pd.DataFrame(list_operator_tasks(PROJECT_ROOT))
         processes = pd.DataFrame(list_project_processes(PROJECT_ROOT))
 
         summary = payload.get("summary", {})
@@ -716,7 +717,7 @@ def build_execution_ui() -> None:
 
         details = get_run_details(PROJECT_ROOT, state["selected_run_id"]) if state["selected_run_id"] else None
 
-        task_rows = list_operator_tasks()
+        task_rows = list_operator_tasks(PROJECT_ROOT)
         if task_rows and state["selected_task_id"] not in {row["task_id"] for row in task_rows}:
             running = [row["task_id"] for row in task_rows if row.get("status") == "running"]
             state["selected_task_id"] = running[0] if running else task_rows[0]["task_id"]
@@ -862,7 +863,7 @@ def build_execution_ui() -> None:
                 "detail": "Recent publish and notification activity for the selected run.",
             },
         ]
-        task_rows_list = list_operator_tasks()
+        task_rows_list = list_operator_tasks(PROJECT_ROOT)
         selected_task = next((row for row in task_rows_list if row["task_id"] == state["selected_task_id"]), None)
         tasks_tiles = [
             {
@@ -1075,7 +1076,7 @@ def build_execution_ui() -> None:
         _table(
             task_log_container,
             "Live Task Log",
-            pd.DataFrame({"log_line": get_task_logs(state["selected_task_id"]) or []}),
+            pd.DataFrame({"log_line": get_task_logs(state["selected_task_id"], PROJECT_ROOT) or []}),
             limit=80,
             subtitle="Streaming log view for the currently selected task.",
             empty="No task logs yet.",

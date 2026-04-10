@@ -262,3 +262,48 @@ def test_publish_dashboard_quantstats_tearsheet_can_write_optional_core_html(
 
     assert result["ok"] is True
     assert Path(str(result["quantstats_core_path"])).exists()
+
+
+def test_build_dashboard_strategy_returns_handles_mixed_run_id_date_parsing(tmp_path: Path) -> None:
+    manual = (
+        tmp_path
+        / "data"
+        / "pipeline_runs"
+        / "manual-run-a"
+        / "rank"
+        / "attempt_1"
+        / "ranked_signals.csv"
+    )
+    pipeline = (
+        tmp_path
+        / "data"
+        / "pipeline_runs"
+        / "pipeline-2026-03-02-bbbb2222"
+        / "rank"
+        / "attempt_1"
+        / "ranked_signals.csv"
+    )
+
+    _write_ranked(
+        manual,
+        [
+            {"symbol_id": "AAA", "close": 100.0, "composite_score": 90.0},
+            {"symbol_id": "BBB", "close": 50.0, "composite_score": 80.0},
+        ],
+    )
+    _write_ranked(
+        pipeline,
+        [
+            {"symbol_id": "AAA", "close": 101.0, "composite_score": 91.0},
+            {"symbol_id": "BBB", "close": 49.0, "composite_score": 79.0},
+        ],
+    )
+
+    returns, detail_df = build_dashboard_strategy_returns(
+        [manual, pipeline],
+        top_n=2,
+        min_overlap=1,
+    )
+
+    assert len(detail_df) == 1
+    assert len(returns) == 1

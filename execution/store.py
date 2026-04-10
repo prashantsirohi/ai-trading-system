@@ -1,11 +1,11 @@
-"""Persistent execution store for orders and fills."""
+"""Persistent execution store for orders, fills, and trade journal notes."""
 
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
 import duckdb
 
@@ -75,6 +75,23 @@ class ExecutionStore:
                     side TEXT NOT NULL,
                     exchange TEXT NOT NULL,
                     broker_fill_id TEXT,
+                    metadata_json TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS execution_trade_note (
+                    trade_ref TEXT PRIMARY KEY,
+                    symbol_id TEXT,
+                    exchange TEXT,
+                    thesis TEXT,
+                    setup_note TEXT,
+                    exit_note TEXT,
+                    lesson_learned TEXT,
+                    tags TEXT,
+                    created_at TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP NOT NULL,
                     metadata_json TEXT
                 )
                 """
@@ -262,6 +279,98 @@ class ExecutionStore:
         finally:
             conn.close()
 
+    def upsert_trade_note(
+        self,
+        *,
+        trade_ref: str,
+        symbol_id: str | None = None,
+        exchange: str | None = None,
+        thesis: str | None = None,
+        setup_note: str | None = None,
+        exit_note: str | None = None,
+        lesson_learned: str | None = None,
+        tags: str | list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        normalized_ref = str(trade_ref or "").strip()
+        if not normalized_ref:
+            raise ValueError("trade_ref is required")
+
+        now = datetime.now(timezone.utc)
+        existing = self.get_trade_note(normalized_ref) or {}
+        tags_value = tags
+        if isinstance(tags_value, list):
+            tags_value = ", ".join(str(item).strip() for item in tags_value if str(item).strip())
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO execution_trade_note (
+                    trade_ref, symbol_id, exchange, thesis, setup_note, exit_note,
+                    lesson_learned, tags, created_at, updated_at, metadata_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_ref) DO UPDATE SET
+                    symbol_id = excluded.symbol_id,
+                    exchange = excluded.exchange,
+                    thesis = excluded.thesis,
+                    setup_note = excluded.setup_note,
+                    exit_note = excluded.exit_note,
+                    lesson_learned = excluded.lesson_learned,
+                    tags = excluded.tags,
+                    updated_at = excluded.updated_at,
+                    metadata_json = excluded.metadata_json
+                """,
+                [
+                    normalized_ref,
+                    (symbol_id if symbol_id is not None else existing.get("symbol_id")) or None,
+                    (exchange if exchange is not None else existing.get("exchange")) or None,
+                    thesis if thesis is not None else existing.get("thesis"),
+                    setup_note if setup_note is not None else existing.get("setup_note"),
+                    exit_note if exit_note is not None else existing.get("exit_note"),
+                    lesson_learned if lesson_learned is not None else existing.get("lesson_learned"),
+                    tags_value if tags is not None else existing.get("tags"),
+                    _coerce_dt(existing["created_at"]) if existing.get("created_at") else now,
+                    now,
+                    json.dumps(metadata or existing.get("metadata") or {}, sort_keys=True),
+                ],
+            )
+        finally:
+            conn.close()
+
+    def get_trade_note(self, trade_ref: str) -> Optional[dict]:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM execution_trade_note
+                WHERE trade_ref = ?
+                """,
+                [trade_ref],
+            ).fetchone()
+            if row is None:
+                return None
+            columns = [item[0] for item in conn.description]
+            return self._trade_note_from_row(dict(zip(columns, row)))
+        finally:
+            conn.close()
+
+    def list_trade_notes(self) -> List[dict]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM execution_trade_note
+                ORDER BY updated_at DESC, trade_ref DESC
+                """
+            ).fetchall()
+            columns = [item[0] for item in conn.description]
+            return [self._trade_note_from_row(dict(zip(columns, row))) for row in rows]
+        finally:
+            conn.close()
+
     @staticmethod
     def _order_from_row(row: dict) -> OrderRecord:
         return OrderRecord(
@@ -302,6 +411,24 @@ class ExecutionStore:
             broker_fill_id=row.get("broker_fill_id"),
             metadata=_load_json(row.get("metadata_json")),
         )
+
+    @staticmethod
+    def _trade_note_from_row(row: dict) -> dict:
+        created_at = row.get("created_at")
+        updated_at = row.get("updated_at")
+        return {
+            "trade_ref": row.get("trade_ref"),
+            "symbol_id": row.get("symbol_id"),
+            "exchange": row.get("exchange"),
+            "thesis": row.get("thesis") or "",
+            "setup_note": row.get("setup_note") or "",
+            "exit_note": row.get("exit_note") or "",
+            "lesson_learned": row.get("lesson_learned") or "",
+            "tags": row.get("tags") or "",
+            "created_at": _coerce_dt(created_at).isoformat() if created_at is not None else None,
+            "updated_at": _coerce_dt(updated_at).isoformat() if updated_at is not None else None,
+            "metadata": _load_json(row.get("metadata_json")),
+        }
 
 
 def _coerce_dt(value: datetime | str) -> datetime:

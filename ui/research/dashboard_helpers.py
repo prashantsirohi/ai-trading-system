@@ -196,6 +196,39 @@ def build_rank_sparkline_payload(
     return payload
 
 
+def build_value_sparkline_payload(
+    history_df: pd.DataFrame,
+    *,
+    key_col: str,
+    value_col: str,
+    max_points: int = 12,
+    higher_is_better: bool = True,
+) -> dict[str, dict[str, object]]:
+    """Aggregate generic time-series history rows into sparkline payload by key."""
+    if history_df is None or history_df.empty:
+        return {}
+
+    payload: dict[str, dict[str, object]] = {}
+    for key, grp in history_df.groupby(key_col, sort=False):
+        ordered = grp.sort_values(["run_order", "run_id"])
+        values = pd.to_numeric(ordered[value_col], errors="coerce").dropna().astype(float).tolist()
+        if not values:
+            continue
+        sparkline = [round(v, 4) for v in values[-max_points:]]
+        delta = sparkline[-1] - sparkline[0] if len(sparkline) > 1 else 0.0
+        if higher_is_better:
+            trend = "Improving" if delta > 0.01 else "Weakening" if delta < -0.01 else "Flat"
+        else:
+            trend = "Improving" if delta < -0.01 else "Weakening" if delta > 0.01 else "Flat"
+        payload[str(key)] = {
+            "sparkline": sparkline,
+            "trend": trend,
+            "delta_value": round(delta, 4),
+            "latest_value": round(sparkline[-1], 4),
+        }
+    return payload
+
+
 def prepare_sector_rotation_frame(
     sector_df: pd.DataFrame,
     stock_scan_df: pd.DataFrame | None = None,
@@ -355,6 +388,10 @@ def build_breakout_evidence_frame(
         "base_breakout": 30,
         "contraction_breakout": 60,
         "supertrend_flip_breakout": 20,
+        "resistance_breakout_50d": 50,
+        "high_52w_breakout": 252,
+        "consolidation_breakout": 60,
+        "volatility_expansion_breakout": 20,
     }
     evidence["base_length_days"] = evidence["setup_family"].map(family_to_base_len).fillna(20).astype(int)
     evidence["contraction_pct"] = (

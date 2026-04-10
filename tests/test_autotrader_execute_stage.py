@@ -158,3 +158,62 @@ def test_execute_stage_preview_mode_does_not_create_fills(tmp_path: Path) -> Non
     assert fills.empty
     summary = json.loads((context.output_dir() / "execute_summary.json").read_text(encoding="utf-8"))
     assert summary["parameters"]["execution_preview"] is True
+
+
+def test_execute_stage_soft_gate_uses_qualified_breakouts_only(tmp_path: Path) -> None:
+    ranked_path = tmp_path / "ranked_signals.csv"
+    pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "close": 100.0, "composite_score": 92.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "close": 101.0, "composite_score": 91.0},
+        ]
+    ).to_csv(ranked_path, index=False)
+
+    breakout_path = tmp_path / "breakout_scan.csv"
+    pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "breakout_state": "qualified", "candidate_tier": "A"},
+            {"symbol_id": "BBB", "breakout_state": "qualified", "candidate_tier": "B"},
+        ]
+    ).to_csv(breakout_path, index=False)
+
+    dashboard_path = tmp_path / "dashboard_payload.json"
+    dashboard_path.write_text(
+        json.dumps({"summary": {"data_trust_status": "trusted"}}),
+        encoding="utf-8",
+    )
+
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="pipeline-2026-04-05-soft-gate",
+        run_date="2026-04-05",
+        stage_name="execute",
+        attempt_number=1,
+        params={
+            "data_domain": "operational",
+            "strategy_mode": "technical",
+            "execution_top_n": 2,
+            "execution_fixed_quantity": 10,
+            "execution_preview": True,
+            "execution_enabled": False,
+            "execution_breakout_linkage": "soft_gate",
+            "paper_slippage_bps": 0,
+        },
+        artifacts={
+            "rank": {
+                "ranked_signals": StageArtifact("ranked_signals", str(ranked_path)),
+                "breakout_scan": StageArtifact("breakout_scan", str(breakout_path)),
+                "dashboard_payload": StageArtifact("dashboard_payload", str(dashboard_path)),
+            }
+        },
+    )
+
+    result = ExecuteStage().run(context)
+
+    assert result.metadata["breakout_linkage_mode"] == "soft_gate"
+    assert result.metadata["ranked_rows_before_linkage"] == 2
+    assert result.metadata["ranked_rows_after_linkage"] == 1
+    assert result.metadata["breakout_tier_a_count"] == 1
+    actions = pd.read_csv(context.output_dir() / "trade_actions.csv")
+    assert actions["symbol_id"].tolist() == ["AAA"]

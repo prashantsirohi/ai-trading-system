@@ -44,6 +44,8 @@ from ui.services.ml_workbench import (
     workbench_recipe_config_path,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _seed_prediction_logs_and_outcomes(registry: RegistryStore, *, model_id: str, horizon: int) -> None:
     registry.replace_prediction_log(
@@ -231,7 +233,7 @@ def test_ml_workbench_approve_deploy_and_rollback_helpers_update_registry(tmp_pa
 
 def test_workbench_recipe_catalog_and_result_loader(tmp_path: Path) -> None:
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    source_config = Path(__file__).resolve().parents[2] / "config" / "research_recipes.toml"
+    source_config = REPO_ROOT / "config" / "research_recipes.toml"
     (tmp_path / "config" / "research_recipes.toml").write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
 
     recipes = load_workbench_recipes(tmp_path)
@@ -283,7 +285,7 @@ def test_workbench_recipe_catalog_and_result_loader(tmp_path: Path) -> None:
 
 def test_workbench_bundle_loader_and_winner_selection(tmp_path: Path) -> None:
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    source_config = Path(__file__).resolve().parents[2] / "config" / "research_recipes.toml"
+    source_config = REPO_ROOT / "config" / "research_recipes.toml"
     (tmp_path / "config" / "research_recipes.toml").write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
 
     bundle = get_recipe_bundle("daily_research", tmp_path)
@@ -338,7 +340,7 @@ def test_workbench_bundle_loader_and_winner_selection(tmp_path: Path) -> None:
 
 def test_recipe_bundle_auto_actions_apply_only_to_winner(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    source_config = Path(__file__).resolve().parents[2] / "config" / "research_recipes.toml"
+    source_config = REPO_ROOT / "config" / "research_recipes.toml"
     (tmp_path / "config" / "research_recipes.toml").write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
 
     registry = RegistryStore(tmp_path)
@@ -602,8 +604,8 @@ def test_execution_workbench_settings_roundtrip(tmp_path: Path) -> None:
     assert reloaded["default_execution_top_n"] == 7
 
 
-def test_control_center_create_task_sets_task_metadata_without_duplicate_task_id_error() -> None:
-    task_id = _create_task("pipeline", "Smoke UI task", {"foo": "bar"})
+def test_control_center_create_task_sets_task_metadata_without_duplicate_task_id_error(tmp_path: Path) -> None:
+    task_id = _create_task("pipeline", "Smoke UI task", {"foo": "bar"}, project_root=tmp_path)
 
     assert task_id.startswith("task-")
 

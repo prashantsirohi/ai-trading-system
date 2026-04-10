@@ -11,6 +11,8 @@ lightgbm>=4.0.0
 
 streamlit>=1.28.0
 nicegui>=2.0.0
+fastapi>=0.135.0
+uvicorn>=0.42.0
 plotly>=5.17.0
 
 python-dotenv>=1.0.0

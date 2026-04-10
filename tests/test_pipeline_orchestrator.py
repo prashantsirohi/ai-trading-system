@@ -15,7 +15,7 @@ from run.preflight import PreflightChecker
 from run.publisher import PublisherDeliveryManager
 from run.orchestrator import PipelineOrchestrator
 from run.stages import FeaturesStage, IngestStage, PublishStage, RankStage
-from run.stages.base import PublishStageError, StageArtifact, StageContext
+from run.stages.base import DataQualityCriticalError, PublishStageError, StageArtifact, StageContext
 from utils.data_domains import ensure_domain_layout, get_domain_paths, research_static_end_date
 
 
@@ -158,6 +158,54 @@ def test_dq_critical_failure_blocks_downstream(tmp_path: Path) -> None:
     assert any(alert["alert_type"] == "critical_dq_failure" for alert in alerts)
 
 
+def test_recent_universe_price_jump_anomaly_blocks_downstream(tmp_path: Path) -> None:
+    project_root = tmp_path
+    (project_root / "data").mkdir(parents=True, exist_ok=True)
+    registry = RegistryStore(project_root)
+
+    def bad_ingest(context):
+        rows = []
+        for idx in range(6):
+            symbol = f"S{idx:03d}"
+            rows.append((symbol, "NSE", "2026-03-27 15:30:00", 100.0, 101.0, 99.0, 100.0, 1000))
+            rows.append((symbol, "NSE", "2026-03-28 15:30:00", 250.0, 251.0, 249.0, 250.0, 1000))
+        _init_catalog(context.db_path, rows)
+        return {"catalog_rows": len(rows), "symbol_count": 6, "latest_timestamp": "2026-03-28 15:30:00"}
+
+    orchestrator = PipelineOrchestrator(
+        project_root=project_root,
+        registry=registry,
+        stages={
+            "ingest": IngestStage(operation=bad_ingest),
+            "features": FeaturesStage(operation=lambda context: {"snapshot_id": 1, "feature_rows": 1}),
+            "rank": RankStage(operation=lambda context: {"ranked_signals": pd.DataFrame()}),
+            "publish": PublishStage(operation=lambda context: {"targets": []}),
+        },
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        orchestrator.run_pipeline(
+            run_date="2026-03-28",
+            params={
+                "preflight": False,
+                "dq_jump_min_symbols": 5,
+                "dq_jump_pct_gt30_threshold": 20.0,
+                "dq_jump_pct_gt50_threshold": 10.0,
+                "dq_jump_median_abs_pct_threshold": 15.0,
+            },
+        )
+
+    assert "ingest_recent_universe_price_jump_anomaly" in str(exc_info.value)
+    conn = duckdb.connect(str(registry.db_path))
+    try:
+        run_id = conn.execute("SELECT run_id FROM pipeline_run").fetchone()[0]
+    finally:
+        conn.close()
+    stage_runs = registry.get_stage_runs(run_id)
+    assert [row["stage_name"] for row in stage_runs] == ["ingest"]
+    assert stage_runs[0]["status"] == "failed"
+
+
 def test_publish_failure_can_retry_independently(tmp_path: Path) -> None:
     project_root = tmp_path
     (project_root / "data").mkdir(parents=True, exist_ok=True)
@@ -266,6 +314,82 @@ def test_publish_stage_rejects_unexpected_empty_required_artifact(tmp_path: Path
         PublishStage()._read_artifact(artifact)
 
 
+def test_publish_stage_builds_compact_telegram_tearsheet(tmp_path: Path) -> None:
+    project_root = tmp_path
+    (project_root / "data").mkdir(parents=True, exist_ok=True)
+    registry = RegistryStore(project_root)
+    context = StageContext(
+        project_root=project_root,
+        db_path=project_root / "data" / "ohlcv.duckdb",
+        run_id="run-1",
+        run_date="2026-04-06",
+        stage_name="publish",
+        attempt_number=1,
+        registry=registry,
+        artifacts={},
+    )
+
+    ranked_df = pd.DataFrame(
+        [
+            {
+                "symbol_id": f"SYM{i:02d}",
+                "sector_name": "Banks",
+                "composite_score": 90 - i,
+                "close": 1000 + i,
+                "rel_strength_score": 80 - i / 10,
+            }
+            for i in range(12)
+        ]
+    )
+    breakout_df = pd.DataFrame(
+        [
+            {
+                "symbol_id": f"BRK{i:02d}",
+                "sector": "Tech",
+                "setup_family": "range_breakout",
+                "breakout_tag": "volume_confirmed",
+                "setup_quality": 100 - i,
+            }
+            for i in range(12)
+        ]
+    )
+    sector_df = pd.DataFrame(
+        [
+            {
+                "Sector": f"Sector{i:02d}",
+                "RS_rank": i + 1,
+                "RS": 0.60 - i * 0.01,
+                "Momentum": 0.10 - i * 0.01,
+                "Quadrant": "Leading",
+            }
+            for i in range(12)
+        ]
+    )
+
+    message = PublishStage()._build_telegram_tearsheet(
+        context,
+        {
+            "ranked_signals": ranked_df,
+            "breakout_scan": breakout_df,
+            "sector_dashboard": sector_df,
+            "dashboard_payload": {"summary": {"run_date": "2026-04-06", "top_symbol": "SYM00", "top_sector": "Sector00"}},
+        },
+    )
+
+    assert "<b>Top 10 Sectors</b>" in message
+    assert "<b>Top 10 Breakouts</b>" in message
+    assert "<b>Top 10 Ranked Stocks</b>" in message
+    assert "1. Sector00 | RS 0.60 | Mom +0.10 | Leading" in message
+    assert "10. Sector09 | RS 0.51 | Mom +0.01 | Leading" in message
+    assert "1. BRK00 | Tech | range_breakout | Tier n/a | Score - | watchlist | volume_confirmed" in message
+    assert "10. BRK09 | Tech | range_breakout | Tier n/a | Score - | watchlist | volume_confirmed" in message
+    assert "1. SYM00 | Banks | Score 90.0 | Close 1000.00 | RS 80.0" in message
+    assert "10. SYM09 | Banks | Score 81.0 | Close 1009.00 | RS 79.1" in message
+    assert "SYM10" not in message
+    assert "BRK10" not in message
+    assert "Sector10" not in message
+
+
 def test_preflight_flags_crlf_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project_root = tmp_path
     (project_root / ".env").write_bytes(b"FOO=bar\r\nBAR=baz\r\n")
@@ -363,6 +487,203 @@ def test_ingest_stage_skips_delivery_when_disabled(
 
     assert result.metadata["delivery_status"] == "skipped"
     assert result.metadata["delivery_reason"] == "disabled"
+
+
+def test_ingest_stage_bhavcopy_validation_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    _init_catalog(
+        tmp_path / "data" / "ohlcv.duckdb",
+        [
+            ("ABC", "NSE", "2026-03-28 15:30:00", 10.0, 11.0, 9.0, 10.5, 1_000),
+            ("XYZ", "NSE", "2026-03-28 15:30:00", 20.0, 21.0, 19.0, 20.5, 2_000),
+        ],
+    )
+    captured: dict[str, object] = {}
+
+    class FakeNSECollector:
+        def __init__(self, data_dir: str):
+            captured["data_dir"] = data_dir
+
+        def get_bhavcopy(self, trade_date: str) -> pd.DataFrame:
+            captured["trade_date"] = trade_date
+            return pd.DataFrame(
+                [
+                    {"SYMBOL": "ABC", "SERIES": "EQ", "CLOSE_PRICE": 10.5},
+                    {"SYMBOL": "XYZ", "SERIES": "EQ", "CLOSE_PRICE": 20.5},
+                ]
+            )
+
+    monkeypatch.setattr("collectors.nse_collector.NSECollector", FakeNSECollector)
+
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="run-bhavcopy-pass",
+        run_date="2026-03-28",
+        stage_name="ingest",
+        attempt_number=1,
+        params={
+            "include_delivery": False,
+            "validate_bhavcopy_after_ingest": True,
+            "bhavcopy_min_coverage": 1.0,
+            "bhavcopy_max_mismatch_ratio": 0.0,
+            "bhavcopy_close_tolerance_pct": 0.001,
+        },
+    )
+    stage = IngestStage(operation=lambda _context: {"updated_symbols": ["ABC", "XYZ"]})
+
+    result = stage.run(context)
+
+    assert captured["trade_date"] == "2026-03-28"
+    assert result.metadata["bhavcopy_validation_status"] == "passed"
+    assert result.metadata["bhavcopy_validation_compared_rows"] == 2
+    assert result.metadata["bhavcopy_validation_mismatch_rows"] == 0
+
+
+def test_ingest_stage_bhavcopy_validation_blocks_on_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    _init_catalog(
+        tmp_path / "data" / "ohlcv.duckdb",
+        [
+            ("ABC", "NSE", "2026-03-28 15:30:00", 10.0, 11.0, 9.0, 10.5, 1_000),
+            ("XYZ", "NSE", "2026-03-28 15:30:00", 20.0, 21.0, 19.0, 20.5, 2_000),
+        ],
+    )
+
+    class FakeNSECollector:
+        def __init__(self, data_dir: str):
+            self.data_dir = data_dir
+
+        def get_bhavcopy(self, trade_date: str) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {"SYMBOL": "ABC", "SERIES": "EQ", "CLOSE_PRICE": 10.5},
+                    {"SYMBOL": "XYZ", "SERIES": "EQ", "CLOSE_PRICE": 10.0},
+                ]
+            )
+
+    monkeypatch.setattr("collectors.nse_collector.NSECollector", FakeNSECollector)
+
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="run-bhavcopy-fail",
+        run_date="2026-03-28",
+        stage_name="ingest",
+        attempt_number=1,
+        params={
+            "include_delivery": False,
+            "validate_bhavcopy_after_ingest": True,
+            "bhavcopy_min_coverage": 1.0,
+            "bhavcopy_max_mismatch_ratio": 0.1,
+            "bhavcopy_close_tolerance_pct": 0.01,
+        },
+    )
+    stage = IngestStage(operation=lambda _context: {"updated_symbols": ["ABC", "XYZ"]})
+
+    with pytest.raises(DataQualityCriticalError, match="Bhavcopy validation gate blocked ingest stage"):
+        stage.run(context)
+
+
+def test_ingest_stage_uses_explicit_bhavcopy_validation_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    _init_catalog(
+        tmp_path / "data" / "ohlcv.duckdb",
+        [
+            ("ABC", "NSE", "2026-03-27 15:30:00", 10.0, 11.0, 9.0, 10.5, 1_000),
+        ],
+    )
+    captured: dict[str, str] = {}
+
+    class FakeNSECollector:
+        def __init__(self, data_dir: str):
+            self.data_dir = data_dir
+
+        def get_bhavcopy(self, trade_date: str) -> pd.DataFrame:
+            captured["trade_date"] = trade_date
+            return pd.DataFrame([{"SYMBOL": "ABC", "SERIES": "EQ", "CLOSE_PRICE": 10.5}])
+
+    monkeypatch.setattr("collectors.nse_collector.NSECollector", FakeNSECollector)
+
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="run-bhavcopy-date",
+        run_date="2026-03-28",
+        stage_name="ingest",
+        attempt_number=1,
+        params={
+            "include_delivery": False,
+            "validate_bhavcopy_after_ingest": True,
+            "bhavcopy_validation_date": "2026-03-27",
+            "bhavcopy_min_coverage": 1.0,
+            "bhavcopy_max_mismatch_ratio": 0.0,
+            "bhavcopy_close_tolerance_pct": 0.001,
+        },
+    )
+    stage = IngestStage(operation=lambda _context: {"updated_symbols": ["ABC"]})
+
+    result = stage.run(context)
+
+    assert captured["trade_date"] == "2026-03-27"
+    assert result.metadata["bhavcopy_validation_date"] == "2026-03-27"
+    assert result.metadata["bhavcopy_validation_status"] == "passed"
+
+
+def test_ingest_stage_bhavcopy_validation_falls_back_to_yfinance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    _init_catalog(
+        tmp_path / "data" / "ohlcv.duckdb",
+        [
+            ("ABC", "NSE", "2026-03-28 15:30:00", 10.0, 11.0, 9.0, 10.5, 1_000),
+        ],
+    )
+
+    class EmptyBhavcopyCollector:
+        def __init__(self, data_dir: str):
+            self.data_dir = data_dir
+
+        def get_bhavcopy(self, trade_date: str) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    def fake_download(*args, **kwargs):
+        return pd.DataFrame(
+            {"Close": [10.5]},
+            index=pd.to_datetime(["2026-03-28"]),
+        )
+
+    monkeypatch.setattr("collectors.nse_collector.NSECollector", EmptyBhavcopyCollector)
+    monkeypatch.setattr("yfinance.download", fake_download)
+
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="run-bhavcopy-yf-fallback",
+        run_date="2026-03-28",
+        stage_name="ingest",
+        attempt_number=1,
+        params={
+            "include_delivery": False,
+            "validate_bhavcopy_after_ingest": True,
+            "bhavcopy_validation_source": "auto",
+            "bhavcopy_min_coverage": 1.0,
+            "bhavcopy_max_mismatch_ratio": 0.0,
+            "bhavcopy_close_tolerance_pct": 0.001,
+        },
+    )
+    stage = IngestStage(operation=lambda _context: {"updated_symbols": ["ABC"]})
+
+    result = stage.run(context)
+
+    assert result.metadata["bhavcopy_validation_status"] == "passed"
+    assert str(result.metadata["bhavcopy_validation_source"]).startswith("yfinance:")
+    assert result.metadata["bhavcopy_validation_compared_rows"] == 1
 
 
 def test_nse_delivery_scraper_normalizes_equity_rows(tmp_path: Path) -> None:
@@ -620,3 +941,53 @@ def test_preflight_checker_detects_missing_live_credentials(tmp_path: Path, monk
     assert "dhan_api_key" in failing_checks
     assert "telegram_bot_token" in failing_checks
     assert "google_spreadsheet_id" in failing_checks
+
+
+def test_preflight_checker_reports_publish_dns_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project_root = tmp_path
+    (project_root / "data").mkdir(parents=True, exist_ok=True)
+    (project_root / "token.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "dummy")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
+    monkeypatch.setenv("GOOGLE_SPREADSHEET_ID", "sheet-id")
+    monkeypatch.delenv("GOOGLE_SHEETS_CREDENTIALS", raising=False)
+    monkeypatch.delenv("GOOGLE_TOKEN_PATH", raising=False)
+
+    def _dns_fail(_host, _port):
+        raise OSError("dns blocked")
+
+    monkeypatch.setattr("run.preflight.socket.getaddrinfo", _dns_fail)
+
+    result = PreflightChecker(project_root).run(
+        ["publish"],
+        {"local_publish": False, "preflight_publish_network_checks": True},
+    )
+    assert result["status"] == "failed"
+    failing_checks = {check["name"] for check in result["blocking_failures"]}
+    assert "telegram_dns_api" in failing_checks
+    assert "google_dns_oauth2" in failing_checks
+    assert "google_dns_sheets" in failing_checks
+
+
+def test_preflight_checker_can_skip_publish_dns_checks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project_root = tmp_path
+    (project_root / "data").mkdir(parents=True, exist_ok=True)
+    (project_root / "token.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "dummy")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
+    monkeypatch.setenv("GOOGLE_SPREADSHEET_ID", "sheet-id")
+    monkeypatch.delenv("GOOGLE_SHEETS_CREDENTIALS", raising=False)
+    monkeypatch.delenv("GOOGLE_TOKEN_PATH", raising=False)
+
+    def _dns_fail(_host, _port):
+        raise OSError("dns blocked")
+
+    monkeypatch.setattr("run.preflight.socket.getaddrinfo", _dns_fail)
+
+    result = PreflightChecker(project_root).run(
+        ["publish"],
+        {"local_publish": False, "preflight_publish_network_checks": False},
+    )
+    assert result["status"] == "passed"

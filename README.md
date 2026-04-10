@@ -5,7 +5,7 @@ Production-oriented NSE technical research and execution platform with:
 - DuckDB-backed control plane and artifact lineage
 - rule-based data quality gating
 - technical ranking and breakout scanning
-- dual UI architecture (Streamlit research + NiceGUI execution)
+- dual UI architecture (Streamlit research + React/FastAPI execution, with NiceGUI fallback during migration)
 - publish channels (Google Sheets, Telegram, dashboard payload, QuantStats tear sheet)
 
 ## 0. Operator Quick Link
@@ -94,6 +94,7 @@ Important runtime semantics:
 - only `critical` failures block downstream execution
 - ingest/features/rank retries are operator-triggered reruns (not automatic loops)
 - publish channels have retry/backoff + idempotent dedupe
+- Telegram publish is informational delivery; Google Sheets + QuantStats are the publish-of-record outputs
 
 ## 4. Ingest and Delivery Collection
 
@@ -256,6 +257,17 @@ Channels:
 - QuantStats dashboard tear sheet
 - local summary mode (`--local-publish`)
 
+Telegram delivery notes:
+- sender performs a DNS precheck against `api.telegram.org` before sending
+- DNS, SSL, timeout, and API failures are logged separately for operator diagnosis
+- request timeouts are configurable via:
+  - `TELEGRAM_CONNECT_TIMEOUT_SECONDS`
+  - `TELEGRAM_READ_TIMEOUT_SECONDS`
+  - `TELEGRAM_WRITE_TIMEOUT_SECONDS`
+  - `TELEGRAM_POOL_TIMEOUT_SECONDS`
+  - `TELEGRAM_SEND_ATTEMPTS`
+  - `TELEGRAM_DNS_PRECHECK_ENABLED`
+
 ## 10. ML and Shadow Monitoring
 
 ML engines:
@@ -274,10 +286,15 @@ Research UI (Streamlit):
 - `ui/research/app.py`
 - deep analytics, ranking explainability, breakout evidence, sector views, ML/shadow review
 
-Execution UI (NiceGUI):
+Execution UI (React + FastAPI):
+- API: `ui/execution_api/app.py`
+- React console: `web/execution-console/`
+- route-based operator console for control, ranking, market, runs, shadow, tasks, and processes
+- durable task state in `control_plane.duckdb::operator_task*`
+
+Legacy execution fallback (NiceGUI):
 - `ui/execution/app.py`
-- operations control center, run inspection, health checks, process/task controls
-- one-click launch of Streamlit research UI
+- still available during migration, now reading the same durable task state
 
 Shared UI services:
 - `ui/services/`
@@ -327,6 +344,26 @@ Skip delivery collection:
 
 ```bash
 python -m run.orchestrator --skip-delivery-collect
+```
+
+Run the execution API:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python -m ui.execution_api.app --port 8090
+```
+
+Run the React execution console:
+
+```bash
+cd web/execution-console
+npm install
+npm run dev
+```
+
+Legacy NiceGUI execution fallback:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python -m ui.execution.app --port 8080
 ```
 
 Override ranking threshold:

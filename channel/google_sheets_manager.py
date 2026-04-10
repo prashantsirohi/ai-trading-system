@@ -66,6 +66,7 @@ class GoogleSheetsManager:
             return
 
         creds = None
+        token_error: Optional[str] = None
 
         if Path(self.token_path).exists():
             try:
@@ -87,6 +88,7 @@ class GoogleSheetsManager:
                     return
             except Exception as e:
                 message = f"Token auth failed: {e}"
+                token_error = message
                 self._set_error(message)
                 logger.warning(message)
 
@@ -123,6 +125,11 @@ class GoogleSheetsManager:
                 logger.info("Authenticated via OAuth2")
                 self.last_error = None
                 return
+
+        if token_error:
+            self._set_error(token_error)
+            logger.info("Falling back stopped because token-based authentication was present but refresh/auth failed.")
+            return
 
         message = f"Credentials file not found: {self.credentials_path}"
         self._set_error(message)

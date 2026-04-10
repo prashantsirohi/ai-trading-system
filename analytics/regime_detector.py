@@ -339,7 +339,7 @@ class RegimeDetector:
         adx_threshold: float = 20.0,
     ) -> Dict:
         """
-        Compute aggregate market regime from Nifty 50 (synthetic).
+        Compute aggregate market regime from Nifty 50 breadth and ADX snapshots.
         Returns dict with market_regime, avg_adx, pct_trending.
         """
         breadth = self._market_breadth_snapshot(exchange=exchange, date=date)

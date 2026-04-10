@@ -447,5 +447,12 @@ def render_breakout_evidence_cards(
                 )
                 st.caption(
                     f"Regime: {row.get('market_regime', 'N/A')} / {row.get('market_bias', 'N/A')} | "
+                    f"Tier: {row.get('candidate_tier', 'N/A')} | "
                     f"Setup Quality: {pd.to_numeric(row.get('setup_quality'), errors='coerce'):.1f}"
                 )
+                trend_reasons = str(row.get("symbol_trend_reasons", "") or "").strip()
+                if trend_reasons:
+                    st.caption(f"Trend reasons: {trend_reasons}")
+                filter_reason = str(row.get("filter_reason", "") or "").strip()
+                if filter_reason:
+                    st.caption(f"Filter reason: {filter_reason}")

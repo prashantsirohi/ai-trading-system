@@ -22,6 +22,7 @@ from run.orchestrator import PipelineOrchestrator
 from utils.logger import logger
 
 
+DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _TASKS: dict[str, dict[str, Any]] = {}
 _TASK_LOCK = threading.Lock()
 
@@ -30,10 +31,119 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def list_operator_tasks() -> List[Dict[str, Any]]:
+def _registry(project_root: str | Path | None = None) -> RegistryStore:
+    return RegistryStore(Path(project_root) if project_root else DEFAULT_PROJECT_ROOT)
+
+
+def _task_snapshot(task_id: str, project_root: str | Path | None = None) -> Dict[str, Any]:
     with _TASK_LOCK:
-        rows = []
+        cached = dict(_TASKS.get(task_id, {}))
+    try:
+        stored = _registry(project_root).get_operator_task(task_id)
+    except KeyError:
+        if cached and "task_id" not in cached:
+            cached["task_id"] = task_id
+        return cached
+    merged = {**stored, **cached}
+    merged["task_id"] = merged.get("task_id") or task_id
+    merged["metadata"] = {
+        **(stored.get("metadata") or {}),
+        **(cached.get("metadata") or {}),
+    }
+    if "logs" not in merged:
+        merged["logs"] = []
+    return merged
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _latest_task_log_rows(task_id: str, project_root: str | Path | None = None, limit: int = 10) -> List[Dict[str, Any]]:
+    return _registry(project_root).get_operator_task_logs(task_id, after=0, limit=max(1, int(limit)))[-int(limit) :]
+
+
+def _derive_task_terminal_state(task_id: str, task: Dict[str, Any], project_root: str | Path | None = None) -> Dict[str, Any]:
+    status = str(task.get("status") or "").lower()
+    if status not in {"running", "queued"}:
+        return {}
+
+    metadata = dict(task.get("metadata") or {})
+    if task.get("error"):
+        return {"status": "failed", "finished_at": task.get("finished_at") or _now(), "error": str(task.get("error"))}
+
+    run_id = metadata.get("run_id")
+    if run_id:
+        requested_stages = [str(stage) for stage in metadata.get("stages") or []]
+        fresh_stage_runs = _registry(project_root).get_stage_runs(str(run_id), started_after=task.get("started_at"))
+        try:
+            run = _registry(project_root).get_run(str(run_id))
+        except KeyError:
+            run = None
+        if run is not None:
+            run_status = str(run.get("status") or "").lower()
+            fresh_requested_stage_seen = (
+                not requested_stages
+                or any(str(row.get("stage_name")) in requested_stages for row in fresh_stage_runs)
+            )
+            if fresh_requested_stage_seen and run_status in {"failed", "completed", "completed_with_publish_errors"}:
+                derived_status = "failed" if run_status == "failed" else run_status
+                return {
+                    "status": derived_status,
+                    "finished_at": task.get("finished_at") or _now(),
+                    "error": run.get("error_message") if derived_status == "failed" else task.get("error"),
+                }
+
+    for row in reversed(_latest_task_log_rows(task_id, project_root, limit=12)):
+        message = str(row.get("message") or "")
+        if "failed:" in message.lower() or "failed with exit_code" in message.lower():
+            error_text = message.split("] ", 1)[-1]
+            if ":" in error_text:
+                error_text = error_text.split(":", 1)[-1].strip()
+            return {"status": "failed", "finished_at": task.get("finished_at") or _now(), "error": error_text}
+        if "completed" in message.lower() or "exited with code=0" in message.lower():
+            return {"status": "completed", "finished_at": task.get("finished_at") or _now(), "error": None}
+
+    pid = metadata.get("pid")
+    if pid:
+        try:
+            resolved_pid = int(pid)
+        except (TypeError, ValueError):
+            resolved_pid = None
+        if resolved_pid and not _process_exists(resolved_pid):
+            return {
+                "status": "failed",
+                "finished_at": task.get("finished_at") or _now(),
+                "error": "Background process is no longer running.",
+            }
+    return {}
+
+
+def reconcile_operator_task(task_id: str, project_root: str | Path | None = None, *, persist: bool = True) -> Dict[str, Any]:
+    task = _task_snapshot(task_id, project_root)
+    if not task:
+        raise KeyError(f"Unknown task_id: {task_id}")
+    derived = _derive_task_terminal_state(task_id, task, project_root)
+    if derived:
+        task.update({key: value for key, value in derived.items() if value is not None})
+        if persist:
+            _set_task(task_id, project_root=project_root, **derived)
+    return task
+
+
+def list_operator_tasks(project_root: str | Path | None = None) -> List[Dict[str, Any]]:
+    rows = _registry(project_root).list_operator_tasks()
+    with _TASK_LOCK:
+        legacy_rows = []
         for task_id, payload in _TASKS.items():
+            if any(row["task_id"] == task_id for row in rows):
+                continue
             row = {
                 "task_id": task_id,
                 "task_type": "",
@@ -48,41 +158,73 @@ def list_operator_tasks() -> List[Dict[str, Any]]:
             }
             row.update(payload or {})
             row["task_id"] = row.get("task_id") or task_id
-            rows.append(row)
-        return list(sorted(rows, key=lambda item: item.get("started_at", ""), reverse=True))
+            legacy_rows.append(row)
+    combined = list(sorted([*rows, *legacy_rows], key=lambda item: item.get("started_at", ""), reverse=True))
+    return [reconcile_operator_task(str(row.get("task_id")), project_root, persist=False) for row in combined if row.get("task_id")]
 
 
-def _set_task(task_key: str, **updates: Any) -> None:
+def get_operator_task(task_id: str, project_root: str | Path | None = None) -> Dict[str, Any]:
+    return reconcile_operator_task(task_id, project_root, persist=False)
+
+
+def _set_task(task_key: str, project_root: str | Path | None = None, **updates: Any) -> None:
     with _TASK_LOCK:
         task = _TASKS.setdefault(task_key, {})
         task.update(updates)
+        payload = dict(task)
+    _registry(project_root).update_operator_task(
+        task_key,
+        status=payload.get("status"),
+        finished_at=payload.get("finished_at"),
+        result=payload.get("result"),
+        error=payload.get("error"),
+        metadata=payload.get("metadata"),
+    )
 
 
-def _append_task_log(task_id: str, message: str) -> None:
+def _append_task_log(task_id: str, message: str, project_root: str | Path | None = None) -> None:
+    rendered = f"[{_now()}] {message}"
     with _TASK_LOCK:
         task = _TASKS.setdefault(task_id, {})
         logs = task.setdefault("logs", [])
-        logs.append(f"[{_now()}] {message}")
+        logs.append(rendered)
         if len(logs) > 300:
             del logs[:-300]
+    _registry(project_root).append_operator_task_log(task_id, rendered)
 
 
-def _create_task(task_type: str, label: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+def _create_task(
+    task_type: str,
+    label: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    *,
+    project_root: str | Path | None = None,
+) -> str:
     task_id = f"task-{uuid.uuid4().hex[:8]}"
-    _set_task(
-        task_id,
+    started_at = _now()
+    _registry(project_root).create_operator_task(
         task_id=task_id,
         task_type=task_type,
         label=label,
         status="running",
-        started_at=_now(),
+        started_at=started_at,
+        metadata=metadata or {},
+    )
+    _set_task(
+        task_id,
+        project_root=project_root,
+        task_id=task_id,
+        task_type=task_type,
+        label=label,
+        status="running",
+        started_at=started_at,
         finished_at=None,
         result=None,
         error=None,
         logs=[],
         metadata=metadata or {},
     )
-    _append_task_log(task_id, f"Task created: {label}")
+    _append_task_log(task_id, f"Task created: {label}", project_root=project_root)
     return task_id
 
 
@@ -96,11 +238,11 @@ def _launch_subprocess_task(
 ) -> str:
     """Launch a Python subprocess in the background and stream logs into the task log."""
     root = Path(project_root)
-    task_id = _create_task(task_type, label, metadata)
+    task_id = _create_task(task_type, label, metadata, project_root=root)
 
     def _runner() -> None:
         try:
-            _append_task_log(task_id, f"Running command: {' '.join(command)}")
+            _append_task_log(task_id, f"Running command: {' '.join(command)}", project_root=root)
             proc = subprocess.Popen(
                 command,
                 cwd=root,
@@ -112,9 +254,10 @@ def _launch_subprocess_task(
             )
             _set_task(
                 task_id,
+                project_root=root,
                 status="running",
                 metadata={
-                    **(_TASKS.get(task_id, {}).get("metadata") or {}),
+                    **(_task_snapshot(task_id, root).get("metadata") or {}),
                     "pid": int(proc.pid),
                     "command": " ".join(command),
                 },
@@ -124,24 +267,25 @@ def _launch_subprocess_task(
                 for line in proc.stdout:
                     message = line.rstrip()
                     if message:
-                        _append_task_log(task_id, message)
+                        _append_task_log(task_id, message, project_root=root)
 
             exit_code = proc.wait()
             if exit_code == 0:
-                _set_task(task_id, status="completed", finished_at=_now())
-                _append_task_log(task_id, f"Task completed with exit_code={exit_code}")
+                _set_task(task_id, project_root=root, status="completed", finished_at=_now())
+                _append_task_log(task_id, f"Task completed with exit_code={exit_code}", project_root=root)
             else:
-                _set_task(task_id, status="failed", finished_at=_now(), error=f"Process exited with code {exit_code}")
-                _append_task_log(task_id, f"Task failed with exit_code={exit_code}")
+                _set_task(task_id, project_root=root, status="failed", finished_at=_now(), error=f"Process exited with code {exit_code}")
+                _append_task_log(task_id, f"Task failed with exit_code={exit_code}", project_root=root)
         except Exception as exc:
-            _append_task_log(task_id, f"Task failed: {exc.__class__.__name__}: {exc}")
+            _append_task_log(task_id, f"Task failed: {exc.__class__.__name__}: {exc}", project_root=root)
             _set_task(
                 task_id,
+                project_root=root,
                 status="failed",
                 finished_at=_now(),
                 error=f"{exc.__class__.__name__}: {exc}",
                 metadata={
-                    **(_TASKS.get(task_id, {}).get("metadata") or {}),
+                    **(_task_snapshot(task_id, root).get("metadata") or {}),
                     "traceback": traceback.format_exc(),
                 },
             )
@@ -164,14 +308,19 @@ def launch_pipeline_task(
     task_id = _create_task(
         "pipeline",
         label,
-        {"stages": list(stage_names), "params": params or {}, "run_id": run_id, "run_date": run_date},
+        {"stages": list(stage_names), "params": params or {}, "run_id": run_id, "run_date": run_date, "current_stage": stage_names[0] if stage_names else None},
+        project_root=root,
     )
 
     def _runner() -> None:
         try:
             resolved_run_id = run_id or f"ui-{datetime.now().date().isoformat()}-{uuid.uuid4().hex[:8]}"
-            _set_task(task_id, metadata={**(_TASKS.get(task_id, {}).get("metadata") or {}), "run_id": resolved_run_id})
-            _append_task_log(task_id, f"Starting pipeline run {resolved_run_id} for stages={stage_names}")
+            _set_task(
+                task_id,
+                project_root=root,
+                metadata={**(_task_snapshot(task_id, root).get("metadata") or {}), "run_id": resolved_run_id},
+            )
+            _append_task_log(task_id, f"Starting pipeline run {resolved_run_id} for stages={stage_names}", project_root=root)
             orchestrator = PipelineOrchestrator(root)
             result = orchestrator.run_pipeline(
                 run_id=resolved_run_id,
@@ -183,18 +332,22 @@ def launch_pipeline_task(
                 _append_task_log(
                     task_id,
                     f"Stage {stage['stage_name']} attempt={stage['attempt_number']} status={stage['status']}",
+                    project_root=root,
                 )
-            _set_task(task_id, status="completed", finished_at=_now(), result=result)
-            _append_task_log(task_id, f"Pipeline completed with status={result.get('status')}")
+            final_status = str(result.get("status") or "completed")
+            task_status = final_status if final_status in {"completed", "completed_with_publish_errors"} else "completed"
+            _set_task(task_id, project_root=root, status=task_status, finished_at=_now(), result=result)
+            _append_task_log(task_id, f"Pipeline completed with status={result.get('status')}", project_root=root)
         except Exception as exc:
-            _append_task_log(task_id, f"Pipeline failed: {exc.__class__.__name__}: {exc}")
+            _append_task_log(task_id, f"Pipeline failed: {exc.__class__.__name__}: {exc}", project_root=root)
             _set_task(
                 task_id,
+                project_root=root,
                 status="failed",
                 finished_at=_now(),
                 error=f"{exc.__class__.__name__}: {exc}",
                 metadata={
-                    **(_TASKS.get(task_id, {}).get("metadata") or {}),
+                    **(_task_snapshot(task_id, root).get("metadata") or {}),
                     "traceback": traceback.format_exc(),
                 },
             )
@@ -210,15 +363,17 @@ def launch_shadow_monitor_task(
     prediction_date: Optional[str] = None,
 ) -> str:
     """Run the shadow-monitor updater in the background and track it for the UI."""
+    project_root = Path(shadow_monitor_module.__file__).resolve().parents[1]
     task_id = _create_task(
         "shadow_monitor",
         label,
         {"backfill_days": int(backfill_days), "prediction_date": prediction_date},
+        project_root=project_root,
     )
 
     def _runner() -> None:
         try:
-            _append_task_log(task_id, "Loading latest trained 5d and 20d LightGBM models")
+            _append_task_log(task_id, "Loading latest trained 5d and 20d LightGBM models", project_root=project_root)
             args = shadow_monitor_module.build_parser().parse_args([])
             args.backfill_days = int(backfill_days)
             args.prediction_date = prediction_date
@@ -228,7 +383,6 @@ def launch_shadow_monitor_task(
             args.ml_weight = 0.25
 
             # Reuse the module's main flow with a light inline adaptation.
-            project_root = Path(shadow_monitor_module.__file__).resolve().parents[1]
             operational_paths = shadow_monitor_module.ensure_domain_layout(project_root=project_root, data_domain="operational")
             research_paths = shadow_monitor_module.ensure_domain_layout(project_root=project_root, data_domain="research")
 
@@ -245,7 +399,7 @@ def launch_shadow_monitor_task(
             model_20d = scorer.load_model_from_uri(model_20d_meta["_model_path"])
 
             if args.backfill_days > 0:
-                _append_task_log(task_id, f"Preparing historical shadow frames for backfill_days={args.backfill_days}")
+                _append_task_log(task_id, f"Preparing historical shadow frames for backfill_days={args.backfill_days}", project_root=project_root)
                 latest_df, prediction_ts = shadow_monitor_module.prepare_current_universe_dataset(
                     project_root=project_root,
                     prediction_date=args.prediction_date,
@@ -267,7 +421,7 @@ def launch_shadow_monitor_task(
                     for date, frame in history_df.groupby(history_df["timestamp"].dt.normalize())
                 }
             else:
-                _append_task_log(task_id, "Preparing current-universe shadow frame")
+                _append_task_log(task_id, "Preparing current-universe shadow frame", project_root=project_root)
                 latest_df, prediction_ts = shadow_monitor_module.prepare_current_universe_dataset(
                     project_root=project_root,
                     prediction_date=args.prediction_date,
@@ -284,7 +438,7 @@ def launch_shadow_monitor_task(
 
             inserted_predictions = 0
             for prediction_day, frame in sorted(prediction_frames.items()):
-                _append_task_log(task_id, f"Scoring overlay for {prediction_day.date().isoformat()} ({len(frame)} symbols)")
+                _append_task_log(task_id, f"Scoring overlay for {prediction_day.date().isoformat()} ({len(frame)} symbols)", project_root=project_root)
                 overlay_df = shadow_monitor_module.build_shadow_overlay(
                     frame,
                     scorer=scorer,
@@ -320,10 +474,10 @@ def launch_shadow_monitor_task(
                 pending = registry.get_unscored_shadow_predictions(horizon)
                 if not pending:
                     matured_counts[horizon] = 0
-                    _append_task_log(task_id, f"No pending matured outcomes for {horizon}d horizon")
+                    _append_task_log(task_id, f"No pending matured outcomes for {horizon}d horizon", project_root=project_root)
                     continue
                 from_date = min(row["prediction_date"] for row in pending)
-                _append_task_log(task_id, f"Evaluating {len(pending)} pending outcomes for {horizon}d horizon from {from_date}")
+                _append_task_log(task_id, f"Evaluating {len(pending)} pending outcomes for {horizon}d horizon from {from_date}", project_root=project_root)
                 price_history = shadow_monitor_module.load_operational_price_history(
                     ohlcv_db_path=operational_paths.ohlcv_db_path,
                     exchange=args.exchange,
@@ -340,17 +494,18 @@ def launch_shadow_monitor_task(
                 "dated_overlay_uri": str(dated_overlay_path),
                 "backfill_days": int(backfill_days),
             }
-            _set_task(task_id, status="completed", finished_at=_now(), result=result)
-            _append_task_log(task_id, f"Shadow monitor completed: rows={inserted_predictions}, outcomes={matured_counts}")
+            _set_task(task_id, project_root=project_root, status="completed", finished_at=_now(), result=result)
+            _append_task_log(task_id, f"Shadow monitor completed: rows={inserted_predictions}, outcomes={matured_counts}", project_root=project_root)
         except Exception as exc:
-            _append_task_log(task_id, f"Shadow monitor failed: {exc.__class__.__name__}: {exc}")
+            _append_task_log(task_id, f"Shadow monitor failed: {exc.__class__.__name__}: {exc}", project_root=project_root)
             _set_task(
                 task_id,
+                project_root=project_root,
                 status="failed",
                 finished_at=_now(),
                 error=f"{exc.__class__.__name__}: {exc}",
                 metadata={
-                    **(_TASKS.get(task_id, {}).get("metadata") or {}),
+                    **(_task_snapshot(task_id, project_root).get("metadata") or {}),
                     "traceback": traceback.format_exc(),
                 },
             )
@@ -391,6 +546,46 @@ def get_recent_runs(project_root: str | Path, limit: int = 12) -> List[Dict[str,
     ]
 
 
+def find_latest_publishable_run(project_root: str | Path, limit: int = 50) -> Dict[str, Any] | None:
+    """Return the most recent run that still has a usable rank artifact for publish retry."""
+    root = Path(project_root)
+    db_path = root / "data" / "control_plane.duckdb"
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT r.run_id, r.run_date, r.status, r.current_stage, r.started_at, r.ended_at, r.error_class, r.error_message, a.uri
+            FROM pipeline_run r
+            JOIN pipeline_artifact a
+              ON a.run_id = r.run_id
+             AND a.stage_name = 'rank'
+             AND a.artifact_type = 'ranked_signals'
+            ORDER BY r.started_at DESC NULLS LAST
+            LIMIT ?
+            """,
+            [int(limit)],
+        ).fetchall()
+    finally:
+        conn.close()
+
+    for row in rows:
+        artifact_path = Path(str(row[8]))
+        if not artifact_path.exists():
+            continue
+        return {
+            "run_id": row[0],
+            "run_date": str(row[1]) if row[1] is not None else None,
+            "status": row[2],
+            "current_stage": row[3],
+            "started_at": str(row[4]) if row[4] is not None else None,
+            "ended_at": str(row[5]) if row[5] is not None else None,
+            "error_class": row[6],
+            "error_message": row[7],
+            "ranked_signals_uri": str(artifact_path),
+        }
+    return None
+
+
 def get_run_details(project_root: str | Path, run_id: str) -> Dict[str, Any]:
     """Return stage runs, alerts, and delivery logs for one pipeline run."""
     registry = RegistryStore(project_root)
@@ -402,10 +597,64 @@ def get_run_details(project_root: str | Path, run_id: str) -> Dict[str, Any]:
     }
 
 
-def get_task_logs(task_id: str) -> List[str]:
+def get_task_logs(task_id: str, project_root: str | Path | None = None, after: int = 0, limit: int = 300) -> List[str]:
+    _ = reconcile_operator_task(task_id, project_root, persist=False)
+    logs = _registry(project_root).get_operator_task_logs(task_id, after=after, limit=limit)
+    if logs:
+        return [str(row["message"]) for row in logs]
     with _TASK_LOCK:
         task = _TASKS.get(task_id, {})
         return list(task.get("logs", []))
+
+
+def terminate_operator_task(task_id: str, project_root: str | Path | None = None) -> Dict[str, Any]:
+    task = reconcile_operator_task(task_id, project_root, persist=True)
+    status = str(task.get("status") or "").lower()
+    if status in {"completed", "completed_with_publish_errors", "failed", "terminated"}:
+        return {"ok": False, "message": f"Task {task_id} is already {status}.", "task": task}
+
+    metadata = dict(task.get("metadata") or {})
+    pid = metadata.get("pid")
+    if pid is not None:
+        try:
+            resolved_pid = int(pid)
+        except (TypeError, ValueError):
+            resolved_pid = None
+        if resolved_pid:
+            try:
+                os.kill(resolved_pid, signal.SIGTERM)
+                _append_task_log(task_id, f"Task terminated by operator (pid={resolved_pid})", project_root=project_root)
+                _set_task(
+                    task_id,
+                    project_root=project_root,
+                    status="terminated",
+                    finished_at=_now(),
+                    error="Terminated by operator.",
+                )
+                return {"ok": True, "message": f"Sent SIGTERM to pid={resolved_pid}.", "task": get_operator_task(task_id, project_root)}
+            except ProcessLookupError:
+                _set_task(
+                    task_id,
+                    project_root=project_root,
+                    status="failed",
+                    finished_at=_now(),
+                    error="Background process is no longer running.",
+                )
+                return {"ok": True, "message": f"Task {task_id} was already stale and is now marked failed.", "task": get_operator_task(task_id, project_root)}
+            except PermissionError:
+                return {"ok": False, "message": f"Permission denied terminating pid={resolved_pid}.", "task": task}
+
+    derived = _derive_task_terminal_state(task_id, task, project_root)
+    if derived:
+        _append_task_log(task_id, "Task state reconciled from terminal run/log evidence.", project_root=project_root)
+        _set_task(task_id, project_root=project_root, **derived)
+        return {"ok": True, "message": f"Task {task_id} was stale and has been reconciled to {derived.get('status')}.", "task": get_operator_task(task_id, project_root)}
+
+    return {
+        "ok": False,
+        "message": "This task runs in-process and cannot be safely terminated from the dashboard.",
+        "task": task,
+    }
 
 
 def launch_streamlit_dashboard_task(
@@ -419,6 +668,7 @@ def launch_streamlit_dashboard_task(
         "streamlit_dashboard",
         f"Launch Streamlit Research Dashboard ({port})",
         {"port": int(port), "url": f"http://localhost:{int(port)}"},
+        project_root=root,
     )
 
     def _runner() -> None:
@@ -443,28 +693,30 @@ def launch_streamlit_dashboard_task(
             )
             _set_task(
                 task_id,
+                project_root=root,
                 status="running",
                 metadata={
-                    **(_TASKS.get(task_id, {}).get("metadata") or {}),
+                    **(_task_snapshot(task_id, root).get("metadata") or {}),
                     "pid": int(proc.pid),
                     "command": " ".join(cmd),
                 },
                 result={"pid": int(proc.pid), "url": f"http://localhost:{int(port)}"},
             )
-            _append_task_log(task_id, f"Streamlit launched on http://localhost:{int(port)} (pid={proc.pid})")
+            _append_task_log(task_id, f"Streamlit launched on http://localhost:{int(port)} (pid={proc.pid})", project_root=root)
             exit_code = proc.wait()
             final_status = "completed" if exit_code == 0 else "failed"
-            _set_task(task_id, status=final_status, finished_at=_now())
-            _append_task_log(task_id, f"Streamlit process exited with code={exit_code}")
+            _set_task(task_id, project_root=root, status=final_status, finished_at=_now())
+            _append_task_log(task_id, f"Streamlit process exited with code={exit_code}", project_root=root)
         except Exception as exc:
-            _append_task_log(task_id, f"Streamlit launch failed: {exc.__class__.__name__}: {exc}")
+            _append_task_log(task_id, f"Streamlit launch failed: {exc.__class__.__name__}: {exc}", project_root=root)
             _set_task(
                 task_id,
+                project_root=root,
                 status="failed",
                 finished_at=_now(),
                 error=f"{exc.__class__.__name__}: {exc}",
                 metadata={
-                    **(_TASKS.get(task_id, {}).get("metadata") or {}),
+                    **(_task_snapshot(task_id, root).get("metadata") or {}),
                     "traceback": traceback.format_exc(),
                 },
             )

@@ -1,20 +1,62 @@
 import asyncio
 import time
 import sqlite3
-import random
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import duckdb
 import requests
 from dhanhq import dhanhq
+from analytics.data_trust import ensure_data_trust_schema
+from core.env import load_project_env
 from features.feature_store import FeatureStore
 from collectors.token_manager import DhanTokenManager
 from utils.data_domains import ensure_domain_layout
 from utils.logger import logger
+
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
+
+
+def dhan_daily_window_ist(reference: datetime | None = None) -> tuple[str, str]:
+    """Return Dhan daily window in IST as (today-1, today)."""
+    if reference is None:
+        now_ist = datetime.now(timezone.utc).astimezone(IST_TZ)
+    elif reference.tzinfo is None:
+        now_ist = reference.replace(tzinfo=IST_TZ)
+    else:
+        now_ist = reference.astimezone(IST_TZ)
+    to_date = now_ist.date()
+    from_date = to_date - timedelta(days=1)
+    return from_date.isoformat(), to_date.isoformat()
+
+
+def normalize_dhan_timestamps_ist(values: Any) -> pd.Series:
+    """
+    Normalize Dhan timestamp arrays into naive IST datetimes.
+
+    Dhan timestamp payloads can arrive as epoch seconds, epoch milliseconds,
+    or serial day counts. Epoch payloads are UTC-based and must be translated
+    to IST trading-day boundaries before date-level comparisons.
+    """
+    series = pd.Series(values)
+    numeric = pd.to_numeric(series, errors="coerce")
+    non_null = numeric.dropna()
+    if non_null.empty:
+        return pd.to_datetime(series, errors="coerce")
+
+    sample = float(non_null.iloc[0])
+    if sample > 1_000_000_000_000:
+        parsed = pd.to_datetime(numeric, unit="ms", utc=True, errors="coerce")
+        return parsed.dt.tz_convert(IST_TZ).dt.tz_localize(None)
+    if sample > 1_000_000_000:
+        parsed = pd.to_datetime(numeric, unit="s", utc=True, errors="coerce")
+        return parsed.dt.tz_convert(IST_TZ).dt.tz_localize(None)
+    if sample > 10_000:
+        return pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
+    return pd.to_datetime(series, errors="coerce")
 
 
 class DhanCollector:
@@ -42,7 +84,8 @@ class DhanCollector:
     - Bulk Fetch: up to 1000 instruments per request (1 req/sec)
     - Daily: 1000 API calls
 
-    For demo/testing: generates synthetic OHLCV data when API is not available.
+    Operational usage requires authenticated Dhan access. The collector now
+    fails loudly instead of generating synthetic OHLCV data.
     """
 
     def __init__(
@@ -57,6 +100,7 @@ class DhanCollector:
         max_concurrent: int = 5,
         data_domain: str = "operational",
     ):
+        load_project_env(os.path.dirname(os.path.dirname(__file__)))
         paths = ensure_domain_layout(
             project_root=os.path.dirname(os.path.dirname(__file__)),
             data_domain=data_domain,
@@ -70,9 +114,9 @@ class DhanCollector:
         if feature_store_dir is None:
             feature_store_dir = str(paths.feature_store_dir)
 
-        self.api_key = api_key
-        self.client_id = client_id
-        self.access_token = access_token
+        self.api_key = api_key or os.getenv("DHAN_API_KEY", "")
+        self.client_id = client_id or os.getenv("DHAN_CLIENT_ID", "")
+        self.access_token = access_token or os.getenv("DHAN_ACCESS_TOKEN", "")
         self.warehouse_dir = warehouse_dir
         self.db_path = db_path
         self.masterdb_path = masterdb_path
@@ -83,7 +127,7 @@ class DhanCollector:
         self.request_timestamps: List[float] = []
         self.daily_request_count = 0
         self.last_reset_date = datetime.now().date()
-        self.use_api = bool(client_id and access_token)
+        self.use_api = bool(self.client_id and self.access_token)
         self._semaphore: Optional[asyncio.Semaphore] = None
         self._executor = ThreadPoolExecutor(max_workers=max_concurrent)
 
@@ -251,6 +295,7 @@ class DhanCollector:
             ON _snapshots(snapshot_ts)
         """)
 
+        ensure_data_trust_schema(conn)
         self._ensure_catalog_compatibility(conn)
 
         conn.commit()
@@ -260,8 +305,30 @@ class DhanCollector:
     def _ensure_catalog_compatibility(self, conn):
         """Log legacy schema gaps without mutating live tables that may have dependencies."""
         expected_columns = {
-            "_catalog": {"security_id", "parquet_file", "ingestion_version", "ingestion_ts"},
-            "_catalog_history": {"security_id", "parquet_file", "ingestion_version", "ingestion_ts"},
+            "_catalog": {
+                "security_id",
+                "parquet_file",
+                "ingestion_version",
+                "ingestion_ts",
+                "provider",
+                "provider_priority",
+                "validation_status",
+                "validated_against",
+                "ingest_run_id",
+                "repair_batch_id",
+            },
+            "_catalog_history": {
+                "security_id",
+                "parquet_file",
+                "ingestion_version",
+                "ingestion_ts",
+                "provider",
+                "provider_priority",
+                "validation_status",
+                "validated_against",
+                "ingest_run_id",
+                "repair_batch_id",
+            },
         }
 
         for table_name, expected in expected_columns.items():
@@ -467,7 +534,9 @@ class DhanCollector:
         self._rate_limit_wait()
 
         if not self.use_api or self.dhan is None:
-            return self._generate_sample_data(security_id, from_date, to_date)
+            raise RuntimeError(
+                "Authenticated Dhan access is unavailable; refusing to generate fallback OHLCV data."
+            )
 
         if not _retry_after_renewal:
             self._ensure_valid_token()
@@ -535,19 +604,11 @@ class DhanCollector:
             )
 
             if "timestamp" in inner and inner["timestamp"]:
-                # Check if it's epoch or Julian
                 ts_sample = inner["timestamp"][0] if inner["timestamp"] else 0
                 logger.debug(
                     f"Timestamp sample value: {ts_sample} (type: {type(ts_sample)})"
                 )
-
-                # If timestamp looks like Julian date (very large number), use different conversion
-                if ts_sample > 100000000:  # Likely Julian date
-                    df["timestamp"] = pd.to_datetime(
-                        inner["timestamp"], unit="D", origin="1899-12-30"
-                    )
-                else:  # Standard epoch
-                    df["timestamp"] = pd.to_datetime(inner["timestamp"], unit="s")
+                df["timestamp"] = normalize_dhan_timestamps_ist(inner["timestamp"])
             elif "date" in inner and inner["date"]:
                 df["timestamp"] = pd.to_datetime(inner["date"])
             else:
@@ -803,6 +864,12 @@ class DhanCollector:
                             "volume": "volume",
                             "parquet_file": "parquet_file",
                             "ingestion_version": "ingestion_version",
+                            "provider": "provider",
+                            "provider_priority": "provider_priority",
+                            "validation_status": "validation_status",
+                            "validated_against": "validated_against",
+                            "ingest_run_id": "ingest_run_id",
+                            "repair_batch_id": "repair_batch_id",
                         },
                         conn,
                     )
@@ -1267,49 +1334,6 @@ class DhanCollector:
     #  Legacy / compatibility                                             #
     # ------------------------------------------------------------------ #
 
-    def _generate_sample_data(
-        self, security_id: str, from_date: str, to_date: str
-    ) -> pd.DataFrame:
-        """Generate synthetic OHLCV data for testing when API is unavailable."""
-        start_date = datetime.strptime(from_date, "%Y-%m-%d")
-        end_date = datetime.strptime(to_date, "%Y-%m-%d")
-        dates = pd.date_range(start=start_date, end=end_date, freq="B")
-
-        if len(dates) == 0:
-            return pd.DataFrame()
-
-        base_price = random.uniform(100, 5000)
-        current_price = base_price
-
-        records = []
-        for date in dates:
-            change = random.uniform(-0.03, 0.03)
-            current_price = current_price * (1 + change)
-            daily_range = random.uniform(0.005, 0.02)
-            high = current_price * (1 + daily_range)
-            low = current_price * (1 - daily_range)
-            open_px = random.uniform(low, high)
-            close_px = random.uniform(low, high)
-            volume = int(random.uniform(100_000, 10_000_000))
-
-            records.append(
-                {
-                    "date": date.strftime("%Y-%m-%d"),
-                    "open": round(open_px, 2),
-                    "high": round(high, 2),
-                    "low": round(low, 2),
-                    "close": round(close_px, 2),
-                    "volume": volume,
-                }
-            )
-
-        df = pd.DataFrame(records)
-        if "date" in df.columns:
-            df["timestamp"] = pd.to_datetime(df["date"])
-            df.set_index("timestamp", inplace=True)
-            df.drop("date", axis=1, inplace=True)
-        return df
-
     def save_to_parquet(self, df: pd.DataFrame, symbol: str) -> str:
         """Legacy method — redirects to DuckDB."""
         logger.warning("save_to_parquet is deprecated; use ingest() for ACID storage")
@@ -1763,6 +1787,7 @@ class DhanCollector:
         compute_features: bool = False,
         full_rebuild: bool = False,
         feature_tail_bars: int = 252,
+        run_id: str | None = None,
     ) -> Dict[str, Any]:
         """
         Run daily EOD update after market close.
@@ -1796,13 +1821,16 @@ class DhanCollector:
         if symbol_limit is not None:
             symbols = symbols[:symbol_limit]
 
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        default_from_str, to_str = dhan_daily_window_ist()
+        to_date_obj = datetime.fromisoformat(to_str).date()
+        yesterday_date = to_date_obj - timedelta(days=1)
+        bootstrap_from_str = (to_date_obj - timedelta(days=max(1, int(days_history)))).isoformat()
         last_dates = self._get_last_dates(exchanges=exchanges)
-        yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
         stale_symbols: List[str] = []
         no_data_symbols: List[str] = []
         up_to_date_symbols: List[str] = []
+        from_candidates: List[str] = []
 
         t0 = time.time()
         total_updated = 0
@@ -1822,25 +1850,37 @@ class DhanCollector:
             for s in batch:
                 sym_id = s["symbol_id"]
                 last = last_dates.get(sym_id)
+                symbol_from_str = default_from_str
                 if last:
-                    from_dt = datetime.strptime(last, "%Y-%m-%d") + timedelta(days=1)
-                    from_str = from_dt.strftime("%Y-%m-%d")
-                    days_gap = (datetime.now().date() - from_dt.date()).days
-                    if days_gap <= 0:
-                        up_to_date_symbols.append(sym_id)
+                    try:
+                        last_dt = datetime.strptime(last, "%Y-%m-%d").date()
+                    except ValueError:
+                        last_dt = None
+                    if last_dt is None:
+                        no_data_symbols.append(sym_id)
+                        symbol_from_str = bootstrap_from_str
                     else:
-                        stale_symbols.append((sym_id, last, days_gap))
+                        days_gap = (to_date_obj - last_dt).days
+                        if last_dt >= to_date_obj:
+                            up_to_date_symbols.append(sym_id)
+                            continue
+                        if last_dt < yesterday_date:
+                            stale_symbols.append((sym_id, last, days_gap))
+                            symbol_from_str = (last_dt + timedelta(days=1)).isoformat()
                 else:
-                    from_str = (datetime.now() - timedelta(days=days_history)).strftime(
-                        "%Y-%m-%d"
-                    )
                     no_data_symbols.append(sym_id)
+                    symbol_from_str = bootstrap_from_str
 
-                to_str = today_str
                 enriched = s.copy()
-                enriched["_from_date"] = from_str
+                enriched["_from_date"] = symbol_from_str
                 enriched["_to_date"] = to_str
+                enriched["_ingest_run_id"] = run_id
                 batch_symbols.append(enriched)
+                from_candidates.append(symbol_from_str)
+
+            if not batch_symbols:
+                logger.info(f"[Daily Update] Batch {batch_num}: all symbols already up to date")
+                continue
 
             dfs, errors = asyncio.run(
                 self._fetch_daily_batch(batch_symbols, max_concurrent)
@@ -1926,6 +1966,10 @@ class DhanCollector:
             "stale_details": stale_symbols,
             "no_data_symbols": no_data_symbols,
             "up_to_date_symbols": len(up_to_date_symbols),
+            "window_from_date": min(from_candidates) if from_candidates else default_from_str,
+            "window_to_date": to_str,
+            "default_daily_from_date": default_from_str,
+            "bootstrap_from_date": bootstrap_from_str,
             "feature_result": feat_result,
             "duration_sec": round(duration, 2),
         }
@@ -1969,8 +2013,10 @@ class DhanCollector:
         """Fetch one symbol's daily data from last known date to today."""
         security_id = symbol_info["security_id"]
         exchange = symbol_info["exchange"]
-        from_date = symbol_info.get("_from_date")
-        to_date = symbol_info.get("_to_date", datetime.now().strftime("%Y-%m-%d"))
+        default_from, default_to = dhan_daily_window_ist()
+        from_date = symbol_info.get("_from_date", default_from)
+        to_date = symbol_info.get("_to_date", default_to)
+        ingest_run_id = symbol_info.get("_ingest_run_id")
 
         loop = asyncio.get_event_loop()
         df = await loop.run_in_executor(
@@ -1983,6 +2029,12 @@ class DhanCollector:
             session,
         )
         if df is not None and not df.empty:
+            df["provider"] = "dhan_historical_daily"
+            df["provider_priority"] = 1
+            df["validation_status"] = "dhan_primary_unverified"
+            df["validated_against"] = None
+            df["ingest_run_id"] = ingest_run_id
+            df["repair_batch_id"] = None
             df.attrs["symbol_info"] = symbol_info
         return df
 
@@ -2045,6 +2097,12 @@ class DhanCollector:
                             "volume": "volume",
                             "parquet_file": "parquet_file",
                             "ingestion_version": "ingestion_version",
+                            "provider": "provider",
+                            "provider_priority": "provider_priority",
+                            "validation_status": "validation_status",
+                            "validated_against": "validated_against",
+                            "ingest_run_id": "ingest_run_id",
+                            "repair_batch_id": "repair_batch_id",
                         },
                         conn,
                     )

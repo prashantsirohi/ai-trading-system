@@ -179,7 +179,7 @@ PipelineOrchestrator
 
 Research defaults to a static historical cutoff of Dec 31 of the prior year so studies do not drift with live data refreshes.
 
-## Smoke Run
-- Self-contained smoke execution:
-  - `python3 -m run.orchestrator --smoke --local-publish`
-- This writes run, stage, artifact, and DQ metadata without needing live providers or delivery credentials.
+## Canary Validation
+- Synthetic smoke mode is removed.
+- Use a constrained live canary run before full rollout:
+  - `python3 -m run.orchestrator --canary --symbol-limit 25 --local-publish`

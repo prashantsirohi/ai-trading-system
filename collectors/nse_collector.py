@@ -20,6 +20,31 @@ class NSECollector:
         self.session = requests.Session()
         self._init_session()
 
+    def _candidate_bhavcopy_urls(self, date: str) -> list[str]:
+        date_compact = date.replace("-", "")
+        dt = datetime.fromisoformat(date)
+        ddmmyyyy = dt.strftime("%d%m%Y")
+        return [
+            f"https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{ddmmyyyy}.csv",
+            f"https://www.nseindia.com/content/nsccl/CM{date_compact}bhav.csv.zip",
+        ]
+
+    def _local_bhavcopy_path(self, date: str) -> str:
+        dt = datetime.fromisoformat(date)
+        filename = f"nse_{dt.strftime('%d%b%Y').upper()}.csv"
+        return os.path.join(self.data_dir, filename)
+
+    def _read_bhavcopy_response(self, response: requests.Response) -> pd.DataFrame:
+        content_type = response.headers.get("Content-Type", "").lower()
+        if ".zip" in response.url.lower() or "zip" in content_type:
+            with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+                for name in z.namelist():
+                    if name.endswith(".csv"):
+                        with z.open(name) as f:
+                            return pd.read_csv(f)
+            return pd.DataFrame()
+        return pd.read_csv(io.StringIO(response.text))
+
     def _init_session(self):
         """Initialize session with headers"""
         headers = {
@@ -40,19 +65,24 @@ class NSECollector:
             date = self._get_previous_trading_day()
 
         try:
-            date_str = date.replace("-", "")
-            url = f"https://www.nseindia.com/content/nsccl/CM{date_str}bhav.csv.zip"
+            local_path = self._local_bhavcopy_path(date)
+            if os.path.exists(local_path):
+                df = pd.read_csv(local_path)
+                if not df.empty:
+                    logger.info(f"Loaded bhavcopy from local archive for {date}: {local_path}")
+                    return df
 
             logger.info(f"Downloading bhavcopy for {date}")
-            response = self.session.get(url, timeout=30)
-            response.raise_for_status()
-
-            with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-                for name in z.namelist():
-                    if name.endswith('.csv'):
-                        with z.open(name) as f:
-                            df = pd.read_csv(f)
-                            return df
+            for url in self._candidate_bhavcopy_urls(date):
+                response = self.session.get(url, timeout=30)
+                if response.status_code == 404:
+                    continue
+                response.raise_for_status()
+                df = self._read_bhavcopy_response(response)
+                if not df.empty:
+                    os.makedirs(self.data_dir, exist_ok=True)
+                    df.to_csv(local_path, index=False)
+                    return df
 
             return pd.DataFrame()
 

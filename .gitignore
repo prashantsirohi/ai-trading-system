@@ -43,6 +43,9 @@ htmlcov/
 .ruff_cache/
 .mypy_cache/
 .hypothesis/
+node_modules/
+web/**/dist/
+*.tsbuildinfo
 
 # ============================================================
 # OS

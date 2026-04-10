@@ -8,6 +8,16 @@ from typing import Dict, List
 from execution.store import ExecutionStore
 
 
+def open_position_trade_ref(symbol_id: str, exchange: str = "NSE") -> str:
+    """Stable journal reference for an active position."""
+    return f"open:{str(exchange or 'NSE').upper()}:{str(symbol_id or '').upper()}"
+
+
+def closed_trade_ref(fill_id: str) -> str:
+    """Stable journal reference for a realized trade row."""
+    return f"closed:{str(fill_id or '').strip()}"
+
+
 @dataclass(slots=True)
 class PositionSnapshot:
     """Current long position state for a symbol."""
@@ -78,4 +88,9 @@ class PortfolioManager:
         return positions
 
     def open_positions_frame(self) -> List[dict]:
-        return [position.to_dict() for position in self.open_positions().values()]
+        rows: list[dict] = []
+        for position in self.open_positions().values():
+            payload = position.to_dict()
+            payload["trade_ref"] = open_position_trade_ref(position.symbol_id, position.exchange)
+            rows.append(payload)
+        return rows

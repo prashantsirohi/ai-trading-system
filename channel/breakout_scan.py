@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from typing import Optional
+from typing import Iterable, Optional
 
 import duckdb
+import numpy as np
 import pandas as pd
 
 from analytics.regime_detector import RegimeDetector
@@ -93,6 +94,262 @@ def _load_supertrend_flags(
     return pd.concat(rows, ignore_index=True).drop_duplicates("symbol_id", keep="last")
 
 
+def _as_bool_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    return frame.get(column, pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+
+
+def _to_float_series(frame: pd.DataFrame, column: str, default: float = np.nan) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(default, index=frame.index, dtype=float)
+    return pd.to_numeric(frame[column], errors="coerce")
+
+
+def _canonical_family_from_legacy(setup_family: str) -> str:
+    mapping = {
+        "base_breakout": "resistance_breakout_50d",
+        "contraction_breakout": "consolidation_breakout",
+        "supertrend_flip_breakout": "volatility_expansion_breakout",
+    }
+    return mapping.get(str(setup_family or "").strip(), "resistance_breakout_50d")
+
+
+def _normalize_market_bias_allowlist(values: Iterable[str] | str | None) -> set[str]:
+    if values is None:
+        return {"BULLISH", "NEUTRAL"}
+    if isinstance(values, str):
+        values = [item.strip() for item in values.split(",")]
+    out = {str(item).strip().upper() for item in values if str(item).strip()}
+    return out or {"BULLISH", "NEUTRAL"}
+
+
+def _prepare_rank_context(ranked_df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    if ranked_df is None or ranked_df.empty or "symbol_id" not in ranked_df.columns:
+        return pd.DataFrame(columns=["symbol_id", "rel_strength_score", "sector_rs_value", "sector_rs_percentile"])
+
+    cols = [col for col in ["symbol_id", "rel_strength_score", "sector_rs_value"] if col in ranked_df.columns]
+    ctx = ranked_df[cols].copy()
+    ctx["symbol_id"] = ctx["symbol_id"].astype(str)
+    if "rel_strength_score" not in ctx.columns:
+        ctx["rel_strength_score"] = np.nan
+    if "sector_rs_value" not in ctx.columns:
+        ctx["sector_rs_value"] = np.nan
+    ctx["sector_rs_percentile"] = (
+        pd.to_numeric(ctx["sector_rs_value"], errors="coerce").rank(pct=True, method="average") * 100.0
+    )
+    return ctx.drop_duplicates("symbol_id", keep="first")
+
+
+def compute_breakout_v2_scores(
+    candidates: pd.DataFrame,
+    *,
+    market_bias: str,
+    breadth_score: float,
+    market_bias_allowlist: Iterable[str] | str | None = None,
+    min_breadth_score: float = 45.0,
+    sector_rs_min: float | None = None,
+    sector_rs_percentile_min: float | None = 60.0,
+    breakout_qualified_min_score: int = 3,
+    breakout_symbol_trend_gate_enabled: bool = True,
+    breakout_symbol_near_high_max_pct: float = 15.0,
+) -> pd.DataFrame:
+    """
+    Apply breakout-v2 score contract and regime gates.
+
+    Expects candidates to already include breakout booleans and rank context columns.
+    """
+    if candidates is None or candidates.empty:
+        return pd.DataFrame()
+
+    df = candidates.copy()
+    market_bias = str(market_bias or "UNKNOWN").upper()
+    allowed_biases = _normalize_market_bias_allowlist(market_bias_allowlist)
+    breadth_score = float(breadth_score or 0.0)
+
+    # v2 score contract (kept separate from the main composite rank).
+    df["breakout_score"] = (
+        _as_bool_series(df, "is_resistance_breakout_50d").astype(int) * 1
+        + _as_bool_series(df, "is_high_52w_breakout").astype(int) * 2
+        + _as_bool_series(df, "is_consolidation_breakout").astype(int) * 2
+        + _as_bool_series(df, "is_volume_confirmed_breakout").astype(int) * 1
+        + (_to_float_series(df, "rel_strength_score", default=0.0).fillna(0.0) >= 80.0).astype(int) * 2
+    )
+
+    if "setup_quality" not in df.columns:
+        df["setup_quality"] = np.nan
+    df["setup_quality"] = pd.to_numeric(df["setup_quality"], errors="coerce")
+    df["setup_quality"] = df["setup_quality"].fillna(
+        df["breakout_score"] * 20.0
+        + _to_float_series(df, "volume_ratio", default=0.0).fillna(0.0).clip(0, 4) * 8.0
+        + _to_float_series(df, "adx_14", default=0.0).fillna(0.0).clip(0, 60) * 0.4
+        + (12.0 - _to_float_series(df, "near_52w_high_pct", default=12.0).fillna(12.0).clip(0, 12)) * 1.5
+    )
+
+    market_bias_ok = market_bias in allowed_biases
+    breadth_ok = breadth_score >= float(min_breadth_score)
+
+    sector_rs_value = _to_float_series(df, "sector_rs_value")
+    sector_rs_percentile = _to_float_series(df, "sector_rs_percentile")
+
+    if sector_rs_min is None:
+        sector_abs_ok = pd.Series(True, index=df.index)
+    else:
+        sector_abs_ok = sector_rs_value >= float(sector_rs_min)
+    if sector_rs_percentile_min is None:
+        sector_pct_ok = pd.Series(True, index=df.index)
+    else:
+        sector_pct_ok = sector_rs_percentile >= float(sector_rs_percentile_min)
+
+    # Regime layer (market + breadth + sector RS gates).
+    sector_gate_ok = sector_abs_ok & sector_pct_ok
+    regime_gate_ok = pd.Series(market_bias_ok and breadth_ok, index=df.index)
+    all_regime_gates_ok = regime_gate_ok & sector_gate_ok
+
+    above_sma200 = _as_bool_series(df, "above_sma200")
+    if "above_sma200" not in df.columns:
+        close_series = _to_float_series(df, "close")
+        sma200_series = _to_float_series(df, "sma_200")
+        derived = close_series > sma200_series
+        above_sma200 = derived.where(close_series.notna() & sma200_series.notna(), True).fillna(True).astype(bool)
+
+    sma50_slope_20d_pct = _to_float_series(df, "sma50_slope_20d_pct")
+    sma50_slope_positive = (sma50_slope_20d_pct > 0).where(sma50_slope_20d_pct.notna(), True).fillna(True).astype(bool)
+
+    near_52w_high_pct = _to_float_series(df, "near_52w_high_pct")
+    near_52w_high_ok = (
+        near_52w_high_pct <= float(breakout_symbol_near_high_max_pct)
+    ).where(near_52w_high_pct.notna(), True).fillna(True).astype(bool)
+
+    pass_count = (
+        above_sma200.astype(int)
+        + sma50_slope_positive.astype(int)
+        + near_52w_high_ok.astype(int)
+    )
+    fail_count = 3 - pass_count
+    candidate_tier = np.select(
+        [fail_count == 0, fail_count == 1],
+        ["A", "B"],
+        default="C",
+    )
+    if not breakout_symbol_trend_gate_enabled:
+        pass_count = pd.Series(3, index=df.index)
+        fail_count = pd.Series(0, index=df.index)
+        candidate_tier = np.array(["A"] * len(df), dtype=object)
+
+    trend_reasons: list[str] = []
+    trend_negative_reasons: list[str] = []
+    for i in range(len(df)):
+        row_reasons = [
+            "ABOVE_SMA200" if bool(above_sma200.iloc[i]) else "BELOW_SMA200",
+            "SMA50_SLOPE_POSITIVE" if bool(sma50_slope_positive.iloc[i]) else "SMA50_SLOPE_NEGATIVE",
+            "NEAR_52W_HIGH" if bool(near_52w_high_ok.iloc[i]) else "FAR_FROM_52W_HIGH",
+        ]
+        trend_reasons.append(",".join(row_reasons))
+        trend_negative_reasons.append(",".join([reason for reason in row_reasons if reason.startswith(("BELOW_", "FAR_", "SMA50_SLOPE_NEGATIVE"))]))
+
+    def _regime_reasons(i: int) -> str:
+        reasons: list[str] = []
+        if not market_bias_ok:
+            reasons.append("market_bias_not_allowed")
+        if not breadth_ok:
+            reasons.append("breadth_below_threshold")
+        if sector_rs_min is not None and not bool(sector_abs_ok.iloc[i]):
+            reasons.append("sector_rs_below_threshold")
+        if sector_rs_percentile_min is not None and not bool(sector_pct_ok.iloc[i]):
+            reasons.append("sector_rs_below_percentile")
+        if pd.isna(sector_rs_value.iloc[i]):
+            reasons.append("sector_rs_missing")
+        return ",".join(reasons)
+
+    filtered_by_regime = ~all_regime_gates_ok
+    if breakout_symbol_trend_gate_enabled:
+        filtered_by_symbol_trend = (~filtered_by_regime) & (pd.Series(candidate_tier, index=df.index) == "C")
+    else:
+        filtered_by_symbol_trend = pd.Series(False, index=df.index)
+
+    states: list[str] = []
+    reasons: list[str] = []
+    for i in range(len(df)):
+        if bool(filtered_by_regime.iloc[i]):
+            states.append("filtered_by_regime")
+            reasons.append(_regime_reasons(i))
+        elif bool(filtered_by_symbol_trend.iloc[i]):
+            states.append("filtered_by_symbol_trend")
+            reasons.append(trend_negative_reasons[i])
+        elif candidate_tier[i] == "A":
+            states.append("qualified")
+            reasons.append("")
+        else:
+            states.append("watchlist")
+            reasons.append(trend_negative_reasons[i] or "score_below_qualified_threshold")
+
+    df["breakout_detected"] = True
+    df["filtered_by_regime"] = filtered_by_regime.fillna(False).astype(bool)
+    df["filtered_by_symbol_trend"] = filtered_by_symbol_trend.fillna(False).astype(bool)
+    df["above_sma200"] = above_sma200.fillna(False).astype(bool)
+    df["sma50_slope_20d_pct"] = sma50_slope_20d_pct
+    df["symbol_trend_fail_count"] = fail_count.astype(int)
+    df["symbol_trend_score"] = (pass_count / 3.0 * 100.0).round(2)
+    df["symbol_trend_reasons"] = trend_reasons
+    df["candidate_tier"] = candidate_tier
+
+    df["breakout_state"] = states
+    df["filter_reason"] = reasons
+    df["market_bias_allowed"] = bool(market_bias_ok)
+    df["breadth_gate_passed"] = bool(breadth_ok)
+    df["sector_gate_passed"] = sector_gate_ok.fillna(False).astype(bool)
+    df["regime_gate_passed"] = regime_gate_ok.fillna(False).astype(bool)
+
+    state_priority = {
+        "qualified": 0,
+        "watchlist": 1,
+        "filtered_by_symbol_trend": 2,
+        "filtered_by_regime": 3,
+    }
+    df["state_priority"] = df["breakout_state"].map(state_priority).fillna(9).astype(int)
+    df["breakout_rank"] = (
+        df.sort_values(
+            ["state_priority", "breakout_score", "setup_quality", "breakout_pct"],
+            ascending=[True, False, False, True],
+            na_position="last",
+        )
+        .reset_index(drop=True)
+        .index
+        + 1
+    )
+    df = df.sort_values("breakout_rank", ascending=True).reset_index(drop=True)
+    return df.drop(columns=["state_priority"], errors="ignore")
+
+
+def _empty_breakout_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "symbol_id",
+            "sector",
+            "setup_family",
+            "legacy_setup_family",
+            "taxonomy_family",
+            "execution_label",
+            "market_regime",
+            "market_bias",
+            "breakout_detected",
+            "filtered_by_regime",
+            "filtered_by_symbol_trend",
+            "breakout_state",
+            "filter_reason",
+            "breakout_score",
+            "breakout_rank",
+            "candidate_tier",
+            "symbol_trend_score",
+            "symbol_trend_reasons",
+            "symbol_trend_fail_count",
+            "sma50_slope_20d_pct",
+            "above_sma200",
+            "setup_quality",
+            "breakout_tag",
+        ]
+    )
+
+
 def scan_breakouts(
     ohlcv_db_path: str,
     feature_store_dir: str,
@@ -102,17 +359,40 @@ def scan_breakouts(
     top_n: int = 25,
     min_volume_ratio: float = 1.2,
     min_adx: float = 18.0,
+    ranked_df: Optional[pd.DataFrame] = None,
+    breakout_engine: str = "v2",
+    include_legacy_families: bool = True,
+    market_bias_allowlist: Iterable[str] | str | None = None,
+    min_breadth_score: float = 45.0,
+    sector_rs_min: float | None = None,
+    sector_rs_percentile_min: float | None = 60.0,
+    breakout_qualified_min_score: int = 3,
+    breakout_symbol_trend_gate_enabled: bool = True,
+    breakout_symbol_near_high_max_pct: float = 15.0,
 ) -> pd.DataFrame:
     """Build a breakout monitor with setup families and market-regime context."""
     conn = duckdb.connect(ohlcv_db_path, read_only=True)
     try:
         if date is None:
-            latest = conn.execute(
-                f"SELECT MAX(timestamp) FROM _catalog WHERE exchange = '{exchange}'"
-            ).fetchone()[0]
-            if latest is None:
-                return pd.DataFrame()
-            date = str(pd.Timestamp(latest).date())
+            latest_row = conn.execute(
+                f"SELECT MAX(CAST(timestamp AS DATE)) FROM _catalog WHERE exchange = '{exchange}'"
+            ).fetchone()
+            latest_date = latest_row[0] if latest_row else None
+            if latest_date is None:
+                return _empty_breakout_frame()
+            date = str(latest_date)
+        else:
+            aligned_row = conn.execute(
+                f"""
+                SELECT MAX(CAST(timestamp AS DATE))
+                FROM _catalog
+                WHERE exchange = '{exchange}'
+                  AND CAST(timestamp AS DATE) <= DATE '{date}'
+                """
+            ).fetchone()
+            aligned = aligned_row[0] if aligned_row else None
+            if aligned is not None:
+                date = str(aligned)
 
         query = f"""
             WITH base AS (
@@ -165,6 +445,16 @@ def scan_breakouts(
                         ORDER BY timestamp
                         ROWS BETWEEN 251 PRECEDING AND CURRENT ROW
                     ) AS high_52w,
+                    MAX(high) OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp
+                        ROWS BETWEEN 50 PRECEDING AND 1 PRECEDING
+                    ) AS prior_high_50,
+                    MAX(high) OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp
+                        ROWS BETWEEN 252 PRECEDING AND 1 PRECEDING
+                    ) AS prior_high_252,
                     AVG(close) OVER (
                         PARTITION BY symbol_id
                         ORDER BY timestamp
@@ -175,12 +465,24 @@ def scan_breakouts(
                         ORDER BY timestamp
                         ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
                     ) AS sma_50
+                    ,
+                    AVG(close) OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp
+                        ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
+                    ) AS sma_200
                 FROM _catalog
                 WHERE exchange = '{exchange}'
                   AND timestamp <= '{date}'
+            ),
+            enriched AS (
+                SELECT
+                    *,
+                    LAG(sma_50, 20) OVER (PARTITION BY symbol_id ORDER BY trade_date) AS sma_50_lag_20
+                FROM base
             )
             SELECT *
-            FROM base
+            FROM enriched
             WHERE trade_date = '{date}'
         """
         latest = conn.execute(query).fetchdf()
@@ -214,7 +516,8 @@ def scan_breakouts(
         conn.close()
 
     if latest.empty:
-        return pd.DataFrame()
+        logger.info("Breakout scan found no market snapshot rows for %s", date)
+        return _empty_breakout_frame()
 
     latest = latest.merge(adx_df, on="symbol_id", how="left")
     latest = latest.merge(atr_df, on="symbol_id", how="left")
@@ -243,6 +546,9 @@ def scan_breakouts(
         (1 - latest["close"] / latest["high_52w"].replace(0, pd.NA)) * 100
     )
     latest["atr_pct"] = latest["atr_14"] / latest["close"].replace(0, pd.NA) * 100
+    latest["day_range_pct"] = (
+        (latest["high"] - latest["low"]) / latest["close"].replace(0, pd.NA) * 100
+    )
     latest["contraction_ratio"] = latest["range_width_pct"] / latest["base_width_pct_60"].replace(0, pd.NA)
     latest["supertrend_bullish"] = latest["supertrend_dir_10_3"].fillna(-1).eq(1)
     latest["supertrend_flip_up"] = (
@@ -252,10 +558,25 @@ def scan_breakouts(
     latest["adx_14"] = latest["adx_14"].fillna(0.0)
     latest["above_sma_20"] = latest["close"] > latest["sma_20"].fillna(latest["close"])
     latest["above_sma_50"] = latest["close"] > latest["sma_50"].fillna(latest["close"])
+    latest["above_sma200"] = latest["close"] > latest["sma_200"].fillna(latest["close"])
+    latest["sma50_slope_20d_pct"] = (
+        (latest["sma_50"] / latest["sma_50_lag_20"]) - 1.0
+    ) * 100.0
     latest["is_range_breakout"] = latest["close"] > latest["prior_range_high"].fillna(float("inf"))
     latest["is_base_breakout_30"] = latest["close"] > latest["prior_base_high_30"].fillna(float("inf"))
     latest["is_base_breakout_60"] = latest["close"] > latest["prior_base_high_60"].fillna(float("inf"))
+    latest["is_resistance_breakout_50d"] = latest["close"] > latest["prior_high_50"].fillna(float("inf"))
+    latest["is_high_52w_breakout"] = latest["close"] > latest["prior_high_252"].fillna(float("inf"))
+    latest["is_range_contraction"] = latest["contraction_ratio"].fillna(999).le(0.7)
+    latest["is_consolidation_breakout"] = latest["is_range_breakout"] & latest["is_range_contraction"]
+    latest["is_volatility_expansion_breakout"] = (
+        latest["is_range_breakout"]
+        & latest["day_range_pct"].fillna(0).ge(latest["atr_pct"].fillna(0) * 1.2)
+        & latest["atr_pct"].fillna(999).le(5.5)
+    )
+    latest["is_volume_confirmed_breakout"] = latest["volume_ratio"].fillna(0).ge(1.5)
 
+    # Legacy families (kept for backward compatibility and migration continuity).
     common_filter = (
         latest["vol_20_avg"].notna()
         & latest["high_52w"].notna()
@@ -277,7 +598,9 @@ def scan_breakouts(
         & (latest["contraction_ratio"].fillna(999) <= 0.9)
     ].copy()
     if not base_breakouts.empty:
-        base_breakouts["setup_family"] = "base_breakout"
+        base_breakouts["legacy_setup_family"] = "base_breakout"
+        base_breakouts["setup_family"] = "resistance_breakout_50d"
+        base_breakouts["taxonomy_family"] = "resistance_breakout_50d"
         base_breakouts["setup_quality"] = (
             base_breakouts["volume_ratio"].clip(0, 4) * 14
             + base_breakouts["adx_14"].clip(0, 60) * 0.6
@@ -298,7 +621,9 @@ def scan_breakouts(
         & (latest["atr_pct"].fillna(999) <= 5.0)
     ].copy()
     if not contraction_breakouts.empty:
-        contraction_breakouts["setup_family"] = "contraction_breakout"
+        contraction_breakouts["legacy_setup_family"] = "contraction_breakout"
+        contraction_breakouts["setup_family"] = "consolidation_breakout"
+        contraction_breakouts["taxonomy_family"] = "consolidation_breakout"
         contraction_breakouts["setup_quality"] = (
             contraction_breakouts["volume_ratio"].clip(0, 4) * 16
             + contraction_breakouts["adx_14"].clip(0, 60) * 0.5
@@ -317,7 +642,9 @@ def scan_breakouts(
         & (latest["near_52w_high_pct"].fillna(999) <= 14.0)
     ].copy()
     if not supertrend_breakouts.empty:
-        supertrend_breakouts["setup_family"] = "supertrend_flip_breakout"
+        supertrend_breakouts["legacy_setup_family"] = "supertrend_flip_breakout"
+        supertrend_breakouts["setup_family"] = "volatility_expansion_breakout"
+        supertrend_breakouts["taxonomy_family"] = "volatility_expansion_breakout"
         supertrend_breakouts["setup_quality"] = (
             supertrend_breakouts["volume_ratio"].clip(0, 4) * 12
             + supertrend_breakouts["adx_14"].clip(0, 60) * 0.55
@@ -325,28 +652,75 @@ def scan_breakouts(
             + supertrend_breakouts["breakout_pct"].clip(0, 3) * 6
         )
 
-    candidates = pd.concat(
+    legacy_candidates = pd.concat(
         [base_breakouts, contraction_breakouts, supertrend_breakouts],
         ignore_index=True,
     )
 
-    if candidates.empty:
-        logger.info("Breakout scan found no candidates for %s", date)
-        return pd.DataFrame(
-            columns=[
-                "symbol_id",
-                "sector",
-                "setup_family",
-                "execution_label",
-                "market_regime",
-                "market_bias",
-                "setup_quality",
-                "breakout_tag",
-            ]
+    # Canonical taxonomy candidates.
+    taxonomy_filter = (
+        latest["high_52w"].notna()
+        & latest["prior_high_50"].notna()
+        & latest["prior_range_high"].notna()
+        & latest["above_sma_20"]
+        & latest["above_sma_50"]
+    )
+    taxonomy_trigger = (
+        latest["is_resistance_breakout_50d"]
+        | latest["is_high_52w_breakout"]
+        | latest["is_consolidation_breakout"]
+        | latest["is_volatility_expansion_breakout"]
+    )
+    canonical_candidates = latest[taxonomy_filter & taxonomy_trigger].copy()
+    if not canonical_candidates.empty:
+        canonical_candidates["legacy_setup_family"] = pd.NA
+        canonical_candidates["taxonomy_family"] = np.select(
+            [
+                canonical_candidates["is_high_52w_breakout"],
+                canonical_candidates["is_consolidation_breakout"],
+                canonical_candidates["is_volatility_expansion_breakout"],
+                canonical_candidates["is_resistance_breakout_50d"],
+            ],
+            [
+                "high_52w_breakout",
+                "consolidation_breakout",
+                "volatility_expansion_breakout",
+                "resistance_breakout_50d",
+            ],
+            default="resistance_breakout_50d",
+        )
+        canonical_candidates["setup_family"] = canonical_candidates["taxonomy_family"]
+        canonical_candidates["setup_quality"] = (
+            canonical_candidates["volume_ratio"].fillna(0).clip(0, 4) * 10
+            + canonical_candidates["adx_14"].fillna(0).clip(0, 60) * 0.45
+            + (12 - canonical_candidates["near_52w_high_pct"].fillna(12).clip(0, 12)) * 1.5
+            + canonical_candidates["breakout_pct"].fillna(0).clip(0, 5) * 4
         )
 
+    breakout_engine = str(breakout_engine or "v2").strip().lower()
+    include_legacy = bool(include_legacy_families)
+    if breakout_engine == "legacy":
+        candidates = legacy_candidates.copy()
+    else:
+        if include_legacy and not legacy_candidates.empty:
+            candidates = pd.concat([canonical_candidates, legacy_candidates], ignore_index=True)
+        else:
+            candidates = canonical_candidates.copy()
+
+    if candidates.empty:
+        logger.info("Breakout scan found no candidates for %s", date)
+        return _empty_breakout_frame()
+
     candidates = candidates.sort_values("setup_quality", ascending=False)
-    candidates = candidates.drop_duplicates("symbol_id", keep="first")
+    candidates = candidates.drop_duplicates("symbol_id", keep="first").reset_index(drop=True)
+
+    rank_context = _prepare_rank_context(ranked_df)
+    if not rank_context.empty:
+        candidates = candidates.merge(rank_context, on="symbol_id", how="left")
+    else:
+        candidates["rel_strength_score"] = np.nan
+        candidates["sector_rs_value"] = np.nan
+        candidates["sector_rs_percentile"] = np.nan
 
     regime = RegimeDetector(
         ohlcv_db_path=ohlcv_db_path,
@@ -354,11 +728,53 @@ def scan_breakouts(
     ).get_market_regime(exchange=exchange, date=date)
     market_regime = regime.get("market_regime", "UNKNOWN")
     market_bias = regime.get("market_bias", "UNKNOWN")
+    breadth_score = float(regime.get("breadth_score", 0.0) or 0.0)
+
+    if breakout_engine == "legacy":
+        candidates["breakout_score"] = np.nan
+        candidates["breakout_state"] = "watchlist"
+        candidates["filter_reason"] = ""
+        candidates["breakout_rank"] = (
+            candidates["setup_quality"]
+            .rank(method="first", ascending=False)
+            .astype(int)
+        )
+        candidates["market_bias_allowed"] = True
+        candidates["breadth_gate_passed"] = True
+        candidates["sector_gate_passed"] = True
+        candidates["regime_gate_passed"] = True
+        candidates["breakout_detected"] = True
+        candidates["filtered_by_regime"] = False
+        candidates["filtered_by_symbol_trend"] = False
+        candidates["candidate_tier"] = "A"
+        candidates["symbol_trend_score"] = 100.0
+        candidates["symbol_trend_reasons"] = "ABOVE_SMA200,SMA50_SLOPE_POSITIVE,NEAR_52W_HIGH"
+        candidates["symbol_trend_fail_count"] = 0
+        if "sma50_slope_20d_pct" not in candidates.columns:
+            candidates["sma50_slope_20d_pct"] = np.nan
+        if "above_sma200" not in candidates.columns:
+            candidates["above_sma200"] = True
+    else:
+        candidates = compute_breakout_v2_scores(
+            candidates,
+            market_bias=market_bias,
+            breadth_score=breadth_score,
+            market_bias_allowlist=market_bias_allowlist,
+            min_breadth_score=min_breadth_score,
+            sector_rs_min=sector_rs_min,
+            sector_rs_percentile_min=sector_rs_percentile_min,
+            breakout_qualified_min_score=breakout_qualified_min_score,
+            breakout_symbol_trend_gate_enabled=breakout_symbol_trend_gate_enabled,
+            breakout_symbol_near_high_max_pct=breakout_symbol_near_high_max_pct,
+        )
 
     def _execution_label(row: pd.Series) -> str:
+        state = str(row.get("breakout_state", "watchlist"))
+        if state in {"filtered_by_regime", "filtered_by_symbol_trend"}:
+            return "FILTERED_BREAKOUT"
+        if state == "watchlist":
+            return "WATCHLIST_BREAKOUT"
         if market_bias == "BEARISH":
-            if row["setup_family"] == "supertrend_flip_breakout":
-                return "COUNTER_TREND_BREAKOUT"
             return "RELATIVE_STRENGTH_BREAKOUT"
         if market_bias == "NEUTRAL":
             return "EARLY_BREAKOUT"
@@ -367,15 +783,28 @@ def scan_breakouts(
     candidates["market_regime"] = market_regime
     candidates["market_bias"] = market_bias
     candidates["execution_label"] = candidates.apply(_execution_label, axis=1)
-    candidates["breakout_tag"] = candidates["setup_family"]
+    candidates["breakout_tag"] = candidates["taxonomy_family"].fillna(candidates["setup_family"])
 
     cols = [
         "symbol_id",
         "sector",
         "setup_family",
+        "legacy_setup_family",
+        "taxonomy_family",
         "execution_label",
         "market_regime",
         "market_bias",
+        "breakout_detected",
+        "filtered_by_regime",
+        "filtered_by_symbol_trend",
+        "breakout_state",
+        "filter_reason",
+        "breakout_score",
+        "breakout_rank",
+        "candidate_tier",
+        "symbol_trend_score",
+        "symbol_trend_reasons",
+        "symbol_trend_fail_count",
         "close",
         "prior_range_high",
         "breakout_pct",
@@ -385,15 +814,30 @@ def scan_breakouts(
         "volume_ratio",
         "adx_14",
         "near_52w_high_pct",
+        "sma50_slope_20d_pct",
+        "above_sma200",
         "range_width_pct",
         "supertrend_dir_10_3",
         "prev_supertrend_dir_10_3",
         "setup_quality",
         "breakout_tag",
+        "rel_strength_score",
+        "sector_rs_value",
+        "sector_rs_percentile",
+        "is_resistance_breakout_50d",
+        "is_high_52w_breakout",
+        "is_consolidation_breakout",
+        "is_volatility_expansion_breakout",
+        "is_volume_confirmed_breakout",
+        "market_bias_allowed",
+        "breadth_gate_passed",
+        "sector_gate_passed",
+        "regime_gate_passed",
     ]
+    available_cols = [col for col in cols if col in candidates.columns]
     return (
-        candidates[cols]
-        .sort_values(["setup_quality", "breakout_pct"], ascending=False)
+        candidates[available_cols]
+        .sort_values(["breakout_rank", "setup_quality"], ascending=[True, False], na_position="last")
         .head(top_n)
         .reset_index(drop=True)
     )

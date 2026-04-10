@@ -14,8 +14,8 @@ The repo auto-loads the local `.env` for the orchestrator, dashboard, publish te
 - `python3 run/daily_pipeline.py --skip-delivery-collect` (offline/restricted network fallback)
 - QuantStats tear sheet publish is enabled by default; disable with `--skip-quantstats`
 
-### Local smoke run
-- `python3 -m run.orchestrator --smoke --local-publish`
+### Live canary run (recommended pre-check)
+- `python3 -m run.orchestrator --canary --symbol-limit 25 --local-publish`
 
 ### Retry publish only
 - `python3 -m run.orchestrator --run-id <run_id> --stages publish`
@@ -71,7 +71,7 @@ The repo auto-loads the local `.env` for the orchestrator, dashboard, publish te
 ## Pre-Run Checklist
 - DuckDB file is writable: `data/ohlcv.duckdb`
 - `.env` uses Unix line endings if the run will be shell-sourced
-- Provider credentials are valid for non-smoke runs
+- Provider credentials are valid
 - Google Sheets / Telegram credentials are present for networked publish runs
 - `quantstats` is installed if QuantStats publish is enabled
 - Prior failed run IDs are noted if a targeted retry is planned
@@ -134,11 +134,11 @@ The repo auto-loads the local `.env` for the orchestrator, dashboard, publish te
   - minimum `180` recent trading days
 - Publish retry is isolated, but external channel throttling still needs operator awareness.
 - Delivery idempotency is scoped to `run_id + channel + artifact hash`; a new artifact produces a new dedupe key.
-- Smoke mode validates orchestration and governance, not live market connectivity.
+- Synthetic smoke mode has been removed; use canary runs for operational validation.
 - `run.publish_test` validates channel plumbing, but it still depends on live external services being reachable.
 - QuantStats tear sheet publish is file-based and does not require Google Sheets/Telegram connectivity, but it does require local historical rank artifacts and a stable local plotting/runtime environment.
 - Research entrypoints share core analytics code with production, but they should only use the research data domain and prior-year historical cutoff by default.
-- The breakout scanner now prioritizes structured setup families (`base_breakout`, `contraction_breakout`, `supertrend_flip_breakout`) instead of a generic 20-day-high list, so output counts can be much lower than older runs.
+- Breakout v2 is now default for breakout listing: canonical taxonomy (`resistance_breakout_50d`, `high_52w_breakout`, `consolidation_breakout`, `volatility_expansion_breakout`) plus explicit states (`qualified`, `watchlist`, `filtered_by_regime`). This is separate from main composite rank and can run with optional execution soft gating.
 
 ## QuantStats Tear Sheet Publish
 
