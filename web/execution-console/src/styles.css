@@ -231,6 +231,65 @@ h3 {
   margin-bottom: 14px;
 }
 
+.ops-ribbon-react {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+
+.ops-ribbon-react-card {
+  flex: 0 0 190px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(120, 138, 170, 0.16);
+  background: rgba(17, 31, 53, 0.68);
+}
+
+.ops-ribbon-react-card.tone-ok {
+  background: linear-gradient(145deg, rgba(11, 44, 37, 0.82), rgba(12, 24, 39, 0.9));
+}
+
+.ops-ribbon-react-card.tone-warn {
+  background: linear-gradient(145deg, rgba(59, 42, 17, 0.84), rgba(24, 15, 21, 0.9));
+}
+
+.ops-ribbon-react-card.tone-error {
+  background: linear-gradient(145deg, rgba(59, 25, 29, 0.9), rgba(24, 15, 21, 0.92));
+}
+
+.ops-ribbon-react-title {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: #8ea2c1;
+  margin-bottom: 8px;
+}
+
+.ops-ribbon-react-main {
+  display: grid;
+  gap: 8px;
+  align-items: start;
+}
+
+.ops-ribbon-react-main .status-pill {
+  width: fit-content;
+  margin-top: 0;
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.ops-ribbon-react-main strong {
+  font-size: 20px;
+  line-height: 1.15;
+}
+
+.ops-ribbon-react-sub {
+  margin-top: 8px;
+  color: #bfd0ea;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
 .eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.18em;

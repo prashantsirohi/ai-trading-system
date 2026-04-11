@@ -13,6 +13,7 @@ import duckdb
 import pandas as pd
 
 from analytics.registry import RegistryStore
+from analytics.data_trust import load_data_trust_summary
 from core.paths import get_domain_paths
 
 
@@ -128,6 +129,7 @@ def load_latest_rank_frames(project_root: str | Path | None = None) -> Dict[str,
     frame_names = {
         "ranked_signals": "ranked_signals.csv",
         "breakout_scan": "breakout_scan.csv",
+        "pattern_scan": "pattern_scan.csv",
         "stock_scan": "stock_scan.csv",
         "sector_dashboard": "sector_dashboard.csv",
     }
@@ -250,6 +252,125 @@ def get_execution_health(project_root: str | Path | None = None, payload: Option
         }
     )
     return {"status": overall_status, "summary": summary, "checks": checks}
+
+
+def get_execution_ops_health_snapshot(
+    project_root: str | Path | None = None,
+    stale_threshold_hours: dict[str, float] | None = None,
+) -> Dict:
+    """Load recent stage freshness + DQ status without Streamlit dependencies."""
+    ctx = get_execution_context(project_root)
+    thresholds = stale_threshold_hours or {
+        "ingest": 36.0,
+        "features": 36.0,
+        "rank": 24.0,
+        "execute": 24.0,
+        "publish": 48.0,
+    }
+    db_path = ctx.project_root / "data" / "control_plane.duckdb"
+    if not db_path.exists():
+        return {"available": False, "error": "control_plane.duckdb missing"}
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        stage_rows = conn.execute(
+            """
+            WITH latest AS (
+                SELECT
+                    stage_name,
+                    run_id,
+                    started_at,
+                    ended_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY stage_name
+                        ORDER BY COALESCE(ended_at, started_at) DESC
+                    ) AS rn
+                FROM pipeline_stage_run
+                WHERE status = 'completed'
+                  AND stage_name IN ('ingest', 'features', 'rank', 'execute', 'publish')
+            )
+            SELECT stage_name, run_id, started_at, ended_at
+            FROM latest
+            WHERE rn = 1
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    now_utc = datetime.utcnow()
+    stage_names = ("ingest", "features", "rank", "execute", "publish")
+    stages: dict[str, dict[str, object]] = {
+        stage_name: {
+            "stage_name": stage_name,
+            "run_id": None,
+            "ended_at": None,
+            "age_hours": None,
+            "stale": True,
+        }
+        for stage_name in stage_names
+    }
+    stale_stages: list[str] = []
+    for stage_name, run_id, started_at, ended_at in stage_rows:
+        end_ts = ended_at or started_at
+        if end_ts is None:
+            continue
+        age_hours = max((now_utc - end_ts).total_seconds() / 3600.0, 0.0)
+        stale = age_hours > float(thresholds.get(stage_name, 24.0))
+        stages[str(stage_name)] = {
+            "stage_name": stage_name,
+            "run_id": run_id,
+            "ended_at": end_ts.isoformat() if hasattr(end_ts, "isoformat") else str(end_ts),
+            "age_hours": round(age_hours, 2),
+            "stale": stale,
+        }
+        if stale:
+            stale_stages.append(str(stage_name))
+
+    latest_rank_run = stages.get("rank", {}).get("run_id")
+    dq_summary = {"run_id": latest_rank_run, "failed_by_severity": {}, "total_failed": 0}
+    if latest_rank_run:
+        conn = duckdb.connect(str(db_path), read_only=True)
+        try:
+            dq_rows = conn.execute(
+                """
+                SELECT severity, status, COUNT(*) AS cnt
+                FROM dq_result
+                WHERE run_id = ?
+                GROUP BY severity, status
+                """,
+                [latest_rank_run],
+            ).fetchall()
+        finally:
+            conn.close()
+        failed_by_severity: dict[str, int] = {}
+        total_failed = 0
+        for severity, status, cnt in dq_rows:
+            if status != "failed":
+                continue
+            failed_by_severity[str(severity)] = int(cnt)
+            total_failed += int(cnt)
+        dq_summary = {
+            "run_id": latest_rank_run,
+            "failed_by_severity": failed_by_severity,
+            "total_failed": total_failed,
+        }
+
+    return {
+        "available": True,
+        "stages": stages,
+        "stale_stages": stale_stages,
+        "dq_summary": dq_summary,
+        "generated_at": now_utc.isoformat(),
+    }
+
+
+def get_execution_data_trust_snapshot(project_root: str | Path | None = None) -> Dict:
+    """Load operational data trust summary without Streamlit dependencies."""
+    ctx = get_execution_context(project_root)
+    summary = load_data_trust_summary(ctx.ohlcv_db)
+    registry = RegistryStore(ctx.project_root)
+    summary["latest_repair_run"] = registry.get_latest_data_repair_run("NSE")
+    return summary
 
 
 def load_shadow_overlay_frame(project_root: str | Path | None = None) -> pd.DataFrame:

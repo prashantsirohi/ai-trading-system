@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from ui.services.execution_operator import (
     get_execution_summary,
     get_market_snapshot,
+    get_pipeline_workspace_snapshot,
     get_process_snapshot,
     get_ranking_snapshot,
     get_shadow_snapshot,
@@ -88,6 +89,10 @@ def create_app() -> FastAPI:
     @app.get("/api/execution/market")
     def execution_market(limit: int = Query(default=25, ge=1, le=200)) -> dict[str, Any]:
         return get_market_snapshot(_project_root(), limit=limit)
+
+    @app.get("/api/execution/workspace/pipeline")
+    def execution_workspace_pipeline(limit: int = Query(default=20, ge=1, le=200)) -> dict[str, Any]:
+        return get_pipeline_workspace_snapshot(_project_root(), limit=limit)
 
     @app.get("/api/execution/shadow")
     def execution_shadow() -> dict[str, Any]:

@@ -28,9 +28,13 @@ def _short_run_id(run_id: str | None) -> str:
     return "-".join(parts[-2:]) if len(parts) >= 2 else str(run_id)
 
 
-def render_ops_health_ribbon(snapshot: dict[str, object]) -> None:
+def render_ops_health_ribbon(
+    snapshot: dict[str, object],
+    *,
+    dashboard_health: dict[str, object] | None = None,
+    data_trust_snapshot: dict[str, object] | None = None,
+) -> None:
     """Render top-of-page operational ribbon with stage freshness and DQ status."""
-    st.markdown("### Ops Health")
     if not snapshot or not snapshot.get("available"):
         st.info("Operational metadata is unavailable. Control-plane database not found.")
         return
@@ -40,51 +44,60 @@ def render_ops_health_ribbon(snapshot: dict[str, object]) -> None:
     st.markdown(
         """
         <style>
+        .ops-ribbon-scroll {
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding-bottom: 0.05rem;
+            margin-bottom: 0.12rem;
+        }
         .ops-ribbon-grid {
-            display: grid;
-            grid-template-columns: repeat(5, minmax(0, 1fr));
-            gap: 0.45rem;
-            margin: 0.1rem 0 0.45rem 0;
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 0.28rem;
+            min-width: max-content;
+            margin: 0.01rem 0 0.02rem 0;
         }
         .ops-ribbon-card {
+            flex: 0 0 9.2rem;
             border: 1px solid rgba(148, 163, 184, 0.35);
-            border-radius: 0.6rem;
-            padding: 0.45rem 0.55rem;
+            border-radius: 0.5rem;
+            padding: 0.22rem 0.34rem;
             background: linear-gradient(180deg, rgba(15, 23, 42, 0.22), rgba(15, 23, 42, 0.08));
         }
         .ops-ribbon-title {
-            font-size: 0.68rem;
+            font-size: 0.58rem;
             letter-spacing: 0.04em;
             color: #94a3b8;
-            margin-bottom: 0.18rem;
+            margin-bottom: 0.08rem;
             text-transform: uppercase;
         }
         .ops-ribbon-main {
-            font-size: 0.82rem;
+            font-size: 0.69rem;
             font-weight: 600;
             color: #e2e8f0;
-            margin-bottom: 0.1rem;
+            margin-bottom: 0.03rem;
             line-height: 1.2;
         }
         .ops-ribbon-sub {
-            font-size: 0.72rem;
+            font-size: 0.58rem;
             color: #cbd5e1;
             line-height: 1.2;
         }
         .ops-chip {
             display: inline-block;
-            font-size: 0.62rem;
+            font-size: 0.54rem;
             font-weight: 700;
             letter-spacing: 0.03em;
-            padding: 0.08rem 0.35rem;
+            padding: 0.05rem 0.26rem;
             border-radius: 999px;
-            margin-right: 0.28rem;
+            margin-right: 0.16rem;
             color: white;
         }
         </style>
         """,
         unsafe_allow_html=True,
     )
+    st.caption("Ops Health")
 
     def _chip_color(stale: bool) -> str:
         return "#dc2626" if stale else "#16a34a"
@@ -121,12 +134,51 @@ def render_ops_health_ribbon(snapshot: dict[str, object]) -> None:
         f"<div class='ops-ribbon-sub'>{sev_text}</div>"
         "</div>"
     )
-    st.markdown(f"<div class='ops-ribbon-grid'>{''.join(card_html)}</div>", unsafe_allow_html=True)
+
+    health_summary = (dashboard_health or {}).get("summary", {}) if isinstance(dashboard_health, dict) else {}
+    if health_summary:
+        health_status = str((dashboard_health or {}).get("status", "unknown")).upper()
+        card_html.append(
+            "<div class='ops-ribbon-card'>"
+            "<div class='ops-ribbon-title'>Pipeline</div>"
+            f"<div class='ops-ribbon-main'>{html.escape(health_status)}</div>"
+            "<div class='ops-ribbon-sub'>"
+            f"OHLCV {html.escape(str(health_summary.get('latest_ohlcv_date', '—')))}"
+            " · "
+            f"Delivery {html.escape(str(health_summary.get('latest_delivery_date', '—')))}"
+            " · "
+            f"Payload {html.escape(str(health_summary.get('payload_age_minutes', '—')))}m"
+            "</div>"
+            "</div>"
+        )
+
+    if isinstance(data_trust_snapshot, dict) and data_trust_snapshot:
+        trust_status = str(data_trust_snapshot.get("status", "unknown")).upper()
+        validated = str(data_trust_snapshot.get("latest_validated_date", "—"))
+        fallback_ratio = float(data_trust_snapshot.get("fallback_ratio_latest", 0.0) or 0.0) * 100.0
+        quarantined = int(data_trust_snapshot.get("active_quarantined_symbols", 0) or 0)
+        card_html.append(
+            "<div class='ops-ribbon-card'>"
+            "<div class='ops-ribbon-title'>Trust</div>"
+            f"<div class='ops-ribbon-main'>{html.escape(trust_status)}</div>"
+            "<div class='ops-ribbon-sub'>"
+            f"Validated {html.escape(validated)}"
+            " · "
+            f"Fallback {fallback_ratio:.1f}%"
+            " · "
+            f"Q {quarantined}"
+            "</div>"
+            "</div>"
+        )
+    st.markdown(
+        f"<div class='ops-ribbon-scroll'><div class='ops-ribbon-grid'>{''.join(card_html)}</div></div>",
+        unsafe_allow_html=True,
+    )
 
     stale_stages = snapshot.get("stale_stages", [])
     if stale_stages:
         stale_list = ", ".join(str(stage).title() for stage in stale_stages)
-        st.warning(f"Stale stage warning: {stale_list}.")
+        st.caption(f"Stale: {stale_list}")
 
 
 def render_factor_attribution_widget(

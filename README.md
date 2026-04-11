@@ -289,8 +289,10 @@ Research UI (Streamlit):
 Execution UI (React + FastAPI):
 - API: `ui/execution_api/app.py`
 - React console: `web/execution-console/`
-- route-based operator console for control, ranking, market, runs, shadow, tasks, and processes
+- route-based operator console for pipeline, control, ranking, market, runs, shadow, tasks, and processes
+- default landing page now starts on the React `Pipeline` workspace backed by live rank artifacts
 - durable task state in `control_plane.duckdb::operator_task*`
+- migration plan: `docs/react-operator-migration-plan.md`
 
 Legacy execution fallback (NiceGUI):
 - `ui/execution/app.py`
@@ -359,6 +361,12 @@ cd web/execution-console
 npm install
 npm run dev
 ```
+
+The React console now lands on the `Pipeline` workspace first and reads from:
+
+- `GET /api/execution/workspace/pipeline`
+- `GET /api/execution/ranking`
+- `GET /api/execution/market`
 
 Legacy NiceGUI execution fallback:
 

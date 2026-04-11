@@ -93,6 +93,10 @@ def _seed_execution_project(tmp_path: Path) -> str:
         "symbol_id,sector,setup_family,breakout_state\nAAA,Finance,high_52w_breakout,qualified\n",
         encoding="utf-8",
     )
+    (rank_dir / "pattern_scan.csv").write_text(
+        "symbol_id,pattern_family,pattern_state,pattern_score\nAAA,flag,confirmed,91\n",
+        encoding="utf-8",
+    )
     (rank_dir / "stock_scan.csv").write_text("symbol_id,close\nAAA,104\n", encoding="utf-8")
     (rank_dir / "sector_dashboard.csv").write_text(
         "Sector,RS_rank_pct,Quadrant\nFinance,95,Leading\n",
@@ -100,6 +104,7 @@ def _seed_execution_project(tmp_path: Path) -> str:
     )
     registry.record_artifact(run_id, "rank", 1, StageArtifact.from_file("ranked_signals", rank_dir / "ranked_signals.csv", row_count=2, attempt_number=1))
     registry.record_artifact(run_id, "rank", 1, StageArtifact.from_file("breakout_scan", rank_dir / "breakout_scan.csv", row_count=1, attempt_number=1))
+    registry.record_artifact(run_id, "rank", 1, StageArtifact.from_file("pattern_scan", rank_dir / "pattern_scan.csv", row_count=1, attempt_number=1))
     registry.record_artifact(run_id, "rank", 1, StageArtifact.from_file("stock_scan", rank_dir / "stock_scan.csv", row_count=1, attempt_number=1))
     registry.record_artifact(run_id, "rank", 1, StageArtifact.from_file("sector_dashboard", rank_dir / "sector_dashboard.csv", row_count=1, attempt_number=1))
     registry.record_artifact(run_id, "rank", 1, StageArtifact.from_file("dashboard_payload", rank_dir / "dashboard_payload.json", row_count=1, attempt_number=1))
@@ -122,6 +127,16 @@ def test_execution_api_read_endpoints(monkeypatch, tmp_path: Path) -> None:
     market = client.get("/api/execution/market?limit=10")
     assert market.status_code == 200
     assert market.json()["breakouts"][0]["symbol_id"] == "AAA"
+
+    pipeline = client.get("/api/execution/workspace/pipeline?limit=10")
+    assert pipeline.status_code == 200
+    pipeline_payload = pipeline.json()
+    assert pipeline_payload["top_ranked"][0]["symbol_id"] == "AAA"
+    assert pipeline_payload["patterns"][0]["pattern_family"] == "flag"
+    assert pipeline_payload["counts"]["breakouts"] == 1
+    assert pipeline_payload["ops_health"]["available"] is True
+    assert "data_trust" in pipeline_payload
+    assert "latest_validated_date" in pipeline_payload["data_trust"]
 
     runs = client.get("/api/execution/runs")
     assert runs.status_code == 200

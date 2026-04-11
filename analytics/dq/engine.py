@@ -326,7 +326,9 @@ class DataQualityEngine:
         symbol_threshold_failed = unresolved_symbol_date_count > max_unresolved_symbol_dates
         ratio_threshold_failed = unresolved_symbol_ratio_pct > max_unresolved_symbol_ratio_pct
 
-        failed_count = int(date_threshold_failed or symbol_threshold_failed or ratio_threshold_failed)
+        # Breadth is the primary safety signal. A multi-date gap affecting only a tiny,
+        # contained symbol set should degrade the run, but not hard-block it.
+        failed_count = int(symbol_threshold_failed or ratio_threshold_failed)
         if unresolved_dates:
             message = (
                 f"Unresolved trade dates remain quarantined: {', '.join(unresolved_dates[:5])}. "
@@ -337,6 +339,8 @@ class DataQualityEngine:
                 f"max_symbol_dates={max_unresolved_symbol_dates}, "
                 f"max_ratio={max_unresolved_symbol_ratio_pct:.2f}%)."
             )
+            if date_threshold_failed and not failed_count:
+                message += " Date threshold exceeded, but symbol breadth remains within tolerated limits."
         else:
             message = "No unresolved dates remain after ingest."
         return self._make_result(

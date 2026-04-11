@@ -29,6 +29,7 @@ type TaskSnapshotResponse = {
 };
 
 const navItems = [
+  { to: "/pipeline", label: "Pipeline" },
   { to: "/control", label: "Control" },
   { to: "/ranking", label: "Ranking" },
   { to: "/market", label: "Market" },
@@ -38,6 +39,26 @@ const navItems = [
   { to: "/processes", label: "Processes" },
 ];
 
+type PipelineWorkspaceResponse = {
+  artifact_path?: string;
+  summary?: AnyRecord;
+  warnings?: unknown[];
+  health?: { status?: string; summary?: AnyRecord; checks?: AnyRecord[] };
+  ops_health?: {
+    available?: boolean;
+    stages?: Record<string, AnyRecord>;
+    stale_stages?: string[];
+    dq_summary?: AnyRecord;
+  };
+  data_trust?: AnyRecord;
+  top_ranked: AnyRecord[];
+  breakouts: AnyRecord[];
+  patterns: AnyRecord[];
+  sectors: AnyRecord[];
+  stock_scan: AnyRecord[];
+  counts?: AnyRecord;
+};
+
 function App() {
   return (
     <div className="shell">
@@ -46,7 +67,8 @@ function App() {
         <TopBar />
         <ToastHost />
         <Routes>
-          <Route path="/" element={<ControlPage />} />
+          <Route path="/" element={<PipelinePage />} />
+          <Route path="/pipeline" element={<PipelinePage />} />
           <Route path="/control" element={<ControlPage />} />
           <Route path="/ranking" element={<RankingPage />} />
           <Route path="/market" element={<MarketPage />} />
@@ -57,6 +79,59 @@ function App() {
         </Routes>
       </main>
       <TaskDrawer />
+    </div>
+  );
+}
+
+function PipelinePage() {
+  const pipelineQuery = useQuery({
+    queryKey: ["pipeline-workspace"],
+    queryFn: () => fetchJson<PipelineWorkspaceResponse>("/api/execution/workspace/pipeline?limit=20"),
+    refetchInterval: 10000,
+  });
+
+  const payload = pipelineQuery.data;
+  const health = payload?.health;
+  const summary = health?.summary ?? {};
+  const trust = payload?.data_trust ?? {};
+  const trustStatus = String(trust?.status ?? "—");
+  const warnings = Array.isArray(payload?.warnings) ? payload?.warnings : [];
+
+  return (
+    <div className="page-grid">
+      <Panel title="Pipeline Workspace" subtitle="First React operator page over the latest operational rank artifact" className="span-3">
+        <OpsHealthRibbon snapshot={payload?.ops_health} health={health} trust={trust} />
+      </Panel>
+      <MetricCard title="Health" value={String(health?.status?.toUpperCase() ?? "LOADING")} detail={`OHLCV ${String(summary?.latest_ohlcv_date ?? "—")}`} tone={String(health?.status ?? "warn")} />
+      <MetricCard title="Trust" value={trustStatus.toUpperCase()} detail={`Validated ${String(trust?.latest_validated_date ?? "—")}`} tone={trustStatus.toLowerCase()} />
+      <MetricCard title="Breakouts" value={Number(payload?.counts?.breakouts ?? 0)} detail="Latest breakout scan rows" tone="success" />
+      <MetricCard title="Patterns" value={Number(payload?.counts?.patterns ?? 0)} detail="Latest pattern scan rows" tone="info" />
+      <Panel title="Top Ranked Signals" subtitle="Current leaderboard from ranked_signals.csv" className="span-2">
+        <DataTable rows={payload?.top_ranked ?? []} />
+      </Panel>
+      <Panel title="Breakout Monitor" subtitle="Current breakout scan rows" className="span-2">
+        <DataTable rows={payload?.breakouts ?? []} />
+      </Panel>
+      <Panel title="Pattern Monitor" subtitle="Operational pattern signals" className="span-2">
+        <DataTable rows={payload?.patterns ?? []} />
+      </Panel>
+      <Panel title="Sector Dashboard" subtitle="Sector leadership snapshot">
+        <DataTable rows={payload?.sectors ?? []} />
+      </Panel>
+      <Panel title="Stock Scan" subtitle="Supplementary stock scan rows">
+        <DataTable rows={payload?.stock_scan ?? []} />
+      </Panel>
+      <Panel title="Artifact & Warnings" subtitle="Pipeline artifact provenance and any surfaced warnings" className="span-3">
+        <KeyValueGrid
+          items={[
+            ["Artifact", payload?.artifact_path],
+            ["Payload Age (min)", summary?.payload_age_minutes],
+            ["Delivery Date", summary?.latest_delivery_date],
+            ["Validated Date", trust?.latest_validated_date],
+          ]}
+        />
+        {warnings.length ? <DataTable rows={warnings.map((warning, index) => ({ id: index + 1, warning }))} /> : <div className="empty-state">No warnings surfaced in the latest payload.</div>}
+      </Panel>
     </div>
   );
 }
@@ -779,6 +854,75 @@ function MetricCard(props: { title: string; value: string | number; detail: stri
       <div className="metric-value">{props.value}</div>
       <p>{props.detail}</p>
     </section>
+  );
+}
+
+function OpsHealthRibbon(props: {
+  snapshot?: PipelineWorkspaceResponse["ops_health"];
+  health?: PipelineWorkspaceResponse["health"];
+  trust?: AnyRecord;
+}) {
+  const stages = props.snapshot?.stages ? Object.values(props.snapshot.stages) : [];
+  const dqSummary = props.snapshot?.dq_summary ?? {};
+  const healthSummary = props.health?.summary ?? {};
+  const trust = props.trust ?? {};
+  const trustStatus = String(trust?.status ?? "—");
+  const trustFallbackRatio = Number(trust?.fallback_ratio_latest ?? 0) * 100;
+
+  const normalizeTone = (value: string): string => {
+    const tone = value.toLowerCase();
+    if (tone === "degraded" || tone === "stale") return "warn";
+    if (tone === "failed") return "error";
+    if (tone === "fresh" || tone === "passed" || tone === "ok") return "ok";
+    return tone;
+  };
+
+  const cards = [
+    ...stages.map((stage) => ({
+      title: String(stage.stage_name ?? "stage").toUpperCase(),
+      status: Boolean(stage.stale) ? "STALE" : "FRESH",
+      detail: String(stage.run_id ?? "—"),
+      subdetail: typeof stage.age_hours === "number" ? `${Number(stage.age_hours).toFixed(1)}h ago` : "n/a",
+      tone: Boolean(stage.stale) ? "warn" : "ok",
+    })),
+    {
+      title: "DQ",
+      status: Number(dqSummary.total_failed ?? 0) > 0 ? "FAILED" : "PASSED",
+      detail: String(dqSummary.total_failed ?? 0),
+      subdetail: Object.keys((dqSummary.failed_by_severity as AnyRecord | undefined) ?? {}).length
+        ? Object.entries((dqSummary.failed_by_severity as AnyRecord) ?? {}).map(([key, value]) => `${key}:${value}`).join(", ")
+        : "none",
+      tone: Number(dqSummary.total_failed ?? 0) > 0 ? "error" : "ok",
+    },
+    {
+      title: "PIPELINE",
+      status: String(props.health?.status?.toUpperCase() ?? "—"),
+      detail: `OHLCV ${String(healthSummary?.latest_ohlcv_date ?? "—")}`,
+      subdetail: `Delivery ${String(healthSummary?.latest_delivery_date ?? "—")} · Payload ${String(healthSummary?.payload_age_minutes ?? "—")}m`,
+      tone: normalizeTone(String(props.health?.status ?? "warn")),
+    },
+    {
+      title: "TRUST",
+      status: trustStatus.toUpperCase(),
+      detail: `Validated ${String(trust?.latest_validated_date ?? "—")}`,
+      subdetail: `Fallback ${trustFallbackRatio.toFixed(1)}% · Q ${String(trust?.active_quarantined_symbols ?? "0")}`,
+      tone: normalizeTone(trustStatus),
+    },
+  ];
+
+  return (
+    <div className="ops-ribbon-react">
+      {cards.map((card) => (
+        <article key={`${card.title}-${card.detail}`} className={`ops-ribbon-react-card tone-${card.tone}`}>
+          <div className="ops-ribbon-react-title">{card.title}</div>
+          <div className="ops-ribbon-react-main">
+            <span className={`status-pill status-${card.tone}`}>{card.status}</span>
+            <strong>{card.detail}</strong>
+          </div>
+          <div className="ops-ribbon-react-sub">{card.subdetail}</div>
+        </article>
+      ))}
+    </div>
   );
 }
 

@@ -124,6 +124,7 @@ def load_latest_rank_frames(project_root: str) -> Dict[str, pd.DataFrame]:
     frame_names = {
         "ranked_signals": "ranked_signals.csv",
         "breakout_scan": "breakout_scan.csv",
+        "pattern_scan": "pattern_scan.csv",
         "stock_scan": "stock_scan.csv",
         "sector_dashboard": "sector_dashboard.csv",
     }
@@ -205,6 +206,99 @@ def load_recent_sector_paths(pipeline_runs_dir: str, max_runs: int = 40) -> List
         if len(selected) >= max_runs:
             break
     return selected
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 5)
+def list_pattern_backtest_bundles(reports_dir: str, max_bundles: int = 20) -> pd.DataFrame:
+    """List recent pattern-backtest research bundles."""
+    base = Path(reports_dir) / "pattern_backtests"
+    if not base.exists():
+        return pd.DataFrame(
+            columns=[
+                "bundle_name",
+                "bundle_dir",
+                "generated_at",
+                "from_date",
+                "to_date",
+                "event_count",
+                "trade_count",
+                "chart_count",
+            ]
+        )
+
+    rows: list[dict[str, Any]] = []
+    candidates = sorted(
+        base.glob("*/summary.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for path in candidates[:max_bundles]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        artifact_map = payload.get("artifacts", {}) if isinstance(payload, dict) else {}
+        event_path = Path(str(artifact_map.get("pattern_events", "")))
+        trade_path = Path(str(artifact_map.get("pattern_trades", "")))
+        event_count = 0
+        trade_count = 0
+        try:
+            if event_path.exists():
+                event_count = max(0, len(pd.read_csv(event_path)))
+            if trade_path.exists():
+                trade_count = max(0, len(pd.read_csv(trade_path)))
+        except Exception:
+            pass
+        rows.append(
+            {
+                "bundle_name": path.parent.name,
+                "bundle_dir": str(path.parent),
+                "generated_at": payload.get("generated_at"),
+                "from_date": payload.get("from_date"),
+                "to_date": payload.get("to_date"),
+                "event_count": event_count,
+                "trade_count": trade_count,
+                "chart_count": len(artifact_map.get("charts", []) or []),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 5)
+def load_pattern_backtest_bundle(bundle_dir: str) -> Dict[str, Any]:
+    """Load one pattern-backtest research bundle and its artifacts."""
+    base = Path(bundle_dir)
+    summary_json = base / "summary.json"
+    if not summary_json.exists():
+        return {
+            "summary_json": {},
+            "summary_df": pd.DataFrame(),
+            "events_df": pd.DataFrame(),
+            "trades_df": pd.DataFrame(),
+            "yearly_df": pd.DataFrame(),
+            "chart_paths": [],
+        }
+
+    payload = json.loads(summary_json.read_text(encoding="utf-8"))
+    artifact_map = payload.get("artifacts", {}) if isinstance(payload, dict) else {}
+
+    def _read_csv(path_value: Any) -> pd.DataFrame:
+        path = Path(str(path_value or ""))
+        if not path.exists():
+            return pd.DataFrame()
+        try:
+            return pd.read_csv(path)
+        except Exception:
+            return pd.DataFrame()
+
+    return {
+        "summary_json": payload,
+        "summary_df": _read_csv(artifact_map.get("summary_csv")),
+        "events_df": _read_csv(artifact_map.get("pattern_events")),
+        "trades_df": _read_csv(artifact_map.get("pattern_trades")),
+        "yearly_df": _read_csv(artifact_map.get("yearly_breakdown_csv")),
+        "chart_paths": [path for path in (artifact_map.get("charts", []) or []) if Path(path).exists()],
+    }
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 5)

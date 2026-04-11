@@ -36,27 +36,32 @@ from analytics.ranker import StockRanker
 from analytics.risk_manager import RiskManager
 from analytics.registry import RegistryStore
 from analytics.visualizations import Visualizer
+from analytics.patterns import PatternBacktestConfig, ensure_pattern_event_chart, run_pattern_backtest
+from analytics.patterns.signal import kernel_smooth
 from core.env import load_project_env
 from core.paths import get_domain_paths
+from utils.data_domains import research_static_end_date
 from ui.research.data_access import (
     load_data_trust_snapshot,
     load_drilldown_history_for_symbols,
     load_latest_rank_frames,
     load_ops_health_snapshot,
+    load_pattern_backtest_bundle,
     load_portfolio_workspace_report,
     load_rank_history_for_symbols,
     load_sector_history_for_sectors,
     load_symbol_trust_snapshot,
     load_trade_report,
+    list_pattern_backtest_bundles,
     save_trade_journal_note,
 )
 from ui.research.dashboard_helpers import (
+    build_breakout_evidence_frame,
     build_rank_sparkline_payload,
     build_value_sparkline_payload,
     enrich_ranked_table_with_context,
 )
 from ui.research.widgets import (
-    render_breakout_evidence_cards,
     render_factor_attribution_widget,
     render_ops_health_ribbon,
     render_sector_dashboard_links_table,
@@ -378,6 +383,529 @@ def load_latest_dashboard_payload() -> Dict:
     return payload
 
 
+def _default_pattern_backtest_dates() -> tuple[datetime.date, datetime.date]:
+    """Default research date window for pattern backtests."""
+    to_date = datetime.fromisoformat(research_static_end_date()).date()
+    from_date = to_date.replace(year=max(to_date.year - 5, 2000))
+    return from_date, to_date
+
+
+def _format_pattern_bundle_option(row: pd.Series) -> str:
+    generated = str(row.get("generated_at") or "")[:19].replace("T", " ")
+    return (
+        f"{row.get('bundle_name', 'bundle')} | "
+        f"{generated or 'n/a'} | "
+        f"events={int(row.get('event_count', 0) or 0)} | "
+        f"trades={int(row.get('trade_count', 0) or 0)}"
+    )
+
+
+def _render_pattern_chart(chart_path: str) -> None:
+    path = Path(chart_path)
+    if not path.exists():
+        st.warning(f"Chart file is missing: {chart_path}")
+        return
+    try:
+        html_payload = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        st.warning(f"Could not read chart HTML: {exc}")
+        return
+    components.html(html_payload, height=780, scrolling=True)
+
+
+def build_pattern_chart_index(events_df: pd.DataFrame, chart_paths: list[str]) -> pd.DataFrame:
+    """Build a chart-selection index keyed by event id / chart path."""
+    rows: list[dict[str, str]] = []
+    existing_chart_lookup = {Path(chart_path).stem: str(chart_path) for chart_path in chart_paths}
+    event_lookup = (
+        events_df.set_index("event_id").to_dict(orient="index")
+        if events_df is not None and not events_df.empty and "event_id" in events_df.columns
+        else {}
+    )
+    for event_id, event_row in event_lookup.items():
+        chart_path = existing_chart_lookup.get(str(event_id), "")
+        event_row = event_lookup.get(event_id, {})
+        symbol_id = str(event_row.get("symbol_id", ""))
+        pattern_type = str(event_row.get("pattern_type", ""))
+        breakout_date = str(event_row.get("breakout_date", ""))
+        label_parts = [part for part in [symbol_id, pattern_type, breakout_date] if part]
+        label = " | ".join(label_parts) if label_parts else event_id
+        rows.append(
+            {
+                "event_id": str(event_id),
+                "symbol_id": symbol_id,
+                "pattern_type": pattern_type,
+                "breakout_date": breakout_date,
+                "breakout_year": breakout_date[:4] if breakout_date else "",
+                "chart_path": str(chart_path),
+                "chart_label": label,
+                "chart_exists": bool(chart_path),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _set_pattern_drilldown(
+    *,
+    bundle_dir: str,
+    chart_path: str | None = None,
+) -> None:
+    """Update in-page pattern state without browser navigation."""
+    st.session_state.pattern_backtest_bundle_dir = bundle_dir
+    if chart_path is not None:
+        st.session_state.pattern_selected_chart = str(chart_path)
+    else:
+        st.session_state.pattern_selected_chart = ""
+
+
+def build_pattern_browser_rows(
+    events_df: pd.DataFrame,
+    trades_df: pd.DataFrame,
+    chart_index_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build a simple event browser with year, stock, type, comment, and chart path."""
+    if chart_index_df is None or chart_index_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "event_id",
+                "symbol_id",
+                "pattern_type",
+                "breakout_date",
+                "breakout_year",
+                "comment",
+                "chart_path",
+            ]
+        )
+
+    browser = chart_index_df.copy()
+    if events_df is not None and not events_df.empty and "event_id" in events_df.columns:
+        event_cols = [
+            col
+            for col in [
+                "event_id",
+                "breakout_level",
+                "invalidation_price",
+                "cup_depth_pct",
+                "width_bars",
+                "handle_depth_pct",
+                "symmetry_ratio",
+                "breakout_volume_ratio",
+                "volume_dry_up",
+            ]
+            if col in events_df.columns
+        ]
+        browser = browser.merge(events_df[event_cols], on="event_id", how="left")
+    if trades_df is not None and not trades_df.empty and "event_id" in trades_df.columns:
+        trade_cols = [
+            col
+            for col in ["event_id", "net_return", "r_multiple", "exit_reason"]
+            if col in trades_df.columns
+        ]
+        browser = browser.merge(trades_df[trade_cols], on="event_id", how="left")
+
+    def _comment(row: pd.Series) -> str:
+        parts: list[str] = []
+        breakout_date = str(row.get("breakout_date") or "")
+        if breakout_date:
+            parts.append(f"breakout {breakout_date}")
+        if pd.notna(row.get("cup_depth_pct")):
+            parts.append(f"depth {float(row['cup_depth_pct']):.1f}%")
+        if pd.notna(row.get("width_bars")):
+            parts.append(f"width {int(float(row['width_bars']))} bars")
+        if pd.notna(row.get("net_return")):
+            parts.append(f"net {float(row['net_return']) * 100:.1f}%")
+        elif pd.notna(row.get("r_multiple")):
+            parts.append(f"R {float(row['r_multiple']):.2f}")
+        if row.get("exit_reason"):
+            parts.append(str(row["exit_reason"]))
+        return " | ".join(parts[:4])
+
+    browser["breakout_year"] = browser["breakout_year"].replace("", pd.NA)
+    if browser["breakout_year"].isna().any() and "breakout_date" in browser.columns:
+        browser["breakout_year"] = browser["breakout_year"].fillna(
+            pd.to_datetime(browser["breakout_date"], errors="coerce").dt.year.astype("Int64").astype(str)
+        )
+    browser["comment"] = browser.apply(_comment, axis=1)
+    browser = browser.sort_values(["breakout_year", "breakout_date", "symbol_id"], ascending=[False, False, True])
+    return browser.reset_index(drop=True)
+
+
+def _coerce_pattern_config(raw: dict | None) -> PatternBacktestConfig:
+    payload = dict(raw or {})
+    if "symbols" in payload and isinstance(payload["symbols"], list):
+        payload["symbols"] = tuple(str(item) for item in payload["symbols"])
+    if "event_horizons" in payload and isinstance(payload["event_horizons"], list):
+        payload["event_horizons"] = tuple(int(item) for item in payload["event_horizons"])
+    return PatternBacktestConfig(**payload)
+
+
+def _pattern_stock_button_label(row: pd.Series, *, selected: bool = False) -> str:
+    """Build a compact stock button label."""
+    symbol = str(row.get("symbol_id") or "")
+    return f"{symbol}{' *' if selected else ''}".strip()
+
+
+def _pattern_quality_badge(row: pd.Series) -> str:
+    """Classify a breakout event as strong, borderline, or failed."""
+    net_return = pd.to_numeric(pd.Series([row.get("net_return")]), errors="coerce").iloc[0]
+    breakout_volume_ratio = pd.to_numeric(pd.Series([row.get("breakout_volume_ratio")]), errors="coerce").iloc[0]
+    cup_depth_pct = pd.to_numeric(pd.Series([row.get("cup_depth_pct")]), errors="coerce").iloc[0]
+    handle_depth_pct = pd.to_numeric(pd.Series([row.get("handle_depth_pct")]), errors="coerce").iloc[0]
+    symmetry_ratio = pd.to_numeric(pd.Series([row.get("symmetry_ratio")]), errors="coerce").iloc[0]
+    width_bars = pd.to_numeric(pd.Series([row.get("width_bars")]), errors="coerce").iloc[0]
+    volume_dry_up = bool(row.get("volume_dry_up"))
+    exit_reason = str(row.get("exit_reason") or "").strip().lower()
+    pattern_type = str(row.get("pattern_type") or "").strip().lower()
+
+    if exit_reason == "stop" or (pd.notna(net_return) and float(net_return) < 0):
+        return "FAILED"
+
+    strong_common = (
+        pd.notna(breakout_volume_ratio)
+        and float(breakout_volume_ratio) >= 1.8
+        and pd.notna(cup_depth_pct)
+        and 18.0 <= float(cup_depth_pct) <= 32.0
+        and pd.notna(width_bars)
+        and float(width_bars) >= 20.0
+        and volume_dry_up
+    )
+    if pattern_type == "cup_handle":
+        if strong_common and pd.notna(handle_depth_pct) and float(handle_depth_pct) <= 8.0:
+            return "STRONG"
+    elif pattern_type == "round_bottom":
+        if strong_common and pd.notna(symmetry_ratio) and 0.75 <= float(symmetry_ratio) <= 1.35:
+            return "STRONG"
+
+    return "BORDERLINE"
+
+
+def _pattern_quality_badge_html(row: pd.Series) -> str:
+    """Render a compact colored quality badge."""
+    badge = _pattern_quality_badge(row)
+    color_map = {
+        "STRONG": ("#14532d", "#86efac", "#dcfce7"),
+        "BORDERLINE": ("#78350f", "#fcd34d", "#fef3c7"),
+        "FAILED": ("#7f1d1d", "#fca5a5", "#fee2e2"),
+    }
+    bg, border, text = color_map.get(badge, ("#1f2937", "#cbd5e1", "#f8fafc"))
+    return (
+        f"<span style=\"display:inline-block;padding:0.08rem 0.38rem;border-radius:999px;"
+        f"font-size:0.68rem;font-weight:700;letter-spacing:0.02em;background:{bg};"
+        f"border:1px solid {border};color:{text};\">{badge}</span>"
+    )
+
+
+def _render_pattern_backtests_tab() -> None:
+    """Render the research-only pattern backtest UI."""
+    st.subheader("🧩 Pattern Backtests")
+    st.caption(
+        "Run the research backtest, then browse breakout events by year on the left and view the marked chart on the right."
+    )
+
+    if "pattern_backtest_bundle_dir" not in st.session_state:
+        st.session_state.pattern_backtest_bundle_dir = None
+    if "pattern_selected_chart" not in st.session_state:
+        st.session_state.pattern_selected_chart = ""
+
+    default_from_date, default_to_date = _default_pattern_backtest_dates()
+    with st.container(border=True):
+        st.markdown("**Run New Pattern Backtest**")
+        run_col1, run_col2, run_col3 = st.columns([1, 1, 1.25])
+        with run_col1:
+            from_date = st.date_input(
+                "From Date",
+                value=default_from_date,
+                key="pattern_backtest_from_date",
+            )
+        with run_col2:
+            to_date = st.date_input(
+                "To Date",
+                value=default_to_date,
+                key="pattern_backtest_to_date",
+            )
+        with run_col3:
+            symbol_input = st.text_input(
+                "Symbols (optional, comma-separated)",
+                value="",
+                key="pattern_backtest_symbols",
+                help="Leave blank to scan the full NSE research universe.",
+            )
+
+        config_col1, config_col2, config_col3 = st.columns(3)
+        with config_col1:
+            bandwidth = st.slider(
+                "Kernel Bandwidth",
+                min_value=1.0,
+                max_value=6.0,
+                value=3.0,
+                step=0.5,
+                key="pattern_backtest_bandwidth",
+            )
+        with config_col2:
+            prominence = st.slider(
+                "Extrema Prominence",
+                min_value=0.005,
+                max_value=0.05,
+                value=0.02,
+                step=0.005,
+                key="pattern_backtest_prominence",
+            )
+        with config_col3:
+            volume_ratio = st.slider(
+                "Breakout Volume Ratio",
+                min_value=1.0,
+                max_value=3.0,
+                value=1.5,
+                step=0.1,
+                key="pattern_backtest_volume_ratio",
+            )
+        precompute_all_charts = st.checkbox(
+            "Precompute all charts",
+            value=False,
+            key="pattern_backtest_precompute_all_charts",
+            help="If enabled, the backtest writes one chart HTML per detected breakout event.",
+        )
+
+        if st.button("Run Pattern Backtest", type="primary", use_container_width=True):
+            selected_symbols = [item.strip().upper() for item in symbol_input.split(",") if item.strip()]
+            config = PatternBacktestConfig(
+                exchange="NSE",
+                symbols=tuple(selected_symbols),
+                bandwidth=float(bandwidth),
+                extrema_prominence=float(prominence),
+                breakout_volume_ratio_min=float(volume_ratio),
+            )
+            with st.spinner("Running research pattern backtest..."):
+                result = run_pattern_backtest(
+                    project_root=PROJECT_ROOT,
+                    from_date=from_date.isoformat(),
+                    to_date=to_date.isoformat(),
+                    exchange="NSE",
+                    symbols=selected_symbols,
+                    config=config,
+                    precompute_all_charts=bool(precompute_all_charts),
+                )
+            first_chart = result["paths"]["charts"][0] if result["paths"].get("charts") else None
+            _set_pattern_drilldown(
+                bundle_dir=result["paths"]["bundle_dir"],
+                chart_path=first_chart,
+            )
+            load_pattern_backtest_bundle.clear()
+            list_pattern_backtest_bundles.clear()
+            st.success(
+                f"Pattern backtest finished with {len(result['events'])} events and {len(result['trades'])} trades."
+            )
+
+    bundles_df = list_pattern_backtest_bundles(RESEARCH_REPORTS_DIR, max_bundles=30)
+    if bundles_df.empty:
+        st.info("No pattern backtest bundles found yet. Run one above to generate the first visual review set.")
+        return
+
+    bundle_options = {
+        _format_pattern_bundle_option(row): row["bundle_dir"]
+        for _, row in bundles_df.iterrows()
+    }
+    default_bundle_dir = st.session_state.pattern_backtest_bundle_dir
+    default_label = next(
+        (label for label, value in bundle_options.items() if value == default_bundle_dir),
+        next(iter(bundle_options.keys())),
+    )
+    selected_bundle_label = st.selectbox(
+        "Saved Backtest Bundles",
+        options=list(bundle_options.keys()),
+        index=list(bundle_options.keys()).index(default_label),
+        key="pattern_backtest_bundle_selector",
+    )
+    selected_bundle_dir = bundle_options[selected_bundle_label]
+    if st.session_state.pattern_backtest_bundle_dir != selected_bundle_dir:
+        _set_pattern_drilldown(bundle_dir=selected_bundle_dir)
+
+    bundle = load_pattern_backtest_bundle(selected_bundle_dir)
+    summary_json = bundle.get("summary_json", {}) or {}
+    summary_df = bundle.get("summary_df", pd.DataFrame())
+    events_df = bundle.get("events_df", pd.DataFrame())
+    trades_df = bundle.get("trades_df", pd.DataFrame())
+    yearly_df = bundle.get("yearly_df", pd.DataFrame())
+    chart_paths = bundle.get("chart_paths", [])
+    chart_index_df = build_pattern_chart_index(events_df, chart_paths)
+    browser_df = build_pattern_browser_rows(events_df, trades_df, chart_index_df)
+
+    metric_cols = st.columns(5)
+    metric_cols[0].metric("Bundle", Path(selected_bundle_dir).name)
+    metric_cols[1].metric("From", summary_json.get("from_date", "—"))
+    metric_cols[2].metric("To", summary_json.get("to_date", "—"))
+    metric_cols[3].metric("Events", f"{len(events_df):,}")
+    metric_cols[4].metric("Trades", f"{len(trades_df):,}")
+    st.caption(f"Bundle path: `{selected_bundle_dir}`")
+    if summary_json.get("precompute_all_charts"):
+        st.caption("Chart mode: precomputed for all events")
+    else:
+        st.caption("Chart mode: generated on demand when you open a breakout")
+
+    left_col, right_col = st.columns([1.05, 1.45], gap="large")
+    with left_col:
+        st.markdown("**Pattern Summary**")
+        if summary_df.empty:
+            st.info("No summary rows available for this bundle.")
+        else:
+            st.dataframe(
+                reorder_columns(
+                    summary_df,
+                    ["pattern_type", "signal_count", "trade_count", "confirmation_rate", "avg_net_return", "expectancy_r"],
+                ),
+                use_container_width=True,
+                hide_index=True,
+                height=200,
+            )
+
+        st.markdown("**Yearly Breakdown**")
+        if yearly_df.empty:
+            st.info("No yearly breakdown available.")
+        else:
+            st.dataframe(
+                reorder_columns(
+                    yearly_df,
+                    ["breakout_year", "pattern_type", "signal_count", "avg_net_return", "avg_r_multiple", "stop_out_rate"],
+                ),
+                use_container_width=True,
+                hide_index=True,
+                height=200,
+            )
+
+        st.markdown("**Breakout Browser**")
+        if browser_df.empty:
+            st.info("No breakout charts are available for this bundle.")
+        else:
+            st.markdown(
+                """
+                <style>
+                .pattern-browser-note {
+                    font-size: 0.74rem;
+                    color: #94a3b8;
+                    margin-top: -0.2rem;
+                    margin-bottom: 0.35rem;
+                }
+                .pattern-browser-comment {
+                    font-size: 0.76rem;
+                    color: #cbd5e1;
+                    line-height: 1.05rem;
+                    padding-top: 0.18rem;
+                }
+                .pattern-browser-type {
+                    font-size: 0.75rem;
+                    color: #e2e8f0;
+                    line-height: 1.0rem;
+                    padding-top: 0.22rem;
+                    white-space: nowrap;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                "<div class='pattern-browser-note'>Badges show only pattern quality: STRONG, BORDERLINE, or FAILED.</div>",
+                unsafe_allow_html=True,
+            )
+            years = [str(year) for year in browser_df["breakout_year"].dropna().astype(str).unique().tolist() if str(year).strip()]
+            if not years:
+                years = ["All"]
+            year_tabs = st.tabs(years)
+            for tab_idx, year in enumerate(years):
+                with year_tabs[tab_idx]:
+                    year_df = browser_df[browser_df["breakout_year"].astype(str) == str(year)].copy()
+                    if year_df.empty:
+                        st.info("No breakout events in this year.")
+                        continue
+                    header_cols = st.columns([1.2, 1.0, 0.95, 2.7], gap="small")
+                    header_cols[0].markdown("**Stock**")
+                    header_cols[1].markdown("**Quality**")
+                    header_cols[2].markdown("**Type**")
+                    header_cols[3].markdown("**Comment**")
+                    for row_idx, row in year_df.iterrows():
+                        cols = st.columns([1.2, 1.0, 0.95, 2.7], gap="small")
+                        with cols[0]:
+                            expected_chart_path = str(Path(selected_bundle_dir) / "charts" / f"{row['event_id']}.html")
+                            current_chart_path = str(row.get("chart_path") or expected_chart_path)
+                            is_selected = current_chart_path == st.session_state.pattern_selected_chart
+                            button_label = _pattern_stock_button_label(row, selected=is_selected)
+                            if st.button(
+                                button_label,
+                                key=f"pattern_browser_stock_{year}_{row_idx}",
+                                use_container_width=True,
+                                type="tertiary",
+                            ):
+                                _set_pattern_drilldown(
+                                    bundle_dir=selected_bundle_dir,
+                                    chart_path=current_chart_path,
+                                )
+                                st.rerun()
+                        with cols[1]:
+                            st.markdown(_pattern_quality_badge_html(row), unsafe_allow_html=True)
+                        with cols[2]:
+                            st.markdown(
+                                f"<div class='pattern-browser-type'>{str(row.get('pattern_type') or '')}</div>",
+                                unsafe_allow_html=True,
+                            )
+                        with cols[3]:
+                            st.markdown(
+                                f"<div class='pattern-browser-comment'>{str(row.get('comment') or '')}</div>",
+                                unsafe_allow_html=True,
+                            )
+
+    with right_col:
+        st.markdown("**Visual Review**")
+        if browser_df.empty:
+            st.info("Run a backtest first to browse charts.")
+        else:
+            chart_options = [str(Path(selected_bundle_dir) / "charts" / f"{event_id}.html") for event_id in browser_df["event_id"].astype(str).tolist()]
+            selected_chart = (
+                st.session_state.pattern_selected_chart
+                if st.session_state.pattern_selected_chart in chart_options
+                else chart_options[0]
+            )
+            selected_event_id = Path(selected_chart).stem
+            selected_row = browser_df[browser_df["event_id"].astype(str) == selected_event_id]
+            if not selected_row.empty:
+                selected_meta = selected_row.iloc[0]
+                st.markdown(
+                    f"**{selected_meta.get('symbol_id', '')}**  |  "
+                    f"`{selected_meta.get('pattern_type', '')}`  |  "
+                    f"`{selected_meta.get('breakout_date', '')}`"
+                )
+                st.caption(str(selected_meta.get("comment") or ""))
+
+            selected_chart = st.selectbox(
+                "Chart",
+                options=chart_options,
+                index=chart_options.index(selected_chart),
+                format_func=lambda value: (
+                    browser_df.loc[browser_df["event_id"].astype(str) == Path(value).stem, "chart_label"].iloc[0]
+                    if not browser_df.loc[browser_df["event_id"].astype(str) == Path(value).stem].empty
+                    else Path(value).stem
+                ),
+                key="pattern_backtest_chart_select",
+            )
+            st.session_state.pattern_selected_chart = selected_chart
+            if not Path(selected_chart).exists() and not selected_row.empty:
+                event_record = events_df[events_df["event_id"].astype(str) == selected_event_id]
+                if not event_record.empty:
+                    with st.spinner("Generating chart on demand..."):
+                        generated_chart = ensure_pattern_event_chart(
+                            project_root=PROJECT_ROOT,
+                            bundle_dir=selected_bundle_dir,
+                            event_row=event_record.iloc[0],
+                            config=_coerce_pattern_config(summary_json.get("config")),
+                            from_date=str(summary_json.get("from_date") or ""),
+                            to_date=str(summary_json.get("to_date") or ""),
+                            exchange=str(summary_json.get("exchange") or "NSE"),
+                        )
+                    st.session_state.pattern_selected_chart = generated_chart
+                    selected_chart = generated_chart
+                    load_pattern_backtest_bundle.clear()
+            _render_pattern_chart(selected_chart)
+            st.caption(f"Chart file: `{selected_chart}`")
+
+
 def load_latest_rank_fallback() -> Dict:
     """Build a minimal payload from the latest rank artifacts when no dashboard payload exists yet."""
     runs_dir = Path(PIPELINE_RUNS_DIR)
@@ -396,10 +924,12 @@ def load_latest_rank_fallback() -> Dict:
     rank_dir = ranked_path.parent
     ranked_df = pd.read_csv(ranked_path)
     breakout_path = rank_dir / "breakout_scan.csv"
+    pattern_path = rank_dir / "pattern_scan.csv"
     stock_scan_path = rank_dir / "stock_scan.csv"
     sector_path = rank_dir / "sector_dashboard.csv"
 
     breakout_df = pd.read_csv(breakout_path) if breakout_path.exists() else pd.DataFrame()
+    pattern_df = pd.read_csv(pattern_path) if pattern_path.exists() else pd.DataFrame()
     stock_scan_df = pd.read_csv(stock_scan_path) if stock_scan_path.exists() else pd.DataFrame()
     sector_df = pd.read_csv(sector_path) if sector_path.exists() else pd.DataFrame()
 
@@ -413,6 +943,7 @@ def load_latest_rank_fallback() -> Dict:
             "run_id": ranked_path.parts[-4],
             "ranked_count": int(len(ranked_df)),
             "breakout_count": int(len(breakout_df)),
+            "pattern_count": int(len(pattern_df)),
             "stock_scan_count": int(len(stock_scan_df)),
             "sector_count": int(len(sector_df)),
             "top_symbol": ranked_df.iloc[0].get("symbol_id") if not ranked_df.empty else None,
@@ -420,6 +951,7 @@ def load_latest_rank_fallback() -> Dict:
         },
         "ranked_signals": ranked_df.head(10).to_dict(orient="records"),
         "breakout_scan": breakout_df.head(10).to_dict(orient="records"),
+        "pattern_scan": pattern_df.head(10).to_dict(orient="records"),
         "stock_scan": stock_scan_df.head(10).to_dict(orient="records"),
         "sector_dashboard": sector_df.head(10).to_dict(orient="records"),
         "warnings": ["Dashboard payload missing; showing latest rank artifacts fallback."],
@@ -526,6 +1058,117 @@ def reorder_columns(df: pd.DataFrame, preferred: list[str]) -> pd.DataFrame:
     ordered = [column for column in preferred if column in df.columns]
     remaining = [column for column in df.columns if column not in ordered]
     return df[ordered + remaining]
+
+
+def _extract_selected_rows(selection_event: object) -> list[int]:
+    """Handle Streamlit dataframe selection payloads across versions."""
+    if selection_event is None:
+        return []
+    selection = getattr(selection_event, "selection", None)
+    if selection is not None:
+        rows = getattr(selection, "rows", None)
+        if rows is not None:
+            return list(rows)
+        if isinstance(selection, dict):
+            return list((selection.get("rows") or []))
+    if isinstance(selection_event, dict):
+        selection = selection_event.get("selection") or {}
+        return list(selection.get("rows") or [])
+    return []
+
+
+def render_selectable_grid(
+    df: pd.DataFrame,
+    *,
+    key: str,
+    height: int,
+    column_config: dict[str, object] | None = None,
+    hide_index: bool = True,
+) -> pd.Series | None:
+    """Render an interactive dataframe grid and return the selected row when supported."""
+    if df is None or df.empty:
+        return None
+    try:
+        selection_event = st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=hide_index,
+            height=height,
+            column_config=column_config or {},
+            on_select="rerun",
+            selection_mode="single-row",
+            key=key,
+        )
+        selected_rows = _extract_selected_rows(selection_event)
+        if selected_rows:
+            selected_idx = int(selected_rows[0])
+            if 0 <= selected_idx < len(df):
+                return df.iloc[selected_idx]
+    except TypeError:
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=hide_index,
+            height=height,
+            column_config=column_config or {},
+        )
+    return None
+
+
+def render_breakout_setup_detail(
+    breakout_row: pd.Series | None,
+    breakout_df: pd.DataFrame,
+    *,
+    signal_date: str | None,
+    title: str,
+) -> None:
+    """Render a compact breakout detail inspector for a selected grid row."""
+    if breakout_row is None or breakout_df is None or breakout_df.empty:
+        return
+    evidence_frame = build_breakout_evidence_frame(breakout_df, signal_date=signal_date)
+    if evidence_frame.empty:
+        return
+    mask = evidence_frame["symbol_id"].astype(str) == str(breakout_row.get("symbol_id", ""))
+    if "setup_family" in evidence_frame.columns and "setup_family" in breakout_row.index:
+        mask &= evidence_frame["setup_family"].astype(str) == str(breakout_row.get("setup_family", ""))
+    selected_evidence = evidence_frame.loc[mask].head(1)
+    if selected_evidence.empty:
+        selected_evidence = evidence_frame.loc[evidence_frame["symbol_id"].astype(str) == str(breakout_row.get("symbol_id", ""))].head(1)
+    if selected_evidence.empty:
+        return
+    row = selected_evidence.iloc[0]
+    verdict_color = str(row.get("verdict_color", "#334155"))
+    badge_html = (
+        f"<span style='background:{verdict_color};color:white;padding:2px 8px;"
+        "border-radius:999px;font-size:0.74rem;font-weight:700;'>"
+        f"{row.get('verdict', 'Unknown')}</span>"
+    )
+    with st.container(border=True):
+        st.markdown(f"**{title}**")
+        st.markdown(
+            f"**{row.get('symbol_id', '—')}**  \n{badge_html}",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            f"{row.get('breakout_type', '—')} | "
+            f"Setup {pd.to_numeric(row.get('setup_quality'), errors='coerce'):.1f} | "
+            f"State {row.get('breakout_state', '—')}"
+        )
+        st.caption(
+            f"Base {int(pd.to_numeric(row.get('base_length_days'), errors='coerce') or 0)}D | "
+            f"Vol x {pd.to_numeric(row.get('volume_ratio'), errors='coerce'):.2f} | "
+            f"Contraction {pd.to_numeric(row.get('contraction_pct'), errors='coerce'):.1f}%"
+        )
+        st.caption(
+            f"Regime {row.get('market_regime', 'N/A')} / {row.get('market_bias', 'N/A')} | "
+            f"Tier {row.get('candidate_tier', 'N/A')}"
+        )
+        trend_reasons = str(row.get("symbol_trend_reasons", "") or "").strip()
+        if trend_reasons:
+            st.caption(f"Trend reasons: {trend_reasons}")
+        filter_reason = str(row.get("filter_reason", "") or "").strip()
+        if filter_reason:
+            st.caption(f"Filter reason: {filter_reason}")
 
 
 def _build_tradingview_link(symbol: object) -> str:
@@ -1258,10 +1901,141 @@ def compute_dynamic_rank(
     return df.reset_index(drop=True)
 
 
+def _pattern_overlay_color(state: str) -> str:
+    state_key = str(state or "").strip().lower()
+    if state_key == "confirmed":
+        return "#22c55e"
+    if state_key == "watchlist":
+        return "#f59e0b"
+    return "#94a3b8"
+
+
+def _parse_pattern_json_list(value: object) -> list[object]:
+    if isinstance(value, list):
+        return value
+    if value is None:
+        return []
+    if isinstance(value, str) and not value.strip():
+        return []
+    if pd.isna(value):
+        return []
+    try:
+        return list(json.loads(str(value)))
+    except Exception:
+        return []
+
+
+def _build_pattern_overlay_option_map(pattern_df: pd.DataFrame, symbol: str) -> dict[str, str | None]:
+    options: dict[str, str | None] = {"None": None}
+    if pattern_df is None or pattern_df.empty or "symbol_id" not in pattern_df.columns:
+        return options
+    subset = pattern_df[pattern_df["symbol_id"].astype(str).str.upper() == str(symbol).upper()].copy()
+    if subset.empty:
+        return options
+    if "pattern_state" in subset.columns:
+        subset["_state_order"] = np.where(subset["pattern_state"].astype(str) == "confirmed", 0, 1)
+    else:
+        subset["_state_order"] = 1
+    subset["_score_order"] = pd.to_numeric(subset.get("pattern_score"), errors="coerce").fillna(0.0)
+    subset = subset.sort_values(["_state_order", "_score_order", "signal_date"], ascending=[True, False, False])
+    for _, row in subset.iterrows():
+        score_value = pd.to_numeric(pd.Series([row.get("pattern_score")]), errors="coerce").iloc[0]
+        label = (
+            f"{str(row.get('pattern_family') or '').replace('_', ' ')}"
+            f" | {str(row.get('pattern_state') or '')}"
+            f" | {str(row.get('signal_date') or '')}"
+            f" | score {0.0 if pd.isna(score_value) else float(score_value):.1f}"
+        )
+        options[label] = str(row.get("signal_id") or "")
+    return options
+
+
+def _add_pattern_overlay_to_figure(fig: go.Figure, ohlcv: pd.DataFrame, pattern_row: pd.Series | None) -> go.Figure:
+    if pattern_row is None or ohlcv.empty:
+        return fig
+
+    color = _pattern_overlay_color(str(pattern_row.get("pattern_state") or ""))
+    smoothed = kernel_smooth(ohlcv["close"], bandwidth=3.0)
+    fig.add_trace(
+        go.Scatter(
+            x=ohlcv.index,
+            y=smoothed,
+            name="Pattern Smoothed",
+            line=dict(color=color, width=2, dash="dash"),
+            opacity=0.85,
+        ),
+        row=1,
+        col=1,
+    )
+
+    pivot_dates = pd.to_datetime(_parse_pattern_json_list(pattern_row.get("pivot_dates")), errors="coerce")
+    pivot_prices = pd.to_numeric(pd.Series(_parse_pattern_json_list(pattern_row.get("pivot_prices"))), errors="coerce")
+    pivot_labels = [str(value) for value in _parse_pattern_json_list(pattern_row.get("pivot_labels"))]
+    if len(pivot_dates) and len(pivot_prices):
+        fig.add_trace(
+            go.Scatter(
+                x=pivot_dates,
+                y=pivot_prices,
+                name="Pattern Pivots",
+                mode="markers+text",
+                text=pivot_labels[: len(pivot_prices)],
+                textposition="top center",
+                marker=dict(size=9, color=color, line=dict(width=1, color="#111827")),
+                textfont=dict(size=10, color=color),
+            ),
+            row=1,
+            col=1,
+        )
+
+    breakout_level = pd.to_numeric(pd.Series([pattern_row.get("breakout_level")]), errors="coerce").iloc[0]
+    invalidation_price = pd.to_numeric(pd.Series([pattern_row.get("invalidation_price")]), errors="coerce").iloc[0]
+    if pd.notna(breakout_level):
+        fig.add_hline(
+            y=float(breakout_level),
+            line_dash="dash",
+            line_color=color,
+            annotation_text="Breakout" if str(pattern_row.get("pattern_state") or "") == "confirmed" else "Trigger",
+            row=1,
+            col=1,
+        )
+    if pd.notna(invalidation_price):
+        fig.add_hline(
+            y=float(invalidation_price),
+            line_dash="dot",
+            line_color="#ef4444",
+            annotation_text="Invalidation",
+            row=1,
+            col=1,
+        )
+
+    score = pd.to_numeric(pd.Series([pattern_row.get("pattern_score")]), errors="coerce").iloc[0]
+    badge_text = (
+        f"{str(pattern_row.get('pattern_family') or '').replace('_', ' ').title()} | "
+        f"{str(pattern_row.get('pattern_state') or '').upper()} | "
+        f"Score {float(score) if pd.notna(score) else 0.0:.1f}"
+    )
+    fig.add_annotation(
+        x=0.01,
+        y=0.99,
+        xref="paper",
+        yref="paper",
+        text=badge_text,
+        showarrow=False,
+        bgcolor="rgba(15,23,42,0.88)",
+        bordercolor=color,
+        borderwidth=1,
+        font=dict(color="#f8fafc", size=12),
+        xanchor="left",
+        yanchor="top",
+    )
+    return fig
+
+
 def plot_candlestick_with_features(
     ohlcv: pd.DataFrame,
     features: Dict[str, pd.DataFrame],
     symbol: str,
+    pattern_row: pd.Series | None = None,
 ) -> go.Figure:
     """Build a Plotly figure with OHLCV + overlaid indicators."""
     if ohlcv.empty:
@@ -1458,7 +2232,7 @@ def plot_candlestick_with_features(
     )
     fig.update_xaxes(showgrid=True, gridcolor="rgba(255,255,255,0.05)")
     fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.05)")
-    return fig
+    return _add_pattern_overlay_to_figure(fig, ohlcv, pattern_row)
 
 
 def plot_radar_chart(row: pd.Series) -> go.Figure:
@@ -2081,13 +2855,27 @@ def main():
 
     st.html("""
     <style>
-    .stMainBlockContainer {padding-top: 0.4rem; padding-bottom: 0.4rem; max-width: 98rem;}
-    [data-testid="stMetricValue"] {font-size: 1.25rem !important; line-height: 1.1 !important;}
-    [data-testid="stMetricLabel"] {font-size: 0.78rem !important; line-height: 1.05 !important;}
+    .stMainBlockContainer {padding-top: 0.18rem; padding-bottom: 0.3rem; max-width: 98rem;}
+    [data-testid="stMetricValue"] {font-size: 1.08rem !important; line-height: 1.05 !important;}
+    [data-testid="stMetricLabel"] {font-size: 0.74rem !important; line-height: 1.0 !important;}
     .stock-row:hover > div {background: rgba(0,176,246,0.08);}
-    section[data-testid="stSidebar"] > div {padding-top: 0.6rem;}
-    div[data-testid="stTabs"] button {font-size: 0.86rem; padding-top: 0.35rem; padding-bottom: 0.35rem;}
+    section[data-testid="stSidebar"] > div {padding-top: 0.4rem;}
+    .workspace-nav-label {
+      margin: 0 0 0.12rem 0;
+      font-size: 0.66rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #94a3b8;
+      font-weight: 700;
+    }
+    .workspace-nav-row {
+      padding-top: 0.02rem;
+      padding-bottom: 0.16rem;
+      margin-bottom: 0.18rem;
+    }
     div[data-testid="stDataFrame"] [role="gridcell"] {padding-top: 0.15rem; padding-bottom: 0.15rem;}
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4, .stMarkdown h5 {margin-top: 0.25rem !important; margin-bottom: 0.35rem !important;}
+    div[data-testid="stExpander"] {margin-top: 0.2rem; margin-bottom: 0.2rem;}
         .broker-header-cell {
           font-size: 0.68rem;
           text-transform: uppercase;
@@ -2186,9 +2974,6 @@ def main():
     </style>
     """)
 
-    st.title("📊 AI Trading Command Center")
-    st.caption(f"Project root: `{PROJECT_ROOT}`")
-
     if "rank_df" not in st.session_state:
         st.session_state.rank_df = None
     if "selected_symbol" not in st.session_state:
@@ -2207,8 +2992,6 @@ def main():
     latest_rank_frames = load_latest_rank_frames(PROJECT_ROOT)
     ops_snapshot = load_ops_health_snapshot(PROJECT_ROOT)
     data_trust_snapshot = load_data_trust_snapshot(PROJECT_ROOT)
-    render_ops_health_ribbon(ops_snapshot)
-
     if st.session_state.rank_df is not None:
         st.session_state.rank_df = normalize_rank_df(st.session_state.rank_df)
         score_col = "custom_score" if "custom_score" in st.session_state.rank_df.columns else "composite_score"
@@ -2446,98 +3229,55 @@ def main():
         render_sector_drilldown_page(requested_sector, rank_source_df)
         return
 
-    tab_pipeline, tab_overview, tab_ranking, tab_chart, tab_ml, tab_portfolio = st.tabs(
-        ["🧭 Pipeline", "📋 Overview", "🏆 Ranking", "📈 Chart", "🧠 ML", "💼 Portfolio"]
+    render_ops_health_ribbon(
+        ops_snapshot,
+        dashboard_health=dashboard_health,
+        data_trust_snapshot=data_trust_snapshot,
     )
 
-    with tab_pipeline:
-        st.subheader("🧭 Unified Pipeline Dashboard")
-        health_cols = st.columns(4)
-        with health_cols[0]:
-            st.metric("Health", str(dashboard_health.get("status", "unknown")).upper())
-        with health_cols[1]:
-            st.metric("OHLCV Date", dashboard_health.get("summary", {}).get("latest_ohlcv_date", "—"))
-        with health_cols[2]:
-            st.metric("Delivery Date", dashboard_health.get("summary", {}).get("latest_delivery_date", "—"))
-        with health_cols[3]:
-            st.metric("Payload Age (min)", dashboard_health.get("summary", {}).get("payload_age_minutes", "—"))
+    workspace_options = [
+        "🧭 Pipeline",
+        "📋 Overview",
+        "🏆 Ranking",
+        "🧩 Patterns",
+        "📈 Chart",
+        "🧠 ML",
+        "💼 Portfolio",
+    ]
+    if "workspace_nav" not in st.session_state:
+        st.session_state.workspace_nav = "🧭 Pipeline"
+    st.markdown("<div class='workspace-nav-row'>", unsafe_allow_html=True)
+    st.markdown("<div class='workspace-nav-label'>Workspace</div>", unsafe_allow_html=True)
+    nav_cols = st.columns(len(workspace_options), gap="small")
+    for nav_col, option in zip(nav_cols, workspace_options):
+        with nav_col:
+            button_type = "primary" if st.session_state.workspace_nav == option else "secondary"
+            if st.button(option, key=f"workspace_nav_{option}", use_container_width=True, type=button_type):
+                st.session_state.workspace_nav = option
+    st.markdown("</div>", unsafe_allow_html=True)
+    selected_workspace = st.session_state.workspace_nav
 
-        trust_cols = st.columns(4)
+    if selected_workspace == "🧭 Pipeline":
         latest_provider_stats = data_trust_snapshot.get("latest_provider_stats", {}) or {}
         latest_repair_run = data_trust_snapshot.get("latest_repair_run") or {}
-        with trust_cols[0]:
-            st.metric("Data Trust", str(data_trust_snapshot.get("status", "unknown")).upper())
-        with trust_cols[1]:
-            st.metric("Latest Validated", data_trust_snapshot.get("latest_validated_date", "—"))
-        with trust_cols[2]:
-            st.metric("Fallback Ratio", f"{float(data_trust_snapshot.get('fallback_ratio_latest', 0.0) or 0.0) * 100:.1f}%")
-        with trust_cols[3]:
-            st.metric("Active Quarantine Symbols", int(data_trust_snapshot.get("active_quarantined_symbols", 0) or 0))
-
-        with st.expander("🩺 Self Check", expanded=False):
-            checks_df = pd.DataFrame(dashboard_health.get("checks", []))
-            if not checks_df.empty:
-                st.dataframe(checks_df, use_container_width=True, hide_index=True)
-            else:
-                st.info("No health checks available.")
-
-        with st.expander("🛡️ Data Trust", expanded=False):
-            provider_mix = latest_provider_stats.get("counts", {})
-            trust_summary_cols = st.columns(3)
-            with trust_summary_cols[0]:
-                st.caption("Latest Provider Mix")
-                st.json(provider_mix or {})
-            with trust_summary_cols[1]:
-                st.caption("Quarantined Dates")
-                st.write(data_trust_snapshot.get("active_quarantined_dates", []) or ["None"])
-            with trust_summary_cols[2]:
-                st.caption("Latest Repair Batch")
-                st.json(latest_repair_run or {})
 
         if not dashboard_payload:
             st.info("No dashboard payload found yet. Run the rank stage first.")
         else:
             summary = dashboard_payload.get("summary", {})
             pipeline_breakout_df = latest_rank_frames.get("breakout_scan", pd.DataFrame())
+            pipeline_pattern_df = latest_rank_frames.get("pattern_scan", pd.DataFrame())
             pipeline_sector_df = latest_rank_frames.get("sector_dashboard", pd.DataFrame())
             pipeline_stock_scan_df = latest_rank_frames.get("stock_scan", pd.DataFrame())
             if pipeline_breakout_df.empty:
                 pipeline_breakout_df = pd.DataFrame(dashboard_payload.get("breakout_scan", []))
+            if pipeline_pattern_df.empty:
+                pipeline_pattern_df = pd.DataFrame(dashboard_payload.get("pattern_scan", []))
             if pipeline_sector_df.empty:
                 pipeline_sector_df = pd.DataFrame(dashboard_payload.get("sector_dashboard", []))
             if pipeline_stock_scan_df.empty:
                 pipeline_stock_scan_df = pd.DataFrame(dashboard_payload.get("stock_scan", []))
-
-            c1, c2, c3, c4 = st.columns(4)
-            with c1:
-                st.metric("Run Date", summary.get("run_date", "—"))
-            with c2:
-                st.metric("Top Symbol", summary.get("top_symbol", "—"))
-            with c3:
-                st.metric("Breakouts", summary.get("breakout_count", 0))
-            with c4:
-                st.metric("Leading Sector", summary.get("top_sector", "—"))
-            breakout_state_counts = summary.get("breakout_state_counts", {}) or {}
-            if breakout_state_counts:
-                state_cols = st.columns(3)
-                with state_cols[0]:
-                    st.metric("Qualified", int(summary.get("breakout_qualified_count", breakout_state_counts.get("qualified", 0) or 0)))
-                with state_cols[1]:
-                    st.metric("Watchlist", int(summary.get("breakout_watchlist_count", breakout_state_counts.get("watchlist", 0) or 0)))
-                with state_cols[2]:
-                    st.metric(
-                        "Filtered",
-                        int(
-                            summary.get(
-                                "breakout_filtered_count",
-                                (breakout_state_counts.get("filtered_by_regime", 0) or 0)
-                                + (breakout_state_counts.get("filtered_by_symbol_trend", 0) or 0),
-                            )
-                        ),
-                    )
-
-            st.caption(f"Payload: `{dashboard_payload.get('_artifact_path', 'n/a')}`")
-
+            task_status_map = dashboard_payload.get("task_status", {}) or {}
             col_left, col_right = st.columns([1, 1])
             with col_left:
                 st.markdown("**Top Ranked Signals**")
@@ -2640,8 +3380,60 @@ def main():
                     breakout_monitor_display = _with_symbol_hyperlink(
                         breakout_monitor_display, symbol_col="symbol_id"
                     )
+                    breakout_monitor_head = breakout_monitor_df.head(20).reset_index(drop=True)
+                    breakout_monitor_head_display = breakout_monitor_display.head(20).reset_index(drop=True)
+                    selected_breakout = render_selectable_grid(
+                        breakout_monitor_head_display,
+                        key="pipeline_breakout_grid",
+                        height=360,
+                        column_config={
+                            "symbol_id": st.column_config.LinkColumn(
+                                "Symbol",
+                                help="Open symbol in TradingView.",
+                                display_text=r".*symbol=NSE(?:%3A|:)([^&]+).*",
+                            )
+                        },
+                    )
+                    if selected_breakout is not None:
+                        selected_idx = int(selected_breakout.name)
+                        if 0 <= selected_idx < len(breakout_monitor_head):
+                            render_breakout_setup_detail(
+                                breakout_monitor_head.iloc[selected_idx],
+                                breakout_monitor_df,
+                                signal_date=summary.get("run_date"),
+                                title="Selected Breakout Setup",
+                            )
+
+                st.markdown("**Pattern Monitor**")
+                pattern_task_status = (task_status_map.get("pattern_scan", {}) or {}).get("status", "")
+                pattern_task_detail = (task_status_map.get("pattern_scan", {}) or {}).get("detail", "")
+                if pattern_task_status in {"failed", "timed_out"}:
+                    st.warning(f"Pattern Scan: {pattern_task_status}. {pattern_task_detail}")
+                elif pipeline_pattern_df.empty:
+                    if pattern_task_status == "completed_empty":
+                        st.info("Pattern Scan completed with no current operational pattern signals for this run.")
+                    elif pattern_task_status == "skipped":
+                        st.info(f"Pattern Scan skipped. {pattern_task_detail}")
+                    else:
+                        st.info("No operational pattern signals in payload.")
+                else:
+                    pattern_monitor_display = reorder_columns(
+                        pipeline_pattern_df,
+                        [
+                            "symbol_id",
+                            "pattern_family",
+                            "pattern_state",
+                            "pattern_score",
+                            "pattern_rank",
+                            "setup_quality",
+                            "breakout_level",
+                            "invalidation_price",
+                            "signal_date",
+                        ],
+                    )
+                    pattern_monitor_display = _with_symbol_hyperlink(pattern_monitor_display, symbol_col="symbol_id")
                     st.dataframe(
-                        breakout_monitor_display.head(20),
+                        pattern_monitor_display.head(20),
                         use_container_width=True,
                         hide_index=True,
                         column_config={
@@ -2652,23 +3444,8 @@ def main():
                             )
                         },
                     )
-                    st.markdown("**Breakout Evidence**")
-                    render_breakout_evidence_cards(
-                        breakout_monitor_df,
-                        signal_date=summary.get("run_date"),
-                        max_cards=6,
-                    )
-
             with col_right:
-                st.markdown("**Sector Dashboard**")
-                render_sector_dashboard_links_table(
-                    reorder_columns(
-                        pipeline_sector_df,
-                        ["Sector", "RS", "Momentum", "Quadrant", "RS_rank", "Top Stocks"],
-                    )
-                    if not pipeline_sector_df.empty
-                    else pipeline_sector_df
-                )
+                sector_dashboard_display = pipeline_sector_df.copy()
                 st.caption("Click a sector name to open the sector drilldown page.")
 
                 sector_history_df = load_sector_history_for_sectors(
@@ -2690,60 +3467,76 @@ def main():
                     max_points=10,
                     higher_is_better=False,
                 )
-                if not pipeline_sector_df.empty and (sector_rs_payload or sector_rank_payload):
-                    sector_trend_df = pipeline_sector_df.copy()
-                    if "Sector" in sector_trend_df.columns:
-                        sector_trend_df["RS Trend"] = sector_trend_df["Sector"].astype(str).map(
+                if not sector_dashboard_display.empty and (sector_rs_payload or sector_rank_payload):
+                    if "Sector" in sector_dashboard_display.columns:
+                        sector_dashboard_display["RS Trend"] = sector_dashboard_display["Sector"].astype(str).map(
                             lambda sector: sector_rs_payload.get(str(sector), {}).get("trend", "Flat")
                         )
-                        sector_trend_df["Δ RS"] = sector_trend_df["Sector"].astype(str).map(
+                        sector_dashboard_display["Δ RS"] = sector_dashboard_display["Sector"].astype(str).map(
                             lambda sector: sector_rs_payload.get(str(sector), {}).get("delta_value", 0.0)
                         )
-                        sector_trend_df["RS History"] = sector_trend_df["Sector"].astype(str).map(
+                        sector_dashboard_display["RS History"] = sector_dashboard_display["Sector"].astype(str).map(
                             lambda sector: sector_rs_payload.get(str(sector), {}).get("sparkline", [np.nan])
                         )
-                        sector_trend_df["Sector Rank Trend"] = sector_trend_df["Sector"].astype(str).map(
+                        sector_dashboard_display["Sector Rank Trend"] = sector_dashboard_display["Sector"].astype(str).map(
                             lambda sector: sector_rank_payload.get(str(sector), {}).get("trend", "Flat")
                         )
-                        sector_trend_df["Δ Sector Rank"] = sector_trend_df["Sector"].astype(str).map(
+                        sector_dashboard_display["Δ Sector Rank"] = sector_dashboard_display["Sector"].astype(str).map(
                             lambda sector: sector_rank_payload.get(str(sector), {}).get("delta_value", 0.0)
                         )
-                        sector_trend_df["Sector Rank History"] = sector_trend_df["Sector"].astype(str).map(
+                        sector_dashboard_display["Sector Rank History"] = sector_dashboard_display["Sector"].astype(str).map(
                             lambda sector: sector_rank_payload.get(str(sector), {}).get("sparkline", [np.nan])
                         )
-                        trend_display_df = reorder_columns(
-                            sector_trend_df,
-                            [
+                st.markdown("**Sector Dashboard**")
+                if sector_dashboard_display.empty:
+                    render_sector_dashboard_links_table(sector_dashboard_display)
+                else:
+                    sector_display_df = reorder_columns(
+                        sector_dashboard_display.loc[:, ~sector_dashboard_display.columns.duplicated()].copy(),
+                        [
+                            "Sector",
+                            "RS",
+                            "Momentum",
+                            "Quadrant",
+                            "RS_rank",
+                            "RS Trend",
+                            "Δ RS",
+                            "RS History",
+                            "Sector Rank Trend",
+                            "Δ Sector Rank",
+                            "Sector Rank History",
+                            "Top Stocks",
+                        ],
+                    )
+                    if "Sector" in sector_display_df.columns:
+                        sector_names = sector_display_df.loc[:, sector_display_df.columns == "Sector"].iloc[:, 0].astype(str)
+                        sector_display_df = sector_display_df.loc[:, sector_display_df.columns != "Sector"].copy()
+                        sector_display_df.insert(
+                            0,
+                            "Sector Link",
+                            sector_names.map(lambda sector: f"?view=sector&sector={quote(str(sector), safe='')}"),
+                        )
+                    st.dataframe(
+                        sector_display_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Sector Link": st.column_config.LinkColumn(
                                 "Sector",
-                                "RS",
-                                "Momentum",
-                                "Quadrant",
-                                "RS_rank",
-                                "RS Trend",
-                                "Δ RS",
+                                help="Open the sector drilldown page.",
+                                display_text=r".*sector=([^&]+).*",
+                            ),
+                            "RS History": st.column_config.LineChartColumn(
                                 "RS History",
-                                "Sector Rank Trend",
-                                "Δ Sector Rank",
+                                help="Recent sector RS across pipeline runs.",
+                            ),
+                            "Sector Rank History": st.column_config.LineChartColumn(
                                 "Sector Rank History",
-                            ],
-                        )
-                        st.markdown("**Sector Trendlines**")
-                        st.dataframe(
-                            trend_display_df,
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config={
-                                "RS History": st.column_config.LineChartColumn(
-                                    "RS History",
-                                    help="Recent sector RS across pipeline runs.",
-                                ),
-                                "Sector Rank History": st.column_config.LineChartColumn(
-                                    "Sector Rank History",
-                                    help="Recent sector rank across pipeline runs. Lower is better.",
-                                )
-                            },
-                            height=280,
-                        )
+                                help="Recent sector rank across pipeline runs. Lower is better.",
+                            ),
+                        },
+                        height=320,
+                    )
 
                 st.markdown("**Stock Scan**")
                 if pipeline_stock_scan_df.empty:
@@ -2761,7 +3554,28 @@ def main():
                     for warning in warnings:
                         st.warning(warning)
 
-    with tab_overview:
+                with st.expander("🩺 Self Check", expanded=False):
+                    checks_df = pd.DataFrame(dashboard_health.get("checks", []))
+                    if not checks_df.empty:
+                        st.dataframe(checks_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No health checks available.")
+
+                with st.expander("🛡️ Data Trust", expanded=False):
+                    provider_mix = latest_provider_stats.get("counts", {})
+                    trust_summary_cols = st.columns(3)
+                    with trust_summary_cols[0]:
+                        st.caption("Latest Provider Mix")
+                        st.json(provider_mix or {})
+                    with trust_summary_cols[1]:
+                        st.caption("Quarantined Dates")
+                        st.write(data_trust_snapshot.get("active_quarantined_dates", []) or ["None"])
+                    with trust_summary_cols[2]:
+                        st.caption("Latest Repair Batch")
+                        st.json(latest_repair_run or {})
+                    st.caption(f"Payload: `{dashboard_payload.get('_artifact_path', 'n/a')}`")
+
+    if selected_workspace == "📋 Overview":
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("📦 Total Symbols", f"{stats.get('symbols', 0):,}")
@@ -2871,7 +3685,7 @@ def main():
                     fig_breadth_overview.add_hline(y=60, line_dash="dash", line_color="#16a34a", opacity=0.5)
                     fig_breadth_overview.add_hline(y=40, line_dash="dash", line_color="#ea580c", opacity=0.5)
                     fig_breadth_overview.update_layout(
-                        height=420,
+                        height=360,
                         margin=dict(l=20, r=20, t=20, b=20),
                         yaxis_title="% of Stocks Above SMA",
                         xaxis_title="Date",
@@ -2895,7 +3709,7 @@ def main():
 
         st.divider()
 
-        col_left, col_right = st.columns([1, 1])
+        col_left, col_right = st.columns([1, 1], gap="small")
 
         with col_left:
             st.subheader("📊 Sector Distribution (Top Ranked)")
@@ -2964,7 +3778,7 @@ def main():
                         )
                         fig.update_layout(
                             template="plotly_dark",
-                            height=450,
+                            height=380,
                             showlegend=False,
                             yaxis={"tickfont": {"size": 11}},
                         )
@@ -2995,7 +3809,7 @@ def main():
                 )
                 fig.update_layout(
                     template="plotly_dark",
-                    height=450,
+                    height=380,
                     showlegend=False,
                     xaxis_title="Composite Score",
                     yaxis_title="Count",
@@ -3021,7 +3835,7 @@ def main():
                     st.session_state.last_refresh = datetime.now().strftime("%H:%M:%S")
                 st.success(f"Ranked {len(rank_df):,} stocks in {time.time() - t0:.1f}s")
 
-    with tab_ranking:
+    if selected_workspace == "🏆 Ranking":
         st.subheader("🏆 Multi-Factor Stock Ranking")
 
         weights_dict = build_dashboard_weights()
@@ -3156,7 +3970,7 @@ def main():
                     display_df,
                     use_container_width=True,
                     hide_index=False,
-                    height=700,
+                    height=560,
                     column_config={
                         "Symbol": st.column_config.LinkColumn(
                             "Symbol",
@@ -3212,8 +4026,11 @@ def main():
 
                 st.markdown("**Breakout Evidence (Top Signals)**")
                 ranking_breakout_df = latest_rank_frames.get("breakout_scan", pd.DataFrame())
+                ranking_pattern_df = latest_rank_frames.get("pattern_scan", pd.DataFrame())
                 if ranking_breakout_df.empty and dashboard_payload:
                     ranking_breakout_df = pd.DataFrame(dashboard_payload.get("breakout_scan", []))
+                if ranking_pattern_df.empty and dashboard_payload:
+                    ranking_pattern_df = pd.DataFrame(dashboard_payload.get("pattern_scan", []))
                 show_filtered_ranking = st.toggle(
                     "Show Filtered Rows (Ranking)",
                     value=False,
@@ -3245,8 +4062,53 @@ def main():
                         ranking_breakout_display,
                         symbol_col="symbol_id",
                     )
+                    ranking_breakout_head = ranking_breakout_df.head(8).reset_index(drop=True)
+                    ranking_breakout_display_head = ranking_breakout_display.head(8).reset_index(drop=True)
+                    selected_ranking_breakout = render_selectable_grid(
+                        ranking_breakout_display_head,
+                        key="ranking_breakout_grid",
+                        height=220,
+                        column_config={
+                            "symbol_id": st.column_config.LinkColumn(
+                                "Symbol",
+                                help="Open symbol in TradingView.",
+                                display_text=r".*symbol=NSE(?:%3A|:)([^&]+).*",
+                            )
+                        },
+                    )
+                    if selected_ranking_breakout is not None:
+                        selected_idx = int(selected_ranking_breakout.name)
+                        if 0 <= selected_idx < len(ranking_breakout_head):
+                            render_breakout_setup_detail(
+                                ranking_breakout_head.iloc[selected_idx],
+                                ranking_breakout_df,
+                                signal_date=(dashboard_payload or {}).get("summary", {}).get("run_date"),
+                                title="Ranking Breakout Setup",
+                            )
+                st.markdown("**Pattern Evidence (Top Signals)**")
+                if not ranking_pattern_df.empty and not top_df.empty and "symbol_id" in ranking_pattern_df.columns:
+                    ranking_pattern_df = ranking_pattern_df[
+                        ranking_pattern_df["symbol_id"].astype(str).isin(set(top_df["symbol_id"].astype(str)))
+                    ].copy()
+                if not ranking_pattern_df.empty:
+                    ranking_pattern_display = reorder_columns(
+                        ranking_pattern_df,
+                        [
+                            "symbol_id",
+                            "pattern_family",
+                            "pattern_state",
+                            "pattern_score",
+                            "pattern_rank",
+                            "setup_quality",
+                            "signal_date",
+                        ],
+                    )
+                    ranking_pattern_display = _with_symbol_hyperlink(
+                        ranking_pattern_display,
+                        symbol_col="symbol_id",
+                    )
                     st.dataframe(
-                        ranking_breakout_display.head(8),
+                        ranking_pattern_display.head(8),
                         use_container_width=True,
                         hide_index=True,
                         height=220,
@@ -3258,12 +4120,8 @@ def main():
                             )
                         },
                     )
-                signal_date = (dashboard_payload or {}).get("summary", {}).get("run_date")
-                render_breakout_evidence_cards(
-                    ranking_breakout_df,
-                    signal_date=signal_date,
-                    max_cards=4,
-                )
+                else:
+                    st.info("No top-ranked pattern signals available.")
 
             st.markdown("**Universe Factor Contribution Map**")
             render_factor_attribution_widget(
@@ -3280,7 +4138,10 @@ def main():
                 "No ranking data available. Click 'Refresh Rankings' in the sidebar."
             )
 
-    with tab_chart:
+    if selected_workspace == "🧩 Patterns":
+        _render_pattern_backtests_tab()
+
+    if selected_workspace == "📈 Chart":
         symbol = st.session_state.selected_symbol
 
         if not symbol:
@@ -3292,6 +4153,9 @@ def main():
             )
 
         if symbol:
+            pattern_frame = latest_rank_frames.get("pattern_scan", pd.DataFrame())
+            if pattern_frame.empty and dashboard_payload:
+                pattern_frame = pd.DataFrame(dashboard_payload.get("pattern_scan", []))
             col1, col2 = st.columns([1, 3])
             symbol_trust_df = load_symbol_trust_snapshot(PROJECT_ROOT, [symbol])
             symbol_trust = symbol_trust_df.iloc[0].to_dict() if not symbol_trust_df.empty else {}
@@ -3321,14 +4185,33 @@ def main():
                         st.warning(
                             "No feature data found. Run feature computation first."
                         )
+                    pattern_option_map = _build_pattern_overlay_option_map(pattern_frame, symbol)
+                    selected_pattern_label = st.selectbox(
+                        "Pattern Overlay",
+                        options=list(pattern_option_map.keys()),
+                        index=0,
+                        key=f"chart_pattern_overlay_{symbol}",
+                    )
                 else:
                     st.warning("No OHLCV data for this symbol.")
 
             with col2:
                 if not ohlcv.empty:
                     features = load_features(symbol)
-                    fig = plot_candlestick_with_features(ohlcv, features, symbol)
+                    pattern_row = None
+                    selected_signal_id = pattern_option_map.get(selected_pattern_label) if "pattern_option_map" in locals() else None
+                    if selected_signal_id and pattern_frame is not None and not pattern_frame.empty and "signal_id" in pattern_frame.columns:
+                        matched = pattern_frame[pattern_frame["signal_id"].astype(str) == str(selected_signal_id)]
+                        if not matched.empty:
+                            pattern_row = matched.iloc[0]
+                    fig = plot_candlestick_with_features(ohlcv, features, symbol, pattern_row=pattern_row)
                     st.plotly_chart(fig, use_container_width=True)
+                    if pattern_row is not None:
+                        st.caption(
+                            f"Pattern overlay: {str(pattern_row.get('pattern_family') or '').replace('_', ' ')} | "
+                            f"{str(pattern_row.get('pattern_state') or '').upper()} | "
+                            f"score {float(pd.to_numeric(pd.Series([pattern_row.get('pattern_score')]), errors='coerce').iloc[0] or 0.0):.1f}"
+                        )
                     st.markdown("**Rank History Sparkline**")
                     symbol_history_df = load_rank_history_for_symbols(
                         PIPELINE_RUNS_DIR,
@@ -3361,7 +4244,7 @@ def main():
                 else:
                     st.info(f"No data for {symbol}. Try another symbol.")
 
-    with tab_ml:
+    if selected_workspace == "🧠 ML":
         st.subheader("🧠 LightGBM Research Models")
 
         metadata_paths = list_research_model_metadata_paths()
@@ -3442,7 +4325,7 @@ def main():
                         top_features_df,
                         use_container_width=True,
                         hide_index=True,
-                        height=520,
+                        height=420,
                     )
                 else:
                     st.info("No feature importance data available.")
@@ -3534,7 +4417,7 @@ def main():
                         monthly_display["period_start"] = monthly_display["period_start"].dt.date.astype(str)
                         st.dataframe(monthly_display, use_container_width=True, hide_index=True, height=240)
 
-    with tab_portfolio:
+    if selected_workspace == "💼 Portfolio":
         _render_portfolio_workspace(
             rank_df=st.session_state.rank_df,
             latest_rank_frames=latest_rank_frames,

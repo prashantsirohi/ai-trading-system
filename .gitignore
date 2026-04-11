@@ -6,6 +6,8 @@ data/ohlcv.duckdb
 data/feature_store/
 data/features/
 data/research/
+data/raw/NSE_EQ/*.csv
+data/raw/NSE_MTO/*.DAT
 data/*.xlsx
 data/*.db
 data/*.duckdb

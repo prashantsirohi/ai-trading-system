@@ -74,6 +74,7 @@ class StageContext:
     registry: Any = None
     params: Dict[str, Any] = field(default_factory=dict)
     artifacts: Dict[str, Dict[str, StageArtifact]] = field(default_factory=dict)
+    task_reporter: Any = None
 
     def output_dir(self) -> Path:
         paths = ensure_domain_layout(
@@ -100,6 +101,27 @@ class StageContext:
                 f"Missing required artifact '{artifact_type}' from stage '{stage_name}'"
             )
         return artifact
+
+    def report_task(
+        self,
+        *,
+        task_name: str,
+        status: str,
+        detail: str | None = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if callable(self.task_reporter):
+            self.task_reporter(
+                {
+                    "run_id": self.run_id,
+                    "stage_name": self.stage_name,
+                    "attempt_number": self.attempt_number,
+                    "task_name": task_name,
+                    "status": status,
+                    "detail": detail,
+                    "metadata": metadata or {},
+                }
+            )
 
 
 def compute_file_hash(path: Path) -> str:

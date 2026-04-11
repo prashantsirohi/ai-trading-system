@@ -91,6 +91,12 @@ for _handler in logging.getLogger().handlers:
     _handler.addFilter(_context_filter)
 
 
+def _set_stdlib_stream_level(level: int) -> None:
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, logging.StreamHandler):
+            handler.setLevel(level)
+
+
 def get_logger(name: str | None = None):
     """Return a logger instance consistent with the shared runtime configuration."""
     logger_name = name or "ai_trading_system"
@@ -100,44 +106,54 @@ def get_logger(name: str | None = None):
 try:
     from loguru import logger as _loguru_logger
 
+    _LOGURU_STDERR_SINK_ID: int | None = None
+    _LOGURU_FILE_SINK_IDS: list[int] = []
+
     def _patch_record(record: Dict[str, Any]) -> Dict[str, Any]:
         record["extra"]["context"] = _context_string() or "-"
         return record
 
     logger = _loguru_logger.patch(_patch_record)
-    logger.remove()
-    logger.add(
-        sys.stderr,
-        format=(
-            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | "
-            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-            "<magenta>{extra[context]}</magenta> - <level>{message}</level>"
-        ),
-        level="INFO",
-    )
-    logger.add(
-        LOG_DIR / "app_{time:YYYY-MM-DD}.log",
-        rotation="1 day",
-        retention="30 days",
-        compression="zip",
-        format=(
-            "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | "
-            "{extra[context]} - {message}"
-        ),
-        level="DEBUG",
-    )
-    logger.add(
-        LOG_DIR / "error_{time:YYYY-MM-DD}.log",
-        rotation="1 day",
-        retention="90 days",
-        format=(
-            "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} | "
-            "{extra[context]} - {message}"
-        ),
-        level="ERROR",
-        backtrace=True,
-        diagnose=True,
-    )
+
+    def _configure_loguru_sinks(stderr_level: str = "INFO") -> None:
+        global _LOGURU_STDERR_SINK_ID, _LOGURU_FILE_SINK_IDS
+        logger.remove()
+        _LOGURU_STDERR_SINK_ID = logger.add(
+            sys.stderr,
+            format=(
+                "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | "
+                "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+                "<magenta>{extra[context]}</magenta> - <level>{message}</level>"
+            ),
+            level=stderr_level,
+        )
+        _LOGURU_FILE_SINK_IDS = [
+            logger.add(
+                LOG_DIR / "app_{time:YYYY-MM-DD}.log",
+                rotation="1 day",
+                retention="30 days",
+                compression="zip",
+                format=(
+                    "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | "
+                    "{extra[context]} - {message}"
+                ),
+                level="DEBUG",
+            ),
+            logger.add(
+                LOG_DIR / "error_{time:YYYY-MM-DD}.log",
+                rotation="1 day",
+                retention="90 days",
+                format=(
+                    "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} | "
+                    "{extra[context]} - {message}"
+                ),
+                level="ERROR",
+                backtrace=True,
+                diagnose=True,
+            ),
+        ]
+
+    _configure_loguru_sinks()
 except ModuleNotFoundError:
     class _FallbackLogger:
         """Adapter that exposes the subset of Loguru APIs used in this repo."""
@@ -199,6 +215,23 @@ except ModuleNotFoundError:
 
     logger = _FallbackLogger(get_logger("ai_trading_system"))
 
+
+def configure_terminal_output(mode: str = "verbose") -> None:
+    """Tighten terminal noise without affecting file logs."""
+
+    normalized = str(mode or "verbose").strip().lower()
+    if normalized == "compact":
+        _set_stdlib_stream_level(logging.WARNING)
+        if "_configure_loguru_sinks" in globals():
+            _configure_loguru_sinks(stderr_level="WARNING")
+        return
+    if normalized in {"verbose", "json"}:
+        _set_stdlib_stream_level(logging.INFO)
+        if "_configure_loguru_sinks" in globals():
+            _configure_loguru_sinks(stderr_level="INFO")
+        return
+    raise ValueError(f"Unsupported terminal logging mode: {mode}")
+
 __all__ = [
     "logger",
     "get_logger",
@@ -206,4 +239,5 @@ __all__ = [
     "set_log_context",
     "clear_log_context",
     "log_context",
+    "configure_terminal_output",
 ]

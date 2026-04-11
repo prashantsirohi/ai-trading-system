@@ -13,6 +13,7 @@ from collectors.delivery_collector import DeliveryCollector
 from collectors.nse_delivery_scraper import NseHistoricalDeliveryScraper
 from run.preflight import PreflightChecker
 from run.publisher import PublisherDeliveryManager
+import run.orchestrator as orchestrator_module
 from run.orchestrator import PipelineOrchestrator
 from run.stages import FeaturesStage, IngestStage, PublishStage, RankStage
 from run.stages.base import DataQualityCriticalError, PublishStageError, StageArtifact, StageContext
@@ -830,6 +831,55 @@ def test_rank_stage_records_degraded_outputs_in_metadata(tmp_path: Path) -> None
     assert result.metadata["degraded_outputs"] == ["stock_scan unavailable: boom"]
 
 
+def test_rank_stage_writes_pattern_scan_artifact_and_dashboard_payload(tmp_path: Path) -> None:
+    project_root = tmp_path
+    context = StageContext(
+        project_root=project_root,
+        db_path=project_root / "data" / "ohlcv.duckdb",
+        run_id="run-pattern",
+        run_date="2026-03-28",
+        stage_name="rank",
+        attempt_number=1,
+    )
+    stage = RankStage(
+        operation=lambda _context: {
+            "ranked_signals": pd.DataFrame([{"symbol_id": "ABC", "composite_score": 10.0}]),
+            "pattern_scan": pd.DataFrame(
+                [
+                    {
+                        "signal_id": "ABC-cup_handle-confirmed-2026-03-28",
+                        "symbol_id": "ABC",
+                        "pattern_family": "cup_handle",
+                        "pattern_state": "confirmed",
+                        "pattern_score": 88.0,
+                    }
+                ]
+            ),
+            "__dashboard_payload__": {
+                "summary": {
+                    "run_id": "run-pattern",
+                    "ranked_count": 1,
+                    "pattern_count": 1,
+                    "pattern_confirmed_count": 1,
+                    "pattern_watchlist_count": 0,
+                    "pattern_family_counts": {"cup_handle": 1},
+                },
+                "ranked_signals": [{"symbol_id": "ABC", "composite_score": 10.0}],
+                "pattern_scan": [{"symbol_id": "ABC", "pattern_family": "cup_handle"}],
+                "warnings": [],
+            },
+        }
+    )
+
+    result = stage.run(context)
+
+    assert (context.output_dir() / "pattern_scan.csv").exists()
+    assert any(artifact.artifact_type == "pattern_scan" for artifact in result.artifacts)
+    dashboard_payload = (context.output_dir() / "dashboard_payload.json").read_text(encoding="utf-8")
+    assert '"pattern_count": 1' in dashboard_payload
+    assert '"pattern_family": "cup_handle"' in dashboard_payload
+
+
 def test_data_domain_paths_separate_operational_and_research(tmp_path: Path) -> None:
     operational = get_domain_paths(project_root=tmp_path, data_domain="operational")
     research = get_domain_paths(project_root=tmp_path, data_domain="research")
@@ -991,3 +1041,203 @@ def test_preflight_checker_can_skip_publish_dns_checks(tmp_path: Path, monkeypat
         {"local_publish": False, "preflight_publish_network_checks": False},
     )
     assert result["status"] == "passed"
+
+
+def test_orchestrator_parser_defaults_skip_preflight_and_uses_today() -> None:
+    args = orchestrator_module.build_parser().parse_args([])
+
+    assert args.run_date == date.today().isoformat()
+    assert args.data_domain == "operational"
+    assert args.skip_preflight is True
+    assert args.auto_repair_quarantine is True
+    assert args.terminal_mode == "compact"
+    assert args.pattern_scan_enabled is True
+    assert args.pattern_max_symbols == 150
+    assert args.pattern_workers == 4
+    assert args.pattern_lookback_days == 260
+    assert args.pattern_smoothing_method == "rolling"
+    assert args.stale_missing_symbol_grace_days == 3
+
+
+def test_main_auto_repairs_quarantine_and_retries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_calls: list[dict] = []
+    repair_calls: list[dict] = []
+
+    class FakeOrchestrator:
+        def __init__(self, project_root: Path) -> None:
+            self.project_root = Path(project_root)
+
+        def _build_run_id(self, run_date: str) -> str:
+            return f"pipeline-{run_date}-autotest"
+
+        def run_pipeline(self, **kwargs):
+            run_calls.append(kwargs)
+            if len(run_calls) == 1:
+                raise DataQualityCriticalError(
+                    "ingest_unresolved_dates_present: Unresolved trade dates remain quarantined: "
+                    "2026-04-08, 2026-04-09, 2026-04-10. unresolved_symbol_dates=9 eligible_symbols=996 "
+                    "ratio=0.90% (max_dates=1, max_symbol_dates=10, max_ratio=1.00%)."
+                )
+            return {"run_id": kwargs["run_id"], "status": "completed", "stages": []}
+
+    def fake_repair(*, project_root: Path, run_id: str, error_message: str, data_domain: str):
+        repair_calls.append(
+            {
+                "project_root": Path(project_root),
+                "run_id": run_id,
+                "error_message": error_message,
+                "data_domain": data_domain,
+            }
+        )
+        return {"status": "completed", "report_dir": str(tmp_path)}
+
+    monkeypatch.setattr(orchestrator_module, "PipelineOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(orchestrator_module, "_run_auto_quarantine_repair", fake_repair)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run.orchestrator",
+            "--stages",
+            "ingest,features,rank",
+        ],
+    )
+
+    orchestrator_module.main()
+
+    assert len(run_calls) == 2
+    assert run_calls[0]["run_id"] == run_calls[1]["run_id"]
+    assert run_calls[0]["params"]["preflight"] is False
+    assert repair_calls[0]["data_domain"] == "operational"
+    assert "2026-04-08" in repair_calls[0]["error_message"]
+
+
+def test_main_exits_cleanly_after_final_dq_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeOrchestrator:
+        def __init__(self, project_root: Path) -> None:
+            self.project_root = Path(project_root)
+
+        def _build_run_id(self, run_date: str) -> str:
+            return f"pipeline-{run_date}-blocked"
+
+        def run_pipeline(self, **kwargs):
+            raise DataQualityCriticalError("ingest_unresolved_dates_present: still blocked")
+
+    monkeypatch.setattr(orchestrator_module, "PipelineOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(orchestrator_module, "_run_auto_quarantine_repair", lambda **kwargs: None)
+    monkeypatch.setattr("sys.argv", ["run.orchestrator"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        orchestrator_module.main()
+
+    assert exc_info.value.code == 1
+
+
+def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+    stage = RankStage()
+    call_counts = {
+        "rank_all": 0,
+        "breakout_scan": 0,
+        "pattern_scan": 0,
+        "stock_scan": 0,
+        "sector_dashboard": 0,
+        "dashboard_payload": 0,
+    }
+
+    class FakeRanker:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def rank_all(self, **_kwargs) -> pd.DataFrame:
+            call_counts["rank_all"] += 1
+            return pd.DataFrame([{"symbol_id": "AAA", "exchange": "NSE", "composite_score": 90.0}])
+
+    monkeypatch.setattr("analytics.data_trust.load_data_trust_summary", lambda *_args, **_kwargs: {"status": "trusted"})
+    monkeypatch.setattr("analytics.ranker.StockRanker", FakeRanker)
+    monkeypatch.setattr(
+        "channel.breakout_scan.scan_breakouts",
+        lambda **_kwargs: call_counts.__setitem__("breakout_scan", call_counts["breakout_scan"] + 1)
+        or pd.DataFrame([{"symbol_id": "AAA", "breakout_state": "qualified"}]),
+    )
+    monkeypatch.setattr(
+        "analytics.patterns.data.load_pattern_frame",
+        lambda *_args, **_kwargs: pd.DataFrame(
+            {
+                "symbol_id": ["AAA"] * 3,
+                "timestamp": pd.date_range("2024-01-01", periods=3, freq="B"),
+                "open": [10.0, 11.0, 12.0],
+                "high": [10.5, 11.5, 12.5],
+                "low": [9.5, 10.5, 11.5],
+                "close": [10.0, 11.0, 12.0],
+                "volume": [1000, 1000, 1000],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "analytics.patterns.build_pattern_signals",
+        lambda **_kwargs: call_counts.__setitem__("pattern_scan", call_counts["pattern_scan"] + 1)
+        or pd.DataFrame([{"symbol_id": "AAA", "pattern_family": "cup_handle", "pattern_state": "confirmed"}]),
+    )
+    monkeypatch.setattr("channel.stock_scan.load_sector_rs", lambda: pd.DataFrame({"RS": [1.0]}))
+    monkeypatch.setattr("channel.stock_scan.load_stock_vs_sector", lambda: pd.DataFrame({"relative_strength": [1.0]}))
+    monkeypatch.setattr("channel.stock_scan.load_sector_mapping", lambda: {"AAA": "Tech"})
+    monkeypatch.setattr(
+        "channel.stock_scan.scan_stocks",
+        lambda *_args, **_kwargs: call_counts.__setitem__("stock_scan", call_counts["stock_scan"] + 1)
+        or pd.DataFrame([{"Symbol": "AAA", "category": "BUY"}]),
+    )
+    monkeypatch.setattr("channel.sector_dashboard.load_sector_rs", lambda: pd.DataFrame({"RS": [1.0]}))
+    monkeypatch.setattr("channel.sector_dashboard.load_stock_vs_sector", lambda: pd.DataFrame({"relative_strength": [1.0]}))
+    monkeypatch.setattr("channel.sector_dashboard.load_sector_mapping", lambda: {"AAA": "Tech"})
+    monkeypatch.setattr("channel.sector_dashboard.compute_sector_momentum", lambda *_args, **_kwargs: pd.DataFrame({"Momentum": [0.2]}))
+    monkeypatch.setattr(
+        "channel.sector_dashboard.build_dashboard",
+        lambda *_args, **_kwargs: call_counts.__setitem__("sector_dashboard", call_counts["sector_dashboard"] + 1)
+        or pd.DataFrame([{"Sector": "Tech", "RS": 1.0, "Momentum": 0.2}]),
+    )
+
+    original_payload_builder = stage._build_dashboard_payload
+
+    def flaky_payload_builder(*args, **kwargs):
+        call_counts["dashboard_payload"] += 1
+        if call_counts["dashboard_payload"] == 1:
+            raise RuntimeError("payload build failed")
+        return original_payload_builder(*args, **kwargs)
+
+    monkeypatch.setattr(stage, "_build_dashboard_payload", flaky_payload_builder)
+
+    context_attempt_1 = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="pipeline-2026-04-11-resume",
+        run_date="2026-04-11",
+        stage_name="rank",
+        attempt_number=1,
+        registry=registry,
+        params={"data_domain": "operational", "preflight": False},
+    )
+    with pytest.raises(RuntimeError, match="payload build failed"):
+        stage.run(context_attempt_1)
+
+    context_attempt_2 = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="pipeline-2026-04-11-resume",
+        run_date="2026-04-11",
+        stage_name="rank",
+        attempt_number=2,
+        registry=registry,
+        params={"data_domain": "operational", "preflight": False},
+    )
+    result = stage.run(context_attempt_2)
+
+    assert call_counts["rank_all"] == 1
+    assert call_counts["breakout_scan"] == 1
+    assert call_counts["pattern_scan"] == 1
+    assert call_counts["stock_scan"] == 1
+    assert call_counts["sector_dashboard"] == 1
+    assert call_counts["dashboard_payload"] == 2
+    task_status = result.metadata["task_status"]
+    assert task_status["rank_core"]["status"] == "skipped"
+    assert int(task_status["rank_core"]["resumed_from_attempt"]) == 1
+    assert task_status["breakout_scan"]["status"] == "skipped"

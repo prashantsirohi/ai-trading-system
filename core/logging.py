@@ -2,6 +2,7 @@
 
 from utils.logger import (
     clear_log_context,
+    configure_terminal_output,
     get_log_context,
     get_logger,
     log_context,
@@ -16,4 +17,5 @@ __all__ = [
     "set_log_context",
     "clear_log_context",
     "log_context",
+    "configure_terminal_output",
 ]

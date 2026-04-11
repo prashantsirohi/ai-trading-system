@@ -23,7 +23,9 @@ from ui.services.control_center import (
 )
 from ui.services.execution_data import (
     get_execution_db_stats,
+    get_execution_data_trust_snapshot,
     get_execution_health,
+    get_execution_ops_health_snapshot,
     load_execution_payload,
     load_latest_rank_frames,
     load_shadow_overlay_frame,
@@ -320,6 +322,42 @@ def get_market_snapshot(project_root: str | Path, *, limit: int = 25) -> dict[st
         "sectors": _records(frames.get("sector_dashboard", pd.DataFrame()), limit=limit),
         "health": health,
         "summary": payload.get("summary", {}),
+    }
+
+
+def get_pipeline_workspace_snapshot(project_root: str | Path, *, limit: int = 20) -> dict[str, Any]:
+    root = Path(project_root)
+    payload = load_execution_payload(root)
+    frames = load_latest_rank_frames(root)
+    health = get_execution_health(root, payload=payload)
+    ops_health = get_execution_ops_health_snapshot(root)
+    data_trust = get_execution_data_trust_snapshot(root)
+
+    ranked = frames.get("ranked_signals", pd.DataFrame())
+    breakouts = frames.get("breakout_scan", pd.DataFrame())
+    patterns = frames.get("pattern_scan", pd.DataFrame())
+    sectors = frames.get("sector_dashboard", pd.DataFrame())
+    stock_scan = frames.get("stock_scan", pd.DataFrame())
+
+    return {
+        "artifact_path": payload.get("_artifact_path"),
+        "summary": payload.get("summary", {}),
+        "warnings": payload.get("warnings", []),
+        "health": health,
+        "ops_health": ops_health,
+        "data_trust": data_trust,
+        "top_ranked": _records(ranked, limit=limit),
+        "breakouts": _records(breakouts, limit=limit),
+        "patterns": _records(patterns, limit=limit),
+        "sectors": _records(sectors, limit=limit),
+        "stock_scan": _records(stock_scan, limit=limit),
+        "counts": {
+            "ranked": int(len(ranked.index)) if ranked is not None else 0,
+            "breakouts": int(len(breakouts.index)) if breakouts is not None else 0,
+            "patterns": int(len(patterns.index)) if patterns is not None else 0,
+            "sectors": int(len(sectors.index)) if sectors is not None else 0,
+            "stock_scan": int(len(stock_scan.index)) if stock_scan is not None else 0,
+        },
     }
 
 
