@@ -351,7 +351,7 @@ class StockRanker:
             p = periods[0]
             ret_data = conn.execute(f"""
                 SELECT
-                    symbol_id, exchange,
+                    symbol_id, exchange, timestamp,
                     close,
                     LAG(close, {p}) OVER w AS close_{p}_ago
                 FROM _catalog
@@ -368,7 +368,9 @@ class StockRanker:
 
             ret_data = self._normalize_symbol_exchange_columns(ret_data)
             ret_data = ret_data.dropna(subset=["return_pct"])
-            ret_data = ret_data.drop_duplicates(["symbol_id", "exchange"])
+            ret_data["timestamp"] = pd.to_datetime(ret_data["timestamp"], errors="coerce")
+            ret_data = ret_data.sort_values(["symbol_id", "exchange", "timestamp"])
+            ret_data = ret_data.drop_duplicates(["symbol_id", "exchange"], keep="last")
             data = data.merge(
                 ret_data[["symbol_id", "exchange", "return_pct"]],
                 on=["symbol_id", "exchange"],
