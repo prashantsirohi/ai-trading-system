@@ -1,3 +1,5 @@
+> ARCHIVED - superseded by the canonical docs in /docs. Do not use this file as the current source of truth.
+
 # Dhan OHLC Isolation Strategy
 
 This strategy is for isolating Dhan daily OHLC corruption independently from the

@@ -1,3 +1,5 @@
+> ARCHIVED - superseded by the canonical docs in /docs. Do not use this file as the current source of truth.
+
 # Operations Runbook
 
 The repo auto-loads the local `.env` for the orchestrator, dashboard, publish test, and other credential-aware runtime entrypoints. Activate `.venv` before running commands; manually sourcing `.env` is usually not required.

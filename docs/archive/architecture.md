@@ -1,3 +1,5 @@
+> ARCHIVED - superseded by the canonical docs in /docs. Do not use this file as the current source of truth.
+
 # Data Architecture - Iceberg-lite Implementation
 
 ## Overview

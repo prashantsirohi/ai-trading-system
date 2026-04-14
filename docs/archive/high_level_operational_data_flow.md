@@ -1,3 +1,5 @@
+> ARCHIVED - superseded by the canonical docs in /docs. Do not use this file as the current source of truth.
+
 # High-Level Operational Data Flow
 
 This document is the practical, operator-focused map of how the system works in production mode today.

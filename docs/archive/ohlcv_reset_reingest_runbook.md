@@ -1,3 +1,5 @@
+> ARCHIVED - superseded by the canonical docs in /docs. Do not use this file as the current source of truth.
+
 # OHLCV Reset + Re-ingest Runbook
 
 This runbook is for a safe operational reset of a corrupted date window.
