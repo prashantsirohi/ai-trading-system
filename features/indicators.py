@@ -2,7 +2,7 @@ import os
 from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
-from utils.logger import logger
+from core.logging import logger
 
 ta = None
 talib = None

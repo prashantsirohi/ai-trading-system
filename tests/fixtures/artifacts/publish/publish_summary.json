@@ -1,0 +1,18 @@
+{
+  "rank_artifact_uri": "data/pipeline_runs/pipeline-2026-04-10-fixture/rank/attempt_1/ranked_signals.csv",
+  "rank_artifact_hash": "fixture-hash-placeholder",
+  "targets": [
+    {
+      "channel": "google_sheets_portfolio",
+      "status": "delivered",
+      "delivery_role": "publish_of_record"
+    },
+    {
+      "channel": "telegram_summary",
+      "status": "delivered",
+      "delivery_role": "informational"
+    }
+  ],
+  "top_symbol": "AAA",
+  "completed_at": "2026-04-10T10:00:00+00:00"
+}

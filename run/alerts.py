@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from utils.logger import logger
+from core.logging import logger
 
 
 class AlertManager:

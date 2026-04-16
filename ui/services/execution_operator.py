@@ -21,16 +21,12 @@ from ui.services.control_center import (
     terminate_operator_task,
     terminate_project_process,
 )
-from ui.services.execution_data import (
-    get_execution_db_stats,
-    get_execution_data_trust_snapshot,
-    get_execution_health,
-    get_execution_ops_health_snapshot,
-    load_execution_payload,
-    load_latest_rank_frames,
-    load_shadow_overlay_frame,
-    load_shadow_summary_frame,
-    pivot_shadow_summary_frame,
+from ui.services.execution_data import load_shadow_overlay_frame, load_shadow_summary_frame, pivot_shadow_summary_frame
+from ui.services.readmodels import (
+    get_execution_summary_read_model,
+    get_market_snapshot_read_model,
+    get_pipeline_workspace_snapshot_read_model,
+    get_ranking_snapshot_read_model,
 )
 
 STAGE_LABELS = {
@@ -281,84 +277,20 @@ def list_task_details(project_root: str | Path, *, limit: int = 50) -> list[dict
 
 def get_execution_summary(project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root)
-    payload = load_execution_payload(root)
-    health = get_execution_health(root, payload=payload)
-    db_stats = get_execution_db_stats(root)
-    recent_runs = get_recent_runs(root, limit=1)
     tasks = list_task_details(root, limit=100)
-    latest_run = recent_runs[0] if recent_runs else None
-    return {
-        "db_stats": db_stats,
-        "health": health,
-        "latest_run": latest_run,
-        "active_task_count": len([row for row in tasks if row.get("status") == "running"]),
-        "task_count": len(tasks),
-        "payload": {
-            "artifact_path": payload.get("_artifact_path"),
-            "summary": payload.get("summary", {}),
-            "metadata": payload.get("metadata", {}),
-        },
-    }
+    return get_execution_summary_read_model(root, tasks=tasks)
 
 
 def get_ranking_snapshot(project_root: str | Path, *, limit: int = 25) -> dict[str, Any]:
-    frames = load_latest_rank_frames(project_root)
-    ranked = frames.get("ranked_signals", pd.DataFrame())
-    return {
-        "top_ranked": _records(ranked, limit=limit),
-        "chart": _records(ranked[["symbol_id", "composite_score"]], limit=min(limit, 10))
-        if not ranked.empty and {"symbol_id", "composite_score"}.issubset(ranked.columns)
-        else [],
-        "artifact_count": int(len(ranked.index)) if ranked is not None else 0,
-    }
+    return get_ranking_snapshot_read_model(project_root, limit=limit)
 
 
 def get_market_snapshot(project_root: str | Path, *, limit: int = 25) -> dict[str, Any]:
-    frames = load_latest_rank_frames(project_root)
-    payload = load_execution_payload(project_root)
-    health = get_execution_health(project_root, payload=payload)
-    return {
-        "breakouts": _records(frames.get("breakout_scan", pd.DataFrame()), limit=limit),
-        "sectors": _records(frames.get("sector_dashboard", pd.DataFrame()), limit=limit),
-        "health": health,
-        "summary": payload.get("summary", {}),
-    }
+    return get_market_snapshot_read_model(project_root, limit=limit)
 
 
 def get_pipeline_workspace_snapshot(project_root: str | Path, *, limit: int = 20) -> dict[str, Any]:
-    root = Path(project_root)
-    payload = load_execution_payload(root)
-    frames = load_latest_rank_frames(root)
-    health = get_execution_health(root, payload=payload)
-    ops_health = get_execution_ops_health_snapshot(root)
-    data_trust = get_execution_data_trust_snapshot(root)
-
-    ranked = frames.get("ranked_signals", pd.DataFrame())
-    breakouts = frames.get("breakout_scan", pd.DataFrame())
-    patterns = frames.get("pattern_scan", pd.DataFrame())
-    sectors = frames.get("sector_dashboard", pd.DataFrame())
-    stock_scan = frames.get("stock_scan", pd.DataFrame())
-
-    return {
-        "artifact_path": payload.get("_artifact_path"),
-        "summary": payload.get("summary", {}),
-        "warnings": payload.get("warnings", []),
-        "health": health,
-        "ops_health": ops_health,
-        "data_trust": data_trust,
-        "top_ranked": _records(ranked, limit=limit),
-        "breakouts": _records(breakouts, limit=limit),
-        "patterns": _records(patterns, limit=limit),
-        "sectors": _records(sectors, limit=limit),
-        "stock_scan": _records(stock_scan, limit=limit),
-        "counts": {
-            "ranked": int(len(ranked.index)) if ranked is not None else 0,
-            "breakouts": int(len(breakouts.index)) if breakouts is not None else 0,
-            "patterns": int(len(patterns.index)) if patterns is not None else 0,
-            "sectors": int(len(sectors.index)) if sectors is not None else 0,
-            "stock_scan": int(len(stock_scan.index)) if stock_scan is not None else 0,
-        },
-    }
+    return get_pipeline_workspace_snapshot_read_model(project_root, limit=limit)
 
 
 def get_shadow_snapshot(project_root: str | Path) -> dict[str, Any]:

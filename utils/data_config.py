@@ -10,8 +10,8 @@ import duckdb
 import pandas as pd
 import pyarrow.parquet as pq
 
-from utils.data_domains import DataDomainPaths, ensure_domain_layout, get_domain_paths
-from utils.logger import logger
+from core.paths import DataDomainPaths, ensure_domain_layout, get_domain_paths
+from core.logging import logger
 
 ENV = os.getenv("ENV", "local").lower()
 DATA_DOMAIN = os.getenv("DATA_DOMAIN", "operational").lower()

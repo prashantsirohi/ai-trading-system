@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 from collectors.nse_collector import NSECollector
-from utils.logger import logger
+from core.logging import logger
 
 
 def iter_business_dates(from_date: str, to_date: str) -> list[str]:

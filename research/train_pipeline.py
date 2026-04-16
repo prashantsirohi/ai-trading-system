@@ -10,8 +10,8 @@ from analytics.alpha.training import train_and_register_model
 from analytics.ml_engine import AlphaEngine
 from analytics.lightgbm_engine import LightGBMAlphaEngine
 from analytics.registry import RegistryStore
-from utils.data_domains import ensure_domain_layout, research_static_end_date
-from utils.logger import log_context, logger
+from core.paths import ensure_domain_layout, research_static_end_date
+from core.logging import log_context, logger
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -40,7 +40,7 @@ from analytics.patterns import PatternBacktestConfig, ensure_pattern_event_chart
 from analytics.patterns.signal import kernel_smooth
 from core.env import load_project_env
 from core.paths import get_domain_paths
-from utils.data_domains import research_static_end_date
+from core.paths import research_static_end_date
 from ui.research.data_access import (
     load_data_trust_snapshot,
     load_drilldown_history_for_symbols,
@@ -88,6 +88,15 @@ RESEARCH_DOMAIN_PATHS = get_domain_paths(PROJECT_ROOT, "research")
 RESEARCH_OHLCV_DB = str(RESEARCH_DOMAIN_PATHS.ohlcv_db_path)
 RESEARCH_FEATURE_STORE = str(RESEARCH_DOMAIN_PATHS.feature_store_dir)
 RESEARCH_MODELS_DIR = str(RESEARCH_DOMAIN_PATHS.model_dir)
+
+_SCHEMA_REPAIR_HINT = "Run `python scripts/repair_ingest_schema.py --apply`."
+
+
+def _schema_check_detail(table_name: str, swapped_rows: int) -> str:
+    detail = f"Swapped {table_name} rows: {swapped_rows}"
+    if swapped_rows > 0:
+        return f"{detail}. {_SCHEMA_REPAIR_HINT}"
+    return detail
 RESEARCH_REPORTS_DIR = str(RESEARCH_DOMAIN_PATHS.reports_dir)
 
 
@@ -321,14 +330,14 @@ def get_dashboard_health(payload: Dict | None = None) -> Dict[str, object]:
         {
             "name": "catalog_schema",
             "status": "ok" if swapped_catalog == 0 else "error",
-            "detail": f"Swapped _catalog rows: {swapped_catalog}",
+            "detail": _schema_check_detail("_catalog", int(swapped_catalog)),
         }
     )
     checks.append(
         {
             "name": "delivery_schema",
             "status": "ok" if swapped_delivery == 0 else "error",
-            "detail": f"Swapped _delivery rows: {swapped_delivery}",
+            "detail": _schema_check_detail("_delivery", int(swapped_delivery)),
         }
     )
     checks.append(
@@ -2855,27 +2864,51 @@ def main():
 
     st.html("""
     <style>
-    .stMainBlockContainer {padding-top: 0.18rem; padding-bottom: 0.3rem; max-width: 98rem;}
-    [data-testid="stMetricValue"] {font-size: 1.08rem !important; line-height: 1.05 !important;}
-    [data-testid="stMetricLabel"] {font-size: 0.74rem !important; line-height: 1.0 !important;}
+    .stMainBlockContainer {padding-top: 0.64rem; padding-bottom: 0.78rem; max-width: 106rem;}
+    [data-testid="stMetric"] {padding-top: 0.12rem; padding-bottom: 0.12rem;}
+    [data-testid="stMetricValue"] {font-size: 1.22rem !important; line-height: 1.16 !important;}
+    [data-testid="stMetricLabel"] {font-size: 0.82rem !important; line-height: 1.18 !important;}
     .stock-row:hover > div {background: rgba(0,176,246,0.08);}
-    section[data-testid="stSidebar"] > div {padding-top: 0.4rem;}
+    section[data-testid="stSidebar"] > div {padding-top: 0.56rem;}
     .workspace-nav-label {
-      margin: 0 0 0.12rem 0;
-      font-size: 0.66rem;
-      letter-spacing: 0.06em;
+      margin: 0 0 0.2rem 0;
+      font-size: 0.73rem;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
       color: #94a3b8;
       font-weight: 700;
     }
     .workspace-nav-row {
-      padding-top: 0.02rem;
-      padding-bottom: 0.16rem;
-      margin-bottom: 0.18rem;
+      padding-top: 0.08rem;
+      padding-bottom: 0.34rem;
+      margin-bottom: 0.36rem;
     }
-    div[data-testid="stDataFrame"] [role="gridcell"] {padding-top: 0.15rem; padding-bottom: 0.15rem;}
-    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4, .stMarkdown h5 {margin-top: 0.25rem !important; margin-bottom: 0.35rem !important;}
-    div[data-testid="stExpander"] {margin-top: 0.2rem; margin-bottom: 0.2rem;}
+    div[data-testid="stButtonGroup"] [role="radiogroup"] {
+      gap: 0.45rem;
+      flex-wrap: wrap;
+      row-gap: 0.5rem;
+    }
+    div[data-testid="stButtonGroup"] button[data-testid^="stBaseButton-segmented_control"] {
+      min-height: 2.42rem;
+      border-radius: 12px !important;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border: 1px solid rgba(148, 163, 184, 0.4) !important;
+      background: rgba(15, 23, 42, 0.04) !important;
+    }
+    div[data-testid="stButtonGroup"] button[data-testid="stBaseButton-segmented_controlActive"] {
+      border-color: rgba(255, 75, 75, 0.92) !important;
+      background: rgba(255, 75, 75, 0.96) !important;
+      color: #ffffff !important;
+    }
+    div[data-testid="stDataFrame"] [role="gridcell"] {padding-top: 0.23rem; padding-bottom: 0.23rem;}
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4, .stMarkdown h5 {margin-top: 0.34rem !important; margin-bottom: 0.52rem !important;}
+    div[data-testid="stExpander"] {margin-top: 0.26rem; margin-bottom: 0.26rem;}
+    div[data-testid="stButton"] button {
+      min-height: 2.42rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
         .broker-header-cell {
           font-size: 0.68rem;
           text-transform: uppercase;
@@ -2967,6 +3000,8 @@ def main():
         }
         div[data-testid="stButton"] button[kind="secondary"] {
           border-radius: 12px;
+          border: 1px solid rgba(148, 163, 184, 0.4);
+          background: rgba(15, 23, 42, 0.04);
         }
     @media (max-width: 1200px) {
       .stMainBlockContainer {max-width: 100%;}
@@ -3244,18 +3279,25 @@ def main():
         "🧠 ML",
         "💼 Portfolio",
     ]
-    if "workspace_nav" not in st.session_state:
+    if (
+        "workspace_nav" not in st.session_state
+        or st.session_state.workspace_nav not in workspace_options
+    ):
         st.session_state.workspace_nav = "🧭 Pipeline"
     st.markdown("<div class='workspace-nav-row'>", unsafe_allow_html=True)
     st.markdown("<div class='workspace-nav-label'>Workspace</div>", unsafe_allow_html=True)
-    nav_cols = st.columns(len(workspace_options), gap="small")
-    for nav_col, option in zip(nav_cols, workspace_options):
-        with nav_col:
-            button_type = "primary" if st.session_state.workspace_nav == option else "secondary"
-            if st.button(option, key=f"workspace_nav_{option}", use_container_width=True, type=button_type):
-                st.session_state.workspace_nav = option
+    selected_workspace = st.segmented_control(
+        "Workspace",
+        workspace_options,
+        selection_mode="single",
+        default=st.session_state.workspace_nav,
+        key="workspace_nav",
+        width="stretch",
+        label_visibility="collapsed",
+    )
     st.markdown("</div>", unsafe_allow_html=True)
-    selected_workspace = st.session_state.workspace_nav
+    if selected_workspace not in workspace_options:
+        selected_workspace = st.session_state.workspace_nav
 
     if selected_workspace == "🧭 Pipeline":
         latest_provider_stats = data_trust_snapshot.get("latest_provider_stats", {}) or {}

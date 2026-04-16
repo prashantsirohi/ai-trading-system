@@ -8,8 +8,9 @@ import pandas as pd
 import duckdb
 import requests
 from collectors.nse_delivery_scraper import NseHistoricalDeliveryScraper
-from utils.data_domains import ensure_domain_layout
-from utils.logger import logger
+from collectors.ingest_validation import validate_delivery_frame
+from core.paths import ensure_domain_layout
+from core.logging import logger
 
 
 class DeliveryCollector:
@@ -317,9 +318,13 @@ class DeliveryCollector:
         """Upsert delivery data into DuckDB."""
         if df.empty:
             return 0
+        validated = validate_delivery_frame(
+            df,
+            source_label="delivery_collector._upsert_delivery",
+        )
         conn = self._get_conn()
         try:
-            conn.execute("CREATE TEMP VIEW _tmp_delivery AS SELECT * FROM df")
+            conn.execute("CREATE TEMP VIEW _tmp_delivery AS SELECT * FROM validated")
             conn.execute("""
                 INSERT INTO _delivery (symbol_id, exchange, timestamp, delivery_pct, volume, delivery_qty)
                 SELECT symbol_id, exchange, timestamp::DATE, delivery_pct,
@@ -334,7 +339,7 @@ class DeliveryCollector:
             conn.execute("DROP VIEW _tmp_delivery")
         finally:
             conn.close()
-        return len(df)
+        return len(validated)
 
     def compute_delivery_features(self, exchange: str = "NSE") -> int:
         """

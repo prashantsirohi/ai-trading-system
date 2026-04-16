@@ -2,7 +2,7 @@ import pandas as pd
 import duckdb
 import sqlite3
 from pathlib import Path
-from utils.logger import logger
+from core.logging import logger
 
 
 def load_all_symbols_with_sector(masterdb_path: str = "data/masterdata.db"):

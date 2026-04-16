@@ -17,7 +17,7 @@ import run.orchestrator as orchestrator_module
 from run.orchestrator import PipelineOrchestrator
 from run.stages import FeaturesStage, IngestStage, PublishStage, RankStage
 from run.stages.base import DataQualityCriticalError, PublishStageError, StageArtifact, StageContext
-from utils.data_domains import ensure_domain_layout, get_domain_paths, research_static_end_date
+from core.paths import ensure_domain_layout, get_domain_paths, research_static_end_date
 
 
 def _init_catalog(db_path: Path, rows: list[tuple]) -> None:

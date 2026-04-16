@@ -40,8 +40,8 @@ project_root = str(ensure_project_root_on_path(__file__))
 from collectors.dhan_collector import DhanCollector, dhan_daily_window_ist
 from collectors.nse_collector import NSECollector
 from features.feature_store import FeatureStore
-from utils.data_domains import ensure_domain_layout
-from utils.logger import logger
+from core.paths import ensure_domain_layout
+from core.logging import logger
 
 
 def _load_nse_holiday_dates(masterdb_path: str | None, from_date: str, to_date: str) -> set[str]:

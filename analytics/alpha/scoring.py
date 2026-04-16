@@ -11,7 +11,7 @@ import pandas as pd
 from analytics.lightgbm_engine import LightGBMAlphaEngine
 from analytics.registry import RegistryStore
 from analytics.shadow_monitor import build_shadow_overlay, prepare_current_universe_dataset
-from utils.data_domains import ensure_domain_layout
+from core.paths import ensure_domain_layout
 
 
 DEFAULT_SHADOW_ENVIRONMENTS: dict[int, str] = {

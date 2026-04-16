@@ -10,7 +10,7 @@ import duckdb
 import pandas as pd
 
 from publishers.google_sheets import GoogleSheetsManager
-from utils.logger import logger
+from core.logging import logger
 
 
 def _frame(records: Iterable[Dict[str, Any]]) -> pd.DataFrame:

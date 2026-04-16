@@ -7,7 +7,7 @@ from pathlib import Path
 
 from analytics.alpha.policy import evaluate_promotion_candidate
 from analytics.registry import RegistryStore
-from utils.logger import log_context, logger
+from core.logging import log_context, logger
 
 
 def build_parser() -> argparse.ArgumentParser:

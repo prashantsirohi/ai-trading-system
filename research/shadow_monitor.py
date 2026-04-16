@@ -21,8 +21,8 @@ from analytics.shadow_monitor import (
     prepare_current_universe_dataset,
     prepare_shadow_history_dataset,
 )
-from utils.data_domains import ensure_domain_layout
-from utils.logger import logger
+from core.paths import ensure_domain_layout
+from core.logging import logger
 
 
 def build_parser() -> argparse.ArgumentParser:

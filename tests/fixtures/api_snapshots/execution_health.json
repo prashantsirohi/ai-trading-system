@@ -1,0 +1,38 @@
+{
+  "checks": [
+    {
+      "detail": "<PROJECT_ROOT>/data/pipeline_runs/pipeline-2026-04-10-smoke/rank/attempt_1/dashboard_payload.json",
+      "name": "pipeline_payload",
+      "status": "ok"
+    },
+    {
+      "detail": "Delivery lag: 0 day(s)",
+      "name": "delivery_freshness",
+      "status": "ok"
+    },
+    {
+      "detail": "Swapped _catalog rows: 0",
+      "name": "catalog_schema",
+      "status": "ok"
+    },
+    {
+      "detail": "Swapped _delivery rows: 0",
+      "name": "delivery_schema",
+      "status": "ok"
+    },
+    {
+      "detail": "Pending symbols: 0, unexpected symbols: 0",
+      "name": "universe_alignment",
+      "status": "ok"
+    }
+  ],
+  "status": "ok",
+  "summary": {
+    "delivery_lag_days": 0,
+    "latest_delivery_date": "2026-04-10",
+    "latest_ohlcv_date": "2026-04-10",
+    "payload_age_minutes": "<payload_age_minutes>",
+    "pending_symbol_count": 0,
+    "unexpected_symbol_count": 0
+  }
+}

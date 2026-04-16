@@ -8,8 +8,8 @@ from pathlib import Path
 
 from analytics.backtester import EventBacktester
 from analytics.rank_backtester import RankBacktester
-from utils.data_domains import ensure_domain_layout, research_static_end_date
-from utils.logger import log_context, logger
+from core.paths import ensure_domain_layout, research_static_end_date
+from core.logging import log_context, logger
 
 
 def build_parser() -> argparse.ArgumentParser:

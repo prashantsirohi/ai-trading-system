@@ -4,7 +4,7 @@ import requests
 import re
 from datetime import datetime
 from typing import Dict, List
-from utils.logger import logger
+from core.logging import logger
 
 
 class ZerodhaSectorCollector:

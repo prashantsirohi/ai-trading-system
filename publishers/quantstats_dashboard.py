@@ -16,7 +16,7 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from utils.logger import logger
+from core.logging import logger
 
 if "MPLCONFIGDIR" not in os.environ:
     _mpl_dir = Path(__file__).resolve().parents[1] / "logs" / "matplotlib"

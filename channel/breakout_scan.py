@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from analytics.regime_detector import RegimeDetector
-from utils.logger import logger
+from core.logging import logger
 
 
 def _load_sector_map(master_db_path: str) -> dict[str, str]:

@@ -5,7 +5,7 @@ import pandas as pd
 import io
 from datetime import datetime
 from typing import Optional, Dict, List
-from utils.logger import logger
+from core.logging import logger
 
 
 class MasterDataCollector:

@@ -12,7 +12,8 @@ import pandas as pd
 from analytics.risk_manager import RiskManager
 from execution import AutoTrader, ExecutionService, ExecutionStore, PaperExecutionAdapter, PortfolioManager
 from run.stages.base import StageArtifact, StageContext, StageResult
-from utils.data_domains import ensure_domain_layout
+from core.paths import ensure_domain_layout
+from services.execute import ExecutionCandidateBuilder, ExecutionRequest
 
 
 class ExecuteStage:
@@ -74,105 +75,42 @@ class ExecuteStage:
     ]
 
     def run(self, context: StageContext) -> StageResult:
-        rank_artifact = context.require_artifact("rank", "ranked_signals")
-        ranked_df = pd.read_csv(rank_artifact.uri) if Path(rank_artifact.uri).exists() else pd.DataFrame()
-        ranked_rows_before_linkage = int(len(ranked_df))
-        dashboard_artifact = context.artifact_for("rank", "dashboard_payload")
-        dashboard_payload = {}
-        if dashboard_artifact and Path(dashboard_artifact.uri).exists():
-            dashboard_payload = json.loads(Path(dashboard_artifact.uri).read_text(encoding="utf-8"))
-        data_trust_status = str((dashboard_payload.get("summary", {}) or {}).get("data_trust_status", "unknown"))
-        block_degraded = bool(context.params.get("block_degraded_execution", False))
-        block_states = {"blocked", "degraded"} if block_degraded else {"blocked"}
-        if data_trust_status in block_states and not bool(context.params.get("allow_untrusted_execution", False)):
-            raise RuntimeError(
-                f"Execution blocked because rank data trust status is '{data_trust_status}'."
-            )
-
-        breakout_linkage_mode = str(context.params.get("execution_breakout_linkage", "off")).strip().lower()
-        breakout_candidates = 0
-        breakout_qualified = 0
-        breakout_tier_a = 0
-        if breakout_linkage_mode == "soft_gate":
-            breakout_artifact = context.artifact_for("rank", "breakout_scan")
-            breakout_df = (
-                pd.read_csv(breakout_artifact.uri)
-                if breakout_artifact and Path(breakout_artifact.uri).exists()
-                else pd.DataFrame()
-            )
-            breakout_candidates = int(len(breakout_df))
-            if not breakout_df.empty and "symbol_id" in breakout_df.columns:
-                if "candidate_tier" in breakout_df.columns:
-                    tier_a_mask = breakout_df["candidate_tier"].astype(str) == "A"
-                    breakout_tier_a = int(tier_a_mask.sum())
-                    if "breakout_state" in breakout_df.columns:
-                        eligible_mask = tier_a_mask & (breakout_df["breakout_state"].astype(str) == "qualified")
-                    else:
-                        eligible_mask = tier_a_mask
-                    qualified_symbols = (
-                        breakout_df[eligible_mask]["symbol_id"]
-                        .astype(str)
-                        .dropna()
-                        .unique()
-                        .tolist()
-                    )
-                elif "breakout_state" in breakout_df.columns:
-                    qualified_symbols = (
-                        breakout_df[breakout_df["breakout_state"].astype(str) == "qualified"]["symbol_id"]
-                        .astype(str)
-                        .dropna()
-                        .unique()
-                        .tolist()
-                    )
-                else:
-                    qualified_symbols = breakout_df["symbol_id"].astype(str).dropna().unique().tolist()
-                breakout_qualified = len(qualified_symbols)
-                if qualified_symbols:
-                    ranked_df = ranked_df[ranked_df["symbol_id"].astype(str).isin(set(qualified_symbols))].copy()
-                else:
-                    ranked_df = ranked_df.iloc[0:0].copy()
-
-        ml_artifact = context.artifact_for("rank", "ml_overlay")
-        ml_overlay_df = pd.read_csv(ml_artifact.uri) if ml_artifact and Path(ml_artifact.uri).exists() else pd.DataFrame()
+        context.require_artifact("rank", "ranked_signals")
+        request = ExecutionRequest.from_context(context)
+        candidates = ExecutionCandidateBuilder().build(context, request=request)
 
         paths = ensure_domain_layout(
             project_root=context.project_root,
-            data_domain=context.params.get("data_domain", "operational"),
+            data_domain=request.data_domain,
         )
         risk_manager = RiskManager(
             ohlcv_db_path=str(context.db_path),
             feature_store_dir=str(paths.feature_store_dir),
-            data_domain=context.params.get("data_domain", "operational"),
+            data_domain=request.data_domain,
         )
         store = ExecutionStore(context.project_root)
         service = ExecutionService(
             store,
-            PaperExecutionAdapter(slippage_bps=float(context.params.get("paper_slippage_bps", 5.0))),
-            default_order_type=str(context.params.get("execution_order_type", "MARKET")),
-            default_product_type=str(context.params.get("execution_product_type", "INTRADAY")),
-            default_validity=str(context.params.get("execution_validity", "DAY")),
+            PaperExecutionAdapter(slippage_bps=request.paper_slippage_bps),
+            default_order_type=request.order_type,
+            default_product_type=request.product_type,
+            default_validity=request.validity,
             risk_manager=risk_manager,
         )
         autotrader = AutoTrader(service, PortfolioManager(store))
-        execution_enabled = bool(context.params.get("execution_enabled", True))
-        preview_only = bool(context.params.get("execution_preview", False))
         result = autotrader.run(
-            ranked_df=ranked_df,
-            ml_overlay_df=ml_overlay_df,
-            strategy_mode=str(context.params.get("strategy_mode", "technical")),
-            target_position_count=int(context.params.get("execution_top_n", context.params.get("top_n") or 5)),
-            ml_horizon=int(context.params.get("execution_ml_horizon", 5)),
-            ml_confirm_threshold=float(context.params.get("execution_ml_confirm_threshold", 0.55)),
-            buy_quantity=(
-                int(context.params.get("execution_fixed_quantity"))
-                if context.params.get("execution_fixed_quantity") not in (None, "")
-                else None
-            ),
-            capital=float(context.params.get("execution_capital", 1_000_000)),
-            regime=str(context.params.get("execution_regime", "TREND")),
-            regime_multiplier=float(context.params.get("execution_regime_multiplier", 1.0)),
-            preview_only=preview_only,
-            execution_enabled=execution_enabled,
+            ranked_df=candidates.ranked_df,
+            ml_overlay_df=candidates.ml_overlay_df,
+            strategy_mode=request.strategy_mode,
+            target_position_count=request.target_position_count,
+            ml_horizon=request.ml_horizon,
+            ml_confirm_threshold=request.ml_confirm_threshold,
+            buy_quantity=request.buy_quantity,
+            capital=request.capital,
+            regime=request.regime,
+            regime_multiplier=request.regime_multiplier,
+            preview_only=request.preview_only,
+            execution_enabled=request.execution_enabled,
         )
 
         actions_df = pd.DataFrame(result["actions"])
@@ -197,16 +135,16 @@ class ExecuteStage:
         metadata = {
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "execution_status": result.get("status", "completed"),
-            "execution_enabled": execution_enabled,
-            "preview_only": preview_only,
-            "strategy_mode": str(context.params.get("strategy_mode", "technical")),
-            "data_trust_status": data_trust_status,
-            "breakout_linkage_mode": breakout_linkage_mode,
-            "ranked_rows_before_linkage": ranked_rows_before_linkage,
-            "ranked_rows_after_linkage": int(len(ranked_df)),
-            "breakout_candidates_count": breakout_candidates,
-            "breakout_qualified_count": breakout_qualified,
-            "breakout_tier_a_count": breakout_tier_a,
+            "execution_enabled": request.execution_enabled,
+            "preview_only": request.preview_only,
+            "strategy_mode": request.strategy_mode,
+            "data_trust_status": candidates.data_trust_status,
+            "breakout_linkage_mode": candidates.breakout_linkage_mode,
+            "ranked_rows_before_linkage": candidates.ranked_rows_before_linkage,
+            "ranked_rows_after_linkage": candidates.ranked_rows_after_linkage,
+            "breakout_candidates_count": candidates.breakout_candidates_count,
+            "breakout_qualified_count": candidates.breakout_qualified_count,
+            "breakout_tier_a_count": candidates.breakout_tier_a_count,
             "actions_count": int(len(actions_df)),
             "order_count": int(len(cycle_orders)),
             "fill_count": int(len(cycle_fills)),

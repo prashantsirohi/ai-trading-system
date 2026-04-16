@@ -47,50 +47,55 @@ def render_ops_health_ribbon(
         .ops-ribbon-scroll {
             overflow-x: auto;
             overflow-y: hidden;
-            padding-bottom: 0.05rem;
-            margin-bottom: 0.12rem;
+            padding-bottom: 0.12rem;
+            margin-bottom: 0.2rem;
         }
         .ops-ribbon-grid {
             display: flex;
             flex-wrap: nowrap;
-            gap: 0.28rem;
+            gap: 0.42rem;
             min-width: max-content;
-            margin: 0.01rem 0 0.02rem 0;
+            margin: 0.03rem 0 0.04rem 0;
         }
         .ops-ribbon-card {
-            flex: 0 0 9.2rem;
+            flex: 0 0 12.4rem;
             border: 1px solid rgba(148, 163, 184, 0.35);
-            border-radius: 0.5rem;
-            padding: 0.22rem 0.34rem;
+            border-radius: 0.62rem;
+            padding: 0.38rem 0.52rem;
             background: linear-gradient(180deg, rgba(15, 23, 42, 0.22), rgba(15, 23, 42, 0.08));
         }
         .ops-ribbon-title {
-            font-size: 0.58rem;
-            letter-spacing: 0.04em;
+            font-size: 0.66rem;
+            letter-spacing: 0.06em;
             color: #94a3b8;
-            margin-bottom: 0.08rem;
+            margin-bottom: 0.16rem;
             text-transform: uppercase;
+            font-weight: 700;
         }
         .ops-ribbon-main {
-            font-size: 0.69rem;
+            font-size: 0.86rem;
             font-weight: 600;
             color: #e2e8f0;
-            margin-bottom: 0.03rem;
-            line-height: 1.2;
+            margin-bottom: 0.08rem;
+            line-height: 1.3;
+            white-space: normal;
+            overflow-wrap: anywhere;
         }
         .ops-ribbon-sub {
-            font-size: 0.58rem;
+            font-size: 0.68rem;
             color: #cbd5e1;
-            line-height: 1.2;
+            line-height: 1.35;
+            white-space: normal;
+            overflow-wrap: anywhere;
         }
         .ops-chip {
             display: inline-block;
-            font-size: 0.54rem;
+            font-size: 0.6rem;
             font-weight: 700;
             letter-spacing: 0.03em;
-            padding: 0.05rem 0.26rem;
+            padding: 0.08rem 0.34rem;
             border-radius: 999px;
-            margin-right: 0.16rem;
+            margin-right: 0.22rem;
             color: white;
         }
         </style>

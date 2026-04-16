@@ -28,8 +28,8 @@ from analytics.patterns.detectors import (
     detect_round_bottom_events,
 )
 from analytics.patterns.signal import find_local_extrema, kernel_smooth
-from utils.data_domains import ensure_domain_layout
-from utils.logger import logger
+from core.paths import ensure_domain_layout
+from core.logging import logger
 
 
 def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:

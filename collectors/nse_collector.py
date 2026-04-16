@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 import pandas as pd
 import requests
-from utils.logger import logger
+from core.logging import logger
 
 
 class NSECollector:

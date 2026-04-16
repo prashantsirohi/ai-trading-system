@@ -3,8 +3,8 @@ import duckdb
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict, Literal, Callable
-from utils.data_domains import ensure_domain_layout
-from utils.logger import logger
+from core.paths import ensure_domain_layout
+from core.logging import logger
 
 
 class EventBacktester:
