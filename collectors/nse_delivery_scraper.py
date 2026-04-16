@@ -13,8 +13,8 @@ from typing import Iterable, Optional
 import pandas as pd
 import requests
 
-from utils.data_domains import ensure_domain_layout
-from utils.logger import logger
+from core.paths import ensure_domain_layout
+from core.logging import logger
 
 
 class NseHistoricalDeliveryScraper:

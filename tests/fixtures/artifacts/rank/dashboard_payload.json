@@ -1,0 +1,61 @@
+{
+  "summary": {
+    "top_sector": "Finance",
+    "breakout_count": 1,
+    "pattern_count": 1,
+    "data_trust_status": "trusted"
+  },
+  "metadata": {
+    "source": "phase0_fixture"
+  },
+  "warnings": [],
+  "ranked_signals": [
+    {
+      "symbol_id": "AAA",
+      "exchange": "NSE",
+      "close": 104.0,
+      "composite_score": 88.5,
+      "sector_name": "Finance"
+    },
+    {
+      "symbol_id": "BBB",
+      "exchange": "NSE",
+      "close": 98.0,
+      "composite_score": 82.0,
+      "sector_name": "Technology"
+    }
+  ],
+  "breakout_scan": [
+    {
+      "symbol_id": "AAA",
+      "sector": "Finance",
+      "setup_family": "high_52w_breakout",
+      "breakout_state": "qualified",
+      "candidate_tier": "A",
+      "breakout_score": 96
+    }
+  ],
+  "pattern_scan": [
+    {
+      "signal_id": "P1",
+      "symbol_id": "AAA",
+      "pattern_family": "cup_handle",
+      "pattern_state": "confirmed",
+      "pattern_score": 91
+    }
+  ],
+  "stock_scan": [
+    {
+      "symbol_id": "AAA",
+      "close": 104.0,
+      "category": "BUY"
+    }
+  ],
+  "sector_dashboard": [
+    {
+      "Sector": "Finance",
+      "RS_rank_pct": 95,
+      "Quadrant": "Leading"
+    }
+  ]
+}

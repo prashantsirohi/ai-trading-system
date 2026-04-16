@@ -21,7 +21,7 @@ from collectors.repair_ohlcv_window import repair_window
 from core.env import load_project_env
 from run.stages import IngestStage
 from run.stages.base import StageContext
-from utils.data_domains import ensure_domain_layout
+from core.paths import ensure_domain_layout
 
 
 def _window_summary(db_path: Path, exchange: str, from_date: str, to_date: str) -> dict[str, Any]:

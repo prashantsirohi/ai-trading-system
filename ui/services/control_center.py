@@ -19,7 +19,7 @@ import duckdb
 from analytics.registry import RegistryStore
 import research.shadow_monitor as shadow_monitor_module
 from run.orchestrator import PipelineOrchestrator
-from utils.logger import logger
+from core.logging import logger
 
 
 DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[2]

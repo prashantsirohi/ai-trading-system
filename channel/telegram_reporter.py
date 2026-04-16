@@ -21,7 +21,7 @@ except ImportError:
     raise ImportError(
         "python-telegram-bot is required. Install with: pip install python-telegram-bot"
     )
-from utils.logger import logger
+from core.logging import logger
 
 
 class TelegramReporter:

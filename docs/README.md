@@ -49,6 +49,7 @@ Reference:
 Governance:
 - [DOCS_STANDARD.md](DOCS_STANDARD.md): required standards for future doc changes
 - [../.docs-pr-checklist.md](../.docs-pr-checklist.md): short PR checklist for doc drift
+- [refactor/final_architecture.md](refactor/final_architecture.md): implemented post-refactor architecture and migration notes
 
 Historical material:
 - [archive/README.md](archive/README.md): archived superseded docs

@@ -19,7 +19,7 @@ from core.bootstrap import ensure_project_root_on_path
 project_root = str(ensure_project_root_on_path(__file__))
 
 from utils.env import load_project_env
-from utils.logger import logger
+from core.logging import logger
 
 load_project_env(__file__)
 

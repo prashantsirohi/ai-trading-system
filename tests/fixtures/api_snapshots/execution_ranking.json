@@ -1,0 +1,29 @@
+{
+  "artifact_count": 2,
+  "chart": [
+    {
+      "composite_score": 88.5,
+      "symbol_id": "AAA"
+    },
+    {
+      "composite_score": 82.0,
+      "symbol_id": "BBB"
+    }
+  ],
+  "top_ranked": [
+    {
+      "close": 104.0,
+      "composite_score": 88.5,
+      "exchange": "NSE",
+      "sector_name": "Finance",
+      "symbol_id": "AAA"
+    },
+    {
+      "close": 98.0,
+      "composite_score": 82.0,
+      "exchange": "NSE",
+      "sector_name": "Technology",
+      "symbol_id": "BBB"
+    }
+  ]
+}

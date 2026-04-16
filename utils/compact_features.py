@@ -16,7 +16,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pyarrow.parquet import ParquetWriter
-from utils.logger import logger
+from core.logging import logger
 
 
 def compact_feature(feature_dir: str, month: str = None) -> str:

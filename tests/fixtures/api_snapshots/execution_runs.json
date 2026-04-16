@@ -1,0 +1,14 @@
+{
+  "runs": [
+    {
+      "current_stage": null,
+      "ended_at": null,
+      "error_class": null,
+      "error_message": null,
+      "run_date": "2026-04-10",
+      "run_id": "pipeline-2026-04-10-smoke",
+      "started_at": "<started_at>",
+      "status": "completed"
+    }
+  ]
+}

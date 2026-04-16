@@ -13,9 +13,10 @@ from dhanhq import dhanhq
 from analytics.data_trust import ensure_data_trust_schema
 from core.env import load_project_env
 from features.feature_store import FeatureStore
+from collectors.ingest_validation import validate_ohlcv_frame
 from collectors.token_manager import DhanTokenManager
-from utils.data_domains import ensure_domain_layout
-from utils.logger import logger
+from core.paths import ensure_domain_layout
+from core.logging import logger
 
 IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
@@ -2067,8 +2068,10 @@ class DhanCollector:
                 df["security_id"] = security_id
                 df["exchange"] = exchange
 
-                if "open" not in df.columns:
-                    continue
+                df = validate_ohlcv_frame(
+                    df,
+                    source_label=f"dhan_collector._upsert_ohlcv:{symbol_id}:{exchange}",
+                )
 
                 conn.execute(
                     """
@@ -2115,6 +2118,6 @@ class DhanCollector:
         except Exception as e:
             conn.execute("ROLLBACK")
             logger.error(f"Upsert failed: {e}")
-            return 0
+            raise
         finally:
             conn.close()

@@ -35,8 +35,8 @@ from collectors.daily_update_runner import _fetch_nse_bhavcopy_rows, _fetch_yfin
 from collectors.dhan_collector import DhanCollector
 from core.env import load_project_env
 from features import FeatureStore, compute_all_symbols_rs
-from utils.data_domains import ensure_domain_layout
-from utils.logger import logger
+from core.paths import ensure_domain_layout
+from core.logging import logger
 
 
 FIELDS = ["open", "high", "low", "close", "volume"]

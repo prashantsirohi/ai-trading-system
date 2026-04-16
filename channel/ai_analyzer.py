@@ -8,7 +8,7 @@ from utils.env import load_project_env
 
 load_project_env(__file__)
 
-from utils.logger import logger
+from core.logging import logger
 
 
 @dataclass

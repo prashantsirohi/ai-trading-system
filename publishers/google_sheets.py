@@ -12,7 +12,7 @@ from channel.google_sheets_manager import (
     PortfolioSheets,
     SectorReportSheets,
 )
-from utils.logger import logger
+from core.logging import logger
 
 
 def _require_spreadsheet_id() -> Optional[str]:

@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 import pandas as pd
 import yfinance as yf
-from utils.logger import logger
+from core.logging import logger
 
 
 class YFinanceCollector:

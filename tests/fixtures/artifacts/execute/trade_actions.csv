@@ -1,0 +1,2 @@
+action,symbol_id,exchange,side,quantity,requested_price,strategy_mode,reason
+BUY,AAA,NSE,BUY,10,104.0,technical,top_rank_signal

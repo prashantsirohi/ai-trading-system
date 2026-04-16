@@ -1,0 +1,33 @@
+{
+  "summary": {
+    "execution_status": "completed",
+    "execution_enabled": true,
+    "preview_only": false,
+    "strategy_mode": "technical",
+    "data_trust_status": "trusted",
+    "breakout_linkage_mode": "off",
+    "ranked_rows_before_linkage": 2,
+    "ranked_rows_after_linkage": 2,
+    "breakout_candidates_count": 0,
+    "breakout_qualified_count": 0,
+    "breakout_tier_a_count": 0,
+    "actions_count": 1,
+    "order_count": 1,
+    "fill_count": 1,
+    "open_position_count": 1
+  },
+  "run_date": "2026-04-10",
+  "parameters": {
+    "data_domain": "operational",
+    "strategy_mode": "technical",
+    "execution_top_n": 2
+  },
+  "positions_before": [],
+  "positions_after": [
+    {
+      "symbol_id": "AAA",
+      "exchange": "NSE",
+      "quantity": 10
+    }
+  ]
+}

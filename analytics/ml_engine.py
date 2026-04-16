@@ -6,8 +6,8 @@ import duckdb
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict, Literal, Tuple
-from utils.data_domains import ensure_domain_layout
-from utils.logger import logger
+from core.paths import ensure_domain_layout
+from core.logging import logger
 
 try:
     import xgboost as xgb

@@ -21,11 +21,12 @@ from core.bootstrap import ensure_project_root_on_path
 project_root = str(ensure_project_root_on_path(__file__))
 
 from utils.env import load_project_env
-from utils.logger import logger
+from core.logging import logger
 
 load_project_env(project_root)
 
 from collectors.dhan_collector import DhanCollector
+from collectors.ingest_validation import validate_ohlcv_frame
 
 DB_PATH = os.path.join(project_root, "data", "ohlcv.duckdb")
 DAILY_LIMIT = 1000
@@ -156,7 +157,7 @@ def write_dfs_to_duckdb(conn, dfs: list, from_date: str, to_date: str) -> tuple:
         return 0, 0
 
     all_rows = pd.concat(dfs, ignore_index=True)
-    all_rows["timestamp"] = pd.to_datetime(all_rows["timestamp"])
+    all_rows = validate_ohlcv_frame(all_rows, source_label="ingest_full.write_dfs_to_duckdb")
 
     rows_written = 0
     symbols_written = 0

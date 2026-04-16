@@ -20,7 +20,7 @@ from research.recipes import (
     save_recipe,
     save_recipe_bundle,
 )
-from utils.data_domains import ensure_domain_layout
+from core.paths import ensure_domain_layout
 
 
 def _project_root(project_root: str | Path | None = None) -> Path:

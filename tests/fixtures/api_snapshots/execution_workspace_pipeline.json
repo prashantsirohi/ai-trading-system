@@ -1,0 +1,181 @@
+{
+  "artifact_path": "<PROJECT_ROOT>/data/pipeline_runs/pipeline-2026-04-10-smoke/rank/attempt_1/dashboard_payload.json",
+  "breakouts": [
+    {
+      "breakout_score": 96,
+      "breakout_state": "qualified",
+      "candidate_tier": "A",
+      "sector": "Finance",
+      "setup_family": "high_52w_breakout",
+      "symbol_id": "AAA"
+    }
+  ],
+  "counts": {
+    "breakouts": 1,
+    "patterns": 1,
+    "ranked": 2,
+    "sectors": 1,
+    "stock_scan": 1
+  },
+  "data_trust": {
+    "active_quarantined_dates": [],
+    "active_quarantined_symbols": 0,
+    "db_path": "<PROJECT_ROOT>/data/ohlcv.duckdb",
+    "fallback_ratio_latest": 0.0,
+    "latest_provider_stats": {
+      "counts": {
+        "unknown": 2
+      },
+      "fallback_rows": 0,
+      "primary_rows": 0,
+      "total_rows": 2,
+      "trade_date": "2026-04-10",
+      "unknown_rows": 2
+    },
+    "latest_quarantined_symbol_ratio": 0.0,
+    "latest_quarantined_symbols": 0,
+    "latest_repair_batch": {},
+    "latest_repair_run": null,
+    "latest_trade_date": "2026-04-10",
+    "latest_validated_date": null,
+    "primary_ratio_latest": 0.0,
+    "provider_counts_by_date": {
+      "2026-04-10": {
+        "unknown": 2
+      }
+    },
+    "status": "legacy",
+    "unknown_ratio_latest": 1.0
+  },
+  "health": {
+    "checks": [
+      {
+        "detail": "<PROJECT_ROOT>/data/pipeline_runs/pipeline-2026-04-10-smoke/rank/attempt_1/dashboard_payload.json",
+        "name": "pipeline_payload",
+        "status": "ok"
+      },
+      {
+        "detail": "Delivery lag: 0 day(s)",
+        "name": "delivery_freshness",
+        "status": "ok"
+      },
+      {
+        "detail": "Swapped _catalog rows: 0",
+        "name": "catalog_schema",
+        "status": "ok"
+      },
+      {
+        "detail": "Swapped _delivery rows: 0",
+        "name": "delivery_schema",
+        "status": "ok"
+      },
+      {
+        "detail": "Pending symbols: 0, unexpected symbols: 0",
+        "name": "universe_alignment",
+        "status": "ok"
+      }
+    ],
+    "status": "ok",
+    "summary": {
+      "delivery_lag_days": 0,
+      "latest_delivery_date": "2026-04-10",
+      "latest_ohlcv_date": "2026-04-10",
+      "payload_age_minutes": "<payload_age_minutes>",
+      "pending_symbol_count": 0,
+      "unexpected_symbol_count": 0
+    }
+  },
+  "ops_health": {
+    "available": true,
+    "dq_summary": {
+      "failed_by_severity": {},
+      "run_id": null,
+      "total_failed": 0
+    },
+    "generated_at": "<generated_at>",
+    "stages": {
+      "execute": {
+        "age_hours": null,
+        "ended_at": null,
+        "run_id": null,
+        "stage_name": "execute",
+        "stale": true
+      },
+      "features": {
+        "age_hours": null,
+        "ended_at": null,
+        "run_id": null,
+        "stage_name": "features",
+        "stale": true
+      },
+      "ingest": {
+        "age_hours": null,
+        "ended_at": null,
+        "run_id": null,
+        "stage_name": "ingest",
+        "stale": true
+      },
+      "publish": {
+        "age_hours": null,
+        "ended_at": null,
+        "run_id": null,
+        "stage_name": "publish",
+        "stale": true
+      },
+      "rank": {
+        "age_hours": null,
+        "ended_at": null,
+        "run_id": null,
+        "stage_name": "rank",
+        "stale": true
+      }
+    },
+    "stale_stages": []
+  },
+  "patterns": [
+    {
+      "pattern_family": "cup_handle",
+      "pattern_score": 91,
+      "pattern_state": "confirmed",
+      "signal_id": "P1",
+      "symbol_id": "AAA"
+    }
+  ],
+  "sectors": [
+    {
+      "Quadrant": "Leading",
+      "RS_rank_pct": 95,
+      "Sector": "Finance"
+    }
+  ],
+  "stock_scan": [
+    {
+      "category": "BUY",
+      "close": 104.0,
+      "symbol_id": "AAA"
+    }
+  ],
+  "summary": {
+    "breakout_count": 1,
+    "data_trust_status": "trusted",
+    "pattern_count": 1,
+    "top_sector": "Finance"
+  },
+  "top_ranked": [
+    {
+      "close": 104.0,
+      "composite_score": 88.5,
+      "exchange": "NSE",
+      "sector_name": "Finance",
+      "symbol_id": "AAA"
+    },
+    {
+      "close": 98.0,
+      "composite_score": 82.0,
+      "exchange": "NSE",
+      "sector_name": "Technology",
+      "symbol_id": "BBB"
+    }
+  ],
+  "warnings": []
+}

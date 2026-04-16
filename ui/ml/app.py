@@ -55,7 +55,7 @@ from ui.services import (
     save_workbench_recipe_bundle,
     workbench_recipe_config_path,
 )
-from utils.data_domains import research_static_end_date
+from core.paths import research_static_end_date
 
 PROJECT_ROOT = str(PROJECT_ROOT_PATH)
 load_project_env(PROJECT_ROOT)

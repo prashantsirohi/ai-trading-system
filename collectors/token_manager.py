@@ -7,7 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from core.runtime_config import DhanRuntimeConfig
 from utils.env import find_project_env, load_project_env
-from utils.logger import logger
+from core.logging import logger
 
 try:
     import pyotp
