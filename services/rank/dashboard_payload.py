@@ -17,6 +17,49 @@ def summarize_task_statuses(task_status: Dict[str, Any]) -> Dict[str, int]:
     return counts
 
 
+def build_score_breakdown(row: dict) -> dict:
+    keys = [
+        "relative_strength",
+        "volume_intensity",
+        "trend_persistence",
+        "proximity_to_highs",
+        "delivery_pct",
+        "sector_strength",
+        "penalty_score",
+    ]
+    return {key: row.get(key) for key in keys if key in row}
+
+
+def build_top_factors(row: dict) -> list[str]:
+    score_map = {
+        "relative_strength": row.get("rel_strength_score"),
+        "volume_intensity": row.get("vol_intensity_score"),
+        "trend_persistence": row.get("trend_score_score"),
+        "proximity_to_highs": row.get("prox_high_score"),
+        "delivery_pct": row.get("delivery_pct_score"),
+        "sector_strength": row.get("sector_strength_score"),
+    }
+    normalized = []
+    for name, value in score_map.items():
+        try:
+            normalized.append((name, float(value)))
+        except (TypeError, ValueError):
+            continue
+    normalized.sort(key=lambda item: item[1], reverse=True)
+    return [name for name, _ in normalized[:3]]
+
+
+def build_rejection_reasons(row: dict) -> list[str]:
+    reasons = []
+    if row.get("eligible_rank") is False:
+        reasons.append("failed_eligibility")
+    if isinstance(row.get("rejection_reasons"), list):
+        for reason in row.get("rejection_reasons"):
+            if reason not in reasons:
+                reasons.append(str(reason))
+    return reasons
+
+
 def build_dashboard_payload(
     *,
     context: StageContext,
@@ -34,7 +77,17 @@ def build_dashboard_payload(
     def _records(df: pd.DataFrame, limit: int = 10) -> list[dict]:
         if df is None or df.empty:
             return []
-        return df.head(limit).to_dict(orient="records")
+        records = df.head(limit).to_dict(orient="records")
+        if df is ranked_df:
+            enriched = []
+            for row in records:
+                row = dict(row)
+                row["score_breakdown"] = build_score_breakdown(row)
+                row["top_factors"] = build_top_factors(row)
+                row["rejection_reasons"] = build_rejection_reasons(row)
+                enriched.append(row)
+            return enriched
+        return records
 
     top_sector = None
     if not sector_dashboard_df.empty:

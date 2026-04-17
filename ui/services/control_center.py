@@ -10,6 +10,8 @@ import sys
 import threading
 import traceback
 import uuid
+import importlib
+import importlib.util
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,14 +19,47 @@ from typing import Any, Dict, List, Optional
 import duckdb
 
 from analytics.registry import RegistryStore
-import research.shadow_monitor as shadow_monitor_module
-from run.orchestrator import PipelineOrchestrator
 from core.logging import logger
 
 
 DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _TASKS: dict[str, dict[str, Any]] = {}
 _TASK_LOCK = threading.Lock()
+
+
+def _load_shadow_monitor_module():
+    """Load research.shadow_monitor robustly across UI launch contexts."""
+    module_name = "research.shadow_monitor"
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        if str(DEFAULT_PROJECT_ROOT) not in sys.path:
+            sys.path.insert(0, str(DEFAULT_PROJECT_ROOT))
+        try:
+            return importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            module_path = DEFAULT_PROJECT_ROOT / "research" / "shadow_monitor.py"
+            if not module_path.exists():
+                raise
+            spec = importlib.util.spec_from_file_location(module_name, module_path)
+            if spec is None or spec.loader is None:
+                raise
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+            return module
+
+
+def _load_pipeline_orchestrator_class():
+    """Load PipelineOrchestrator lazily to avoid UI import-time dependency chains."""
+    module_name = "run.orchestrator"
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        if str(DEFAULT_PROJECT_ROOT) not in sys.path:
+            sys.path.insert(0, str(DEFAULT_PROJECT_ROOT))
+        module = importlib.import_module(module_name)
+    return getattr(module, "PipelineOrchestrator")
 
 
 def _now() -> str:
@@ -321,7 +356,8 @@ def launch_pipeline_task(
                 metadata={**(_task_snapshot(task_id, root).get("metadata") or {}), "run_id": resolved_run_id},
             )
             _append_task_log(task_id, f"Starting pipeline run {resolved_run_id} for stages={stage_names}", project_root=root)
-            orchestrator = PipelineOrchestrator(root)
+            orchestrator_cls = _load_pipeline_orchestrator_class()
+            orchestrator = orchestrator_cls(root)
             result = orchestrator.run_pipeline(
                 run_id=resolved_run_id,
                 stage_names=stage_names,
@@ -363,6 +399,7 @@ def launch_shadow_monitor_task(
     prediction_date: Optional[str] = None,
 ) -> str:
     """Run the shadow-monitor updater in the background and track it for the UI."""
+    shadow_monitor_module = _load_shadow_monitor_module()
     project_root = Path(shadow_monitor_module.__file__).resolve().parents[1]
     task_id = _create_task(
         "shadow_monitor",

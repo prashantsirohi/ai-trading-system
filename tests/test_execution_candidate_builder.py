@@ -7,7 +7,12 @@ import pandas as pd
 import pytest
 
 from run.stages.base import StageArtifact, StageContext
-from services.execute import ExecutionCandidateBuilder, ExecutionRequest
+from services.execute import (
+    ExecutionCandidateBuilder,
+    ExecutionRequest,
+    attach_execution_weight,
+    prioritize_execution_candidates,
+)
 
 
 def _stage_context(
@@ -67,6 +72,28 @@ def test_execution_request_normalizes_context_params(tmp_path: Path) -> None:
     assert request.order_type == "LIMIT"
     assert request.product_type == "CNC"
     assert request.validity == "IOC"
+    assert request.entry_policy_name == "breakout"
+    assert request.exit_atr_multiple == pytest.approx(2.0)
+    assert request.exit_max_holding_days == 20
+    assert request.use_portfolio_constraints is False
+    assert request.max_positions == 10
+    assert request.max_sector_exposure == pytest.approx(0.30)
+    assert request.max_single_stock_weight == pytest.approx(0.10)
+    assert request.use_atr_position_sizing is False
+
+
+def test_execution_candidate_priority_and_weight_scaffolding() -> None:
+    frame = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "composite_score": 90.0, "rank_confidence": 0.9, "signal_decay_score": 0.8},
+            {"symbol_id": "BBB", "composite_score": 95.0, "rank_confidence": 0.7, "signal_decay_score": 0.9},
+        ]
+    )
+
+    out = attach_execution_weight(prioritize_execution_candidates(frame))
+
+    assert out["symbol_id"].tolist() == ["BBB", "AAA"]
+    assert out["execution_weight"].tolist() == [0.7, 0.9]
 
 
 def test_execution_candidate_builder_applies_soft_gate_and_loads_overlay(tmp_path: Path) -> None:

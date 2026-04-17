@@ -317,6 +317,19 @@ class DhanCollector:
                 "validated_against",
                 "ingest_run_id",
                 "repair_batch_id",
+                "provider_confidence",
+                "provider_discrepancy_flag",
+                "provider_discrepancy_note",
+                "adjusted_open",
+                "adjusted_high",
+                "adjusted_low",
+                "adjusted_close",
+                "adjustment_factor",
+                "adjustment_source",
+                "instrument_type",
+                "is_benchmark",
+                "benchmark_label",
+                "isin",
             },
             "_catalog_history": {
                 "security_id",
@@ -329,6 +342,19 @@ class DhanCollector:
                 "validated_against",
                 "ingest_run_id",
                 "repair_batch_id",
+                "provider_confidence",
+                "provider_discrepancy_flag",
+                "provider_discrepancy_note",
+                "adjusted_open",
+                "adjusted_high",
+                "adjusted_low",
+                "adjusted_close",
+                "adjustment_factor",
+                "adjustment_source",
+                "instrument_type",
+                "is_benchmark",
+                "benchmark_label",
+                "isin",
             },
         }
 
@@ -871,6 +897,19 @@ class DhanCollector:
                             "validated_against": "validated_against",
                             "ingest_run_id": "ingest_run_id",
                             "repair_batch_id": "repair_batch_id",
+                            "provider_confidence": "provider_confidence",
+                            "provider_discrepancy_flag": "provider_discrepancy_flag",
+                            "provider_discrepancy_note": "provider_discrepancy_note",
+                            "adjusted_open": "adjusted_open",
+                            "adjusted_high": "adjusted_high",
+                            "adjusted_low": "adjusted_low",
+                            "adjusted_close": "adjusted_close",
+                            "adjustment_factor": "adjustment_factor",
+                            "adjustment_source": "adjustment_source",
+                            "instrument_type": "instrument_type",
+                            "is_benchmark": "is_benchmark",
+                            "benchmark_label": "benchmark_label",
+                            "isin": "isin",
                         },
                         conn,
                     )
@@ -945,6 +984,25 @@ class DhanCollector:
                     "parquet_file",
                     "ingestion_version",
                     "ingestion_ts",
+                    "provider",
+                    "provider_priority",
+                    "validation_status",
+                    "validated_against",
+                    "ingest_run_id",
+                    "repair_batch_id",
+                    "provider_confidence",
+                    "provider_discrepancy_flag",
+                    "provider_discrepancy_note",
+                    "adjusted_open",
+                    "adjusted_high",
+                    "adjusted_low",
+                    "adjusted_close",
+                    "adjustment_factor",
+                    "adjustment_source",
+                    "instrument_type",
+                    "is_benchmark",
+                    "benchmark_label",
+                    "isin",
                 )
                 if column in catalog_columns and column in history_columns
             ]
@@ -2036,6 +2094,19 @@ class DhanCollector:
             df["validated_against"] = None
             df["ingest_run_id"] = ingest_run_id
             df["repair_batch_id"] = None
+            df["provider_confidence"] = 1.0
+            df["provider_discrepancy_flag"] = False
+            df["provider_discrepancy_note"] = None
+            df["adjusted_open"] = df["open"]
+            df["adjusted_high"] = df["high"]
+            df["adjusted_low"] = df["low"]
+            df["adjusted_close"] = df["close"]
+            df["adjustment_factor"] = 1.0
+            df["adjustment_source"] = None
+            df["instrument_type"] = "equity"
+            df["is_benchmark"] = False
+            df["benchmark_label"] = None
+            df["isin"] = symbol_info.get("isin")
             df.attrs["symbol_info"] = symbol_info
         return df
 
@@ -2106,6 +2177,19 @@ class DhanCollector:
                             "validated_against": "validated_against",
                             "ingest_run_id": "ingest_run_id",
                             "repair_batch_id": "repair_batch_id",
+                            "provider_confidence": "provider_confidence",
+                            "provider_discrepancy_flag": "provider_discrepancy_flag",
+                            "provider_discrepancy_note": "provider_discrepancy_note",
+                            "adjusted_open": "adjusted_open",
+                            "adjusted_high": "adjusted_high",
+                            "adjusted_low": "adjusted_low",
+                            "adjusted_close": "adjusted_close",
+                            "adjustment_factor": "adjustment_factor",
+                            "adjustment_source": "adjustment_source",
+                            "instrument_type": "instrument_type",
+                            "is_benchmark": "is_benchmark",
+                            "benchmark_label": "benchmark_label",
+                            "isin": "isin",
                         },
                         conn,
                     )

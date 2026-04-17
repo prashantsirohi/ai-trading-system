@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from execution.adapters.base import ExecutionAdapter
 from execution.models import OrderIntent
+from execution.policies import compute_atr_position_size
 from execution.store import ExecutionStore
 
 
@@ -79,14 +80,34 @@ class ExecutionService:
         risk_payload: Optional[dict] = None
         quantity = int(signal.get("quantity") or signal.get("shares") or 0)
         if rm is not None and quantity <= 0:
-            risk_payload = rm.compute_position_size(
-                symbol_id,
-                exchange=exchange,
-                capital=capital,
-                regime=regime,
-                regime_multiplier=regime_multiplier,
-            )
-            quantity = int(risk_payload.get("shares", 0))
+            use_atr_position_sizing = bool(signal.get("use_atr_position_sizing", False))
+            if use_atr_position_sizing:
+                atr = _maybe_float(signal.get("atr_14"))
+                atr_multiple = _maybe_float(signal.get("atr_multiple")) or 2.0
+                risk_per_trade = _maybe_float(signal.get("risk_per_trade_pct")) or 0.01
+                quantity = compute_atr_position_size(
+                    capital=float(capital),
+                    risk_per_trade=float(risk_per_trade),
+                    entry_price=float(price),
+                    atr=float(atr or 0.0),
+                    atr_multiple=float(atr_multiple),
+                )
+                risk_payload = {
+                    "shares": int(quantity),
+                    "atr": atr,
+                    "atr_multiple": atr_multiple,
+                    "risk_per_trade_pct": risk_per_trade,
+                    "sizing_method": "atr_config",
+                }
+            else:
+                risk_payload = rm.compute_position_size(
+                    symbol_id,
+                    exchange=exchange,
+                    capital=capital,
+                    regime=regime,
+                    regime_multiplier=regime_multiplier,
+                )
+                quantity = int(risk_payload.get("shares", 0))
 
         if quantity <= 0:
             return {

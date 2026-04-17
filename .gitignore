@@ -13,6 +13,7 @@ data/*.db
 data/*.duckdb
 data/*.parquet
 data/pipeline_runs/
+!data/masterdata.db
 reports/
 logs/
 *.log

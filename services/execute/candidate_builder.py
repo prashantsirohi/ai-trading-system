@@ -9,7 +9,34 @@ from typing import Any
 
 import pandas as pd
 
+from core.trust_confidence import TrustConfidenceEnvelope, attach_audit_fields
 from run.stages.base import StageContext
+
+
+def prioritize_execution_candidates(frame: pd.DataFrame) -> pd.DataFrame:
+    """Sort candidates by transparent priority columns when present."""
+    if frame is None or frame.empty:
+        return frame if frame is not None else pd.DataFrame()
+    output = frame.copy()
+    sort_cols = [col for col in ["composite_score", "rank_confidence", "signal_decay_score"] if col in output.columns]
+    if not sort_cols:
+        return output
+    return output.sort_values(sort_cols, ascending=False).reset_index(drop=True)
+
+
+def attach_execution_weight(frame: pd.DataFrame) -> pd.DataFrame:
+    """Propagate rank confidence into an execution weighting scaffold."""
+    output = frame.copy()
+    if output.empty:
+        output["execution_weight"] = pd.Series(dtype=float)
+        return output
+    if "rank_confidence" not in output.columns and "feature_confidence" in output.columns:
+        output["rank_confidence"] = pd.to_numeric(output["feature_confidence"], errors="coerce")
+    if "rank_confidence" in output.columns:
+        output["execution_weight"] = pd.to_numeric(output["rank_confidence"], errors="coerce").fillna(1.0)
+    else:
+        output["execution_weight"] = 1.0
+    return output
 
 
 @dataclass(frozen=True)
@@ -32,6 +59,14 @@ class ExecutionRequest:
     order_type: str
     product_type: str
     validity: str
+    entry_policy_name: str
+    exit_atr_multiple: float
+    exit_max_holding_days: int
+    use_portfolio_constraints: bool
+    max_positions: int
+    max_sector_exposure: float
+    max_single_stock_weight: float
+    use_atr_position_sizing: bool
 
     @classmethod
     def from_context(cls, context: StageContext) -> "ExecutionRequest":
@@ -57,6 +92,14 @@ class ExecutionRequest:
             order_type=str(context.params.get("execution_order_type", "MARKET")),
             product_type=str(context.params.get("execution_product_type", "INTRADAY")),
             validity=str(context.params.get("execution_validity", "DAY")),
+            entry_policy_name=str(context.params.get("execution_entry_policy", "breakout")),
+            exit_atr_multiple=float(context.params.get("execution_exit_atr_multiple", 2.0)),
+            exit_max_holding_days=int(context.params.get("execution_exit_max_holding_days", 20)),
+            use_portfolio_constraints=bool(context.params.get("execution_use_portfolio_constraints", False)),
+            max_positions=int(context.params.get("execution_max_positions", 10)),
+            max_sector_exposure=float(context.params.get("execution_max_sector_exposure", 0.30)),
+            max_single_stock_weight=float(context.params.get("execution_max_single_stock_weight", 0.10)),
+            use_atr_position_sizing=bool(context.params.get("execution_use_atr_position_sizing", False)),
         )
 
 
@@ -74,12 +117,14 @@ class ExecutionCandidateBundle:
     breakout_candidates_count: int
     breakout_qualified_count: int
     breakout_tier_a_count: int
+    trust_confidence: dict[str, Any]
 
 
 class ExecutionCandidateBuilder:
     """Build execution-ready candidate datasets while preserving current safeguards."""
 
     def build(self, context: StageContext, *, request: ExecutionRequest) -> ExecutionCandidateBundle:
+        rank_artifact = context.artifact_for("rank", "ranked_signals")
         ranked_df = self._read_csv_artifact(context, "rank", "ranked_signals")
         ranked_rows_before_linkage = int(len(ranked_df))
         dashboard_payload = self._read_json_artifact(context, "rank", "dashboard_payload")
@@ -91,7 +136,40 @@ class ExecutionCandidateBuilder:
             ranked_df=ranked_df,
             breakout_linkage_mode=request.breakout_linkage_mode,
         )
+        ranked_df = attach_execution_weight(prioritize_execution_candidates(ranked_df))
+        if not ranked_df.empty:
+            ranked_rows = ranked_df.to_dict(orient="records")
+            ranked_rows = [
+                attach_audit_fields(
+                    row,
+                    run_id=context.run_id,
+                    stage="execute",
+                    artifact_path=rank_artifact.uri if rank_artifact is not None else None,
+                )
+                for row in ranked_rows
+            ]
+            ranked_df = pd.DataFrame(ranked_rows)
         ml_overlay_df = self._read_csv_artifact(context, "rank", "ml_overlay")
+        top_rank_confidence = None
+        top_execution_weight = None
+        if not ranked_df.empty:
+            if "rank_confidence" in ranked_df.columns:
+                try:
+                    top_rank_confidence = float(pd.to_numeric(ranked_df["rank_confidence"], errors="coerce").dropna().iloc[0])
+                except Exception:
+                    top_rank_confidence = None
+            if "execution_weight" in ranked_df.columns:
+                try:
+                    top_execution_weight = float(pd.to_numeric(ranked_df["execution_weight"], errors="coerce").dropna().iloc[0])
+                except Exception:
+                    top_execution_weight = None
+        provider_confidence = ((dashboard_payload.get("summary", {}) or {}).get("trust_confidence") or {}).get("provider_confidence")
+        trust_confidence = TrustConfidenceEnvelope(
+            trust_status=data_trust_status,
+            provider_confidence=provider_confidence,
+            rank_confidence=top_rank_confidence,
+            execution_weight=top_execution_weight,
+        ).to_dict()
 
         return ExecutionCandidateBundle(
             ranked_df=ranked_df,
@@ -104,6 +182,7 @@ class ExecutionCandidateBuilder:
             breakout_candidates_count=breakout_metadata["breakout_candidates_count"],
             breakout_qualified_count=breakout_metadata["breakout_qualified_count"],
             breakout_tier_a_count=breakout_metadata["breakout_tier_a_count"],
+            trust_confidence=trust_confidence,
         )
 
     def _assert_trust_gate(self, context: StageContext, data_trust_status: str) -> None:

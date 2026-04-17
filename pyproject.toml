@@ -8,6 +8,28 @@ version = "0.1.0"
 description = "Technical NSE trading pipeline with staged orchestration, DQ, and dashboarding."
 readme = "README.md"
 requires-python = ">=3.11"
+dependencies = [
+  "duckdb",
+  "fastapi",
+  "numpy",
+  "pandas",
+  "plotly",
+  "pyarrow",
+  "pydantic",
+  "python-dotenv",
+  "quantstats",
+  "requests",
+  "uvicorn",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black",
+  "mypy",
+  "pytest",
+  "pytest-cov",
+  "ruff",
+]
 
 [project.scripts]
 ai-trading-pipeline = "run.orchestrator:main"

@@ -8,6 +8,29 @@ ta = None
 talib = None
 
 
+def add_multi_timeframe_returns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add standard trailing returns across multiple horizons."""
+    output = frame.copy()
+    if output.empty:
+        for period in [5, 20, 60, 120, 252]:
+            output[f"return_{period}d"] = pd.Series(dtype=float)
+        return output
+
+    if "symbol" in output.columns and "symbol_id" not in output.columns:
+        output["symbol_id"] = output["symbol"]
+
+    group_col = "symbol_id" if "symbol_id" in output.columns else None
+    if group_col is None or "close" not in output.columns:
+        for period in [5, 20, 60, 120, 252]:
+            output[f"return_{period}d"] = np.nan
+        return output
+
+    grouped = output.groupby(group_col, sort=False)
+    for period in [5, 20, 60, 120, 252]:
+        output[f"return_{period}d"] = grouped["close"].pct_change(period)
+    return output
+
+
 class FeatureEngine:
     """
     Feature Engine - Calculates technical indicators for trading signals.

@@ -13,6 +13,8 @@ from core.contracts import StageArtifact
 from ui.execution_api.app import create_app
 from ui.services.execution_operator import retry_publish_action
 
+API_HEADERS = {"x-api-key": "local-dev-key"}
+
 
 def _seed_execution_project(tmp_path: Path) -> str:
     data_dir = tmp_path / "data"
@@ -116,19 +118,19 @@ def test_execution_api_read_endpoints(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
     client = TestClient(create_app())
 
-    summary = client.get("/api/execution/summary")
+    summary = client.get("/api/execution/summary", headers=API_HEADERS)
     assert summary.status_code == 200
     assert summary.json()["db_stats"]["symbols"] == 1
 
-    ranking = client.get("/api/execution/ranking?limit=10")
+    ranking = client.get("/api/execution/ranking?limit=10", headers=API_HEADERS)
     assert ranking.status_code == 200
     assert ranking.json()["top_ranked"][0]["symbol_id"] == "AAA"
 
-    market = client.get("/api/execution/market?limit=10")
+    market = client.get("/api/execution/market?limit=10", headers=API_HEADERS)
     assert market.status_code == 200
     assert market.json()["breakouts"][0]["symbol_id"] == "AAA"
 
-    pipeline = client.get("/api/execution/workspace/pipeline?limit=10")
+    pipeline = client.get("/api/execution/workspace/pipeline?limit=10", headers=API_HEADERS)
     assert pipeline.status_code == 200
     pipeline_payload = pipeline.json()
     assert pipeline_payload["top_ranked"][0]["symbol_id"] == "AAA"
@@ -138,21 +140,21 @@ def test_execution_api_read_endpoints(monkeypatch, tmp_path: Path) -> None:
     assert "data_trust" in pipeline_payload
     assert "latest_validated_date" in pipeline_payload["data_trust"]
 
-    runs = client.get("/api/execution/runs")
+    runs = client.get("/api/execution/runs", headers=API_HEADERS)
     assert runs.status_code == 200
     assert runs.json()["runs"][0]["run_id"] == run_id
 
-    run_detail = client.get(f"/api/execution/runs/{run_id}")
+    run_detail = client.get(f"/api/execution/runs/{run_id}", headers=API_HEADERS)
     assert run_detail.status_code == 200
     assert run_detail.json()["run"]["run_id"] == run_id
 
-    tasks = client.get("/api/execution/tasks")
+    tasks = client.get("/api/execution/tasks", headers=API_HEADERS)
     assert tasks.status_code == 200
     assert tasks.json()["tasks"][0]["task_id"] == "task-demo"
     assert tasks.json()["tasks"][0]["operator_action_type"] == "pipeline_task"
     assert tasks.json()["tasks"][0]["status"] == "completed"
 
-    logs = client.get("/api/execution/tasks/task-demo/logs")
+    logs = client.get("/api/execution/tasks/task-demo/logs", headers=API_HEADERS)
     assert logs.status_code == 200
     assert len(logs.json()["logs"]) == 2
     assert logs.json()["task"]["run_id"] == run_id
@@ -187,21 +189,42 @@ def test_execution_api_action_endpoints(monkeypatch, tmp_path: Path) -> None:
         lambda *args, **kwargs: {"ok": True, "message": "task terminated"},
     )
 
-    pipeline_resp = client.post("/api/execution/pipeline/run", json={"label": "API full run", "stages": ["rank"]})
+    pipeline_resp = client.post(
+        "/api/execution/pipeline/run",
+        json={"label": "API full run", "stages": ["rank"]},
+        headers=API_HEADERS,
+    )
     assert pipeline_resp.status_code == 200
     assert pipeline_resp.json()["task"]["task_id"] == "task-new"
 
-    publish_resp = client.post("/api/execution/pipeline/publish-retry", json={"local_publish": True})
+    publish_resp = client.post(
+        "/api/execution/pipeline/publish-retry",
+        json={"local_publish": True},
+        headers=API_HEADERS,
+    )
     assert publish_resp.status_code == 200
     assert publish_resp.json()["task"]["task_id"] == "task-publish"
 
-    terminate_resp = client.post("/api/execution/processes/123/terminate")
+    terminate_resp = client.post("/api/execution/processes/123/terminate", headers=API_HEADERS)
     assert terminate_resp.status_code == 200
     assert terminate_resp.json()["ok"] is True
 
-    terminate_task_resp = client.post("/api/execution/tasks/task-new/terminate")
+    terminate_task_resp = client.post("/api/execution/tasks/task-new/terminate", headers=API_HEADERS)
     assert terminate_task_resp.status_code == 200
     assert terminate_task_resp.json()["ok"] is True
+
+
+def test_execution_api_requires_api_key(monkeypatch, tmp_path: Path) -> None:
+    _seed_execution_project(tmp_path)
+    monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    client = TestClient(create_app())
+
+    unauthorized = client.get("/api/execution/summary")
+    assert unauthorized.status_code == 401
+    assert unauthorized.json()["detail"] == "Unauthorized"
+
+    authorized = client.get("/api/execution/summary", headers=API_HEADERS)
+    assert authorized.status_code == 200
 
 
 def test_retry_publish_action_uses_latest_publishable_run(monkeypatch, tmp_path: Path) -> None:

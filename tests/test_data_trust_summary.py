@@ -258,6 +258,40 @@ def test_dq_unresolved_dates_rule_allows_multi_date_small_breadth(tmp_path: Path
     assert "Date threshold exceeded" in outcome.message
 
 
+def test_dq_unresolved_dates_rule_uses_distinct_symbol_breadth_for_ratio(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+    engine = DataQualityEngine(registry)
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "ohlcv.duckdb",
+        run_id="pipeline-2026-04-15-unresolved-distinct-breadth",
+        run_date="2026-04-15",
+        stage_name="ingest",
+        attempt_number=1,
+        registry=registry,
+        params={
+            "dq_max_unresolved_dates": 1,
+            "dq_max_unresolved_symbol_dates": 10,
+            "dq_max_unresolved_symbol_ratio_pct": 1.0,
+        },
+    )
+    result = StageResult(
+        metadata={
+            "unresolved_dates": ["2026-04-11", "2026-04-12", "2026-04-15"],
+            "unresolved_symbol_date_count": 27,
+            "unresolved_symbol_count": 9,
+            "active_eligible_symbol_count": 996,
+        }
+    )
+
+    outcome = engine._rule_ingest_unresolved_dates_present(context, result, "critical")
+
+    assert outcome.status == "passed"
+    assert outcome.failed_count == 0
+    assert "unresolved_symbol_dates=9" in outcome.message
+    assert "unresolved_symbol_date_pairs=27" in outcome.message
+
+
 def test_dq_features_quarantine_rule_tolerates_small_scope_when_thresholds_allow(tmp_path: Path) -> None:
     db_path = tmp_path / "ohlcv.duckdb"
     _init_catalog_with_trust_columns(db_path)

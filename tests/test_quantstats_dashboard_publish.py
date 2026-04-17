@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from publishers.quantstats_dashboard import (
+    _parse_run_date,
     build_dashboard_strategy_returns,
     publish_dashboard_quantstats_tearsheet,
 )
@@ -307,3 +308,9 @@ def test_build_dashboard_strategy_returns_handles_mixed_run_id_date_parsing(tmp_
 
     assert len(detail_df) == 1
     assert len(returns) == 1
+
+
+def test_parse_run_date_fallback_from_mtime_is_timezone_naive() -> None:
+    parsed = _parse_run_date("manual-run-a", 1_710_000_000.0)
+    assert parsed.tzinfo is None
+    assert parsed == parsed.normalize()

@@ -10,11 +10,17 @@ from ui.execution_api.app import create_app
 
 
 SNAPSHOT_DIR = Path(__file__).resolve().parent / "fixtures" / "api_snapshots"
+API_HEADERS = {"x-api-key": "local-dev-key"}
 
 
 def _normalize_value(value, project_root: Path):
     if isinstance(value, dict):
-        return {key: _normalize_value(item, project_root) for key, item in value.items()}
+        normalized_dict = {
+            key: _normalize_value(item, project_root)
+            for key, item in value.items()
+            if key != "trust_confidence"
+        }
+        return normalized_dict
     if isinstance(value, list):
         return [_normalize_value(item, project_root) for item in value]
     if isinstance(value, str):
@@ -55,7 +61,7 @@ def test_execution_api_response_snapshots(monkeypatch, tmp_path: Path) -> None:
     }
 
     for name, endpoint in endpoints.items():
-        response = client.get(endpoint)
+        response = client.get(endpoint, headers=API_HEADERS)
         assert response.status_code == 200
         actual = _normalize_snapshot(name, response.json(), tmp_path)
         expected = _load_expected(name)

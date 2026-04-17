@@ -61,6 +61,8 @@ class PublishStage:
             read_artifact=self._read_artifact,
             read_json_artifact=self._read_json_artifact,
             ranked_signals_artifact=rank_artifact,
+            run_id=context.run_id,
+            stage_name=self.name,
         )
         ranked_df = datasets.get("ranked_signals", pd.DataFrame())
 
@@ -129,7 +131,10 @@ class PublishStage:
         rank_artifact: StageArtifact,
         datasets: Dict[str, pd.DataFrame],
     ) -> Dict[str, Any]:
-        return {"report_id": f"local-{context.run_id}"}
+        return {
+            "report_id": f"local-{context.run_id}",
+            "trust_status": datasets.get("publish_trust_status", "unknown"),
+        }
 
     def _publish_stock_scan(
         self,
@@ -155,7 +160,7 @@ class PublishStage:
             datasets.get("dashboard_payload", {}),
             project_root=context.project_root,
             run_date=context.run_date,
-            ranked_df=datasets.get("ranked_signals"),
+            ranked_df=pd.DataFrame(datasets.get("publish_rows_dashboard", [])),
             breakout_df=datasets.get("breakout_scan"),
             sector_df=datasets.get("sector_dashboard"),
         )
@@ -239,7 +244,11 @@ class PublishStage:
         from publishers.telegram import TelegramReporter
 
         reporter = TelegramReporter(report_dir=context.project_root / "reports")
-        message = self._build_telegram_tearsheet(context, datasets)
+        telegram_datasets = dict(datasets)
+        publish_rows = pd.DataFrame(datasets.get("publish_rows_telegram", []))
+        if not publish_rows.empty:
+            telegram_datasets["ranked_signals"] = publish_rows
+        message = self._build_telegram_tearsheet(context, telegram_datasets)
         if not reporter.send_message(message):
             detail = reporter.last_error or "unknown Telegram error"
             if reporter.last_health_check and reporter.last_health_check.get("status") == "failed":

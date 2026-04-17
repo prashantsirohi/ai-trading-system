@@ -190,6 +190,7 @@ def test_daily_update_runner_uses_nse_then_yfinance_fallback(
     monkeypatch.setattr(daily_update_runner, "DhanCollector", DummyCollector)
     monkeypatch.setattr(daily_update_runner, "_fetch_nse_bhavcopy_rows", fake_fetch_nse_bhavcopy_rows)
     monkeypatch.setattr(daily_update_runner, "_fetch_yfinance_rows", fake_fetch_yfinance_rows)
+    monkeypatch.setattr(daily_update_runner, "_load_historically_trusted_symbols", lambda _db_path: {"AAA"})
 
     result = daily_update_runner.run(
         symbols_only=True,
@@ -253,6 +254,7 @@ def test_daily_update_runner_canary_blocks_when_dates_remain_unresolved(
     monkeypatch.setattr(daily_update_runner, "DhanCollector", DummyCollector)
     monkeypatch.setattr(daily_update_runner, "_fetch_nse_bhavcopy_rows", fake_fetch_nse_bhavcopy_rows)
     monkeypatch.setattr(daily_update_runner, "_fetch_yfinance_rows", fake_fetch_yfinance_rows)
+    monkeypatch.setattr(daily_update_runner, "_load_historically_trusted_symbols", lambda _db_path: {"AAA"})
 
     result = daily_update_runner.run(
         symbols_only=True,
@@ -270,6 +272,153 @@ def test_daily_update_runner_canary_blocks_when_dates_remain_unresolved(
     assert result["canary_blocked"] is True
     assert result["canary_status"] == "blocked"
     assert result["unresolved_dates"] == ["2026-04-06"]
+
+
+def test_daily_update_runner_bulk_canary_blocks_on_error(monkeypatch, tmp_path: Path) -> None:
+    class DummyCollector:
+        def __init__(self, *args, **kwargs) -> None:
+            self.db_path = str(tmp_path / "ohlcv.duckdb")
+            self.masterdb_path = str(tmp_path / "masterdata.db")
+            self.feature_store_dir = str(tmp_path / "feature_store")
+            self.data_domain = "operational"
+            self.use_api = True
+            self.dhan = object()
+            self.client_id = "cid"
+            self.api_key = "key"
+            self.access_token = "token"
+            self.token_manager = type(
+                "TM",
+                (),
+                {
+                    "ensure_valid_token": staticmethod(lambda hours_before_expiry=1: "token"),
+                    "client_id": "cid",
+                    "api_key": "key",
+                },
+            )()
+
+        def _init_dhan_client(self):
+            self.dhan = object()
+
+        def _ensure_valid_token(self):
+            return True
+
+        def run_daily_update_bulk(self, **kwargs):
+            return {"error": "bulk api failed", "symbols_errors": 0}
+
+    monkeypatch.setattr(daily_update_runner, "DhanCollector", DummyCollector)
+    result = daily_update_runner.run(
+        symbols_only=True,
+        features_only=False,
+        batch_size=25,
+        bulk=True,
+        canary_mode=True,
+        canary_symbol_limit=3,
+        data_domain="operational",
+    )
+    assert result["canary_mode"] is True
+    assert result["canary_symbol_limit"] == 3
+    assert result["canary_blocked"] is True
+    assert result["canary_status"] == "blocked"
+
+
+def test_daily_update_runner_bulk_canary_blocks_on_degraded_trust(monkeypatch, tmp_path: Path) -> None:
+    class DummyCollector:
+        def __init__(self, *args, **kwargs) -> None:
+            self.db_path = str(tmp_path / "ohlcv.duckdb")
+            self.masterdb_path = str(tmp_path / "masterdata.db")
+            self.feature_store_dir = str(tmp_path / "feature_store")
+            self.data_domain = "operational"
+            self.use_api = True
+            self.dhan = object()
+            self.client_id = "cid"
+            self.api_key = "key"
+            self.access_token = "token"
+            self.token_manager = type(
+                "TM",
+                (),
+                {
+                    "ensure_valid_token": staticmethod(lambda hours_before_expiry=1: "token"),
+                    "client_id": "cid",
+                    "api_key": "key",
+                },
+            )()
+
+        def _init_dhan_client(self):
+            self.dhan = object()
+
+        def _ensure_valid_token(self):
+            return True
+
+        def run_daily_update_bulk(self, **kwargs):
+            return {
+                "symbols_updated": 5,
+                "symbols_errors": 0,
+                "trust_summary": {"status": "degraded"},
+            }
+
+    monkeypatch.setattr(daily_update_runner, "DhanCollector", DummyCollector)
+    result = daily_update_runner.run(
+        symbols_only=True,
+        features_only=False,
+        batch_size=25,
+        bulk=True,
+        canary_mode=True,
+        canary_symbol_limit=3,
+        data_domain="operational",
+    )
+    assert result["canary_blocked"] is True
+    assert result["canary_status"] == "blocked"
+
+
+def test_daily_update_runner_bulk_canary_passes_when_clean(monkeypatch, tmp_path: Path) -> None:
+    class DummyCollector:
+        def __init__(self, *args, **kwargs) -> None:
+            self.db_path = str(tmp_path / "ohlcv.duckdb")
+            self.masterdb_path = str(tmp_path / "masterdata.db")
+            self.feature_store_dir = str(tmp_path / "feature_store")
+            self.data_domain = "operational"
+            self.use_api = True
+            self.dhan = object()
+            self.client_id = "cid"
+            self.api_key = "key"
+            self.access_token = "token"
+            self.token_manager = type(
+                "TM",
+                (),
+                {
+                    "ensure_valid_token": staticmethod(lambda hours_before_expiry=1: "token"),
+                    "client_id": "cid",
+                    "api_key": "key",
+                },
+            )()
+
+        def _init_dhan_client(self):
+            self.dhan = object()
+
+        def _ensure_valid_token(self):
+            return True
+
+        def run_daily_update_bulk(self, **kwargs):
+            return {
+                "symbols_updated": 5,
+                "symbols_errors": 0,
+                "trust_summary": {"status": "trusted"},
+                "validator_status": "ok",
+                "unresolved_dates": [],
+            }
+
+    monkeypatch.setattr(daily_update_runner, "DhanCollector", DummyCollector)
+    result = daily_update_runner.run(
+        symbols_only=True,
+        features_only=False,
+        batch_size=25,
+        bulk=True,
+        canary_mode=True,
+        canary_symbol_limit=3,
+        data_domain="operational",
+    )
+    assert result["canary_blocked"] is False
+    assert result["canary_status"] == "passed"
 
 
 def test_daily_update_runner_quarantines_only_impacted_symbol_dates(

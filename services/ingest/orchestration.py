@@ -62,16 +62,32 @@ class IngestOrchestrationService:
             conn.close()
 
         payload = dict(result or {})
+        latest_catalog_date = None
+        if latest_ts is not None:
+            latest_catalog_date = pd.Timestamp(latest_ts).date().isoformat()
+        target_end_date = str(payload.get("target_end_date") or context.run_date)
         payload.update(
             {
                 "catalog_rows": int(catalog_rows or 0),
                 "symbol_count": int(symbol_count or 0),
                 "latest_timestamp": str(latest_ts) if latest_ts is not None else None,
+                "freshness_status": self.classify_freshness_status(
+                    target_end_date=target_end_date,
+                    latest_available_date=latest_catalog_date,
+                ),
             }
         )
         payload.update(self.run_bhavcopy_validation(context, payload))
         payload.update(self.run_delivery_collection(context, payload))
         return payload
+
+    @staticmethod
+    def classify_freshness_status(target_end_date: str, latest_available_date: str | None) -> str:
+        if latest_available_date is None:
+            return "stale"
+        if str(latest_available_date) == str(target_end_date):
+            return "fresh"
+        return "delayed"
 
     def run_bhavcopy_validation(self, context: StageContext, ingest_payload: Dict) -> Dict:
         if not bool(context.params.get("validate_bhavcopy_after_ingest", False)):

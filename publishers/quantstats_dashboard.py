@@ -60,7 +60,7 @@ def _parse_run_date(run_id: str, fallback_mtime: float) -> pd.Timestamp:
         return pd.Timestamp(match.group(1))
     # Keep run-date keys timezone-naive across both parsing paths so
     # snapshot sorting/comparisons never mix naive and tz-aware timestamps.
-    return pd.Timestamp.utcfromtimestamp(float(fallback_mtime)).tz_localize(None).normalize()
+    return pd.Timestamp.fromtimestamp(float(fallback_mtime), tz="UTC").tz_localize(None).normalize()
 
 
 def _latest_ranked_snapshots(

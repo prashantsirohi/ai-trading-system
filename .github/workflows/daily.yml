@@ -46,8 +46,8 @@ jobs:
         id: cache-feature
         uses: actions/cache@v4
         with:
-          path: data/feature_store/
-          key: features-${{ github.run_id }}
+          path: data/feature_store
+          key: features-${{ github.sha }}
           restore-keys: features-
       
       - name: Check cache restore
@@ -57,28 +57,32 @@ jobs:
           else
             echo "No cache - need to fetch data"
           fi
-      
+
+      - name: Verify Data Availability
+        run: |
+          if [ ! -d "data" ]; then
+            echo "Data directory missing."
+            exit 1
+          fi
+          if [ ! -d "data/feature_store/all_symbols" ]; then
+            echo "Feature store cache missing at data/feature_store/all_symbols."
+            exit 1
+          fi
+
       - name: Download initial data if no cache
         if: steps.cache-feature.outputs.cache-hit != 'true'
         run: |
           echo "This is first run - no cached data available"
           echo "Please run locally first to create initial data"
+          exit 1
       
       - name: Run stock scan
         run: |
-          if [ -d "data/feature_store/all_symbols" ]; then
-            python -m channel.stock_scan
-          else
-            echo "SKIP: No feature data - run locally first to create initial data"
-          fi
+          python -m channel.stock_scan
       
       - name: Run sector dashboard
         run: |
-          if [ -d "data/feature_store/all_symbols" ]; then
-            python -m channel.sector_dashboard
-          else
-            echo "SKIP: No feature data"
-          fi
+          python -m channel.sector_dashboard
       
       - name: Upload logs
         if: always()

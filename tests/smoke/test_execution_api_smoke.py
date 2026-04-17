@@ -14,6 +14,7 @@ from ui.execution_api.app import create_app
 
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "artifacts"
+API_HEADERS = {"x-api-key": "local-dev-key"}
 
 
 def _seed_datastores(project_root: Path) -> None:
@@ -154,19 +155,19 @@ def test_execution_api_smoke_endpoints(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
     client = TestClient(create_app())
 
-    health = client.get("/api/execution/health")
+    health = client.get("/api/execution/health", headers=API_HEADERS)
     assert health.status_code == 200
     health_payload = health.json()
     assert health_payload["status"] in {"ok", "warn"}
     assert health_payload["summary"]["latest_ohlcv_date"] == "2026-04-10"
 
-    ranking = client.get("/api/execution/ranking?limit=10")
+    ranking = client.get("/api/execution/ranking?limit=10", headers=API_HEADERS)
     assert ranking.status_code == 200
     ranking_payload = ranking.json()
     assert ranking_payload["top_ranked"][0]["symbol_id"] == "AAA"
     assert ranking_payload["artifact_count"] == 2
 
-    workspace = client.get("/api/execution/workspace/pipeline?limit=10")
+    workspace = client.get("/api/execution/workspace/pipeline?limit=10", headers=API_HEADERS)
     assert workspace.status_code == 200
     workspace_payload = workspace.json()
     assert workspace_payload["top_ranked"][0]["symbol_id"] == "AAA"
@@ -175,15 +176,15 @@ def test_execution_api_smoke_endpoints(monkeypatch, tmp_path: Path) -> None:
     assert workspace_payload["ops_health"]["available"] is True
     assert "latest_validated_date" in workspace_payload["data_trust"]
 
-    summary = client.get("/api/execution/summary")
+    summary = client.get("/api/execution/summary", headers=API_HEADERS)
     assert summary.status_code == 200
     assert summary.json()["db_stats"]["symbols"] == 2
 
-    runs = client.get("/api/execution/runs")
+    runs = client.get("/api/execution/runs", headers=API_HEADERS)
     assert runs.status_code == 200
     assert runs.json()["runs"][0]["run_id"] == run_id
 
-    tasks = client.get("/api/execution/tasks")
+    tasks = client.get("/api/execution/tasks", headers=API_HEADERS)
     assert tasks.status_code == 200
     assert tasks.json()["tasks"][0]["task_id"] == "task-smoke"
     assert tasks.json()["tasks"][0]["status"] == "completed"

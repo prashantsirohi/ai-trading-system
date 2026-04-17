@@ -144,3 +144,53 @@ def apply_sector_strength(
     scores["sector_rs_value"] = scores["sector_rs_value"].fillna(0.5)
     scores["stock_vs_sector_value"] = scores["stock_vs_sector_value"].fillna(0.0)
     return scores
+
+
+def compute_penalty_score(frame: pd.DataFrame) -> pd.DataFrame:
+    """Compute additive penalty metadata while preserving core factor scores."""
+    output = frame.copy()
+    output["penalty_score"] = 0.0
+
+    if {"close", "sma_200"}.issubset(output.columns):
+        close = pd.to_numeric(output["close"], errors="coerce")
+        sma_200 = pd.to_numeric(output["sma_200"], errors="coerce")
+        output.loc[close < sma_200, "penalty_score"] += 10.0
+
+    if "liquidity_score" in output.columns:
+        liquidity = pd.to_numeric(output["liquidity_score"], errors="coerce")
+        output.loc[liquidity < 0.20, "penalty_score"] += 10.0
+
+    if {"atr_14", "close"}.issubset(output.columns):
+        atr = pd.to_numeric(output["atr_14"], errors="coerce")
+        close = pd.to_numeric(output["close"], errors="coerce").replace(0, np.nan)
+        output.loc[(atr / close) > 0.08, "penalty_score"] += 5.0
+
+    output["penalty_score"] = output["penalty_score"].clip(lower=0.0)
+    return output
+
+
+def add_signal_freshness(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add signal age and a simple linear decay score for prioritization."""
+    output = frame.copy()
+    if output.empty:
+        output["signal_age"] = pd.Series(dtype=int)
+        output["signal_decay_score"] = pd.Series(dtype=float)
+        return output
+
+    timestamp_col = "timestamp" if "timestamp" in output.columns else "date" if "date" in output.columns else None
+    if timestamp_col is None:
+        output["signal_age"] = 0
+        output["signal_decay_score"] = 1.0
+        return output
+
+    ts = pd.to_datetime(output[timestamp_col], errors="coerce")
+    if "signal_start_date" in output.columns:
+        start_ts = pd.to_datetime(output["signal_start_date"], errors="coerce")
+        age_days = (ts - start_ts).dt.days
+    else:
+        reference = ts.max()
+        age_days = (reference - ts).dt.days
+
+    output["signal_age"] = age_days.fillna(0).clip(lower=0).astype(int)
+    output["signal_decay_score"] = (1.0 - (output["signal_age"] / 30.0)).clip(lower=0.0, upper=1.0)
+    return output

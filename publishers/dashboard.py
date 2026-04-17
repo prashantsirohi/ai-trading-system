@@ -11,6 +11,7 @@ import pandas as pd
 
 from publishers.google_sheets import GoogleSheetsManager
 from core.logging import logger
+from services.publish.publish_payloads import format_rows_for_channel
 
 
 def _frame(records: Iterable[Dict[str, Any]]) -> pd.DataFrame:
@@ -373,6 +374,9 @@ def publish_dashboard_payload(
         raise RuntimeError(f"Dashboard publish failed creating sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
 
     source_ranked = ranked_df if isinstance(ranked_df, pd.DataFrame) and not ranked_df.empty else _frame(payload.get("ranked_signals", []))
+    source_ranked = pd.DataFrame(
+        format_rows_for_channel(source_ranked.to_dict(orient="records") if isinstance(source_ranked, pd.DataFrame) else [], "dashboard")["rows"]
+    )
     source_breakout = breakout_df if isinstance(breakout_df, pd.DataFrame) and not breakout_df.empty else _frame(payload.get("breakout_scan", []))
     source_sector = sector_df if isinstance(sector_df, pd.DataFrame) and not sector_df.empty else _frame(payload.get("sector_dashboard", []))
 

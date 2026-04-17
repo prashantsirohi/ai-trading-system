@@ -21,6 +21,12 @@ Bootstrap master data:
 python -m collectors.masterdata
 ```
 
+Bootstrap runtime directories (and optionally refresh seed masterdata):
+```bash
+python -m scripts.bootstrap_runtime_data
+python -m scripts.bootstrap_runtime_data --refresh-masterdata
+```
+
 ## Operational pipeline
 
 CLI default pipeline:

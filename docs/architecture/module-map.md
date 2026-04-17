@@ -236,8 +236,8 @@ Label:
 - `legacy fallback`
 
 Role:
-- outdated script-era entrypoint
-- imports packages that do not match the current runtime layout
+- compatibility shim only
+- exits with explicit deprecation guidance to `python -m run.orchestrator`
 - do not use for current operations
 
 ## Generated state directories

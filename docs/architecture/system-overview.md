@@ -91,6 +91,6 @@ React execution console:
 ## Legacy and non-canonical surfaces
 
 These modules are present but are not the current runtime source of truth:
-- `main.py`: outdated script-era entrypoint that no longer matches the package layout
+- `main.py`: retained compatibility shim that now exits fast with deprecation guidance to `python -m run.orchestrator`
 - `dashboard/`: compatibility wrappers that re-export current UI modules
 - `config/settings.py`: legacy configuration model that does not describe the orchestrated runtime accurately enough to use as canonical documentation

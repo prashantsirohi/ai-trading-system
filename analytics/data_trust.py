@@ -9,6 +9,8 @@ from typing import Any, Iterable
 import duckdb
 import pandas as pd
 
+from core.trust_confidence import TrustConfidenceEnvelope
+
 
 CATALOG_TRUST_COLUMNS: dict[str, str] = {
     "provider": "VARCHAR",
@@ -17,6 +19,19 @@ CATALOG_TRUST_COLUMNS: dict[str, str] = {
     "validated_against": "VARCHAR",
     "ingest_run_id": "VARCHAR",
     "repair_batch_id": "VARCHAR",
+    "provider_confidence": "DOUBLE",
+    "provider_discrepancy_flag": "BOOLEAN",
+    "provider_discrepancy_note": "VARCHAR",
+    "adjusted_open": "DOUBLE",
+    "adjusted_high": "DOUBLE",
+    "adjusted_low": "DOUBLE",
+    "adjusted_close": "DOUBLE",
+    "adjustment_factor": "DOUBLE",
+    "adjustment_source": "VARCHAR",
+    "instrument_type": "VARCHAR",
+    "is_benchmark": "BOOLEAN",
+    "benchmark_label": "VARCHAR",
+    "isin": "VARCHAR",
 }
 
 
@@ -61,17 +76,49 @@ def ensure_data_trust_schema(db_path_or_conn: duckdb.DuckDBPyConnection | str | 
                 provider_priority INTEGER,
                 validation_status VARCHAR,
                 validated_against VARCHAR,
+                provider_confidence DOUBLE,
+                provider_discrepancy_flag BOOLEAN,
+                provider_discrepancy_note VARCHAR,
                 open DOUBLE,
                 high DOUBLE,
                 low DOUBLE,
                 close DOUBLE,
                 volume BIGINT,
+                adjusted_open DOUBLE,
+                adjusted_high DOUBLE,
+                adjusted_low DOUBLE,
+                adjusted_close DOUBLE,
+                adjustment_factor DOUBLE,
+                adjustment_source VARCHAR,
+                instrument_type VARCHAR,
+                is_benchmark BOOLEAN,
+                benchmark_label VARCHAR,
+                isin VARCHAR,
                 ingest_run_id VARCHAR,
                 repair_batch_id VARCHAR,
                 recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        provenance_expected = {
+            "provider_confidence": "DOUBLE",
+            "provider_discrepancy_flag": "BOOLEAN",
+            "provider_discrepancy_note": "VARCHAR",
+            "adjusted_open": "DOUBLE",
+            "adjusted_high": "DOUBLE",
+            "adjusted_low": "DOUBLE",
+            "adjusted_close": "DOUBLE",
+            "adjustment_factor": "DOUBLE",
+            "adjustment_source": "VARCHAR",
+            "instrument_type": "VARCHAR",
+            "is_benchmark": "BOOLEAN",
+            "benchmark_label": "VARCHAR",
+            "isin": "VARCHAR",
+        }
+        provenance_existing = _table_columns(conn, "_catalog_provenance")
+        for column_name, column_type in provenance_expected.items():
+            if column_name not in provenance_existing:
+                conn.execute(f"ALTER TABLE _catalog_provenance ADD COLUMN {column_name} {column_type}")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS _catalog_quarantine (
@@ -125,11 +172,24 @@ def record_provenance_rows(
             "provider_priority",
             "validation_status",
             "validated_against",
+            "provider_confidence",
+            "provider_discrepancy_flag",
+            "provider_discrepancy_note",
             "open",
             "high",
             "low",
             "close",
             "volume",
+            "adjusted_open",
+            "adjusted_high",
+            "adjusted_low",
+            "adjusted_close",
+            "adjustment_factor",
+            "adjustment_source",
+            "instrument_type",
+            "is_benchmark",
+            "benchmark_label",
+            "isin",
             "ingest_run_id",
             "repair_batch_id",
         ]:
@@ -140,7 +200,10 @@ def record_provenance_rows(
             """
             INSERT INTO _catalog_provenance
             (symbol_id, security_id, exchange, timestamp, provider, provider_priority,
-             validation_status, validated_against, open, high, low, close, volume,
+             validation_status, validated_against, provider_confidence, provider_discrepancy_flag, provider_discrepancy_note,
+             open, high, low, close, volume,
+             adjusted_open, adjusted_high, adjusted_low, adjusted_close, adjustment_factor, adjustment_source,
+             instrument_type, is_benchmark, benchmark_label, isin,
              ingest_run_id, repair_batch_id)
             SELECT
                 symbol_id,
@@ -151,11 +214,24 @@ def record_provenance_rows(
                 provider_priority,
                 validation_status,
                 validated_against,
+                provider_confidence,
+                provider_discrepancy_flag,
+                provider_discrepancy_note,
                 open,
                 high,
                 low,
                 close,
                 volume,
+                adjusted_open,
+                adjusted_high,
+                adjusted_low,
+                adjusted_close,
+                adjustment_factor,
+                adjustment_source,
+                instrument_type,
+                is_benchmark,
+                benchmark_label,
+                isin,
                 ingest_run_id,
                 repair_batch_id
             FROM trust_rows
@@ -165,6 +241,84 @@ def record_provenance_rows(
     finally:
         if should_close:
             conn.close()
+
+
+def reconcile_provider_row(primary_row: dict, fallback_row: dict | None = None) -> dict:
+    """Keep primary row authoritative while surfacing discrepancy metadata."""
+    chosen = dict(primary_row or {})
+    chosen["provider_confidence"] = float(chosen.get("provider_confidence", 1.0) or 1.0)
+    chosen["provider_discrepancy_flag"] = bool(chosen.get("provider_discrepancy_flag", False))
+    chosen["provider_discrepancy_note"] = chosen.get("provider_discrepancy_note")
+
+    if fallback_row is None:
+        return chosen
+
+    primary_close = primary_row.get("close")
+    fallback_close = fallback_row.get("close")
+    if primary_close is None or fallback_close is None:
+        return chosen
+
+    try:
+        diff = abs(float(primary_close) - float(fallback_close))
+    except (TypeError, ValueError):
+        return chosen
+    if diff > 0:
+        chosen["provider_discrepancy_flag"] = True
+        chosen["provider_discrepancy_note"] = f"primary_vs_fallback_close_diff={diff}"
+        chosen["provider_confidence"] = min(float(chosen["provider_confidence"]), 0.8)
+    return chosen
+
+
+def annotate_provider_reconciliation(
+    frame: pd.DataFrame,
+    *,
+    primary_provider: str = "nse_bhavcopy",
+    fallback_provider: str = "yfinance",
+) -> pd.DataFrame:
+    """Add provider confidence and discrepancy markers to ingest rows."""
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=frame.columns if isinstance(frame, pd.DataFrame) else None)
+    output = frame.copy()
+    if "provider_confidence" in output.columns:
+        output["provider_confidence"] = pd.to_numeric(output["provider_confidence"], errors="coerce").fillna(1.0)
+    else:
+        output["provider_confidence"] = 1.0
+    output["provider_discrepancy_flag"] = False
+    output["provider_discrepancy_note"] = None
+
+    required = {"symbol_id", "exchange", "timestamp", "provider", "close"}
+    if not required.issubset(set(output.columns)):
+        return output
+
+    keys = ["symbol_id", "exchange", "timestamp"]
+    primary = output[output["provider"] == primary_provider]
+    fallback = output[output["provider"] == fallback_provider]
+    if primary.empty or fallback.empty:
+        return output
+
+    merged = primary[keys + ["close"]].merge(
+        fallback[keys + ["close"]],
+        on=keys,
+        how="inner",
+        suffixes=("_primary", "_fallback"),
+    )
+    if merged.empty:
+        return output
+
+    for row in merged.itertuples(index=False):
+        primary_row = {"close": row.close_primary}
+        fallback_row = {"close": row.close_fallback}
+        reconciled = reconcile_provider_row(primary_row, fallback_row)
+        mask = (
+            (output["provider"] == primary_provider)
+            & (output["symbol_id"] == row.symbol_id)
+            & (output["exchange"] == row.exchange)
+            & (output["timestamp"] == row.timestamp)
+        )
+        output.loc[mask, "provider_confidence"] = float(reconciled["provider_confidence"])
+        output.loc[mask, "provider_discrepancy_flag"] = bool(reconciled["provider_discrepancy_flag"])
+        output.loc[mask, "provider_discrepancy_note"] = reconciled["provider_discrepancy_note"]
+    return output
 
 
 def quarantine_symbol_dates(
@@ -293,6 +447,7 @@ def load_data_trust_summary(
 ) -> dict[str, Any]:
     path = Path(db_path)
     if not path.exists():
+        envelope = TrustConfidenceEnvelope(trust_status="missing")
         return {
             "status": "missing",
             "db_path": str(path),
@@ -306,12 +461,14 @@ def load_data_trust_summary(
             "latest_repair_batch": {},
             "latest_quarantined_symbols": 0,
             "latest_quarantined_symbol_ratio": 0.0,
+            "trust_confidence": envelope.to_dict(),
         }
 
     conn = duckdb.connect(str(path), read_only=True)
     try:
         catalog_columns = _table_columns(conn, "_catalog")
         if not catalog_columns:
+            envelope = TrustConfidenceEnvelope(trust_status="missing")
             return {
                 "status": "missing",
                 "db_path": str(path),
@@ -325,6 +482,7 @@ def load_data_trust_summary(
                 "latest_repair_batch": {},
                 "latest_quarantined_symbols": 0,
                 "latest_quarantined_symbol_ratio": 0.0,
+                "trust_confidence": envelope.to_dict(),
             }
         latest_trade_date = conn.execute(
             "SELECT MAX(CAST(timestamp AS DATE)) FROM _catalog WHERE exchange = 'NSE'"
@@ -437,6 +595,12 @@ def load_data_trust_summary(
         elif fallback_ratio_latest > fallback_warn_threshold:
             status = "degraded"
 
+    provider_confidence = max(0.0, min(1.0, 1.0 - float(fallback_ratio_latest) - float(unknown_ratio_latest)))
+    envelope = TrustConfidenceEnvelope(
+        trust_status=status,
+        provider_confidence=round(provider_confidence, 4),
+    )
+
     return {
         "status": status,
         "db_path": str(path),
@@ -459,6 +623,7 @@ def load_data_trust_summary(
             "unknown_rows": latest_unknown,
         },
         "latest_repair_batch": latest_repair_batch,
+        "trust_confidence": envelope.to_dict(),
     }
 
 

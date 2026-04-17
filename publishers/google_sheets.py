@@ -13,6 +13,7 @@ from channel.google_sheets_manager import (
     SectorReportSheets,
 )
 from core.logging import logger
+from services.publish.publish_payloads import format_rows_for_channel
 
 
 def _require_spreadsheet_id() -> Optional[str]:
@@ -32,7 +33,8 @@ def publish_stock_scan(stocks: pd.DataFrame) -> bool:
     manager = GoogleSheetsManager()
     if not manager.open_spreadsheet():
         raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
-    stocks_with_index = stocks.reset_index()
+    stocks_rows = format_rows_for_channel(stocks.to_dict(orient="records"), "sheets")["rows"]
+    stocks_with_index = pd.DataFrame(stocks_rows).reset_index()
     stocks_with_index.rename(columns={"index": "Symbol"}, inplace=True)
     stocks_with_index["report_date"] = pd.Timestamp.now().strftime("%Y-%m-%d")
 
@@ -59,7 +61,8 @@ def publish_sector_dashboard(dashboard: pd.DataFrame) -> bool:
     manager = GoogleSheetsManager()
     if not manager.open_spreadsheet():
         raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
-    dashboard_with_index = dashboard.reset_index()
+    dashboard_rows = format_rows_for_channel(dashboard.to_dict(orient="records"), "sheets")["rows"]
+    dashboard_with_index = pd.DataFrame(dashboard_rows).reset_index()
     dashboard_with_index.rename(columns={"index": "Sector"}, inplace=True)
 
     sheet = manager.get_or_create_sheet("Sector Dashboard")

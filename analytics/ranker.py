@@ -10,18 +10,24 @@ import pandas as pd
 from core.logging import logger
 from core.paths import ensure_domain_layout
 from services.rank.composite import (
+    apply_rank_stability,
     compute_factor_scores,
+    compute_rank_confidence,
     filter_ranked_scores,
     load_factor_weights,
     select_rank_output_columns,
 )
+from services.rank.contracts import RANK_MODES
+from services.rank.eligibility import apply_rank_eligibility
 from services.rank.factors import (
+    add_signal_freshness,
     apply_delivery,
     apply_proximity_highs,
     apply_relative_strength,
     apply_sector_strength,
     apply_trend_persistence,
     apply_volume_intensity,
+    compute_penalty_score,
 )
 from services.rank.input_loader import RankerInputLoader
 
@@ -73,6 +79,9 @@ class StockRanker:
         top_n: int = None,
         benchmark_symbol: str = "NIFTY50",
         weights: Dict[str, float] = None,
+        rank_mode: str = "default",
+        previous_ranked: pd.DataFrame | None = None,
+        apply_penalty_adjustment: bool = False,
     ) -> pd.DataFrame:
         """
         Rank all symbols for a given date while preserving the current artifact contract.
@@ -87,6 +96,9 @@ class StockRanker:
             return pd.DataFrame()
 
         logger.info("Ranking stocks for date=%s, exchanges=%s", date, exchanges)
+        if rank_mode not in RANK_MODES:
+            logger.warning("Unknown rank_mode=%s; falling back to default", rank_mode)
+            rank_mode = "default"
 
         scores = self.input_loader.load_latest_market_data(exchanges=exchanges)
         if scores.empty:
@@ -100,6 +112,15 @@ class StockRanker:
         scores = self._compute_delivery(scores, date)
         scores = self._compute_sector_strength(scores, date)
         scores = compute_factor_scores(scores, weights=weights)
+        scores["rank_mode"] = rank_mode
+        scores = apply_rank_eligibility(scores)
+        scores = compute_penalty_score(scores)
+        scores["composite_score_adjusted"] = scores["composite_score"] - scores["penalty_score"].fillna(0.0)
+        scores = compute_rank_confidence(scores)
+        scores = add_signal_freshness(scores)
+        scores = apply_rank_stability(scores, previous_frame=previous_ranked)
+        if apply_penalty_adjustment:
+            scores["composite_score"] = scores["composite_score_adjusted"]
         # scores = self._apply_1yr_penalty(scores, weights)
         scores = filter_ranked_scores(scores, min_score=min_score, top_n=top_n)
         return select_rank_output_columns(scores)

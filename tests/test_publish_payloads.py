@@ -46,6 +46,12 @@ def test_build_publish_datasets_loads_optional_artifacts_with_defaults(tmp_path:
     assert datasets["stock_scan"].empty
     assert datasets["sector_dashboard"].empty
     assert datasets["dashboard_payload"] == {}
+    assert datasets["publish_trust_status"] == "unknown"
+    assert datasets["publish_mode_telegram"] == "concise"
+    assert datasets["publish_mode_sheets"] == "full"
+    assert datasets["publish_mode_dashboard"] == "structured_json"
+    assert datasets["publish_rows_telegram"][0]["signal_classification"] == "actionable"
+    assert datasets["publish_rows_telegram"][0]["publish_confidence"] is None
 
 
 def test_build_publish_metadata_uses_top_ranked_symbol() -> None:
@@ -54,7 +60,9 @@ def test_build_publish_metadata_uses_top_ranked_symbol() -> None:
         uri="/tmp/ranked_signals.csv",
         content_hash="hash-a",
     )
-    ranked_df = pd.DataFrame([{"symbol_id": "INFY"}, {"symbol_id": "RELIANCE"}])
+    ranked_df = pd.DataFrame(
+        [{"symbol_id": "INFY", "rank_confidence": 0.85}, {"symbol_id": "RELIANCE", "rank_confidence": 0.70}]
+    )
     targets = [{"channel": "telegram_summary", "status": "delivered"}]
 
     metadata = build_publish_metadata(
@@ -66,5 +74,6 @@ def test_build_publish_metadata_uses_top_ranked_symbol() -> None:
     assert metadata["rank_artifact_uri"] == "/tmp/ranked_signals.csv"
     assert metadata["rank_artifact_hash"] == "hash-a"
     assert metadata["top_symbol"] == "INFY"
+    assert metadata["top_publish_confidence"] == 0.85
     assert metadata["targets"] == targets
     assert "completed_at" in metadata

@@ -10,6 +10,97 @@ from core.paths import ensure_domain_layout
 from core.logging import logger
 
 
+def add_feature_readiness(frame: pd.DataFrame, min_lookback: int = 50) -> pd.DataFrame:
+    """Mark rows with sufficient per-symbol history for robust feature usage."""
+    output = frame.copy()
+    if output.empty:
+        output["feature_ready"] = pd.Series(dtype=bool)
+        return output
+    if "symbol" in output.columns and "symbol_id" not in output.columns:
+        output["symbol_id"] = output["symbol"]
+    if "symbol_id" not in output.columns:
+        output["feature_ready"] = False
+        return output
+    output["feature_ready"] = output.groupby("symbol_id").cumcount() >= (int(min_lookback) - 1)
+    return output
+
+
+def add_feature_confidence(frame: pd.DataFrame) -> pd.DataFrame:
+    """Propagate readiness/provider confidence into a bounded feature confidence score."""
+    output = frame.copy()
+    if output.empty:
+        output["feature_confidence"] = pd.Series(dtype=float)
+        return output
+
+    output["feature_confidence"] = 1.0
+
+    if "feature_ready" in output.columns:
+        output.loc[~output["feature_ready"].fillna(False), "feature_confidence"] = 0.0
+
+    if "provider_confidence" in output.columns:
+        provider = pd.to_numeric(output["provider_confidence"], errors="coerce").clip(lower=0.0, upper=1.0)
+        output["feature_confidence"] = pd.concat(
+            [output["feature_confidence"], provider], axis=1
+        ).min(axis=1)
+
+    output["feature_confidence"] = output["feature_confidence"].clip(lower=0.0, upper=1.0)
+    return output
+
+
+def add_liquidity_features(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add basic cross-sectional liquidity signals."""
+    output = frame.copy()
+    if output.empty:
+        output["turnover"] = pd.Series(dtype=float)
+        output["liquidity_score"] = pd.Series(dtype=float)
+        return output
+
+    close = pd.to_numeric(output.get("close"), errors="coerce")
+    volume = pd.to_numeric(output.get("volume"), errors="coerce")
+    output["turnover"] = close * volume
+
+    if "date" not in output.columns and "timestamp" in output.columns:
+        output["date"] = pd.to_datetime(output["timestamp"]).dt.normalize()
+    if "date" in output.columns:
+        output["liquidity_score"] = output.groupby("date")["turnover"].rank(pct=True)
+    else:
+        output["liquidity_score"] = output["turnover"].rank(pct=True)
+    return output
+
+
+def add_cross_sectional_features(frame: pd.DataFrame, metric: str = "return_20d") -> pd.DataFrame:
+    """Add per-date universe and sector ranks for explainability and screening."""
+    output = frame.copy()
+    if output.empty:
+        output["rank_in_universe"] = pd.Series(dtype=float)
+        output["percentile_score"] = pd.Series(dtype=float)
+        return output
+    if metric not in output.columns:
+        output["rank_in_universe"] = np.nan
+        output["percentile_score"] = np.nan
+        if "sector" in output.columns:
+            output["rank_in_sector"] = np.nan
+        return output
+
+    if "date" not in output.columns and "timestamp" in output.columns:
+        output["date"] = pd.to_datetime(output["timestamp"]).dt.normalize()
+    if "date" not in output.columns:
+        output["rank_in_universe"] = output[metric].rank(ascending=False, method="dense")
+        output["percentile_score"] = output[metric].rank(pct=True)
+        if "sector" in output.columns:
+            output["rank_in_sector"] = output.groupby("sector")[metric].rank(ascending=False, method="dense")
+        return output
+
+    output["rank_in_universe"] = output.groupby("date")[metric].rank(ascending=False, method="dense")
+    output["percentile_score"] = output.groupby("date")[metric].rank(pct=True)
+    if "sector" in output.columns:
+        output["rank_in_sector"] = output.groupby(["date", "sector"])[metric].rank(
+            ascending=False,
+            method="dense",
+        )
+    return output
+
+
 class FeatureStore:
     """
     Feature Store & Compute Layer.
@@ -67,8 +158,8 @@ class FeatureStore:
         # Create sequence if not exists
         try:
             conn.execute("CREATE SEQUENCE IF NOT EXISTS _feat_id_seq START 1")
-        except:
-            pass
+        except Exception as exc:
+            logger.debug("Feature id sequence bootstrap skipped: %s", exc)
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS _feature_registry (
@@ -305,8 +396,8 @@ class FeatureStore:
                             snapshot_id,
                         ),
                     )
-                except:
-                    pass
+                except Exception as exc:
+                    logger.debug("File registry insert skipped for %s: %s", final_path, exc)
 
                 rows_written += len(sym_df)
 
@@ -329,8 +420,8 @@ class FeatureStore:
                         sym_df["date"].max(),
                     ),
                 )
-            except:
-                pass
+            except Exception as exc:
+                logger.debug("Ingestion status upsert skipped for %s/%s: %s", table_name, symbol, exc)
 
         conn.commit()
         conn.close()
@@ -340,8 +431,8 @@ class FeatureStore:
             if f.endswith(".tmp.parquet"):
                 try:
                     os.remove(os.path.join(self.feature_store_dir, f))
-                except:
-                    pass
+                except Exception as exc:
+                    logger.debug("Temp parquet cleanup skipped for %s: %s", f, exc)
 
         return rows_written
 
@@ -482,7 +573,14 @@ class FeatureStore:
                     f"SELECT MAX(date) FROM feat_{feature_name}"
                 ).fetchone()[0]
             return str(result) if result else None
-        except:
+        except Exception as exc:
+            logger.debug(
+                "Last feature date unavailable for %s (%s/%s): %s",
+                feature_name,
+                symbol_id,
+                exchange,
+                exc,
+            )
             return None
         finally:
             conn.close()
@@ -1577,8 +1675,8 @@ class FeatureStore:
             conn.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
             conn.close()
             return
-        except:
-            pass
+        except Exception as exc:
+            logger.debug("Feature table %s does not exist yet: %s", table_name, exc)
 
         conn = self._get_conn()
         try:
@@ -1685,7 +1783,8 @@ class FeatureStore:
 
         try:
             conn.execute(f"SELECT * FROM {table_name} LIMIT 1")
-        except:
+        except Exception as exc:
+            logger.debug("Feature table %s read skipped: %s", table_name, exc)
             conn.close()
             return pd.DataFrame()
 
@@ -1742,7 +1841,8 @@ class FeatureStore:
                 max_ts = conn.execute(
                     f"SELECT MAX(timestamp) FROM feat_{feat_name}"
                 ).fetchone()[0]
-            except:
+            except Exception as exc:
+                logger.debug("Could not fetch max timestamp for feat_%s: %s", feat_name, exc)
                 max_ts = None
 
             for pf in parquet_files:

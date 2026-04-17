@@ -7,6 +7,24 @@ from core.paths import ensure_domain_layout
 from core.logging import logger
 
 
+def compute_atr_position_size(
+    capital: float,
+    risk_per_trade: float,
+    entry_price: float,
+    atr: float,
+    atr_multiple: float = 2.0,
+) -> int:
+    """Return ATR-based share quantity for a single position."""
+    if capital <= 0 or entry_price <= 0 or atr <= 0:
+        return 0
+    risk_amount = float(capital) * float(risk_per_trade)
+    stop_distance = float(atr) * float(atr_multiple)
+    if stop_distance <= 0:
+        return 0
+    qty = int(risk_amount / stop_distance)
+    return max(qty, 0)
+
+
 class RiskManager:
     """
     Risk Management Engine.
@@ -110,10 +128,13 @@ class RiskManager:
         stop_distance = atr * self.config["atr_multiplier_stop"]
         stop_loss = close - stop_distance
 
-        base_risk = capital * self.config["risk_per_trade_pct"]
-        risk_adjusted = base_risk * regime_mult
-
-        shares_raw = risk_adjusted / stop_distance
+        shares_raw = compute_atr_position_size(
+            capital=capital * regime_mult,
+            risk_per_trade=self.config["risk_per_trade_pct"],
+            entry_price=close,
+            atr=atr,
+            atr_multiple=self.config["atr_multiplier_stop"],
+        )
         max_shares = (capital * self.config["max_position_pct"]) / close
         shares = min(shares_raw, max_shares)
         shares = max(0, int(shares))

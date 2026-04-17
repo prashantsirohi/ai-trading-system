@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -36,6 +37,7 @@ from ui.services.control_center import get_recent_runs, get_run_details
 
 
 DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+API_KEY = os.getenv("EXECUTION_API_KEY", "local-dev-key")
 
 
 class PipelineRunRequest(BaseModel):
@@ -73,6 +75,14 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def api_key_auth(request: Request, call_next):
+        if request.url.path.startswith("/api"):
+            key = request.headers.get("x-api-key")
+            if key != API_KEY:
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        return await call_next(request)
 
     @app.get("/api/execution/summary")
     def execution_summary() -> dict[str, Any]:

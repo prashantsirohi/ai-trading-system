@@ -8,8 +8,10 @@ import pandas as pd
 
 from execution.models import OrderIntent
 from execution.policies import build_trade_actions
-from execution.portfolio import PortfolioManager
+from execution.portfolio import PortfolioManager, check_portfolio_constraints
 from execution.service import ExecutionService
+from services.execute.entry_policy import select_entry_policy
+from services.execute.exit_policy import build_exit_plan
 
 
 class AutoTrader:
@@ -34,6 +36,14 @@ class AutoTrader:
         regime_multiplier: float = 1.0,
         preview_only: bool = False,
         execution_enabled: bool = True,
+        entry_policy_name: str = "breakout",
+        exit_atr_multiple: float = 2.0,
+        exit_max_holding_days: int = 20,
+        use_portfolio_constraints: bool = False,
+        max_positions: int = 10,
+        max_sector_exposure: float = 0.30,
+        max_single_stock_weight: float = 0.10,
+        use_atr_position_sizing: bool = False,
     ) -> Dict[str, Any]:
         positions_before = self.portfolio.open_positions()
         actions = build_trade_actions(
@@ -53,6 +63,7 @@ class AutoTrader:
             for row in ranked_df.to_dict(orient="records")
             if "symbol_id" in row
         } if ranked_df is not None and not ranked_df.empty else {}
+        open_count = len(positions_before)
 
         if not execution_enabled and not preview_only:
             return {
@@ -86,6 +97,36 @@ class AutoTrader:
                 continue
             if action.action == "BUY":
                 signal = dict(ranked_lookup.get(action.symbol_id, {}))
+                entry_plan = select_entry_policy(signal, policy_name=entry_policy_name)
+                exit_plan = build_exit_plan(
+                    signal,
+                    atr_multiple=exit_atr_multiple,
+                    max_holding_days=exit_max_holding_days,
+                )
+                if use_portfolio_constraints:
+                    constraint_result = check_portfolio_constraints(
+                        signal,
+                        {
+                            "open_positions_count": open_count,
+                            "sector_exposure": {},
+                            "symbol_weights": {},
+                        },
+                        max_positions=max_positions,
+                        max_sector_exposure=max_sector_exposure,
+                        max_single_stock_weight=max_single_stock_weight,
+                    )
+                    if not constraint_result["allowed"]:
+                        executions.append(
+                            {
+                                "action": action.to_dict(),
+                                "result": {
+                                    "status": "REJECTED",
+                                    "reason": "portfolio_constraints_failed",
+                                    "constraints": constraint_result,
+                                },
+                            }
+                        )
+                        continue
                 signal.update(
                     {
                         "symbol_id": action.symbol_id,
@@ -93,6 +134,13 @@ class AutoTrader:
                         "side": "BUY",
                         "quantity": int(action.quantity or buy_quantity or 0),
                         "strategy": action.strategy_mode,
+                        "entry_policy": entry_plan,
+                        "exit_plan": exit_plan,
+                        "execution_weight": signal.get("execution_weight", 1.0),
+                        "use_atr_position_sizing": bool(use_atr_position_sizing),
+                        "atr_14": signal.get("atr_14"),
+                        "risk_per_trade_pct": signal.get("risk_per_trade_pct", 0.01),
+                        "atr_multiple": signal.get("atr_multiple", exit_atr_multiple),
                         "correlation_id": f"{action.strategy_mode}:{action.symbol_id}:{action.reason}",
                     }
                 )
@@ -103,6 +151,8 @@ class AutoTrader:
                     regime=regime,
                     regime_multiplier=regime_multiplier,
                 )
+                if result.get("status") not in {"REJECTED", "ERROR"}:
+                    open_count += 1
             else:
                 result = self.service.submit_order(
                     OrderIntent(

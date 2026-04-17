@@ -72,6 +72,14 @@ class ExecuteStage:
         "execution_regime",
         "execution_regime_multiplier",
         "paper_slippage_bps",
+        "execution_entry_policy",
+        "execution_exit_atr_multiple",
+        "execution_exit_max_holding_days",
+        "execution_use_portfolio_constraints",
+        "execution_max_positions",
+        "execution_max_sector_exposure",
+        "execution_max_single_stock_weight",
+        "execution_use_atr_position_sizing",
     ]
 
     def run(self, context: StageContext) -> StageResult:
@@ -111,6 +119,14 @@ class ExecuteStage:
             regime_multiplier=request.regime_multiplier,
             preview_only=request.preview_only,
             execution_enabled=request.execution_enabled,
+            entry_policy_name=request.entry_policy_name,
+            exit_atr_multiple=request.exit_atr_multiple,
+            exit_max_holding_days=request.exit_max_holding_days,
+            use_portfolio_constraints=request.use_portfolio_constraints,
+            max_positions=request.max_positions,
+            max_sector_exposure=request.max_sector_exposure,
+            max_single_stock_weight=request.max_single_stock_weight,
+            use_atr_position_sizing=request.use_atr_position_sizing,
         )
 
         actions_df = pd.DataFrame(result["actions"])
@@ -139,6 +155,7 @@ class ExecuteStage:
             "preview_only": request.preview_only,
             "strategy_mode": request.strategy_mode,
             "data_trust_status": candidates.data_trust_status,
+            "trust_confidence": candidates.trust_confidence,
             "breakout_linkage_mode": candidates.breakout_linkage_mode,
             "ranked_rows_before_linkage": candidates.ranked_rows_before_linkage,
             "ranked_rows_after_linkage": candidates.ranked_rows_after_linkage,

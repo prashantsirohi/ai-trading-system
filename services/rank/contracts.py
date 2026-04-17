@@ -31,11 +31,25 @@ DEFAULT_FACTOR_WEIGHTS: dict[str, float] = {
     "sector_strength": 0.15,
 }
 
+RANK_MODES: tuple[str, ...] = ("default", "momentum", "breakout", "defensive", "watchlist")
+
 RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "symbol_id",
     "exchange",
     "close",
     "composite_score",
+    "composite_score_adjusted",
+    "rank_mode",
+    "eligible_rank",
+    "rejection_reasons",
+    "penalty_score",
+    "rank_confidence",
+    "signal_age",
+    "signal_decay_score",
+    "previous_rank_position",
+    "rank_delta",
+    "score_delta",
+    "rank_change_limit",
     "rel_strength_score",
     "vol_intensity_score",
     "trend_score_score",

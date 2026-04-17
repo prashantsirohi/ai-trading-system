@@ -27,6 +27,7 @@ import pandas as pd
 import yfinance as yf
 
 from analytics.data_trust import (
+    annotate_provider_reconciliation,
     ensure_data_trust_schema,
     load_data_trust_summary,
     quarantine_symbol_dates,
@@ -34,6 +35,7 @@ from analytics.data_trust import (
     resolve_quarantine_for_rows,
 )
 from core.bootstrap import ensure_project_root_on_path
+from core.symbol_master import SymbolMaster
 
 project_root = str(ensure_project_root_on_path(__file__))
 
@@ -42,6 +44,7 @@ from collectors.nse_collector import NSECollector
 from features.feature_store import FeatureStore
 from core.paths import ensure_domain_layout
 from core.logging import logger
+from services.ingest.benchmark_ingest import ingest_benchmarks
 
 
 def _load_nse_holiday_dates(masterdb_path: str | None, from_date: str, to_date: str) -> set[str]:
@@ -74,6 +77,117 @@ def _business_dates(from_date: str, to_date: str, *, masterdb_path: str | None =
     if not holidays:
         return business_days
     return [day for day in business_days if day not in holidays]
+
+
+def _compute_canary_blocked(result: dict, *, canary_mode: bool) -> bool:
+    """Return canary blocked state from normalized ingest result metadata."""
+    if not canary_mode:
+        return False
+    if result.get("error"):
+        return True
+    trust_summary = result.get("trust_summary") or {}
+    trust_status = str(trust_summary.get("status") or "").strip().lower()
+    if trust_status in {"blocked", "degraded"}:
+        return True
+    if bool(result.get("unresolved_dates")):
+        return True
+    if str(result.get("validator_status") or "").strip().lower() == "alert":
+        return True
+    if int(result.get("symbols_errors") or 0) > 0:
+        return True
+    return False
+
+
+def _apply_canary_metadata(result: dict, *, canary_mode: bool, canary_symbol_limit: int | None) -> dict:
+    """Attach canonical canary metadata keys to run results."""
+    blocked = _compute_canary_blocked(result, canary_mode=canary_mode)
+    result["canary_mode"] = bool(canary_mode)
+    result["canary_symbol_limit"] = canary_symbol_limit
+    result["canary_blocked"] = blocked
+    if canary_mode:
+        result["canary_status"] = "blocked" if blocked else "passed"
+    return result
+
+
+def apply_adjustment_fields(frame: pd.DataFrame, corporate_actions: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Add additive adjusted-price scaffolding while preserving raw OHLC values."""
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=frame.columns if isinstance(frame, pd.DataFrame) else None)
+    output = frame.copy()
+    output["adjusted_open"] = pd.to_numeric(output.get("open"), errors="coerce")
+    output["adjusted_high"] = pd.to_numeric(output.get("high"), errors="coerce")
+    output["adjusted_low"] = pd.to_numeric(output.get("low"), errors="coerce")
+    output["adjusted_close"] = pd.to_numeric(output.get("close"), errors="coerce")
+    output["adjustment_factor"] = 1.0
+    output["adjustment_source"] = None
+    if corporate_actions is not None and not corporate_actions.empty:
+        output["adjustment_source"] = "corporate_actions_pending"
+    return output
+
+
+def _with_default_trust_metadata(frame: pd.DataFrame, *, run_id: str | None) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=frame.columns if isinstance(frame, pd.DataFrame) else None)
+    output = frame.copy()
+    if "provider_priority" not in output.columns:
+        output["provider_priority"] = 1
+    if "validation_status" not in output.columns:
+        output["validation_status"] = "trusted_primary"
+    if "validated_against" not in output.columns:
+        output["validated_against"] = None
+    output["ingest_run_id"] = run_id
+    if "repair_batch_id" not in output.columns:
+        output["repair_batch_id"] = None
+    if "provider_confidence" not in output.columns:
+        output["provider_confidence"] = 1.0
+    if "provider_discrepancy_flag" not in output.columns:
+        output["provider_discrepancy_flag"] = False
+    if "provider_discrepancy_note" not in output.columns:
+        output["provider_discrepancy_note"] = None
+    if "is_benchmark" not in output.columns:
+        output["is_benchmark"] = False
+    if "instrument_type" not in output.columns:
+        output["instrument_type"] = "equity"
+    if "benchmark_label" not in output.columns:
+        output["benchmark_label"] = None
+    if "isin" not in output.columns:
+        output["isin"] = None
+    return output
+
+
+def _build_benchmark_rows(
+    *,
+    trade_dates: list[str],
+    run_id: str | None,
+) -> pd.DataFrame:
+    if not trade_dates:
+        return pd.DataFrame()
+    benchmark_rows = ingest_benchmarks(trade_dates)
+    if benchmark_rows.empty:
+        return pd.DataFrame()
+    output = benchmark_rows.copy()
+    if "provider" not in output.columns:
+        output["provider"] = "nse_bhavcopy"
+    else:
+        output["provider"] = output["provider"].fillna("nse_bhavcopy")
+    output["provider_priority"] = 1
+    output["validation_status"] = "trusted_primary"
+    output["validated_against"] = None
+    output["ingest_run_id"] = run_id
+    output["repair_batch_id"] = None
+    output["provider_confidence"] = 1.0
+    output["provider_discrepancy_flag"] = False
+    output["provider_discrepancy_note"] = None
+    output["is_benchmark"] = True
+    if "instrument_type" not in output.columns:
+        output["instrument_type"] = "index"
+    else:
+        output["instrument_type"] = output["instrument_type"].fillna("index")
+    output["benchmark_label"] = output.get("benchmark_label")
+    if "isin" not in output.columns:
+        output["isin"] = None
+    output["security_id"] = output.get("security_id", pd.Series(dtype=str)).fillna("").astype(str)
+    return apply_adjustment_fields(output)
 
 
 def _downgrade_noncritical_quarantine_rows(
@@ -294,7 +408,25 @@ def _rows_to_symbol_frames(rows: pd.DataFrame) -> list[pd.DataFrame]:
     if rows is None or rows.empty:
         return []
     frames: list[pd.DataFrame] = []
+    optional_columns = [
+        "provider_confidence",
+        "provider_discrepancy_flag",
+        "provider_discrepancy_note",
+        "adjusted_open",
+        "adjusted_high",
+        "adjusted_low",
+        "adjusted_close",
+        "adjustment_factor",
+        "adjustment_source",
+        "instrument_type",
+        "is_benchmark",
+        "benchmark_label",
+        "isin",
+    ]
     for (symbol_id, security_id, exchange), part in rows.groupby(["symbol_id", "security_id", "exchange"], sort=True):
+        for column in optional_columns:
+            if column not in part.columns:
+                part[column] = None
         frame = (
             part[
                 [
@@ -310,6 +442,19 @@ def _rows_to_symbol_frames(rows: pd.DataFrame) -> list[pd.DataFrame]:
                     "validated_against",
                     "ingest_run_id",
                     "repair_batch_id",
+                    "provider_confidence",
+                    "provider_discrepancy_flag",
+                    "provider_discrepancy_note",
+                    "adjusted_open",
+                    "adjusted_high",
+                    "adjusted_low",
+                    "adjusted_close",
+                    "adjustment_factor",
+                    "adjustment_source",
+                    "instrument_type",
+                    "is_benchmark",
+                    "benchmark_label",
+                    "isin",
                 ]
             ]
             .sort_values("timestamp")
@@ -451,6 +596,8 @@ def _run_nse_yfinance_daily_update(
     days_history: int = 7,
 ) -> dict:
     symbols = collector.get_symbols_from_masterdb(exchanges=["NSE"])
+    symbol_master = SymbolMaster.from_masterdb(collector.masterdb_path)
+    symbols = symbol_master.canonicalize_symbol_rows(symbols)
     if symbol_limit is not None:
         symbols = symbols[:symbol_limit]
     if not symbols:
@@ -554,6 +701,16 @@ def _run_nse_yfinance_daily_update(
             yfinance_dates = sorted(yfinance_rows["timestamp"].dt.date.astype(str).unique().tolist())
             all_rows = yfinance_rows if all_rows.empty else pd.concat([all_rows, yfinance_rows], ignore_index=True)
 
+    if not all_rows.empty:
+        all_rows = _with_default_trust_metadata(all_rows, run_id=run_id)
+        all_rows["is_benchmark"] = False
+        all_rows["instrument_type"] = "equity"
+        if "isin" not in all_rows.columns:
+            all_rows["isin"] = None
+        all_rows["isin"] = all_rows["symbol_id"].map(symbol_master.isin_for)
+        all_rows = annotate_provider_reconciliation(all_rows)
+        all_rows = apply_adjustment_fields(all_rows)
+
     resolved_symbol_dates: set[tuple[str, str]] = set()
     if not all_rows.empty:
         resolved_symbol_dates = {
@@ -584,7 +741,9 @@ def _run_nse_yfinance_daily_update(
 
     resolved_symbol_ids = {symbol_id for symbol_id, _ in resolved_symbol_dates}
     historically_trusted_symbols = _load_historically_trusted_symbols(collector.db_path)
-    active_eligible_symbols = historically_trusted_symbols.union(resolved_symbol_ids)
+    active_eligible_symbols = historically_trusted_symbols.union(resolved_symbol_ids).union(
+        set(required_symbol_dates.keys())
+    )
 
     quarantined_row_count = 0
     observed_row_count = 0
@@ -599,6 +758,8 @@ def _run_nse_yfinance_daily_update(
 
     unresolved_dates = sorted({trade_date for _, trade_date in unresolved_symbol_dates_active})
     unresolved_dates_observed = sorted({trade_date for _, trade_date in unresolved_symbol_dates_observed})
+    unresolved_symbols = sorted({symbol_id for symbol_id, _ in unresolved_symbol_dates_active})
+    unresolved_symbols_all = sorted({symbol_id for symbol_id, _ in unresolved_symbol_dates})
 
     active_symbols_by_date: dict[str, set[str]] = {}
     for symbol_id, trade_date in unresolved_symbol_dates_active:
@@ -635,12 +796,21 @@ def _run_nse_yfinance_daily_update(
         )
 
     rows_written = 0
+    benchmark_rows_written = 0
     provider_counts_by_date: dict[str, dict[str, int]] = {}
     validation_counts = {
         "trusted_primary": 0,
         "trusted_fallback": 0,
         "legacy_unverified": 0,
     }
+    rows_to_write = all_rows.copy() if not all_rows.empty else pd.DataFrame()
+    benchmark_rows = _build_benchmark_rows(trade_dates=nse_dates, run_id=run_id)
+    if not benchmark_rows.empty:
+        rows_to_write = benchmark_rows if rows_to_write.empty else pd.concat([rows_to_write, benchmark_rows], ignore_index=True)
+
+    if not rows_to_write.empty:
+        benchmark_rows_written = int(rows_to_write.get("is_benchmark", pd.Series(dtype=bool)).fillna(False).sum())
+
     if not all_rows.empty:
         for trade_date, provider, row_count in (
             all_rows.assign(trade_date=all_rows["timestamp"].dt.date.astype(str))
@@ -656,9 +826,11 @@ def _run_nse_yfinance_daily_update(
         ):
             validation_counts[str(status)] = int(row_count)
 
-        record_provenance_rows(collector.db_path, all_rows)
-        frames = _rows_to_symbol_frames(all_rows)
+    if not rows_to_write.empty:
+        record_provenance_rows(collector.db_path, rows_to_write)
+        frames = _rows_to_symbol_frames(rows_to_write)
         rows_written = int(collector._upsert_ohlcv(frames) or 0)
+    if not all_rows.empty:
         resolve_quarantine_for_rows(
             collector.db_path,
             all_rows,
@@ -689,7 +861,10 @@ def _run_nse_yfinance_daily_update(
         "unresolved_date_count_all": len(unresolved_dates_all),
         "unresolved_symbol_date_count": len(unresolved_symbol_dates_active),
         "unresolved_symbol_date_count_all": len(unresolved_symbol_dates),
+        "unresolved_symbol_count": len(unresolved_symbols),
+        "unresolved_symbol_count_all": len(unresolved_symbols_all),
         "rows_written": rows_written,
+        "benchmark_rows_written": benchmark_rows_written,
         "quarantined_row_count": quarantined_row_count,
         "observed_row_count": observed_row_count,
         "validation_counts": validation_counts,
@@ -771,6 +946,8 @@ def _run_dhan_primary_daily_update(
     validator_pct_threshold: float = 0.01,
 ) -> dict:
     symbols = collector.get_symbols_from_masterdb(exchanges=["NSE"])
+    symbol_master = SymbolMaster.from_masterdb(collector.masterdb_path)
+    symbols = symbol_master.canonicalize_symbol_rows(symbols)
     if symbol_limit is not None:
         symbols = symbols[:symbol_limit]
     if not symbols:
@@ -877,6 +1054,12 @@ def _run_dhan_primary_daily_update(
         providers_used.append("validator_yfinance")
 
     result = dict(result or {})
+    benchmark_rows = _build_benchmark_rows(trade_dates=nse_dates, run_id=run_id)
+    benchmark_rows_written = 0
+    if not benchmark_rows.empty:
+        record_provenance_rows(collector.db_path, benchmark_rows)
+        benchmark_rows_written = int(collector._upsert_ohlcv(_rows_to_symbol_frames(benchmark_rows)) or 0)
+
     result.update(
         {
             "ohlc_source_mode": "dhan_primary",
@@ -896,6 +1079,7 @@ def _run_dhan_primary_daily_update(
             "validator_mismatch_sample": mismatch_sample,
             "validator_pct_threshold": float(validator_pct_threshold),
             "trust_summary": trust_summary,
+            "benchmark_rows_written": benchmark_rows_written,
         }
     )
     return result
@@ -1026,11 +1210,11 @@ def run(
             symbol_limit=effective_symbol_limit,
             compute_features=False,
         )
-        result["canary_mode"] = bool(canary_mode)
-        result["canary_symbol_limit"] = effective_symbol_limit
-        if canary_mode:
-            result["canary_blocked"] = False
-            result["canary_status"] = "passed"
+        _apply_canary_metadata(
+            result,
+            canary_mode=canary_mode,
+            canary_symbol_limit=effective_symbol_limit,
+        )
         logger.info(f"Bulk daily update result: {result}")
         return result
 
@@ -1049,11 +1233,11 @@ def run(
             feature_tail_bars=feature_tail_bars,
         )
         result["ohlc_source_mode"] = "dhan_historical_daily"
-        result["canary_mode"] = bool(canary_mode)
-        result["canary_symbol_limit"] = effective_symbol_limit
-        if canary_mode:
-            result["canary_blocked"] = bool(result.get("symbols_errors"))
-            result["canary_status"] = "blocked" if result["canary_blocked"] else "passed"
+        _apply_canary_metadata(
+            result,
+            canary_mode=canary_mode,
+            canary_symbol_limit=effective_symbol_limit,
+        )
         return result
 
     if symbols_only:
@@ -1078,20 +1262,11 @@ def run(
                 symbol_limit=effective_symbol_limit,
                 run_id=run_id,
             )
-        trust_summary = result.get("trust_summary") or {}
-        canary_blocked = bool(
-            canary_mode
-            and (
-                trust_summary.get("status") in {"blocked", "degraded"}
-                or bool(result.get("unresolved_dates"))
-                or result.get("validator_status") == "alert"
-            )
+        _apply_canary_metadata(
+            result,
+            canary_mode=canary_mode,
+            canary_symbol_limit=effective_symbol_limit,
         )
-        result["canary_mode"] = bool(canary_mode)
-        result["canary_symbol_limit"] = effective_symbol_limit
-        result["canary_blocked"] = canary_blocked
-        if canary_mode:
-            result["canary_status"] = "blocked" if canary_blocked else "passed"
         logger.info(f"Daily update result: {result}")
         logger.info("")
         logger.info("TIP: Run features separately after OHLCV update:")
@@ -1121,20 +1296,11 @@ def run(
             symbol_limit=effective_symbol_limit,
             run_id=run_id,
         )
-    trust_summary = result.get("trust_summary") or {}
-    canary_blocked = bool(
-        canary_mode
-        and (
-            trust_summary.get("status") in {"blocked", "degraded"}
-            or bool(result.get("unresolved_dates"))
-            or result.get("validator_status") == "alert"
-        )
+    _apply_canary_metadata(
+        result,
+        canary_mode=canary_mode,
+        canary_symbol_limit=effective_symbol_limit,
     )
-    result["canary_mode"] = bool(canary_mode)
-    result["canary_symbol_limit"] = effective_symbol_limit
-    result["canary_blocked"] = canary_blocked
-    if canary_mode:
-        result["canary_status"] = "blocked" if canary_blocked else "passed"
 
     logger.info("=" * 60)
     logger.info("DAILY UPDATE COMPLETE")

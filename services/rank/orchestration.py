@@ -13,6 +13,7 @@ import pandas as pd
 from pandas.util import hash_pandas_object
 
 from core.paths import ensure_domain_layout
+from core.trust_confidence import TrustConfidenceEnvelope
 from run.stages.base import StageArtifact, StageContext, StageResult
 from services.rank.dashboard_payload import (
     augment_dashboard_payload_with_ml,
@@ -29,6 +30,14 @@ TASK_FILE_MAP = {
     "sector_dashboard": ("sector_dashboard", "csv"),
     "dashboard_payload": ("dashboard_payload", "json"),
 }
+
+
+def attach_rank_confidence_from_features(frame: pd.DataFrame) -> pd.DataFrame:
+    """Propagate feature confidence when rank confidence is absent."""
+    output = frame.copy()
+    if "feature_confidence" in output.columns and "rank_confidence" not in output.columns:
+        output["rank_confidence"] = pd.to_numeric(output["feature_confidence"], errors="coerce")
+    return output
 
 
 class RankOrchestrationService:
@@ -181,9 +190,14 @@ class RankOrchestrationService:
                 date=context.run_date,
                 min_score=float(context.params.get("min_score", 0.0)),
                 top_n=context.params.get("top_n"),
+                rank_mode=str(context.params.get("rank_mode", "default")),
+                apply_penalty_adjustment=bool(
+                    context.params.get("rank_apply_penalty_adjustment", False)
+                ),
             ),
             optional=False,
         )
+        ranked = attach_rank_confidence_from_features(ranked)
 
         outputs: Dict[str, pd.DataFrame] = {"ranked_signals": ranked}
 
@@ -414,10 +428,25 @@ class RankOrchestrationService:
             optional=False,
         )
 
+        top_rank_confidence = None
+        if not ranked.empty and "rank_confidence" in ranked.columns:
+            try:
+                top_rank_confidence = float(pd.to_numeric(ranked["rank_confidence"], errors="coerce").dropna().iloc[0])
+            except Exception:
+                top_rank_confidence = None
+        provider_confidence = (trust_summary.get("trust_confidence") or {}).get("provider_confidence")
+        trust_confidence = TrustConfidenceEnvelope(
+            trust_status=str(trust_summary.get("status", "unknown")),
+            provider_confidence=provider_confidence,
+            rank_confidence=top_rank_confidence,
+        )
+
         outputs["__stage_metadata__"] = {
             "degraded_outputs": warnings,
             "degraded_output_count": len(warnings),
             "data_trust_status": trust_summary.get("status"),
+            "rank_mode": str(context.params.get("rank_mode", "default")),
+            "trust_confidence": trust_confidence.to_dict(),
             "task_status": task_status,
             "task_status_counts": summarize_task_statuses(task_status),
             "resumed_from_attempt": previous_attempt,

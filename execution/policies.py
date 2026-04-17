@@ -18,6 +18,24 @@ SUPPORTED_STRATEGY_MODES = {
 }
 
 
+def compute_atr_position_size(
+    capital: float,
+    risk_per_trade: float,
+    entry_price: float,
+    atr: float,
+    atr_multiple: float = 2.0,
+) -> int:
+    """Compute ATR risk-based position size."""
+    if capital <= 0 or entry_price <= 0 or atr <= 0:
+        return 0
+    risk_amount = float(capital) * float(risk_per_trade)
+    stop_distance = float(atr) * float(atr_multiple)
+    if stop_distance <= 0:
+        return 0
+    qty = int(risk_amount / stop_distance)
+    return max(qty, 0)
+
+
 def build_trade_actions(
     *,
     ranked_df: pd.DataFrame,

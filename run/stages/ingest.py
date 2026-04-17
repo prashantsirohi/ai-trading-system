@@ -10,6 +10,14 @@ from run.stages.base import StageContext, StageResult
 from services.ingest import IngestOrchestrationService
 
 
+def classify_freshness_status(target_end_date: str, latest_available_date: str | None) -> str:
+    if latest_available_date is None:
+        return "stale"
+    if str(latest_available_date) == str(target_end_date):
+        return "fresh"
+    return "delayed"
+
+
 class IngestStage:
     """Thin wrapper around ingest orchestration services."""
 

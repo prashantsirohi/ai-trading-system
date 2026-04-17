@@ -83,6 +83,67 @@ def filter_ranked_scores(
     return ranked
 
 
+def compute_rank_confidence(frame: pd.DataFrame) -> pd.DataFrame:
+    """Derive rank confidence from readiness, eligibility, and penalties."""
+    output = frame.copy()
+    if output.empty:
+        output["rank_confidence"] = pd.Series(dtype=float)
+        return output
+
+    output["rank_confidence"] = 1.0
+
+    if "feature_confidence" in output.columns:
+        output["rank_confidence"] *= pd.to_numeric(
+            output["feature_confidence"], errors="coerce"
+        ).fillna(0.0)
+
+    if "eligible_rank" in output.columns:
+        output.loc[~output["eligible_rank"].fillna(False), "rank_confidence"] = 0.0
+
+    if "penalty_score" in output.columns:
+        penalties = pd.to_numeric(output["penalty_score"], errors="coerce").fillna(0.0)
+        output["rank_confidence"] *= (1.0 - penalties.clip(lower=0.0, upper=50.0) / 100.0)
+
+    output["rank_confidence"] = output["rank_confidence"].clip(lower=0.0, upper=1.0)
+    return output
+
+
+def apply_rank_stability(
+    current_frame: pd.DataFrame,
+    previous_frame: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Attach optional rank stability metadata without mutating current ordering."""
+    output = current_frame.copy()
+    output["rank_change_limit"] = pd.NA
+    output["previous_rank_position"] = pd.NA
+    output["rank_delta"] = pd.NA
+    output["score_delta"] = pd.NA
+
+    if previous_frame is None or previous_frame.empty or output.empty:
+        return output
+    if "symbol_id" not in output.columns or "symbol_id" not in previous_frame.columns:
+        return output
+
+    prev = previous_frame.copy()
+    prev = prev.reset_index(drop=True)
+    prev["previous_rank_position"] = prev.index + 1
+    prev_cols = ["symbol_id", "previous_rank_position"]
+    if "exchange" in prev.columns and "exchange" in output.columns:
+        prev_cols.insert(1, "exchange")
+    if "composite_score" in prev.columns and "composite_score" in output.columns:
+        prev = prev.rename(columns={"composite_score": "previous_composite_score"})
+        prev_cols.append("previous_composite_score")
+
+    merged = output.merge(prev[prev_cols], on=[c for c in ["symbol_id", "exchange"] if c in prev_cols and c in output.columns], how="left")
+    merged = merged.reset_index(drop=True)
+    merged["current_rank_position"] = merged.index + 1
+    merged["rank_delta"] = merged["previous_rank_position"] - merged["current_rank_position"]
+    if "previous_composite_score" in merged.columns and "composite_score" in merged.columns:
+        merged["score_delta"] = merged["composite_score"] - merged["previous_composite_score"]
+    merged["rank_change_limit"] = pd.NA
+    return merged
+
+
 def select_rank_output_columns(frame: pd.DataFrame) -> pd.DataFrame:
     """Project rank output into the backward-compatible artifact contract."""
     available = [column for column in RANKED_SIGNAL_COLUMNS if column in frame.columns]

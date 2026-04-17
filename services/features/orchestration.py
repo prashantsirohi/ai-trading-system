@@ -8,6 +8,8 @@ from typing import Callable, Dict, Optional
 
 import duckdb
 
+from analytics.data_trust import load_data_trust_summary
+from core.trust_confidence import TrustConfidenceEnvelope
 from run.stages.base import StageArtifact, StageContext, StageResult
 
 
@@ -75,6 +77,15 @@ class FeaturesOrchestrationService:
         snapshot_id, feature_rows, feature_registry_entries = (
             record_snapshot or self.record_snapshot
         )(context)
+        benchmark_symbol = str(context.params.get("benchmark_symbol", "NIFTY_500"))
+        trust_summary = load_data_trust_summary(context.db_path, run_date=context.run_date)
+        provider_confidence = (trust_summary.get("trust_confidence") or {}).get("provider_confidence")
+        feature_confidence = 1.0 if int(feature_rows or 0) > 0 else 0.0
+        trust_confidence = TrustConfidenceEnvelope(
+            trust_status=str(trust_summary.get("status", "unknown")),
+            provider_confidence=provider_confidence,
+            feature_confidence=feature_confidence,
+        )
 
         return {
             "snapshot_id": int(snapshot_id),
@@ -82,6 +93,16 @@ class FeaturesOrchestrationService:
             "feature_registry_entries": int(feature_registry_entries),
             "feature_mode": "full_rebuild" if full_rebuild else "incremental",
             "target_symbol_count": len(updated_symbols or []),
+            "feature_enhancements": {
+                "readiness": True,
+                "feature_confidence": True,
+                "multi_timeframe_returns": [5, 20, 60, 120, 252],
+                "liquidity": True,
+                "cross_sectional": True,
+                "pattern_preconditions": True,
+                "benchmark_relative": {"enabled": True, "benchmark_symbol": benchmark_symbol},
+            },
+            "trust_confidence": trust_confidence.to_dict(),
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
 

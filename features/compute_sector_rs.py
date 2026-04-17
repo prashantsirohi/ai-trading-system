@@ -1,8 +1,59 @@
 import pandas as pd
+import numpy as np
 import duckdb
 import sqlite3
 from pathlib import Path
 from core.logging import logger
+
+
+def add_benchmark_relative_features(
+    frame: pd.DataFrame,
+    benchmark_frame: pd.DataFrame,
+    benchmark_symbol: str = "NIFTY_500",
+) -> pd.DataFrame:
+    """Attach benchmark-relative return context without mutating core columns."""
+    output = frame.copy()
+    if output.empty:
+        output["benchmark_close"] = pd.Series(dtype=float)
+        output["stock_vs_benchmark"] = pd.Series(dtype=float)
+        return output
+    if benchmark_frame is None or benchmark_frame.empty:
+        output["benchmark_close"] = np.nan
+        output["stock_vs_benchmark"] = np.nan
+        return output
+
+    bench = benchmark_frame.copy()
+    if "symbol_id" not in bench.columns and "symbol" in bench.columns:
+        bench["symbol_id"] = bench["symbol"]
+    symbol_col = "symbol_id" if "symbol_id" in bench.columns else "symbol"
+    if symbol_col not in bench.columns:
+        output["benchmark_close"] = np.nan
+        output["stock_vs_benchmark"] = np.nan
+        return output
+
+    bench = bench[bench[symbol_col] == benchmark_symbol].copy()
+    if bench.empty:
+        output["benchmark_close"] = np.nan
+        output["stock_vs_benchmark"] = np.nan
+        return output
+
+    if "date" not in bench.columns and "timestamp" in bench.columns:
+        bench["date"] = pd.to_datetime(bench["timestamp"]).dt.normalize()
+    if "date" not in output.columns and "timestamp" in output.columns:
+        output["date"] = pd.to_datetime(output["timestamp"]).dt.normalize()
+    if "date" not in bench.columns or "date" not in output.columns:
+        output["benchmark_close"] = np.nan
+        output["stock_vs_benchmark"] = np.nan
+        return output
+
+    bench = bench[["date", "close"]].rename(columns={"close": "benchmark_close"})
+    bench = bench.drop_duplicates(subset=["date"], keep="last")
+    output = output.merge(bench, on="date", how="left")
+    output["stock_vs_benchmark"] = (
+        pd.to_numeric(output.get("close"), errors="coerce")
+        / pd.to_numeric(output.get("benchmark_close"), errors="coerce")
+    ) - 1.0
+    return output
 
 
 def load_all_symbols_with_sector(masterdb_path: str = "data/masterdata.db"):

@@ -7,6 +7,13 @@ from typing import Dict, List
 
 from execution.store import ExecutionStore
 
+POSITION_STATES = [
+    "candidate",
+    "active",
+    "partial",
+    "exit",
+]
+
 
 def open_position_trade_ref(symbol_id: str, exchange: str = "NSE") -> str:
     """Stable journal reference for an active position."""
@@ -16,6 +23,38 @@ def open_position_trade_ref(symbol_id: str, exchange: str = "NSE") -> str:
 def closed_trade_ref(fill_id: str) -> str:
     """Stable journal reference for a realized trade row."""
     return f"closed:{str(fill_id or '').strip()}"
+
+
+def check_portfolio_constraints(
+    candidate: dict,
+    portfolio_state: dict,
+    *,
+    max_positions: int = 10,
+    max_sector_exposure: float = 0.30,
+    max_single_stock_weight: float = 0.10,
+) -> dict:
+    """Evaluate basic portfolio limits for a candidate order."""
+    reasons = []
+
+    if int(portfolio_state.get("open_positions_count", 0) or 0) >= int(max_positions):
+        reasons.append("max_positions_reached")
+
+    candidate_sector = str(candidate.get("sector_name") or candidate.get("sector") or "").strip()
+    if candidate_sector:
+        sector_exposure = float((portfolio_state.get("sector_exposure") or {}).get(candidate_sector, 0.0) or 0.0)
+        if sector_exposure > float(max_sector_exposure):
+            reasons.append("max_sector_exposure_exceeded")
+
+    symbol = str(candidate.get("symbol_id") or "").strip()
+    if symbol:
+        single_weight = float((portfolio_state.get("symbol_weights") or {}).get(symbol, 0.0) or 0.0)
+        if single_weight > float(max_single_stock_weight):
+            reasons.append("max_single_stock_weight_exceeded")
+
+    return {
+        "allowed": len(reasons) == 0,
+        "reasons": reasons,
+    }
 
 
 @dataclass(slots=True)

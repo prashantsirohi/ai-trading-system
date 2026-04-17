@@ -308,9 +308,12 @@ class DataQualityEngine:
         unresolved_dates = list(result.metadata.get("unresolved_dates") or [])
         unresolved_date_count = int(len(unresolved_dates))
         unresolved_symbol_date_count = int(result.metadata.get("unresolved_symbol_date_count", 0) or 0)
+        unresolved_symbol_count = int(
+            result.metadata.get("unresolved_symbol_count", unresolved_symbol_date_count) or 0
+        )
         active_eligible_symbol_count = int(result.metadata.get("active_eligible_symbol_count", 0) or 0)
         unresolved_symbol_ratio_pct = (
-            (unresolved_symbol_date_count * 100.0 / active_eligible_symbol_count)
+            (unresolved_symbol_count * 100.0 / active_eligible_symbol_count)
             if active_eligible_symbol_count > 0
             else 0.0
         )
@@ -319,11 +322,20 @@ class DataQualityEngine:
         # default that tolerates a single-date micro-gap while still blocking broad unresolved windows.
         allowed = int(context.params.get("dq_allowed_unresolved_dates", 0) or 0)
         max_unresolved_dates = int(context.params.get("dq_max_unresolved_dates", max(1, allowed)) or max(1, allowed))
-        max_unresolved_symbol_dates = int(context.params.get("dq_max_unresolved_symbol_dates", 10) or 10)
+        # Backward-compatible param fallback:
+        # `dq_max_unresolved_symbol_dates` historically modeled breadth, so keep it as
+        # default source until `dq_max_unresolved_symbols` is explicitly provided.
+        max_unresolved_symbols = int(
+            context.params.get(
+                "dq_max_unresolved_symbols",
+                context.params.get("dq_max_unresolved_symbol_dates", 10),
+            )
+            or 10
+        )
         max_unresolved_symbol_ratio_pct = float(context.params.get("dq_max_unresolved_symbol_ratio_pct", 1.0) or 1.0)
 
         date_threshold_failed = unresolved_date_count > max_unresolved_dates
-        symbol_threshold_failed = unresolved_symbol_date_count > max_unresolved_symbol_dates
+        symbol_threshold_failed = unresolved_symbol_count > max_unresolved_symbols
         ratio_threshold_failed = unresolved_symbol_ratio_pct > max_unresolved_symbol_ratio_pct
 
         # Breadth is the primary safety signal. A multi-date gap affecting only a tiny,
@@ -332,11 +344,12 @@ class DataQualityEngine:
         if unresolved_dates:
             message = (
                 f"Unresolved trade dates remain quarantined: {', '.join(unresolved_dates[:5])}. "
-                f"unresolved_symbol_dates={unresolved_symbol_date_count} "
+                f"unresolved_symbol_dates={unresolved_symbol_count} "
+                f"unresolved_symbol_date_pairs={unresolved_symbol_date_count} "
                 f"eligible_symbols={active_eligible_symbol_count} "
                 f"ratio={unresolved_symbol_ratio_pct:.2f}% "
                 f"(max_dates={max_unresolved_dates}, "
-                f"max_symbol_dates={max_unresolved_symbol_dates}, "
+                f"max_symbols={max_unresolved_symbols}, "
                 f"max_ratio={max_unresolved_symbol_ratio_pct:.2f}%)."
             )
             if date_threshold_failed and not failed_count:

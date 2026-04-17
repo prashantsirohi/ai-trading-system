@@ -145,7 +145,12 @@ def _format_ranked_line(index: int, row: pd.Series) -> str:
     score = _format_decimal(row.get("composite_score"), 1)
     close = _format_decimal(row.get("close"), 2)
     rs = _format_decimal(row.get("rel_strength_score"), 1)
-    return f"{index}. {symbol} | {sector} | Score {score} | Close {close} | RS {rs}"
+    confidence = _format_decimal(row.get("publish_confidence"), 2)
+    signal_class = escape(str(row.get("signal_classification", "n/a")))
+    return (
+        f"{index}. {symbol} | {sector} | Score {score} | Close {close} | RS {rs}"
+        f" | Conf {confidence} | {signal_class}"
+    )
 
 
 def _format_decimal(value: Any, places: int = 2) -> str:
