@@ -456,6 +456,57 @@ def test_build_pattern_signals_uses_parallel_helper_when_requested(monkeypatch) 
     assert signals.iloc[0]["symbol_id"] == "CUP"
 
 
+def test_build_pattern_signals_falls_back_to_serial_on_transient_parallel_resource_error(monkeypatch) -> None:
+    frame = pd.concat(
+        [
+            _cup_handle_frame(symbol_id="CUP"),
+            _double_bottom_frame(symbol_id="DBLW", breakout=False),
+        ],
+        ignore_index=True,
+    )
+    called: dict[str, int] = {"serial": 0}
+
+    class _FailingPool:
+        def __init__(self, *args, **kwargs):
+            raise BlockingIOError(35, "Resource temporarily unavailable")
+
+    def fake_serial(frame_arg, *, config, progress_callback=None):
+        called["serial"] += 1
+        return (
+            pd.DataFrame(
+                [
+                    {
+                        "symbol_id": "CUP",
+                        "pattern_family": "cup_handle",
+                        "pattern_state": "confirmed",
+                        "signal_date": "2024-12-31",
+                        "pattern_score": 90.0,
+                        "pattern_rank": 1,
+                    }
+                ]
+            ),
+            {},
+            {},
+        )
+
+    monkeypatch.setattr("analytics.patterns.evaluation.ProcessPoolExecutor", _FailingPool)
+    monkeypatch.setattr("analytics.patterns.evaluation._scan_pattern_signals", fake_serial)
+
+    signals = build_pattern_signals(
+        project_root=Path("."),
+        signal_date="2024-12-31",
+        exchange="NSE",
+        data_domain="operational",
+        config=_scan_config(),
+        frame=frame,
+        pattern_workers=4,
+    )
+
+    assert called["serial"] == 1
+    assert len(signals) == 1
+    assert signals.iloc[0]["symbol_id"] == "CUP"
+
+
 def test_load_pattern_frame_supports_operational_and_research_domains(monkeypatch, tmp_path: Path) -> None:
     raw = pd.DataFrame(
         {
