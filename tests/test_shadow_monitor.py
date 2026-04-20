@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from analytics.shadow_monitor import build_shadow_overlay, compute_matured_outcomes
+from ai_trading_system.research.shadow_monitor import compute_rolling_spearman_ic, compute_spearman_ic
 
 
 class _DummyModel:
@@ -72,3 +74,66 @@ def test_compute_matured_outcomes_uses_forward_bars():
     assert outcomes[0]["future_date"] == "2026-03-06"
     assert round(outcomes[0]["realized_return"], 4) == 0.05
     assert outcomes[0]["hit"] is True
+
+
+def test_compute_spearman_ic_returns_value_with_enough_observations():
+    frame = pd.DataFrame(
+        {
+            "probability": [0.9, 0.8, 0.4, 0.2, 0.1],
+            "realized_return": [0.12, 0.08, 0.03, -0.01, -0.04],
+        }
+    )
+
+    ic_value = compute_spearman_ic(frame, min_observations=5)
+
+    assert ic_value == pytest.approx(1.0)
+
+
+def test_compute_spearman_ic_returns_nan_when_observations_are_insufficient():
+    frame = pd.DataFrame(
+        {
+            "probability": [0.9, 0.8, 0.4],
+            "realized_return": [0.12, 0.08, 0.03],
+        }
+    )
+
+    ic_value = compute_spearman_ic(frame, min_observations=5)
+
+    assert pd.isna(ic_value)
+
+
+def test_compute_rolling_spearman_ic_returns_expected_schema():
+    frame = pd.DataFrame(
+        {
+            "prediction_date": [
+                "2026-04-01", "2026-04-01", "2026-04-01", "2026-04-01", "2026-04-01",
+                "2026-04-02", "2026-04-02", "2026-04-02", "2026-04-02", "2026-04-02",
+                "2026-04-03", "2026-04-03", "2026-04-03", "2026-04-03", "2026-04-03",
+            ],
+            "horizon": [5] * 15,
+            "probability": [
+                0.9, 0.8, 0.6, 0.3, 0.1,
+                0.85, 0.7, 0.55, 0.25, 0.05,
+                0.88, 0.75, 0.5, 0.2, 0.1,
+            ],
+            "realized_return": [
+                0.10, 0.06, 0.04, -0.01, -0.03,
+                0.11, 0.05, 0.02, -0.02, -0.05,
+                0.09, 0.07, 0.01, -0.03, -0.04,
+            ],
+        }
+    )
+
+    rolling = compute_rolling_spearman_ic(frame, window=2, min_observations=5)
+
+    assert rolling.columns.tolist() == [
+        "prediction_date",
+        "horizon",
+        "observations",
+        "ic_spearman",
+        "rolling_ic_spearman",
+        "window",
+    ]
+    assert len(rolling) == 3
+    assert pd.isna(rolling.iloc[0]["rolling_ic_spearman"])
+    assert rolling.iloc[1]["window"] == 2

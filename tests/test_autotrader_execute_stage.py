@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from execution import AutoTrader, ExecutionService, ExecutionStore, PaperExecutionAdapter, PortfolioManager
-from execution.models import OrderIntent
+from ai_trading_system.domains.execution import AutoTrader, ExecutionService, ExecutionStore, PaperExecutionAdapter, PortfolioManager
+from ai_trading_system.domains.execution.models import OrderIntent
 from run.stages import ExecuteStage
-from run.stages.base import StageArtifact, StageContext
+from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 
 
 class _StaticRiskManager:
@@ -61,6 +61,103 @@ def test_autotrader_rebalances_positions_in_technical_mode(tmp_path: Path) -> No
     assert positions_after["BBB"] == 10
     assert positions_after["CCC"] == 10
     assert "AAA" not in positions_after
+
+
+def test_autotrader_blocks_buy_when_sector_exposure_would_be_breached(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path)
+    service = ExecutionService(store, PaperExecutionAdapter(slippage_bps=0), risk_manager=_StaticRiskManager())
+    portfolio = PortfolioManager(store)
+    service.submit_order(
+        OrderIntent(symbol_id="AAA", exchange="NSE", quantity=10, side="BUY"),
+        market_price=100.0,
+    )
+    ranked_df = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "close": 100.0, "composite_score": 92.0, "sector_name": "IT"},
+            {"symbol_id": "BBB", "exchange": "NSE", "close": 100.0, "composite_score": 91.0, "sector_name": "IT"},
+        ]
+    )
+
+    result = AutoTrader(service, portfolio).run(
+        ranked_df=ranked_df,
+        strategy_mode="technical",
+        target_position_count=2,
+        capital=10_000,
+        use_portfolio_constraints=True,
+        max_positions=5,
+        max_sector_exposure=0.15,
+    )
+
+    executions = result["executions"]
+    blocked = next(item for item in executions if item["action"]["symbol_id"] == "BBB")
+    assert blocked["result"]["status"] == "REJECTED"
+    assert blocked["result"]["reason"] == "portfolio_constraints_failed"
+    assert "max_sector_exposure_exceeded" in blocked["result"]["constraints"]["reasons"]
+    positions_after = {row["symbol_id"]: row["quantity"] for row in result["positions_after"]}
+    assert positions_after == {"AAA": 10}
+
+
+def test_portfolio_heat_gate_uses_risk_at_stop_instead_of_capital_exposure(tmp_path: Path) -> None:
+    tight_store = ExecutionStore(tmp_path / "tight")
+    tight_service = ExecutionService(
+        tight_store,
+        PaperExecutionAdapter(slippage_bps=0),
+        risk_manager=_StaticRiskManager(),
+    )
+    tight_portfolio = PortfolioManager(tight_store)
+    tight_service.submit_order(
+        OrderIntent(symbol_id="AAA", exchange="NSE", quantity=10, side="BUY"),
+        market_price=100.0,
+    )
+    tight_store.upsert_position_stop(
+        position_key="NSE:AAA",
+        symbol_id="AAA",
+        exchange="NSE",
+        quantity=10,
+        entry_price=100.0,
+        stop_price=98.0,
+        atr_multiplier=1.0,
+        status="ACTIVE",
+    )
+
+    tight_ok, tight_risk_pct = tight_portfolio.check_heat_gate(
+        tight_portfolio.open_positions(),
+        capital=1_000.0,
+        threshold=0.15,
+    )
+
+    wide_store = ExecutionStore(tmp_path / "wide")
+    wide_service = ExecutionService(
+        wide_store,
+        PaperExecutionAdapter(slippage_bps=0),
+        risk_manager=_StaticRiskManager(),
+    )
+    wide_portfolio = PortfolioManager(wide_store)
+    wide_service.submit_order(
+        OrderIntent(symbol_id="BBB", exchange="NSE", quantity=5, side="BUY"),
+        market_price=100.0,
+    )
+    wide_store.upsert_position_stop(
+        position_key="NSE:BBB",
+        symbol_id="BBB",
+        exchange="NSE",
+        quantity=5,
+        entry_price=100.0,
+        stop_price=50.0,
+        atr_multiplier=1.0,
+        status="ACTIVE",
+    )
+
+    wide_ok, wide_risk_pct = wide_portfolio.check_heat_gate(
+        wide_portfolio.open_positions(),
+        capital=1_000.0,
+        threshold=0.15,
+    )
+
+    assert tight_ok is True
+    assert tight_risk_pct == 0.02
+    assert wide_ok is False
+    assert wide_risk_pct == 0.25
 
 
 def test_execute_stage_runs_hybrid_confirm_and_writes_artifacts(tmp_path: Path) -> None:

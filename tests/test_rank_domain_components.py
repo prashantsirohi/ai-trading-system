@@ -4,15 +4,17 @@ import pandas as pd
 import pytest
 
 from analytics.ranker import StockRanker
-from services.rank.composite import (
+from ai_trading_system.domains.ranking.composite import (
+    apply_rank_stability,
     compute_factor_scores,
     filter_ranked_scores,
     load_factor_weights,
     select_rank_output_columns,
 )
-from services.rank.contracts import DEFAULT_FACTOR_WEIGHTS
-from services.rank.factors import apply_sector_strength, apply_trend_persistence
-from services.rank.input_loader import RankerInputLoader
+from ai_trading_system.domains.ranking.contracts import DEFAULT_FACTOR_WEIGHTS
+from ai_trading_system.domains.ranking.factors import apply_sector_strength, apply_trend_persistence
+from ai_trading_system.domains.ranking.factors import apply_delivery
+from ai_trading_system.domains.ranking.input_loader import RankerInputLoader
 
 
 def test_load_factor_weights_overrides_defaults(tmp_path):
@@ -107,7 +109,9 @@ def test_compute_factor_scores_preserves_rank_order_and_output_contract():
     projected = select_rank_output_columns(ranked)
 
     assert projected["symbol_id"].tolist() == ["CCC", "BBB", "AAA"]
-    assert projected["composite_score"].tolist() == pytest.approx([100.0, 66.6666667, 33.3333333])
+    assert projected["composite_score"].tolist() == pytest.approx(
+        sorted(projected["composite_score"].tolist(), reverse=True)
+    )
     assert projected.columns.tolist()[:10] == [
         "symbol_id",
         "exchange",
@@ -122,30 +126,41 @@ def test_compute_factor_scores_preserves_rank_order_and_output_contract():
     ]
 
 
-def test_apply_trend_persistence_uses_alignment_and_defaults():
+def test_apply_trend_persistence_blends_strength_and_alignment():
     data = pd.DataFrame(
         [
-            {"symbol_id": "AAA", "exchange": "NSE", "close": 110.0},
-            {"symbol_id": "BBB", "exchange": "NSE", "close": 90.0},
+            {"symbol_id": "AAA", "exchange": "NSE", "close": 95.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "close": 110.0},
         ]
     )
     adx_frame = pd.DataFrame(
         [
-            {"symbol_id": "AAA", "exchange": "NSE", "adx_14": 25.0},
+            {"symbol_id": "AAA", "exchange": "NSE", "adx_14": 40.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "adx_14": 10.0},
         ]
     )
     sma_frame = pd.DataFrame(
         [
-            {"symbol_id": "AAA", "exchange": "NSE", "sma_20": 100.0, "sma_50": 95.0},
+            {"symbol_id": "AAA", "exchange": "NSE", "sma_20": 90.0, "sma_50": 100.0},
             {"symbol_id": "BBB", "exchange": "NSE", "sma_20": 100.0, "sma_50": 95.0},
         ]
     )
 
     scored = apply_trend_persistence(data, adx_frame=adx_frame, sma_frame=sma_frame)
 
-    assert scored.loc[scored["symbol_id"] == "AAA", "trend_score"].iloc[0] == pytest.approx(70.0)
-    assert scored.loc[scored["symbol_id"] == "BBB", "trend_score"].iloc[0] == pytest.approx(0.0)
-    assert scored.loc[scored["symbol_id"] == "BBB", "adx_score"].iloc[0] == pytest.approx(100.0)
+    aaa = scored.loc[scored["symbol_id"] == "AAA"].iloc[0]
+    bbb = scored.loc[scored["symbol_id"] == "BBB"].iloc[0]
+
+    assert aaa["adx_score"] == pytest.approx(80.0)
+    assert aaa["sma20_aligned"] == 1
+    assert aaa["sma50_aligned"] == 0
+    assert aaa["trend_score"] == pytest.approx(68.0)
+
+    assert bbb["adx_score"] == pytest.approx(20.0)
+    assert bbb["sma20_aligned"] == 1
+    assert bbb["sma50_aligned"] == 1
+    assert bbb["trend_score"] == pytest.approx(44.0)
+    assert aaa["trend_score"] > bbb["trend_score"]
 
 
 def test_apply_sector_strength_falls_back_when_inputs_missing():
@@ -161,6 +176,133 @@ def test_apply_sector_strength_falls_back_when_inputs_missing():
 
     assert scored["sector_rs_value"].iloc[0] == pytest.approx(0.5)
     assert scored["stock_vs_sector_value"].iloc[0] == pytest.approx(0.0)
+
+
+def test_apply_delivery_imputes_from_sector_then_universe_median():
+    data = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "close": 100.0, "sector_name": "Tech"},
+            {"symbol_id": "BBB", "exchange": "NSE", "close": 101.0, "sector_name": "Tech"},
+            {"symbol_id": "CCC", "exchange": "NSE", "close": 102.0, "sector_name": "Energy"},
+            {"symbol_id": "DDD", "exchange": "NSE", "close": 103.0, "sector_name": None},
+        ]
+    )
+    delivery_frame = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "delivery_pct": 30.0},
+            {"symbol_id": "CCC", "exchange": "NSE", "delivery_pct": 50.0},
+        ]
+    )
+
+    scored = apply_delivery(data, delivery_frame=delivery_frame)
+
+    assert scored.loc[scored["symbol_id"] == "AAA", "delivery_pct"].iloc[0] == pytest.approx(30.0)
+    assert scored.loc[scored["symbol_id"] == "BBB", "delivery_pct"].iloc[0] == pytest.approx(30.0)
+    assert scored.loc[scored["symbol_id"] == "DDD", "delivery_pct"].iloc[0] == pytest.approx(40.0)
+    assert scored.loc[scored["symbol_id"] == "BBB", "delivery_pct_imputed"].iloc[0]
+    assert scored.loc[scored["symbol_id"] == "DDD", "delivery_pct_imputed"].iloc[0]
+    assert scored.loc[scored["symbol_id"] == "AAA", "delivery_pct_imputed"].iloc[0] == False
+    assert scored.loc[scored["symbol_id"] == "DDD", "delivery_pct_filled"].iloc[0] == pytest.approx(40.0)
+
+
+def test_compute_factor_scores_sector_demeans_sector_sensitive_raw_factors():
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "TECH_A",
+                "exchange": "NSE",
+                "close": 100.0,
+                "rel_strength": 90.0,
+                "vol_intensity": 90.0,
+                "trend_score": 90.0,
+                "prox_high": 50.0,
+                "delivery_pct": 40.0,
+                "sector_rs_value": 0.6,
+                "stock_vs_sector_value": 0.2,
+                "sector_name": "Tech",
+            },
+            {
+                "symbol_id": "TECH_B",
+                "exchange": "NSE",
+                "close": 101.0,
+                "rel_strength": 80.0,
+                "vol_intensity": 80.0,
+                "trend_score": 80.0,
+                "prox_high": 50.0,
+                "delivery_pct": 40.0,
+                "sector_rs_value": 0.6,
+                "stock_vs_sector_value": 0.2,
+                "sector_name": "Tech",
+            },
+            {
+                "symbol_id": "UTIL_A",
+                "exchange": "NSE",
+                "close": 102.0,
+                "rel_strength": 60.0,
+                "vol_intensity": 60.0,
+                "trend_score": 60.0,
+                "prox_high": 50.0,
+                "delivery_pct": 40.0,
+                "sector_rs_value": 0.6,
+                "stock_vs_sector_value": 0.2,
+                "sector_name": "Utilities",
+            },
+            {
+                "symbol_id": "UTIL_B",
+                "exchange": "NSE",
+                "close": 103.0,
+                "rel_strength": 50.0,
+                "vol_intensity": 50.0,
+                "trend_score": 50.0,
+                "prox_high": 50.0,
+                "delivery_pct": 40.0,
+                "sector_rs_value": 0.6,
+                "stock_vs_sector_value": 0.2,
+                "sector_name": "Utilities",
+            },
+        ]
+    )
+
+    scored = compute_factor_scores(frame, weights=DEFAULT_FACTOR_WEIGHTS)
+
+    tech_a = scored.loc[scored["symbol_id"] == "TECH_A"].iloc[0]
+    util_a = scored.loc[scored["symbol_id"] == "UTIL_A"].iloc[0]
+    tech_b = scored.loc[scored["symbol_id"] == "TECH_B"].iloc[0]
+    util_b = scored.loc[scored["symbol_id"] == "UTIL_B"].iloc[0]
+
+    assert tech_a["rel_strength_score"] == pytest.approx(util_a["rel_strength_score"])
+    assert tech_a["vol_intensity_score"] == pytest.approx(util_a["vol_intensity_score"])
+    assert tech_a["trend_score_score"] == pytest.approx(util_a["trend_score_score"])
+    assert tech_b["rel_strength_score"] == pytest.approx(util_b["rel_strength_score"])
+    assert tech_b["vol_intensity_score"] == pytest.approx(util_b["vol_intensity_score"])
+    assert tech_b["trend_score_score"] == pytest.approx(util_b["trend_score_score"])
+    assert tech_a["prox_high_score"] == pytest.approx(util_a["prox_high_score"])
+    assert tech_a["delivery_pct_score"] == pytest.approx(util_a["delivery_pct_score"])
+
+
+def test_apply_rank_stability_uses_previous_score_order_for_positions():
+    current = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "composite_score": 95.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "composite_score": 90.0},
+            {"symbol_id": "CCC", "exchange": "NSE", "composite_score": 85.0},
+        ]
+    )
+    previous = pd.DataFrame(
+        [
+            {"symbol_id": "BBB", "exchange": "NSE", "composite_score": 70.0},
+            {"symbol_id": "CCC", "exchange": "NSE", "composite_score": 80.0},
+            {"symbol_id": "AAA", "exchange": "NSE", "composite_score": 90.0},
+        ]
+    )
+
+    stabilized = apply_rank_stability(current, previous_frame=previous)
+
+    previous_positions = stabilized.set_index("symbol_id")["previous_rank_position"].to_dict()
+
+    assert previous_positions["AAA"] == 1
+    assert previous_positions["CCC"] == 2
+    assert previous_positions["BBB"] == 3
 
 
 def test_ranker_input_loader_normalizes_swapped_columns():

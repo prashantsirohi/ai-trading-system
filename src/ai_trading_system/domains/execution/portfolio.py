@@ -30,7 +30,7 @@ def check_portfolio_constraints(
     portfolio_state: dict,
     *,
     max_positions: int = 10,
-    max_sector_exposure: float = 0.30,
+    max_sector_exposure: float = 0.20,
     max_single_stock_weight: float = 0.10,
 ) -> dict:
     """Evaluate basic portfolio limits for a candidate order."""
@@ -126,6 +126,28 @@ class PortfolioManager:
             positions[position.symbol_id] = position
         return positions
 
+    def check_heat_gate(
+        self,
+        positions: Dict[str, PositionSnapshot],
+        capital: float,
+        threshold: float = 0.15,
+    ) -> tuple[bool, float]:
+        if not positions:
+            return True, 0.0
+        active_stops = {
+            f"{str(row.get('exchange') or 'NSE').upper()}:{str(row.get('symbol_id') or '').upper()}": row
+            for row in self.store.list_active_stops()
+        }
+        total_risk = 0.0
+        for pos in positions.values():
+            position_key = f"{str(pos.exchange or 'NSE').upper()}:{str(pos.symbol_id or '').upper()}"
+            total_risk += _estimate_position_risk(
+                position=pos,
+                stop_record=active_stops.get(position_key),
+            )
+        risk_pct = total_risk / capital if capital > 0 else 0.0
+        return risk_pct <= threshold, round(risk_pct, 4)
+
     def open_positions_frame(self) -> List[dict]:
         rows: list[dict] = []
         for position in self.open_positions().values():
@@ -133,3 +155,21 @@ class PortfolioManager:
             payload["trade_ref"] = open_position_trade_ref(position.symbol_id, position.exchange)
             rows.append(payload)
         return rows
+
+
+def _estimate_position_risk(
+    *,
+    position: PositionSnapshot,
+    stop_record: dict | None,
+    fallback_risk_pct: float = 0.10,
+) -> float:
+    if stop_record and str(stop_record.get("status") or "").upper() == "ACTIVE":
+        entry_price = float(stop_record.get("entry_price") or position.avg_entry_price or 0.0)
+        stop_price = float(stop_record.get("stop_price") or 0.0)
+        stop_quantity = int(stop_record.get("quantity") or 0)
+        quantity = stop_quantity if stop_quantity > 0 else int(position.quantity)
+        stop_distance = max(0.0, entry_price - stop_price)
+        return stop_distance * max(quantity, 0)
+
+    fallback_distance = max(0.0, float(position.avg_entry_price) * float(fallback_risk_pct))
+    return fallback_distance * max(int(position.quantity), 0)

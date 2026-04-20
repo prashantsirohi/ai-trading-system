@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -9,8 +11,8 @@ from typing import Callable, Dict, Optional
 import pandas as pd
 
 from ai_trading_system.domains.ingest.repository import fetch_catalog_close_frame, fetch_catalog_summary
-from core.logging import logger
-from run.stages.base import DataQualityCriticalError, StageArtifact, StageContext, StageResult
+from ai_trading_system.platform.logging.logger import logger
+from ai_trading_system.pipeline.contracts import DataQualityCriticalError, StageArtifact, StageContext, StageResult
 
 
 class IngestOrchestrationService:
@@ -70,7 +72,46 @@ class IngestOrchestrationService:
         )
         payload.update(self.run_bhavcopy_validation(context, payload))
         payload.update(self.run_delivery_collection(context, payload))
+        payload["downstream_skip_eligible"] = self.is_downstream_skip_eligible(payload)
+        payload["downstream_input_fingerprint"] = self.build_downstream_input_fingerprint(payload)
         return payload
+
+    @staticmethod
+    def is_downstream_skip_eligible(payload: Dict) -> bool:
+        if "rows_written" not in payload and "updated_symbols" not in payload:
+            return False
+        updated_symbols = payload.get("updated_symbols")
+        rows_written = int(payload.get("rows_written", 0) or 0)
+        return rows_written == 0 and not bool(updated_symbols)
+
+    @staticmethod
+    def build_downstream_input_fingerprint(payload: Dict) -> str:
+        updated_symbols = payload.get("updated_symbols")
+        if isinstance(updated_symbols, list):
+            normalized_symbols = sorted({str(symbol).strip() for symbol in updated_symbols if str(symbol).strip()})
+        else:
+            normalized_symbols = []
+        trust_summary = payload.get("trust_summary") if isinstance(payload.get("trust_summary"), dict) else {}
+        fingerprint_payload = {
+            "catalog_rows": int(payload.get("catalog_rows", 0) or 0),
+            "symbol_count": int(payload.get("symbol_count", 0) or 0),
+            "latest_timestamp": payload.get("latest_timestamp"),
+            "rows_written": int(payload.get("rows_written", 0) or 0),
+            "benchmark_rows_written": int(payload.get("benchmark_rows_written", 0) or 0),
+            "updated_symbols": normalized_symbols,
+            "unresolved_date_count": int(payload.get("unresolved_date_count", 0) or 0),
+            "unresolved_symbol_count": int(payload.get("unresolved_symbol_count", 0) or 0),
+            "validation_counts": payload.get("validation_counts") if isinstance(payload.get("validation_counts"), dict) else {},
+            "trust_summary": {
+                "status": trust_summary.get("status"),
+                "fallback_ratio_latest": trust_summary.get("fallback_ratio_latest"),
+                "unknown_ratio_latest": trust_summary.get("unknown_ratio_latest"),
+                "active_quarantine_symbol_count": trust_summary.get("active_quarantine_symbol_count"),
+                "active_quarantine_ratio": trust_summary.get("active_quarantine_ratio"),
+            },
+        }
+        encoded = json.dumps(fingerprint_payload, sort_keys=True, default=str).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod
     def classify_freshness_status(target_end_date: str, latest_available_date: str | None) -> str:

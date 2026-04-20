@@ -4,11 +4,76 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.paths import ensure_domain_layout
+@dataclass(frozen=True)
+class TrustConfidenceEnvelope:
+    """Portable trust/confidence envelope for rank/execute/publish reporting."""
+
+    trust_status: str
+    active_quarantined_dates: list[str] = field(default_factory=list)
+    active_quarantined_symbols: int = 0
+    fallback_ratio_latest: float = 0.0
+    primary_ratio_latest: float | None = None
+    unknown_ratio_latest: float = 0.0
+    latest_provider_stats: dict[str, Any] = field(default_factory=dict)
+    latest_trade_date: str | None = None
+    latest_validated_date: str | None = None
+    notes: list[str] = field(default_factory=list)
+    provider_confidence: float | None = None
+    feature_confidence: float | None = None
+    rank_confidence: float | None = None
+    execution_weight: float | None = None
+
+    @classmethod
+    def from_trust_summary(
+        cls,
+        summary: dict[str, Any] | None,
+        *,
+        notes: list[str] | None = None,
+        feature_confidence: float | None = None,
+        rank_confidence: float | None = None,
+        execution_weight: float | None = None,
+    ) -> "TrustConfidenceEnvelope":
+        payload = dict(summary or {})
+        embedded = dict(payload.get("trust_confidence") or {})
+        return cls(
+            trust_status=str(payload.get("status") or embedded.get("trust_status") or "unknown"),
+            active_quarantined_dates=list(payload.get("active_quarantined_dates") or embedded.get("active_quarantined_dates") or []),
+            active_quarantined_symbols=int(payload.get("active_quarantined_symbols") or embedded.get("active_quarantined_symbols") or 0),
+            fallback_ratio_latest=float(payload.get("fallback_ratio_latest") or embedded.get("fallback_ratio_latest") or 0.0),
+            primary_ratio_latest=_maybe_float(payload.get("primary_ratio_latest", embedded.get("primary_ratio_latest"))),
+            unknown_ratio_latest=float(payload.get("unknown_ratio_latest") or embedded.get("unknown_ratio_latest") or 0.0),
+            latest_provider_stats=dict(payload.get("latest_provider_stats") or embedded.get("latest_provider_stats") or {}),
+            latest_trade_date=_maybe_str(payload.get("latest_trade_date", embedded.get("latest_trade_date"))),
+            latest_validated_date=_maybe_str(payload.get("latest_validated_date", embedded.get("latest_validated_date"))),
+            notes=list(notes or embedded.get("notes") or payload.get("notes") or []),
+            provider_confidence=_maybe_float(embedded.get("provider_confidence")),
+            feature_confidence=feature_confidence if feature_confidence is not None else _maybe_float(embedded.get("feature_confidence")),
+            rank_confidence=rank_confidence if rank_confidence is not None else _maybe_float(embedded.get("rank_confidence")),
+            execution_weight=execution_weight if execution_weight is not None else _maybe_float(embedded.get("execution_weight")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def attach_audit_fields(
+    row: dict,
+    *,
+    run_id: str | None,
+    stage: str | None,
+    artifact_path: str | None,
+) -> dict:
+    """Attach artifact/run lineage for traceability."""
+    return {
+        **row,
+        "audit_run_id": run_id,
+        "audit_stage": stage,
+        "audit_artifact_path": artifact_path,
+    }
 
 
 @dataclass
@@ -77,6 +142,8 @@ class StageContext:
     task_reporter: Any = None
 
     def output_dir(self) -> Path:
+        from ai_trading_system.platform.db.paths import ensure_domain_layout
+
         paths = ensure_domain_layout(
             project_root=self.project_root,
             data_domain=self.params.get("data_domain", "operational"),
@@ -131,3 +198,18 @@ def compute_file_hash(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _maybe_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _maybe_str(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return str(value)

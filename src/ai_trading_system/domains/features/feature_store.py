@@ -8,95 +8,95 @@ from ai_trading_system.domains.features import repository as features_repository
 from ai_trading_system.domains.features import snapshot as features_snapshot
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
-from core.paths import ensure_domain_layout
-from core.logging import logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
 
 
 def add_feature_readiness(frame: pd.DataFrame, min_lookback: int = 50) -> pd.DataFrame:
     """Mark rows with sufficient per-symbol history for robust feature usage."""
-    output = frame.copy()
+    output = frame.copy(deep=True)
     if output.empty:
-        output["feature_ready"] = pd.Series(dtype=bool)
+        output.loc[:, "feature_ready"] = pd.Series(dtype=bool)
         return output
     if "symbol" in output.columns and "symbol_id" not in output.columns:
-        output["symbol_id"] = output["symbol"]
+        output.loc[:, "symbol_id"] = output["symbol"]
     if "symbol_id" not in output.columns:
-        output["feature_ready"] = False
+        output.loc[:, "feature_ready"] = False
         return output
-    output["feature_ready"] = output.groupby("symbol_id").cumcount() >= (int(min_lookback) - 1)
+    output.loc[:, "feature_ready"] = output.groupby("symbol_id").cumcount() >= (int(min_lookback) - 1)
     return output
 
 
 def add_feature_confidence(frame: pd.DataFrame) -> pd.DataFrame:
     """Propagate readiness/provider confidence into a bounded feature confidence score."""
-    output = frame.copy()
+    output = frame.copy(deep=True)
     if output.empty:
-        output["feature_confidence"] = pd.Series(dtype=float)
+        output.loc[:, "feature_confidence"] = pd.Series(dtype=float)
         return output
 
-    output["feature_confidence"] = 1.0
+    output.loc[:, "feature_confidence"] = 1.0
 
     if "feature_ready" in output.columns:
         output.loc[~output["feature_ready"].fillna(False), "feature_confidence"] = 0.0
 
     if "provider_confidence" in output.columns:
         provider = pd.to_numeric(output["provider_confidence"], errors="coerce").clip(lower=0.0, upper=1.0)
-        output["feature_confidence"] = pd.concat(
+        output.loc[:, "feature_confidence"] = pd.concat(
             [output["feature_confidence"], provider], axis=1
         ).min(axis=1)
 
-    output["feature_confidence"] = output["feature_confidence"].clip(lower=0.0, upper=1.0)
+    output.loc[:, "feature_confidence"] = output["feature_confidence"].clip(lower=0.0, upper=1.0)
     return output
 
 
 def add_liquidity_features(frame: pd.DataFrame) -> pd.DataFrame:
     """Add basic cross-sectional liquidity signals."""
-    output = frame.copy()
+    output = frame.copy(deep=True)
     if output.empty:
-        output["turnover"] = pd.Series(dtype=float)
-        output["liquidity_score"] = pd.Series(dtype=float)
+        output.loc[:, "turnover"] = pd.Series(dtype=float)
+        output.loc[:, "liquidity_score"] = pd.Series(dtype=float)
         return output
 
     close = pd.to_numeric(output.get("close"), errors="coerce")
     volume = pd.to_numeric(output.get("volume"), errors="coerce")
-    output["turnover"] = close * volume
+    output.loc[:, "turnover"] = close * volume
 
     if "date" not in output.columns and "timestamp" in output.columns:
-        output["date"] = pd.to_datetime(output["timestamp"]).dt.normalize()
+        output.loc[:, "date"] = pd.to_datetime(output["timestamp"]).dt.normalize()
     if "date" in output.columns:
-        output["liquidity_score"] = output.groupby("date")["turnover"].rank(pct=True)
+        output.loc[:, "liquidity_score"] = output.groupby("date")["turnover"].rank(pct=True)
     else:
-        output["liquidity_score"] = output["turnover"].rank(pct=True)
+        output.loc[:, "liquidity_score"] = output["turnover"].rank(pct=True)
     return output
 
 
 def add_cross_sectional_features(frame: pd.DataFrame, metric: str = "return_20d") -> pd.DataFrame:
     """Add per-date universe and sector ranks for explainability and screening."""
-    output = frame.copy()
+    output = frame.copy(deep=True)
     if output.empty:
-        output["rank_in_universe"] = pd.Series(dtype=float)
-        output["percentile_score"] = pd.Series(dtype=float)
+        output.loc[:, "rank_in_universe"] = pd.Series(dtype=float)
+        output.loc[:, "percentile_score"] = pd.Series(dtype=float)
         return output
     if metric not in output.columns:
-        output["rank_in_universe"] = np.nan
-        output["percentile_score"] = np.nan
+        output.loc[:, "rank_in_universe"] = np.nan
+        output.loc[:, "percentile_score"] = np.nan
         if "sector" in output.columns:
-            output["rank_in_sector"] = np.nan
+            output.loc[:, "rank_in_sector"] = np.nan
         return output
 
     if "date" not in output.columns and "timestamp" in output.columns:
-        output["date"] = pd.to_datetime(output["timestamp"]).dt.normalize()
+        output.loc[:, "date"] = pd.to_datetime(output["timestamp"]).dt.normalize()
     if "date" not in output.columns:
-        output["rank_in_universe"] = output[metric].rank(ascending=False, method="dense")
-        output["percentile_score"] = output[metric].rank(pct=True)
+        output.loc[:, "rank_in_universe"] = output[metric].rank(ascending=False, method="dense")
+        output.loc[:, "percentile_score"] = output[metric].rank(pct=True)
         if "sector" in output.columns:
-            output["rank_in_sector"] = output.groupby("sector")[metric].rank(ascending=False, method="dense")
+            output.loc[:, "rank_in_sector"] = output.groupby("sector")[metric].rank(ascending=False, method="dense")
         return output
 
-    output["rank_in_universe"] = output.groupby("date")[metric].rank(ascending=False, method="dense")
-    output["percentile_score"] = output.groupby("date")[metric].rank(pct=True)
+    output.loc[:, "rank_in_universe"] = output.groupby("date")[metric].rank(ascending=False, method="dense")
+    output.loc[:, "percentile_score"] = output.groupby("date")[metric].rank(pct=True)
     if "sector" in output.columns:
-        output["rank_in_sector"] = output.groupby(["date", "sector"])[metric].rank(
+        output.loc[:, "rank_in_sector"] = output.groupby(["date", "sector"])[metric].rank(
             ascending=False,
             method="dense",
         )
@@ -423,48 +423,45 @@ class FeatureStore:
     ) -> pd.DataFrame:
         """
         Execute a DuckDB SQL template over the OHLCV catalog.
-        Template receives {symbol} placeholder. Must return:
+        Template receives {symbol_predicate} and {exchange_predicate} placeholders. Must return:
           symbol_id, exchange, timestamp, and at least one feature column.
         """
         conn = self._get_conn()
         try:
+            query = sql_template.replace(
+                "{symbol_predicate}",
+                "symbol_id = ?" if symbol_id else "TRUE",
+            ).replace(
+                "{exchange_predicate}",
+                "exchange = ?" if exchange else "TRUE",
+            )
+
+            bind_params: list[Any] = []
             if symbol_id:
-                query = sql_template.replace("{symbol}", f"'{symbol_id}'")
+                bind_params.append(symbol_id)
+            if exchange:
+                bind_params.append(exchange)
 
-                # Add date filters
-                date_conditions = []
-                if start_date:
-                    date_conditions.append(f"timestamp > '{start_date}'")
-                if end_date:
-                    date_conditions.append(f"timestamp <= '{end_date}'")
+            date_conditions = []
+            if start_date:
+                date_conditions.append("timestamp > CAST(? AS TIMESTAMP)")
+                bind_params.append(start_date)
+            if end_date:
+                date_conditions.append("timestamp <= CAST(? AS TIMESTAMP)")
+                bind_params.append(end_date)
 
-                if date_conditions:
-                    order_pos = query.upper().rfind("ORDER BY")
-                    insert_pos = order_pos if order_pos != -1 else len(query)
-                    where_clause = " AND ".join(date_conditions)
-                    query = (
-                        query[:insert_pos]
-                        + f" AND {where_clause}"
-                        + (
-                            f" AND exchange = '{exchange}'"
-                            if "exchange" not in where_clause
-                            else ""
-                        )
-                        + query[insert_pos:]
-                    )
-                elif exchange:
-                    order_pos = query.upper().rfind("ORDER BY")
-                    insert_pos = order_pos if order_pos != -1 else len(query)
-                    query = (
-                        query[:insert_pos]
-                        + f" AND exchange = '{exchange}'"
-                        + query[insert_pos:]
-                    )
+            if date_conditions:
+                order_pos = query.upper().rfind("ORDER BY")
+                insert_pos = order_pos if order_pos != -1 else len(query)
+                query = (
+                    query[:insert_pos]
+                    + " AND "
+                    + " AND ".join(date_conditions)
+                    + " "
+                    + query[insert_pos:]
+                )
 
-                df = conn.execute(query).fetchdf()
-            else:
-                query = sql_template.replace("{symbol}", "symbol_id")
-                df = conn.execute(query).fetchdf()
+            df = conn.execute(query, bind_params).fetchdf()
             return df
         finally:
             conn.close()
@@ -512,8 +509,8 @@ class FeatureStore:
         if new_df.empty:
             return 0
 
-        new_df = new_df.copy()
-        new_df["timestamp"] = pd.to_datetime(new_df["timestamp"])
+        new_df = new_df.copy(deep=True)
+        new_df.loc[:, "timestamp"] = pd.to_datetime(new_df["timestamp"])
         new_df = new_df.sort_values("timestamp").drop_duplicates(
             subset=["symbol_id", "exchange", "timestamp"],
             keep="last",
@@ -525,7 +522,8 @@ class FeatureStore:
 
         existing = pd.read_parquet(path)
         if not existing.empty and "timestamp" in existing.columns:
-            existing["timestamp"] = pd.to_datetime(existing["timestamp"])
+            existing = existing.copy(deep=True)
+            existing.loc[:, "timestamp"] = pd.to_datetime(existing["timestamp"])
             existing = existing[existing["timestamp"] < replace_from_ts]
 
         combined = pd.concat([existing, new_df], ignore_index=True)
@@ -614,8 +612,8 @@ class FeatureStore:
                     close,
                     LAG(close) OVER w AS prev_close
                 FROM _catalog
-                WHERE symbol_id = {{symbol}}
-                  AND exchange = '{exchange}'
+                WHERE {{symbol_predicate}}
+                  AND {{exchange_predicate}}
                   AND timestamp IS NOT NULL
                 WINDOW w AS (ORDER BY timestamp)
             ),
@@ -689,8 +687,8 @@ class FeatureStore:
                     LAG(low) OVER w AS prev_low,
                     LAG(high) OVER w AS prev_high
                 FROM _catalog
-                WHERE symbol_id = {{symbol}}
-                  AND exchange = '{exchange}'
+                WHERE {{symbol_predicate}}
+                  AND {{exchange_predicate}}
                   AND timestamp IS NOT NULL
                 WINDOW w AS (ORDER BY timestamp)
             ),
@@ -811,8 +809,8 @@ class FeatureStore:
                     close,
                     ROW_NUMBER() OVER w AS rn
                 FROM _catalog
-                WHERE symbol_id = {{symbol}}
-                  AND exchange = '{exchange}'
+                WHERE {{symbol_predicate}}
+                  AND {{exchange_predicate}}
                   AND timestamp IS NOT NULL
                   {date_filter}
                 WINDOW w AS (ORDER BY timestamp)
@@ -828,11 +826,19 @@ class FeatureStore:
 
         conn = self._get_conn()
         try:
+            query = sql.replace(
+                "{symbol_predicate}",
+                "symbol_id = ?" if symbol_id else "TRUE",
+            ).replace(
+                "{exchange_predicate}",
+                "exchange = ?" if exchange else "TRUE",
+            )
+            bind_params: list[Any] = []
             if symbol_id:
-                query = sql.replace("{symbol}", f"'{symbol_id}'")
-            else:
-                query = sql.replace("{symbol}", "symbol_id")
-            df = conn.execute(query).fetchdf()
+                bind_params.append(symbol_id)
+            if exchange:
+                bind_params.append(exchange)
+            df = conn.execute(query, bind_params).fetchdf()
             return df
         finally:
             conn.close()
@@ -868,15 +874,12 @@ class FeatureStore:
                     symbol_id, exchange, timestamp, close,
                     LAG(close) OVER w AS prev_close
                 FROM _catalog
-                WHERE symbol_id = {{symbol}}
-                  AND exchange = '{exchange}'
+                WHERE {"symbol_id = ?" if symbol_id else "TRUE"}
+                  AND {"exchange = ?" if exchange else "TRUE"}
                   AND timestamp IS NOT NULL
                   {date_filter}
                 WINDOW w AS (ORDER BY timestamp)
             """
-            if symbol_id:
-                base_sql = base_sql.replace("{symbol}", f"'{symbol_id}'")
-
             result_dfs = []
             for w in windows:
                 alpha = 2.0 / (w + 1)
@@ -896,7 +899,12 @@ class FeatureStore:
                     FROM ema
                     ORDER BY timestamp
                 """
-                df = conn.execute(query).fetchdf()
+                params: list[Any] = []
+                if symbol_id:
+                    params.append(symbol_id)
+                if exchange:
+                    params.append(exchange)
+                df = conn.execute(query, params).fetchdf()
                 result_dfs.append(df)
 
             if not result_dfs:
@@ -941,16 +949,13 @@ class FeatureStore:
                 SELECT
                     symbol_id, exchange, timestamp, close
                 FROM _catalog
-                WHERE symbol_id = {{symbol}}
-                  AND exchange = '{exchange}'
+                WHERE {"symbol_id = ?" if symbol_id else "TRUE"}
+                  AND {"exchange = ?" if exchange else "TRUE"}
                   AND timestamp IS NOT NULL
                   {date_filter}
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp) >= {slow}
                 ORDER BY timestamp
             """
-            if symbol_id:
-                base = base.replace("{symbol}", f"'{symbol_id}'")
-
             fast_alpha = 2.0 / (fast + 1)
             slow_alpha = 2.0 / (slow + 1)
             sig_alpha = 2.0 / (signal + 1)
@@ -1004,7 +1009,12 @@ class FeatureStore:
                 WHERE macd_line IS NOT NULL
                 ORDER BY timestamp
             """
-            return conn.execute(query).fetchdf()
+            params: list[Any] = []
+            if symbol_id:
+                params.append(symbol_id)
+            if exchange:
+                params.append(exchange)
+            return conn.execute(query, params).fetchdf()
         finally:
             conn.close()
 
@@ -1030,8 +1040,8 @@ class FeatureStore:
                     high, low, close,
                     LAG(close) OVER w AS prev_close
                 FROM _catalog
-                WHERE symbol_id = {{symbol}}
-                  AND exchange = '{exchange}'
+                WHERE {{symbol_predicate}}
+                  AND {{exchange_predicate}}
                   AND timestamp IS NOT NULL
                 WINDOW w AS (ORDER BY timestamp)
             ),
@@ -1093,8 +1103,8 @@ class FeatureStore:
                     STDDEV(close) OVER w AS sd,
                     ROW_NUMBER() OVER w AS rn
                 FROM _catalog
-                WHERE symbol_id = {{symbol}}
-                  AND exchange = '{exchange}'
+                WHERE {{symbol_predicate}}
+                  AND {{exchange_predicate}}
                   AND timestamp IS NOT NULL
                 WINDOW w AS (ORDER BY timestamp ROWS BETWEEN {period - 1} PRECEDING AND CURRENT ROW)
             )
@@ -1153,22 +1163,24 @@ class FeatureStore:
                             / NULLIF(LAG(close, {p}) OVER w, 0),
                         4) AS roc_{p}
                     FROM _catalog
-                    WHERE symbol_id = {{symbol}}
-                      AND exchange = '{exchange}'
+                    WHERE {"symbol_id = ?" if symbol_id else "TRUE"}
+                      AND {"exchange = ?" if exchange else "TRUE"}
                       AND timestamp IS NOT NULL
                       {date_filter}
                     WINDOW w AS (ORDER BY timestamp)
                 """
+                params: list[Any] = []
                 if symbol_id:
-                    base_sql = base_sql.replace("{symbol}", f"'{symbol_id}'")
-
+                    params.append(symbol_id)
+                if exchange:
+                    params.append(exchange)
                 df = conn.execute(f"""
                     SELECT symbol_id, exchange, timestamp, close,
                            roc_{p} AS roc_{p}
                     FROM ({base_sql}) t
                     WHERE close_{p} IS NOT NULL
                     ORDER BY timestamp
-                """).fetchdf()
+                """, params).fetchdf()
                 all_dfs.append(df)
 
             if not all_dfs:
@@ -1359,23 +1371,23 @@ class FeatureStore:
         conn = self._get_conn()
         try:
             if as_of_ts:
-                query = f"""
+                query = """
                     WITH ohlcv AS (
                         SELECT
                             symbol_id, exchange, timestamp,
                             open, high, low, close, volume
                         FROM _catalog
-                        WHERE symbol_id = '{ohlcv_symbol_id}'
-                          AND exchange = '{exchange}'
-                          AND timestamp <= TIMESTAMP '{as_of_ts}'
+                        WHERE symbol_id = ?
+                          AND exchange = ?
+                          AND timestamp <= CAST(? AS TIMESTAMP)
                     ),
                     feat_latest AS (
                         SELECT DISTINCT ON (timestamp)
                             timestamp, open, high, low, close, volume
                         FROM _catalog
-                        WHERE symbol_id = '{ohlcv_symbol_id}'
-                          AND exchange = '{exchange}'
-                          AND timestamp <= TIMESTAMP '{as_of_ts}'
+                        WHERE symbol_id = ?
+                          AND exchange = ?
+                          AND timestamp <= CAST(? AS TIMESTAMP)
                         ORDER BY timestamp
                     )
                     SELECT o.symbol_id, o.exchange, o.timestamp,
@@ -1387,22 +1399,33 @@ class FeatureStore:
                         ON f.timestamp = (
                             SELECT MAX(timestamp)
                             FROM _catalog
-                            WHERE symbol_id = '{ohlcv_symbol_id}'
-                              AND exchange = '{exchange}'
+                            WHERE symbol_id = ?
+                              AND exchange = ?
                               AND timestamp <= o.timestamp
-                              AND timestamp <= TIMESTAMP '{as_of_ts}'
+                              AND timestamp <= CAST(? AS TIMESTAMP)
                         )
                     ORDER BY o.timestamp
                 """
+                params = [
+                    ohlcv_symbol_id,
+                    exchange,
+                    as_of_ts,
+                    ohlcv_symbol_id,
+                    exchange,
+                    as_of_ts,
+                    ohlcv_symbol_id,
+                    exchange,
+                    as_of_ts,
+                ]
             else:
-                query = f"""
+                query = """
                     WITH ohlcv AS (
                         SELECT
                             symbol_id, exchange, timestamp,
                             open, high, low, close, volume
                         FROM _catalog
-                        WHERE symbol_id = '{ohlcv_symbol_id}'
-                          AND exchange = '{exchange}'
+                        WHERE symbol_id = ?
+                          AND exchange = ?
                     ),
                     feat_with_row AS (
                         SELECT
@@ -1411,8 +1434,8 @@ class FeatureStore:
                             ROW_NUMBER() OVER w AS rn,
                             COUNT(*) OVER () AS total
                         FROM _catalog
-                        WHERE symbol_id = '{ohlcv_symbol_id}'
-                          AND exchange = '{exchange}'
+                        WHERE symbol_id = ?
+                          AND exchange = ?
                         WINDOW w AS (ORDER BY timestamp)
                     )
                     SELECT
@@ -1426,11 +1449,12 @@ class FeatureStore:
                             SELECT MAX(rn)
                             FROM feat_with_row f2
                             WHERE f2.timestamp <= o.timestamp
-                              AND f2.symbol_id = '{ohlcv_symbol_id}'
+                              AND f2.symbol_id = ?
                         )
                     ORDER BY o.timestamp
                 """
-            return conn.execute(query).fetchdf()
+                params = [ohlcv_symbol_id, exchange, ohlcv_symbol_id, exchange, ohlcv_symbol_id]
+            return conn.execute(query, params).fetchdf()
         finally:
             conn.close()
 
@@ -1500,9 +1524,9 @@ class FeatureStore:
         if df.empty:
             return 0
 
-        df = df.copy()
+        df = df.copy(deep=True)
         if "date" not in df.columns:
-            df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+            df.loc[:, "date"] = pd.to_datetime(df["timestamp"]).dt.date
 
         self._ensure_feature_table(feature_name, df)
 
@@ -1511,34 +1535,13 @@ class FeatureStore:
             conn.execute(f"INSERT INTO feat_{feature_name} BY NAME SELECT * FROM df")
             conn.commit()
             rows = len(df)
-        except Exception as e:
-            logger.warning(f"Insert error: {e}")
-            rows = 0
+        except Exception as exc:
+            logger.exception("Failed writing feature rows into feat_%s: %s", feature_name, exc)
+            raise
         finally:
             conn.close()
 
         return rows
-
-        df = df.copy()
-        if "date" not in df.columns:
-            df["date"] = pd.to_datetime(df["timestamp"]).dt.date
-
-        self._ensure_feature_table(feature_name, df)
-
-        conn = self._get_conn()
-        try:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS temp_staging AS SELECT * FROM df LIMIT 0"
-            )
-            for col in df.columns:
-                pass
-            conn.commit()
-        except Exception as e:
-            pass
-        finally:
-            conn.close()
-
-        return 0
 
     def load_features_duckdb(
         self,
@@ -1555,28 +1558,33 @@ class FeatureStore:
         try:
             conn.execute(f"SELECT * FROM {table_name} LIMIT 1")
         except Exception as exc:
-            logger.debug("Feature table %s read skipped: %s", table_name, exc)
+            logger.warning("Feature table %s read skipped: %s", table_name, exc)
             conn.close()
             return pd.DataFrame()
 
         conn = self._get_conn()
         try:
             conditions = []
+            params: list[Any] = []
             if symbol_id:
-                conditions.append(f"symbol_id = '{symbol_id}'")
+                conditions.append("symbol_id = ?")
+                params.append(symbol_id)
             if exchange:
-                conditions.append(f"exchange = '{exchange}'")
+                conditions.append("exchange = ?")
+                params.append(exchange)
             if start_date:
-                conditions.append(f"date >= '{start_date}'")
+                conditions.append("date >= ?")
+                params.append(start_date)
             if end_date:
-                conditions.append(f"date <= '{end_date}'")
+                conditions.append("date <= ?")
+                params.append(end_date)
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
             df = conn.execute(f"""
                 SELECT * FROM {table_name}
                 WHERE {where_clause}
                 ORDER BY symbol_id, timestamp
-            """).fetchdf()
+            """, params).fetchdf()
             return df
         finally:
             conn.close()
@@ -1700,9 +1708,10 @@ class FeatureStore:
                 sym_rows = conn.execute(
                     """
                     SELECT DISTINCT symbol_id FROM _catalog
-                    WHERE exchange IN ({exchanges})
+                    WHERE exchange IN (SELECT UNNEST(?))
                     ORDER BY symbol_id
-                """.format(exchanges=",".join(f"'{e}'" for e in exchanges))
+                """,
+                    [list(exchanges)],
                 ).fetchdf()
                 symbols = sym_rows["symbol_id"].tolist()
             finally:
@@ -1771,7 +1780,8 @@ class FeatureStore:
                             os.makedirs(feat_dir, exist_ok=True)
                             out_path = os.path.join(feat_dir, f"{sym}.parquet")
                             if incremental and os.path.exists(out_path) and replace_from_ts is not None:
-                                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                                df = df.copy(deep=True)
+                                df.loc[:, "timestamp"] = pd.to_datetime(df["timestamp"])
                                 df = df[df["timestamp"] >= replace_from_ts].copy()
                                 rows_added = self._replace_tail_in_parquet(
                                     df,
@@ -1953,10 +1963,10 @@ class FeatureStore:
                     supertrend.iloc[i] = prev_upper
 
         suffix = f"_{period}_{int(multiplier)}"
-        result = ohlcv[["symbol_id", "exchange", "timestamp"]].copy()
-        result["close"] = close.values
-        result[f"supertrend{suffix}"] = supertrend.values
-        result[f"supertrend_dir{suffix}"] = direction.values
+        result = ohlcv[["symbol_id", "exchange", "timestamp"]].copy(deep=True)
+        result.loc[:, "close"] = close.values
+        result.loc[:, f"supertrend{suffix}"] = supertrend.values
+        result.loc[:, f"supertrend_dir{suffix}"] = direction.values
 
         logger.info(
             f"Supertrend{period}x{multiplier}: {len(result)} rows for {symbol_id}"
@@ -1993,13 +2003,13 @@ class FeatureStore:
         cur = conn_sqlite.cursor()
         cur.execute("""
             SELECT name FROM sqlite_master
-            WHERE type='table' AND name IN ('stock_details', 'symbols')
+            WHERE type='table' AND name = 'symbols'
         """)
         available = {r[0] for r in cur.fetchall()}
         conn_sqlite.close()
 
-        if "stock_details" not in available:
-            logger.warning("stock_details table not found in masterdb")
+        if "symbols" not in available:
+            logger.warning("symbols table not found in masterdb")
             return pd.DataFrame()
 
         conn_sqlite = sqlite3.connect(masterdb_path)
@@ -2008,18 +2018,15 @@ class FeatureStore:
         df = pd.read_sql(
             f"""
             SELECT
-                sd.Security_id,
-                sd.Symbol    AS symbol_id,
-                sd.Name      AS name,
-                sd."Industry Group" AS industry_group,
-                sd."Industry"       AS industry,
-                sd.MCAP,
+                s.security_id,
+                s.symbol_id,
+                s.symbol_name   AS name,
+                s.sector        AS industry_group,
+                s.industry      AS industry,
+                s.mcap,
                 s.exchange
-            FROM stock_details sd
-            LEFT JOIN symbols s ON s.security_id = sd.Security_id
-            WHERE sd.Security_id IS NOT NULL
-              AND sd.Security_id != ''
-              AND s.exchange IN ({exc_placeholders})
+            FROM symbols s
+            WHERE s.exchange IN ({exc_placeholders})
         """,
             conn_sqlite,
             params=exchanges,
@@ -2049,7 +2056,7 @@ class FeatureStore:
             else:
                 return "Nano Cap"
 
-        df["mcap_category"] = df["MCAP"].apply(mcap_category)
+        df["mcap_category"] = df["mcap"].apply(mcap_category)
 
         return df
 
@@ -2123,16 +2130,14 @@ class FeatureStore:
         df = pd.read_sql(
             """
             SELECT
-                sd.Security_id,
-                sd.Symbol    AS symbol_id,
-                sd.Name      AS name,
-                sd."Industry Group" AS industry_group,
-                sd."Industry"       AS industry,
-                sd.MCAP
-            FROM stock_details sd
-            LEFT JOIN symbols s ON s.security_id = sd.Security_id
-            WHERE sd.Symbol = ? AND s.exchange = ?
-              AND sd.Security_id IS NOT NULL AND sd.Security_id != ''
+                s.security_id,
+                s.symbol_id,
+                s.symbol_name   AS name,
+                s.sector        AS industry_group,
+                s.industry      AS industry,
+                s.mcap
+            FROM symbols s
+            WHERE s.symbol_id = ? AND s.exchange = ?
         """,
             conn_sqlite,
             params=(symbol_id, exchange),

@@ -9,7 +9,7 @@ from typing import Mapping
 import pandas as pd
 import ai_trading_system.platform.config as platform_config
 
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.ranking.contracts import (
     DEFAULT_FACTOR_WEIGHTS,
     PRIMARY_FACTORS,
@@ -21,6 +21,7 @@ _PLATFORM_CONFIG_DIR = Path(platform_config.__file__).resolve().parent
 _LEGACY_CONFIG_DIR = Path(__file__).resolve().parents[4] / "config"
 RANK_FACTOR_WEIGHTS_PATH = _PLATFORM_CONFIG_DIR / "rank_factor_weights.json"
 LEGACY_RANK_FACTOR_WEIGHTS_PATH = _LEGACY_CONFIG_DIR / "rank_factor_weights.json"
+_SECTOR_DEMEAN_FACTORS = frozenset({"rel_strength", "vol_intensity", "trend_score"})
 
 
 def load_factor_weights(config_path: Path | None = None) -> dict[str, float]:
@@ -49,16 +50,66 @@ def load_factor_weights(config_path: Path | None = None) -> dict[str, float]:
     return weights
 
 
+def winsorize_series(
+    values: pd.Series,
+    *,
+    lower_quantile: float = 0.05,
+    upper_quantile: float = 0.95,
+) -> pd.Series:
+    """Clip outliers so a few extreme rows do not dominate percentile scoring."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    non_null = numeric.dropna()
+    if non_null.empty:
+        return numeric
+
+    lower = non_null.quantile(lower_quantile)
+    upper = non_null.quantile(upper_quantile)
+    if pd.isna(lower) or pd.isna(upper):
+        return numeric
+    return numeric.clip(lower=lower, upper=upper)
+
+
+def demean_by_sector(values: pd.Series, sector_names: pd.Series | None) -> pd.Series:
+    """Subtract sector medians so sector baselines do not overwhelm stock selection."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    if sector_names is None:
+        return numeric
+
+    sectors = sector_names.where(sector_names.notna()).astype("object")
+    sector_medians = numeric.groupby(sectors).transform("median")
+    return numeric - sector_medians.fillna(0.0)
+
+
+def normalize_raw_factor_inputs(frame: pd.DataFrame) -> pd.DataFrame:
+    """Prepare raw factors for percentile scoring without changing the output schema."""
+    normalized = frame.copy()
+    sector_names = normalized["sector_name"] if "sector_name" in normalized.columns else None
+
+    for factor in PRIMARY_FACTORS:
+        if factor.raw_column not in normalized.columns:
+            continue
+        raw_values = winsorize_series(normalized[factor.raw_column])
+        if factor.raw_column in _SECTOR_DEMEAN_FACTORS:
+            raw_values = demean_by_sector(raw_values, sector_names)
+        normalized[factor.raw_column] = raw_values
+
+    return normalized
+
+
 def compute_factor_scores(
     frame: pd.DataFrame,
     *,
     weights: Mapping[str, float],
 ) -> pd.DataFrame:
     """Normalize factor inputs and compute the composite ranking score."""
-    scores = frame.copy()
+    scores = normalize_raw_factor_inputs(frame)
 
     for factor in PRIMARY_FACTORS:
-        scores[factor.score_column] = scores[factor.raw_column].rank(pct=True) * 100
+        rank_method = "average" if factor.raw_column == "delivery_pct" else "average"
+        scores[factor.score_column] = scores[factor.raw_column].rank(
+            pct=True,
+            method=rank_method,
+        ) * 100
 
     scores["sector_rs_score"] = scores["sector_rs_value"].rank(pct=True) * 100
     scores["stock_vs_sector_score"] = scores["stock_vs_sector_value"].rank(pct=True) * 100
@@ -70,6 +121,13 @@ def compute_factor_scores(
         scores[factor.score_column] * float(weights[factor.weight_key])
         for factor in PRIMARY_FACTORS
     ) + scores["sector_strength_score"] * float(weights["sector_strength"])
+
+    if "sector_name" in scores.columns:
+        scores["sector_rank_within_sector"] = scores.groupby("sector_name")["composite_score"].rank(
+            ascending=False, method="min"
+        )
+        scores["sector_total_symbols"] = scores.groupby("sector_name")["sector_name"].transform("count")
+
     return scores
 
 
@@ -129,6 +187,8 @@ def apply_rank_stability(
         return output
 
     prev = previous_frame.copy()
+    if "composite_score" in prev.columns:
+        prev = prev.sort_values("composite_score", ascending=False, kind="stable")
     prev = prev.reset_index(drop=True)
     prev["previous_rank_position"] = prev.index + 1
     prev_cols = ["symbol_id", "previous_rank_position"]
@@ -138,7 +198,12 @@ def apply_rank_stability(
         prev = prev.rename(columns={"composite_score": "previous_composite_score"})
         prev_cols.append("previous_composite_score")
 
-    merged = output.merge(prev[prev_cols], on=[c for c in ["symbol_id", "exchange"] if c in prev_cols and c in output.columns], how="left")
+    merge_base = output.drop(columns=["previous_rank_position", "rank_delta", "score_delta"], errors="ignore")
+    merged = merge_base.merge(
+        prev[prev_cols],
+        on=[c for c in ["symbol_id", "exchange"] if c in prev_cols and c in output.columns],
+        how="left",
+    )
     merged = merged.reset_index(drop=True)
     merged["current_rank_position"] = merged.index + 1
     merged["rank_delta"] = merged["previous_rank_position"] - merged["current_rank_position"]
@@ -152,3 +217,116 @@ def select_rank_output_columns(frame: pd.DataFrame) -> pd.DataFrame:
     """Project rank output into the backward-compatible artifact contract."""
     available = [column for column in RANKED_SIGNAL_COLUMNS if column in frame.columns]
     return frame[available].reset_index(drop=True)
+
+
+FACTOR_COLUMNS = [
+    "rel_strength_score",
+    "vol_intensity_score",
+    "trend_score_score",
+    "prox_high_score",
+    "delivery_pct_score",
+]
+
+
+def compute_factor_turnover(
+    current_frame: pd.DataFrame,
+    previous_frame: pd.DataFrame | None = None,
+) -> dict:
+    """Compute factor turnover metrics comparing current vs previous rank.
+
+    Returns dict with:
+    - turnover_pct: percentage of symbols that changed rank position
+    - symbols_changed: count of symbols with rank position change
+    - symbols_unchanged: count of symbols with same rank position
+    - total_symbols: total symbols in comparison
+    """
+    if previous_frame is None or previous_frame.empty or current_frame.empty:
+        return {
+            "turnover_pct": 0.0,
+            "symbols_changed": 0,
+            "symbols_unchanged": 0,
+            "total_symbols": 0,
+            "previous_frame_available": False,
+        }
+
+    prev = previous_frame.copy().reset_index(drop=True)
+    curr = current_frame.copy().reset_index(drop=True)
+
+    if "eligible_rank" not in prev.columns or "eligible_rank" not in curr.columns:
+        if "composite_score" in prev.columns and "composite_score" in curr.columns:
+            prev["rank_by_score"] = prev["composite_score"].rank(ascending=False, method="min")
+            curr["rank_by_score"] = curr["composite_score"].rank(ascending=False, method="min")
+            compare_col = "rank_by_score"
+        else:
+            return {
+                "turnover_pct": 0.0,
+                "symbols_changed": 0,
+                "symbols_unchanged": 0,
+                "total_symbols": 0,
+                "previous_frame_available": True,
+            }
+    else:
+        compare_col = "eligible_rank"
+
+    merge_keys = ["symbol_id"]
+    if "exchange" in prev.columns and "exchange" in curr.columns:
+        merge_keys.append("exchange")
+
+    prev_cols_to_select = merge_keys + [compare_col]
+    merged = curr.merge(
+        prev[prev_cols_to_select],
+        on=merge_keys,
+        how="inner",
+        suffixes=("", "_prev"),
+    )
+
+    prev_col = f"{compare_col}_prev"
+    changed = (merged[compare_col] != merged[prev_col]).sum() if prev_col in merged.columns else 0
+    total = len(merged)
+    unchanged = total - changed
+
+    return {
+        "turnover_pct": round((changed / total * 100) if total > 0 else 0.0, 2),
+        "symbols_changed": int(changed),
+        "symbols_unchanged": int(unchanged),
+        "total_symbols": int(total),
+        "previous_frame_available": True,
+    }
+
+
+def compute_factor_correlations(frame: pd.DataFrame) -> dict:
+    """Compute correlation matrix for primary factor scores.
+
+    Returns dict with:
+    - correlation_matrix: DataFrame of pairwise correlations
+    - violations: list of (factor1, factor2, correlation) where |corr| > 0.70
+    - has_violations: bool indicating if any threshold exceeded
+    """
+    available_factors = [f for f in FACTOR_COLUMNS if f in frame.columns]
+
+    if len(available_factors) < 2:
+        return {
+            "correlation_matrix": pd.DataFrame(),
+            "violations": [],
+            "has_violations": False,
+        }
+
+    corr_matrix = frame[available_factors].corr()
+
+    violations = []
+    for i, f1 in enumerate(available_factors):
+        for f2 in available_factors[i + 1:]:
+            corr_val = corr_matrix.loc[f1, f2]
+            if abs(corr_val) > 0.70:
+                violations.append({
+                    "factor_1": f1,
+                    "factor_2": f2,
+                    "correlation": round(float(corr_val), 4),
+                })
+
+    corr_dict = corr_matrix.to_dict()
+    return {
+        "correlation_matrix": corr_dict if isinstance(corr_dict, dict) else {},
+        "violations": violations,
+        "has_violations": len(violations) > 0,
+    }

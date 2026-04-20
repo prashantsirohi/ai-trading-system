@@ -9,9 +9,9 @@ from typing import Dict, List
 import duckdb
 import pandas as pd
 
-from analytics.data_trust import load_data_trust_summary
+from ai_trading_system.domains.ingest.trust import load_data_trust_summary
 from analytics.registry import RegistryStore
-from core.contracts import DataQualityCriticalError, StageContext, StageResult
+from ai_trading_system.pipeline.contracts import DataQualityCriticalError, StageContext, StageResult
 
 
 @dataclass
@@ -102,17 +102,21 @@ class DataQualityEngine:
     def _rule_ingest_required_fields_not_null(
         self, context: StageContext, result: StageResult, severity: str
     ) -> DQRuleFailure:
-        query = """
+        catalog_run_filter = self._catalog_run_filter(context.db_path, context.run_id)
+        query = f"""
             SELECT COUNT(*)
             FROM _catalog
-            WHERE symbol_id IS NULL
-               OR exchange IS NULL
-               OR timestamp IS NULL
-               OR open IS NULL
-               OR high IS NULL
-               OR low IS NULL
-               OR close IS NULL
-               OR volume IS NULL
+            WHERE {catalog_run_filter}
+              AND (
+                    symbol_id IS NULL
+                 OR exchange IS NULL
+                 OR timestamp IS NULL
+                 OR open IS NULL
+                 OR high IS NULL
+                 OR low IS NULL
+                 OR close IS NULL
+                 OR volume IS NULL
+              )
         """
         failed_count = self._scalar(context.db_path, query)
         return self._make_result(
@@ -127,12 +131,16 @@ class DataQualityEngine:
     def _rule_ingest_ohlc_consistency(
         self, context: StageContext, result: StageResult, severity: str
     ) -> DQRuleFailure:
-        query = """
+        catalog_run_filter = self._catalog_run_filter(context.db_path, context.run_id)
+        query = f"""
             SELECT COUNT(*)
             FROM _catalog
-            WHERE high < GREATEST(open, close)
-               OR low > LEAST(open, close)
-               OR high < low
+            WHERE {catalog_run_filter}
+              AND (
+                    high < GREATEST(open, close)
+                 OR low > LEAST(open, close)
+                 OR high < low
+              )
         """
         failed_count = self._scalar(context.db_path, query)
         return self._make_result(
@@ -468,6 +476,8 @@ class DataQualityEngine:
             if result.metadata.get("snapshot_id") is None
             else str(int(result.metadata["snapshot_id"])),
             "run_date_literal": self._sql_literal(context.run_date),
+            "run_id_literal": self._sql_literal(context.run_id),
+            "catalog_run_filter": self._catalog_run_filter(context.db_path, context.run_id),
             "expected_rank_min_rows": str(
                 int(
                     context.params.get(
@@ -519,6 +529,27 @@ class DataQualityEngine:
         finally:
             conn.close()
 
+    def _column_exists(self, db_path: Path, table_name: str, column_name: str) -> bool:
+        conn = duckdb.connect(str(db_path), read_only=True)
+        try:
+            row = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_name = ?
+                  AND column_name = ?
+                """,
+                [table_name, column_name],
+            ).fetchone()
+            return bool(row and int(row[0]) > 0)
+        finally:
+            conn.close()
+
+    def _catalog_run_filter(self, db_path: Path, run_id: str) -> str:
+        if self._column_exists(db_path, "_catalog", "ingest_run_id"):
+            return f"COALESCE(ingest_run_id, '') = {self._sql_literal(run_id)}"
+        return "TRUE"
+
     def _sql_literal(self, value: str) -> str:
         escaped = value.replace("'", "''")
         return f"'{escaped}'"
@@ -539,3 +570,49 @@ class DataQualityEngine:
             message=message,
             sample_uri=sample_uri,
         )
+
+    def _rule_rank_delivery_pct_range(
+        self, context: StageContext, result: StageResult, severity: str
+    ) -> DQRuleFailure:
+        rank_artifact = context.artifact_for("rank", "ranked_signals")
+        if not rank_artifact or not rank_artifact.uri:
+            return self._make_result("rank_delivery_pct_range", severity, 0, "No ranked_signals artifact")
+        try:
+            import pandas as pd
+            df = pd.read_csv(rank_artifact.uri)
+            if "delivery_pct" not in df.columns:
+                return self._make_result("rank_delivery_pct_range", severity, 0, "delivery_pct column not in ranked_signals")
+            invalid = df[(df["delivery_pct"].notna()) & ((df["delivery_pct"] < 0) | (df["delivery_pct"] > 100))]
+            failed_count = len(invalid)
+            return self._make_result(
+                "rank_delivery_pct_range",
+                severity,
+                failed_count,
+                "Delivery percentage values are valid." if failed_count == 0 else f"Found {failed_count} rows with invalid delivery_pct."
+            )
+        except Exception as exc:
+            return self._make_result("rank_delivery_pct_range", severity, 0, f"Error evaluating rule: {exc}")
+
+    def _rule_rank_sector_coverage_threshold(
+        self, context: StageContext, result: StageResult, severity: str
+    ) -> DQRuleFailure:
+        rank_artifact = context.artifact_for("rank", "ranked_signals")
+        if not rank_artifact or not rank_artifact.uri:
+            return self._make_result("rank_sector_coverage_threshold", severity, 0, "No ranked_signals artifact")
+        try:
+            import pandas as pd
+            df = pd.read_csv(rank_artifact.uri)
+            if "sector_name" not in df.columns:
+                return self._make_result("rank_sector_coverage_threshold", severity, 0, "sector_name column not in ranked_signals")
+            total = len(df)
+            missing = df["sector_name"].isna().sum()
+            missing_pct = (missing / total) if total > 0 else 0
+            failed_count = 1 if missing_pct > 0.10 else 0
+            return self._make_result(
+                "rank_sector_coverage_threshold",
+                severity,
+                failed_count,
+                "Sector coverage is adequate." if failed_count == 0 else f"Sector coverage gap: {missing_pct*100:.1f}% (>10% threshold)"
+            )
+        except Exception as exc:
+            return self._make_result("rank_sector_coverage_threshold", severity, 0, f"Error evaluating rule: {exc}")

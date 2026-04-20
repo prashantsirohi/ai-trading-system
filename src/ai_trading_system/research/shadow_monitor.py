@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from analytics.alpha.drift import score_drift_rows
@@ -21,8 +22,99 @@ from analytics.shadow_monitor import (
     prepare_current_universe_dataset,
     prepare_shadow_history_dataset,
 )
-from core.paths import ensure_domain_layout
-from core.logging import logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
+
+
+def compute_spearman_ic(
+    frame: pd.DataFrame,
+    *,
+    prediction_col: str = "probability",
+    realized_return_col: str = "realized_return",
+    min_observations: int = 5,
+) -> float:
+    """Compute cross-sectional Spearman IC between predictions and realized returns."""
+    if frame is None or frame.empty:
+        return float("nan")
+
+    scoped = frame[[prediction_col, realized_return_col]].copy()
+    scoped.loc[:, prediction_col] = pd.to_numeric(scoped[prediction_col], errors="coerce")
+    scoped.loc[:, realized_return_col] = pd.to_numeric(scoped[realized_return_col], errors="coerce")
+    scoped = scoped.dropna(subset=[prediction_col, realized_return_col])
+    if len(scoped) < int(min_observations):
+        return float("nan")
+    if scoped[prediction_col].nunique(dropna=True) < 2 or scoped[realized_return_col].nunique(dropna=True) < 2:
+        return float("nan")
+
+    return float(scoped[prediction_col].corr(scoped[realized_return_col], method="spearman"))
+
+
+def compute_rolling_spearman_ic(
+    frame: pd.DataFrame,
+    *,
+    prediction_col: str = "probability",
+    realized_return_col: str = "realized_return",
+    prediction_date_col: str = "prediction_date",
+    horizon_col: str = "horizon",
+    horizons: list[int] | tuple[int, ...] | None = None,
+    window: int = 20,
+    min_observations: int = 5,
+) -> pd.DataFrame:
+    """Compute daily cross-sectional IC plus rolling average IC across horizons."""
+    if frame is None or frame.empty:
+        return pd.DataFrame(
+            columns=["prediction_date", "horizon", "observations", "ic_spearman", "rolling_ic_spearman", "window"]
+        )
+
+    scoped = frame.copy()
+    scoped.loc[:, prediction_date_col] = pd.to_datetime(scoped[prediction_date_col], errors="coerce")
+    scoped = scoped.dropna(subset=[prediction_date_col])
+    if horizons is not None and horizon_col in scoped.columns:
+        scoped = scoped[scoped[horizon_col].isin(list(horizons))]
+
+    if horizon_col not in scoped.columns:
+        scoped[horizon_col] = pd.NA
+
+    rows: list[dict] = []
+    for (horizon, prediction_date), day_frame in scoped.groupby([horizon_col, prediction_date_col], dropna=False):
+        ic_value = compute_spearman_ic(
+            day_frame,
+            prediction_col=prediction_col,
+            realized_return_col=realized_return_col,
+            min_observations=min_observations,
+        )
+        observations = int(
+            day_frame[[prediction_col, realized_return_col]]
+            .apply(pd.to_numeric, errors="coerce")
+            .dropna()
+            .shape[0]
+        )
+        rows.append(
+            {
+                "prediction_date": prediction_date,
+                "horizon": horizon,
+                "observations": observations,
+                "ic_spearman": ic_value,
+            }
+        )
+
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return pd.DataFrame(
+            columns=["prediction_date", "horizon", "observations", "ic_spearman", "rolling_ic_spearman", "window"]
+        )
+
+    result = result.sort_values(["horizon", "prediction_date"], kind="stable").reset_index(drop=True)
+    result.loc[:, "rolling_ic_spearman"] = (
+        result.groupby("horizon", dropna=False)["ic_spearman"]
+        .transform(lambda series: series.rolling(window=int(window), min_periods=1).mean())
+    )
+    result.loc[:, "rolling_ic_spearman"] = result["rolling_ic_spearman"].where(
+        result.groupby("horizon", dropna=False).cumcount() + 1 >= int(window),
+        np.nan,
+    )
+    result.loc[:, "window"] = int(window)
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:

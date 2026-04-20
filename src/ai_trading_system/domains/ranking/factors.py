@@ -5,18 +5,33 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 
+TREND_STRENGTH_WEIGHT = 0.7
+TREND_ALIGNMENT_WEIGHT = 0.3
+
 
 def apply_relative_strength(data: pd.DataFrame, *, return_frame: pd.DataFrame) -> pd.DataFrame:
     scores = data.copy()
     if return_frame is not None and not return_frame.empty:
         scores = scores.merge(
-            return_frame[["symbol_id", "exchange", "return_pct"]],
+            return_frame,
             on=["symbol_id", "exchange"],
             how="left",
         )
-    if "return_pct" not in scores.columns:
-        scores["return_pct"] = 0.0
-    scores["rel_strength"] = scores["return_pct"].fillna(0.0)
+    period_cols = [c for c in ["return_20", "return_60", "return_120"] if c in scores.columns]
+    if len(period_cols) >= 2:
+        for col in period_cols:
+            scores[col] = scores[col].fillna(0.0)
+        rs_20 = scores["return_20"].rank(pct=True) * 100 if "return_20" in scores.columns else pd.Series(50, index=scores.index)
+        rs_60 = scores["return_60"].rank(pct=True) * 100 if "return_60" in scores.columns else pd.Series(50, index=scores.index)
+        rs_120 = scores["return_120"].rank(pct=True) * 100 if "return_120" in scores.columns else pd.Series(50, index=scores.index)
+        scores["rel_strength"] = 0.2 * rs_20 + 0.5 * rs_60 + 0.3 * rs_120
+    else:
+        if "return_pct" not in scores.columns:
+            if "return_20" in scores.columns:
+                scores["return_pct"] = scores["return_20"]
+            else:
+                scores["return_pct"] = 0.0
+        scores["rel_strength"] = scores["return_pct"].fillna(0.0)
     return scores
 
 
@@ -61,7 +76,13 @@ def apply_trend_persistence(
     if "sma_50" not in scores.columns:
         scores["sma_50"] = scores["close"]
 
-    scores["adx_score"] = scores.get("adx_14", 50.0).fillna(50.0) * 2
+    # ADX captures directional strength regardless of whether price is currently
+    # above or below the moving averages, so keep it independent from SMA posture.
+    scores["adx_score"] = (
+        pd.to_numeric(scores.get("adx_14", 50.0), errors="coerce")
+        .fillna(0.0)
+        .clip(lower=0.0, upper=50.0) / 50.0 * 100.0
+    )
     scores["sma20_aligned"] = (
         (scores["close"] > scores["sma_20"].replace(0, np.nan)).fillna(False).astype(int)
     )
@@ -69,16 +90,18 @@ def apply_trend_persistence(
         (scores["close"] > scores["sma_50"].replace(0, np.nan)).fillna(False).astype(int)
     )
 
-    above_sma20 = scores["close"] > scores["sma_20"].replace(0, np.nan)
-    above_sma50 = scores["close"] > scores["sma_50"].replace(0, np.nan)
-    direction_multiplier = pd.Series(1.0, index=scores.index)
-    direction_multiplier[~above_sma50] = 0.0
-    direction_multiplier[~above_sma20 & above_sma50] = 0.5
+    # Directional posture is a separate sub-score:
+    # - 40 points for clearing SMA20
+    # - 60 points for clearing SMA50
+    # This keeps full alignment valuable without wiping out genuine ADX strength.
+    scores["sma_alignment_score"] = (
+        scores["sma20_aligned"] * 40.0
+        + scores["sma50_aligned"] * 60.0
+    )
 
     scores["trend_score"] = (
-        scores["adx_score"].fillna(0.0) * 0.6 * direction_multiplier
-        + scores["sma20_aligned"] * 25
-        + scores["sma50_aligned"] * 15
+        scores["adx_score"].fillna(0.0) * TREND_STRENGTH_WEIGHT
+        + scores["sma_alignment_score"].fillna(0.0) * TREND_ALIGNMENT_WEIGHT
     )
     return scores
 
@@ -109,7 +132,31 @@ def apply_delivery(data: pd.DataFrame, *, delivery_frame: pd.DataFrame) -> pd.Da
         )
     if "delivery_pct" not in scores.columns:
         scores["delivery_pct"] = np.nan
-    scores["delivery_pct"] = scores["delivery_pct"].fillna(20.0)
+
+    sector_col = None
+    for candidate in ("sector_name", "sector"):
+        if candidate in scores.columns:
+            sector_col = candidate
+            break
+
+    delivery_numeric = pd.to_numeric(scores["delivery_pct"], errors="coerce")
+    scores["delivery_pct_imputed"] = delivery_numeric.isna()
+
+    if sector_col is not None:
+        sector_medians = delivery_numeric.groupby(scores[sector_col]).transform("median")
+    else:
+        sector_medians = pd.Series(np.nan, index=scores.index, dtype=float)
+
+    universe_median = delivery_numeric.dropna().median()
+    if pd.isna(universe_median):
+        universe_median = 20.0
+
+    scores["delivery_pct_filled"] = (
+        delivery_numeric
+        .fillna(sector_medians)
+        .fillna(float(universe_median))
+    )
+    scores["delivery_pct"] = scores["delivery_pct_filled"]
     return scores
 
 

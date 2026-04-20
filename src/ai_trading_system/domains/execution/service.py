@@ -129,7 +129,139 @@ class ExecutionService:
         result = self.submit_order(intent, market_price=price)
         if risk_payload is not None:
             result["risk"] = risk_payload
+        self._persist_stop_on_fill(
+            symbol_id=symbol_id,
+            exchange=exchange,
+            quantity=intent.quantity,
+            fill_price=price,
+            side=side,
+            signal=signal,
+        )
         return result
+
+    def _persist_stop_on_fill(
+        self,
+        *,
+        symbol_id: str,
+        exchange: str,
+        quantity: int,
+        fill_price: float,
+        side: str,
+        signal: dict,
+    ) -> None:
+        if side.upper() != "BUY" or quantity <= 0:
+            return
+        atr = _maybe_float(signal.get("atr_14"))
+        atr_multiple = _maybe_float(signal.get("atr_multiple")) or _maybe_float(signal.get("exit_atr_multiple")) or 2.0
+        if atr is None or atr <= 0:
+            return
+        stop_price = round(fill_price - (atr_multiple * atr), 4)
+        position_key = f"{exchange.upper()}:{symbol_id.upper()}"
+        self.store.upsert_position_stop(
+            position_key=position_key,
+            symbol_id=symbol_id,
+            exchange=exchange,
+            quantity=quantity,
+            entry_price=fill_price,
+            stop_price=stop_price,
+            atr_multiplier=atr_multiple,
+            status="ACTIVE",
+            metadata={
+                "signal": signal.get("strategy"),
+                "regime": signal.get("regime"),
+            },
+        )
+
+    def check_stop_triggered(
+        self,
+        symbol_id: str,
+        exchange: str = "NSE",
+        current_price: float = 0.0,
+    ) -> dict:
+        position_key = f"{exchange.upper()}:{symbol_id.upper()}"
+        stop_record = self.store.get_position_stop(position_key)
+        if not stop_record or stop_record.get("status") != "ACTIVE":
+            return {"triggered": False, "reason": "no_active_stop"}
+        stop_price = float(stop_record.get("stop_price", 0))
+        if stop_price <= 0:
+            return {"triggered": False, "reason": "invalid_stop_price"}
+        if current_price <= 0:
+            return {"triggered": False, "reason": "no_market_price"}
+        triggered = current_price <= stop_price
+        return {
+            "triggered": triggered,
+            "stop_price": stop_price,
+            "current_price": current_price,
+            "position_key": position_key,
+        }
+
+    def maintain_trailing_stops(
+        self,
+        *,
+        current_prices: Mapping[str, float] | None = None,
+        atr_by_symbol: Mapping[str, float] | None = None,
+        open_symbols: set[str] | None = None,
+    ) -> Dict[str, Any]:
+        normalized_prices = {
+            str(symbol_id).strip().upper(): float(price)
+            for symbol_id, price in (current_prices or {}).items()
+            if symbol_id not in (None, "") and _maybe_float(price) is not None
+        }
+        normalized_atr = {
+            str(symbol_id).strip().upper(): float(atr)
+            for symbol_id, atr in (atr_by_symbol or {}).items()
+            if symbol_id not in (None, "") and _maybe_float(atr) is not None
+        }
+        normalized_open_symbols = {
+            str(symbol_id).strip().upper()
+            for symbol_id in (open_symbols or set())
+            if symbol_id not in (None, "")
+        }
+
+        updated_count = 0
+        evaluated_count = 0
+        for stop_record in self.store.list_active_stops():
+            symbol_id = str(stop_record.get("symbol_id") or "").strip().upper()
+            if not symbol_id:
+                continue
+            if normalized_open_symbols and symbol_id not in normalized_open_symbols:
+                continue
+            current_price = normalized_prices.get(symbol_id)
+            atr = normalized_atr.get(symbol_id)
+            if current_price is None or atr is None or atr <= 0:
+                continue
+            evaluated_count += 1
+            existing_stop = float(stop_record.get("stop_price") or 0.0)
+            atr_multiplier = float(stop_record.get("atr_multiplier") or 2.0)
+            candidate_stop = round(current_price - (atr_multiplier * atr), 4)
+            if candidate_stop <= existing_stop:
+                continue
+            metadata = dict(stop_record.get("metadata") or {})
+            metadata.update(
+                {
+                    "trailing_stop_updated": True,
+                    "trailing_reference_price": round(current_price, 4),
+                    "trailing_atr_14": round(atr, 4),
+                    "prior_stop_price": existing_stop,
+                }
+            )
+            self.store.upsert_position_stop(
+                position_key=str(stop_record.get("position_key") or f"{stop_record.get('exchange', 'NSE')}:{symbol_id}"),
+                symbol_id=str(stop_record.get("symbol_id") or symbol_id),
+                exchange=str(stop_record.get("exchange") or "NSE"),
+                quantity=int(stop_record.get("quantity") or 0),
+                entry_price=float(stop_record.get("entry_price") or 0.0),
+                stop_price=candidate_stop,
+                atr_multiplier=atr_multiplier,
+                status=str(stop_record.get("status") or "ACTIVE"),
+                metadata=metadata,
+            )
+            updated_count += 1
+
+        return {
+            "updated_count": updated_count,
+            "evaluated_count": evaluated_count,
+        }
 
 
 def _maybe_float(value: Any) -> float | None:

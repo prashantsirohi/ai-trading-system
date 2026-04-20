@@ -6,6 +6,7 @@ import json
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -26,6 +27,7 @@ DEFAULT_RULES = [
             FROM (
                 SELECT symbol_id, exchange, timestamp, COUNT(*) AS duplicate_count
                 FROM _catalog
+                WHERE {catalog_run_filter}
                 GROUP BY 1, 2, 3
                 HAVING COUNT(*) > 1
             ) duplicate_keys
@@ -38,7 +40,21 @@ DEFAULT_RULES = [
         "stage_name": "ingest",
         "dataset_name": "_catalog",
         "severity": "critical",
-        "rule_sql": "SELECT CASE WHEN COUNT(*) = 0 THEN 1 ELSE 0 END FROM _catalog",
+        "rule_sql": """
+            SELECT CASE
+                WHEN (
+                    SELECT COUNT(*)
+                    FROM _catalog
+                    WHERE {catalog_run_filter}
+                ) = 0
+                AND (
+                    SELECT COUNT(*)
+                    FROM _catalog
+                ) = 0
+                THEN 1
+                ELSE 0
+            END
+        """,
         "description": "OHLCV catalog must contain at least one row after ingest.",
         "owner": "pipeline",
     },
@@ -50,14 +66,17 @@ DEFAULT_RULES = [
         "rule_sql": """
             SELECT COUNT(*)
             FROM _catalog
-            WHERE symbol_id IS NULL
-               OR exchange IS NULL
-               OR timestamp IS NULL
-               OR open IS NULL
-               OR high IS NULL
-               OR low IS NULL
-               OR close IS NULL
-               OR volume IS NULL
+            WHERE {catalog_run_filter}
+              AND (
+                    symbol_id IS NULL
+                 OR exchange IS NULL
+                 OR timestamp IS NULL
+                 OR open IS NULL
+                 OR high IS NULL
+                 OR low IS NULL
+                 OR close IS NULL
+                 OR volume IS NULL
+              )
         """,
         "description": "Key OHLCV columns must be populated.",
         "owner": "pipeline",
@@ -70,9 +89,12 @@ DEFAULT_RULES = [
         "rule_sql": """
             SELECT COUNT(*)
             FROM _catalog
-            WHERE high < GREATEST(open, close)
-               OR low > LEAST(open, close)
-               OR high < low
+            WHERE {catalog_run_filter}
+              AND (
+                    high < GREATEST(open, close)
+                 OR low > LEAST(open, close)
+                 OR high < low
+              )
         """,
         "description": "OHLC values must obey high/low consistency rules.",
         "owner": "pipeline",
@@ -82,7 +104,12 @@ DEFAULT_RULES = [
         "stage_name": "ingest",
         "dataset_name": "_catalog",
         "severity": "high",
-        "rule_sql": "SELECT COUNT(*) FROM _catalog WHERE volume < 0",
+        "rule_sql": """
+            SELECT COUNT(*)
+            FROM _catalog
+            WHERE {catalog_run_filter}
+              AND volume < 0
+        """,
         "description": "Volume should not be negative.",
         "owner": "pipeline",
     },
@@ -205,6 +232,37 @@ DEFAULT_RULES = [
         "description": "Rank output symbol coverage is lower than expected.",
         "owner": "pipeline",
     },
+    {
+        "rule_id": "rank_composite_score_range",
+        "stage_name": "rank",
+        "dataset_name": "ranked_signals",
+        "severity": "critical",
+        "rule_sql": """
+            SELECT COUNT(*)
+            FROM read_csv_auto({rank_artifact_uri})
+            WHERE composite_score < 0 OR composite_score > 100
+        """,
+        "description": "Composite score must be within valid range [0, 100].",
+        "owner": "pipeline",
+    },
+    {
+        "rule_id": "rank_delivery_pct_range",
+        "stage_name": "rank",
+        "dataset_name": "ranked_signals",
+        "severity": "high",
+        "rule_sql": None,
+        "description": "Delivery percentage must be within valid range [0, 100].",
+        "owner": "pipeline",
+    },
+    {
+        "rule_id": "rank_sector_coverage_threshold",
+        "stage_name": "rank",
+        "dataset_name": "ranked_signals",
+        "severity": "medium",
+        "rule_sql": None,
+        "description": "Sector assignment coverage must be at least 90% of universe.",
+        "owner": "pipeline",
+    },
 ]
 
 _REGISTRY_INIT_LOCK = threading.Lock()
@@ -221,10 +279,35 @@ class RegistryStore:
         # model governance, or pipeline run tracking.
         self.db_path = Path(db_path) if db_path else self.project_root / "data" / "control_plane.duckdb"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_lock = threading.RLock()
         self._ensure_initialized()
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
         return duckdb.connect(str(self.db_path))
+
+    @contextmanager
+    def _writer(self) -> Iterable[duckdb.DuckDBPyConnection]:
+        with self._write_lock:
+            conn = self._connect()
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except duckdb.TransactionException:
+                    pass
+                raise
+            finally:
+                conn.close()
+
+    @contextmanager
+    def _reader(self) -> Iterable[duckdb.DuckDBPyConnection]:
+        conn = self._connect()
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def _migration_path(self) -> Path:
         candidate_root = self.project_root / "sql" / "migrations"
@@ -249,16 +332,12 @@ class RegistryStore:
                     time.sleep(0.05 * (attempt + 1))
 
     def _apply_migrations(self) -> None:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             for migration_path in sorted(self._migration_path().glob("*.sql")):
                 conn.execute(migration_path.read_text(encoding="utf-8"))
-        finally:
-            conn.close()
 
     def seed_default_rules(self) -> None:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             for rule in DEFAULT_RULES:
                 conn.execute(
                     """
@@ -283,19 +362,14 @@ class RegistryStore:
                         rule["owner"],
                     ],
                 )
-        finally:
-            conn.close()
 
     def run_exists(self, run_id: str) -> bool:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM pipeline_run WHERE run_id = ?",
                 [run_id],
             ).fetchone()
             return bool(row and row[0])
-        finally:
-            conn.close()
 
     def create_run(
         self,
@@ -306,8 +380,7 @@ class RegistryStore:
         status: str = "running",
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO pipeline_run
@@ -316,8 +389,6 @@ class RegistryStore:
                 """,
                 [run_id, pipeline_name, run_date, trigger, status, self._json(metadata)],
             )
-        finally:
-            conn.close()
 
     def register_dataset(
         self,
@@ -337,8 +408,7 @@ class RegistryStore:
         symbol_count: int | None = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             existing = conn.execute(
                 "SELECT dataset_id FROM dataset_registry WHERE dataset_ref = ?",
                 [dataset_ref],
@@ -408,12 +478,9 @@ class RegistryStore:
                     ],
                 )
             return dataset_id
-        finally:
-            conn.close()
 
     def get_dataset(self, dataset_ref: str) -> Optional[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             row = conn.execute(
                 """
                 SELECT dataset_id, dataset_ref, dataset_uri, data_domain, engine_name,
@@ -424,8 +491,6 @@ class RegistryStore:
                 """,
                 [dataset_ref],
             ).fetchone()
-        finally:
-            conn.close()
 
         if row is None:
             return None
@@ -470,8 +535,7 @@ class RegistryStore:
             params.append(int(horizon))
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 f"""
                 SELECT dataset_id, dataset_ref, dataset_uri, data_domain, engine_name,
@@ -484,8 +548,6 @@ class RegistryStore:
                 """,
                 [*params, int(limit)],
             ).fetchall()
-        finally:
-            conn.close()
 
         return [
             {
@@ -536,14 +598,11 @@ class RegistryStore:
             assignments.append("ended_at = CURRENT_TIMESTAMP")
         params.append(run_id)
 
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 f"UPDATE pipeline_run SET {', '.join(assignments)} WHERE run_id = ?",
                 params,
             )
-        finally:
-            conn.close()
 
     def append_run_metadata_event(self, run_id: str, event: Dict[str, Any]) -> Dict[str, Any]:
         """Append an immutable audit event to pipeline_run metadata_json."""
@@ -556,8 +615,7 @@ class RegistryStore:
         return metadata
 
     def next_stage_attempt(self, run_id: str, stage_name: str) -> int:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             row = conn.execute(
                 """
                 SELECT COALESCE(MAX(attempt_number), 0) + 1
@@ -567,13 +625,10 @@ class RegistryStore:
                 [run_id, stage_name],
             ).fetchone()
             return int(row[0]) if row else 1
-        finally:
-            conn.close()
 
     def start_stage(self, run_id: str, stage_name: str, attempt_number: int) -> str:
         stage_run_id = f"{stage_name}-{attempt_number}-{uuid.uuid4().hex[:8]}"
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 """
                 INSERT INTO pipeline_stage_run
@@ -582,8 +637,6 @@ class RegistryStore:
                 """,
                 [stage_run_id, run_id, stage_name, attempt_number],
             )
-        finally:
-            conn.close()
         return stage_run_id
 
     def finish_stage(
@@ -594,8 +647,7 @@ class RegistryStore:
         error_message: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 """
                 UPDATE pipeline_stage_run
@@ -605,8 +657,6 @@ class RegistryStore:
                 """,
                 [status, error_class, error_message, self._json(metadata), stage_run_id],
             )
-        finally:
-            conn.close()
 
     def record_artifact(
         self,
@@ -616,8 +666,7 @@ class RegistryStore:
         artifact: StageArtifact,
     ) -> None:
         artifact_id = f"{stage_name}-{artifact.artifact_type}-{uuid.uuid4().hex[:10]}"
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 """
                 INSERT INTO pipeline_artifact
@@ -636,12 +685,9 @@ class RegistryStore:
                     self._json(artifact.metadata),
                 ],
             )
-        finally:
-            conn.close()
 
     def get_artifact_map(self, run_id: str) -> Dict[str, Dict[str, StageArtifact]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 """
                 SELECT stage_name, artifact_type, uri, row_count, content_hash, metadata_json, attempt_number
@@ -651,8 +697,6 @@ class RegistryStore:
                 """,
                 [run_id],
             ).fetchall()
-        finally:
-            conn.close()
 
         artifacts: Dict[str, Dict[str, StageArtifact]] = {}
         for row in rows:
@@ -668,8 +712,7 @@ class RegistryStore:
         return artifacts
 
     def get_rules_for_stage(self, stage_name: str) -> List[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 """
                 SELECT rule_id, stage_name, dataset_name, severity, rule_sql, description, owner
@@ -679,8 +722,6 @@ class RegistryStore:
                 """,
                 [stage_name],
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "rule_id": row[0],
@@ -691,6 +732,53 @@ class RegistryStore:
                 "description": row[5],
                 "owner": row[6],
             }
+                for row in rows
+        ]
+
+    def get_latest_artifact(
+        self,
+        *,
+        stage_name: str,
+        artifact_type: str,
+        limit: int = 1,
+        exclude_run_id: str | None = None,
+        run_status: str | None = "completed",
+    ) -> List[StageArtifact]:
+        clauses = [
+            "a.stage_name = ?",
+            "a.artifact_type = ?",
+        ]
+        params: List[Any] = [stage_name, artifact_type]
+        if exclude_run_id is not None:
+            clauses.append("a.run_id <> ?")
+            params.append(exclude_run_id)
+        if run_status is not None:
+            clauses.append("r.status = ?")
+            params.append(run_status)
+        where_sql = " AND ".join(clauses)
+
+        with self._reader() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT a.uri, a.row_count, a.content_hash, a.metadata_json, a.attempt_number
+                FROM pipeline_artifact a
+                JOIN pipeline_run r ON r.run_id = a.run_id
+                WHERE {where_sql}
+                ORDER BY r.started_at DESC, a.created_at DESC
+                LIMIT ?
+                """,
+                [*params, int(limit)],
+            ).fetchall()
+
+        return [
+            StageArtifact(
+                artifact_type=artifact_type,
+                uri=row[0],
+                row_count=row[1],
+                content_hash=row[2],
+                metadata=self._loads(row[3]),
+                attempt_number=row[4],
+            )
             for row in rows
         ]
 
@@ -706,8 +794,7 @@ class RegistryStore:
         sample_uri: Optional[str] = None,
     ) -> None:
         result_id = f"dq-{uuid.uuid4().hex[:12]}"
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 """
                 INSERT INTO dq_result
@@ -716,12 +803,9 @@ class RegistryStore:
                 """,
                 [result_id, run_id, stage_name, rule_id, severity, status, failed_count, message, sample_uri],
             )
-        finally:
-            conn.close()
 
     def get_successful_delivery(self, dedupe_key: str) -> Optional[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             row = conn.execute(
                 """
                 SELECT channel, status, external_message_id, external_report_id, attempt_number, dedupe_key
@@ -732,8 +816,6 @@ class RegistryStore:
                 """,
                 [dedupe_key],
             ).fetchone()
-        finally:
-            conn.close()
         if row is None:
             return None
         return {
@@ -746,8 +828,7 @@ class RegistryStore:
         }
 
     def next_delivery_attempt(self, dedupe_key: str) -> int:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             row = conn.execute(
                 """
                 SELECT COALESCE(MAX(attempt_number), 0) + 1
@@ -757,8 +838,6 @@ class RegistryStore:
                 [dedupe_key],
             ).fetchone()
             return int(row[0]) if row else 1
-        finally:
-            conn.close()
 
     def record_delivery_log(
         self,
@@ -775,8 +854,7 @@ class RegistryStore:
         error_message: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 """
                 INSERT INTO publisher_delivery_log
@@ -800,12 +878,9 @@ class RegistryStore:
                     self._json(metadata),
                 ],
             )
-        finally:
-            conn.close()
 
     def get_delivery_logs(self, run_id: str) -> List[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 """
                 SELECT channel, dedupe_key, attempt_number, status, external_message_id, external_report_id, error_message
@@ -815,8 +890,6 @@ class RegistryStore:
                 """,
                 [run_id],
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "channel": row[0],
@@ -838,8 +911,7 @@ class RegistryStore:
         message: str,
         stage_name: Optional[str] = None,
     ) -> None:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 """
                 INSERT INTO pipeline_alert
@@ -848,12 +920,9 @@ class RegistryStore:
                 """,
                 [f"alert-{uuid.uuid4().hex[:12]}", run_id, alert_type, severity, stage_name, message],
             )
-        finally:
-            conn.close()
 
     def get_alerts(self, run_id: str) -> List[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 """
                 SELECT alert_type, severity, stage_name, message
@@ -863,8 +932,6 @@ class RegistryStore:
                 """,
                 [run_id],
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "alert_type": row[0],
@@ -886,8 +953,7 @@ class RegistryStore:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         model_id = f"model-{uuid.uuid4().hex[:12]}"
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 """
                 INSERT INTO model_registry
@@ -906,8 +972,6 @@ class RegistryStore:
                     self._json(metadata),
                 ],
             )
-        finally:
-            conn.close()
         return model_id
 
     def record_model_eval(
@@ -918,8 +982,7 @@ class RegistryStore:
         notes: Optional[str] = None,
     ) -> List[str]:
         eval_ids: List[str] = []
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             for metric_name, metric_value in metrics.items():
                 eval_id = f"eval-{uuid.uuid4().hex[:12]}"
                 conn.execute(
@@ -931,19 +994,14 @@ class RegistryStore:
                     [eval_id, model_id, metric_name, float(metric_value), dataset_ref, notes],
                 )
                 eval_ids.append(eval_id)
-        finally:
-            conn.close()
         return eval_ids
 
     def approve_model(self, model_id: str) -> None:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 "UPDATE model_registry SET approval_status = 'approved' WHERE model_id = ?",
                 [model_id],
             )
-        finally:
-            conn.close()
 
     def deploy_model(
         self,
@@ -953,9 +1011,17 @@ class RegistryStore:
         notes: Optional[str] = None,
         deployed_at: Optional[str] = None,
     ) -> str:
-        active = self.get_active_deployment(environment)
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
+            active = conn.execute(
+                """
+                SELECT deployment_id, model_id, environment, status, rollback_model_id
+                FROM model_deployment
+                WHERE environment = ? AND status = 'active'
+                ORDER BY deployed_at DESC NULLS LAST, approved_at DESC NULLS LAST
+                LIMIT 1
+                """,
+                [environment],
+            ).fetchone()
             approval_status = conn.execute(
                 "SELECT approval_status FROM model_registry WHERE model_id = ?",
                 [model_id],
@@ -982,12 +1048,10 @@ class RegistryStore:
                     environment,
                     approved_by,
                     deployed_at or datetime.now(timezone.utc).isoformat(),
-                    active["model_id"] if active else None,
+                    active[1] if active else None,
                     notes,
                 ],
             )
-        finally:
-            conn.close()
         return deployment_id
 
     def rollback_model_deployment(
@@ -1007,8 +1071,7 @@ class RegistryStore:
         )
 
     def get_active_deployment(self, environment: str) -> Optional[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             row = conn.execute(
                 """
                 SELECT deployment_id, model_id, environment, status, rollback_model_id
@@ -1019,8 +1082,6 @@ class RegistryStore:
                 """,
                 [environment],
             ).fetchone()
-        finally:
-            conn.close()
         if row is None:
             return None
         return {
@@ -1032,8 +1093,7 @@ class RegistryStore:
         }
 
     def get_model_record(self, model_id: str) -> Dict[str, Any]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             row = conn.execute(
                 """
                 SELECT model_id, model_name, model_version, artifact_uri, feature_schema_hash,
@@ -1043,8 +1103,6 @@ class RegistryStore:
                 """,
                 [model_id],
             ).fetchone()
-        finally:
-            conn.close()
         if row is None:
             raise KeyError(f"Unknown model_id: {model_id}")
         return {
@@ -1075,8 +1133,7 @@ class RegistryStore:
             params.append(model_name)
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 f"""
                 SELECT model_id, model_name, model_version, artifact_uri, training_snapshot_ref,
@@ -1088,8 +1145,6 @@ class RegistryStore:
                 """,
                 [*params, int(limit)],
             ).fetchall()
-        finally:
-            conn.close()
 
         return [
             {
@@ -1106,8 +1161,7 @@ class RegistryStore:
         ]
 
     def get_model_evals(self, model_id: str) -> List[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 """
                 SELECT metric_name, metric_value, dataset_ref, notes
@@ -1117,8 +1171,6 @@ class RegistryStore:
                 """,
                 [model_id],
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "metric_name": row[0],
@@ -1130,8 +1182,7 @@ class RegistryStore:
         ]
 
     def get_deployment_history(self, environment: str) -> List[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 """
                 SELECT deployment_id, model_id, environment, status, rollback_model_id, notes
@@ -1141,8 +1192,6 @@ class RegistryStore:
                 """,
                 [environment],
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "deployment_id": row[0],
@@ -1172,8 +1221,7 @@ class RegistryStore:
             params.append(status)
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 f"""
                 SELECT deployment_id, model_id, environment, status, approved_by,
@@ -1185,9 +1233,6 @@ class RegistryStore:
                 """,
                 [*params, int(limit)],
             ).fetchall()
-        finally:
-            conn.close()
-
         return [
             {
                 "deployment_id": row[0],
@@ -1204,8 +1249,7 @@ class RegistryStore:
         ]
 
     def get_stage_runs(self, run_id: str, *, started_after: str | None = None) -> List[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             where_sql = "WHERE run_id = ?"
             params: list[Any] = [run_id]
             if started_after is not None:
@@ -1220,8 +1264,6 @@ class RegistryStore:
                 """,
                 params,
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "stage_name": row[0],
@@ -1236,8 +1278,7 @@ class RegistryStore:
         ]
 
     def get_run(self, run_id: str) -> Dict[str, Any]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             row = conn.execute(
                 """
                 SELECT run_id, pipeline_name, run_date, status, current_stage, error_class, error_message, metadata_json
@@ -1246,8 +1287,6 @@ class RegistryStore:
                 """,
                 [run_id],
             ).fetchone()
-        finally:
-            conn.close()
         if row is None:
             raise KeyError(f"Unknown run_id: {run_id}")
         return {
@@ -1273,8 +1312,7 @@ class RegistryStore:
         result: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
     ) -> None:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO operator_task
@@ -1292,8 +1330,6 @@ class RegistryStore:
                     self._json(metadata),
                 ],
             )
-        finally:
-            conn.close()
 
     def update_operator_task(
         self,
@@ -1305,35 +1341,47 @@ class RegistryStore:
         error: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        assignments: list[str] = ["updated_at = CURRENT_TIMESTAMP"]
-        params: list[Any] = []
-        if status is not None:
-            assignments.append("status = ?")
-            params.append(status)
-        if finished_at is not None:
-            assignments.append("finished_at = ?")
-            params.append(finished_at)
-        if result is not None:
-            assignments.append("result_json = ?")
-            params.append(self._json(result))
-        if error is not None:
-            assignments.append("error = ?")
-            params.append(error)
-        if metadata is not None:
-            assignments.append("metadata_json = ?")
-            params.append(self._json(metadata))
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
+            existing = conn.execute(
+                """
+                SELECT task_id, task_type, label, status, started_at, finished_at, result_json, error, metadata_json, created_at
+                FROM operator_task
+                WHERE task_id = ?
+                """,
+                [task_id],
+            ).fetchone()
+            if existing is None:
+                return
+
+            next_status = status if status is not None else existing[3]
+            next_finished_at = finished_at if finished_at is not None else existing[5]
+            next_result_json = self._json(result) if result is not None else existing[6]
+            next_error = error if error is not None else existing[7]
+            next_metadata_json = self._json(metadata) if metadata is not None else existing[8]
+            conn.execute("DELETE FROM operator_task WHERE task_id = ?", [task_id])
+            conn.commit()
             conn.execute(
-                f"UPDATE operator_task SET {', '.join(assignments)} WHERE task_id = ?",
-                [*params, task_id],
+                """
+                INSERT INTO operator_task
+                (task_id, task_type, label, status, started_at, finished_at, result_json, error, metadata_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                [
+                    existing[0],
+                    existing[1],
+                    existing[2],
+                    next_status,
+                    existing[4],
+                    next_finished_at,
+                    next_result_json,
+                    next_error,
+                    next_metadata_json,
+                    existing[9],
+                ],
             )
-        finally:
-            conn.close()
 
     def append_operator_task_log(self, task_id: str, message: str) -> int:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             next_order = conn.execute(
                 """
                 SELECT COALESCE(MAX(log_order), 0) + 1
@@ -1354,12 +1402,9 @@ class RegistryStore:
                 [task_id],
             )
             return int(next_order)
-        finally:
-            conn.close()
 
     def get_operator_task(self, task_id: str) -> Dict[str, Any]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             row = conn.execute(
                 """
                 SELECT task_id, task_type, label, status, started_at, finished_at, result_json, error, metadata_json
@@ -1368,8 +1413,6 @@ class RegistryStore:
                 """,
                 [task_id],
             ).fetchone()
-        finally:
-            conn.close()
         if row is None:
             raise KeyError(f"Unknown task_id: {task_id}")
         return {
@@ -1385,8 +1428,7 @@ class RegistryStore:
         }
 
     def list_operator_tasks(self, limit: int = 100) -> List[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 """
                 SELECT task_id, task_type, label, status, started_at, finished_at, result_json, error, metadata_json
@@ -1396,8 +1438,6 @@ class RegistryStore:
                 """,
                 [int(limit)],
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "task_id": row[0],
@@ -1420,8 +1460,7 @@ class RegistryStore:
         after: int = 0,
         limit: int = 300,
     ) -> List[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 """
                 SELECT log_order, message, created_at
@@ -1433,8 +1472,6 @@ class RegistryStore:
                 """,
                 [task_id, int(after), int(limit)],
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "log_cursor": int(row[0]),
@@ -1445,11 +1482,8 @@ class RegistryStore:
         ]
 
     def count_rows(self, table_name: str) -> int:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             return int(conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
-        finally:
-            conn.close()
 
     def replace_shadow_predictions(
         self,
@@ -1457,8 +1491,7 @@ class RegistryStore:
         rows: List[Dict[str, Any]],
         artifact_uri: Optional[str] = None,
     ) -> int:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 "DELETE FROM model_shadow_prediction WHERE prediction_date = ?",
                 [prediction_date],
@@ -1505,8 +1538,6 @@ class RegistryStore:
                     ],
                 )
                 inserted += 1
-        finally:
-            conn.close()
         return inserted
 
     def replace_prediction_log(
@@ -1519,8 +1550,7 @@ class RegistryStore:
         model_id: Optional[str] = None,
         artifact_uri: Optional[str] = None,
     ) -> int:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             if model_id is None:
                 conn.execute(
                     """
@@ -1575,8 +1605,6 @@ class RegistryStore:
                     ],
                 )
                 inserted += 1
-        finally:
-            conn.close()
         return inserted
 
     def get_unscored_prediction_logs(
@@ -1586,8 +1614,7 @@ class RegistryStore:
         deployment_mode: str,
         model_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             if model_id is None:
                 rows = conn.execute(
                     """
@@ -1621,9 +1648,6 @@ class RegistryStore:
                     """,
                     [int(horizon), deployment_mode, model_id],
                 ).fetchall()
-        finally:
-            conn.close()
-
         return [
             {
                 "prediction_log_id": row[0],
@@ -1638,8 +1662,7 @@ class RegistryStore:
         ]
 
     def replace_shadow_eval(self, rows: List[Dict[str, Any]]) -> int:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             inserted = 0
             for row in rows:
                 conn.execute(
@@ -1671,13 +1694,10 @@ class RegistryStore:
                     ],
                 )
                 inserted += 1
-        finally:
-            conn.close()
         return inserted
 
     def record_drift_metrics(self, rows: List[Dict[str, Any]]) -> int:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             inserted = 0
             for row in rows:
                 drift_metric_id = row.get("drift_metric_id") or f"drift-{uuid.uuid4().hex[:12]}"
@@ -1703,8 +1723,6 @@ class RegistryStore:
                     ],
                 )
                 inserted += 1
-        finally:
-            conn.close()
         return inserted
 
     def get_latest_drift_metrics(
@@ -1730,8 +1748,7 @@ class RegistryStore:
             clauses.append("prediction_date <= ?")
             params.append(prediction_date)
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 f"""
                 SELECT drift_metric_id, prediction_date, model_id, deployment_mode, horizon,
@@ -1742,8 +1759,6 @@ class RegistryStore:
                 """,
                 params,
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "drift_metric_id": row[0],
@@ -1761,8 +1776,7 @@ class RegistryStore:
         ]
 
     def record_promotion_gate_results(self, model_id: str, rows: List[Dict[str, Any]]) -> int:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             inserted = 0
             for row in rows:
                 gate_result_id = row.get("gate_result_id") or f"gate-{uuid.uuid4().hex[:12]}"
@@ -1785,13 +1799,10 @@ class RegistryStore:
                     ],
                 )
                 inserted += 1
-        finally:
-            conn.close()
         return inserted
 
     def get_promotion_gate_results(self, model_id: str) -> List[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 """
                 SELECT gate_result_id, gate_name, status, metric_value, threshold_value, metadata_json
@@ -1801,8 +1812,6 @@ class RegistryStore:
                 """,
                 [model_id],
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "gate_result_id": row[0],
@@ -1825,8 +1834,7 @@ class RegistryStore:
         as_of_date: Optional[str] = None,
     ) -> Dict[str, Any]:
         as_of_sql = "COALESCE(?, CURRENT_DATE)"
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             row = conn.execute(
                 f"""
                 WITH scoped_predictions AS (
@@ -1871,8 +1879,6 @@ class RegistryStore:
                 """,
                 [model_id, int(horizon), deployment_mode, as_of_date, as_of_date],
             ).fetchone()
-        finally:
-            conn.close()
         if row is None:
             return {}
         return {
@@ -1914,8 +1920,7 @@ class RegistryStore:
         if to_date is not None:
             clauses.append("prediction_date <= ?")
             params.append(to_date)
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 f"""
                 SELECT COALESCE(probability, score)
@@ -1926,18 +1931,13 @@ class RegistryStore:
                 """,
                 params,
             ).fetchall()
-        finally:
-            conn.close()
         return [float(row[0]) for row in rows]
 
     def get_latest_shadow_prediction_date(self) -> Optional[str]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             row = conn.execute(
                 "SELECT MAX(prediction_date) FROM model_shadow_prediction"
             ).fetchone()
-        finally:
-            conn.close()
         return str(row[0]) if row and row[0] is not None else None
 
     def get_shadow_overlay(
@@ -1945,8 +1945,7 @@ class RegistryStore:
         prediction_date: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             if prediction_date is None:
                 prediction_date = self.get_latest_shadow_prediction_date()
             if prediction_date is None:
@@ -1966,8 +1965,6 @@ class RegistryStore:
                 """,
                 [prediction_date],
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "prediction_date": row[0],
@@ -1995,8 +1992,7 @@ class RegistryStore:
         ]
 
     def replace_shadow_outcomes(self, rows: List[Dict[str, Any]]) -> int:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             inserted = 0
             for row in rows:
                 conn.execute(
@@ -2024,13 +2020,10 @@ class RegistryStore:
                     ],
                 )
                 inserted += 1
-        finally:
-            conn.close()
         return inserted
 
     def get_unscored_shadow_predictions(self, horizon: int) -> List[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 """
                 SELECT p.prediction_id, p.prediction_date, p.symbol_id, p.exchange
@@ -2043,8 +2036,6 @@ class RegistryStore:
                 """,
                 [int(horizon)],
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "prediction_id": row[0],
@@ -2069,8 +2060,7 @@ class RegistryStore:
 
         ml_flag = f"ml_{horizon}d_top_decile"
         blend_flag = f"blend_{horizon}d_top_decile"
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             rows = conn.execute(
                 f"""
                 WITH base AS (
@@ -2109,8 +2099,6 @@ class RegistryStore:
                 """,
                 [int(horizon), int(periods * 3)],
             ).fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "period_start": str(row[0]),
@@ -2136,8 +2124,7 @@ class RegistryStore:
         report_uri: str | None = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        conn = self._connect()
-        try:
+        with self._writer() as conn:
             conn.execute(
                 """
                 INSERT INTO data_repair_run
@@ -2165,12 +2152,9 @@ class RegistryStore:
                     self._json(metadata),
                 ],
             )
-        finally:
-            conn.close()
 
     def get_latest_data_repair_run(self, exchange: str = "NSE") -> Optional[Dict[str, Any]]:
-        conn = self._connect()
-        try:
+        with self._reader() as conn:
             row = conn.execute(
                 """
                 SELECT
@@ -2192,8 +2176,6 @@ class RegistryStore:
                 """,
                 [exchange],
             ).fetchone()
-        finally:
-            conn.close()
         if row is None:
             return None
         return {
