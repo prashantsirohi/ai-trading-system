@@ -12,7 +12,7 @@ from ai_trading_system.domains.publish.channels.google_sheets_manager import (
     PortfolioSheets,
     SectorReportSheets,
 )
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
 
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pandas as pd
 
-from services.execute.candidate_builder import attach_execution_weight
-from services.publish.publish_payloads import attach_publish_metadata
-from services.rank.orchestration import attach_rank_confidence_from_features
+from ai_trading_system.domains.execution.candidate_builder import attach_execution_weight
+from ai_trading_system.domains.publish.publish_payloads import attach_publish_metadata
+from ai_trading_system.domains.ranking.service import attach_rank_confidence_from_features
 
 
 def test_feature_confidence_flows_into_rank_and_execute_and_publish() -> None:
@@ -23,4 +23,3 @@ def test_feature_confidence_flows_into_rank_and_execute_and_publish() -> None:
     assert execution_ready["execution_weight"].tolist() == [0.82, 0.40]
     assert publish_row["trust_status"] == "trusted"
     assert publish_row["publish_confidence"] == 0.82
-

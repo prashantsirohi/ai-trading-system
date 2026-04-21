@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import duckdb
 
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 def get_conn(ohlcv_db_path: str) -> duckdb.DuckDBPyConnection:
@@ -96,32 +96,46 @@ def register_feature(
     note: str = None,
 ) -> int:
     conn = get_conn(ohlcv_db_path)
-    feat_id_raw = conn.execute("SELECT nextval('_feat_id_seq')").fetchone()
-    feat_id = int(feat_id_raw[0]) if feat_id_raw else 1
+    try:
+        # Guard against sequence drift where nextval() can collide with existing PKs.
+        # This can happen after restores/backfills that insert explicit feature_id values.
+        for _ in range(5):
+            feat_id_raw = conn.execute("SELECT nextval('_feat_id_seq')").fetchone()
+            seq_id = int(feat_id_raw[0]) if feat_id_raw else 1
+            max_id_raw = conn.execute("SELECT COALESCE(MAX(feature_id), 0) FROM _feature_registry").fetchone()
+            max_id = int(max_id_raw[0]) if max_id_raw else 0
+            feat_id = max(seq_id, max_id + 1)
 
-    conn.execute(
-        """
-        INSERT INTO _feature_registry
-            (feature_id, feature_name, symbol_id, exchange, rows_computed,
-             lookback_days, params, feature_file, status, note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """,
-        (
-            feat_id,
-            feature_name,
-            symbol_id,
-            exchange,
-            rows_computed,
-            lookback_days,
-            str(params) if params else None,
-            feature_file,
-            status,
-            note,
-        ),
-    )
-    conn.commit()
-    conn.close()
-    return feat_id
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO _feature_registry
+                        (feature_id, feature_name, symbol_id, exchange, rows_computed,
+                         lookback_days, params, feature_file, status, note)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        feat_id,
+                        feature_name,
+                        symbol_id,
+                        exchange,
+                        rows_computed,
+                        lookback_days,
+                        str(params) if params else None,
+                        feature_file,
+                        status,
+                        note,
+                    ),
+                )
+                conn.commit()
+                return feat_id
+            except duckdb.ConstraintException:
+                # Rare race/collision; retry with a freshly computed id.
+                continue
+
+        raise RuntimeError("Failed to register feature after retries due to repeated feature_id collisions.")
+    finally:
+        conn.close()
 
 
 def get_last_feature_date(
@@ -157,4 +171,3 @@ def get_last_feature_date(
         return None
     finally:
         conn.close()
-

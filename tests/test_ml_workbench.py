@@ -6,8 +6,8 @@ from pathlib import Path
 import duckdb
 
 from analytics.registry import RegistryStore
-from execution import ExecutionService, ExecutionStore, PaperExecutionAdapter
-from execution.models import OrderIntent
+from ai_trading_system.domains.execution import ExecutionService, ExecutionStore, PaperExecutionAdapter
+from ai_trading_system.domains.execution.models import OrderIntent
 from research.recipes import (
     build_validation_review,
     get_recipe,
@@ -233,7 +233,7 @@ def test_ml_workbench_approve_deploy_and_rollback_helpers_update_registry(tmp_pa
 
 def test_workbench_recipe_catalog_and_result_loader(tmp_path: Path) -> None:
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    source_config = REPO_ROOT / "config" / "research_recipes.toml"
+    source_config = REPO_ROOT / "src" / "ai_trading_system" / "platform" / "config" / "research_recipes.toml"
     (tmp_path / "config" / "research_recipes.toml").write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
 
     recipes = load_workbench_recipes(tmp_path)
@@ -285,7 +285,7 @@ def test_workbench_recipe_catalog_and_result_loader(tmp_path: Path) -> None:
 
 def test_workbench_bundle_loader_and_winner_selection(tmp_path: Path) -> None:
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    source_config = REPO_ROOT / "config" / "research_recipes.toml"
+    source_config = REPO_ROOT / "src" / "ai_trading_system" / "platform" / "config" / "research_recipes.toml"
     (tmp_path / "config" / "research_recipes.toml").write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
 
     bundle = get_recipe_bundle("daily_research", tmp_path)
@@ -340,7 +340,7 @@ def test_workbench_bundle_loader_and_winner_selection(tmp_path: Path) -> None:
 
 def test_recipe_bundle_auto_actions_apply_only_to_winner(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    source_config = REPO_ROOT / "config" / "research_recipes.toml"
+    source_config = REPO_ROOT / "src" / "ai_trading_system" / "platform" / "config" / "research_recipes.toml"
     (tmp_path / "config" / "research_recipes.toml").write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
 
     registry = RegistryStore(tmp_path)

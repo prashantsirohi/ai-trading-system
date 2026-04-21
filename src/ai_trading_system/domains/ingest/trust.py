@@ -9,7 +9,7 @@ from typing import Any, Iterable
 import duckdb
 import pandas as pd
 
-from core.trust_confidence import TrustConfidenceEnvelope
+from ai_trading_system.pipeline.contracts import TrustConfidenceEnvelope
 
 
 CATALOG_TRUST_COLUMNS: dict[str, str] = {
@@ -32,6 +32,42 @@ CATALOG_TRUST_COLUMNS: dict[str, str] = {
     "is_benchmark": "BOOLEAN",
     "benchmark_label": "VARCHAR",
     "isin": "VARCHAR",
+}
+
+# Index catalog schemas for sectoral indices (NIFTY BANK, NIFTY AUTO, etc.)
+INDEX_METADATA_COLUMNS: dict[str, str] = {
+    "index_code": "VARCHAR PRIMARY KEY",
+    "display_name": "VARCHAR NOT NULL",
+    "family": "VARCHAR",
+    "is_sectoral": "BOOLEAN DEFAULT TRUE",
+    "benchmark_for": "VARCHAR",
+    "source": "VARCHAR DEFAULT 'nseindia'",
+    "active": "BOOLEAN DEFAULT TRUE",
+    "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+    "updated_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+}
+
+INDEX_CATALOG_COLUMNS: dict[str, str] = {
+    "index_code": "VARCHAR NOT NULL",
+    "date": "DATE NOT NULL",
+    "open": "DOUBLE",
+    "high": "DOUBLE",
+    "low": "DOUBLE",
+    "close": "DOUBLE NOT NULL",
+    "volume": "BIGINT",
+    "value": "DOUBLE",
+    "provider": "VARCHAR DEFAULT 'nseindia'",
+    "ingest_run_id": "VARCHAR",
+    "validated_at": "TIMESTAMP",
+}
+
+SECTOR_TO_INDEX_COLUMNS: dict[str, str] = {
+    "system_sector": "VARCHAR PRIMARY KEY",
+    "index_code": "VARCHAR NOT NULL",
+    "index_name": "VARCHAR NOT NULL",
+    "is_primary": "BOOLEAN DEFAULT TRUE",
+    "fallback_index": "VARCHAR DEFAULT 'NIFTY_50'",
+    "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
 }
 
 
@@ -148,6 +184,79 @@ def ensure_data_trust_schema(db_path_or_conn: duckdb.DuckDBPyConnection | str | 
             ON _catalog_provenance (exchange, timestamp, provider, symbol_id)
             """
         )
+    finally:
+        if should_close:
+            conn.close()
+
+
+def ensure_index_schema(db_path_or_conn: duckdb.DuckDBPyConnection | str | Path) -> None:
+    """Ensure index catalog tables exist with proper schema."""
+    conn, should_close = _connect(db_path_or_conn)
+    try:
+        # Create _index_metadata table
+        existing_meta = _table_columns(conn, "_index_metadata")
+        if not existing_meta:
+            conn.execute("""
+                CREATE TABLE _index_metadata (
+                    index_code VARCHAR PRIMARY KEY,
+                    display_name VARCHAR NOT NULL,
+                    family VARCHAR,
+                    is_sectoral BOOLEAN DEFAULT TRUE,
+                    benchmark_for VARCHAR,
+                    source VARCHAR DEFAULT 'nseindia',
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # Add columns if table existed but missing columns
+        else:
+            for col, dtype in INDEX_METADATA_COLUMNS.items():
+                if col not in existing_meta:
+                    conn.execute(f"ALTER TABLE _index_metadata ADD COLUMN {col} {dtype}")
+
+        # Create _index_catalog table
+        existing_cat = _table_columns(conn, "_index_catalog")
+        if not existing_cat:
+            conn.execute("""
+                CREATE TABLE _index_catalog (
+                    index_code VARCHAR NOT NULL,
+                    date DATE NOT NULL,
+                    open DOUBLE,
+                    high DOUBLE,
+                    low DOUBLE,
+                    close DOUBLE NOT NULL,
+                    volume BIGINT,
+                    value DOUBLE,
+                    provider VARCHAR DEFAULT 'nseindia',
+                    ingest_run_id VARCHAR,
+                    validated_at TIMESTAMP,
+                    PRIMARY KEY (index_code, date)
+                )
+            """)
+        else:
+            for col, dtype in INDEX_CATALOG_COLUMNS.items():
+                if col not in existing_cat:
+                    conn.execute(f"ALTER TABLE _index_catalog ADD COLUMN {col} {dtype}")
+
+        # Create sector_to_index mapping table
+        existing_map = _table_columns(conn, "sector_to_index")
+        if not existing_map:
+            conn.execute("""
+                CREATE TABLE sector_to_index (
+                    system_sector VARCHAR PRIMARY KEY,
+                    index_code VARCHAR NOT NULL,
+                    index_name VARCHAR NOT NULL,
+                    is_primary BOOLEAN DEFAULT TRUE,
+                    fallback_index VARCHAR DEFAULT 'NIFTY_50',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        else:
+            for col, dtype in SECTOR_TO_INDEX_COLUMNS.items():
+                if col not in existing_map:
+                    conn.execute(f"ALTER TABLE sector_to_index ADD COLUMN {col} {dtype}")
+
     finally:
         if should_close:
             conn.close()
@@ -278,13 +387,14 @@ def annotate_provider_reconciliation(
     """Add provider confidence and discrepancy markers to ingest rows."""
     if frame is None or frame.empty:
         return pd.DataFrame(columns=frame.columns if isinstance(frame, pd.DataFrame) else None)
-    output = frame.copy()
+    output = frame.copy(deep=True)
     if "provider_confidence" in output.columns:
-        output["provider_confidence"] = pd.to_numeric(output["provider_confidence"], errors="coerce").fillna(1.0)
+        provider_confidence = pd.to_numeric(output["provider_confidence"], errors="coerce")
+        output.loc[:, "provider_confidence"] = provider_confidence.where(provider_confidence.notna(), 1.0)
     else:
-        output["provider_confidence"] = 1.0
-    output["provider_discrepancy_flag"] = False
-    output["provider_discrepancy_note"] = None
+        output.loc[:, "provider_confidence"] = 1.0
+    output.loc[:, "provider_discrepancy_flag"] = False
+    output.loc[:, "provider_discrepancy_note"] = None
 
     required = {"symbol_id", "exchange", "timestamp", "provider", "close"}
     if not required.issubset(set(output.columns)):
@@ -354,6 +464,9 @@ def quarantine_symbol_dates(
                 }
             )
 
+    if not rows:
+        return 0
+
     conn, should_close = _connect(db_path_or_conn)
     try:
         ensure_data_trust_schema(conn)
@@ -400,10 +513,10 @@ def resolve_quarantine_for_rows(
 ) -> int:
     if rows is None or rows.empty:
         return 0
-    frame = rows.copy()
+    frame = rows.copy(deep=True)
     if "timestamp" not in frame.columns:
         return 0
-    frame["trade_date"] = pd.to_datetime(frame["timestamp"]).dt.date.astype(str)
+    frame.loc[:, "trade_date"] = pd.to_datetime(frame["timestamp"]).dt.date.astype(str)
     for column in ("symbol_id", "exchange"):
         if column not in frame.columns:
             return 0
@@ -447,7 +560,7 @@ def load_data_trust_summary(
 ) -> dict[str, Any]:
     path = Path(db_path)
     if not path.exists():
-        envelope = TrustConfidenceEnvelope(trust_status="missing")
+        envelope = TrustConfidenceEnvelope.from_trust_summary({"status": "missing"})
         return {
             "status": "missing",
             "db_path": str(path),
@@ -468,7 +581,7 @@ def load_data_trust_summary(
     try:
         catalog_columns = _table_columns(conn, "_catalog")
         if not catalog_columns:
-            envelope = TrustConfidenceEnvelope(trust_status="missing")
+            envelope = TrustConfidenceEnvelope.from_trust_summary({"status": "missing"})
             return {
                 "status": "missing",
                 "db_path": str(path),
@@ -596,9 +709,26 @@ def load_data_trust_summary(
             status = "degraded"
 
     provider_confidence = max(0.0, min(1.0, 1.0 - float(fallback_ratio_latest) - float(unknown_ratio_latest)))
-    envelope = TrustConfidenceEnvelope(
-        trust_status=status,
-        provider_confidence=round(provider_confidence, 4),
+    envelope = TrustConfidenceEnvelope.from_trust_summary(
+        {
+            "status": status,
+            "active_quarantined_dates": active_quarantined_dates,
+            "active_quarantined_symbols": active_quarantined_symbols,
+            "fallback_ratio_latest": round(fallback_ratio_latest, 4),
+            "primary_ratio_latest": round(primary_ratio_latest, 4),
+            "unknown_ratio_latest": round(unknown_ratio_latest, 4),
+            "latest_provider_stats": {
+                "trade_date": latest_trade_key,
+                "counts": latest_provider_stats,
+                "total_rows": latest_total,
+                "primary_rows": latest_primary,
+                "fallback_rows": latest_fallback,
+                "unknown_rows": latest_unknown,
+            },
+            "latest_trade_date": latest_trade_key,
+            "latest_validated_date": str(latest_validated_date) if latest_validated_date is not None else None,
+            "trust_confidence": {"provider_confidence": round(provider_confidence, 4)},
+        }
     )
 
     return {

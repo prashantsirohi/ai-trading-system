@@ -9,8 +9,8 @@ from typing import Any
 
 import pandas as pd
 
-from core.trust_confidence import TrustConfidenceEnvelope, attach_audit_fields
-from run.stages.base import StageContext
+from ai_trading_system.pipeline.contracts import TrustConfidenceEnvelope, attach_audit_fields
+from ai_trading_system.pipeline.contracts import StageContext
 
 
 def prioritize_execution_candidates(frame: pd.DataFrame) -> pd.DataFrame:
@@ -97,7 +97,7 @@ class ExecutionRequest:
             exit_max_holding_days=int(context.params.get("execution_exit_max_holding_days", 20)),
             use_portfolio_constraints=bool(context.params.get("execution_use_portfolio_constraints", False)),
             max_positions=int(context.params.get("execution_max_positions", 10)),
-            max_sector_exposure=float(context.params.get("execution_max_sector_exposure", 0.30)),
+            max_sector_exposure=float(context.params.get("execution_max_sector_exposure", 0.20)),
             max_single_stock_weight=float(context.params.get("execution_max_single_stock_weight", 0.10)),
             use_atr_position_sizing=bool(context.params.get("execution_use_atr_position_sizing", False)),
         )
@@ -163,10 +163,16 @@ class ExecutionCandidateBuilder:
                     top_execution_weight = float(pd.to_numeric(ranked_df["execution_weight"], errors="coerce").dropna().iloc[0])
                 except Exception:
                     top_execution_weight = None
-        provider_confidence = ((dashboard_payload.get("summary", {}) or {}).get("trust_confidence") or {}).get("provider_confidence")
-        trust_confidence = TrustConfidenceEnvelope(
-            trust_status=data_trust_status,
-            provider_confidence=provider_confidence,
+        trust_summary = (dashboard_payload.get("data_trust") or {}) or {"status": data_trust_status}
+        if "summary" in dashboard_payload and "latest_trade_date" not in trust_summary:
+            trust_summary = {
+                **trust_summary,
+                "status": data_trust_status,
+                "latest_trade_date": (dashboard_payload.get("summary", {}) or {}).get("latest_trade_date"),
+                "latest_validated_date": (dashboard_payload.get("summary", {}) or {}).get("latest_validated_date"),
+            }
+        trust_confidence = TrustConfidenceEnvelope.from_trust_summary(
+            trust_summary,
             rank_confidence=top_rank_confidence,
             execution_weight=top_execution_weight,
         ).to_dict()

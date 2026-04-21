@@ -8,7 +8,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 class RankerInputLoader:
@@ -81,7 +81,7 @@ class RankerInputLoader:
 
         if frame.empty:
             return frame
-        frame["timestamp"] = pd.to_datetime(frame["timestamp"])
+        frame.loc[:, "timestamp"] = pd.to_datetime(frame["timestamp"])
         return self.normalize_symbol_exchange_columns(frame)
 
     def load_return_frame(self, *, period: int) -> pd.DataFrame:
@@ -104,16 +104,56 @@ class RankerInputLoader:
         if ret_data.empty:
             return pd.DataFrame(columns=["symbol_id", "exchange", "return_pct"])
 
-        ret_data[f"return_pct"] = (
+        ret_data.loc[:, "return_pct"] = (
             (ret_data["close"] - ret_data[f"close_{period}_ago"])
             / ret_data[f"close_{period}_ago"].replace(0, float("nan"))
             * 100
         )
         ret_data = ret_data.dropna(subset=["return_pct"])
-        ret_data["timestamp"] = pd.to_datetime(ret_data["timestamp"], errors="coerce")
+        ret_data.loc[:, "timestamp"] = pd.to_datetime(ret_data["timestamp"], errors="coerce")
         ret_data = ret_data.sort_values(["symbol_id", "exchange", "timestamp"])
         ret_data = ret_data.drop_duplicates(["symbol_id", "exchange"], keep="last")
         return ret_data[["symbol_id", "exchange", "return_pct"]]
+
+    def load_return_frame_multi(self, *, periods: list[int] = None) -> pd.DataFrame:
+        periods = periods or [20, 60, 120]
+        conn = self.get_conn()
+        try:
+            lag_clauses = ", ".join([f"LAG(close, {p}) OVER w AS close_{p}_ago" for p in periods])
+            ret_data = conn.execute(
+                f"""
+                SELECT
+                    symbol_id, exchange, timestamp, close,
+                    {lag_clauses}
+                FROM _catalog
+                WHERE exchange = 'NSE'
+                WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
+                """
+            ).fetchdf()
+        finally:
+            conn.close()
+
+        if ret_data.empty:
+            cols = ["symbol_id", "exchange"] + [f"return_{p}" for p in periods]
+            return pd.DataFrame(columns=cols)
+
+        for p in periods:
+            col_name = f"close_{p}_ago"
+            if col_name in ret_data.columns:
+                ret_data.loc[:, f"return_{p}"] = (
+                    (ret_data["close"] - ret_data[col_name])
+                    / ret_data[col_name].replace(0, float("nan"))
+                    * 100
+                )
+
+        ret_data = ret_data.dropna(subset=[f"return_{p}" for p in periods if f"return_{p}" in ret_data.columns])
+        ret_data.loc[:, "timestamp"] = pd.to_datetime(ret_data["timestamp"], errors="coerce")
+        ret_data = ret_data.sort_values(["symbol_id", "exchange", "timestamp"])
+        ret_data = ret_data.drop_duplicates(["symbol_id", "exchange"], keep="last")
+
+        return_cols = ["symbol_id", "exchange"] + [f"return_{p}" for p in periods]
+        existing_cols = [c for c in return_cols if c in ret_data.columns]
+        return ret_data[existing_cols]
 
     def load_volume_frame(self) -> pd.DataFrame:
         conn = self.get_conn()
@@ -168,7 +208,7 @@ class RankerInputLoader:
 
         adx_latest = self.normalize_symbol_exchange_columns(adx_latest)
         if "adx_14" not in adx_latest.columns and "adx_value" in adx_latest.columns:
-            adx_latest["adx_14"] = adx_latest["adx_value"]
+            adx_latest.loc[:, "adx_14"] = adx_latest["adx_value"]
         return adx_latest
 
     def load_latest_sma(self, *, date: str) -> pd.DataFrame:
@@ -284,10 +324,13 @@ class RankerInputLoader:
         if master_db_path.exists():
             conn = sqlite3.connect(master_db_path)
             try:
-                rows = conn.execute(
-                    "SELECT Symbol, Sector FROM stock_details WHERE Symbol IS NOT NULL"
-                ).fetchall()
-                sector_map = {symbol: sector for symbol, sector in rows if sector}
+                rows = conn.execute("""
+                    SELECT s.symbol_id, COALESCE(sm.system_sector, 'Other')
+                    FROM symbols s
+                    LEFT JOIN sector_mapping sm ON s.sector = sm.industry
+                    WHERE s.exchange = 'NSE'
+                """).fetchall()
+                sector_map = {symbol: sector for symbol, sector in rows}
             finally:
                 conn.close()
 

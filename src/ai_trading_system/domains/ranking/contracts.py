@@ -23,15 +23,22 @@ PRIMARY_FACTORS: tuple[RankFactorDefinition, ...] = (
 )
 
 DEFAULT_FACTOR_WEIGHTS: dict[str, float] = {
-    "relative_strength": 0.25,
+    "relative_strength": 0.28,
     "volume_intensity": 0.18,
     "trend_persistence": 0.15,
     "proximity_highs": 0.17,
-    "delivery_pct": 0.10,
-    "sector_strength": 0.15,
+    "delivery_pct": 0.12,
+    "sector_strength": 0.10,
 }
 
-RANK_MODES: tuple[str, ...] = ("default", "momentum", "breakout", "defensive", "watchlist")
+RANK_MODES: tuple[str, ...] = (
+    "default",
+    "momentum",
+    "breakout",
+    "defensive",
+    "watchlist",
+    "stage2_breakout",  # Stage 2 uptrend filter + breakout focus
+)
 
 RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "symbol_id",
@@ -71,4 +78,17 @@ RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "sma_50",
     "volume",
     "timestamp",
+    "return_20",
+    "return_60",
+    "return_120",
+    "sector_rank_within_sector",
+    "sector_total_symbols",
+    # Stage 2 uptrend enrichment columns (added in Sprint 1)
+    "stage2_score",
+    "is_stage2_uptrend",
+    "stage2_label",
+    "stage2_fail_reason",
+    "stage2_score_bonus",
+    "sma200_slope_20d_pct",
+    "sma_150",
 )

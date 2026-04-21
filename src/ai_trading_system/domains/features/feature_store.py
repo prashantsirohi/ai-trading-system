@@ -6,10 +6,24 @@ import pandas as pd
 import numpy as np
 from ai_trading_system.domains.features import repository as features_repository
 from ai_trading_system.domains.features import snapshot as features_snapshot
+from ai_trading_system.domains.features.indicators import add_stage2_features
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger
+
+# Columns produced by the Stage 2 computation — persisted to feature parquet
+STAGE2_FEATURE_COLUMNS: tuple[str, ...] = (
+    "sma_150",
+    "sma150_slope_20d_pct",
+    "sma200_slope_20d_pct",
+    "stage2_score",
+    "is_stage2_uptrend",
+    "stage2_label",
+    "stage2_fail_reason",
+    "near_52w_high_pct",
+    "volume_ratio_20",
+)
 
 
 def add_feature_readiness(frame: pd.DataFrame, min_lookback: int = 50) -> pd.DataFrame:
@@ -1196,6 +1210,88 @@ class FeatureStore:
         finally:
             conn.close()
 
+    def compute_stage2(
+        self,
+        symbol_id: str = None,
+        exchange: str = "NSE",
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """Compute Stage 2 uptrend features for a single symbol.
+
+        Fetches OHLCV data with SMA-150 and SMA-200 from DuckDB, derives
+        ``near_52w_high_pct`` and ``volume_ratio_20``, then delegates to
+        ``add_stage2_features()`` in *indicators.py*.
+
+        Note: ``rel_strength_score`` is cross-sectional and not available
+        inside the per-symbol feature loop; it defaults to 0 in the scoring
+        function and will be enriched by the ranker at rank time.
+        """
+        date_filter = ""
+        if start_date or end_date:
+            conds: list[str] = []
+            if start_date:
+                conds.append(f"timestamp > '{start_date}'")
+            if end_date:
+                conds.append(f"timestamp <= '{end_date}'")
+            date_filter = " AND " + " AND ".join(conds)
+
+        sym_pred = "symbol_id = ?" if symbol_id else "TRUE"
+        exc_pred = "exchange = ?" if exchange else "TRUE"
+
+        # Pull OHLCV with SMA-150 and SMA-200 in a single SQL pass.
+        # min_periods handled in Python via add_stage2_features (min_periods=100).
+        sql = f"""
+            SELECT
+                symbol_id, exchange, timestamp,
+                open, high, low, close, volume,
+                AVG(close) OVER w150 AS sma_150,
+                AVG(close) OVER w200 AS sma_200,
+                MAX(high)  OVER w252 AS high_252
+            FROM _catalog
+            WHERE {sym_pred}
+              AND {exc_pred}
+              AND timestamp IS NOT NULL
+              {date_filter}
+            WINDOW
+                w150 AS (ORDER BY timestamp ROWS BETWEEN 149 PRECEDING AND CURRENT ROW),
+                w200 AS (ORDER BY timestamp ROWS BETWEEN 199 PRECEDING AND CURRENT ROW),
+                w252 AS (ORDER BY timestamp ROWS BETWEEN 251 PRECEDING AND CURRENT ROW)
+            ORDER BY timestamp
+        """
+
+        conn = self._get_conn()
+        try:
+            bind_params: list[Any] = []
+            if symbol_id:
+                bind_params.append(symbol_id)
+            if exchange:
+                bind_params.append(exchange)
+            df = conn.execute(sql, bind_params).fetchdf()
+        finally:
+            conn.close()
+
+        if df.empty:
+            return df
+
+        # ── Derived fields ──────────────────────────────────────────────
+        close = pd.to_numeric(df["close"], errors="coerce")
+        high_252 = pd.to_numeric(df["high_252"], errors="coerce").replace(0, pd.NA)
+        df["near_52w_high_pct"] = ((1.0 - close / high_252) * 100.0).clip(0.0, 100.0)
+        df.drop(columns=["high_252"], inplace=True)
+
+        if "volume" in df.columns:
+            vol = pd.to_numeric(df["volume"], errors="coerce")
+            vol_avg = vol.rolling(20, min_periods=10).mean().replace(0, pd.NA)
+            df["volume_ratio_20"] = vol / vol_avg
+
+        # rel_strength_score not available here — add_stage2_features defaults to 0
+        df = add_stage2_features(df)
+
+        # Keep only columns useful for the feature store
+        keep_cols = ["symbol_id", "exchange", "timestamp", "close"] + list(STAGE2_FEATURE_COLUMNS)
+        return df[[c for c in keep_cols if c in df.columns]]
+
     def compute_all_technicals(
         self,
         symbol_id: str,
@@ -1679,6 +1775,7 @@ class FeatureStore:
         tail_bars: int = 252,
         warmup_bars: int | None = None,
         full_rebuild: bool = False,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, int]:
         """
         Compute all technical features for all (or specified) symbols
@@ -1736,7 +1833,26 @@ class FeatureStore:
             "bb": lambda sid, exc, start, end: self.compute_bollinger_bands(sid, exc, start_date=start, end_date=end),
             "roc": lambda sid, exc, start, end: self.compute_roc(sid, exc, start_date=start, end_date=end),
             "supertrend": lambda sid, exc, start, end: self.compute_supertrend(sid, exc, start_date=start, end_date=end),
+            # Stage 2 uptrend scoring (Weinstein methodology, Sprint 1)
+            "stage2": lambda sid, exc, start, end: self.compute_stage2(sid, exc, start_date=start, end_date=end),
         }
+
+        total_steps = max(1, len(feature_types) * len(exchanges) * len(symbols))
+        processed_steps = 0
+        progress_start = time.time()
+        progress_interval = max(1, total_steps // 100)  # ~1% increments
+        if callable(progress_callback):
+            progress_callback(
+                {
+                    "status": "started",
+                    "mode": mode,
+                    "total_steps": total_steps,
+                    "completed_steps": 0,
+                    "feature_types": list(feature_types),
+                    "exchanges": list(exchanges),
+                    "symbols_count": len(symbols),
+                }
+            )
 
         rows_written = {}
         for feat_type in feature_types:
@@ -1749,6 +1865,9 @@ class FeatureStore:
 
             for exc in exchanges:
                 for sym in symbols:
+                    rows_added = 0
+                    step_status = "ok"
+                    step_error = None
                     try:
                         compute_start = None
                         replace_from_ts = None
@@ -1762,6 +1881,7 @@ class FeatureStore:
 
                         df = method(sym, exc, compute_start, None)
                         if df.empty:
+                            step_status = "empty"
                             continue
 
                         if use_duckdb:
@@ -1810,13 +1930,58 @@ class FeatureStore:
                                 status="completed",
                             )
                     except Exception as e:
+                        step_status = "error"
+                        step_error = str(e)
                         logger.warning(
                             f"Error computing {feat_type} for {sym}/{exc}: {e}"
                         )
+                    finally:
+                        processed_steps += 1
+                        if callable(progress_callback):
+                            should_emit = (
+                                processed_steps == 1
+                                or processed_steps == total_steps
+                                or (processed_steps % progress_interval == 0)
+                                or step_status == "error"
+                            )
+                            if should_emit:
+                                elapsed = max(0.0, time.time() - progress_start)
+                                rate = (processed_steps / elapsed) if elapsed > 0 else 0.0
+                                remaining = max(0, total_steps - processed_steps)
+                                eta_seconds = int(remaining / rate) if rate > 0 else None
+                                progress_callback(
+                                    {
+                                        "status": "running",
+                                        "mode": mode,
+                                        "feature_type": feat_type,
+                                        "exchange": exc,
+                                        "symbol_id": sym,
+                                        "total_steps": total_steps,
+                                        "completed_steps": processed_steps,
+                                        "rows_added": int(rows_added),
+                                        "step_status": step_status,
+                                        "error": step_error,
+                                        "elapsed_seconds": int(elapsed),
+                                        "eta_seconds": eta_seconds,
+                                    }
+                                )
 
             rows_written[feat_type] = total_rows
             logger.info(
                 f"{feat_type}: wrote {total_rows:,} rows across {len(symbols)} symbols"
+            )
+
+        if callable(progress_callback):
+            total_rows_written = int(sum(rows_written.values()))
+            progress_callback(
+                {
+                    "status": "completed",
+                    "mode": mode,
+                    "total_steps": total_steps,
+                    "completed_steps": processed_steps,
+                    "rows_written_total": total_rows_written,
+                    "elapsed_seconds": int(max(0.0, time.time() - progress_start)),
+                }
             )
 
         return rows_written

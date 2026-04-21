@@ -21,19 +21,19 @@ class SymbolRecord:
 
 class SymbolMaster:
     def __init__(self, frame: pd.DataFrame):
-        normalized = frame.copy()
+        normalized = frame.copy(deep=True)
         if normalized.empty:
             normalized = pd.DataFrame(
                 columns=["symbol", "canonical_symbol", "isin", "status", "sector", "industry"]
             )
         for column in ("symbol", "canonical_symbol", "status"):
             if column not in normalized.columns:
-                normalized[column] = None
-        normalized["symbol"] = normalized["symbol"].astype(str).str.strip().str.upper()
-        normalized["canonical_symbol"] = (
+                normalized.loc[:, column] = None
+        normalized.loc[:, "symbol"] = normalized["symbol"].astype(str).str.strip().str.upper()
+        normalized.loc[:, "canonical_symbol"] = (
             normalized["canonical_symbol"].fillna(normalized["symbol"]).astype(str).str.strip().str.upper()
         )
-        normalized["status"] = normalized["status"].fillna("active").astype(str).str.strip().str.lower()
+        normalized.loc[:, "status"] = normalized["status"].fillna("active").astype(str).str.strip().str.lower()
         self.frame = normalized
 
     @classmethod

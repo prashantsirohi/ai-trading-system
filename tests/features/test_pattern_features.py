@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from features.pattern_features import compute_pattern_preconditions
+from ai_trading_system.domains.features.pattern_features import compute_pattern_preconditions
 
 
 def test_compute_pattern_preconditions_adds_expected_columns() -> None:
@@ -27,4 +27,3 @@ def test_compute_pattern_preconditions_adds_expected_columns() -> None:
     ]:
         assert col in out.columns
         assert out[col].notna().any()
-

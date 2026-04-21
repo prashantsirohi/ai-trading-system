@@ -4,8 +4,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from run.stages.base import StageArtifact
-from services.publish.publish_payloads import build_publish_datasets, build_publish_metadata
+from ai_trading_system.pipeline.contracts import StageArtifact
+from ai_trading_system.domains.publish.publish_payloads import (
+    build_publish_datasets,
+    build_publish_metadata,
+)
 
 
 def test_build_publish_datasets_loads_optional_artifacts_with_defaults(tmp_path: Path) -> None:

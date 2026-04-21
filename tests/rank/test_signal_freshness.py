@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from services.rank.factors import add_signal_freshness
+from ai_trading_system.domains.ranking.factors import add_signal_freshness
 
 
 def test_add_signal_freshness_derives_age_from_timestamp() -> None:
@@ -22,4 +22,3 @@ def test_add_signal_freshness_derives_age_from_timestamp() -> None:
     assert bbb["signal_age"] == 2
     assert aaa["signal_decay_score"] == 1.0
     assert 0.0 <= bbb["signal_decay_score"] < 1.0
-

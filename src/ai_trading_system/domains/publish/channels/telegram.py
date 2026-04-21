@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
-import quantstats as qs
 from core.runtime_config import TelegramRuntimeConfig
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
 from ai_trading_system.platform.utils.env import load_project_env
@@ -22,7 +21,7 @@ except ImportError:
     raise ImportError(
         "python-telegram-bot is required. Install with: pip install python-telegram-bot"
     )
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 class TelegramReporter:
@@ -231,6 +230,14 @@ class TelegramReporter:
         match_dates: bool = True,
         save_path: Optional[Path] = None,
     ) -> Path:
+        try:
+            import quantstats as qs
+        except ImportError as exc:
+            raise RuntimeError(
+                "QuantStats tearsheet support requires optional dependency 'quantstats' "
+                "(and its transitive requirements such as IPython)."
+            ) from exc
+
         save_path = save_path or self.report_dir / f"{name}_tearsheet.html"
         qs.reports.html(
             returns=returns,

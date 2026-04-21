@@ -1,3 +1,0 @@
-symbol,quantity,avg_price,current_price,market_value,cost_basis,pnl,pnl_pct,position_type,sector,entry_date,weight
-RELIANCE,10,2500,3544,35440,25000,10440,41.760000000000005,LONG,Energy,2026-03-23,23.282856485891667
-TCS,5,3500,3355,16775,17500,-725,-4.142857142857142,LONG,IT,2026-03-23,11.020595867687152

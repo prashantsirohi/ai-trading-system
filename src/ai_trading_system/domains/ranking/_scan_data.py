@@ -27,20 +27,29 @@ def load_stock_vs_sector() -> pd.DataFrame:
 
 
 def load_sector_mapping() -> pd.DataFrame:
-    """Load symbol to sector mapping from SQLite."""
+    """Load symbol to sector mapping from SQLite using sector_mapping table."""
     conn = sqlite3.connect("data/masterdata.db")
-    df = pd.read_sql("SELECT Symbol, Sector FROM stock_details", conn)
+    df = pd.read_sql("""
+        SELECT s.symbol_id as symbol, COALESCE(sm.system_sector, 'Other') as sector
+        FROM symbols s
+        LEFT JOIN sector_mapping sm ON s.sector = sm.industry
+        WHERE s.exchange = 'NSE'
+    """, conn)
     conn.close()
-    df.columns = ["symbol", "sector"]
     return df
 
 
 def load_sector_map() -> dict:
-    """Load symbol to sector mapping as dictionary."""
+    """Load symbol to sector mapping as dictionary using sector_mapping table."""
     conn = sqlite3.connect("data/masterdata.db")
-    rows = conn.execute("SELECT Symbol, Sector FROM stock_details").fetchall()
+    rows = conn.execute("""
+        SELECT s.symbol_id, COALESCE(sm.system_sector, 'Other')
+        FROM symbols s
+        LEFT JOIN sector_mapping sm ON s.sector = sm.industry
+        WHERE s.exchange = 'NSE'
+    """).fetchall()
     conn.close()
-    return {sym: sector for sym, sector in rows if sector}
+    return {symbol: sector for symbol, sector in rows}
 
 
 def compute_stock_rs_full(

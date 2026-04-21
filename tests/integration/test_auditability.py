@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.trust_confidence import attach_audit_fields
-from run.stages.base import StageArtifact
-from services.publish.publish_payloads import build_publish_datasets
+from ai_trading_system.pipeline.contracts import attach_audit_fields
+from ai_trading_system.pipeline.contracts import StageArtifact
+from ai_trading_system.domains.publish.publish_payloads import build_publish_datasets
 
 
 def test_attach_audit_fields_adds_lineage_metadata() -> None:
@@ -42,4 +42,3 @@ def test_publish_rows_include_audit_lineage(tmp_path: Path) -> None:
     assert row["audit_run_id"] == "pipeline-2026-04-17-audit"
     assert row["audit_stage"] == "publish"
     assert row["audit_artifact_path"] == str(tmp_path / "ranked_signals.csv")
-

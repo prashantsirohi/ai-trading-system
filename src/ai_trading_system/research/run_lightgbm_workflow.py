@@ -11,8 +11,8 @@ from analytics.alpha.dataset_builder import AlphaDatasetBuilder
 from analytics.alpha.training import train_and_register_model
 from analytics.lightgbm_engine import LightGBMAlphaEngine
 from analytics.registry import RegistryStore
-from core.paths import ensure_domain_layout, research_static_end_date
-from core.logging import log_context, logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout, research_static_end_date
+from ai_trading_system.platform.logging.logger import log_context, logger
 
 
 def build_parser() -> argparse.ArgumentParser:

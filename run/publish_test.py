@@ -14,8 +14,8 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 from core.env import load_project_env
 from run.preflight import PreflightChecker
-from core.logging import logger
-from publishers.google_sheets import GoogleSheetsManager
+from ai_trading_system.platform.logging.logger import logger
+from ai_trading_system.domains.publish.channels.google_sheets import GoogleSheetsManager
 
 
 def run_publish_test(project_root: Path) -> dict:
@@ -38,7 +38,7 @@ def run_publish_test(project_root: Path) -> dict:
         results.append({"channel": "google_sheets", "status": "failed", "error": str(exc)})
 
     try:
-        from publishers.telegram import TelegramReporter
+        from ai_trading_system.domains.publish.channels.telegram import TelegramReporter
 
         reporter = TelegramReporter(report_dir=project_root / "reports")
         status = reporter.send_message(f"Pipeline healthcheck {timestamp}")

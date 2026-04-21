@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.bootstrap import ensure_project_root_on_path
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.platform.utils.env import load_project_env
 
 

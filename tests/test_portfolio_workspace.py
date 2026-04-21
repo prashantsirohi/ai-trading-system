@@ -5,11 +5,11 @@ from pathlib import Path
 
 import duckdb
 
-from execution.adapters import PaperExecutionAdapter
-from execution.models import OrderIntent
-from execution.portfolio import closed_trade_ref, open_position_trade_ref
-from execution.service import ExecutionService
-from execution.store import ExecutionStore
+from ai_trading_system.domains.execution.adapters import PaperExecutionAdapter
+from ai_trading_system.domains.execution.models import OrderIntent
+from ai_trading_system.domains.execution.portfolio import closed_trade_ref, open_position_trade_ref
+from ai_trading_system.domains.execution.service import ExecutionService
+from ai_trading_system.domains.execution.store import ExecutionStore
 from ui.research.data_access import (
     build_portfolio_candidate_frame,
     load_portfolio_workspace_report,

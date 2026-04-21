@@ -13,7 +13,7 @@ from core.contracts import StageArtifact
 from ui.execution_api.app import create_app
 from ui.services.execution_operator import retry_publish_action
 
-API_HEADERS = {"x-api-key": "local-dev-key"}
+API_HEADERS = {"x-api-key": "test-api-key"}
 
 
 def _seed_execution_project(tmp_path: Path) -> str:
@@ -116,6 +116,7 @@ def _seed_execution_project(tmp_path: Path) -> str:
 def test_execution_api_read_endpoints(monkeypatch, tmp_path: Path) -> None:
     run_id = _seed_execution_project(tmp_path)
     monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("EXECUTION_API_KEY", API_HEADERS["x-api-key"])
     client = TestClient(create_app())
 
     summary = client.get("/api/execution/summary", headers=API_HEADERS)
@@ -164,6 +165,7 @@ def test_execution_api_read_endpoints(monkeypatch, tmp_path: Path) -> None:
 def test_execution_api_action_endpoints(monkeypatch, tmp_path: Path) -> None:
     _seed_execution_project(tmp_path)
     monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("EXECUTION_API_KEY", API_HEADERS["x-api-key"])
     client = TestClient(create_app())
 
     app_module = importlib.import_module("ui.execution_api.app")
@@ -217,6 +219,7 @@ def test_execution_api_action_endpoints(monkeypatch, tmp_path: Path) -> None:
 def test_execution_api_requires_api_key(monkeypatch, tmp_path: Path) -> None:
     _seed_execution_project(tmp_path)
     monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("EXECUTION_API_KEY", API_HEADERS["x-api-key"])
     client = TestClient(create_app())
 
     unauthorized = client.get("/api/execution/summary")
@@ -225,6 +228,18 @@ def test_execution_api_requires_api_key(monkeypatch, tmp_path: Path) -> None:
 
     authorized = client.get("/api/execution/summary", headers=API_HEADERS)
     assert authorized.status_code == 200
+
+
+def test_execution_api_returns_configuration_error_when_api_key_missing(monkeypatch, tmp_path: Path) -> None:
+    _seed_execution_project(tmp_path)
+    monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.delenv("EXECUTION_API_KEY", raising=False)
+    client = TestClient(create_app())
+
+    response = client.get("/api/execution/summary")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Execution API key is not configured"
 
 
 def test_retry_publish_action_uses_latest_publishable_run(monkeypatch, tmp_path: Path) -> None:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from publishers.dashboard import publish_dashboard_payload
+from ai_trading_system.domains.publish.dashboard import publish_dashboard_payload
 
 
 class _FakeWorksheet:
@@ -82,9 +82,9 @@ class _FakeManager:
 
 
 def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_breakouts(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("publishers.dashboard.GoogleSheetsManager", _FakeManager)
+    monkeypatch.setattr("ai_trading_system.domains.publish.dashboard.GoogleSheetsManager", _FakeManager)
     monkeypatch.setattr(
-        "publishers.dashboard._load_operational_breadth",
+        "ai_trading_system.domains.publish.dashboard._load_operational_breadth",
         lambda _root: pd.DataFrame(
             [{"Date": "2026-04-07", "PctAbove200": 52.4}, {"Date": "2026-04-08", "PctAbove200": 54.1}]
         ),

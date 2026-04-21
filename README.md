@@ -21,3 +21,15 @@ Recommended starting points:
 - commands: [`docs/reference/commands.md`](docs/reference/commands.md)
 - operator runbook: [`docs/operations/runbook.md`](docs/operations/runbook.md)
 - refactor end-state and migration notes: [`docs/refactor/final_architecture.md`](docs/refactor/final_architecture.md)
+
+## Frontend Consoles
+
+- Existing console (unchanged): [`web/execution-console`](web/execution-console)
+- Parallel V2 operator UI: [`web/execution-console-v2`](web/execution-console-v2)
+
+## Runtime Setup Notes
+
+- Install dependencies and project package for `src` layout imports:
+  - `python -m pip install -r requirements.txt`
+  - `python -m pip install -e .`
+- Execution API requires `EXECUTION_API_KEY` to be set; `/api/*` requests return `500` when the key is missing.

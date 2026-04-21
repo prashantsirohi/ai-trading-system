@@ -37,7 +37,7 @@ from ai_trading_system.interfaces.api.services.control_center import get_recent_
 
 
 DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[4]
-API_KEY = os.getenv("EXECUTION_API_KEY", "local-dev-key")
+API_KEY_HEADER = "x-api-key"
 
 
 class PipelineRunRequest(BaseModel):
@@ -68,6 +68,14 @@ def _project_root() -> Path:
     return Path(os.getenv("AI_TRADING_PROJECT_ROOT", DEFAULT_PROJECT_ROOT)).resolve()
 
 
+def _configured_api_key() -> str | None:
+    value = os.getenv("EXECUTION_API_KEY")
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="AI Trading Execution API", version="0.1.0")
     app.add_middleware(
@@ -75,7 +83,7 @@ def create_app() -> FastAPI:
         allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
-        allow_headers=["*", "x-api-key"],
+        allow_headers=["*", API_KEY_HEADER],
     )
 
     @app.middleware("http")
@@ -84,8 +92,14 @@ def create_app() -> FastAPI:
         if request.method == "OPTIONS":
             return await call_next(request)
         if request.url.path.startswith("/api"):
-            key = request.headers.get("x-api-key")
-            if key != API_KEY:
+            api_key = _configured_api_key()
+            if api_key is None:
+                return JSONResponse(
+                    status_code=500,
+                    content={"detail": "Execution API key is not configured"},
+                )
+            key = (request.headers.get(API_KEY_HEADER) or "").strip()
+            if key != api_key:
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         return await call_next(request)
 

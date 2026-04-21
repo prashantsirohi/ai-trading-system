@@ -20,8 +20,8 @@ from core.bootstrap import ensure_project_root_on_path
 
 project_root = str(ensure_project_root_on_path(__file__))
 
-from utils.env import load_project_env
-from core.logging import logger
+from ai_trading_system.platform.utils.env import load_project_env
+from ai_trading_system.platform.logging.logger import logger
 
 load_project_env(project_root)
 

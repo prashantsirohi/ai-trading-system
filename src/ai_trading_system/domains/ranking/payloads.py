@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from run.stages.base import StageContext
+from ai_trading_system.pipeline.contracts import StageContext
 
 
 def summarize_task_statuses(task_status: Dict[str, Any]) -> Dict[str, int]:

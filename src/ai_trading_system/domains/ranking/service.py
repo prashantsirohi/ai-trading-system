@@ -12,9 +12,9 @@ from typing import Any, Callable, Dict, Optional
 import pandas as pd
 from pandas.util import hash_pandas_object
 
-from core.paths import ensure_domain_layout
-from core.trust_confidence import TrustConfidenceEnvelope
-from run.stages.base import StageArtifact, StageContext, StageResult
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.pipeline.contracts import TrustConfidenceEnvelope
+from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 from ai_trading_system.domains.ranking.payloads import (
     augment_dashboard_payload_with_ml,
     build_dashboard_payload,
@@ -197,7 +197,44 @@ class RankOrchestrationService:
             ),
             optional=False,
         )
+        from ai_trading_system.domains.ranking.composite import (
+            compute_factor_correlations,
+            compute_factor_turnover,
+        )
+
+        previous_artifact = None
+        previous_week_artifact = None
+        if context.registry is not None:
+            try:
+                prev_artifacts = context.registry.get_latest_artifact(
+                    stage_name="rank", artifact_type="ranked_signals", limit=8
+                )
+                if len(prev_artifacts) >= 2:
+                    previous_artifact = prev_artifacts[1]
+                if len(prev_artifacts) >= 8:
+                    previous_week_artifact = prev_artifacts[7]
+            except Exception:
+                pass
+
+        previous_df = None
+        if previous_artifact and hasattr(previous_artifact, "uri"):
+            try:
+                previous_df = pd.read_csv(previous_artifact.uri)
+            except Exception:
+                pass
+
+        previous_week_df = None
+        if previous_week_artifact and hasattr(previous_week_artifact, "uri"):
+            try:
+                previous_week_df = pd.read_csv(previous_week_artifact.uri)
+            except Exception:
+                pass
+
         ranked = attach_rank_confidence_from_features(ranked)
+
+        daily_turnover = compute_factor_turnover(ranked, previous_df)
+        weekly_turnover = compute_factor_turnover(ranked, previous_week_df)
+        correlation_result = compute_factor_correlations(ranked)
 
         outputs: Dict[str, pd.DataFrame] = {"ranked_signals": ranked}
 
@@ -316,6 +353,9 @@ class RankOrchestrationService:
                 lookback_days=lookback_days,
                 progress_callback=progress,
                 pattern_workers=int(context.params.get("pattern_workers", 1) or 1),
+                scan_mode=str(context.params.get("pattern_scan_mode", "incremental")),
+                stage2_only=bool(context.params.get("pattern_stage2_only", True)),
+                min_stage2_score=float(context.params.get("pattern_min_stage2_score", 70.0)),
             )
 
         pattern_df, pattern_status = self.execute_rank_task(
@@ -327,6 +367,9 @@ class RankOrchestrationService:
                 "run_date": context.run_date,
                 "pattern_scan_enabled": pattern_enabled,
                 "pattern_max_symbols": len(pattern_symbols),
+                "pattern_scan_mode": str(context.params.get("pattern_scan_mode", "incremental")),
+                "pattern_stage2_only": bool(context.params.get("pattern_stage2_only", True)),
+                "pattern_min_stage2_score": float(context.params.get("pattern_min_stage2_score", 70.0)),
                 "pattern_bandwidth": float(context.params.get("pattern_bandwidth", 3.0)),
                 "pattern_extrema_prominence": float(context.params.get("pattern_extrema_prominence", 0.02)),
                 "breakout_volume_ratio_min": float(context.params.get("pattern_breakout_volume_ratio_min", 1.5)),
@@ -434,10 +477,8 @@ class RankOrchestrationService:
                 top_rank_confidence = float(pd.to_numeric(ranked["rank_confidence"], errors="coerce").dropna().iloc[0])
             except Exception:
                 top_rank_confidence = None
-        provider_confidence = (trust_summary.get("trust_confidence") or {}).get("provider_confidence")
-        trust_confidence = TrustConfidenceEnvelope(
-            trust_status=str(trust_summary.get("status", "unknown")),
-            provider_confidence=provider_confidence,
+        trust_confidence = TrustConfidenceEnvelope.from_trust_summary(
+            trust_summary,
             rank_confidence=top_rank_confidence,
         )
 
@@ -450,6 +491,16 @@ class RankOrchestrationService:
             "task_status": task_status,
             "task_status_counts": summarize_task_statuses(task_status),
             "resumed_from_attempt": previous_attempt,
+            "trust_status_at_start": trust_summary.get("status"),
+            "symbol_universe_count": len(ranked),
+            "canary_blocked": bool(context.params.get("canary")) and context.params.get("canary_blocked", False),
+            "factor_turnover_pct": daily_turnover.get("turnover_pct", 0.0),
+            "factor_turnover_symbols_changed": daily_turnover.get("symbols_changed", 0),
+            "factor_turnover_weekly_pct": weekly_turnover.get("turnover_pct", 0.0),
+            "factor_turnover_weekly_symbols_changed": weekly_turnover.get("symbols_changed", 0),
+            "factor_correlation_violations": correlation_result.get("has_violations", False),
+            "factor_correlation_details": correlation_result.get("violations", []),
+            "factor_correlations_json": json.dumps(correlation_result.get("correlation_matrix", {})) if isinstance(correlation_result.get("correlation_matrix"), dict) else json.dumps({}),
         }
         outputs["__dashboard_payload__"] = dashboard_payload
         return outputs
@@ -631,7 +682,7 @@ class RankOrchestrationService:
         normalized = normalized.sort_index(axis=1)
         for col in normalized.columns:
             if normalized[col].dtype == object:
-                normalized[col] = normalized[col].apply(
+                normalized.loc[:, col] = normalized[col].map(
                     lambda x: tuple(x) if isinstance(x, list) else x
                 )
         hashed = hash_pandas_object(normalized.fillna("<NA>"), index=True).values.tobytes()

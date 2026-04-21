@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 import duckdb
 
 from analytics.registry import RegistryStore
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[5]

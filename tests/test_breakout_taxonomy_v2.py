@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from channel.breakout_scan import compute_breakout_v2_scores
+from ai_trading_system.domains.ranking.breakout import compute_breakout_v2_scores
 
 
 def test_breakout_score_contract_matches_v2_spec() -> None:

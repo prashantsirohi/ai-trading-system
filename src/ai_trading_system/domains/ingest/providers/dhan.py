@@ -20,8 +20,8 @@ from core.env import load_project_env
 from ai_trading_system.domains.features.feature_store import FeatureStore
 from collectors.ingest_validation import validate_ohlcv_frame
 from collectors.token_manager import DhanTokenManager
-from core.paths import ensure_domain_layout
-from core.logging import logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
 
 IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
@@ -256,32 +256,32 @@ class DhanCollector:
 
         cur.execute("""
             SELECT name FROM sqlite_master
-            WHERE type='table' AND name IN ('stock_details', 'symbols')
+            WHERE type='table' AND name = 'symbols'
         """)
         available_tables = {r[0] for r in cur.fetchall()}
 
-        if "stock_details" in available_tables:
+        if "symbols" in available_tables:
             query = """
                 SELECT
-                    sd.Security_id,
-                    sd.Symbol,
-                    sd.Name,
-                    sd."Industry Group" AS industry_group,
-                    sd."Industry" AS industry,
-                    sd.MCAP,
-                    sd.exchange
-                FROM stock_details sd
-                WHERE sd.Security_id IS NOT NULL
-                  AND sd.Security_id != ''
+                    s.security_id,
+                    s.symbol_id,
+                    s.symbol_name,
+                    s.sector AS industry_group,
+                    s.industry,
+                    s.mcap,
+                    s.exchange
+                FROM symbols s
+                WHERE s.security_id IS NOT NULL
+                  AND s.security_id != ''
             """
             params: List[Any] = []
 
             if exchanges:
                 placeholders = ",".join("?" * len(exchanges))
-                query += f" AND sd.exchange IN ({placeholders})"
+                query += f" AND s.exchange IN ({placeholders})"
                 params.extend(exchanges)
 
-            query += " ORDER BY sd.Security_id"
+            query += " ORDER BY s.security_id"
 
             if limit:
                 query += f" LIMIT {limit}"
@@ -299,55 +299,11 @@ class DhanCollector:
                 }
                 for r in cur.fetchall()
             ]
-            logger.info(f"Loaded {len(rows)} symbols from stock_details")
+            logger.info(f"Loaded {len(rows)} symbols from symbols table")
             return rows
 
-        if "symbols" in available_tables:
-            query = """
-                SELECT
-                    security_id,
-                    symbol_id,
-                    CASE WHEN exchange = 'BSE' THEN bse_symbol ELSE nse_symbol END AS symbol_name,
-                    exchange,
-                    sector,
-                    industry
-                FROM symbols
-                WHERE security_id IS NOT NULL
-                  AND security_id != ''
-                  AND (
-                      (exchange = 'NSE' AND nse_symbol IS NOT NULL AND nse_symbol != '')
-                      OR (exchange = 'BSE' AND bse_symbol IS NOT NULL AND bse_symbol != '')
-                  )
-            """
-            params: List[Any] = []
-
-            if exchanges:
-                placeholders = ",".join("?" * len(exchanges))
-                query += f" AND exchange IN ({placeholders})"
-                params.extend(exchanges)
-
-            query += " ORDER BY exchange, security_id"
-
-            if limit:
-                query += f" LIMIT {limit}"
-
-            cur.execute(query, params)
-            rows = [
-                {
-                    "security_id": str(r[0]),
-                    "symbol_id": r[1],
-                    "symbol_name": r[2],
-                    "exchange": r[3],
-                    "sector": r[4],
-                    "industry": r[5],
-                }
-                for r in cur.fetchall()
-            ]
-            conn.close()
-            logger.info(
-                f"Loaded {len(rows)} symbols from symbols table (stock_details not available)"
-            )
-            return rows
+        logger.warning("symbols table not found in masterdb")
+        return []
 
         conn.close()
         logger.warning("Neither stock_details nor symbols table found in masterdb")

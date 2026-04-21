@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from analytics.ml_engine import AlphaEngine
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 try:
     import lightgbm as lgb

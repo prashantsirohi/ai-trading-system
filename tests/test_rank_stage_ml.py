@@ -8,7 +8,7 @@ import pandas as pd
 from analytics.alpha.scoring import OperationalMLOverlayService
 from analytics.registry import RegistryStore
 from run.stages import RankStage
-from run.stages.base import StageContext
+from ai_trading_system.pipeline.contracts import StageContext
 
 
 def _rank_outputs(context: StageContext) -> dict[str, pd.DataFrame]:

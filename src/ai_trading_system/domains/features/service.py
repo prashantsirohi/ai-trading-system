@@ -9,8 +9,8 @@ from typing import Callable, Dict, Optional
 import duckdb
 
 from analytics.data_trust import load_data_trust_summary
-from core.trust_confidence import TrustConfidenceEnvelope
-from run.stages.base import StageArtifact, StageContext, StageResult
+from ai_trading_system.pipeline.contracts import TrustConfidenceEnvelope
+from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 
 
 class FeaturesOrchestrationService:
@@ -62,6 +62,53 @@ class FeaturesOrchestrationService:
             or context.params.get("data_domain") == "research"
         )
 
+        def _render_progress_bar(completed: int, total: int, width: int = 20) -> str:
+            total = max(1, int(total))
+            completed = max(0, min(int(completed), total))
+            filled = int((completed / total) * width)
+            return "[" + ("#" * filled) + ("-" * (width - filled)) + "]"
+
+        def _feature_progress(update: dict) -> None:
+            status = str(update.get("status") or "running").strip().lower()
+            if status == "started":
+                context.report_task(
+                    task_name="feature_progress",
+                    status="running",
+                    detail="starting feature computation",
+                    metadata=update,
+                )
+                return
+
+            total = int(update.get("total_steps") or 0)
+            completed = int(update.get("completed_steps") or 0)
+            pct = int((completed / max(1, total)) * 100)
+            bar = _render_progress_bar(completed, total)
+            feature_type = str(update.get("feature_type") or "").strip()
+            symbol_id = str(update.get("symbol_id") or "").strip()
+            step_status = str(update.get("step_status") or "").strip()
+            eta = update.get("eta_seconds")
+            eta_txt = f"{int(eta)}s" if eta is not None else "n/a"
+            detail = (
+                f"{bar} {completed}/{max(1, total)} ({pct}%)"
+                + (f" · {feature_type}:{symbol_id}" if feature_type and symbol_id else "")
+                + (f" · step={step_status}" if step_status else "")
+                + f" · eta={eta_txt}"
+            )
+            if status == "completed":
+                context.report_task(
+                    task_name="feature_progress",
+                    status="done",
+                    detail=detail,
+                    metadata=update,
+                )
+            else:
+                context.report_task(
+                    task_name="feature_progress",
+                    status="running",
+                    detail=detail,
+                    metadata=update,
+                )
+
         run_daily_update(
             symbols_only=False,
             features_only=True,
@@ -72,6 +119,7 @@ class FeaturesOrchestrationService:
             symbols=updated_symbols,
             full_rebuild=full_rebuild,
             feature_tail_bars=int(context.params.get("feature_tail_bars", 252)),
+            feature_progress_callback=_feature_progress,
         )
 
         snapshot_id, feature_rows, feature_registry_entries = (
@@ -79,11 +127,9 @@ class FeaturesOrchestrationService:
         )(context)
         benchmark_symbol = str(context.params.get("benchmark_symbol", "NIFTY_500"))
         trust_summary = load_data_trust_summary(context.db_path, run_date=context.run_date)
-        provider_confidence = (trust_summary.get("trust_confidence") or {}).get("provider_confidence")
         feature_confidence = 1.0 if int(feature_rows or 0) > 0 else 0.0
-        trust_confidence = TrustConfidenceEnvelope(
-            trust_status=str(trust_summary.get("status", "unknown")),
-            provider_confidence=provider_confidence,
+        trust_confidence = TrustConfidenceEnvelope.from_trust_summary(
+            trust_summary,
             feature_confidence=feature_confidence,
         )
 

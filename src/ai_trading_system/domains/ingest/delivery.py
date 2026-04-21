@@ -9,8 +9,8 @@ import duckdb
 import requests
 from collectors.nse_delivery_scraper import NseHistoricalDeliveryScraper
 from collectors.ingest_validation import validate_delivery_frame
-from core.paths import ensure_domain_layout
-from core.logging import logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
 
 
 class DeliveryCollector:

@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 from core.runtime_config import DhanRuntimeConfig
-from utils.env import find_project_env, load_project_env
-from core.logging import logger
+from ai_trading_system.platform.utils.env import find_project_env, load_project_env
+from ai_trading_system.platform.logging.logger import logger
 
 try:
     import pyotp

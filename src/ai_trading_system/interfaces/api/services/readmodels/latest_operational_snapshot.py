@@ -10,7 +10,7 @@ from typing import Optional
 import duckdb
 import pandas as pd
 
-from core.paths import get_domain_paths
+from ai_trading_system.platform.db.paths import get_domain_paths
 
 
 @dataclass(frozen=True)

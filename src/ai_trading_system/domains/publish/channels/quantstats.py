@@ -16,7 +16,7 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 if "MPLCONFIGDIR" not in os.environ:
     _mpl_dir = Path(__file__).resolve().parents[5] / "logs" / "matplotlib"
@@ -60,7 +60,7 @@ def _parse_run_date(run_id: str, fallback_mtime: float) -> pd.Timestamp:
         return pd.Timestamp(match.group(1))
     # Keep run-date keys timezone-naive across both parsing paths so
     # snapshot sorting/comparisons never mix naive and tz-aware timestamps.
-    return pd.Timestamp.fromtimestamp(float(fallback_mtime), tz="UTC").tz_localize(None).normalize()
+    return pd.to_datetime(float(fallback_mtime), unit="s", utc=True).tz_localize(None).normalize()
 
 
 def _latest_ranked_snapshots(

@@ -37,9 +37,9 @@ def _require_columns(frame: pd.DataFrame, *, required: set[str], ctx: Validation
 
 
 def _normalize_symbol_exchange(frame: pd.DataFrame, *, ctx: ValidationContext) -> pd.DataFrame:
-    normalized = frame.copy()
-    normalized["symbol_id"] = normalized["symbol_id"].astype(str).str.strip()
-    normalized["exchange"] = normalized["exchange"].astype(str).str.strip().str.upper()
+    normalized = frame.copy(deep=True)
+    normalized.loc[:, "symbol_id"] = normalized["symbol_id"].astype(str).str.strip()
+    normalized.loc[:, "exchange"] = normalized["exchange"].astype(str).str.strip().str.upper()
 
     null_keys = normalized["symbol_id"].eq("") | normalized["exchange"].eq("")
     if null_keys.any():
@@ -68,8 +68,8 @@ def _normalize_symbol_exchange(frame: pd.DataFrame, *, ctx: ValidationContext) -
 
 
 def _coerce_timestamp(frame: pd.DataFrame, *, ctx: ValidationContext) -> pd.DataFrame:
-    coerced = frame.copy()
-    coerced["timestamp"] = pd.to_datetime(coerced["timestamp"], errors="coerce")
+    coerced = frame.copy(deep=True)
+    coerced.loc[:, "timestamp"] = pd.to_datetime(coerced["timestamp"], errors="coerce")
     invalid_ts = coerced["timestamp"].isna()
     if invalid_ts.any():
         _raise_invalid("invalid timestamp values", ctx=ctx, sample=_sample_rows(coerced, invalid_ts))
@@ -91,7 +91,7 @@ def validate_ohlcv_frame(frame: pd.DataFrame, *, source_label: str) -> pd.DataFr
     normalized = _coerce_timestamp(normalized, ctx=ctx)
 
     for column in ("open", "high", "low", "close", "volume"):
-        normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+        normalized.loc[:, column] = pd.to_numeric(normalized[column], errors="coerce")
 
     invalid_price_nulls = normalized[["open", "high", "low", "close"]].isna().any(axis=1)
     if invalid_price_nulls.any():
@@ -101,7 +101,8 @@ def validate_ohlcv_frame(frame: pd.DataFrame, *, source_label: str) -> pd.DataFr
             sample=_sample_rows(normalized, invalid_price_nulls),
         )
 
-    normalized["volume"] = normalized["volume"].fillna(0)
+    volume = pd.to_numeric(normalized["volume"], errors="coerce")
+    normalized.loc[:, "volume"] = volume.where(volume.notna(), 0)
     invalid_volume = normalized["volume"] < 0
     if invalid_volume.any():
         _raise_invalid("volume cannot be negative", ctx=ctx, sample=_sample_rows(normalized, invalid_volume))
@@ -132,7 +133,7 @@ def validate_delivery_frame(frame: pd.DataFrame, *, source_label: str) -> pd.Dat
     normalized = _normalize_symbol_exchange(frame, ctx=ctx)
     normalized = _coerce_timestamp(normalized, ctx=ctx)
 
-    normalized["delivery_pct"] = pd.to_numeric(normalized["delivery_pct"], errors="coerce")
+    normalized.loc[:, "delivery_pct"] = pd.to_numeric(normalized["delivery_pct"], errors="coerce")
     invalid_delivery_pct = normalized["delivery_pct"].isna() | (normalized["delivery_pct"] < 0) | (
         normalized["delivery_pct"] > 100
     )
@@ -145,8 +146,9 @@ def validate_delivery_frame(frame: pd.DataFrame, *, source_label: str) -> pd.Dat
 
     for column in ("volume", "delivery_qty"):
         if column not in normalized.columns:
-            normalized[column] = 0
-        normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0)
+            normalized.loc[:, column] = 0
+        numeric = pd.to_numeric(normalized[column], errors="coerce")
+        normalized.loc[:, column] = numeric.where(numeric.notna(), 0)
         invalid = normalized[column] < 0
         if invalid.any():
             _raise_invalid(f"{column} cannot be negative", ctx=ctx, sample=_sample_rows(normalized, invalid))

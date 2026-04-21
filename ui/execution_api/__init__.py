@@ -1,5 +1,6 @@
-"""FastAPI application package for the React execution console."""
+from ai_trading_system.interfaces.api import *  # noqa: F401,F403
+from ai_trading_system.interfaces import api as _api
+import sys as _sys
 
-from .app import app, create_app
+_sys.modules[__name__] = _api
 
-__all__ = ["app", "create_app"]

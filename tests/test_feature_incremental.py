@@ -7,7 +7,7 @@ import duckdb
 import pandas as pd
 
 from core.contracts import StageArtifact, StageContext
-from features.feature_store import FeatureStore
+from ai_trading_system.domains.features.feature_store import FeatureStore
 from run.stages.features import FeaturesStage
 
 

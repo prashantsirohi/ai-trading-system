@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import threading
+import time
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -12,10 +14,11 @@ from typing import Dict, Iterable, List, Optional
 
 from analytics.dq import DataQualityEngine
 from analytics.registry import RegistryStore
+from ai_trading_system.domains.ingest.service import IngestOrchestrationService
 from core.contracts import DataQualityCriticalError, PublishStageError, StageContext, StageResult
 from core.env import load_project_env
-from core.logging import configure_terminal_output, log_context, logger
-from core.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import configure_terminal_output, log_context, logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout
 from run.alerts import AlertManager
 from run.preflight import PreflightChecker
 from run.stages import ExecuteStage, FeaturesStage, IngestStage, PublishStage, RankStage
@@ -115,6 +118,113 @@ class PipelineOrchestrator:
             default_stages.update(stages)
         self.stages = default_stages
         self.progress_renderer = progress_renderer
+        self._stage_hints = {
+            "ingest": "fetching OHLCV and validating source data",
+            "features": "computing technical features and writing feature store",
+            "rank": "scoring symbols and building ranked outputs",
+            "execute": "evaluating execution actions",
+            "publish": "publishing reports and channel payloads",
+        }
+
+    def _read_json_artifact(self, artifact_uri: str) -> Dict[str, object]:
+        try:
+            return json.loads(Path(artifact_uri).read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _ingest_fingerprint_from_summary(self, summary: Dict[str, object]) -> str:
+        fingerprint = str(summary.get("downstream_input_fingerprint") or "").strip()
+        if fingerprint:
+            return fingerprint
+        return IngestOrchestrationService.build_downstream_input_fingerprint(summary)
+
+    def _plan_downstream_stage_skips(
+        self,
+        *,
+        run_id: str,
+        stage_names: list[str],
+        ingest_metadata: Dict[str, object],
+    ) -> Dict[str, object] | None:
+        requested_downstream = [stage for stage in stage_names if stage in PIPELINE_ORDER and PIPELINE_ORDER.index(stage) > PIPELINE_ORDER.index("ingest")]
+        if not requested_downstream:
+            return None
+
+        fingerprint = self._ingest_fingerprint_from_summary(ingest_metadata)
+        if bool(ingest_metadata.get("downstream_skip_eligible")):
+            return {
+                "stages": requested_downstream,
+                "reason_code": "no_new_ingest_data",
+                "detail": "ingest reported no new catalog updates",
+                "fingerprint": fingerprint or None,
+            }
+
+        if not fingerprint:
+            return None
+
+        previous_artifacts = self.registry.get_latest_artifact(
+            stage_name="ingest",
+            artifact_type="ingest_summary",
+            limit=1,
+            exclude_run_id=run_id,
+            run_status="completed",
+        )
+        if not previous_artifacts:
+            return None
+
+        previous_summary = self._read_json_artifact(previous_artifacts[0].uri)
+        previous_fingerprint = self._ingest_fingerprint_from_summary(previous_summary)
+        if previous_fingerprint and previous_fingerprint == fingerprint:
+            return {
+                "stages": requested_downstream,
+                "reason_code": "unchanged_ingest_inputs",
+                "detail": "ingest inputs unchanged from previous successful run",
+                "fingerprint": fingerprint,
+                "previous_ingest_summary_uri": previous_artifacts[0].uri,
+            }
+        return None
+
+    def _record_skipped_stage(
+        self,
+        *,
+        run_id: str,
+        stage_name: str,
+        detail: str,
+        metadata: Optional[Dict[str, object]] = None,
+    ) -> None:
+        attempt_number = self.registry.next_stage_attempt(run_id, stage_name)
+        stage_run_id = self.registry.start_stage(run_id, stage_name, attempt_number)
+        self.registry.finish_stage(stage_run_id, status="skipped", metadata=metadata or {})
+        if self.progress_renderer is not None:
+            self.progress_renderer.emit_stage(stage_name=stage_name, status="skip", detail=detail)
+
+    def _start_stage_heartbeat(
+        self,
+        *,
+        stage_name: str,
+        attempt_number: int,
+        interval_seconds: int = 30,
+    ) -> tuple[threading.Event, threading.Thread] | None:
+        if self.progress_renderer is None:
+            return None
+        if getattr(self.progress_renderer, "mode", "compact") == "verbose":
+            return None
+        interval_seconds = max(15, int(interval_seconds))
+        stop_event = threading.Event()
+        start_ts = time.time()
+        hint = self._stage_hints.get(stage_name, "processing")
+
+        def _heartbeat() -> None:
+            while not stop_event.wait(interval_seconds):
+                elapsed = int(time.time() - start_ts)
+                self.progress_renderer.emit_stage(
+                    stage_name=stage_name,
+                    status="running",
+                    detail=f"attempt {attempt_number} · {hint} · elapsed {elapsed}s",
+                )
+
+        worker = threading.Thread(target=_heartbeat, name=f"stage-heartbeat-{stage_name}", daemon=True)
+        worker.start()
+        return stop_event, worker
 
     def run_pipeline(
         self,
@@ -183,19 +293,32 @@ class PipelineOrchestrator:
                     raise RuntimeError(message)
 
             final_status = "completed"
+            planned_stage_skips: dict[str, dict[str, object]] = {}
 
             for stage_name in stage_names:
-                completed_stages = {
-                    s["stage_name"]: s["status"]
-                    for s in self.registry.get_stage_runs(run_id)
-                }
-                if completed_stages.get(stage_name) == "completed":
+                stage_runs = self.registry.get_stage_runs(run_id)
+                latest_attempt = None
+                for run in reversed(stage_runs):
+                    if run["stage_name"] == stage_name:
+                        latest_attempt = run
+                        break
+                if latest_attempt and latest_attempt.get("status") == "completed":
                     if self.progress_renderer is not None:
                         self.progress_renderer.emit_stage(
                             stage_name=stage_name,
                             status="skip",
                             detail="already completed",
                         )
+                    continue
+
+                skip_plan = planned_stage_skips.get(stage_name)
+                if skip_plan is not None:
+                    self._record_skipped_stage(
+                        run_id=run_id,
+                        stage_name=stage_name,
+                        detail=str(skip_plan.get("detail", "skipped")),
+                        metadata=skip_plan,
+                    )
                     continue
 
                 self.registry.update_run(run_id, status="running", current_stage=stage_name)
@@ -226,7 +349,18 @@ class PipelineOrchestrator:
                 with log_context(run_id=run_id, stage_name=stage_name, attempt_number=attempt_number):
                     try:
                         stage = self.stages[stage_name]
-                        result: StageResult = stage.run(context)
+                        heartbeat = self._start_stage_heartbeat(
+                            stage_name=stage_name,
+                            attempt_number=attempt_number,
+                            interval_seconds=int(params.get("terminal_heartbeat_seconds", 30) or 30),
+                        )
+                        try:
+                            result: StageResult = stage.run(context)
+                        finally:
+                            if heartbeat is not None:
+                                stop_event, worker = heartbeat
+                                stop_event.set()
+                                worker.join(timeout=0.2)
                         context.artifacts.setdefault(stage_name, {})
                         for artifact in result.artifacts:
                             self.registry.record_artifact(run_id, stage_name, attempt_number, artifact)
@@ -234,6 +368,33 @@ class PipelineOrchestrator:
 
                         if stage_name in {"ingest", "features", "rank"}:
                             self.dq_engine.evaluate(context, result)
+
+                        if stage_name == "ingest":
+                            skip_plan = self._plan_downstream_stage_skips(
+                                run_id=run_id,
+                                stage_names=list(stage_names),
+                                ingest_metadata=result.metadata,
+                            )
+                            if skip_plan is not None:
+                                skip_metadata = {
+                                    "source_stage": "ingest",
+                                    "reason_code": skip_plan["reason_code"],
+                                    "detail": skip_plan["detail"],
+                                    "fingerprint": skip_plan.get("fingerprint"),
+                                    "planned_stages": list(skip_plan.get("stages", [])),
+                                }
+                                if skip_plan.get("previous_ingest_summary_uri"):
+                                    skip_metadata["previous_ingest_summary_uri"] = skip_plan["previous_ingest_summary_uri"]
+                                run_metadata = self.registry.get_run(run_id).get("metadata", {})
+                                run_metadata["downstream_stage_skip"] = skip_metadata
+                                self.registry.update_run(run_id, status="running", metadata=run_metadata)
+                                for downstream_stage in skip_plan["stages"]:
+                                    planned_stage_skips[downstream_stage] = {
+                                        "source_stage": "ingest",
+                                        "reason_code": skip_plan["reason_code"],
+                                        "detail": str(skip_plan["detail"]),
+                                        "fingerprint": skip_plan.get("fingerprint"),
+                                    }
 
                         self.registry.finish_stage(
                             stage_run_id,
@@ -371,7 +532,7 @@ def _run_auto_quarantine_repair(
         exchange="NSE",
         apply=True,
         data_domain=data_domain,
-        validation_source="auto",
+        validation_source="bhavcopy",
     )
     report_dir = Path(str(repair_report["report_dir"]))
     report_path = report_dir / "reset_reingest_report.json"

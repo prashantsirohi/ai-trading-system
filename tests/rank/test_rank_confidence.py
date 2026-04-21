@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from services.rank.composite import compute_rank_confidence
+from ai_trading_system.domains.ranking.composite import compute_rank_confidence
 
 
 def test_compute_rank_confidence_uses_feature_eligibility_and_penalty() -> None:
@@ -18,4 +18,3 @@ def test_compute_rank_confidence_uses_feature_eligibility_and_penalty() -> None:
 
     assert out.loc[out["symbol_id"] == "AAA", "rank_confidence"].iloc[0] == pytest.approx(0.81)
     assert out.loc[out["symbol_id"] == "BBB", "rank_confidence"].iloc[0] == 0.0
-

@@ -20,18 +20,18 @@ def apply_relative_strength(data: pd.DataFrame, *, return_frame: pd.DataFrame) -
     period_cols = [c for c in ["return_20", "return_60", "return_120"] if c in scores.columns]
     if len(period_cols) >= 2:
         for col in period_cols:
-            scores[col] = scores[col].fillna(0.0)
+            scores.loc[:, col] = scores[col].fillna(0.0)
         rs_20 = scores["return_20"].rank(pct=True) * 100 if "return_20" in scores.columns else pd.Series(50, index=scores.index)
         rs_60 = scores["return_60"].rank(pct=True) * 100 if "return_60" in scores.columns else pd.Series(50, index=scores.index)
         rs_120 = scores["return_120"].rank(pct=True) * 100 if "return_120" in scores.columns else pd.Series(50, index=scores.index)
-        scores["rel_strength"] = 0.2 * rs_20 + 0.5 * rs_60 + 0.3 * rs_120
+        scores.loc[:, "rel_strength"] = 0.2 * rs_20 + 0.5 * rs_60 + 0.3 * rs_120
     else:
         if "return_pct" not in scores.columns:
             if "return_20" in scores.columns:
-                scores["return_pct"] = scores["return_20"]
+                scores.loc[:, "return_pct"] = scores["return_20"]
             else:
-                scores["return_pct"] = 0.0
-        scores["rel_strength"] = scores["return_pct"].fillna(0.0)
+                scores.loc[:, "return_pct"] = 0.0
+        scores.loc[:, "rel_strength"] = scores["return_pct"].fillna(0.0)
     return scores
 
 
@@ -43,7 +43,7 @@ def apply_volume_intensity(data: pd.DataFrame, *, volume_frame: pd.DataFrame) ->
             on=["symbol_id", "exchange"],
             how="left",
         )
-    scores["vol_intensity"] = (
+    scores.loc[:, "vol_intensity"] = (
         scores["volume"] / scores["vol_20_avg"].replace(0, np.nan)
     ).fillna(1.0)
     return scores
@@ -70,23 +70,23 @@ def apply_trend_persistence(
         )
 
     if "adx_14" not in scores.columns:
-        scores["adx_14"] = 50.0
+        scores.loc[:, "adx_14"] = 50.0
     if "sma_20" not in scores.columns:
-        scores["sma_20"] = scores["close"]
+        scores.loc[:, "sma_20"] = scores["close"]
     if "sma_50" not in scores.columns:
-        scores["sma_50"] = scores["close"]
+        scores.loc[:, "sma_50"] = scores["close"]
 
     # ADX captures directional strength regardless of whether price is currently
     # above or below the moving averages, so keep it independent from SMA posture.
-    scores["adx_score"] = (
+    scores.loc[:, "adx_score"] = (
         pd.to_numeric(scores.get("adx_14", 50.0), errors="coerce")
         .fillna(0.0)
         .clip(lower=0.0, upper=50.0) / 50.0 * 100.0
     )
-    scores["sma20_aligned"] = (
+    scores.loc[:, "sma20_aligned"] = (
         (scores["close"] > scores["sma_20"].replace(0, np.nan)).fillna(False).astype(int)
     )
-    scores["sma50_aligned"] = (
+    scores.loc[:, "sma50_aligned"] = (
         (scores["close"] > scores["sma_50"].replace(0, np.nan)).fillna(False).astype(int)
     )
 
@@ -94,12 +94,12 @@ def apply_trend_persistence(
     # - 40 points for clearing SMA20
     # - 60 points for clearing SMA50
     # This keeps full alignment valuable without wiping out genuine ADX strength.
-    scores["sma_alignment_score"] = (
+    scores.loc[:, "sma_alignment_score"] = (
         scores["sma20_aligned"] * 40.0
         + scores["sma50_aligned"] * 60.0
     )
 
-    scores["trend_score"] = (
+    scores.loc[:, "trend_score"] = (
         scores["adx_score"].fillna(0.0) * TREND_STRENGTH_WEIGHT
         + scores["sma_alignment_score"].fillna(0.0) * TREND_ALIGNMENT_WEIGHT
     )
@@ -115,8 +115,8 @@ def apply_proximity_highs(data: pd.DataFrame, *, highs_frame: pd.DataFrame) -> p
             how="left",
         )
     if "high_52w" not in scores.columns:
-        scores["high_52w"] = scores["close"]
-    scores["prox_high"] = (
+        scores.loc[:, "high_52w"] = scores["close"]
+    scores.loc[:, "prox_high"] = (
         1 - (scores["close"] / scores["high_52w"].replace(0, np.nan))
     ).fillna(0.5) * 100
     return scores
@@ -131,7 +131,7 @@ def apply_delivery(data: pd.DataFrame, *, delivery_frame: pd.DataFrame) -> pd.Da
             how="left",
         )
     if "delivery_pct" not in scores.columns:
-        scores["delivery_pct"] = np.nan
+        scores.loc[:, "delivery_pct"] = np.nan
 
     sector_col = None
     for candidate in ("sector_name", "sector"):
@@ -140,7 +140,7 @@ def apply_delivery(data: pd.DataFrame, *, delivery_frame: pd.DataFrame) -> pd.Da
             break
 
     delivery_numeric = pd.to_numeric(scores["delivery_pct"], errors="coerce")
-    scores["delivery_pct_imputed"] = delivery_numeric.isna()
+    scores.loc[:, "delivery_pct_imputed"] = delivery_numeric.isna()
 
     if sector_col is not None:
         sector_medians = delivery_numeric.groupby(scores[sector_col]).transform("median")
@@ -151,12 +151,12 @@ def apply_delivery(data: pd.DataFrame, *, delivery_frame: pd.DataFrame) -> pd.Da
     if pd.isna(universe_median):
         universe_median = 20.0
 
-    scores["delivery_pct_filled"] = (
+    scores.loc[:, "delivery_pct_filled"] = (
         delivery_numeric
         .fillna(sector_medians)
         .fillna(float(universe_median))
     )
-    scores["delivery_pct"] = scores["delivery_pct_filled"]
+    scores.loc[:, "delivery_pct"] = scores["delivery_pct_filled"]
     return scores
 
 
@@ -170,26 +170,26 @@ def apply_sector_strength(
 ) -> pd.DataFrame:
     scores = data.copy()
     if sector_rs.empty or stock_vs_sector.empty or not sector_map:
-        scores["sector_rs_value"] = 0.5
-        scores["stock_vs_sector_value"] = 0.0
+        scores.loc[:, "sector_rs_value"] = 0.5
+        scores.loc[:, "stock_vs_sector_value"] = 0.0
         return scores
 
     cutoff = pd.to_datetime(date).normalize()
     sector_slice = sector_rs.loc[sector_rs.index <= cutoff]
     stock_vs_slice = stock_vs_sector.loc[stock_vs_sector.index <= cutoff]
     if sector_slice.empty or stock_vs_slice.empty:
-        scores["sector_rs_value"] = 0.5
-        scores["stock_vs_sector_value"] = 0.0
+        scores.loc[:, "sector_rs_value"] = 0.5
+        scores.loc[:, "stock_vs_sector_value"] = 0.0
         return scores
 
     latest_sector = sector_slice.ffill().iloc[-1]
     latest_stock_vs = stock_vs_slice.ffill().iloc[-1]
 
-    scores["sector_name"] = scores["symbol_id"].map(sector_map)
-    scores["sector_rs_value"] = scores["sector_name"].map(latest_sector.to_dict())
-    scores["stock_vs_sector_value"] = scores["symbol_id"].map(latest_stock_vs.to_dict())
-    scores["sector_rs_value"] = scores["sector_rs_value"].fillna(0.5)
-    scores["stock_vs_sector_value"] = scores["stock_vs_sector_value"].fillna(0.0)
+    scores.loc[:, "sector_name"] = scores["symbol_id"].map(sector_map)
+    scores.loc[:, "sector_rs_value"] = scores["sector_name"].map(latest_sector.to_dict())
+    scores.loc[:, "stock_vs_sector_value"] = scores["symbol_id"].map(latest_stock_vs.to_dict())
+    scores.loc[:, "sector_rs_value"] = scores["sector_rs_value"].fillna(0.5)
+    scores.loc[:, "stock_vs_sector_value"] = scores["stock_vs_sector_value"].fillna(0.0)
     return scores
 
 
@@ -212,7 +212,7 @@ def compute_penalty_score(frame: pd.DataFrame) -> pd.DataFrame:
         close = pd.to_numeric(output["close"], errors="coerce").replace(0, np.nan)
         output.loc[(atr / close) > 0.08, "penalty_score"] += 5.0
 
-    output["penalty_score"] = output["penalty_score"].clip(lower=0.0)
+    output.loc[:, "penalty_score"] = output["penalty_score"].clip(lower=0.0)
     return output
 
 
@@ -226,8 +226,8 @@ def add_signal_freshness(frame: pd.DataFrame) -> pd.DataFrame:
 
     timestamp_col = "timestamp" if "timestamp" in output.columns else "date" if "date" in output.columns else None
     if timestamp_col is None:
-        output["signal_age"] = 0
-        output["signal_decay_score"] = 1.0
+        output.loc[:, "signal_age"] = 0
+        output.loc[:, "signal_decay_score"] = 1.0
         return output
 
     ts = pd.to_datetime(output[timestamp_col], errors="coerce")
@@ -238,6 +238,6 @@ def add_signal_freshness(frame: pd.DataFrame) -> pd.DataFrame:
         reference = ts.max()
         age_days = (reference - ts).dt.days
 
-    output["signal_age"] = age_days.fillna(0).clip(lower=0).astype(int)
-    output["signal_decay_score"] = (1.0 - (output["signal_age"] / 30.0)).clip(lower=0.0, upper=1.0)
+    output.loc[:, "signal_age"] = age_days.fillna(0).clip(lower=0).astype(int)
+    output.loc[:, "signal_decay_score"] = (1.0 - (output["signal_age"] / 30.0)).clip(lower=0.0, upper=1.0)
     return output

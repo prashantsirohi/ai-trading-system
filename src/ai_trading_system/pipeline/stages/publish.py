@@ -10,7 +10,7 @@ from pandas.errors import EmptyDataError
 import json
 
 from run.publisher import PublisherDeliveryManager
-from run.stages.base import PublishStageError, StageArtifact, StageContext, StageResult
+from ai_trading_system.pipeline.contracts import PublishStageError, StageArtifact, StageContext, StageResult
 from ai_trading_system.domains.publish.publish_payloads import (
     build_publish_datasets,
     build_publish_metadata,

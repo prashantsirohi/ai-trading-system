@@ -31,7 +31,7 @@ def test_daily_pipeline_defaults_validation_date_to_yesterday(monkeypatch):
     daily_pipeline.main(force=True, stages="ingest")
 
     assert captured["params"]["bhavcopy_validation_date"] == "2026-04-07"
-    assert captured["params"]["bhavcopy_validation_source"] == "auto"
+    assert captured["params"]["bhavcopy_validation_source"] == "bhavcopy"
     assert captured["params"]["nse_primary"] is True
     assert captured["params"]["breakout_engine"] == "v2"
     assert captured["params"]["breakout_symbol_near_high_max_pct"] == 15.0

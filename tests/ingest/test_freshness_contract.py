@@ -5,7 +5,7 @@ from pathlib import Path
 import duckdb
 
 from core.contracts import StageContext
-from services.ingest.orchestration import IngestOrchestrationService
+from ai_trading_system.domains.ingest.service import IngestOrchestrationService
 from run.stages.ingest import classify_freshness_status
 
 

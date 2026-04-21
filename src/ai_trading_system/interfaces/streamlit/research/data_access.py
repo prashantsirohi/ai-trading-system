@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 from analytics.data_trust import load_data_trust_summary, load_symbol_trust_state
 from analytics.registry import RegistryStore
-from core.paths import get_domain_paths
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.domains.execution.store import ExecutionStore
 
 
@@ -70,6 +70,41 @@ def _normalize_lookup_key(value: object) -> str:
 def _get_pipeline_runs_dir(project_root: str) -> Path:
     paths = get_domain_paths(project_root, "operational")
     return Path(paths.pipeline_runs_dir)
+
+
+def _build_live_sector_dashboard_frame(project_root: str) -> pd.DataFrame:
+    """Recompute the sector dashboard from the latest operational sector RS features."""
+    from ai_trading_system.domains.ranking.sector_dashboard import (
+        build_dashboard,
+        compute_sector_momentum,
+        load_sector_rs,
+    )
+
+    sector_rs = load_sector_rs()
+    if sector_rs.empty:
+        return pd.DataFrame()
+    return build_dashboard(
+        sector_rs,
+        compute_sector_momentum(sector_rs, days=20),
+    ).reset_index()
+
+
+def _should_refresh_sector_dashboard(
+    project_root: str,
+    rank_dir: Path | None,
+    sector_dashboard_path: Path | None,
+) -> bool:
+    """Return True when live sector features are newer than the persisted rank artifact."""
+    paths = get_domain_paths(project_root, "operational")
+    sector_rs_path = Path(paths.feature_store_dir) / "all_symbols" / "sector_rs.parquet"
+    if not sector_rs_path.exists():
+        return False
+    if sector_dashboard_path is None or not sector_dashboard_path.exists() or rank_dir is None:
+        return True
+    try:
+        return sector_rs_path.stat().st_mtime > sector_dashboard_path.stat().st_mtime
+    except OSError:
+        return False
 
 
 def _load_latest_payload_path(project_root: str) -> Path | None:
@@ -149,6 +184,13 @@ def load_latest_rank_frames(project_root: str) -> Dict[str, pd.DataFrame]:
             frames[key] = pd.read_csv(path)
         except Exception:
             frames[key] = pd.DataFrame()
+
+    sector_dashboard_path = rank_dir / frame_names["sector_dashboard"]
+    if _should_refresh_sector_dashboard(project_root, rank_dir, sector_dashboard_path):
+        try:
+            frames["sector_dashboard"] = _build_live_sector_dashboard_frame(project_root)
+        except Exception:
+            pass
     return frames
 
 
@@ -785,12 +827,11 @@ def load_portfolio_symbol_details(project_root: str) -> pd.DataFrame:
             frame = pd.read_sql_query(
                 """
                 SELECT
-                    "Symbol" AS symbol_id,
-                    "Name" AS company_name,
-                    "Sector" AS sector_name,
-                    "Industry Group" AS industry_group
-                FROM stock_details
-                WHERE "Symbol" IS NOT NULL
+                    symbol_id,
+                    symbol_name AS company_name,
+                    sector AS sector_name
+                FROM symbols
+                WHERE symbol_id IS NOT NULL
                 """,
                 conn,
             )

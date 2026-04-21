@@ -12,7 +12,7 @@ Usage:
 from datetime import datetime
 
 import pandas as pd
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.ranking import _scan_data
 from ai_trading_system.domains.ranking._script_env import bootstrap_script_environment
 
@@ -42,7 +42,7 @@ def compute_stock_rs(
 
     for col in stock_vs_sector.columns:
         if col in stock_rs.columns:
-            stock_rs[col] = sector_rs[col] + stock_vs_sector[col]
+            stock_rs.loc[:, col] = sector_rs[col] + stock_vs_sector[col]
 
     return stock_rs
 
@@ -75,6 +75,13 @@ def build_dashboard(
 ) -> pd.DataFrame:
     """Build sector dashboard with quadrants."""
     sector_rs_filled = sector_rs.ffill()
+    if sector_momentum is None or sector_momentum.empty:
+        latest_momentum = pd.Series(0.0, index=sector_rs.columns, dtype=float)
+    else:
+        latest_momentum = pd.to_numeric(sector_momentum.iloc[-1], errors="coerce").reindex(
+            sector_rs.columns
+        )
+        latest_momentum = latest_momentum.fillna(0.0)
 
     dashboard = pd.DataFrame(
         {
@@ -88,27 +95,27 @@ def build_dashboard(
             "RS_100": sector_rs_filled.iloc[-100]
             if len(sector_rs_filled) >= 100
             else sector_rs_filled.iloc[0],
-            "Momentum": sector_momentum.iloc[-1],
+            "Momentum": latest_momentum,
         }
     )
 
-    dashboard = dashboard.dropna(subset=["RS", "Momentum"])
+    dashboard = dashboard.dropna(subset=["RS"])
 
-    dashboard["RS_rank"] = (
+    dashboard.loc[:, "RS_rank"] = (
         dashboard["RS"].rank(ascending=False, na_option="keep").fillna(0).astype(int)
     )
-    dashboard["RS_rank_pct"] = dashboard["RS"].rank(ascending=False, pct=True)
-    dashboard["Momentum_rank"] = (
+    dashboard.loc[:, "RS_rank_pct"] = dashboard["RS"].rank(ascending=False, pct=True)
+    dashboard.loc[:, "Momentum_rank"] = (
         dashboard["Momentum"]
         .rank(ascending=False, na_option="keep")
         .fillna(0)
         .astype(int)
     )
-    dashboard["Momentum_rank_pct"] = dashboard["Momentum"].rank(
+    dashboard.loc[:, "Momentum_rank_pct"] = dashboard["Momentum"].rank(
         ascending=False, pct=True
     )
 
-    dashboard["Quadrant"] = dashboard.apply(
+    dashboard.loc[:, "Quadrant"] = dashboard.apply(
         lambda row: classify_quadrant(row["RS"], row["Momentum"]), axis=1
     )
 
@@ -121,7 +128,7 @@ def build_dashboard(
         "RS_rank_pct",
         "Momentum_rank_pct",
     ]
-    dashboard[cols_to_round] = dashboard[cols_to_round].round(2)
+    dashboard.loc[:, cols_to_round] = dashboard[cols_to_round].round(2)
 
     dashboard = dashboard.sort_values("RS", ascending=False)
     dashboard.index.name = "Sector"

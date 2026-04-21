@@ -35,8 +35,8 @@ from collectors.daily_update_runner import _fetch_nse_bhavcopy_rows, _fetch_yfin
 from collectors.dhan_collector import DhanCollector
 from core.env import load_project_env
 from ai_trading_system.domains.features import FeatureStore, compute_all_symbols_rs
-from core.paths import ensure_domain_layout
-from core.logging import logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
 
 
 FIELDS = ["open", "high", "low", "close", "volume"]
@@ -64,7 +64,7 @@ def _normalize_trade_frame(frame: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["trade_date", *FIELDS])
     df = frame.copy()
     if "timestamp" in df.columns:
-        df["trade_date"] = pd.to_datetime(df["timestamp"]).dt.date.astype(str)
+        df = df.assign(trade_date=pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d"))
     elif "trade_date" not in df.columns:
         raise ValueError("frame must include timestamp or trade_date")
     keep = ["trade_date", *FIELDS]
@@ -197,7 +197,7 @@ def _load_db_window(
             FROM _catalog
             WHERE symbol_id = ?
               AND exchange = ?
-              AND CAST(timestamp AS DATE) BETWEEN ? AND ?
+              AND CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             ORDER BY timestamp
             """,
             [symbol_id, exchange, from_date, to_date],
@@ -231,7 +231,7 @@ def _backup_current_rows(
                 volume
             FROM _catalog
             WHERE exchange = ?
-              AND CAST(timestamp AS DATE) BETWEEN ? AND ?
+              AND CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             ORDER BY symbol_id, timestamp
             """,
             [exchange, from_date, to_date],
@@ -265,7 +265,7 @@ def _delete_window_rows(
             f"""
             DELETE FROM _catalog
             WHERE exchange = ?
-              AND CAST(timestamp AS DATE) BETWEEN ? AND ?
+              AND CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
               AND symbol_id IN ({placeholders})
             RETURNING 1
             """,

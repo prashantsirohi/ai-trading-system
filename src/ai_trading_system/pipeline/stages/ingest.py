@@ -6,7 +6,7 @@ from typing import Callable, Dict, Optional
 
 import pandas as pd
 
-from run.stages.base import StageContext, StageResult
+from ai_trading_system.pipeline.contracts import StageContext, StageResult
 from ai_trading_system.domains.ingest.service import IngestOrchestrationService
 
 

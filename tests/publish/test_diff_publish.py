@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from services.publish.publish_payloads import add_rank_diff
+from ai_trading_system.domains.publish.publish_payloads import add_rank_diff
 
 
 def test_add_rank_diff_tracks_previous_position_and_new_entries() -> None:
@@ -20,4 +20,3 @@ def test_add_rank_diff_tracks_previous_position_and_new_entries() -> None:
     assert out[0]["rank_change"] == 1
     assert out[2]["previous_rank"] is None
     assert out[2]["new_entry"] is True
-

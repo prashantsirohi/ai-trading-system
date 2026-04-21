@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from features.feature_store import add_feature_confidence
+from ai_trading_system.domains.features.feature_store import add_feature_confidence
 
 
 def test_add_feature_confidence_respects_readiness_and_provider_confidence() -> None:
@@ -16,4 +16,3 @@ def test_add_feature_confidence_respects_readiness_and_provider_confidence() -> 
     out = add_feature_confidence(frame)
 
     assert out["feature_confidence"].tolist() == [0.9, 0.0, 1.0, 0.0]
-

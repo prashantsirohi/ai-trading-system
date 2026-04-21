@@ -91,7 +91,7 @@ def normalize_raw_factor_inputs(frame: pd.DataFrame) -> pd.DataFrame:
         raw_values = winsorize_series(normalized[factor.raw_column])
         if factor.raw_column in _SECTOR_DEMEAN_FACTORS:
             raw_values = demean_by_sector(raw_values, sector_names)
-        normalized[factor.raw_column] = raw_values
+        normalized.loc[:, factor.raw_column] = raw_values
 
     return normalized
 
@@ -106,27 +106,27 @@ def compute_factor_scores(
 
     for factor in PRIMARY_FACTORS:
         rank_method = "average" if factor.raw_column == "delivery_pct" else "average"
-        scores[factor.score_column] = scores[factor.raw_column].rank(
+        scores.loc[:, factor.score_column] = scores[factor.raw_column].rank(
             pct=True,
             method=rank_method,
         ) * 100
 
-    scores["sector_rs_score"] = scores["sector_rs_value"].rank(pct=True) * 100
-    scores["stock_vs_sector_score"] = scores["stock_vs_sector_value"].rank(pct=True) * 100
-    scores["sector_strength_score"] = (
+    scores.loc[:, "sector_rs_score"] = scores["sector_rs_value"].rank(pct=True) * 100
+    scores.loc[:, "stock_vs_sector_score"] = scores["stock_vs_sector_value"].rank(pct=True) * 100
+    scores.loc[:, "sector_strength_score"] = (
         scores["sector_rs_score"] * 0.6 + scores["stock_vs_sector_score"] * 0.4
     )
 
-    scores["composite_score"] = sum(
+    scores.loc[:, "composite_score"] = sum(
         scores[factor.score_column] * float(weights[factor.weight_key])
         for factor in PRIMARY_FACTORS
     ) + scores["sector_strength_score"] * float(weights["sector_strength"])
 
     if "sector_name" in scores.columns:
-        scores["sector_rank_within_sector"] = scores.groupby("sector_name")["composite_score"].rank(
+        scores.loc[:, "sector_rank_within_sector"] = scores.groupby("sector_name")["composite_score"].rank(
             ascending=False, method="min"
         )
-        scores["sector_total_symbols"] = scores.groupby("sector_name")["sector_name"].transform("count")
+        scores.loc[:, "sector_total_symbols"] = scores.groupby("sector_name")["sector_name"].transform("count")
 
     return scores
 
@@ -152,10 +152,10 @@ def compute_rank_confidence(frame: pd.DataFrame) -> pd.DataFrame:
         output["rank_confidence"] = pd.Series(dtype=float)
         return output
 
-    output["rank_confidence"] = 1.0
+    output.loc[:, "rank_confidence"] = 1.0
 
     if "feature_confidence" in output.columns:
-        output["rank_confidence"] *= pd.to_numeric(
+        output.loc[:, "rank_confidence"] = output["rank_confidence"] * pd.to_numeric(
             output["feature_confidence"], errors="coerce"
         ).fillna(0.0)
 
@@ -164,9 +164,11 @@ def compute_rank_confidence(frame: pd.DataFrame) -> pd.DataFrame:
 
     if "penalty_score" in output.columns:
         penalties = pd.to_numeric(output["penalty_score"], errors="coerce").fillna(0.0)
-        output["rank_confidence"] *= (1.0 - penalties.clip(lower=0.0, upper=50.0) / 100.0)
+        output.loc[:, "rank_confidence"] = output["rank_confidence"] * (
+            1.0 - penalties.clip(lower=0.0, upper=50.0) / 100.0
+        )
 
-    output["rank_confidence"] = output["rank_confidence"].clip(lower=0.0, upper=1.0)
+    output.loc[:, "rank_confidence"] = output["rank_confidence"].clip(lower=0.0, upper=1.0)
     return output
 
 
@@ -176,10 +178,10 @@ def apply_rank_stability(
 ) -> pd.DataFrame:
     """Attach optional rank stability metadata without mutating current ordering."""
     output = current_frame.copy()
-    output["rank_change_limit"] = pd.NA
-    output["previous_rank_position"] = pd.NA
-    output["rank_delta"] = pd.NA
-    output["score_delta"] = pd.NA
+    output.loc[:, "rank_change_limit"] = pd.NA
+    output.loc[:, "previous_rank_position"] = pd.NA
+    output.loc[:, "rank_delta"] = pd.NA
+    output.loc[:, "score_delta"] = pd.NA
 
     if previous_frame is None or previous_frame.empty or output.empty:
         return output
@@ -190,7 +192,7 @@ def apply_rank_stability(
     if "composite_score" in prev.columns:
         prev = prev.sort_values("composite_score", ascending=False, kind="stable")
     prev = prev.reset_index(drop=True)
-    prev["previous_rank_position"] = prev.index + 1
+    prev.loc[:, "previous_rank_position"] = prev.index + 1
     prev_cols = ["symbol_id", "previous_rank_position"]
     if "exchange" in prev.columns and "exchange" in output.columns:
         prev_cols.insert(1, "exchange")
@@ -205,11 +207,11 @@ def apply_rank_stability(
         how="left",
     )
     merged = merged.reset_index(drop=True)
-    merged["current_rank_position"] = merged.index + 1
-    merged["rank_delta"] = merged["previous_rank_position"] - merged["current_rank_position"]
+    merged.loc[:, "current_rank_position"] = merged.index + 1
+    merged.loc[:, "rank_delta"] = merged["previous_rank_position"] - merged["current_rank_position"]
     if "previous_composite_score" in merged.columns and "composite_score" in merged.columns:
-        merged["score_delta"] = merged["composite_score"] - merged["previous_composite_score"]
-    merged["rank_change_limit"] = pd.NA
+        merged.loc[:, "score_delta"] = merged["composite_score"] - merged["previous_composite_score"]
+    merged.loc[:, "rank_change_limit"] = pd.NA
     return merged
 
 

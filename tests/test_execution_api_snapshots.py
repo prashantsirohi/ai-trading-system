@@ -10,7 +10,7 @@ from ui.execution_api.app import create_app
 
 
 SNAPSHOT_DIR = Path(__file__).resolve().parent / "fixtures" / "api_snapshots"
-API_HEADERS = {"x-api-key": "local-dev-key"}
+API_HEADERS = {"x-api-key": "test-api-key"}
 
 
 def _normalize_value(value, project_root: Path):
@@ -51,6 +51,7 @@ def _load_expected(name: str) -> dict:
 def test_execution_api_response_snapshots(monkeypatch, tmp_path: Path) -> None:
     _seed_execution_project(tmp_path)
     monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("EXECUTION_API_KEY", API_HEADERS["x-api-key"])
     client = TestClient(create_app())
 
     endpoints = {

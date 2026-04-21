@@ -14,7 +14,7 @@ from ui.execution_api.app import create_app
 
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "artifacts"
-API_HEADERS = {"x-api-key": "local-dev-key"}
+API_HEADERS = {"x-api-key": "test-api-key"}
 
 
 def _seed_datastores(project_root: Path) -> None:
@@ -153,6 +153,7 @@ def _seed_execution_project(project_root: Path) -> str:
 def test_execution_api_smoke_endpoints(monkeypatch, tmp_path: Path) -> None:
     run_id = _seed_execution_project(tmp_path)
     monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("EXECUTION_API_KEY", API_HEADERS["x-api-key"])
     client = TestClient(create_app())
 
     health = client.get("/api/execution/health", headers=API_HEADERS)

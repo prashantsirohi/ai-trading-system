@@ -6,8 +6,8 @@ import argparse
 from pathlib import Path
 
 from analytics.visualizations import Visualizer
-from core.paths import ensure_domain_layout
-from core.logging import log_context, logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import log_context, logger
 
 
 def build_parser() -> argparse.ArgumentParser:

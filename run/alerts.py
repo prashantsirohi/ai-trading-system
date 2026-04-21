@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 import requests
 
 

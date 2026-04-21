@@ -5,7 +5,7 @@ from pathlib import Path
 import json
 import pytest
 
-from channel.google_sheets_manager import GoogleSheetsManager
+from ai_trading_system.domains.publish.channels.google_sheets_manager import GoogleSheetsManager
 from analytics.registry import RegistryStore
 from core.contracts import StageArtifact, StageContext
 from run.stages.publish import PublishStage
@@ -94,7 +94,7 @@ def test_google_sheets_manager_preserves_token_refresh_error(monkeypatch, tmp_pa
             raise RuntimeError("DNS resolve failed for oauth2.googleapis.com")
 
     monkeypatch.setattr(
-        "channel.google_sheets_manager.OAuthCredentials.from_authorized_user_file",
+        "ai_trading_system.domains.publish.channels.google_sheets_manager.OAuthCredentials.from_authorized_user_file",
         lambda *_args, **_kwargs: _FakeCreds(),
     )
 

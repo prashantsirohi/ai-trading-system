@@ -9,14 +9,64 @@ from typing import List, Tuple
 from ai_trading_system.domains.execution.adapters.base import ExecutionAdapter
 from ai_trading_system.domains.execution.models import FillRecord, OrderIntent, OrderRecord, utcnow
 
+NSETxnCostConfig = {
+    "brokerage_flat": 20.0,
+    "gst_rate": 0.18,
+    "stt_buy": 0.001,
+    "stt_sell": 0.001,
+    "exchange_rate": 0.00005,
+    "sebi_rate": 0.000001,
+    "stamp_duty_rate": 0.0001,
+}
+
+
+class NSETransactionCost:
+    """NSE transaction cost calculator."""
+
+    @staticmethod
+    def calculate(
+        price: float,
+        quantity: int,
+        side: str,
+    ) -> dict:
+        turnover = price * quantity
+        side_upper = side.upper()
+
+        brokerage = NSETxnCostConfig["brokerage_flat"]
+        gst = brokerage * NSETxnCostConfig["gst_rate"]
+        stt = turnover * (
+            NSETxnCostConfig["stt_buy"] if side_upper == "BUY" else NSETxnCostConfig["stt_sell"]
+        )
+        exchange_fee = turnover * NSETxnCostConfig["exchange_rate"]
+        sebi_charges = turnover * NSETxnCostConfig["sebi_rate"]
+        stamp_duty = (
+            turnover * NSETxnCostConfig["stamp_duty_rate"] if side_upper == "BUY" else 0.0
+        )
+
+        total_cost = brokerage + gst + stt + exchange_fee + sebi_charges + stamp_duty
+        bps = (total_cost / turnover * 10_000) if turnover > 0 else 0.0
+
+        return {
+            "brokerage": round(brokerage, 2),
+            "gst": round(gst, 2),
+            "stt": round(stt, 4),
+            "exchange_fee": round(exchange_fee, 4),
+            "sebi_charges": round(sebi_charges, 4),
+            "stamp_duty": round(stamp_duty, 4),
+            "total_cost": round(total_cost, 2),
+            "bps": round(bps, 2),
+            "turnover": round(turnover, 2),
+        }
+
 
 class PaperExecutionAdapter(ExecutionAdapter):
     """Simple local execution simulator for paper trading and tests."""
 
     broker_name = "paper"
 
-    def __init__(self, *, slippage_bps: float = 5.0):
+    def __init__(self, *, slippage_bps: float = 5.0, include_costs: bool = True):
         self.slippage_bps = float(slippage_bps)
+        self.include_costs = include_costs
 
     def place_order(
         self,
@@ -63,6 +113,14 @@ class PaperExecutionAdapter(ExecutionAdapter):
             return replace(order, updated_at=now), []
 
         fill_price = self._resolve_fill_price(order, market_price)
+        fill_metadata = {"order_type": order.order_type}
+        if self.include_costs and order.exchange.upper() == "NSE":
+            cost_breakdown = NSETransactionCost.calculate(
+                price=fill_price,
+                quantity=order.quantity,
+                side=order.side,
+            )
+            fill_metadata["transaction_cost"] = cost_breakdown
         fill = FillRecord(
             fill_id=str(uuid.uuid4()),
             order_id=order.order_id,
@@ -73,7 +131,7 @@ class PaperExecutionAdapter(ExecutionAdapter):
             filled_at=now,
             side=order.side,
             exchange=order.exchange,
-            metadata={"order_type": order.order_type},
+            metadata=fill_metadata,
         )
         filled = replace(
             order,

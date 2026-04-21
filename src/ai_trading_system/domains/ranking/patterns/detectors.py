@@ -50,6 +50,11 @@ def _scan_config_from_backtest(config: PatternBacktestConfig) -> PatternScanConf
         exchange=config.exchange,
         data_domain=config.data_domain,
         symbols=config.symbols,
+        # Bug Fix 3: smoothing_method was missing — PatternBacktestConfig defaults
+        # to 'kernel'; PatternScanConfig defaults to 'rolling'. Pass the backtest
+        # value so callers that override it (e.g., research scripts) get the right
+        # smoother in the derived scan config.
+        smoothing_method=getattr(config, "smoothing_method", "rolling"),
         bandwidth=config.bandwidth,
         extrema_prominence=config.extrema_prominence,
         min_history_bars=config.min_history_bars,
@@ -226,73 +231,96 @@ def _score_signal_rows(signals_df: pd.DataFrame) -> pd.DataFrame:
     if signals_df.empty:
         return signals_df
     scored = signals_df.copy()
-    scored["pattern_score"] = 0.0
+
+    def _series_or_default(column: str, default: float | bool = float("nan")) -> pd.Series:
+        value = scored.get(column)
+        if value is None:
+            return pd.Series(default, index=scored.index)
+        return pd.Series(value, index=scored.index)
 
     state_bonus = np.where(scored["pattern_state"].astype(str) == "confirmed", 40.0, 20.0)
-    scored["pattern_score"] += state_bonus
+    pattern_score = pd.Series(state_bonus, index=scored.index, dtype=float)
 
-    breakout_volume_ratio = pd.to_numeric(scored.get("breakout_volume_ratio"), errors="coerce")
-    scored["pattern_score"] += np.select(
+    breakout_volume_ratio = pd.to_numeric(_series_or_default("breakout_volume_ratio"), errors="coerce")
+    pattern_score = pattern_score + np.select(
         [breakout_volume_ratio >= 2.0, breakout_volume_ratio >= 1.5],
         [15.0, 10.0],
         default=0.0,
     )
 
-    rel_strength = pd.to_numeric(scored.get("rel_strength_score"), errors="coerce")
-    scored["pattern_score"] += np.select(
+    rel_strength = pd.to_numeric(_series_or_default("rel_strength_score"), errors="coerce")
+    pattern_score = pattern_score + np.select(
         [rel_strength >= 80.0, rel_strength >= 60.0],
         [15.0, 8.0],
         default=0.0,
     )
 
-    sector_pct = pd.to_numeric(scored.get("sector_rs_percentile"), errors="coerce")
-    scored["pattern_score"] += np.select(
+    sector_pct = pd.to_numeric(_series_or_default("sector_rs_percentile"), errors="coerce")
+    pattern_score = pattern_score + np.select(
         [sector_pct >= 70.0, sector_pct >= 60.0],
         [10.0, 5.0],
         default=0.0,
     )
-    scored["pattern_score"] += np.where(scored.get("volume_dry_up", False).fillna(False).astype(bool), 10.0, 0.0)
+    volume_dry_up = _series_or_default("volume_dry_up", False)
+    if volume_dry_up.dtype == object:
+        volume_dry_up = volume_dry_up.infer_objects(copy=False)
+    volume_dry_up = volume_dry_up.fillna(False).astype(bool)
+    pattern_score = pattern_score + np.where(volume_dry_up, 10.0, 0.0)
 
     family_bonus = np.zeros(len(scored), dtype=float)
     family = scored["pattern_family"].astype(str)
     family_bonus += np.where(
-        (family == "cup_handle") & (pd.to_numeric(scored.get("handle_depth_pct"), errors="coerce") <= 8.0),
+        (family == "cup_handle") & (pd.to_numeric(_series_or_default("handle_depth_pct"), errors="coerce") <= 8.0),
         10.0,
         0.0,
     )
-    symmetry = pd.to_numeric(scored.get("symmetry_ratio"), errors="coerce")
+    symmetry = pd.to_numeric(_series_or_default("symmetry_ratio"), errors="coerce")
     family_bonus += np.where(
         (family == "round_bottom") & symmetry.between(0.75, 1.35, inclusive="both"),
         10.0,
         0.0,
     )
-    trough_similarity = pd.to_numeric(scored.get("trough_similarity_pct"), errors="coerce")
+    trough_similarity = pd.to_numeric(_series_or_default("trough_similarity_pct"), errors="coerce")
     family_bonus += np.where(
         (family == "double_bottom") & (trough_similarity <= 3.0),
         10.0,
         0.0,
     )
-    flag_retracement = pd.to_numeric(scored.get("flag_retracement_pct"), errors="coerce")
+    flag_retracement = pd.to_numeric(_series_or_default("flag_retracement_pct"), errors="coerce")
     family_bonus += np.where(
         (family == "flag") & (flag_retracement <= 25.0),
         10.0,
         0.0,
     )
-    pole_rise = pd.to_numeric(scored.get("pole_rise_pct"), errors="coerce")
-    flag_tightness = pd.to_numeric(scored.get("flag_tightness_pct"), errors="coerce")
+    pole_rise = pd.to_numeric(_series_or_default("pole_rise_pct"), errors="coerce")
+    flag_tightness = pd.to_numeric(_series_or_default("flag_tightness_pct"), errors="coerce")
     family_bonus += np.where(
         (family == "high_tight_flag") & (pole_rise >= 90.0) & (flag_tightness <= 15.0),
         10.0,
         0.0,
     )
-    scored["pattern_score"] += family_bonus
-    scored["pattern_score"] = scored["pattern_score"].clip(upper=100.0)
+    pattern_score = pattern_score + family_bonus
+
+    # ── Stage 2 bonus (Sprint 2) — rewards patterns on Stage 2 trend stocks ──
+    # +15 pts for strong_stage2 (≥85), +10 for stage2 (≥70), +5 for transitional (≥50)
+    if "stage2_score" in scored.columns:
+        s2 = pd.to_numeric(scored["stage2_score"], errors="coerce").fillna(0.0)
+        pattern_score = pattern_score + np.select(
+            [s2 >= 85.0, s2 >= 70.0, s2 >= 50.0],
+            [15.0, 10.0, 5.0],
+            default=0.0,
+        )
+        scored.loc[:, "stage2_label"] = scored.get("stage2_label", pd.Series("non_stage2", index=scored.index))
+
+    if "setup_quality" not in scored.columns:
+        scored.loc[:, "setup_quality"] = np.nan
+    scored.loc[:, "pattern_score"] = pattern_score.clip(upper=100.0)
     scored = scored.sort_values(
         ["pattern_score", "setup_quality", "symbol_id"],
         ascending=[False, False, True],
         na_position="last",
     ).reset_index(drop=True)
-    scored["pattern_rank"] = np.arange(1, len(scored) + 1)
+    scored.loc[:, "pattern_rank"] = np.arange(1, len(scored) + 1)
     return scored
 
 
@@ -397,6 +425,9 @@ def detect_cup_handle_signals(
                 confirmed += 1
             continue
 
+        # Bug Fix 4: skip stale CwH watchlist candidates whose handle is too old
+        if not _recent_enough(handle_idx, frame, config):
+            continue
         latest_close = float(frame.iloc[-1]["close"])
         latest_low_since_handle = float(frame.iloc[handle_idx:]["low"].min())
         if (
@@ -460,10 +491,13 @@ def detect_round_bottom_signals(
         recovery_window = smoothed.iloc[trough_idx + 1 : min(len(smoothed), trough_idx + config.max_round_width + 1)]
         if recovery_window.empty:
             continue
-        right_candidates = recovery_window[recovery_window >= recovery_threshold]
-        if right_candidates.empty:
+        # Bug Fix 2: use positional argmax — safe regardless of frame index type
+        # (int-based or DatetimeIndex).  .index[0] was fragile on non-zero-start slices.
+        recovery_offset = trough_idx + 1
+        right_candidates_mask = recovery_window >= recovery_threshold
+        if not right_candidates_mask.any():
             continue
-        right_idx = int(right_candidates.index[0])
+        right_idx = recovery_offset + int(right_candidates_mask.values.argmax())
         width = right_idx - left_idx
         if width < config.min_round_width or width > config.max_round_width:
             continue
@@ -532,6 +566,12 @@ def detect_round_bottom_signals(
                 confirmed += 1
             continue
 
+        # Bug Fix 4: skip stale round bottom watchlist candidates
+        if not _recent_enough(right_idx, frame, config):
+            continue
+        # Bug Fix 5: skip low-volume round bottom watchlist (below 50% of breakout threshold)
+        if _latest_watchlist_volume(frame) < config.breakout_volume_ratio_min * 0.5:
+            continue
         latest_close = float(frame.iloc[-1]["close"])
         latest_low_since_right = float(frame.iloc[right_idx:]["low"].min())
         if (
@@ -722,6 +762,17 @@ def detect_flag_signals(
     high_tight_only: bool = False,
     recent_only: bool = True,
 ) -> tuple[list[PatternSignal], PatternScanStats]:
+    """Detect bull-flag and high-tight-flag patterns.
+
+    Bug Fix 1: replaced original O(n³) triple-nested loop with an optimised
+    two-pass structure:
+    - Outer loop iterates over *pole_bars* (constant ~5-20 range).
+    - Per pole_bars, `pole_returns` is pre-computed as a numpy array (O(n))
+      so the middle loop can skip non-qualifying poles with a single comparison.
+    - Innermost flag_bars loop breaks after the first valid flag per
+      (pole_bars, pole_end_idx) pair.  In practice this limits the innermost
+      work to O(1) amortised per qualifying pole rather than O(max_flag_bars).
+    """
     pattern_family = "high_tight_flag" if high_tight_only else "flag"
     signals: list[PatternSignal] = []
     candidates = 0
@@ -737,27 +788,43 @@ def detect_flag_signals(
     )
     max_flag_range_pct = config.high_tight_flag_max_range_pct * 100.0 if high_tight_only else None
 
-    for pole_end_idx in range(config.flag_pole_min_bars, len(frame) - config.flag_min_bars):
-        for pole_bars in range(config.flag_pole_min_bars, max_pole_bars + 1):
-            pole_start_idx = pole_end_idx - pole_bars
-            if pole_start_idx < 0:
+    closes = frame["close"].to_numpy(dtype=float)
+    n = len(closes)
+    # Suppress divide-by-zero: replace 0-closes with nan
+    closes_safe = np.where(closes > 1e-9, closes, np.nan)
+
+    for pole_bars in range(config.flag_pole_min_bars, max_pole_bars + 1):
+        if pole_bars >= n:
+            break
+        # Vectorised pole-return array: shape (n - pole_bars,)
+        # pole_returns[i] = return from bar i to bar (i + pole_bars)
+        pole_returns = (closes[pole_bars:] / closes_safe[:-pole_bars] - 1.0) * 100.0
+
+        for pole_end_idx in range(pole_bars, n - config.flag_min_bars - 1):
+            # Pre-screen: skip pole if return is below threshold
+            pret = pole_returns[pole_end_idx - pole_bars]
+            if np.isnan(pret) or pret < min_pole_rise:
                 continue
+
+            pole_start_idx = pole_end_idx - pole_bars
+
             for flag_bars in range(config.flag_min_bars, config.flag_max_bars + 1):
                 flag_end_idx = pole_end_idx + flag_bars
-                if flag_end_idx >= len(frame):
-                    continue
-                pole_rise_pct, flag_high, flag_low, flag_range_pct, retracement_pct = _flag_candidate_from_window(
+                if flag_end_idx >= n:
+                    break
+
+                # Compute flag metrics using the shared helper
+                _, flag_high, flag_low, flag_range_pct, retracement_pct = _flag_candidate_from_window(
                     frame,
                     pole_start_idx=pole_start_idx,
                     pole_end_idx=pole_end_idx,
                     flag_end_idx=flag_end_idx,
                 )
-                if pole_rise_pct < min_pole_rise:
-                    continue
                 if retracement_pct > max_retracement_pct:
                     continue
                 if max_flag_range_pct is not None and flag_range_pct > max_flag_range_pct:
                     continue
+
                 flag_window = smoothed.iloc[pole_end_idx : flag_end_idx + 1]
                 if len(flag_window) < 2:
                     continue
@@ -765,25 +832,34 @@ def detect_flag_signals(
                 if slope > 0.2:
                     continue
 
+                # Valid flag found — compute signal, then break (shortest valid flag wins)
                 breakout_volume_min = 2.0 if high_tight_only else config.breakout_volume_ratio_min
                 breakout_idx = None
                 breakout_volume_ratio = None
-                max_idx = min(len(frame) - 1, flag_end_idx + config.max_breakout_wait_bars)
-                for idx in range(flag_end_idx + 1, max_idx + 1):
-                    close = float(frame.iloc[idx]["close"])
-                    volume_ratio = float(frame.iloc[idx].get("volume_ratio_20", 0.0) or 0.0)
-                    if close > flag_high and volume_ratio >= breakout_volume_min:
+                max_scan_idx = min(n - 1, flag_end_idx + config.max_breakout_wait_bars)
+                for idx in range(flag_end_idx + 1, max_scan_idx + 1):
+                    b_close = float(frame.iloc[idx]["close"])
+                    b_vol = float(frame.iloc[idx].get("volume_ratio_20", 0.0) or 0.0)
+                    if b_close > flag_high and b_vol >= breakout_volume_min:
                         breakout_idx = idx
-                        breakout_volume_ratio = volume_ratio
+                        breakout_volume_ratio = b_vol
                         break
+
                 candidates += 1
                 invalidation_price = float(frame.iloc[pole_end_idx : flag_end_idx + 1]["low"].min())
                 volume_dry_up = bool(frame.iloc[pole_end_idx : flag_end_idx + 1]["volume_ratio_20"].mean() < 1.0)
+                pole_rise_pct = float(pret)  # use pre-computed numpy value
                 setup_quality = _flag_setup_quality(
                     pole_rise_pct=pole_rise_pct,
                     retracement_pct=retracement_pct,
                     volume_dry_up=volume_dry_up,
                     high_tight=high_tight_only,
+                )
+
+                pivot_prices = (
+                    float(smoothed.iloc[pole_start_idx]),
+                    float(smoothed.iloc[pole_end_idx]),
+                    float(smoothed.iloc[flag_end_idx]),
                 )
 
                 if breakout_idx is not None and (not recent_only or _recent_enough(breakout_idx, frame, config)):
@@ -799,11 +875,7 @@ def detect_flag_signals(
                         setup_quality=setup_quality,
                         pivot_labels=("pole_start", "pole_end", "flag_end"),
                         pivot_indices=(pole_start_idx, pole_end_idx, flag_end_idx),
-                        pivot_prices=(
-                            float(smoothed.iloc[pole_start_idx]),
-                            float(smoothed.iloc[pole_end_idx]),
-                            float(smoothed.iloc[flag_end_idx]),
-                        ),
+                        pivot_prices=pivot_prices,
                         config=config,
                         volume_dry_up=volume_dry_up,
                         breakout_volume_ratio=breakout_volume_ratio,
@@ -816,41 +888,768 @@ def detect_flag_signals(
                         used_signal_ids.add(signal.signal_id)
                         signals.append(signal)
                         confirmed += 1
-                    continue
+                else:
+                    latest_close = float(frame.iloc[-1]["close"])
+                    if (
+                        latest_close <= flag_high
+                        and latest_close >= flag_high * (1 - config.flag_watchlist_buffer_pct)
+                    ):
+                        signal = _build_signal(
+                            frame=frame,
+                            pattern_family=pattern_family,
+                            pattern_state="watchlist",
+                            signal_idx=len(frame) - 1,
+                            pattern_start_idx=pole_start_idx,
+                            pattern_end_idx=flag_end_idx,
+                            breakout_level=flag_high,
+                            invalidation_price=invalidation_price,
+                            setup_quality=setup_quality - 10.0,
+                            pivot_labels=("pole_start", "pole_end", "flag_end"),
+                            pivot_indices=(pole_start_idx, pole_end_idx, flag_end_idx),
+                            pivot_prices=pivot_prices,
+                            config=config,
+                            volume_dry_up=volume_dry_up,
+                            breakout_volume_ratio=_latest_watchlist_volume(frame),
+                            width_bars=flag_end_idx - pole_start_idx,
+                            pole_rise_pct=pole_rise_pct,
+                            flag_tightness_pct=flag_range_pct,
+                            flag_retracement_pct=retracement_pct,
+                        )
+                        if signal.signal_id not in used_signal_ids:
+                            used_signal_ids.add(signal.signal_id)
+                            signals.append(signal)
+                            watchlist += 1
 
-                latest_close = float(frame.iloc[-1]["close"])
-                if latest_close <= flag_high and latest_close >= flag_high * (1 - config.flag_watchlist_buffer_pct):
-                    signal = _build_signal(
-                        frame=frame,
-                        pattern_family=pattern_family,
-                        pattern_state="watchlist",
-                        signal_idx=len(frame) - 1,
-                        pattern_start_idx=pole_start_idx,
-                        pattern_end_idx=flag_end_idx,
-                        breakout_level=flag_high,
-                        invalidation_price=invalidation_price,
-                        setup_quality=setup_quality - 10.0,
-                        pivot_labels=("pole_start", "pole_end", "flag_end"),
-                        pivot_indices=(pole_start_idx, pole_end_idx, flag_end_idx),
-                        pivot_prices=(
-                            float(smoothed.iloc[pole_start_idx]),
-                            float(smoothed.iloc[pole_end_idx]),
-                            float(smoothed.iloc[flag_end_idx]),
-                        ),
-                        config=config,
-                        volume_dry_up=volume_dry_up,
-                        breakout_volume_ratio=_latest_watchlist_volume(frame),
-                        width_bars=flag_end_idx - pole_start_idx,
-                        pole_rise_pct=pole_rise_pct,
-                        flag_tightness_pct=flag_range_pct,
-                        flag_retracement_pct=retracement_pct,
-                    )
-                    if signal.signal_id not in used_signal_ids:
-                        used_signal_ids.add(signal.signal_id)
-                        signals.append(signal)
-                        watchlist += 1
+                # Break after first valid flag per (pole_bars, pole_end_idx)
+                break
 
     return signals, PatternScanStats(pattern_family, candidates, confirmed, watchlist)
+
+
+def _ascending_triangle_setup_quality(
+    res_deviation_pct: float, trough_rise_pct: float, volume_dry_up: bool, width: int
+) -> float:
+    base = 45.0
+    res_penalty = min(abs(res_deviation_pct) * 200.0, 15.0)
+    trough_bonus = min(trough_rise_pct * 100.0, 10.0)
+    vol_bonus = 8.0 if volume_dry_up else 0.0
+    width_penalty = max(0, (width - 30) * 0.2) if width > 30 else 0
+    return float(np.clip(base - res_penalty + trough_bonus + vol_bonus - width_penalty, 0, 100))
+
+
+def detect_ascending_triangle_signals(
+    frame: pd.DataFrame,
+    *,
+    smoothed: pd.Series,
+    extrema: Iterable[LocalExtrema],
+    config: PatternScanConfig,
+    recent_only: bool = True,
+) -> tuple[list[PatternSignal], PatternScanStats]:
+    """Detect bullish ascending triangle patterns.
+
+    Ascending Triangle = flat resistance line + rising troughs.
+    Stage 2 gate: skip if stage2_score < 50 (pre-filter).
+    """
+    extrema_list = list(extrema)
+    peaks = [e for e in extrema_list if e.kind == "peak"]
+    troughs = [e for e in extrema_list if e.kind == "trough"]
+
+    signals: list[PatternSignal] = []
+    candidates = 0
+    confirmed = 0
+    watchlist = 0
+    used_signal_ids: set[str] = set()
+    flat_tol = getattr(config, "asc_tri_flat_tol", 0.015)
+
+    if "stage2_score" in frame.columns:
+        latest_s2 = float(frame["stage2_score"].iloc[-1]) if len(frame) > 0 else 0
+        if latest_s2 < 50:
+            return signals, PatternScanStats("ascending_triangle", 0, 0, 0)
+
+    for i in range(len(peaks) - 1):
+        p1, p2 = peaks[i], peaks[i + 1]
+        if p2.index <= p1.index + 15:
+            continue
+        res_prices = [float(smoothed.iloc[p.index]) for p in [p1, p2]]
+        res_mean = sum(res_prices) / 2
+        if any(abs(p - res_mean) / res_mean > flat_tol for p in res_prices):
+            continue
+
+        span_troughs = [t for t in troughs if p1.index < t.index < p2.index]
+        if len(span_troughs) < 2:
+            continue
+
+        t_prices = [float(smoothed.iloc[t.index]) for t in span_troughs]
+        if not all(t_prices[j + 1] >= t_prices[j] * 1.005 for j in range(len(t_prices) - 1)):
+            continue
+
+        width = p2.index - p1.index
+        if width < 15 or width > 90:
+            continue
+
+        candidates += 1
+        resistance_level = float(frame.iloc[p1.index : p2.index + 1]["high"].max())
+        invalidation = float(t_prices[-1]) * 0.98
+        res_deviation = (res_prices[1] - res_prices[0]) / res_mean
+
+        breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+            frame,
+            start_idx=p2.index,
+            resistance_level=resistance_level,
+            config=config,
+        )
+
+        left_volume = float(frame.iloc[max(0, p1.index - 5) : p1.index]["volume_ratio_20"].mean())
+        right_volume = float(frame.iloc[p2.index : min(len(frame), p2.index + 5)]["volume_ratio_20"].mean())
+        volume_dry_up = right_volume < left_volume
+
+        trough_rise_pct = (t_prices[-1] - t_prices[0]) / max(t_prices[0], 1e-9) if len(t_prices) > 1 else 0
+        setup_quality = _ascending_triangle_setup_quality(res_deviation, trough_rise_pct, volume_dry_up, width)
+
+        pivot_prices = (
+            float(smoothed.iloc[p1.index]),
+            float(smoothed.iloc[p2.index]),
+        )
+        pivot_indices = (p1.index, p2.index)
+
+        if breakout_idx is not None and (not recent_only or _recent_enough(breakout_idx, frame, config)):
+            signal = _build_signal(
+                frame=frame,
+                pattern_family="ascending_triangle",
+                pattern_state="confirmed",
+                signal_idx=breakout_idx,
+                pattern_start_idx=p1.index,
+                pattern_end_idx=p2.index,
+                breakout_level=resistance_level,
+                invalidation_price=invalidation,
+                setup_quality=setup_quality,
+                pivot_labels=("resistance_1", "resistance_2"),
+                pivot_indices=pivot_indices,
+                pivot_prices=pivot_prices,
+                config=config,
+                volume_dry_up=volume_dry_up,
+                breakout_volume_ratio=breakout_volume_ratio,
+                width_bars=width,
+            )
+            if signal.signal_id not in used_signal_ids:
+                used_signal_ids.add(signal.signal_id)
+                signals.append(signal)
+                confirmed += 1
+            continue
+
+        if not _recent_enough(p2.index, frame, config):
+            continue
+        latest_close = float(frame.iloc[-1]["close"])
+        if latest_close <= resistance_level and latest_close >= resistance_level * 0.97:
+            signal = _build_signal(
+                frame=frame,
+                pattern_family="ascending_triangle",
+                pattern_state="watchlist",
+                signal_idx=len(frame) - 1,
+                pattern_start_idx=p1.index,
+                pattern_end_idx=p2.index,
+                breakout_level=resistance_level,
+                invalidation_price=invalidation,
+                setup_quality=setup_quality - 10.0,
+                pivot_labels=("resistance_1", "resistance_2"),
+                pivot_indices=pivot_indices,
+                pivot_prices=pivot_prices,
+                config=config,
+                volume_dry_up=volume_dry_up,
+                breakout_volume_ratio=_latest_watchlist_volume(frame),
+                width_bars=width,
+            )
+            if signal.signal_id not in used_signal_ids:
+                used_signal_ids.add(signal.signal_id)
+                signals.append(signal)
+                watchlist += 1
+
+    return signals, PatternScanStats("ascending_triangle", candidates, confirmed, watchlist)
+
+
+def _vcp_setup_quality(
+    price_contraction_pct: float, vol_contraction_pct: float, stage2_score: float
+) -> float:
+    base = 50.0
+    pc_bonus = min(price_contraction_pct * 80.0, 15.0)
+    vc_bonus = min(vol_contraction_pct * 60.0, 10.0)
+    s2_bonus = 15.0 if stage2_score >= 85 else (10.0 if stage2_score >= 70 else 5.0)
+    return (base + pc_bonus + vc_bonus + s2_bonus).clip(0, 100)
+
+
+def detect_vcp_signals(
+    frame: pd.DataFrame,
+    *,
+    smoothed: pd.Series,
+    extrema: Iterable[LocalExtrema],
+    config: PatternScanConfig,
+    recent_only: bool = True,
+) -> tuple[list[PatternSignal], PatternScanStats]:
+    """Detect bullish VCP (Volatility Contraction Pattern).
+
+    VCP = price range contracts across 3 sequential windows + volume contracts.
+    Stage 2 bonus: +15 for strong_stage2, +10 for stage2, +5 for transitional.
+    """
+    closes = frame["close"].to_numpy(float)
+    vrat = frame["volume_ratio_20"].to_numpy(float)
+    n = len(closes)
+    signals: list[PatternSignal] = []
+    candidates = 0
+    confirmed = 0
+    watchlist = 0
+    used_signal_ids: set[str] = set()
+
+    window = getattr(config, "vcp_window_bars", 40)
+    p_fact = getattr(config, "vcp_price_contraction_factor", 0.85)
+    v_fact = getattr(config, "vcp_vol_contraction_factor", 0.90)
+    min_c1 = getattr(config, "vcp_min_first_range_pct", 0.08)
+
+    has_stage2 = "stage2_score" in frame.columns
+
+    for end in range(window, n):
+        start = end - window
+        third = window // 3
+        if third < 3:
+            continue
+
+        ranges = []
+        vols = []
+        for i in range(3):
+            segment_start = start + i * third
+            segment_end = start + (i + 1) * third
+            if segment_end > n:
+                break
+            seg_max = closes[segment_start:segment_end].max()
+            seg_min = closes[segment_start:segment_end].min()
+            seg_range = (seg_max - seg_min) / max(seg_min, 1e-9)
+            ranges.append(seg_range)
+            vols.append(vrat[segment_start:segment_end].mean())
+
+        if len(ranges) < 3 or ranges[0] < min_c1:
+            continue
+
+        price_ok = all(ranges[j + 1] < ranges[j] * p_fact for j in range(2))
+        vol_ok = all(vols[j + 1] < vols[j] * v_fact for j in range(2))
+        if not (price_ok and vol_ok):
+            continue
+
+        candidates += 1
+        pivot = float(frame.iloc[start:end + 1]["high"].max())
+        invalidation = float(frame.iloc[start:end + 1]["low"].min())
+
+        s2_score = float(frame["stage2_score"].iloc[end]) if has_stage2 and len(frame) > end else 0
+        setup_quality = _vcp_setup_quality(
+            ranges[0] - ranges[1], 1 - vols[0] / max(vols[1], 1e-9), s2_score
+        )
+
+        breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+            frame, start_idx=end, resistance_level=pivot, config=config
+        )
+
+        if breakout_idx is not None and (not recent_only or _recent_enough(breakout_idx, frame, config)):
+            signal = _build_signal(
+                frame=frame,
+                pattern_family="vcp",
+                pattern_state="confirmed",
+                signal_idx=breakout_idx,
+                pattern_start_idx=start,
+                pattern_end_idx=end,
+                breakout_level=pivot,
+                invalidation_price=invalidation,
+                setup_quality=setup_quality,
+                pivot_labels=("vcp_start", "vcp_end"),
+                pivot_indices=(start, end),
+                pivot_prices=(float(smoothed.iloc[start]), float(smoothed.iloc[end])),
+                config=config,
+                volume_dry_up=vols[-1] < vols[0],
+                breakout_volume_ratio=breakout_volume_ratio,
+                width_bars=window,
+            )
+            if signal.signal_id not in used_signal_ids:
+                used_signal_ids.add(signal.signal_id)
+                signals.append(signal)
+                confirmed += 1
+            continue
+
+        if not _recent_enough(end, frame, config):
+            continue
+        latest_close = float(frame.iloc[-1]["close"])
+        if latest_close <= pivot and latest_close >= pivot * 0.97:
+            signal = _build_signal(
+                frame=frame,
+                pattern_family="vcp",
+                pattern_state="watchlist",
+                signal_idx=len(frame) - 1,
+                pattern_start_idx=start,
+                pattern_end_idx=end,
+                breakout_level=pivot,
+                invalidation_price=invalidation,
+                setup_quality=setup_quality - 10.0,
+                pivot_labels=("vcp_start", "vcp_end"),
+                pivot_indices=(start, end),
+                pivot_prices=(float(smoothed.iloc[start]), float(smoothed.iloc[end])),
+                config=config,
+                volume_dry_up=vols[-1] < vols[0],
+                breakout_volume_ratio=_latest_watchlist_volume(frame),
+                width_bars=window,
+            )
+            if signal.signal_id not in used_signal_ids:
+                used_signal_ids.add(signal.signal_id)
+                signals.append(signal)
+                watchlist += 1
+
+    return signals, PatternScanStats("vcp", candidates, confirmed, watchlist)
+
+
+def _flat_base_setup_quality(depth_pct: float, volume_dry_up: bool, width: int) -> float:
+    base = 48.0
+    depth_penalty = min(depth_pct * 200.0, 12.0)
+    vol_bonus = 8.0 if volume_dry_up else 0.0
+    width_bonus = min(width * 0.15, 8.0)
+    return float(np.clip(base - depth_penalty + vol_bonus + width_bonus, 0, 100))
+
+
+def detect_flat_base_signals(
+    frame: pd.DataFrame,
+    *,
+    smoothed: pd.Series,
+    extrema: Iterable[LocalExtrema],
+    config: PatternScanConfig,
+    recent_only: bool = True,
+) -> tuple[list[PatternSignal], PatternScanStats]:
+    """Detect bullish flat base patterns.
+
+    Flat Base = tight price range (max depth 15%) over 25-65 bars.
+    """
+    highs = frame["high"].to_numpy(float)
+    lows = frame["low"].to_numpy(float)
+    vrat = frame["volume_ratio_20"].to_numpy(float)
+    n = len(highs)
+    signals: list[PatternSignal] = []
+    candidates = 0
+    confirmed = 0
+    watchlist = 0
+    used_signal_ids: set[str] = set()
+
+    min_bars = getattr(config, "flat_base_min_bars", 25)
+    max_bars = getattr(config, "flat_base_max_bars", 65)
+    max_depth = getattr(config, "flat_base_max_depth_pct", 0.15)
+
+    for end in range(min_bars, n):
+        for span in range(min_bars, min(max_bars + 1, end + 1)):
+            start = end - span
+            wh = highs[start:end + 1].max()
+            wl = lows[start:end + 1].min()
+            depth = (wh - wl) / max(wh, 1e-9)
+            if depth > max_depth:
+                continue
+
+            mid = start + span // 2
+            if vrat[mid:end + 1].mean() >= vrat[start:mid].mean():
+                continue
+
+            candidates += 1
+            pivot = wh
+            invalidation = wl
+
+            breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+                frame, start_idx=end, resistance_level=pivot, config=config
+            )
+
+            left_volume = float(frame.iloc[max(0, start - 5) : start]["volume_ratio_20"].mean())
+            right_volume = float(frame.iloc[start:end]["volume_ratio_20"].mean())
+            volume_dry_up = right_volume < left_volume
+
+            setup_quality = _flat_base_setup_quality(depth, volume_dry_up, span)
+
+            if breakout_idx is not None and (not recent_only or _recent_enough(breakout_idx, frame, config)):
+                signal = _build_signal(
+                    frame=frame,
+                    pattern_family="flat_base",
+                    pattern_state="confirmed",
+                    signal_idx=breakout_idx,
+                    pattern_start_idx=start,
+                    pattern_end_idx=end,
+                    breakout_level=pivot,
+                    invalidation_price=invalidation,
+                    setup_quality=setup_quality,
+                    pivot_labels=("base_start", "base_end"),
+                    pivot_indices=(start, end),
+                    pivot_prices=(float(smoothed.iloc[start]), float(smoothed.iloc[end])),
+                    config=config,
+                    volume_dry_up=volume_dry_up,
+                    breakout_volume_ratio=breakout_volume_ratio,
+                    width_bars=span,
+                )
+                if signal.signal_id not in used_signal_ids:
+                    used_signal_ids.add(signal.signal_id)
+                    signals.append(signal)
+                    confirmed += 1
+                break
+
+            if not _recent_enough(end, frame, config):
+                continue
+            latest_close = float(frame.iloc[-1]["close"])
+            if latest_close <= pivot and latest_close >= pivot * 0.97:
+                signal = _build_signal(
+                    frame=frame,
+                    pattern_family="flat_base",
+                    pattern_state="watchlist",
+                    signal_idx=len(frame) - 1,
+                    pattern_start_idx=start,
+                    pattern_end_idx=end,
+                    breakout_level=pivot,
+                    invalidation_price=invalidation,
+                    setup_quality=setup_quality - 10.0,
+                    pivot_labels=("base_start", "base_end"),
+                    pivot_indices=(start, end),
+                    pivot_prices=(float(smoothed.iloc[start]), float(smoothed.iloc[end])),
+                    config=config,
+                    volume_dry_up=volume_dry_up,
+                    breakout_volume_ratio=_latest_watchlist_volume(frame),
+                    width_bars=span,
+                )
+                if signal.signal_id not in used_signal_ids:
+                    used_signal_ids.add(signal.signal_id)
+                    signals.append(signal)
+                    watchlist += 1
+                break
+
+    return signals, PatternScanStats("flat_base", candidates, confirmed, watchlist)
+
+
+def _3wt_setup_quality(tight_pct: float, prior_adv: float, volume_dry_up: bool) -> float:
+    base = 52.0
+    tightness_bonus = min((0.015 - tight_pct) * 2000.0, 15.0) if tight_pct < 0.015 else 0.0
+    adv_bonus = min((prior_adv - 0.20) * 50.0, 10.0) if prior_adv > 0.20 else 0.0
+    vol_bonus = 8.0 if volume_dry_up else 0.0
+    return float(np.clip(base + tightness_bonus + adv_bonus + vol_bonus, 0, 100))
+
+
+def detect_3wt_signals(
+    frame: pd.DataFrame,
+    *,
+    smoothed: pd.Series,
+    extrema: Iterable[LocalExtrema],
+    config: PatternScanConfig,
+    recent_only: bool = True,
+) -> tuple[list[PatternSignal], PatternScanStats]:
+    """Detect bullish 3-Weeks-Tight (3WT) patterns.
+
+    3WT = last 3 'weekly' (5-bar) closing prices within a tight range (default 1.5%)
+    following a significant prior advance (default ≥ 20%).
+    """
+    closes = frame["close"].to_numpy(float)
+    n = len(closes)
+    signals: list[PatternSignal] = []
+    candidates = 0
+    confirmed = 0
+    watchlist = 0
+    used_signal_ids: set[str] = set()
+
+    tight_pct = getattr(config, "wt3_tight_pct", 0.015)
+    prior_adv = getattr(config, "wt3_prior_adv", 0.20)
+    weeks = 3
+    step = 5  # 5 bars ≈ 1 trading week
+
+    if n < weeks * step + 20:
+        return signals, PatternScanStats("three_weeks_tight", 0, 0, 0)
+
+    for end in range(weeks * step, n):
+        # Weekly close proxies: one close per 'week' at positions end, end-5, end-10
+        w_closes = [closes[end - i * step] for i in range(weeks)]  # newest first
+        w_max = max(w_closes)
+        w_min = min(w_closes)
+        if w_max < 1e-9:
+            continue
+        tightness = (w_max - w_min) / w_max
+        if tightness > tight_pct:
+            continue
+
+        # Prior advance: from ~20 bars before the base start to the start of the 3WT
+        base_start = end - weeks * step
+        prior_start = max(0, base_start - 20)
+        if closes[prior_start] < 1e-9:
+            continue
+        adv = (closes[base_start] - closes[prior_start]) / closes[prior_start]
+        if adv < prior_adv:
+            continue
+
+        candidates += 1
+        pivot = float(frame.iloc[base_start : end + 1]["high"].max())
+        invalidation = float(w_closes[-1]) * 0.97  # 3% below oldest weekly close
+
+        # Volume: check if volume is drying up in the base vs prior period
+        vrat = frame.get("volume_ratio_20")
+        volume_dry_up = False
+        if vrat is not None and hasattr(vrat, "iloc"):
+            base_vol = float(pd.to_numeric(vrat.iloc[base_start : end + 1], errors="coerce").mean())
+            prior_vol = float(pd.to_numeric(vrat.iloc[prior_start : base_start], errors="coerce").mean())
+            volume_dry_up = (base_vol < prior_vol) if (not np.isnan(base_vol) and not np.isnan(prior_vol)) else False
+
+        setup_quality = _3wt_setup_quality(tightness, adv, volume_dry_up)
+
+        breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+            frame, start_idx=end, resistance_level=pivot, config=config
+        )
+
+        pivot_prices = (
+            float(smoothed.iloc[base_start]),
+            float(smoothed.iloc[end]),
+        )
+        pivot_indices = (base_start, end)
+
+        if breakout_idx is not None and (not recent_only or _recent_enough(breakout_idx, frame, config)):
+            signal = _build_signal(
+                frame=frame,
+                pattern_family="three_weeks_tight",
+                pattern_state="confirmed",
+                signal_idx=breakout_idx,
+                pattern_start_idx=base_start,
+                pattern_end_idx=end,
+                breakout_level=pivot,
+                invalidation_price=invalidation,
+                setup_quality=setup_quality,
+                pivot_labels=("base_start", "base_end"),
+                pivot_indices=pivot_indices,
+                pivot_prices=pivot_prices,
+                config=config,
+                volume_dry_up=volume_dry_up,
+                breakout_volume_ratio=breakout_volume_ratio,
+                width_bars=weeks * step,
+            )
+            if signal.signal_id not in used_signal_ids:
+                used_signal_ids.add(signal.signal_id)
+                signals.append(signal)
+                confirmed += 1
+            continue
+
+        if not _recent_enough(end, frame, config):
+            continue
+        latest_close = float(frame.iloc[-1]["close"])
+        if latest_close <= pivot and latest_close >= pivot * (1 - getattr(config, "cup_watchlist_buffer_pct", 0.03)):
+            signal = _build_signal(
+                frame=frame,
+                pattern_family="three_weeks_tight",
+                pattern_state="watchlist",
+                signal_idx=len(frame) - 1,
+                pattern_start_idx=base_start,
+                pattern_end_idx=end,
+                breakout_level=pivot,
+                invalidation_price=invalidation,
+                setup_quality=setup_quality - 10.0,
+                pivot_labels=("base_start", "base_end"),
+                pivot_indices=pivot_indices,
+                pivot_prices=pivot_prices,
+                config=config,
+                volume_dry_up=volume_dry_up,
+                breakout_volume_ratio=_latest_watchlist_volume(frame),
+                width_bars=weeks * step,
+            )
+            if signal.signal_id not in used_signal_ids:
+                used_signal_ids.add(signal.signal_id)
+                signals.append(signal)
+                watchlist += 1
+
+    return signals, PatternScanStats("three_weeks_tight", candidates, confirmed, watchlist)
+
+
+def _sym_tri_setup_quality(peak_drop_pct: float, trough_rise_pct: float, volume_dry_up: bool, width: int) -> float:
+    base = 45.0
+    conv_bonus = min((peak_drop_pct + trough_rise_pct) * 50.0, 15.0)
+    vol_bonus = 8.0 if volume_dry_up else 0.0
+    width_penalty = max(0, (width - 40) * 0.2)
+    return float(np.clip(base + conv_bonus + vol_bonus - width_penalty, 0, 100))
+
+
+def detect_symmetrical_triangle_signals(
+    frame: pd.DataFrame,
+    *,
+    smoothed: pd.Series,
+    extrema: Iterable[LocalExtrema],
+    config: PatternScanConfig,
+    recent_only: bool = True,
+) -> tuple[list[PatternSignal], PatternScanStats]:
+    """Detect bullish symmetrical triangle patterns.
+
+    Symmetrical Triangle = descending peaks + ascending troughs converging.
+    Only emits BULLISH breakouts (close > upper line with volume).
+    """
+    extrema_list = list(extrema)
+    peaks = [e for e in extrema_list if e.kind == "peak"]
+    troughs = [e for e in extrema_list if e.kind == "trough"]
+
+    signals: list[PatternSignal] = []
+    candidates = 0
+    confirmed = 0
+    watchlist = 0
+    used_signal_ids: set[str] = set()
+
+    for i in range(len(peaks) - 1):
+        p1, p2 = peaks[i], peaks[i + 1]
+        if p2.index <= p1.index + 15:
+            continue
+
+        p1_price = float(smoothed.iloc[p1.index])
+        p2_price = float(smoothed.iloc[p2.index])
+
+        # Descending peaks required
+        if p2_price >= p1_price:
+            continue
+
+        # Find inner troughs between p1 and p2
+        inner_troughs = [t for t in troughs if p1.index < t.index < p2.index]
+        if len(inner_troughs) < 2:
+            continue
+
+        t1, t2 = inner_troughs[0], inner_troughs[-1]
+        t1_price = float(smoothed.iloc[t1.index])
+        t2_price = float(smoothed.iloc[t2.index])
+
+        # Ascending troughs required
+        if t2_price <= t1_price:
+            continue
+
+        width = p2.index - p1.index
+        if width < 15 or width > 80:
+            continue
+
+        # Convergence check: upper line at p2 must still be above lower line at t2
+        if p2_price <= t2_price:
+            continue
+
+        candidates += 1
+        # Upper resistance is the smoothed price at p2 (the lower peak)
+        resistance_level = float(frame.iloc[p1.index : p2.index + 1]["high"].max())
+        # Invalidation: below the last trough
+        invalidation = float(t2_price) * 0.98
+
+        # Volume contraction check
+        left_vol = float(pd.to_numeric(
+            frame.get("volume_ratio_20", pd.Series(dtype=float)).iloc[max(0, p1.index - 5) : p1.index],
+            errors="coerce",
+        ).mean()) if "volume_ratio_20" in frame.columns else 1.0
+        right_vol = float(pd.to_numeric(
+            frame.get("volume_ratio_20", pd.Series(dtype=float)).iloc[p2.index : min(len(frame), p2.index + 5)],
+            errors="coerce",
+        ).mean()) if "volume_ratio_20" in frame.columns else 1.0
+        volume_dry_up = right_vol < left_vol
+
+        peak_drop_pct = (p1_price - p2_price) / max(p1_price, 1e-9)
+        trough_rise_pct = (t2_price - t1_price) / max(t1_price, 1e-9)
+        setup_quality = _sym_tri_setup_quality(peak_drop_pct, trough_rise_pct, volume_dry_up, width)
+
+        breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+            frame, start_idx=p2.index, resistance_level=resistance_level, config=config
+        )
+
+        pivot_prices = (p1_price, t1_price, t2_price, p2_price)
+        pivot_indices = (p1.index, t1.index, t2.index, p2.index)
+
+        if breakout_idx is not None and (not recent_only or _recent_enough(breakout_idx, frame, config)):
+            signal = _build_signal(
+                frame=frame,
+                pattern_family="symmetrical_triangle",
+                pattern_state="confirmed",
+                signal_idx=breakout_idx,
+                pattern_start_idx=p1.index,
+                pattern_end_idx=p2.index,
+                breakout_level=resistance_level,
+                invalidation_price=invalidation,
+                setup_quality=setup_quality,
+                pivot_labels=("upper_peak_1", "lower_trough_1", "upper_trough_2", "upper_peak_2"),
+                pivot_indices=pivot_indices,
+                pivot_prices=pivot_prices,
+                config=config,
+                volume_dry_up=volume_dry_up,
+                breakout_volume_ratio=breakout_volume_ratio,
+                width_bars=width,
+            )
+            if signal.signal_id not in used_signal_ids:
+                used_signal_ids.add(signal.signal_id)
+                signals.append(signal)
+                confirmed += 1
+            continue
+
+        if not _recent_enough(p2.index, frame, config):
+            continue
+        latest_close = float(frame.iloc[-1]["close"])
+        buffer = getattr(config, "cup_watchlist_buffer_pct", 0.03)
+        if latest_close <= resistance_level and latest_close >= resistance_level * (1 - buffer):
+            signal = _build_signal(
+                frame=frame,
+                pattern_family="symmetrical_triangle",
+                pattern_state="watchlist",
+                signal_idx=len(frame) - 1,
+                pattern_start_idx=p1.index,
+                pattern_end_idx=p2.index,
+                breakout_level=resistance_level,
+                invalidation_price=invalidation,
+                setup_quality=setup_quality - 10.0,
+                pivot_labels=("upper_peak_1", "lower_trough_1", "upper_trough_2", "upper_peak_2"),
+                pivot_indices=pivot_indices,
+                pivot_prices=pivot_prices,
+                config=config,
+                volume_dry_up=volume_dry_up,
+                breakout_volume_ratio=_latest_watchlist_volume(frame),
+                width_bars=width,
+            )
+            if signal.signal_id not in used_signal_ids:
+                used_signal_ids.add(signal.signal_id)
+                signals.append(signal)
+                watchlist += 1
+
+    return signals, PatternScanStats("symmetrical_triangle", candidates, confirmed, watchlist)
+
+
+def detect_head_shoulders_filter(
+    frame: pd.DataFrame,
+    *,
+    smoothed: pd.Series,
+    extrema: Iterable[LocalExtrema],
+    config: PatternScanConfig,
+) -> tuple[bool, float]:
+    """Return (is_hs_top, neckline_price). Pure detection — no signal objects.
+
+    H&S top = three consecutive peaks where the middle ('head') is strictly
+    taller than both shoulders (ls, rs), shoulders within 5% of each other,
+    and latest close has broken the neckline (< neckline * 0.99).
+    """
+    extrema_list = list(extrema)
+    peaks = [e for e in extrema_list if e.kind == "peak"]
+    troughs = [e for e in extrema_list if e.kind == "trough"]
+
+    for i in range(len(peaks) - 2):
+        ls, head, rs = peaks[i], peaks[i + 1], peaks[i + 2]
+
+        ls_px = float(smoothed.iloc[ls.index])
+        head_px = float(smoothed.iloc[head.index])
+        rs_px = float(smoothed.iloc[rs.index])
+
+        # Head must be clearly above both shoulders
+        if head_px <= ls_px * 1.03 or head_px <= rs_px * 1.03:
+            continue
+
+        # Shoulders should be roughly balanced (within 5%)
+        if abs(ls_px - rs_px) / max(ls_px, 1e-9) > 0.05:
+            continue
+
+        # Find troughs between ls→head and head→rs
+        t1_candidates = [t for t in troughs if ls.index < t.index < head.index]
+        t2_candidates = [t for t in troughs if head.index < t.index < rs.index]
+        if not t1_candidates or not t2_candidates:
+            continue
+
+        t1 = t1_candidates[-1]  # trough closest to head on the left
+        t2 = t2_candidates[0]   # trough closest to head on the right
+        neckline = (float(smoothed.iloc[t1.index]) + float(smoothed.iloc[t2.index])) / 2.0
+
+        # Confirmed breakdown: latest close below neckline
+        latest_close = float(frame.iloc[-1]["close"])
+        if latest_close < neckline * 0.99:
+            return True, float(neckline)
+
+    return False, 0.0
 
 
 def detect_cup_handle_events(
@@ -896,21 +1695,55 @@ def detect_pattern_signals_for_symbol(
     extrema: Iterable[LocalExtrema],
     config: PatternScanConfig,
 ) -> tuple[pd.DataFrame, dict[str, PatternScanStats]]:
-    """Return all bullish pattern signals for one ordered symbol frame."""
+    """Return all bullish pattern signals for one ordered symbol frame.
 
-    detectors = [
+    Applies the Head & Shoulders exclusion filter last: if an H&S top is
+    detected and the latest close has broken the neckline, all bullish signals
+    for this symbol are dropped.
+    """
+    # --- H&S exclusion check (run first so we can skip expensive detectors) ---
+    extrema_list = list(extrema)  # materialise once; passed to all detectors
+    is_hs, _neckline = detect_head_shoulders_filter(
+        frame, smoothed=smoothed, extrema=extrema_list, config=config
+    )
+    if is_hs:
+        # Symbol is in confirmed bearish H&S breakdown — return no bullish signals
+        hs_stats: dict[str, PatternScanStats] = {
+            "head_shoulders": PatternScanStats("head_shoulders", 1, 1, 0)
+        }
+        return pd.DataFrame(), hs_stats
+
+    # --- Smoothed-extrema detectors ---
+    se_detectors = [
         detect_cup_handle_signals,
         detect_round_bottom_signals,
         detect_double_bottom_signals,
-        detect_flag_signals,
+        lambda *args, **kwargs: detect_flag_signals(*args, **kwargs, high_tight_only=False),
         lambda *args, **kwargs: detect_flag_signals(*args, **kwargs, high_tight_only=True),
+        detect_ascending_triangle_signals,
+        detect_symmetrical_triangle_signals,
     ]
+
+    # --- Frame-only detectors (no smoothed/extrema needed) ---
+    fo_detectors = [
+        detect_vcp_signals,
+        detect_flat_base_signals,
+        detect_3wt_signals,
+    ]
+
     rows: list[dict[str, object]] = []
     stats: dict[str, PatternScanStats] = {}
-    for detector in detectors:
-        signals, detector_stats = detector(frame, smoothed=smoothed, extrema=extrema, config=config)
+
+    for detector in se_detectors:
+        signals, detector_stats = detector(frame, smoothed=smoothed, extrema=extrema_list, config=config)
         stats[detector_stats.pattern_type] = detector_stats
         rows.extend(signal.to_record() for signal in signals)
+
+    for detector in fo_detectors:
+        signals, detector_stats = detector(frame, smoothed=smoothed, extrema=extrema_list, config=config)
+        stats[detector_stats.pattern_type] = detector_stats
+        rows.extend(signal.to_record() for signal in signals)
+
     if not rows:
         return pd.DataFrame(), stats
     signals_df = pd.DataFrame(rows).drop_duplicates(subset=["signal_id"]).reset_index(drop=True)

@@ -27,7 +27,8 @@ def _records(frame: pd.DataFrame, *, limit: Optional[int] = None) -> list[dict[s
     display = display.where(pd.notnull(display), None)
     for column in display.columns:
         if pd.api.types.is_datetime64_any_dtype(display[column]):
-            display[column] = pd.to_datetime(display[column], errors="coerce").astype(str)
+            display = display.astype({column: "object"})
+            display.loc[:, column] = pd.to_datetime(display[column], errors="coerce").astype(str)
     return display.to_dict(orient="records")
 
 

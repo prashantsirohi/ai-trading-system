@@ -20,8 +20,8 @@ import duckdb
 from collectors.repair_ohlcv_window import repair_window
 from core.env import load_project_env
 from run.stages import IngestStage
-from run.stages.base import StageContext
-from core.paths import ensure_domain_layout
+from ai_trading_system.pipeline.contracts import StageContext
+from ai_trading_system.platform.db.paths import ensure_domain_layout
 
 
 def _window_summary(db_path: Path, exchange: str, from_date: str, to_date: str) -> dict[str, Any]:
@@ -36,7 +36,7 @@ def _window_summary(db_path: Path, exchange: str, from_date: str, to_date: str) 
                 MAX(timestamp) AS max_ts
             FROM _catalog
             WHERE exchange = ?
-              AND CAST(timestamp AS DATE) BETWEEN ? AND ?
+              AND CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             """,
             [exchange, from_date, to_date],
         ).fetchone()
@@ -65,7 +65,7 @@ def _backup_window(
             SELECT *
             FROM _catalog
             WHERE exchange = ?
-              AND CAST(timestamp AS DATE) BETWEEN ? AND ?
+              AND CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             ORDER BY symbol_id, timestamp
             """,
             [exchange, from_date, to_date],
@@ -84,7 +84,7 @@ def _delete_window(*, db_path: Path, exchange: str, from_date: str, to_date: str
             """
             DELETE FROM _catalog
             WHERE exchange = ?
-              AND CAST(timestamp AS DATE) BETWEEN ? AND ?
+              AND CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             RETURNING 1
             """,
             [exchange, from_date, to_date],

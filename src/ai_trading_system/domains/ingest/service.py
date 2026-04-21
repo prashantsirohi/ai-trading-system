@@ -11,8 +11,10 @@ from typing import Callable, Dict, Optional
 import pandas as pd
 
 from ai_trading_system.domains.ingest.repository import fetch_catalog_close_frame, fetch_catalog_summary
+from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.pipeline.contracts import DataQualityCriticalError, StageArtifact, StageContext, StageResult
+from core.symbol_master import SymbolMaster
 
 
 class IngestOrchestrationService:
@@ -50,6 +52,8 @@ class IngestOrchestrationService:
                 canary_symbol_limit=context.params.get("canary_symbol_limit"),
                 data_domain=context.params.get("data_domain", "operational"),
                 run_id=context.run_id,
+                stale_missing_symbol_grace_days=int(context.params.get("stale_missing_symbol_grace_days", 3)),
+                nse_allow_yfinance_fallback=bool(context.params.get("nse_allow_yfinance_fallback", False)),
             )
 
         catalog_rows, symbol_count, latest_ts = fetch_catalog_summary(context.db_path)
@@ -179,15 +183,16 @@ class IngestOrchestrationService:
         mismatch_rows = 0
         mismatch_sample: list[dict[str, object]] = []
         if not merged.empty:
-            merged["close_catalog"] = pd.to_numeric(merged["close_catalog"], errors="coerce")
-            merged["close_bhavcopy"] = pd.to_numeric(merged["close_bhavcopy"], errors="coerce")
+            merged = merged.copy(deep=True)
+            merged.loc[:, "close_catalog"] = pd.to_numeric(merged["close_catalog"], errors="coerce")
+            merged.loc[:, "close_bhavcopy"] = pd.to_numeric(merged["close_bhavcopy"], errors="coerce")
             merged = merged.dropna(subset=["close_catalog", "close_bhavcopy"])
         compared_rows = int(len(merged))
         coverage_ratio = (compared_rows / expected_rows) if expected_rows else 0.0
         if not merged.empty:
             ref_abs = merged["close_bhavcopy"].abs().replace(0, pd.NA)
-            merged["abs_pct_diff"] = (merged["close_catalog"] - merged["close_bhavcopy"]).abs() / ref_abs
-            merged["abs_pct_diff"] = merged["abs_pct_diff"].fillna(0.0)
+            merged.loc[:, "abs_pct_diff"] = (merged["close_catalog"] - merged["close_bhavcopy"]).abs() / ref_abs
+            merged.loc[:, "abs_pct_diff"] = merged["abs_pct_diff"].fillna(0.0)
             mismatch_mask = (
                 merged["close_catalog"].round(4) != merged["close_bhavcopy"].round(4)
             ) & (merged["abs_pct_diff"] >= tolerance_pct)
@@ -255,7 +260,7 @@ class IngestOrchestrationService:
         validation_date: str,
         symbol_ids: list[str],
     ) -> tuple[pd.DataFrame, str]:
-        source_mode = str(context.params.get("bhavcopy_validation_source", "auto") or "auto").strip().lower()
+        source_mode = str(context.params.get("bhavcopy_validation_source", "bhavcopy") or "bhavcopy").strip().lower()
         if source_mode not in {"auto", "bhavcopy", "yfinance"}:
             raise DataQualityCriticalError(
                 f"Invalid bhavcopy_validation_source '{source_mode}'. Expected auto|bhavcopy|yfinance."
@@ -310,7 +315,7 @@ class IngestOrchestrationService:
         if raw_df is None or raw_df.empty:
             return pd.DataFrame(columns=["symbol_id", "close_bhavcopy"]), source_label
 
-        frame = raw_df.copy()
+        frame = raw_df.copy(deep=True)
         frame.columns = [
             str(column).replace("\ufeff", "").strip().upper().replace(" ", "_")
             for column in frame.columns
@@ -328,11 +333,53 @@ class IngestOrchestrationService:
             )
         if series_col:
             frame = frame[frame[series_col].astype(str).str.strip().str.upper().eq("EQ")]
-        frame = frame[[symbol_col, close_col]].copy()
-        frame.columns = ["symbol_id", "close_bhavcopy"]
-        frame["symbol_id"] = frame["symbol_id"].astype(str).str.strip()
-        frame["close_bhavcopy"] = pd.to_numeric(frame["close_bhavcopy"], errors="coerce")
-        frame = frame.dropna(subset=["symbol_id", "close_bhavcopy"])
+        isin_col = "ISIN" if "ISIN" in frame.columns else None
+        symbol_master = SymbolMaster.from_masterdb(
+            str(
+                ensure_domain_layout(
+                    project_root=context.project_root,
+                    data_domain=context.params.get("data_domain", "operational"),
+                ).master_db_path
+            )
+        )
+        symbol_map: dict[str, dict[str, str]] = {}
+        isin_map: dict[str, dict[str, str]] = {}
+        if not symbol_master.frame.empty:
+            for row in symbol_master.frame.itertuples(index=False):
+                symbol = str(getattr(row, "symbol", "") or "").strip().upper()
+                canonical = str(getattr(row, "canonical_symbol", "") or "").strip().upper()
+                isin = str(getattr(row, "isin", "") or "").strip().upper()
+                if not canonical:
+                    continue
+                record = {"symbol_id": canonical, "isin": isin}
+                if symbol:
+                    symbol_map[symbol] = record
+                symbol_map[canonical] = record
+                if isin:
+                    isin_map[isin] = record
+
+        keep_cols = [symbol_col, close_col]
+        if isin_col:
+            keep_cols.append(isin_col)
+        frame = frame[keep_cols].copy()
+        frame.columns = ["symbol_raw", "close_bhavcopy"] + (["isin"] if isin_col else [])
+        frame.loc[:, "symbol_raw"] = frame["symbol_raw"].astype(str).str.strip().str.upper()
+        if "isin" in frame.columns:
+            frame.loc[:, "isin"] = frame["isin"].astype(str).str.strip().str.upper()
+        else:
+            frame.loc[:, "isin"] = ""
+        frame.loc[:, "symbol_id"] = frame.apply(
+            lambda row: str(
+                (
+                    isin_map.get(str(row.get("isin", "")))
+                    or symbol_map.get(str(row.get("symbol_raw", "")))
+                    or {"symbol_id": str(row.get("symbol_raw", ""))}
+                ).get("symbol_id", "")
+            ),
+            axis=1,
+        )
+        frame.loc[:, "close_bhavcopy"] = pd.to_numeric(frame["close_bhavcopy"], errors="coerce")
+        frame = frame[(frame["symbol_id"].astype(str).str.strip() != "") & frame["close_bhavcopy"].notna()]
         return frame.drop_duplicates("symbol_id", keep="last"), source_label
 
     def load_yfinance_close_frame(self, *, validation_date: str, symbol_ids: list[str]) -> tuple[pd.DataFrame, str]:

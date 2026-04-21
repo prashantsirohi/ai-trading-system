@@ -1253,7 +1253,7 @@ class RegistryStore:
             where_sql = "WHERE run_id = ?"
             params: list[Any] = [run_id]
             if started_after is not None:
-                where_sql += " AND started_at >= ?"
+                where_sql += " AND started_at >= CAST(? AS TIMESTAMP)"
                 params.append(started_after)
             rows = conn.execute(
                 f"""
@@ -1317,7 +1317,7 @@ class RegistryStore:
                 """
                 INSERT OR REPLACE INTO operator_task
                 (task_id, task_type, label, status, started_at, finished_at, result_json, error, metadata_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), NULL, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, COALESCE(CAST(? AS TIMESTAMP), CURRENT_TIMESTAMP), NULL, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 [
                     task_id,
@@ -1745,7 +1745,7 @@ class RegistryStore:
             clauses.append("horizon = ?")
             params.append(int(horizon))
         if prediction_date is not None:
-            clauses.append("prediction_date <= ?")
+            clauses.append("prediction_date <= CAST(? AS DATE)")
             params.append(prediction_date)
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._reader() as conn:
@@ -1833,7 +1833,7 @@ class RegistryStore:
         lookback_days: int = 60,
         as_of_date: Optional[str] = None,
     ) -> Dict[str, Any]:
-        as_of_sql = "COALESCE(?, CURRENT_DATE)"
+        as_of_sql = "COALESCE(CAST(? AS DATE), CURRENT_DATE)"
         with self._reader() as conn:
             row = conn.execute(
                 f"""

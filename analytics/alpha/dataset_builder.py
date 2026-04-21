@@ -14,8 +14,8 @@ import pandas as pd
 
 from analytics.alpha.feature_schema import DEFAULT_FEATURE_SCHEMA, FeatureSchema
 from analytics.alpha.labeling import TargetSpec
-from core.paths import ensure_domain_layout
-from core.logging import logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
 
 
 @dataclass(frozen=True)

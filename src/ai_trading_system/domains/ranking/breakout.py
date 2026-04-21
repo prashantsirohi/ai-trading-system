@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from analytics.regime_detector import RegimeDetector
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 def _load_sector_map(master_db_path: str) -> dict[str, str]:
@@ -19,12 +19,15 @@ def _load_sector_map(master_db_path: str) -> dict[str, str]:
         return {}
     conn = sqlite3.connect(master_db_path)
     try:
-        rows = conn.execute(
-            "SELECT Symbol, Sector FROM stock_details WHERE Symbol IS NOT NULL"
-        ).fetchall()
+        rows = conn.execute("""
+            SELECT s.symbol_id, COALESCE(sm.system_sector, 'Other')
+            FROM symbols s
+            LEFT JOIN sector_mapping sm ON s.sector = sm.industry
+            WHERE s.exchange = 'NSE'
+        """).fetchall()
     finally:
         conn.close()
-    return {symbol: sector for symbol, sector in rows if sector}
+    return {symbol: sector for symbol, sector in rows}
 
 
 def _load_supertrend_flags(
@@ -58,7 +61,7 @@ def _load_supertrend_flags(
             )
         except Exception:
             continue
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df.loc[:, "timestamp"] = pd.to_datetime(df["timestamp"])
         df = df[df["timestamp"] <= cutoff]
         if df.empty:
             continue
@@ -128,12 +131,12 @@ def _prepare_rank_context(ranked_df: Optional[pd.DataFrame]) -> pd.DataFrame:
 
     cols = [col for col in ["symbol_id", "rel_strength_score", "sector_rs_value"] if col in ranked_df.columns]
     ctx = ranked_df[cols].copy()
-    ctx["symbol_id"] = ctx["symbol_id"].astype(str)
+    ctx.loc[:, "symbol_id"] = ctx["symbol_id"].astype(str)
     if "rel_strength_score" not in ctx.columns:
-        ctx["rel_strength_score"] = np.nan
+        ctx.loc[:, "rel_strength_score"] = np.nan
     if "sector_rs_value" not in ctx.columns:
-        ctx["sector_rs_value"] = np.nan
-    ctx["sector_rs_percentile"] = (
+        ctx.loc[:, "sector_rs_value"] = np.nan
+    ctx.loc[:, "sector_rs_percentile"] = (
         pd.to_numeric(ctx["sector_rs_value"], errors="coerce").rank(pct=True, method="average") * 100.0
     )
     return ctx.drop_duplicates("symbol_id", keep="first")
@@ -166,7 +169,7 @@ def compute_breakout_v2_scores(
     breadth_score = float(breadth_score or 0.0)
 
     # v2 score contract (kept separate from the main composite rank).
-    df["breakout_score"] = (
+    df.loc[:, "breakout_score"] = (
         _as_bool_series(df, "is_resistance_breakout_50d").astype(int) * 1
         + _as_bool_series(df, "is_high_52w_breakout").astype(int) * 2
         + _as_bool_series(df, "is_consolidation_breakout").astype(int) * 2
@@ -175,9 +178,9 @@ def compute_breakout_v2_scores(
     )
 
     if "setup_quality" not in df.columns:
-        df["setup_quality"] = np.nan
-    df["setup_quality"] = pd.to_numeric(df["setup_quality"], errors="coerce")
-    df["setup_quality"] = df["setup_quality"].fillna(
+        df.loc[:, "setup_quality"] = np.nan
+    df.loc[:, "setup_quality"] = pd.to_numeric(df["setup_quality"], errors="coerce")
+    df.loc[:, "setup_quality"] = df["setup_quality"].fillna(
         df["breakout_score"] * 20.0
         + _to_float_series(df, "volume_ratio", default=0.0).fillna(0.0).clip(0, 4) * 8.0
         + _to_float_series(df, "adx_14", default=0.0).fillna(0.0).clip(0, 60) * 0.4
@@ -219,17 +222,36 @@ def compute_breakout_v2_scores(
         near_52w_high_pct <= float(breakout_symbol_near_high_max_pct)
     ).where(near_52w_high_pct.notna(), True).fillna(True).astype(bool)
 
-    pass_count = (
-        above_sma200.astype(int)
-        + sma50_slope_positive.astype(int)
-        + near_52w_high_ok.astype(int)
-    )
-    fail_count = 3 - pass_count
-    candidate_tier = np.select(
-        [fail_count == 0, fail_count == 1],
-        ["A", "B"],
-        default="C",
-    )
+    # ── Tier computation — Stage 2 score drives tiering when available ──────
+    # Sprint 2: if stage2_score is present for ≥50% of rows, use it as the
+    # single authoritative trend gate.  Otherwise fall back to the 3-condition
+    # pass_count so the system degrades gracefully before Stage 2 is populated.
+    s2_score = _to_float_series(df, "stage2_score")
+    stage2_available = s2_score.notna().sum() > len(df) * 0.5
+
+    if stage2_available:
+        # Stage 2-driven tiering: A=strong, B=standard, C=transitional, D=excluded
+        candidate_tier = np.select(
+            [s2_score >= 85.0, s2_score >= 70.0, s2_score >= 50.0],
+            ["A", "B", "C"],
+            default="D",  # non_stage2 — filtered by symbol trend
+        )
+        pass_count = (s2_score.fillna(0.0) / 25.0).clip(0, 3).round().astype(int)
+        fail_count = 3 - pass_count
+    else:
+        # Legacy fallback: 3-condition pass_count (unchanged)
+        pass_count = (
+            above_sma200.astype(int)
+            + sma50_slope_positive.astype(int)
+            + near_52w_high_ok.astype(int)
+        )
+        fail_count = 3 - pass_count
+        candidate_tier = np.select(
+            [fail_count == 0, fail_count == 1],
+            ["A", "B"],
+            default="C",
+        )
+
     if not breakout_symbol_trend_gate_enabled:
         pass_count = pd.Series(3, index=df.index)
         fail_count = pd.Series(0, index=df.index)
@@ -261,43 +283,65 @@ def compute_breakout_v2_scores(
         return ",".join(reasons)
 
     filtered_by_regime = ~all_regime_gates_ok
+    tier_series = pd.Series(candidate_tier, index=df.index)
     if breakout_symbol_trend_gate_enabled:
-        filtered_by_symbol_trend = (~filtered_by_regime) & (pd.Series(candidate_tier, index=df.index) == "C")
+        # Tier C = legacy near-miss; Tier D = Stage 2 excluded (only when stage2_available)
+        filtered_by_symbol_trend = (~filtered_by_regime) & (
+            (tier_series == "C") | (stage2_available & (tier_series == "D"))
+        )
     else:
         filtered_by_symbol_trend = pd.Series(False, index=df.index)
+
+    # Pre-fetch stage2_fail_reason for explainable rejection reasons
+    stage2_fail_reason_col = df.get("stage2_fail_reason", pd.Series("", index=df.index)).fillna("")
 
     states: list[str] = []
     reasons: list[str] = []
     for i in range(len(df)):
+        tier_i = candidate_tier[i]
         if bool(filtered_by_regime.iloc[i]):
             states.append("filtered_by_regime")
             reasons.append(_regime_reasons(i))
         elif bool(filtered_by_symbol_trend.iloc[i]):
             states.append("filtered_by_symbol_trend")
-            reasons.append(trend_negative_reasons[i])
-        elif candidate_tier[i] == "A":
+            # Use stage2_fail_reason when Stage 2 is powering the exclusion
+            if stage2_available and tier_i == "D":
+                reasons.append(str(stage2_fail_reason_col.iloc[i]) or "non_stage2")
+            else:
+                reasons.append(trend_negative_reasons[i])
+        elif tier_i == "A":
             states.append("qualified")
             reasons.append("")
         else:
             states.append("watchlist")
             reasons.append(trend_negative_reasons[i] or "score_below_qualified_threshold")
 
-    df["breakout_detected"] = True
-    df["filtered_by_regime"] = filtered_by_regime.fillna(False).astype(bool)
-    df["filtered_by_symbol_trend"] = filtered_by_symbol_trend.fillna(False).astype(bool)
-    df["above_sma200"] = above_sma200.fillna(False).astype(bool)
-    df["sma50_slope_20d_pct"] = sma50_slope_20d_pct
-    df["symbol_trend_fail_count"] = fail_count.astype(int)
-    df["symbol_trend_score"] = (pass_count / 3.0 * 100.0).round(2)
-    df["symbol_trend_reasons"] = trend_reasons
-    df["candidate_tier"] = candidate_tier
+    df.loc[:, "breakout_detected"] = True
+    df.loc[:, "filtered_by_regime"] = filtered_by_regime.fillna(False).astype(bool)
+    df.loc[:, "filtered_by_symbol_trend"] = filtered_by_symbol_trend.fillna(False).astype(bool)
+    df.loc[:, "above_sma200"] = above_sma200.fillna(False).astype(bool)
+    df.loc[:, "sma50_slope_20d_pct"] = sma50_slope_20d_pct
+    df.loc[:, "symbol_trend_fail_count"] = fail_count.astype(int)
+    df.loc[:, "symbol_trend_score"] = (pass_count / 3.0 * 100.0).round(2)
+    df.loc[:, "symbol_trend_reasons"] = trend_reasons
+    df.loc[:, "candidate_tier"] = candidate_tier
+    # Stage 2 enrichment columns (passthrough when present, else derived)
+    df.loc[:, "stage2_score"] = s2_score
+    df.loc[:, "is_stage2_uptrend"] = s2_score >= 70.0
+    df.loc[:, "stage2_gate_passed"] = s2_score >= 70.0
+    if "stage2_label" not in df.columns:
+        df.loc[:, "stage2_label"] = np.select(
+            [s2_score >= 85.0, s2_score >= 70.0, s2_score >= 50.0],
+            ["strong_stage2", "stage2", "stage1_to_stage2"],
+            default="non_stage2",
+        )
 
-    df["breakout_state"] = states
-    df["filter_reason"] = reasons
-    df["market_bias_allowed"] = bool(market_bias_ok)
-    df["breadth_gate_passed"] = bool(breadth_ok)
-    df["sector_gate_passed"] = sector_gate_ok.fillna(False).astype(bool)
-    df["regime_gate_passed"] = regime_gate_ok.fillna(False).astype(bool)
+    df.loc[:, "breakout_state"] = states
+    df.loc[:, "filter_reason"] = reasons
+    df.loc[:, "market_bias_allowed"] = bool(market_bias_ok)
+    df.loc[:, "breadth_gate_passed"] = bool(breadth_ok)
+    df.loc[:, "sector_gate_passed"] = sector_gate_ok.fillna(False).astype(bool)
+    df.loc[:, "regime_gate_passed"] = regime_gate_ok.fillna(False).astype(bool)
 
     state_priority = {
         "qualified": 0,
@@ -305,8 +349,8 @@ def compute_breakout_v2_scores(
         "filtered_by_symbol_trend": 2,
         "filtered_by_regime": 3,
     }
-    df["state_priority"] = df["breakout_state"].map(state_priority).fillna(9).astype(int)
-    df["breakout_rank"] = (
+    df.loc[:, "state_priority"] = df["breakout_state"].map(state_priority).fillna(9).astype(int)
+    df.loc[:, "breakout_rank"] = (
         df.sort_values(
             ["state_priority", "breakout_score", "setup_quality", "breakout_pct"],
             ascending=[True, False, False, True],
@@ -526,55 +570,55 @@ def scan_breakouts(
     latest = latest.merge(supertrend_df, on="symbol_id", how="left")
 
     sector_map = _load_sector_map(master_db_path)
-    latest["sector"] = latest["symbol_id"].map(sector_map).fillna("Other")
+    latest.loc[:, "sector"] = latest["symbol_id"].map(sector_map).fillna("Other")
 
-    latest["vol_20_avg"] = latest["vol_20_avg"].replace(0, pd.NA)
-    latest["breakout_pct"] = (
+    latest.loc[:, "vol_20_avg"] = latest["vol_20_avg"].replace(0, pd.NA)
+    latest.loc[:, "breakout_pct"] = (
         (latest["close"] - latest["prior_range_high"]) / latest["prior_range_high"].replace(0, pd.NA) * 100
     )
-    latest["range_width_pct"] = (
+    latest.loc[:, "range_width_pct"] = (
         (latest["prior_range_high"] - latest["prior_range_low"]) / latest["prior_range_high"].replace(0, pd.NA) * 100
     )
-    latest["base_width_pct_30"] = (
+    latest.loc[:, "base_width_pct_30"] = (
         (latest["prior_base_high_30"] - latest["prior_base_low_30"]) / latest["prior_base_high_30"].replace(0, pd.NA) * 100
     )
-    latest["base_width_pct_60"] = (
+    latest.loc[:, "base_width_pct_60"] = (
         (latest["prior_base_high_60"] - latest["prior_base_low_60"]) / latest["prior_base_high_60"].replace(0, pd.NA) * 100
     )
-    latest["volume_ratio"] = latest["volume"] / latest["vol_20_avg"]
-    latest["near_52w_high_pct"] = (
+    latest.loc[:, "volume_ratio"] = latest["volume"] / latest["vol_20_avg"]
+    latest.loc[:, "near_52w_high_pct"] = (
         (1 - latest["close"] / latest["high_52w"].replace(0, pd.NA)) * 100
     )
-    latest["atr_pct"] = latest["atr_14"] / latest["close"].replace(0, pd.NA) * 100
-    latest["day_range_pct"] = (
+    latest.loc[:, "atr_pct"] = latest["atr_14"] / latest["close"].replace(0, pd.NA) * 100
+    latest.loc[:, "day_range_pct"] = (
         (latest["high"] - latest["low"]) / latest["close"].replace(0, pd.NA) * 100
     )
-    latest["contraction_ratio"] = latest["range_width_pct"] / latest["base_width_pct_60"].replace(0, pd.NA)
-    latest["supertrend_bullish"] = latest["supertrend_dir_10_3"].fillna(-1).eq(1)
-    latest["supertrend_flip_up"] = (
+    latest.loc[:, "contraction_ratio"] = latest["range_width_pct"] / latest["base_width_pct_60"].replace(0, pd.NA)
+    latest.loc[:, "supertrend_bullish"] = latest["supertrend_dir_10_3"].fillna(-1).eq(1)
+    latest.loc[:, "supertrend_flip_up"] = (
         latest["supertrend_dir_10_3"].fillna(-1).eq(1)
         & latest["prev_supertrend_dir_10_3"].fillna(-1).eq(-1)
     )
-    latest["adx_14"] = latest["adx_14"].fillna(0.0)
-    latest["above_sma_20"] = latest["close"] > latest["sma_20"].fillna(latest["close"])
-    latest["above_sma_50"] = latest["close"] > latest["sma_50"].fillna(latest["close"])
-    latest["above_sma200"] = latest["close"] > latest["sma_200"].fillna(latest["close"])
-    latest["sma50_slope_20d_pct"] = (
+    latest.loc[:, "adx_14"] = latest["adx_14"].fillna(0.0)
+    latest.loc[:, "above_sma_20"] = latest["close"] > latest["sma_20"].fillna(latest["close"])
+    latest.loc[:, "above_sma_50"] = latest["close"] > latest["sma_50"].fillna(latest["close"])
+    latest.loc[:, "above_sma200"] = latest["close"] > latest["sma_200"].fillna(latest["close"])
+    latest.loc[:, "sma50_slope_20d_pct"] = (
         (latest["sma_50"] / latest["sma_50_lag_20"]) - 1.0
     ) * 100.0
-    latest["is_range_breakout"] = latest["close"] > latest["prior_range_high"].fillna(float("inf"))
-    latest["is_base_breakout_30"] = latest["close"] > latest["prior_base_high_30"].fillna(float("inf"))
-    latest["is_base_breakout_60"] = latest["close"] > latest["prior_base_high_60"].fillna(float("inf"))
-    latest["is_resistance_breakout_50d"] = latest["close"] > latest["prior_high_50"].fillna(float("inf"))
-    latest["is_high_52w_breakout"] = latest["close"] > latest["prior_high_252"].fillna(float("inf"))
-    latest["is_range_contraction"] = latest["contraction_ratio"].fillna(999).le(0.7)
-    latest["is_consolidation_breakout"] = latest["is_range_breakout"] & latest["is_range_contraction"]
-    latest["is_volatility_expansion_breakout"] = (
+    latest.loc[:, "is_range_breakout"] = latest["close"] > latest["prior_range_high"].fillna(float("inf"))
+    latest.loc[:, "is_base_breakout_30"] = latest["close"] > latest["prior_base_high_30"].fillna(float("inf"))
+    latest.loc[:, "is_base_breakout_60"] = latest["close"] > latest["prior_base_high_60"].fillna(float("inf"))
+    latest.loc[:, "is_resistance_breakout_50d"] = latest["close"] > latest["prior_high_50"].fillna(float("inf"))
+    latest.loc[:, "is_high_52w_breakout"] = latest["close"] > latest["prior_high_252"].fillna(float("inf"))
+    latest.loc[:, "is_range_contraction"] = latest["contraction_ratio"].fillna(999).le(0.7)
+    latest.loc[:, "is_consolidation_breakout"] = latest["is_range_breakout"] & latest["is_range_contraction"]
+    latest.loc[:, "is_volatility_expansion_breakout"] = (
         latest["is_range_breakout"]
         & latest["day_range_pct"].fillna(0).ge(latest["atr_pct"].fillna(0) * 1.2)
         & latest["atr_pct"].fillna(999).le(5.5)
     )
-    latest["is_volume_confirmed_breakout"] = latest["volume_ratio"].fillna(0).ge(1.5)
+    latest.loc[:, "is_volume_confirmed_breakout"] = latest["volume_ratio"].fillna(0).ge(1.5)
 
     # Legacy families (kept for backward compatibility and migration continuity).
     common_filter = (
@@ -598,10 +642,10 @@ def scan_breakouts(
         & (latest["contraction_ratio"].fillna(999) <= 0.9)
     ].copy()
     if not base_breakouts.empty:
-        base_breakouts["legacy_setup_family"] = "base_breakout"
-        base_breakouts["setup_family"] = "resistance_breakout_50d"
-        base_breakouts["taxonomy_family"] = "resistance_breakout_50d"
-        base_breakouts["setup_quality"] = (
+        base_breakouts.loc[:, "legacy_setup_family"] = "base_breakout"
+        base_breakouts.loc[:, "setup_family"] = "resistance_breakout_50d"
+        base_breakouts.loc[:, "taxonomy_family"] = "resistance_breakout_50d"
+        base_breakouts.loc[:, "setup_quality"] = (
             base_breakouts["volume_ratio"].clip(0, 4) * 14
             + base_breakouts["adx_14"].clip(0, 60) * 0.6
             + (12 - base_breakouts["near_52w_high_pct"].clip(0, 12)) * 2.2
@@ -621,10 +665,10 @@ def scan_breakouts(
         & (latest["atr_pct"].fillna(999) <= 5.0)
     ].copy()
     if not contraction_breakouts.empty:
-        contraction_breakouts["legacy_setup_family"] = "contraction_breakout"
-        contraction_breakouts["setup_family"] = "consolidation_breakout"
-        contraction_breakouts["taxonomy_family"] = "consolidation_breakout"
-        contraction_breakouts["setup_quality"] = (
+        contraction_breakouts.loc[:, "legacy_setup_family"] = "contraction_breakout"
+        contraction_breakouts.loc[:, "setup_family"] = "consolidation_breakout"
+        contraction_breakouts.loc[:, "taxonomy_family"] = "consolidation_breakout"
+        contraction_breakouts.loc[:, "setup_quality"] = (
             contraction_breakouts["volume_ratio"].clip(0, 4) * 16
             + contraction_breakouts["adx_14"].clip(0, 60) * 0.5
             + (10 - contraction_breakouts["near_52w_high_pct"].clip(0, 10)) * 2.0
@@ -642,10 +686,10 @@ def scan_breakouts(
         & (latest["near_52w_high_pct"].fillna(999) <= 14.0)
     ].copy()
     if not supertrend_breakouts.empty:
-        supertrend_breakouts["legacy_setup_family"] = "supertrend_flip_breakout"
-        supertrend_breakouts["setup_family"] = "volatility_expansion_breakout"
-        supertrend_breakouts["taxonomy_family"] = "volatility_expansion_breakout"
-        supertrend_breakouts["setup_quality"] = (
+        supertrend_breakouts.loc[:, "legacy_setup_family"] = "supertrend_flip_breakout"
+        supertrend_breakouts.loc[:, "setup_family"] = "volatility_expansion_breakout"
+        supertrend_breakouts.loc[:, "taxonomy_family"] = "volatility_expansion_breakout"
+        supertrend_breakouts.loc[:, "setup_quality"] = (
             supertrend_breakouts["volume_ratio"].clip(0, 4) * 12
             + supertrend_breakouts["adx_14"].clip(0, 60) * 0.55
             + (14 - supertrend_breakouts["near_52w_high_pct"].clip(0, 14)) * 1.8
@@ -673,8 +717,8 @@ def scan_breakouts(
     )
     canonical_candidates = latest[taxonomy_filter & taxonomy_trigger].copy()
     if not canonical_candidates.empty:
-        canonical_candidates["legacy_setup_family"] = pd.NA
-        canonical_candidates["taxonomy_family"] = np.select(
+        canonical_candidates.loc[:, "legacy_setup_family"] = pd.NA
+        canonical_candidates.loc[:, "taxonomy_family"] = np.select(
             [
                 canonical_candidates["is_high_52w_breakout"],
                 canonical_candidates["is_consolidation_breakout"],
@@ -689,8 +733,8 @@ def scan_breakouts(
             ],
             default="resistance_breakout_50d",
         )
-        canonical_candidates["setup_family"] = canonical_candidates["taxonomy_family"]
-        canonical_candidates["setup_quality"] = (
+        canonical_candidates.loc[:, "setup_family"] = canonical_candidates["taxonomy_family"]
+        canonical_candidates.loc[:, "setup_quality"] = (
             canonical_candidates["volume_ratio"].fillna(0).clip(0, 4) * 10
             + canonical_candidates["adx_14"].fillna(0).clip(0, 60) * 0.45
             + (12 - canonical_candidates["near_52w_high_pct"].fillna(12).clip(0, 12)) * 1.5
@@ -718,9 +762,9 @@ def scan_breakouts(
     if not rank_context.empty:
         candidates = candidates.merge(rank_context, on="symbol_id", how="left")
     else:
-        candidates["rel_strength_score"] = np.nan
-        candidates["sector_rs_value"] = np.nan
-        candidates["sector_rs_percentile"] = np.nan
+        candidates.loc[:, "rel_strength_score"] = np.nan
+        candidates.loc[:, "sector_rs_value"] = np.nan
+        candidates.loc[:, "sector_rs_percentile"] = np.nan
 
     regime = RegimeDetector(
         ohlcv_db_path=ohlcv_db_path,
@@ -731,29 +775,29 @@ def scan_breakouts(
     breadth_score = float(regime.get("breadth_score", 0.0) or 0.0)
 
     if breakout_engine == "legacy":
-        candidates["breakout_score"] = np.nan
-        candidates["breakout_state"] = "watchlist"
-        candidates["filter_reason"] = ""
-        candidates["breakout_rank"] = (
+        candidates.loc[:, "breakout_score"] = np.nan
+        candidates.loc[:, "breakout_state"] = "watchlist"
+        candidates.loc[:, "filter_reason"] = ""
+        candidates.loc[:, "breakout_rank"] = (
             candidates["setup_quality"]
             .rank(method="first", ascending=False)
             .astype(int)
         )
-        candidates["market_bias_allowed"] = True
-        candidates["breadth_gate_passed"] = True
-        candidates["sector_gate_passed"] = True
-        candidates["regime_gate_passed"] = True
-        candidates["breakout_detected"] = True
-        candidates["filtered_by_regime"] = False
-        candidates["filtered_by_symbol_trend"] = False
-        candidates["candidate_tier"] = "A"
-        candidates["symbol_trend_score"] = 100.0
-        candidates["symbol_trend_reasons"] = "ABOVE_SMA200,SMA50_SLOPE_POSITIVE,NEAR_52W_HIGH"
-        candidates["symbol_trend_fail_count"] = 0
+        candidates.loc[:, "market_bias_allowed"] = True
+        candidates.loc[:, "breadth_gate_passed"] = True
+        candidates.loc[:, "sector_gate_passed"] = True
+        candidates.loc[:, "regime_gate_passed"] = True
+        candidates.loc[:, "breakout_detected"] = True
+        candidates.loc[:, "filtered_by_regime"] = False
+        candidates.loc[:, "filtered_by_symbol_trend"] = False
+        candidates.loc[:, "candidate_tier"] = "A"
+        candidates.loc[:, "symbol_trend_score"] = 100.0
+        candidates.loc[:, "symbol_trend_reasons"] = "ABOVE_SMA200,SMA50_SLOPE_POSITIVE,NEAR_52W_HIGH"
+        candidates.loc[:, "symbol_trend_fail_count"] = 0
         if "sma50_slope_20d_pct" not in candidates.columns:
-            candidates["sma50_slope_20d_pct"] = np.nan
+            candidates.loc[:, "sma50_slope_20d_pct"] = np.nan
         if "above_sma200" not in candidates.columns:
-            candidates["above_sma200"] = True
+            candidates.loc[:, "above_sma200"] = True
     else:
         candidates = compute_breakout_v2_scores(
             candidates,
@@ -780,10 +824,10 @@ def scan_breakouts(
             return "EARLY_BREAKOUT"
         return "ACTIONABLE_BREAKOUT"
 
-    candidates["market_regime"] = market_regime
-    candidates["market_bias"] = market_bias
-    candidates["execution_label"] = candidates.apply(_execution_label, axis=1)
-    candidates["breakout_tag"] = candidates["taxonomy_family"].fillna(candidates["setup_family"])
+    candidates.loc[:, "market_regime"] = market_regime
+    candidates.loc[:, "market_bias"] = market_bias
+    candidates.loc[:, "execution_label"] = candidates.apply(_execution_label, axis=1)
+    candidates.loc[:, "breakout_tag"] = candidates["taxonomy_family"].fillna(candidates["setup_family"])
 
     cols = [
         "symbol_id",

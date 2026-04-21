@@ -8,8 +8,8 @@ from typing import Tuple, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import duckdb
-from core.paths import ensure_domain_layout
-from core.logging import logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
 
 warnings.filterwarnings("ignore")
 

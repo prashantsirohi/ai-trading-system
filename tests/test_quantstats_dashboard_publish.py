@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from publishers.quantstats_dashboard import (
+from ai_trading_system.domains.publish.channels.quantstats import (
     _parse_run_date,
     build_dashboard_strategy_returns,
     publish_dashboard_quantstats_tearsheet,
@@ -192,11 +192,11 @@ def test_publish_dashboard_quantstats_tearsheet_writes_outputs(
         return (0, "", "")
 
     monkeypatch.setattr(
-        "publishers.quantstats_dashboard.HAS_QUANTSTATS",
+        "ai_trading_system.domains.publish.channels.quantstats.HAS_QUANTSTATS",
         True,
     )
     monkeypatch.setattr(
-        "publishers.quantstats_dashboard._render_quantstats_tearsheet_subprocess",
+        "ai_trading_system.domains.publish.channels.quantstats._render_quantstats_tearsheet_subprocess",
         _fake_render,
     )
 
@@ -248,8 +248,8 @@ def test_publish_dashboard_quantstats_tearsheet_can_write_optional_core_html(
         output.write_text("<html>stub core</html>", encoding="utf-8")
         return (0, "", "")
 
-    monkeypatch.setattr("publishers.quantstats_dashboard.HAS_QUANTSTATS", True)
-    monkeypatch.setattr("publishers.quantstats_dashboard._render_quantstats_tearsheet_subprocess", _fake_render)
+    monkeypatch.setattr("ai_trading_system.domains.publish.channels.quantstats.HAS_QUANTSTATS", True)
+    monkeypatch.setattr("ai_trading_system.domains.publish.channels.quantstats._render_quantstats_tearsheet_subprocess", _fake_render)
 
     result = publish_dashboard_quantstats_tearsheet(
         project_root=tmp_path,

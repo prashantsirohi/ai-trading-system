@@ -21,7 +21,7 @@ import requests
 from collectors.daily_update_runner import _fetch_nse_bhavcopy_rows, _fetch_yfinance_rows
 from collectors.dhan_collector import DhanCollector, normalize_dhan_timestamps_ist
 from core.env import load_project_env
-from core.paths import ensure_domain_layout
+from ai_trading_system.platform.db.paths import ensure_domain_layout
 
 FIELDS = ["open", "high", "low", "close", "volume"]
 
@@ -49,7 +49,7 @@ def _normalize_trade_frame(frame: pd.DataFrame) -> pd.DataFrame:
     df = frame.copy()
     if "timestamp" in df.columns:
         normalized_ts = normalize_dhan_timestamps_ist(df["timestamp"])
-        df["trade_date"] = pd.to_datetime(normalized_ts).dt.date.astype(str)
+        df = df.assign(trade_date=pd.to_datetime(normalized_ts).dt.strftime("%Y-%m-%d"))
     elif "trade_date" not in df.columns:
         raise ValueError("frame must include timestamp or trade_date")
     keep = ["trade_date", *FIELDS]
@@ -57,8 +57,7 @@ def _normalize_trade_frame(frame: pd.DataFrame) -> pd.DataFrame:
         if column not in df.columns:
             df[column] = pd.NA
     df = df[keep].copy()
-    for field in FIELDS:
-        df[field] = pd.to_numeric(df[field], errors="coerce")
+    df = df.assign(**{field: pd.to_numeric(df[field], errors="coerce") for field in FIELDS})
     df = df[df["trade_date"].notna()].copy()
     df = df[df["trade_date"] != "NaT"].copy()
     return df.sort_values("trade_date").drop_duplicates("trade_date", keep="last").reset_index(drop=True)
@@ -85,7 +84,7 @@ def _load_db_window(
             FROM _catalog
             WHERE symbol_id = ?
               AND exchange = ?
-              AND CAST(timestamp AS DATE) BETWEEN ? AND ?
+              AND CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             ORDER BY timestamp
             """,
             [symbol_id, exchange, from_date, to_date],
@@ -159,19 +158,22 @@ def _scale_ratio(left: pd.DataFrame, right: pd.DataFrame, field: str = "close") 
 
 
 def _mismatch_dates(left: pd.DataFrame, right: pd.DataFrame) -> list[str]:
-    merged = left.merge(right, on="trade_date", how="outer", suffixes=("_left", "_right")).sort_values("trade_date")
     mismatches: list[str] = []
-    for _, row in merged.iterrows():
+    left_rows = left.set_index("trade_date")[FIELDS].to_dict("index") if not left.empty else {}
+    right_rows = right.set_index("trade_date")[FIELDS].to_dict("index") if not right.empty else {}
+    for trade_date in sorted(set(left_rows) | set(right_rows)):
+        left_row = left_rows.get(trade_date, {})
+        right_row = right_rows.get(trade_date, {})
         for field in FIELDS:
-            lv = row.get(f"{field}_left")
-            rv = row.get(f"{field}_right")
+            lv = left_row.get(field)
+            rv = right_row.get(field)
             if pd.isna(lv) and pd.isna(rv):
                 continue
             if pd.isna(lv) != pd.isna(rv):
-                mismatches.append(str(row["trade_date"]))
+                mismatches.append(str(trade_date))
                 break
             if float(lv) != float(rv):
-                mismatches.append(str(row["trade_date"]))
+                mismatches.append(str(trade_date))
                 break
     return sorted(set(mismatches))
 

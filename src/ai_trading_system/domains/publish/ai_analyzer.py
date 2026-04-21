@@ -8,7 +8,7 @@ from ai_trading_system.platform.utils.env import load_project_env
 
 load_project_env(__file__)
 
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 @dataclass

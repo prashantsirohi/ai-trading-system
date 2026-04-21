@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from services.rank.dashboard_payload import (
+from ai_trading_system.domains.ranking.payloads import (
     build_rejection_reasons,
     build_score_breakdown,
     build_top_factors,
@@ -39,4 +39,3 @@ def test_build_rejection_reasons_includes_eligibility_and_explicit_reasons() -> 
         }
     )
     assert reasons == ["failed_eligibility", "min_price", "insufficient_liquidity"]
-

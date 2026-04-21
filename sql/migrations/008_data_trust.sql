@@ -13,4 +13,4 @@ CREATE TABLE IF NOT EXISTS data_repair_run (
 );
 
 CREATE INDEX IF NOT EXISTS idx_data_repair_run_created
-ON data_repair_run (created_at, exchange, status);
+ON data_repair_run (exchange, created_at);

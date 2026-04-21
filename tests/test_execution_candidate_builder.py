@@ -6,12 +6,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from run.stages.base import StageArtifact, StageContext
-from services.execute import (
+from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
+from ai_trading_system.domains.execution.candidate_builder import (
     ExecutionCandidateBuilder,
-    ExecutionRequest,
     attach_execution_weight,
     prioritize_execution_candidates,
+    ExecutionRequest,
 )
 
 
@@ -77,7 +77,7 @@ def test_execution_request_normalizes_context_params(tmp_path: Path) -> None:
     assert request.exit_max_holding_days == 20
     assert request.use_portfolio_constraints is False
     assert request.max_positions == 10
-    assert request.max_sector_exposure == pytest.approx(0.30)
+    assert request.max_sector_exposure == pytest.approx(0.20)
     assert request.max_single_stock_weight == pytest.approx(0.10)
     assert request.use_atr_position_sizing is False
 

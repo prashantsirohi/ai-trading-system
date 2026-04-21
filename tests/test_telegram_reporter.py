@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from channel.telegram_reporter import TelegramReporter
+from ai_trading_system.domains.publish.channels.telegram import TelegramReporter
 
 
 class _DummyBot:
@@ -31,7 +31,7 @@ def test_send_message_fails_fast_on_dns_precheck(monkeypatch: pytest.MonkeyPatch
     def _dns_fail(_host, _port):
         raise socket.gaierror("nodename nor servname provided")
 
-    monkeypatch.setattr("channel.telegram_reporter.socket.getaddrinfo", _dns_fail)
+    monkeypatch.setattr("ai_trading_system.domains.publish.channels.telegram.socket.getaddrinfo", _dns_fail)
 
     assert reporter.send_message("test") is False
     assert calls["send"] == 0
@@ -51,7 +51,7 @@ def test_send_message_classifies_ssl_failure(monkeypatch: pytest.MonkeyPatch, tm
         raise ssl.SSLError("RECORD_LAYER_FAILURE")
 
     reporter.bot = _DummyBot(_send_message)
-    monkeypatch.setattr("channel.telegram_reporter.socket.getaddrinfo", lambda _host, _port: [object()])
+    monkeypatch.setattr("ai_trading_system.domains.publish.channels.telegram.socket.getaddrinfo", lambda _host, _port: [object()])
 
     assert reporter.send_message("test") is False
     assert reporter.last_error_code == "telegram_ssl_failure"
@@ -69,7 +69,7 @@ def test_send_message_retries_when_configured(monkeypatch: pytest.MonkeyPatch, t
             raise asyncio.TimeoutError("timed out")
 
     reporter.bot = _DummyBot(_send_message)
-    monkeypatch.setattr("channel.telegram_reporter.socket.getaddrinfo", lambda _host, _port: [object()])
+    monkeypatch.setattr("ai_trading_system.domains.publish.channels.telegram.socket.getaddrinfo", lambda _host, _port: [object()])
 
     assert reporter.send_message("test") is True
     assert attempts["count"] == 2

@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 import pandas as pd
 import yfinance as yf
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 class YFinanceCollector:
@@ -24,7 +24,7 @@ class YFinanceCollector:
 
         conn = sqlite3.connect("data/masterdata.db")
         symbols = conn.execute(
-            "SELECT Symbol FROM stock_details WHERE Symbol IS NOT NULL"
+            "SELECT symbol_id FROM symbols WHERE exchange = 'NSE'"
         ).fetchall()
         conn.close()
         return [s[0] for s in symbols]

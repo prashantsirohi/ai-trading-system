@@ -11,7 +11,7 @@ from ai_trading_system.platform.utils.env import load_project_env
 
 load_project_env(__file__)
 
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 class PositionType(Enum):
@@ -128,8 +128,13 @@ def load_sector_map() -> Dict[str, str]:
         base_dir = Path(__file__).resolve().parents[4]
         conn = sqlite3.connect(base_dir / "data/masterdata.db")
 
-        rows = conn.execute("SELECT Symbol, Sector FROM stock_details").fetchall()
-        sector_map = {sym: sector for sym, sector in rows if sector}
+        rows = conn.execute("""
+            SELECT s.symbol_id, COALESCE(sm.system_sector, 'Other')
+            FROM symbols s
+            LEFT JOIN sector_mapping sm ON s.sector = sm.industry
+            WHERE s.exchange = 'NSE'
+        """).fetchall()
+        sector_map = {sym: sector for sym, sector in rows}
         conn.close()
         return sector_map
     except Exception as e:

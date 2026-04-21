@@ -91,9 +91,9 @@ def _display_frame(frame: pd.DataFrame, *, height: int = 320) -> None:
     for column in display.columns:
         if "date" in column or column.endswith("_at"):
             try:
-                display[column] = pd.to_datetime(display[column]).astype(str)
+                display.loc[:, column] = pd.to_datetime(display[column]).astype(str)
             except Exception:
-                display[column] = display[column].astype(str)
+                display.loc[:, column] = display[column].astype(str)
     st.dataframe(display, use_container_width=True, height=height)
 
 

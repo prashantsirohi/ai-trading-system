@@ -43,6 +43,17 @@ class PatternBacktestConfig:
     min_trough_dwell_bars: int = 3
     sample_charts_per_pattern: int = 2
 
+    asc_tri_flat_tol: float = 0.015
+    vcp_window_bars: int = 40
+    vcp_price_contraction_factor: float = 0.85
+    vcp_vol_contraction_factor: float = 0.90
+    vcp_min_first_range_pct: float = 0.08
+    flat_base_min_bars: int = 25
+    flat_base_max_bars: int = 65
+    flat_base_max_depth_pct: float = 0.15
+    wt3_tight_pct: float = 0.015
+    wt3_prior_adv: float = 0.20
+
     def to_metadata(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["symbols"] = list(self.symbols)
@@ -101,6 +112,17 @@ class PatternScanConfig:
     high_tight_flag_max_range_pct: float = 0.15
     high_tight_flag_max_retracement_pct: float = 0.25
     fallback_atr_stop_mult: float = 2.0
+
+    asc_tri_flat_tol: float = 0.015
+    vcp_window_bars: int = 40
+    vcp_price_contraction_factor: float = 0.85
+    vcp_vol_contraction_factor: float = 0.90
+    vcp_min_first_range_pct: float = 0.08
+    flat_base_min_bars: int = 25
+    flat_base_max_bars: int = 65
+    flat_base_max_depth_pct: float = 0.15
+    wt3_tight_pct: float = 0.015
+    wt3_prior_adv: float = 0.20
 
     def to_metadata(self) -> dict[str, Any]:
         payload = asdict(self)

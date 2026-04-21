@@ -8,7 +8,7 @@ from typing import Callable
 
 import pandas as pd
 
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 def get_partition_path(feature_store_dir: str, table_name: str, year: int, month: int) -> str:

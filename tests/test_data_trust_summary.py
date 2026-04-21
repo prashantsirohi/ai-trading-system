@@ -3,10 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
+import pandas as pd
+import pytest
 
 from analytics.data_trust import load_data_trust_summary
 from analytics.dq import DataQualityEngine
 from analytics.registry import RegistryStore
+from ai_trading_system.domains.ingest.repair import _normalize_trade_frame
 from core.contracts import StageContext, StageResult
 
 
@@ -345,3 +348,131 @@ def test_dq_features_quarantine_rule_blocks_when_threshold_crossed(tmp_path: Pat
 
     assert outcome.status == "failed"
     assert outcome.failed_count == 1
+
+
+def test_record_data_repair_run_updates_status_for_existing_run_id(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+
+    registry.record_data_repair_run(
+        repair_run_id="repair-2026-04-21",
+        from_date="2026-04-13",
+        to_date="2026-04-20",
+        exchange="NSE",
+        status="running",
+        repaired_row_count=0,
+        unresolved_symbol_count=41,
+        unresolved_date_count=5,
+        metadata={"source": "auto"},
+    )
+    registry.record_data_repair_run(
+        repair_run_id="repair-2026-04-21",
+        from_date="2026-04-13",
+        to_date="2026-04-20",
+        exchange="NSE",
+        status="completed",
+        repaired_row_count=37,
+        unresolved_symbol_count=0,
+        unresolved_date_count=0,
+        report_uri="artifacts/data_repair/repair-2026-04-21.json",
+        metadata={"source": "auto", "result": "ok"},
+    )
+
+    latest = registry.get_latest_data_repair_run("NSE")
+
+    assert latest is not None
+    assert latest["repair_run_id"] == "repair-2026-04-21"
+    assert latest["status"] == "completed"
+    assert latest["repaired_row_count"] == 37
+    assert latest["unresolved_symbol_count"] == 0
+    assert latest["unresolved_date_count"] == 0
+    assert latest["report_uri"] == "artifacts/data_repair/repair-2026-04-21.json"
+    assert latest["metadata"]["result"] == "ok"
+
+
+def test_record_data_repair_run_repairs_legacy_index_before_upsert(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "control_plane.duckdb"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE data_repair_run (
+                repair_run_id VARCHAR PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                from_date DATE NOT NULL,
+                to_date DATE NOT NULL,
+                exchange VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                repaired_row_count BIGINT DEFAULT 0,
+                unresolved_symbol_count BIGINT DEFAULT 0,
+                unresolved_date_count BIGINT DEFAULT 0,
+                report_uri VARCHAR,
+                metadata_json VARCHAR
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX idx_data_repair_run_created
+            ON data_repair_run (created_at, exchange, status)
+            """
+        )
+    finally:
+        conn.close()
+
+    registry = RegistryStore(tmp_path)
+    registry.record_data_repair_run(
+        repair_run_id="repair-legacy-2026-04-21",
+        from_date="2026-04-13",
+        to_date="2026-04-20",
+        exchange="NSE",
+        status="running",
+    )
+    registry.record_data_repair_run(
+        repair_run_id="repair-legacy-2026-04-21",
+        from_date="2026-04-13",
+        to_date="2026-04-20",
+        exchange="NSE",
+        status="completed",
+        repaired_row_count=12,
+    )
+
+    latest = registry.get_latest_data_repair_run("NSE")
+
+    assert latest is not None
+    assert latest["status"] == "completed"
+    assert latest["repaired_row_count"] == 12
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT sql FROM duckdb_indexes() WHERE index_name = ?",
+            ["idx_data_repair_run_created"],
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row[0] == "CREATE INDEX idx_data_repair_run_created ON data_repair_run(exchange, created_at);"
+
+
+def test_normalize_trade_frame_avoids_futurewarning_on_trade_date_assignment() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": "2026-04-13 15:30:00",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 10,
+            }
+        ]
+    )
+
+    with pytest.warns(None) as record:
+        normalized = _normalize_trade_frame(frame)
+
+    assert len(record) == 0
+    assert normalized["trade_date"].tolist() == ["2026-04-13"]

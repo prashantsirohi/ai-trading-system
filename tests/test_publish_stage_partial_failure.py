@@ -9,7 +9,7 @@ import pytest
 from analytics.registry import RegistryStore
 from core.contracts import StageArtifact, StageContext
 from run.publisher import PublisherDeliveryManager
-from run.stages.base import PublishStageError
+from ai_trading_system.pipeline.contracts import PublishStageError
 from run.stages.publish import PublishStage
 
 

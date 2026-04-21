@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from services.publish.publish_payloads import apply_trust_overlay
+from ai_trading_system.domains.publish.publish_payloads import apply_trust_overlay
 
 
 def test_apply_trust_overlay_sets_warning_for_non_trusted_status() -> None:
@@ -11,4 +11,3 @@ def test_apply_trust_overlay_sets_warning_for_non_trusted_status() -> None:
     assert trusted["trust_warning"] is None
     assert degraded["trust_status"] == "degraded"
     assert "Trust status is degraded" in degraded["trust_warning"]
-

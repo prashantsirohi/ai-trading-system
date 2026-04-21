@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from services.rank.eligibility import apply_rank_eligibility
+from ai_trading_system.domains.ranking.eligibility import apply_rank_eligibility
 
 
 def test_apply_rank_eligibility_marks_rejections() -> None:
@@ -21,4 +21,3 @@ def test_apply_rank_eligibility_marks_rejections() -> None:
     assert out.loc[out["symbol_id"] == "BBB", "rejection_reasons"].iloc[0] == ["min_price"]
     assert out.loc[out["symbol_id"] == "CCC", "rejection_reasons"].iloc[0] == ["feature_not_ready"]
     assert out.loc[out["symbol_id"] == "DDD", "rejection_reasons"].iloc[0] == ["insufficient_liquidity"]
-

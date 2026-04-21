@@ -39,8 +39,8 @@ from analytics.visualizations import Visualizer
 from analytics.patterns import PatternBacktestConfig, ensure_pattern_event_chart, run_pattern_backtest
 from analytics.patterns.signal import kernel_smooth
 from core.env import load_project_env
-from core.paths import get_domain_paths
-from core.paths import research_static_end_date
+from ai_trading_system.platform.db.paths import get_domain_paths
+from ai_trading_system.platform.db.paths import research_static_end_date
 from ai_trading_system.interfaces.streamlit.research.data_access import (
     load_data_trust_snapshot,
     load_drilldown_history_for_symbols,
@@ -237,7 +237,7 @@ def load_breadth_history(start_date: str = "2010-01-01", data_source: str = "ope
         conn.close()
     if df.empty:
         return df
-    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    df.loc[:, "trade_date"] = pd.to_datetime(df["trade_date"])
     return df
 
 
@@ -529,12 +529,12 @@ def build_pattern_browser_rows(
             parts.append(str(row["exit_reason"]))
         return " | ".join(parts[:4])
 
-    browser["breakout_year"] = browser["breakout_year"].replace("", pd.NA)
+    browser.loc[:, "breakout_year"] = browser["breakout_year"].replace("", pd.NA)
     if browser["breakout_year"].isna().any() and "breakout_date" in browser.columns:
-        browser["breakout_year"] = browser["breakout_year"].fillna(
+        browser.loc[:, "breakout_year"] = browser["breakout_year"].fillna(
             pd.to_datetime(browser["breakout_date"], errors="coerce").dt.year.astype("Int64").astype(str)
         )
-    browser["comment"] = browser.apply(_comment, axis=1)
+    browser.loc[:, "comment"] = browser.apply(_comment, axis=1)
     browser = browser.sort_values(["breakout_year", "breakout_date", "symbol_id"], ascending=[False, False, True])
     return browser.reset_index(drop=True)
 
@@ -1021,7 +1021,7 @@ def load_shadow_overlay() -> pd.DataFrame:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
     if "prediction_date" in df.columns:
-        df["prediction_date"] = pd.to_datetime(df["prediction_date"])
+        df.loc[:, "prediction_date"] = pd.to_datetime(df["prediction_date"])
     return df
 
 
@@ -1032,7 +1032,7 @@ def load_shadow_period_summary(grain: str, horizon: int, periods: int = 12) -> p
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
-    df["period_start"] = pd.to_datetime(df["period_start"])
+    df.loc[:, "period_start"] = pd.to_datetime(df["period_start"])
     return df
 
 
@@ -1192,7 +1192,7 @@ def _with_symbol_hyperlink(df: pd.DataFrame, *, symbol_col: str) -> pd.DataFrame
     if df is None or df.empty or symbol_col not in df.columns:
         return df
     out = df.copy()
-    out[symbol_col] = out[symbol_col].map(_build_tradingview_link)
+    out.loc[:, symbol_col] = out[symbol_col].map(_build_tradingview_link)
     return out
 
 
@@ -1335,9 +1335,9 @@ def load_symbol_sector_details() -> pd.DataFrame:
             conn.close()
         if df.empty:
             return df
-        df["symbol_id"] = df["symbol_id"].astype(str).str.upper()
-        df["sector_name"] = df["sector_name"].fillna("").astype(str).str.strip()
-        df["industry_group"] = df["industry_group"].fillna("").astype(str).str.strip()
+        df.loc[:, "symbol_id"] = df["symbol_id"].astype(str).str.upper()
+        df.loc[:, "sector_name"] = df["sector_name"].fillna("").astype(str).str.strip()
+        df.loc[:, "industry_group"] = df["industry_group"].fillna("").astype(str).str.strip()
         return df
     except Exception:
         return pd.DataFrame(columns=["symbol_id", "company_name", "sector_name", "industry_group"])
@@ -1392,8 +1392,8 @@ def build_sector_universe_frame(rank_df: pd.DataFrame, sector_name: str) -> tupl
     lookup = _with_unique_column_names(lookup)
     for col in ("sector_name", "industry_group", "company_name", "symbol_id"):
         if col not in lookup.columns:
-            lookup[col] = ""
-    lookup["symbol_id"] = lookup["symbol_id"].astype(str).str.upper()
+            lookup.loc[:, col] = ""
+    lookup.loc[:, "symbol_id"] = lookup["symbol_id"].astype(str).str.upper()
 
     mask = _sector_match_mask(lookup, "sector_name", "industry_group", sector_name)
     filtered_lookup = lookup[mask].copy()
@@ -1409,11 +1409,11 @@ def build_sector_universe_frame(rank_df: pd.DataFrame, sector_name: str) -> tupl
         base = normalize_rank_df(rank_df).copy()
     if not base.empty and "symbol_id" in base.columns:
         rank_base = _with_unique_column_names(base.copy())
-        rank_base["symbol_id"] = rank_base["symbol_id"].astype(str).str.upper()
+        rank_base.loc[:, "symbol_id"] = rank_base["symbol_id"].astype(str).str.upper()
         score_col = "custom_score" if "custom_score" in rank_base.columns else "composite_score"
         if score_col in rank_base.columns:
             rank_base = rank_base.sort_values(score_col, ascending=False, na_position="last").reset_index(drop=True)
-            rank_base["overall_rank"] = np.arange(1, len(rank_base) + 1)
+            rank_base.loc[:, "overall_rank"] = np.arange(1, len(rank_base) + 1)
         rank_cols_preferred = [
             "symbol_id",
             "overall_rank",
@@ -1549,7 +1549,7 @@ def render_sector_drilldown_page(sector_name: str, rank_source_df: pd.DataFrame)
                 st.metric("Δ Sector Rank", f"{int(round(delta_rank)):+d}")
 
         chart_df = history_ordered.copy()
-        chart_df["run_label"] = chart_df["run_date"].dt.strftime("%Y-%m-%d").fillna(chart_df["run_id"])
+        chart_df.loc[:, "run_label"] = chart_df["run_date"].dt.strftime("%Y-%m-%d").fillna(chart_df["run_id"])
         fig_sector = go.Figure()
         fig_sector.add_trace(
             go.Scatter(
@@ -1651,7 +1651,7 @@ def render_sector_drilldown_page(sector_name: str, rank_source_df: pd.DataFrame)
                 st.metric("Δ Best Rank", f"{int(round(delta_rank)):+d}" if delta_rank is not None else "—")
 
             chart_df = drilldown_history_df.copy()
-            chart_df["run_label"] = chart_df["run_date"].dt.strftime("%Y-%m-%d").fillna(chart_df["run_id"])
+            chart_df.loc[:, "run_label"] = chart_df["run_date"].dt.strftime("%Y-%m-%d").fillna(chart_df["run_id"])
             fig_group = go.Figure()
             fig_group.add_trace(
                 go.Scatter(
@@ -1700,8 +1700,8 @@ def render_sector_drilldown_page(sector_name: str, rank_source_df: pd.DataFrame)
                 "is_quarantined": "trust_quarantined",
             }
         )
-        trust_df["symbol_id"] = trust_df["symbol_id"].astype(str).str.upper()
-        sector_ranked["symbol_id"] = sector_ranked["symbol_id"].astype(str).str.upper()
+        trust_df.loc[:, "symbol_id"] = trust_df["symbol_id"].astype(str).str.upper()
+        sector_ranked.loc[:, "symbol_id"] = sector_ranked["symbol_id"].astype(str).str.upper()
         sector_ranked = sector_ranked.merge(
             trust_df[
                 [
@@ -1787,7 +1787,7 @@ def load_ohlcv(symbol: str, exchange: str = "NSE", days: int = 365) -> pd.DataFr
         finally:
             conn.close()
         if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"])
+            df.loc[:, "date"] = pd.to_datetime(df["date"])
             df.set_index("date", inplace=True)
         return df
     except Exception:
@@ -1824,10 +1824,10 @@ def load_features(symbol: str, exchange: str = "NSE") -> Dict[str, pd.DataFrame]
                     """
                 ).fetchdf()
                 if not result.empty:
-                    result["timestamp"] = pd.to_datetime(result["timestamp"])
-                    result["timestamp"] = result["timestamp"].dt.normalize()
+                    result.loc[:, "timestamp"] = pd.to_datetime(result["timestamp"])
+                    result.loc[:, "timestamp"] = result["timestamp"].dt.normalize()
                     result.set_index("timestamp", inplace=True)
-                    features[feat] = result
+                    features[feat] = result.copy()
     finally:
         conn.close()
 
@@ -1849,20 +1849,20 @@ def load_features(symbol: str, exchange: str = "NSE") -> Dict[str, pd.DataFrame]
         finally:
             conn.close()
         if not result.empty:
-            result["timestamp"] = pd.to_datetime(result["timestamp"])
-            result["timestamp"] = result["timestamp"].dt.normalize()
+            result.loc[:, "timestamp"] = pd.to_datetime(result["timestamp"])
+            result.loc[:, "timestamp"] = result["timestamp"].dt.normalize()
             result.set_index("timestamp", inplace=True)
-            features["bb"] = result
+            features["bb"] = result.copy()
 
     for feat in per_symbol_features:
         path = os.path.join(FEATURE_STORE, feat, exchange, f"{symbol}.parquet")
         if os.path.exists(path):
             df = pd.read_parquet(path)
             if "timestamp" in df.columns:
-                df["timestamp"] = pd.to_datetime(df["timestamp"])
-                df["timestamp"] = df["timestamp"].dt.normalize()
+                df.loc[:, "timestamp"] = pd.to_datetime(df["timestamp"])
+                df.loc[:, "timestamp"] = df["timestamp"].dt.normalize()
                 df.set_index("timestamp", inplace=True)
-            features[feat] = df
+            features[feat] = df.copy()
 
     return features
 
@@ -1900,7 +1900,7 @@ def compute_dynamic_rank(
     if total == 0:
         return df
     df = df.copy()
-    df["custom_score"] = (
+    df.loc[:, "custom_score"] = (
         df["rel_strength_score"] * (w_rs / total)
         + df["vol_intensity_score"] * (w_vol / total)
         + df["trend_score_score"] * (w_trend / total)
@@ -1942,10 +1942,10 @@ def _build_pattern_overlay_option_map(pattern_df: pd.DataFrame, symbol: str) -> 
     if subset.empty:
         return options
     if "pattern_state" in subset.columns:
-        subset["_state_order"] = np.where(subset["pattern_state"].astype(str) == "confirmed", 0, 1)
+        subset.loc[:, "_state_order"] = np.where(subset["pattern_state"].astype(str) == "confirmed", 0, 1)
     else:
-        subset["_state_order"] = 1
-    subset["_score_order"] = pd.to_numeric(subset.get("pattern_score"), errors="coerce").fillna(0.0)
+        subset.loc[:, "_state_order"] = 1
+    subset.loc[:, "_score_order"] = pd.to_numeric(subset.get("pattern_score"), errors="coerce").fillna(0.0)
     subset = subset.sort_values(["_state_order", "_score_order", "signal_date"], ascending=[True, False, False])
     for _, row in subset.iterrows():
         score_value = pd.to_numeric(pd.Series([row.get("pattern_score")]), errors="coerce").iloc[0]
@@ -2466,10 +2466,10 @@ def _render_portfolio_workspace(
             st.info("No ranking candidates available yet. Run the pipeline or refresh ranking first.")
         else:
             working = candidates.copy()
-            working["sector_name"] = working.get("sector_name", "").fillna("").astype(str)
-            working["company_name"] = working.get("company_name", "").fillna("").astype(str)
-            working["breakout_state"] = working.get("breakout_state", "").fillna("").astype(str)
-            working["candidate_tier"] = working.get("candidate_tier", "").fillna("").astype(str)
+            working.loc[:, "sector_name"] = working.get("sector_name", "").fillna("").astype(str)
+            working.loc[:, "company_name"] = working.get("company_name", "").fillna("").astype(str)
+            working.loc[:, "breakout_state"] = working.get("breakout_state", "").fillna("").astype(str)
+            working.loc[:, "candidate_tier"] = working.get("candidate_tier", "").fillna("").astype(str)
 
             filter_cols = st.columns(4)
             sectors = sorted([value for value in working["sector_name"].dropna().unique().tolist() if str(value).strip()])
@@ -2507,7 +2507,7 @@ def _render_portfolio_workspace(
             st.caption(f"{len(filtered)} candidates after filters")
 
             display = filtered.copy()
-            display["Select"] = False
+            display.loc[:, "Select"] = False
             screener_cols = [
                 "Select",
                 "symbol_id",
@@ -3022,9 +3022,27 @@ def main():
     if "portfolio_selected_symbol" not in st.session_state:
         st.session_state.portfolio_selected_symbol = None
 
-    dashboard_payload = load_latest_dashboard_payload() or load_latest_rank_fallback()
-    dashboard_health = get_dashboard_health(dashboard_payload)
+    # Prefer full ranked_signals.csv over limited dashboard_payload.json
     latest_rank_frames = load_latest_rank_frames(PROJECT_ROOT)
+    ranked_signals_df = latest_rank_frames.get("ranked_signals", pd.DataFrame())
+
+    # DEBUG: Add visible debug info at top of page
+    st.sidebar.write(f"DEBUG: ranked_signals = {len(ranked_signals_df)} rows")
+
+    # Build dashboard_payload from full ranked_signals.csv
+    if not ranked_signals_df.empty:
+        dashboard_payload = {
+            "ranked_signals": ranked_signals_df.to_dict(orient="records"),
+            "breakout_scan": latest_rank_frames.get("breakout_scan", pd.DataFrame()).to_dict(orient="records"),
+            "pattern_scan": latest_rank_frames.get("pattern_scan", pd.DataFrame()).to_dict(orient="records"),
+            "stock_scan": latest_rank_frames.get("stock_scan", pd.DataFrame()).to_dict(orient="records"),
+            "sector_dashboard": latest_rank_frames.get("sector_dashboard", pd.DataFrame()).to_dict(orient="records"),
+            "summary": {"ranked_count": len(ranked_signals_df)},
+        }
+    else:
+        dashboard_payload = load_latest_dashboard_payload() or load_latest_rank_fallback()
+
+    dashboard_health = get_dashboard_health(dashboard_payload)
     ops_snapshot = load_ops_health_snapshot(PROJECT_ROOT)
     data_trust_snapshot = load_data_trust_snapshot(PROJECT_ROOT)
     if st.session_state.rank_df is not None:
@@ -3511,22 +3529,22 @@ def main():
                 )
                 if not sector_dashboard_display.empty and (sector_rs_payload or sector_rank_payload):
                     if "Sector" in sector_dashboard_display.columns:
-                        sector_dashboard_display["RS Trend"] = sector_dashboard_display["Sector"].astype(str).map(
+                        sector_dashboard_display.loc[:, "RS Trend"] = sector_dashboard_display["Sector"].astype(str).map(
                             lambda sector: sector_rs_payload.get(str(sector), {}).get("trend", "Flat")
                         )
-                        sector_dashboard_display["Δ RS"] = sector_dashboard_display["Sector"].astype(str).map(
+                        sector_dashboard_display.loc[:, "Δ RS"] = sector_dashboard_display["Sector"].astype(str).map(
                             lambda sector: sector_rs_payload.get(str(sector), {}).get("delta_value", 0.0)
                         )
-                        sector_dashboard_display["RS History"] = sector_dashboard_display["Sector"].astype(str).map(
+                        sector_dashboard_display.loc[:, "RS History"] = sector_dashboard_display["Sector"].astype(str).map(
                             lambda sector: sector_rs_payload.get(str(sector), {}).get("sparkline", [np.nan])
                         )
-                        sector_dashboard_display["Sector Rank Trend"] = sector_dashboard_display["Sector"].astype(str).map(
+                        sector_dashboard_display.loc[:, "Sector Rank Trend"] = sector_dashboard_display["Sector"].astype(str).map(
                             lambda sector: sector_rank_payload.get(str(sector), {}).get("trend", "Flat")
                         )
-                        sector_dashboard_display["Δ Sector Rank"] = sector_dashboard_display["Sector"].astype(str).map(
+                        sector_dashboard_display.loc[:, "Δ Sector Rank"] = sector_dashboard_display["Sector"].astype(str).map(
                             lambda sector: sector_rank_payload.get(str(sector), {}).get("delta_value", 0.0)
                         )
-                        sector_dashboard_display["Sector Rank History"] = sector_dashboard_display["Sector"].astype(str).map(
+                        sector_dashboard_display.loc[:, "Sector Rank History"] = sector_dashboard_display["Sector"].astype(str).map(
                             lambda sector: sector_rank_payload.get(str(sector), {}).get("sparkline", [np.nan])
                         )
                 st.markdown("**Sector Dashboard**")
@@ -4353,7 +4371,7 @@ def main():
                     ],
                     columns=["Field", "Value"],
                 )
-                metadata_summary["Value"] = metadata_summary["Value"].astype(str)
+                metadata_summary.loc[:, "Value"] = metadata_summary["Value"].astype(str)
                 st.dataframe(metadata_summary, use_container_width=True, hide_index=True)
 
             left_col, right_col = st.columns([1, 2])
@@ -4412,7 +4430,7 @@ def main():
                 )
 
             display_overlay_df = shadow_overlay_df.copy()
-            display_overlay_df["prediction_date"] = display_overlay_df["prediction_date"].dt.date.astype(str)
+            display_overlay_df.loc[:, "prediction_date"] = display_overlay_df["prediction_date"].dt.date.astype(str)
             display_overlay_df = reorder_columns(
                 display_overlay_df,
                 [
@@ -4444,7 +4462,7 @@ def main():
                         st.caption("Not enough matured weekly outcomes yet.")
                     else:
                         weekly_display = weekly_df.copy()
-                        weekly_display["period_start"] = weekly_display["period_start"].dt.date.astype(str)
+                        weekly_display.loc[:, "period_start"] = weekly_display["period_start"].dt.date.astype(str)
                         st.dataframe(weekly_display, use_container_width=True, hide_index=True, height=280)
 
             monthly_cols = st.columns(2)
@@ -4456,7 +4474,7 @@ def main():
                         st.caption("Not enough matured monthly outcomes yet.")
                     else:
                         monthly_display = monthly_df.copy()
-                        monthly_display["period_start"] = monthly_display["period_start"].dt.date.astype(str)
+                        monthly_display.loc[:, "period_start"] = monthly_display["period_start"].dt.date.astype(str)
                         st.dataframe(monthly_display, use_container_width=True, hide_index=True, height=240)
 
     if selected_workspace == "💼 Portfolio":

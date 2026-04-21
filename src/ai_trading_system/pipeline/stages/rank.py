@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, Optional
 
 import pandas as pd
 
-from run.stages.base import StageContext, StageResult
+from ai_trading_system.pipeline.contracts import StageContext, StageResult
 from ai_trading_system.domains.ranking.payloads import (
     augment_dashboard_payload_with_ml,
     build_dashboard_payload,

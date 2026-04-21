@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from features.compute_sector_rs import add_benchmark_relative_features
-from features.feature_store import add_cross_sectional_features, add_liquidity_features
+from ai_trading_system.domains.features.feature_store import add_cross_sectional_features, add_liquidity_features
+from ai_trading_system.domains.features.sector_rs import add_benchmark_relative_features
 
 
 def test_add_liquidity_and_cross_sectional_features() -> None:
@@ -49,4 +49,3 @@ def test_add_benchmark_relative_features() -> None:
     assert set(["benchmark_close", "stock_vs_benchmark"]).issubset(out.columns)
     assert out["benchmark_close"].tolist() == [20_000.0, 20_100.0]
     assert out["stock_vs_benchmark"].notna().all()
-

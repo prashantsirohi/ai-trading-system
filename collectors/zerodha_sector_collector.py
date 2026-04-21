@@ -4,7 +4,7 @@ import requests
 import re
 from datetime import datetime
 from typing import Dict, List
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 class ZerodhaSectorCollector:

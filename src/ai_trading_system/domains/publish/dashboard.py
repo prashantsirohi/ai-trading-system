@@ -10,7 +10,7 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.publish.channels.google_sheets import GoogleSheetsManager
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
 
 

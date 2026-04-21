@@ -8,7 +8,7 @@ import duckdb
 import pandas as pd
 
 from analytics.data_trust import ensure_data_trust_schema
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 def get_duckdb_conn(db_path: str | Path) -> duckdb.DuckDBPyConnection:
@@ -255,7 +255,7 @@ def fetch_catalog_close_frame(db_path: str | Path, validation_date: str) -> pd.D
         conn.close()
     if frame.empty:
         return pd.DataFrame(columns=["symbol_id", "close_catalog"])
-    frame["symbol_id"] = frame["symbol_id"].astype(str).str.strip()
-    frame["close_catalog"] = pd.to_numeric(frame["close_catalog"], errors="coerce")
+    frame = frame.copy(deep=True)
+    frame.loc[:, "symbol_id"] = frame["symbol_id"].astype(str).str.strip()
+    frame.loc[:, "close_catalog"] = pd.to_numeric(frame["close_catalog"], errors="coerce")
     return frame.dropna(subset=["symbol_id", "close_catalog"]).drop_duplicates("symbol_id", keep="last")
-

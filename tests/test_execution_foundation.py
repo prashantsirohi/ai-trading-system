@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from execution import DhanExecutor
-from execution.adapters import PaperExecutionAdapter
-from execution.models import OrderIntent
-from execution.service import ExecutionService
-from execution.store import ExecutionStore
+from ai_trading_system.domains.execution import DhanExecutor
+from ai_trading_system.domains.execution.adapters import PaperExecutionAdapter
+from ai_trading_system.domains.execution.models import OrderIntent
+from ai_trading_system.domains.execution.service import ExecutionService
+from ai_trading_system.domains.execution.store import ExecutionStore
 
 
 class _StaticRiskManager:

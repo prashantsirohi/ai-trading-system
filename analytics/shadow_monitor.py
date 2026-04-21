@@ -13,7 +13,7 @@ import pandas as pd
 from analytics.lightgbm_engine import LightGBMAlphaEngine
 from analytics.lightgbm_research import add_technical_baseline_scores
 from analytics.training_dataset import TrainingDatasetBuilder
-from core.paths import ensure_domain_layout
+from ai_trading_system.platform.db.paths import ensure_domain_layout
 
 
 def _descending_rank(series: pd.Series) -> pd.Series:

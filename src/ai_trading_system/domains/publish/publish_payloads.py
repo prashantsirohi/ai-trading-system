@@ -7,8 +7,8 @@ from typing import Any, Callable, Dict
 
 import pandas as pd
 
-from core.trust_confidence import attach_audit_fields
-from run.stages.base import StageArtifact
+from ai_trading_system.pipeline.contracts import attach_audit_fields
+from ai_trading_system.pipeline.contracts import StageArtifact
 from ai_trading_system.domains.publish.signal_classification import classify_signal
 
 

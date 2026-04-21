@@ -57,6 +57,32 @@ def test_normalize_bhavcopy_frame_strips_series_values() -> None:
     assert frame.iloc[0]["symbol_id"] == "AAA"
 
 
+def test_normalize_bhavcopy_frame_prefers_isin_mapping_over_symbol_text() -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "SYMBOL": "WRONGTOKEN",
+                "ISIN": "INE000A01011",
+                "SERIES": "EQ",
+                "OPEN_PRICE": 10.0,
+                "HIGH_PRICE": 11.0,
+                "LOW_PRICE": 9.5,
+                "CLOSE_PRICE": 10.5,
+                "TTL_TRD_QNTY": 1000,
+            }
+        ]
+    )
+    frame = daily_update_runner._normalize_bhavcopy_frame(
+        raw,
+        "2026-04-07",
+        {"AAA": {"symbol_id": "AAA", "security_id": "101", "exchange": "NSE", "isin": "INE000A01011"}},
+        isin_map={"INE000A01011": {"symbol_id": "AAA", "security_id": "101", "exchange": "NSE", "isin": "INE000A01011"}},
+    )
+    assert len(frame) == 1
+    assert frame.iloc[0]["symbol_id"] == "AAA"
+    assert frame.iloc[0]["isin"] == "INE000A01011"
+
+
 def test_quarantine_housekeeping_downgrades_noncritical_rows(tmp_path: Path) -> None:
     db_path = tmp_path / "ohlcv.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -122,10 +148,72 @@ def test_quarantine_housekeeping_downgrades_noncritical_rows(tmp_path: Path) -> 
 
     assert stats["repair_rows_observed"] == 1
     assert stats["non_trading_provider_rows_observed"] == 1
+    assert stats["stale_provider_rows_observed"] == 0
     assert rows == [
         ("AAA", "provider_unavailable", "observed"),
         ("BBB", "repair_source_unavailable", "observed"),
         ("CCC", "provider_unavailable", "active"),
+    ]
+
+
+def test_quarantine_housekeeping_downgrades_stale_symbol_provider_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE _catalog_quarantine (
+                symbol_id VARCHAR,
+                security_id VARCHAR,
+                exchange VARCHAR,
+                trade_date DATE,
+                reason VARCHAR,
+                status VARCHAR,
+                source_run_id VARCHAR,
+                repair_batch_id VARCHAR,
+                note VARCHAR,
+                created_at TIMESTAMP,
+                resolved_at TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO _catalog_quarantine
+            (symbol_id, security_id, exchange, trade_date, reason, status, source_run_id, repair_batch_id, note, created_at, resolved_at)
+            VALUES
+            ('AAA', '1', 'NSE', '2026-04-17', 'provider_unavailable', 'active', NULL, NULL, NULL, CURRENT_TIMESTAMP, NULL),
+            ('BBB', '2', 'NSE', '2026-04-17', 'provider_unavailable', 'active', NULL, NULL, NULL, CURRENT_TIMESTAMP, NULL)
+            """
+        )
+    finally:
+        conn.close()
+
+    stats = daily_update_runner._downgrade_noncritical_quarantine_rows(
+        db_path=str(db_path),
+        masterdb_path=None,
+        from_date="2026-04-13",
+        to_date="2026-04-20",
+        run_id="pipeline-2026-04-20-test",
+        stale_symbol_ids=["AAA"],
+    )
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT symbol_id, reason, status
+            FROM _catalog_quarantine
+            ORDER BY symbol_id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert stats["stale_provider_rows_observed"] == 1
+    assert rows == [
+        ("AAA", "provider_unavailable", "observed"),
+        ("BBB", "provider_unavailable", "active"),
     ]
 
 
@@ -161,7 +249,7 @@ def test_daily_update_runner_uses_nse_then_yfinance_fallback(
             captured_frames.extend(dfs)
             return sum(len(df) for df in dfs)
 
-    def fake_fetch_nse_bhavcopy_rows(*, raw_dir, trade_dates, security_map):
+    def fake_fetch_nse_bhavcopy_rows(*, raw_dir, trade_dates, security_map, isin_map=None):
         assert trade_dates == ["2026-04-06"]
         assert set(security_map) == {"AAA"}
         return pd.DataFrame(), [], ["2026-04-06"]
@@ -198,6 +286,7 @@ def test_daily_update_runner_uses_nse_then_yfinance_fallback(
         batch_size=50,
         bulk=False,
         nse_primary=True,
+        nse_allow_yfinance_fallback=True,
         data_domain="operational",
     )
 
@@ -243,7 +332,7 @@ def test_daily_update_runner_canary_blocks_when_dates_remain_unresolved(
         def _upsert_ohlcv(self, dfs):
             return sum(len(df) for df in dfs)
 
-    def fake_fetch_nse_bhavcopy_rows(*, raw_dir, trade_dates, security_map):
+    def fake_fetch_nse_bhavcopy_rows(*, raw_dir, trade_dates, security_map, isin_map=None):
         return pd.DataFrame(), [], ["2026-04-06"]
 
     def fake_fetch_yfinance_rows(*, symbol_rows, trade_dates, batch_size=100):
@@ -262,6 +351,7 @@ def test_daily_update_runner_canary_blocks_when_dates_remain_unresolved(
         batch_size=50,
         bulk=False,
         nse_primary=True,
+        nse_allow_yfinance_fallback=True,
         canary_mode=True,
         canary_symbol_limit=5,
         data_domain="operational",
@@ -370,6 +460,56 @@ def test_daily_update_runner_bulk_canary_blocks_on_degraded_trust(monkeypatch, t
     assert result["canary_status"] == "blocked"
 
 
+def test_daily_update_runner_bulk_canary_blocks_on_validator_unresolved_dates(monkeypatch, tmp_path: Path) -> None:
+    class DummyCollector:
+        def __init__(self, *args, **kwargs) -> None:
+            self.db_path = str(tmp_path / "ohlcv.duckdb")
+            self.masterdb_path = str(tmp_path / "masterdata.db")
+            self.feature_store_dir = str(tmp_path / "feature_store")
+            self.data_domain = "operational"
+            self.use_api = True
+            self.dhan = object()
+            self.client_id = "cid"
+            self.api_key = "key"
+            self.access_token = "token"
+            self.token_manager = type(
+                "TM",
+                (),
+                {
+                    "ensure_valid_token": staticmethod(lambda hours_before_expiry=1: "token"),
+                    "client_id": "cid",
+                    "api_key": "key",
+                },
+            )()
+
+        def _init_dhan_client(self):
+            self.dhan = object()
+
+        def _ensure_valid_token(self):
+            return True
+
+        def run_daily_update_bulk(self, **kwargs):
+            return {
+                "symbols_updated": 5,
+                "symbols_errors": 0,
+                "validator_status": "ok",
+                "validator_unresolved_dates": ["2026-04-17"],
+            }
+
+    monkeypatch.setattr(daily_update_runner, "DhanCollector", DummyCollector)
+    result = daily_update_runner.run(
+        symbols_only=True,
+        features_only=False,
+        batch_size=25,
+        bulk=True,
+        canary_mode=True,
+        canary_symbol_limit=3,
+        data_domain="operational",
+    )
+    assert result["canary_blocked"] is True
+    assert result["canary_status"] == "blocked"
+
+
 def test_daily_update_runner_bulk_canary_passes_when_clean(monkeypatch, tmp_path: Path) -> None:
     class DummyCollector:
         def __init__(self, *args, **kwargs) -> None:
@@ -458,7 +598,7 @@ def test_daily_update_runner_quarantines_only_impacted_symbol_dates(
         def _upsert_ohlcv(self, dfs):
             return sum(len(df) for df in dfs)
 
-    def fake_fetch_nse_bhavcopy_rows(*, raw_dir, trade_dates, security_map):
+    def fake_fetch_nse_bhavcopy_rows(*, raw_dir, trade_dates, security_map, isin_map=None):
         return pd.DataFrame(), [], ["2026-04-06"]
 
     def fake_fetch_yfinance_rows(*, symbol_rows, trade_dates, batch_size=100):
@@ -490,6 +630,7 @@ def test_daily_update_runner_quarantines_only_impacted_symbol_dates(
         batch_size=50,
         bulk=False,
         nse_primary=True,
+        nse_allow_yfinance_fallback=True,
         data_domain="operational",
     )
 
@@ -511,6 +652,67 @@ def test_daily_update_runner_quarantines_only_impacted_symbol_dates(
     finally:
         conn.close()
     assert rows == [("BBB", datetime(2026, 4, 6).date(), "active")]
+
+
+def test_daily_update_runner_applies_stale_grace_to_unresolved_dates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class DummyCollector:
+        def __init__(self, *args, **kwargs) -> None:
+            self.db_path = str(tmp_path / "ohlcv.duckdb")
+            self.masterdb_path = str(tmp_path / "masterdata.db")
+            self.feature_store_dir = str(tmp_path / "feature_store")
+            self.data_domain = "operational"
+
+        def get_symbols_from_masterdb(self, exchanges=None):
+            return [
+                {
+                    "symbol_id": "AAA",
+                    "security_id": "101",
+                    "symbol_name": "AAA Ltd",
+                    "industry_group": "Test Group",
+                    "industry": "Test Industry",
+                    "exchange": "NSE",
+                }
+            ]
+
+        def _get_last_dates(self, exchanges=None):
+            # The fixed run date in this test is 2026-04-07, so target_end_date is 2026-04-06.
+            # A 5-day stale gap should be excluded when grace is set to 1.
+            return {"AAA": "2026-04-01"}
+
+        def _upsert_ohlcv(self, dfs):
+            return sum(len(df) for df in dfs)
+
+    monkeypatch.setattr(daily_update_runner, "project_root", str(tmp_path))
+    monkeypatch.setattr(daily_update_runner, "datetime", _FixedDateTime)
+    monkeypatch.setattr(daily_update_runner, "DhanCollector", DummyCollector)
+    monkeypatch.setattr(
+        daily_update_runner,
+        "_fetch_nse_bhavcopy_rows",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("No fetch expected when all symbols are beyond stale grace")),
+    )
+    monkeypatch.setattr(
+        daily_update_runner,
+        "_fetch_yfinance_rows",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("No fallback fetch expected when all symbols are beyond stale grace")),
+    )
+
+    result = daily_update_runner.run(
+        symbols_only=True,
+        features_only=False,
+        batch_size=50,
+        bulk=False,
+        nse_primary=True,
+        stale_missing_symbol_grace_days=1,
+        data_domain="operational",
+    )
+
+    assert result["symbols_updated"] == 0
+    assert result["unresolved_dates"] == []
+    assert result["stale_missing_symbol_count"] == 1
+    assert result["stale_missing_symbols"] == ["AAA"]
 
 
 def test_daily_update_runner_dhan_historical_mode_calls_collector_daily_update(

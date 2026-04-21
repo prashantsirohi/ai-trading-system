@@ -21,7 +21,7 @@ from ai_trading_system.research.recipes import (
     save_recipe,
     save_recipe_bundle,
 )
-from core.paths import ensure_domain_layout
+from ai_trading_system.platform.db.paths import ensure_domain_layout
 
 
 def _project_root(project_root: str | Path | None = None) -> Path:
@@ -266,7 +266,7 @@ def load_recipe_results(
         active = active_deployments[["model_id", "environment"]].rename(columns={"environment": "active_environment"})
         frame = frame.merge(active, on="model_id", how="left")
     else:
-        frame["active_environment"] = None
+        frame.loc[:, "active_environment"] = None
     return frame.sort_values("executed_at", ascending=False)
 
 
@@ -333,11 +333,11 @@ def load_workbench_datasets(
         return pd.DataFrame()
     frame = pd.DataFrame(rows)
     metadata = frame.pop("metadata").apply(lambda value: value or {})
-    frame["validation_start"] = metadata.apply(lambda item: item.get("validation_start"))
-    frame["validation_fraction"] = metadata.apply(lambda item: item.get("validation_fraction"))
-    frame["strategy_tag"] = metadata.apply(lambda item: item.get("strategy_tag"))
-    frame["feature_set_variant"] = metadata.apply(lambda item: item.get("feature_set_variant"))
-    frame["recipe_name"] = metadata.apply(lambda item: item.get("recipe_name"))
+    frame.loc[:, "validation_start"] = metadata.apply(lambda item: item.get("validation_start"))
+    frame.loc[:, "validation_fraction"] = metadata.apply(lambda item: item.get("validation_fraction"))
+    frame.loc[:, "strategy_tag"] = metadata.apply(lambda item: item.get("strategy_tag"))
+    frame.loc[:, "feature_set_variant"] = metadata.apply(lambda item: item.get("feature_set_variant"))
+    frame.loc[:, "recipe_name"] = metadata.apply(lambda item: item.get("recipe_name"))
     return frame
 
 
@@ -363,14 +363,14 @@ def load_workbench_models(
         return pd.DataFrame()
     frame = pd.DataFrame(rows)
     metadata = frame.pop("metadata").apply(lambda value: value or {})
-    frame["engine"] = metadata.apply(lambda item: item.get("engine"))
-    frame["horizon"] = metadata.apply(lambda item: item.get("horizon"))
-    frame["strategy_tag"] = metadata.apply(lambda item: item.get("strategy_tag"))
-    frame["feature_set_variant"] = metadata.apply(lambda item: item.get("feature_set_variant"))
-    frame["recipe_name"] = metadata.apply(lambda item: item.get("recipe_name"))
-    frame["validation_auc"] = metadata.apply(lambda item: (item.get("evaluation") or {}).get("validation_auc"))
-    frame["precision_at_10pct"] = metadata.apply(lambda item: (item.get("evaluation") or {}).get("precision_at_10pct"))
-    frame["walkforward_avg_validation_auc"] = metadata.apply(
+    frame.loc[:, "engine"] = metadata.apply(lambda item: item.get("engine"))
+    frame.loc[:, "horizon"] = metadata.apply(lambda item: item.get("horizon"))
+    frame.loc[:, "strategy_tag"] = metadata.apply(lambda item: item.get("strategy_tag"))
+    frame.loc[:, "feature_set_variant"] = metadata.apply(lambda item: item.get("feature_set_variant"))
+    frame.loc[:, "recipe_name"] = metadata.apply(lambda item: item.get("recipe_name"))
+    frame.loc[:, "validation_auc"] = metadata.apply(lambda item: (item.get("evaluation") or {}).get("validation_auc"))
+    frame.loc[:, "precision_at_10pct"] = metadata.apply(lambda item: (item.get("evaluation") or {}).get("precision_at_10pct"))
+    frame.loc[:, "walkforward_avg_validation_auc"] = metadata.apply(
         lambda item: (item.get("walkforward_summary") or {}).get("avg_validation_auc")
     )
     return frame
@@ -525,7 +525,7 @@ def load_workbench_trade_report(
             "fills": pd.DataFrame(),
         }
 
-    fills["filled_at"] = pd.to_datetime(fills["filled_at"], errors="coerce")
+    fills.loc[:, "filled_at"] = pd.to_datetime(fills["filled_at"], errors="coerce")
     fills = fills.sort_values(["filled_at", "fill_id"]).reset_index(drop=True)
     latest_prices = _load_latest_prices(root, data_domain=data_domain)
 

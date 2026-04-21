@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pandas as pd
 
-from services.ingest.benchmark_ingest import BenchmarkSpec, benchmark_lookup, ingest_benchmarks
+from ai_trading_system.domains.ingest.benchmark_ingest import (
+    BenchmarkSpec,
+    benchmark_lookup,
+    ingest_benchmarks,
+)
 
 
 class _DummyNSECollector:

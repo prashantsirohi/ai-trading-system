@@ -21,6 +21,7 @@ import time
 import sqlite3
 from datetime import datetime, timedelta, date
 from pathlib import Path
+from typing import Callable, Optional
 
 import duckdb
 import pandas as pd
@@ -41,10 +42,11 @@ project_root = str(ensure_project_root_on_path(__file__))
 
 from collectors.dhan_collector import DhanCollector, dhan_daily_window_ist
 from collectors.nse_collector import NSECollector
-from features.feature_store import FeatureStore
-from core.paths import ensure_domain_layout
-from core.logging import logger
-from services.ingest.benchmark_ingest import ingest_benchmarks
+from ai_trading_system.domains.features.feature_store import FeatureStore
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
+from ai_trading_system.domains.ingest.benchmark_ingest import ingest_benchmarks
+from ai_trading_system.domains.ingest.index_ingest import IndexCollector, IndexIngestConfig
 
 
 def _load_nse_holiday_dates(masterdb_path: str | None, from_date: str, to_date: str) -> set[str]:
@@ -85,13 +87,23 @@ def _compute_canary_blocked(result: dict, *, canary_mode: bool) -> bool:
         return False
     if result.get("error"):
         return True
+
+    unresolved_dates = result.get("unresolved_dates") or []
+    validator_unresolved_dates = result.get("validator_unresolved_dates") or []
+    if bool(unresolved_dates) or bool(validator_unresolved_dates):
+        return True
+    if int(result.get("unresolved_date_count") or 0) > 0:
+        return True
+    if int(result.get("unresolved_date_count_all") or 0) > 0:
+        return True
+
     trust_summary = result.get("trust_summary") or {}
     trust_status = str(trust_summary.get("status") or "").strip().lower()
     if trust_status in {"blocked", "degraded"}:
         return True
-    if bool(result.get("unresolved_dates")):
-        return True
-    if str(result.get("validator_status") or "").strip().lower() == "alert":
+
+    validator_status = str(result.get("validator_status") or "").strip().lower()
+    if validator_status in {"alert", "degraded", "blocked"}:
         return True
     if int(result.get("symbols_errors") or 0) > 0:
         return True
@@ -113,45 +125,45 @@ def apply_adjustment_fields(frame: pd.DataFrame, corporate_actions: pd.DataFrame
     """Add additive adjusted-price scaffolding while preserving raw OHLC values."""
     if frame is None or frame.empty:
         return pd.DataFrame(columns=frame.columns if isinstance(frame, pd.DataFrame) else None)
-    output = frame.copy()
-    output["adjusted_open"] = pd.to_numeric(output.get("open"), errors="coerce")
-    output["adjusted_high"] = pd.to_numeric(output.get("high"), errors="coerce")
-    output["adjusted_low"] = pd.to_numeric(output.get("low"), errors="coerce")
-    output["adjusted_close"] = pd.to_numeric(output.get("close"), errors="coerce")
-    output["adjustment_factor"] = 1.0
-    output["adjustment_source"] = None
+    output = frame.copy(deep=True)
+    output.loc[:, "adjusted_open"] = pd.to_numeric(output.get("open"), errors="coerce")
+    output.loc[:, "adjusted_high"] = pd.to_numeric(output.get("high"), errors="coerce")
+    output.loc[:, "adjusted_low"] = pd.to_numeric(output.get("low"), errors="coerce")
+    output.loc[:, "adjusted_close"] = pd.to_numeric(output.get("close"), errors="coerce")
+    output.loc[:, "adjustment_factor"] = 1.0
+    output.loc[:, "adjustment_source"] = None
     if corporate_actions is not None and not corporate_actions.empty:
-        output["adjustment_source"] = "corporate_actions_pending"
+        output.loc[:, "adjustment_source"] = "corporate_actions_pending"
     return output
 
 
 def _with_default_trust_metadata(frame: pd.DataFrame, *, run_id: str | None) -> pd.DataFrame:
     if frame is None or frame.empty:
         return pd.DataFrame(columns=frame.columns if isinstance(frame, pd.DataFrame) else None)
-    output = frame.copy()
+    output = frame.copy(deep=True)
     if "provider_priority" not in output.columns:
-        output["provider_priority"] = 1
+        output.loc[:, "provider_priority"] = 1
     if "validation_status" not in output.columns:
-        output["validation_status"] = "trusted_primary"
+        output.loc[:, "validation_status"] = "trusted_primary"
     if "validated_against" not in output.columns:
-        output["validated_against"] = None
-    output["ingest_run_id"] = run_id
+        output.loc[:, "validated_against"] = None
+    output.loc[:, "ingest_run_id"] = run_id
     if "repair_batch_id" not in output.columns:
-        output["repair_batch_id"] = None
+        output.loc[:, "repair_batch_id"] = None
     if "provider_confidence" not in output.columns:
-        output["provider_confidence"] = 1.0
+        output.loc[:, "provider_confidence"] = 1.0
     if "provider_discrepancy_flag" not in output.columns:
-        output["provider_discrepancy_flag"] = False
+        output.loc[:, "provider_discrepancy_flag"] = False
     if "provider_discrepancy_note" not in output.columns:
-        output["provider_discrepancy_note"] = None
+        output.loc[:, "provider_discrepancy_note"] = None
     if "is_benchmark" not in output.columns:
-        output["is_benchmark"] = False
+        output.loc[:, "is_benchmark"] = False
     if "instrument_type" not in output.columns:
-        output["instrument_type"] = "equity"
+        output.loc[:, "instrument_type"] = "equity"
     if "benchmark_label" not in output.columns:
-        output["benchmark_label"] = None
+        output.loc[:, "benchmark_label"] = None
     if "isin" not in output.columns:
-        output["isin"] = None
+        output.loc[:, "isin"] = None
     return output
 
 
@@ -165,29 +177,56 @@ def _build_benchmark_rows(
     benchmark_rows = ingest_benchmarks(trade_dates)
     if benchmark_rows.empty:
         return pd.DataFrame()
-    output = benchmark_rows.copy()
+    output = benchmark_rows.copy(deep=True)
     if "provider" not in output.columns:
-        output["provider"] = "nse_bhavcopy"
+        output.loc[:, "provider"] = "nse_bhavcopy"
     else:
-        output["provider"] = output["provider"].fillna("nse_bhavcopy")
-    output["provider_priority"] = 1
-    output["validation_status"] = "trusted_primary"
-    output["validated_against"] = None
-    output["ingest_run_id"] = run_id
-    output["repair_batch_id"] = None
-    output["provider_confidence"] = 1.0
-    output["provider_discrepancy_flag"] = False
-    output["provider_discrepancy_note"] = None
-    output["is_benchmark"] = True
+        output.loc[:, "provider"] = output["provider"].fillna("nse_bhavcopy")
+    output.loc[:, "provider_priority"] = 1
+    output.loc[:, "validation_status"] = "trusted_primary"
+    output.loc[:, "validated_against"] = None
+    output.loc[:, "ingest_run_id"] = run_id
+    output.loc[:, "repair_batch_id"] = None
+    output.loc[:, "provider_confidence"] = 1.0
+    output.loc[:, "provider_discrepancy_flag"] = False
+    output.loc[:, "provider_discrepancy_note"] = None
+    output.loc[:, "is_benchmark"] = True
     if "instrument_type" not in output.columns:
-        output["instrument_type"] = "index"
+        output.loc[:, "instrument_type"] = "index"
     else:
-        output["instrument_type"] = output["instrument_type"].fillna("index")
-    output["benchmark_label"] = output.get("benchmark_label")
+        output.loc[:, "instrument_type"] = output["instrument_type"].fillna("index")
+    output.loc[:, "benchmark_label"] = output.get("benchmark_label")
     if "isin" not in output.columns:
-        output["isin"] = None
-    output["security_id"] = output.get("security_id", pd.Series(dtype=str)).fillna("").astype(str)
+        output.loc[:, "isin"] = None
+    output.loc[:, "security_id"] = output.get("security_id", pd.Series(dtype=str)).fillna("").astype(str)
     return apply_adjustment_fields(output)
+
+
+def _build_index_rows(
+    *,
+    trade_dates: list[str],
+    run_id: str | None,
+    ohlcv_db_path: str,
+) -> pd.DataFrame:
+    """Fetch and ingest NSE sectoral index OHLCV data."""
+    if not trade_dates:
+        return pd.DataFrame()
+    
+    try:
+        collector = IndexCollector(config=IndexIngestConfig(ohlcv_db_path=ohlcv_db_path))
+        # Ensure indices are registered
+        collector._register_indices()
+        # Fetch latest data for trade dates
+        index_rows = collector.fetch_latest(trade_dates)
+        if index_rows.empty:
+            return pd.DataFrame()
+        # Add run_id and provider
+        index_rows["provider"] = "nseindia"
+        index_rows["ingest_run_id"] = run_id
+        return index_rows
+    except Exception as e:
+        logger.warning(f"Index fetch failed: {e}")
+        return pd.DataFrame()
 
 
 def _downgrade_noncritical_quarantine_rows(
@@ -197,6 +236,7 @@ def _downgrade_noncritical_quarantine_rows(
     from_date: str,
     to_date: str,
     run_id: str | None = None,
+    stale_symbol_ids: list[str] | None = None,
 ) -> dict[str, int]:
     conn = duckdb.connect(db_path)
     try:
@@ -211,6 +251,7 @@ def _downgrade_noncritical_quarantine_rows(
             return {
                 "repair_rows_observed": 0,
                 "non_trading_provider_rows_observed": 0,
+                "stale_provider_rows_observed": 0,
             }
 
         note_prefix = f"[{run_id or 'manual'}]"
@@ -256,9 +297,34 @@ def _downgrade_noncritical_quarantine_rows(
                 [f"{note_prefix} provider_unavailable moved to observed on non-trading date"],
             ).fetchall()
 
+        stale_provider_rows = []
+        stale_symbols = sorted({str(symbol_id) for symbol_id in (stale_symbol_ids or []) if symbol_id})
+        if stale_symbols:
+            conn.register("stale_symbols", pd.DataFrame({"symbol_id": stale_symbols}))
+            stale_provider_rows = conn.execute(
+                """
+                UPDATE _catalog_quarantine
+                SET status = 'observed',
+                    resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP),
+                    note = COALESCE(note, ?)
+                FROM stale_symbols s
+                WHERE _catalog_quarantine.status = 'active'
+                  AND _catalog_quarantine.reason = 'provider_unavailable'
+                  AND _catalog_quarantine.symbol_id = s.symbol_id
+                  AND _catalog_quarantine.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                RETURNING 1
+                """,
+                [
+                    f"{note_prefix} provider_unavailable moved to observed for stale-symbol grace",
+                    from_date,
+                    to_date,
+                ],
+            ).fetchall()
+
         return {
             "repair_rows_observed": int(len(repair_rows)),
             "non_trading_provider_rows_observed": int(len(provider_rows)),
+            "stale_provider_rows_observed": int(len(stale_provider_rows)),
         }
     finally:
         conn.close()
@@ -356,10 +422,15 @@ def _bhavcopy_filename(trade_date: str) -> str:
     return f"nse_{dt.strftime('%d%b%Y').upper()}.csv"
 
 
+def _normalize_isin(value: object) -> str:
+    return str(value or "").strip().upper()
+
+
 def _normalize_bhavcopy_frame(
     raw_df: pd.DataFrame,
     trade_date: str,
     security_map: dict[str, dict],
+    isin_map: dict[str, dict] | None = None,
 ) -> pd.DataFrame:
     if raw_df is None or raw_df.empty:
         return pd.DataFrame(
@@ -371,6 +442,9 @@ def _normalize_bhavcopy_frame(
     rename_map = {
         "SYMBOL": "symbol_id",
         "SERIES": "series",
+        "ISIN": "isin",
+        "ISIN_NUMBER": "isin",
+        "ISINCODE": "isin",
         "OPEN_PRICE": "open",
         "HIGH_PRICE": "high",
         "LOW_PRICE": "low",
@@ -380,27 +454,51 @@ def _normalize_bhavcopy_frame(
     df = df.rename(columns=rename_map)
     if "series" in df.columns:
         df = df[df["series"].astype(str).str.strip().str.upper() == "EQ"]
-    df["symbol_id"] = df.get("symbol_id", pd.Series(dtype=str)).astype(str).str.strip()
-    df = df[df["symbol_id"].isin(security_map.keys())].copy()
+    symbol_map = {str(symbol): row for symbol, row in security_map.items()}
+    isin_lookup = {str(k): v for k, v in (isin_map or {}).items()}
+
+    if "isin" in df.columns:
+        df.loc[:, "isin"] = df["isin"].map(_normalize_isin)
+    else:
+        df.loc[:, "isin"] = ""
+    df.loc[:, "symbol_raw"] = df.get("symbol_id", pd.Series(dtype=str)).astype(str).str.strip().str.upper()
+
+    def resolve_symbol(row: pd.Series) -> str:
+        by_isin = isin_lookup.get(str(row.get("isin", "")))
+        if by_isin:
+            return str(by_isin.get("symbol_id", ""))
+        by_symbol = symbol_map.get(str(row.get("symbol_raw", "")))
+        if by_symbol:
+            return str(by_symbol.get("symbol_id", ""))
+        return ""
+
+    df.loc[:, "symbol_id"] = df.apply(resolve_symbol, axis=1)
+    df = df[df["symbol_id"].astype(str).str.strip() != ""].copy()
     if df.empty:
         return pd.DataFrame(
             columns=["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume"]
         )
 
     for field in ["open", "high", "low", "close", "volume"]:
-        df[field] = pd.to_numeric(df.get(field), errors="coerce")
+        df.loc[:, field] = pd.to_numeric(df.get(field), errors="coerce")
     df = df.dropna(subset=["open", "high", "low", "close"])
     if df.empty:
         return pd.DataFrame(
             columns=["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume"]
         )
 
-    df["timestamp"] = pd.to_datetime(trade_date)
-    df["security_id"] = df["symbol_id"].map(lambda symbol: security_map[symbol]["security_id"])
-    df["exchange"] = "NSE"
-    df["volume"] = df["volume"].fillna(0).astype("int64")
+    df.loc[:, "timestamp"] = pd.to_datetime(trade_date)
+    df.loc[:, "security_id"] = df["symbol_id"].map(
+        lambda symbol: str(symbol_map.get(str(symbol), {}).get("security_id", ""))
+    )
+    df.loc[:, "isin"] = df["symbol_id"].map(
+        lambda symbol: _normalize_isin(symbol_map.get(str(symbol), {}).get("isin", "")) or None
+    )
+    df.loc[:, "exchange"] = "NSE"
+    volume = pd.to_numeric(df["volume"], errors="coerce")
+    df.loc[:, "volume"] = volume.where(volume.notna(), 0).astype("int64")
     return df[
-        ["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume"]
+        ["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume", "isin"]
     ].drop_duplicates(subset=["symbol_id", "exchange", "timestamp"])
 
 
@@ -475,6 +573,7 @@ def _fetch_nse_bhavcopy_rows(
     raw_dir: Path,
     trade_dates: list[str],
     security_map: dict[str, dict],
+    isin_map: dict[str, dict] | None = None,
 ) -> tuple[pd.DataFrame, list[str], list[str]]:
     collector = NSECollector(data_dir=str(raw_dir))
     normalized_frames: list[pd.DataFrame] = []
@@ -489,7 +588,7 @@ def _fetch_nse_bhavcopy_rows(
         out_path = raw_dir / _bhavcopy_filename(trade_date)
         if not out_path.exists():
             df.to_csv(out_path, index=False)
-        normalized = _normalize_bhavcopy_frame(df, trade_date, security_map)
+        normalized = _normalize_bhavcopy_frame(df, trade_date, security_map, isin_map=isin_map)
         if normalized.empty:
             missing_dates.append(trade_date)
             continue
@@ -575,7 +674,8 @@ def _fetch_yfinance_rows(
             frame["symbol_id"] = row["symbol_id"]
             frame["security_id"] = str(row["security_id"])
             frame["exchange"] = row.get("exchange", "NSE") or "NSE"
-            frame["volume"] = pd.to_numeric(frame["volume"], errors="coerce").fillna(0).astype("int64")
+            volume = pd.to_numeric(frame["volume"], errors="coerce")
+            frame.loc[:, "volume"] = volume.where(volume.notna(), 0).astype("int64")
             normalized_frames.append(
                 frame[["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume"]]
             )
@@ -594,6 +694,8 @@ def _run_nse_yfinance_daily_update(
     symbol_limit: int | None,
     run_id: str | None = None,
     days_history: int = 7,
+    stale_missing_symbol_grace_days: int = 3,
+    nse_allow_yfinance_fallback: bool = False,
 ) -> dict:
     symbols = collector.get_symbols_from_masterdb(exchanges=["NSE"])
     symbol_master = SymbolMaster.from_masterdb(collector.masterdb_path)
@@ -612,17 +714,23 @@ def _run_nse_yfinance_daily_update(
     stale_symbols: list[str] = []
     no_data_symbols: list[str] = []
     up_to_date_symbols: list[str] = []
+    stale_gap_symbols: list[str] = []
     required_start_by_symbol: dict[str, str] = {}
+    grace_days = max(0, int(stale_missing_symbol_grace_days))
 
     for row in symbols:
         sym_id = row["symbol_id"]
         last = last_dates.get(sym_id)
         if last:
-            start_date = datetime.strptime(last, "%Y-%m-%d").date() + timedelta(days=1)
+            last_date = datetime.strptime(last, "%Y-%m-%d").date()
+            start_date = last_date + timedelta(days=1)
             if start_date > target_end_date:
                 up_to_date_symbols.append(sym_id)
             else:
                 stale_symbols.append(sym_id)
+                if (target_end_date - last_date).days > grace_days:
+                    stale_gap_symbols.append(sym_id)
+                    continue
         else:
             start_date = fallback_start
             no_data_symbols.append(sym_id)
@@ -631,6 +739,15 @@ def _run_nse_yfinance_daily_update(
         required_start_by_symbol[sym_id] = start_date.isoformat()
 
     if earliest_needed > target_end_date:
+        ensure_data_trust_schema(collector.db_path)
+        quarantine_housekeeping = _downgrade_noncritical_quarantine_rows(
+            db_path=collector.db_path,
+            masterdb_path=collector.masterdb_path,
+            from_date=fallback_start.isoformat(),
+            to_date=target_end_date.isoformat(),
+            run_id=run_id,
+            stale_symbol_ids=stale_gap_symbols,
+        )
         return {
             "symbols_updated": 0,
             "symbols_errors": 0,
@@ -639,12 +756,19 @@ def _run_nse_yfinance_daily_update(
             "nse_bhavcopy_dates": [],
             "yfinance_fallback_dates": [],
             "unresolved_dates": [],
+            "unresolved_symbol_date_count": 0,
+            "unresolved_symbol_count": 0,
+            "active_eligible_symbol_count": 0,
             "rows_written": 0,
             "duration_sec": 0.0,
             "stale_symbols": stale_symbols,
+            "stale_missing_symbol_grace_days": grace_days,
+            "stale_missing_symbol_count": len(stale_gap_symbols),
+            "stale_missing_symbols": sorted(stale_gap_symbols)[:50],
             "no_data_symbols": no_data_symbols,
             "up_to_date_symbols": up_to_date_symbols,
             "target_end_date": target_end_date.isoformat(),
+            "quarantine_housekeeping": quarantine_housekeeping,
         }
 
     trade_dates = _business_dates(
@@ -659,7 +783,12 @@ def _run_nse_yfinance_daily_update(
         }
     raw_dir = Path(project_root) / "data" / "raw" / "NSE_EQ"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    security_map = {str(row["symbol_id"]): row for row in symbols}
+    security_map = {str(row["symbol_id"]).strip().upper(): row for row in symbols}
+    isin_map = {
+        _normalize_isin(row.get("isin")): row
+        for row in symbols
+        if _normalize_isin(row.get("isin"))
+    }
 
     t0 = time.time()
     ensure_data_trust_schema(collector.db_path)
@@ -673,11 +802,13 @@ def _run_nse_yfinance_daily_update(
         from_date=earliest_needed.isoformat(),
         to_date=target_end_date.isoformat(),
         run_id=run_id,
+        stale_symbol_ids=stale_gap_symbols,
     )
     nse_rows, nse_dates, missing_dates = _fetch_nse_bhavcopy_rows(
         raw_dir=raw_dir,
         trade_dates=trade_dates,
         security_map=security_map,
+        isin_map=isin_map,
     )
     if not nse_rows.empty:
         nse_rows["provider"] = "nse_bhavcopy"
@@ -689,7 +820,7 @@ def _run_nse_yfinance_daily_update(
 
     all_rows = nse_rows.copy() if not nse_rows.empty else pd.DataFrame()
     yfinance_dates: list[str] = []
-    if missing_dates:
+    if missing_dates and bool(nse_allow_yfinance_fallback):
         yfinance_rows = _fetch_yfinance_rows(symbol_rows=symbols, trade_dates=missing_dates, batch_size=max(25, min(batch_size, 100)))
         if not yfinance_rows.empty:
             yfinance_rows["provider"] = "yfinance"
@@ -703,11 +834,11 @@ def _run_nse_yfinance_daily_update(
 
     if not all_rows.empty:
         all_rows = _with_default_trust_metadata(all_rows, run_id=run_id)
-        all_rows["is_benchmark"] = False
-        all_rows["instrument_type"] = "equity"
+        all_rows.loc[:, "is_benchmark"] = False
+        all_rows.loc[:, "instrument_type"] = "equity"
         if "isin" not in all_rows.columns:
-            all_rows["isin"] = None
-        all_rows["isin"] = all_rows["symbol_id"].map(symbol_master.isin_for)
+            all_rows.loc[:, "isin"] = None
+        all_rows.loc[:, "isin"] = all_rows["symbol_id"].map(symbol_master.isin_for)
         all_rows = annotate_provider_reconciliation(all_rows)
         all_rows = apply_adjustment_fields(all_rows)
 
@@ -779,7 +910,11 @@ def _run_nse_yfinance_daily_update(
             reason="provider_unavailable",
             status="active",
             source_run_id=run_id,
-            note="NSE bhavcopy missing and yfinance fallback returned no OHLC rows.",
+            note=(
+                "NSE bhavcopy missing and yfinance fallback returned no OHLC rows."
+                if bool(nse_allow_yfinance_fallback)
+                else "NSE bhavcopy missing and fallback source disabled."
+            ),
         )
     for trade_date, symbol_ids in sorted(observed_symbols_by_date.items()):
         rows = [symbol_lookup[symbol_id] for symbol_id in sorted(symbol_ids) if symbol_id in symbol_lookup]
@@ -810,6 +945,17 @@ def _run_nse_yfinance_daily_update(
 
     if not rows_to_write.empty:
         benchmark_rows_written = int(rows_to_write.get("is_benchmark", pd.Series(dtype=bool)).fillna(False).sum())
+
+    # Fetch sectoral index data
+    index_rows_written = 0
+    if nse_dates:
+        index_collector = IndexCollector(IndexIngestConfig(ohlcv_db_path=collector.db_path))
+        index_collector._register_indices()
+        index_rows = index_collector.fetch_latest(nse_dates)
+        if not index_rows.empty:
+            index_rows["provider"] = "nseindia"
+            index_rows["ingest_run_id"] = run_id
+            index_rows_written = index_collector.ingest(index_rows, run_id=run_id)
 
     if not all_rows.empty:
         for trade_date, provider, row_count in (
@@ -865,12 +1011,16 @@ def _run_nse_yfinance_daily_update(
         "unresolved_symbol_count_all": len(unresolved_symbols_all),
         "rows_written": rows_written,
         "benchmark_rows_written": benchmark_rows_written,
+        "index_rows_written": index_rows_written,
         "quarantined_row_count": quarantined_row_count,
         "observed_row_count": observed_row_count,
         "validation_counts": validation_counts,
         "written_without_cross_source_confirmation": int(validation_counts.get("trusted_fallback", 0)),
         "duration_sec": duration,
         "stale_symbols": stale_symbols,
+        "stale_missing_symbol_grace_days": grace_days,
+        "stale_missing_symbol_count": len(stale_gap_symbols),
+        "stale_missing_symbols": sorted(stale_gap_symbols)[:50],
         "no_data_symbols": no_data_symbols,
         "up_to_date_symbols": up_to_date_symbols,
         "trust_summary": trust_summary,
@@ -927,7 +1077,7 @@ def _load_catalog_window_rows(
               AND symbol_id IN (
                   SELECT UNNEST(?)
               )
-              AND CAST(timestamp AS DATE) BETWEEN ? AND ?
+              AND CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             ORDER BY symbol_id, timestamp
             """,
             [symbol_ids, from_date, to_date],
@@ -1100,6 +1250,9 @@ def run(
     full_rebuild: bool = False,
     feature_tail_bars: int = 252,
     run_id: str | None = None,
+    stale_missing_symbol_grace_days: int = 3,
+    nse_allow_yfinance_fallback: bool = False,
+    feature_progress_callback: Optional[Callable[[dict], None]] = None,
 ):
     paths = ensure_domain_layout(project_root=project_root, data_domain=data_domain)
     incremental_features = data_domain == "operational" and not full_rebuild
@@ -1179,11 +1332,12 @@ def run(
             incremental=incremental_features,
             tail_bars=feature_tail_bars,
             full_rebuild=full_rebuild,
+            progress_callback=feature_progress_callback,
         )
         logger.info(f"Feature computation complete: {result}")
 
         logger.info("Computing sector RS and relative strength...")
-        from features.compute_sector_rs import compute_all_symbols_rs
+        from ai_trading_system.domains.features.sector_rs import compute_all_symbols_rs
 
         compute_all_symbols_rs(
             db_path=str(paths.ohlcv_db_path),
@@ -1250,6 +1404,8 @@ def run(
                 batch_size=batch_size,
                 symbol_limit=effective_symbol_limit,
                 run_id=run_id,
+                stale_missing_symbol_grace_days=stale_missing_symbol_grace_days,
+                nse_allow_yfinance_fallback=bool(nse_allow_yfinance_fallback),
             )
         else:
             ensure_live_dhan_access()
@@ -1339,12 +1495,13 @@ def run(
             incremental=incremental_features,
             tail_bars=feature_tail_bars,
             full_rebuild=full_rebuild,
+            progress_callback=feature_progress_callback,
         )
         logger.info(f"Feature computation complete: {feat_result}")
         result["feature_result"] = feat_result
 
     logger.info("Computing sector RS and relative strength...")
-    from features.compute_sector_rs import compute_all_symbols_rs
+    from ai_trading_system.domains.features.sector_rs import compute_all_symbols_rs
 
     compute_all_symbols_rs(
         db_path=str(paths.ohlcv_db_path),

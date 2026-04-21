@@ -28,7 +28,7 @@ def load_shadow_overlay_frame(project_root: str | Path | None = None) -> pd.Data
     if not rows:
         return pd.DataFrame()
     frame = pd.DataFrame(rows)
-    frame["prediction_date"] = pd.to_datetime(frame["prediction_date"])
+    frame.loc[:, "prediction_date"] = pd.to_datetime(frame["prediction_date"])
     return frame
 
 
@@ -44,7 +44,7 @@ def load_shadow_summary_frame(
     if not rows:
         return pd.DataFrame()
     frame = pd.DataFrame(rows)
-    frame["period_start"] = pd.to_datetime(frame["period_start"])
+    frame.loc[:, "period_start"] = pd.to_datetime(frame["period_start"])
     return frame
 
 

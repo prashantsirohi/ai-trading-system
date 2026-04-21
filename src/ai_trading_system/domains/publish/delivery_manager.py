@@ -6,7 +6,7 @@ import hashlib
 import time
 from typing import Any, Callable, Dict, Optional
 
-from run.stages.base import StageArtifact, StageContext
+from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 
 
 class PublisherDeliveryManager:
@@ -32,7 +32,7 @@ class PublisherDeliveryManager:
         if context.registry is None:
             raise RuntimeError("StageContext.registry is required for publisher delivery logging")
 
-        dedupe_key = self.build_dedupe_key(context.run_id, channel, artifact)
+        dedupe_key = self.build_dedupe_key(channel, artifact)
         successful = context.registry.get_successful_delivery(dedupe_key)
         if successful:
             attempt_number = context.registry.next_delivery_attempt(dedupe_key)
@@ -111,8 +111,8 @@ class PublisherDeliveryManager:
 
         raise RuntimeError("Unreachable delivery retry state")
 
-    def build_dedupe_key(self, run_id: str, channel: str, artifact: StageArtifact) -> str:
-        seed = f"{run_id}:{channel}:{artifact.content_hash or artifact.uri}"
+    def build_dedupe_key(self, channel: str, artifact: StageArtifact) -> str:
+        seed = f"{channel}:{artifact.content_hash or artifact.uri}"
         return hashlib.sha256(seed.encode("utf-8")).hexdigest()
 
     def _normalize_sender_payload(self, payload: Dict[str, Any] | bool | None) -> Dict[str, Any]:

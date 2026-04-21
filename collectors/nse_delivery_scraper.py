@@ -13,8 +13,8 @@ from typing import Iterable, Optional
 import pandas as pd
 import requests
 
-from core.paths import ensure_domain_layout
-from core.logging import logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
 
 
 class NseHistoricalDeliveryScraper:
@@ -188,29 +188,31 @@ class NseHistoricalDeliveryScraper:
                 ]
             )
 
-        normalized["exchange"] = "NSE"
-        normalized["timestamp"] = pd.to_datetime(
+        normalized.loc[:, "exchange"] = "NSE"
+        normalized.loc[:, "timestamp"] = pd.to_datetime(
             normalized["timestamp"], dayfirst=True, errors="coerce"
         )
         for col in ["delivery_pct", "volume", "delivery_qty"]:
             if col in normalized.columns:
-                normalized[col] = (
+                normalized.loc[:, col] = (
                     normalized[col]
                     .astype(str)
                     .str.replace(",", "", regex=False)
                     .str.strip()
                 )
-        normalized["delivery_pct"] = pd.to_numeric(
+        normalized.loc[:, "delivery_pct"] = pd.to_numeric(
             normalized.get("delivery_pct"), errors="coerce"
         )
-        normalized["volume"] = pd.to_numeric(normalized.get("volume"), errors="coerce")
-        normalized["delivery_qty"] = pd.to_numeric(
+        normalized.loc[:, "volume"] = pd.to_numeric(normalized.get("volume"), errors="coerce")
+        normalized.loc[:, "delivery_qty"] = pd.to_numeric(
             normalized.get("delivery_qty"), errors="coerce"
         )
         normalized = normalized.dropna(subset=["symbol_id", "timestamp", "delivery_pct"])
-        normalized["volume"] = normalized["volume"].fillna(0).astype("int64")
-        normalized["delivery_qty"] = normalized["delivery_qty"].fillna(0).astype("int64")
-        normalized["symbol_id"] = normalized["symbol_id"].astype(str).str.strip()
+        volume = pd.to_numeric(normalized["volume"], errors="coerce")
+        delivery_qty = pd.to_numeric(normalized["delivery_qty"], errors="coerce")
+        normalized.loc[:, "volume"] = volume.where(volume.notna(), 0).astype("int64")
+        normalized.loc[:, "delivery_qty"] = delivery_qty.where(delivery_qty.notna(), 0).astype("int64")
+        normalized.loc[:, "symbol_id"] = normalized["symbol_id"].astype(str).str.strip()
         normalized = normalized.drop_duplicates(subset=["symbol_id", "exchange", "timestamp"])
         return normalized[
             ["symbol_id", "exchange", "timestamp", "delivery_pct", "volume", "delivery_qty"]

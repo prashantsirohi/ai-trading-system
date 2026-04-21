@@ -3,8 +3,8 @@ import duckdb
 import pandas as pd
 import numpy as np
 from typing import Optional, Dict, List
-from core.paths import ensure_domain_layout
-from core.logging import logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
 
 
 def compute_atr_position_size(
@@ -170,16 +170,18 @@ class RiskManager:
                 return float(df[col].dropna().iloc[-1])
             return None
 
+        window_rows = max(int(period) - 1, 0)
         conn = self._get_conn()
         try:
-            result = conn.execute(f"""
+            result = conn.execute(
+                f"""
                 WITH ohlc AS (
                     SELECT
                         symbol_id, exchange, timestamp,
                         high, low, close,
                         LAG(close) OVER w AS prev_close
                     FROM _catalog
-                    WHERE symbol_id = '{symbol_id}' AND exchange = '{exchange}'
+                    WHERE symbol_id = ? AND exchange = ?
                     WINDOW w AS (ORDER BY timestamp)
                 ),
                 tr_calc AS (
@@ -195,17 +197,20 @@ class RiskManager:
                     SELECT AVG(tr) OVER w AS raw_atr
                     FROM tr_calc
                     WINDOW w AS (ORDER BY ROW_NUMBER() OVER ()
-                                 ROWS BETWEEN {period - 1} PRECEDING AND CURRENT ROW)
+                                 ROWS BETWEEN {window_rows} PRECEDING AND CURRENT ROW)
                 )
                 SELECT raw_atr FROM atr_calc QUALIFY ROW_NUMBER() OVER (
                     ORDER BY raw_atr DESC
                 ) = 1
-            """).fetchone()
-            conn.close()
+            """,
+                (symbol_id, exchange),
+            ).fetchone()
             return float(result[0]) if result and result[0] else None
         except Exception as e:
             logger.warning(f"ATR fetch failed for {symbol_id}: {e}")
             return None
+        finally:
+            conn.close()
 
     def build_portfolio(
         self,

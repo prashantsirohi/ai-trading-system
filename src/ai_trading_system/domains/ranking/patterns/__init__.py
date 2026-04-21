@@ -7,6 +7,7 @@ from analytics.patterns.contracts import (
     PatternSignal,
     PatternTrade,
 )
+from ai_trading_system.domains.ranking.patterns.cache import PatternCacheStore
 from analytics.patterns.evaluation import (
     build_pattern_events,
     build_pattern_signals,
@@ -21,6 +22,7 @@ __all__ = [
     "PatternScanConfig",
     "PatternSignal",
     "PatternTrade",
+    "PatternCacheStore",
     "build_pattern_events",
     "build_pattern_signals",
     "ensure_pattern_event_chart",

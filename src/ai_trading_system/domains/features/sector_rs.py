@@ -3,7 +3,7 @@ import numpy as np
 import duckdb
 import sqlite3
 from pathlib import Path
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 def add_benchmark_relative_features(
@@ -57,18 +57,19 @@ def add_benchmark_relative_features(
 
 
 def load_all_symbols_with_sector(masterdb_path: str = "data/masterdata.db"):
-    """Load all symbols from stock_details with sector mapping"""
+    """Load all symbols from symbols table with sector mapping via sector_mapping"""
     conn = sqlite3.connect(masterdb_path)
 
     rows = conn.execute("""
-        SELECT Symbol, Sector
-        FROM stock_details
-        WHERE Symbol IS NOT NULL
+        SELECT s.symbol_id, COALESCE(sm.system_sector, 'Other')
+        FROM symbols s
+        LEFT JOIN sector_mapping sm ON s.sector = sm.industry
+        WHERE s.exchange = 'NSE'
     """).fetchall()
 
     conn.close()
 
-    sector_map = {sym: sector for sym, sector in rows if sector}
+    sector_map = {sym: sector for sym, sector in rows}
 
     return sector_map
 
@@ -113,9 +114,10 @@ def load_liquidity_filtered_symbols(
     if liq_df.empty:
         return []
 
-    liq_df["symbol_id"] = liq_df["symbol_id"].astype(str)
-    liq_df = liq_df[liq_df["symbol_id"].isin(sector_map)]
-    liq_df = liq_df.head(top_n)
+    liq_df = liq_df.copy(deep=True)
+    liq_df.loc[:, "symbol_id"] = liq_df["symbol_id"].astype(str)
+    liq_df = liq_df[liq_df["symbol_id"].isin(sector_map)].copy()
+    liq_df = liq_df.head(top_n).copy()
 
     logger.info(
         "Selected %s liquid symbols using %s-day lookback and >=%s recent days",
@@ -174,6 +176,35 @@ def _resolve_rs_lookbacks(available_days: int) -> list[int]:
     return []
 
 
+def _build_close_matrix(ohlcv: pd.DataFrame) -> pd.DataFrame:
+    """Build a stable wide close matrix without pandas pivot/unstack date corruption."""
+    if ohlcv.empty:
+        return pd.DataFrame()
+
+    normalized = ohlcv.loc[:, ["symbol_id", "timestamp", "close"]].copy(deep=True)
+    normalized.loc[:, "date"] = pd.to_datetime(normalized["timestamp"]).dt.normalize()
+    raw_unique_dates = int(normalized["date"].nunique())
+
+    series_by_symbol: dict[str, pd.Series] = {}
+    for symbol, group in normalized.groupby("symbol_id", sort=True):
+        closes = group.groupby("date", sort=True)["close"].last()
+        closes.index = pd.to_datetime(closes.index)
+        series_by_symbol[str(symbol)] = closes
+
+    close_df = pd.concat(series_by_symbol, axis=1).sort_index()
+    close_df = close_df.dropna(how="all", axis=1)
+
+    # Guard against silent reshape corruption that can collapse hundreds of dates
+    # into a 1-2 row matrix even when the source OHLCV history is intact.
+    if raw_unique_dates > 10 and close_df.index.nunique() <= 2:
+        raise RuntimeError(
+            "Sector RS close-matrix construction collapsed trading history unexpectedly "
+            f"(raw_dates={raw_unique_dates}, matrix_dates={close_df.index.nunique()})"
+        )
+
+    return close_df
+
+
 def compute_all_symbols_rs(
     db_path: str = "data/ohlcv.duckdb",
     feature_store_dir: str = "data/feature_store",
@@ -186,7 +217,7 @@ def compute_all_symbols_rs(
     logger.info("Sector RS Analysis - Liquidity-Filtered Broad Universe")
     logger.info("=" * 60)
 
-    logger.info("Step 1: Loading sector mapping from stock_details...")
+    logger.info("Step 1: Loading sector mapping from sector_mapping table...")
     sector_map = load_all_symbols_with_sector(masterdb_path=masterdb_path)
     logger.info("Mapped %s stocks to sectors", len(sector_map))
 
@@ -229,12 +260,8 @@ def compute_all_symbols_rs(
         logger.warning("No OHLCV rows available for sector RS; writing empty artifacts.")
         return _write_empty_outputs(feature_store_dir=feature_store_dir)
 
-    logger.info("Step 4: Deduplicating by date and pivoting...")
-    ohlcv["date"] = pd.to_datetime(ohlcv["timestamp"]).dt.normalize()
-    ohlcv = ohlcv.drop_duplicates(subset=["date", "symbol_id"], keep="last")
-    close_df = ohlcv.pivot(index="date", columns="symbol_id", values="close")
-    close_df = close_df.sort_index()
-    close_df = close_df.dropna(how="all", axis=1)
+    logger.info("Step 4: Building close matrix...")
+    close_df = _build_close_matrix(ohlcv)
     logger.info("Wide format: %s", close_df.shape)
     if close_df.empty:
         logger.warning("Pivoted close matrix is empty; writing empty sector RS artifacts.")
@@ -355,10 +382,10 @@ def compute_all_symbols_rs(
             )
 
     if final_stocks:
-        result_df = pd.DataFrame(final_stocks).sort_values("RS_Score", ascending=False)
-        result_df["RS_Score"] = result_df["RS_Score"].round(3)
-        result_df["Vs_Sector"] = result_df["Vs_Sector"].round(3)
-        result_df["Sector_Rank"] = result_df["Sector_Rank"].round(1)
+        result_df = pd.DataFrame(final_stocks).sort_values("RS_Score", ascending=False).copy(deep=True)
+        result_df.loc[:, "RS_Score"] = result_df["RS_Score"].round(3)
+        result_df.loc[:, "Vs_Sector"] = result_df["Vs_Sector"].round(3)
+        result_df.loc[:, "Sector_Rank"] = result_df["Sector_Rank"].round(1)
         logger.info("\n%s", result_df.head(50).to_string(index=False))
     else:
         logger.info("No stocks meet all criteria.")

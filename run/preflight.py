@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List
 from core.env import load_project_env
-from core.paths import get_domain_paths
+from ai_trading_system.platform.db.paths import get_domain_paths
 
 
 @dataclass

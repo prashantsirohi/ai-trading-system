@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from services.rank.factors import compute_penalty_score
+from ai_trading_system.domains.ranking.factors import compute_penalty_score
 
 
 def test_compute_penalty_score_is_additive() -> None:
@@ -17,4 +17,3 @@ def test_compute_penalty_score_is_additive() -> None:
 
     assert out.loc[out["symbol_id"] == "AAA", "penalty_score"].iloc[0] == 25.0
     assert out.loc[out["symbol_id"] == "BBB", "penalty_score"].iloc[0] == 0.0
-

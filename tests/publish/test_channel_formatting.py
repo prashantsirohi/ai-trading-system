@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from services.publish.publish_payloads import (
+from ai_trading_system.domains.publish.publish_payloads import (
     attach_publish_confidence,
     attach_publish_explainability,
     format_rows_for_channel,
@@ -28,4 +28,3 @@ def test_publish_explainability_and_confidence_are_attached_additively() -> None
     assert enriched["why_selected"] == ["relative_strength"]
     assert enriched["key_factors"] == ["relative_strength"]
     assert enriched["publish_confidence"] == 0.82
-

@@ -9,8 +9,8 @@ from pathlib import Path
 
 from collectors.ingest_full import run_ingestion
 from collectors.dhan_collector import DhanCollector
-from core.paths import ensure_domain_layout, research_static_end_date
-from core.logging import log_context, logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout, research_static_end_date
+from ai_trading_system.platform.logging.logger import log_context, logger
 
 
 def build_parser() -> argparse.ArgumentParser:

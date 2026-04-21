@@ -11,6 +11,7 @@ import multiprocessing as mp
 from pathlib import Path
 from typing import Any, Callable
 
+import duckdb
 import numpy as np
 import pandas as pd
 
@@ -28,8 +29,9 @@ from analytics.patterns.detectors import (
     detect_round_bottom_events,
 )
 from analytics.patterns.signal import find_local_extrema, kernel_smooth
-from core.paths import ensure_domain_layout
-from core.logging import logger
+from ai_trading_system.domains.ranking.patterns.cache import PatternCacheStore
+from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
 
 
 def _is_transient_resource_error(exc: BaseException) -> bool:
@@ -80,7 +82,7 @@ def _scan_pattern_events(
         return pd.DataFrame(), {}, {}
 
     for symbol, symbol_frame in frame.groupby("symbol_id", sort=True):
-        ordered = symbol_frame.sort_values("timestamp").reset_index(drop=True)
+        ordered = symbol_frame.sort_values("timestamp").reset_index(drop=True).copy()
         if len(ordered) < config.min_history_bars:
             continue
         smoothed = kernel_smooth(
@@ -88,7 +90,7 @@ def _scan_pattern_events(
             bandwidth=config.bandwidth,
             method=getattr(config, "smoothing_method", "kernel"),
         )
-        ordered["smoothed_close"] = smoothed
+        ordered.loc[:, "smoothed_close"] = smoothed
         extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
         processed[str(symbol)] = ordered
 
@@ -134,13 +136,13 @@ def _scan_pattern_signals(
     total_symbols = len(eligible_symbols)
 
     for idx, (symbol, symbol_frame) in enumerate(eligible_symbols, start=1):
-        ordered = symbol_frame.sort_values("timestamp").reset_index(drop=True)
+        ordered = symbol_frame.sort_values("timestamp").reset_index(drop=True).copy()
         smoothed = kernel_smooth(
             ordered["close"],
             bandwidth=config.bandwidth,
             method=getattr(config, "smoothing_method", "rolling"),
         )
-        ordered["smoothed_close"] = smoothed
+        ordered.loc[:, "smoothed_close"] = smoothed
         extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
         processed[str(symbol)] = ordered
 
@@ -188,7 +190,7 @@ def _pattern_signal_worker(payload: dict[str, Any]) -> dict[str, Any]:
         bandwidth=config.bandwidth,
         method=getattr(config, "smoothing_method", "rolling"),
     )
-    ordered["smoothed_close"] = smoothed
+    ordered.loc[:, "smoothed_close"] = smoothed
     extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
     signal_df, detector_stats = detect_pattern_signals_for_symbol(
         ordered,
@@ -323,6 +325,9 @@ def build_pattern_signals(
     lookback_days: int = 420,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     pattern_workers: int = 1,
+    scan_mode: str = "full",
+    stage2_only: bool = False,
+    min_stage2_score: float = 70.0,
 ) -> pd.DataFrame:
     """Build live bullish pattern signals for one domain and signal date."""
 
@@ -339,6 +344,8 @@ def build_pattern_signals(
             "symbols": tuple(symbols or active_config.symbols),
         }
     )
+    project_root = Path(project_root)
+    paths = ensure_domain_layout(project_root=project_root, data_domain=data_domain)
     working_frame = frame
     if working_frame is None:
         from_ts = (pd.Timestamp(signal_date) - pd.Timedelta(days=int(lookback_days))).date().isoformat()
@@ -350,46 +357,243 @@ def build_pattern_signals(
             symbols=symbols,
             data_domain=data_domain,
         )
+    working_frame = _attach_stage2_context(working_frame, ranked_df=ranked_df)
+    selected_symbols, cached_carry = _resolve_scan_symbols(
+        working_frame,
+        project_root=project_root,
+        signal_date=signal_date,
+        exchange=exchange,
+        data_domain=data_domain,
+        all_symbols=list(symbols or ()) or sorted(working_frame.get("symbol_id", pd.Series(dtype=str)).astype(str).unique().tolist()),
+        scan_mode=scan_mode,
+        ohlcv_db_path=paths.ohlcv_db_path,
+    )
+    scan_frame = working_frame
+    if selected_symbols:
+        scan_frame = working_frame[working_frame["symbol_id"].astype(str).isin(selected_symbols)].copy()
+    if scan_frame.empty and not cached_carry.empty:
+        signals_df = cached_carry.copy()
+        signals_df.loc[:, "signal_date"] = signal_date
+        return _attach_rank_context_and_score(signals_df, ranked_df=ranked_df).reset_index(drop=True)
+
+    scan_frame = _apply_stage2_prescreen(
+        scan_frame,
+        stage2_only=stage2_only,
+        min_stage2_score=min_stage2_score,
+    )
+    if scan_frame.empty and not cached_carry.empty:
+        signals_df = cached_carry.copy()
+        signals_df.loc[:, "signal_date"] = signal_date
+        return _attach_rank_context_and_score(signals_df, ranked_df=ranked_df).reset_index(drop=True)
+
     if int(pattern_workers) > 1:
         signals_df, _, _ = _scan_pattern_signals_parallel(
-            working_frame,
+            scan_frame,
             config=active_config,
             pattern_workers=int(pattern_workers),
             progress_callback=progress_callback,
         )
     else:
         signals_df, _, _ = _scan_pattern_signals(
-            working_frame,
+            scan_frame,
             config=active_config,
             progress_callback=progress_callback,
         )
+    if not cached_carry.empty and not signals_df.empty:
+        cached_carry = cached_carry.copy()
+        cached_carry.loc[:, "signal_date"] = signal_date
+        merged_records = signals_df.to_dict(orient="records") + cached_carry.to_dict(orient="records")
+        signals_df = pd.DataFrame.from_records(merged_records)
+    elif not cached_carry.empty:
+        signals_df = cached_carry.copy()
+        signals_df.loc[:, "signal_date"] = signal_date
+    signals_df = _attach_rank_context_and_score(signals_df, ranked_df=ranked_df).reset_index(drop=True)
+    _write_pattern_cache(
+        project_root=project_root,
+        data_domain=data_domain,
+        exchange=exchange,
+        signal_date=signal_date,
+        scan_mode=scan_mode,
+        selected_symbols=selected_symbols,
+        signals_df=signals_df,
+    )
+    return signals_df
+
+
+def _latest_rank_context(ranked_df: pd.DataFrame | None) -> pd.DataFrame:
+    if ranked_df is None or ranked_df.empty or "symbol_id" not in ranked_df.columns:
+        return pd.DataFrame()
+    ctx_cols = [
+        col
+        for col in [
+            "symbol_id",
+            "rel_strength_score",
+            "sector_rs_value",
+            "stage2_score",
+            "stage2_label",
+        ]
+        if col in ranked_df.columns
+    ]
+    if not ctx_cols:
+        return pd.DataFrame()
+    ctx = ranked_df[ctx_cols].copy()
+    ctx.loc[:, "symbol_id"] = ctx["symbol_id"].astype(str)
+    return ctx.drop_duplicates(subset=["symbol_id"], keep="last").reset_index(drop=True)
+
+
+def _attach_stage2_context(frame: pd.DataFrame, *, ranked_df: pd.DataFrame | None) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    ctx = _latest_rank_context(ranked_df)
+    if ctx.empty:
+        return frame.copy()
+    merged = frame.copy()
+    for col in ["stage2_score", "stage2_label", "rel_strength_score"]:
+        if col in merged.columns:
+            merged = merged.drop(columns=[col])
+    return merged.merge(ctx, on="symbol_id", how="left")
+
+
+def _attach_rank_context_and_score(signals_df: pd.DataFrame, *, ranked_df: pd.DataFrame | None) -> pd.DataFrame:
     if signals_df.empty:
         return signals_df
-
-    if ranked_df is not None and not ranked_df.empty and "symbol_id" in ranked_df.columns:
-        ctx_cols = [col for col in ["symbol_id", "rel_strength_score", "sector_rs_value"] if col in ranked_df.columns]
-        ctx = ranked_df[ctx_cols].copy()
-        ctx["symbol_id"] = ctx["symbol_id"].astype(str)
-        if "rel_strength_score" not in ctx.columns:
-            ctx["rel_strength_score"] = np.nan
+    output = signals_df.copy()
+    ctx = _latest_rank_context(ranked_df)
+    if not ctx.empty:
         if "sector_rs_value" not in ctx.columns:
-            ctx["sector_rs_value"] = np.nan
-        ctx["sector_rs_percentile"] = (
+            ctx.loc[:, "sector_rs_value"] = np.nan
+        if "rel_strength_score" not in ctx.columns:
+            ctx.loc[:, "rel_strength_score"] = np.nan
+        ctx.loc[:, "sector_rs_percentile"] = (
             pd.to_numeric(ctx["sector_rs_value"], errors="coerce").rank(pct=True, method="average") * 100.0
         )
-        signals_df = signals_df.drop(columns=["rel_strength_score", "sector_rs_percentile"], errors="ignore")
-        signals_df = signals_df.merge(
-            ctx[["symbol_id", "rel_strength_score", "sector_rs_percentile"]],
+        output = output.drop(columns=["rel_strength_score", "sector_rs_percentile", "stage2_score", "stage2_label"], errors="ignore")
+        output = output.merge(
+            ctx[[col for col in ["symbol_id", "rel_strength_score", "sector_rs_percentile", "stage2_score", "stage2_label"] if col in ctx.columns]],
             on="symbol_id",
             how="left",
         )
-        # Re-score after rank context is attached.
-        signals_df = signals_df.drop(columns=["pattern_rank"], errors="ignore")
-        from analytics.patterns.detectors import _score_signal_rows  # local import to avoid widening public surface
+    output = output.drop(columns=["pattern_rank"], errors="ignore")
+    from analytics.patterns.detectors import _score_signal_rows  # local import to avoid widening public surface
 
-        signals_df = _score_signal_rows(signals_df)
+    return _score_signal_rows(output)
 
-    return signals_df.reset_index(drop=True)
+
+def _build_scan_payloads(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    if frame.empty:
+        return payloads
+    for symbol_id, symbol_frame in frame.groupby("symbol_id", sort=True):
+        ordered = symbol_frame.sort_values("timestamp").reset_index(drop=True).copy()
+        payloads.append({"symbol_id": str(symbol_id), "frame": ordered})
+    return payloads
+
+
+def _stage2_prescreened(
+    eligible_payloads: list[dict],
+    *,
+    stage2_only: bool = False,
+    min_stage2_score: float = 70.0,
+) -> tuple[list[dict], list[dict]]:
+    stage2, non_stage2 = [], []
+    for payload in eligible_payloads:
+        frame = pd.DataFrame(payload.get("frame", {}))
+        if frame.empty:
+            continue
+        latest_s2 = 0.0
+        if "stage2_score" in frame.columns:
+            latest_s2 = float(pd.to_numeric(frame["stage2_score"], errors="coerce").fillna(0.0).iloc[-1])
+        if latest_s2 >= min_stage2_score:
+            stage2.append(payload)
+        elif not stage2_only:
+            non_stage2.append(payload)
+    return stage2, non_stage2
+
+
+def _apply_stage2_prescreen(
+    frame: pd.DataFrame,
+    *,
+    stage2_only: bool,
+    min_stage2_score: float,
+) -> pd.DataFrame:
+    payloads = _build_scan_payloads(frame)
+    if not payloads:
+        return frame
+    stage2_payloads, non_stage2_payloads = _stage2_prescreened(
+        payloads,
+        stage2_only=stage2_only,
+        min_stage2_score=min_stage2_score,
+    )
+    if stage2_only and not stage2_payloads:
+        has_stage2_data = any("stage2_score" in pd.DataFrame(payload.get("frame", {})).columns for payload in payloads)
+        return frame if not has_stage2_data else pd.DataFrame(columns=frame.columns)
+    selected_payloads = stage2_payloads + non_stage2_payloads
+    selected_symbols = {str(payload["symbol_id"]) for payload in selected_payloads}
+    return frame[frame["symbol_id"].astype(str).isin(selected_symbols)].copy()
+
+
+def _resolve_scan_symbols(
+    frame: pd.DataFrame,
+    *,
+    project_root: Path,
+    signal_date: str,
+    exchange: str,
+    data_domain: str,
+    all_symbols: list[str],
+    scan_mode: str,
+    ohlcv_db_path: Path,
+) -> tuple[list[str], pd.DataFrame]:
+    if frame.empty or str(data_domain).lower() != "operational":
+        return all_symbols, pd.DataFrame()
+    try:
+        store = PatternCacheStore(project_root / "data" / "control_plane.duckdb")
+    except duckdb.IOException:
+        return all_symbols, pd.DataFrame()
+    normalized_symbols = [str(symbol).strip().upper() for symbol in all_symbols if str(symbol).strip()]
+    if str(scan_mode).lower() != "incremental":
+        return normalized_symbols, pd.DataFrame()
+    latest_cache_date = store.latest_cached_signal_date(as_of_date=signal_date, exchange=exchange)
+    if latest_cache_date is None:
+        return normalized_symbols, pd.DataFrame()
+    active_symbols = store.symbols_needing_rescan(
+        normalized_symbols,
+        ohlcv_db_path=ohlcv_db_path,
+        as_of_date=signal_date,
+    )
+    cached = store.read_cached_signals(signal_date=latest_cache_date, exchange=exchange)
+    if not active_symbols:
+        return [], cached
+    carry = pd.DataFrame()
+    if not cached.empty and "symbol_id" in cached.columns:
+        carry = cached[~cached["symbol_id"].astype(str).isin(active_symbols)].copy()
+    return active_symbols, carry
+
+
+def _write_pattern_cache(
+    *,
+    project_root: Path,
+    data_domain: str,
+    exchange: str,
+    signal_date: str,
+    scan_mode: str,
+    selected_symbols: list[str],
+    signals_df: pd.DataFrame,
+) -> None:
+    if str(data_domain).lower() != "operational":
+        return
+    try:
+        store = PatternCacheStore(project_root / "data" / "control_plane.duckdb")
+    except duckdb.IOException:
+        return
+    run_prefix = "incremental" if str(scan_mode).lower() == "incremental" else "full"
+    run_scope = f"{run_prefix}:{signal_date}:"
+    scan_run_id = f"{run_scope}{len(selected_symbols)}"
+    store.write_signals(
+        signals_df,
+        scan_run_id=scan_run_id,
+        replace_date=signal_date,
+        replace_run_scope=run_scope,
+    )
 
 
 def _attach_event_study_metrics(
@@ -571,7 +775,7 @@ def _build_yearly_breakdown(
     if events_df.empty:
         return pd.DataFrame()
     yearly = events_df.copy()
-    yearly["breakout_year"] = pd.to_datetime(yearly["breakout_date"]).dt.year
+    yearly.loc[:, "breakout_year"] = pd.to_datetime(yearly["breakout_date"]).dt.year
     merged = yearly.merge(
         trades_df[["event_id", "net_return", "exit_reason", "r_multiple"]] if not trades_df.empty else pd.DataFrame(columns=["event_id"]),
         on="event_id",
@@ -615,7 +819,7 @@ def render_pattern_event_chart(
     end_idx = min(len(symbol_frame) - 1, breakout_bar_index + config.max_hold_bars)
     window = symbol_frame.iloc[start_idx : end_idx + 1].copy()
     if "smoothed_close" not in window.columns:
-        window["smoothed_close"] = kernel_smooth(window["close"], bandwidth=config.bandwidth)
+        window.loc[:, "smoothed_close"] = kernel_smooth(window["close"], bandwidth=config.bandwidth)
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=window["timestamp"], y=window["close"], name="Close", mode="lines"))
@@ -730,10 +934,15 @@ def ensure_pattern_event_chart(
             exchange=exchange,
             symbols=[str(row["symbol_id"])],
         )
-    symbol_frame = frame[frame["symbol_id"].astype(str) == str(row["symbol_id"])].sort_values("timestamp").reset_index(drop=True)
+    symbol_frame = (
+        frame[frame["symbol_id"].astype(str) == str(row["symbol_id"])]
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+        .copy()
+    )
     if symbol_frame.empty:
         raise ValueError(f"No research data found for symbol {row['symbol_id']}")
-    symbol_frame["smoothed_close"] = kernel_smooth(symbol_frame["close"], bandwidth=config.bandwidth)
+    symbol_frame.loc[:, "smoothed_close"] = kernel_smooth(symbol_frame["close"], bandwidth=config.bandwidth)
     return render_pattern_event_chart(
         output_dir=bundle_dir,
         event_row=row,

@@ -22,9 +22,9 @@ from datetime import datetime, timedelta
 from core.bootstrap import ensure_project_root_on_path
 project_root = str(ensure_project_root_on_path(__file__))
 from core.env import load_project_env
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 from run.orchestrator import PipelineOrchestrator
-from utils.data_config import (
+from ai_trading_system.platform.utils.data_config import (
     should_truncate_data,
     truncate_old_data,
     data_retention_years,
@@ -65,8 +65,8 @@ def is_weekend(date: datetime = None) -> bool:
 def run_portfolio_analysis():
     """Run portfolio analysis from Google Sheets."""
     try:
-        from channel.portfolio_analyzer import Portfolio, PortfolioManager
-        from publishers.google_sheets import GoogleSheetsManager
+        from ai_trading_system.domains.publish.portfolio_analyzer import Portfolio, PortfolioManager
+        from ai_trading_system.domains.publish.channels.google_sheets import GoogleSheetsManager
         import sqlite3
         import duckdb
         from collectors.yfinance_collector import YFinanceCollector
@@ -191,7 +191,7 @@ def main(
     validate_bhavcopy_after_ingest: bool = True,
     bhavcopy_validation_date: str | None = None,
     bhavcopy_validation_csv: str | None = None,
-    bhavcopy_validation_source: str = "auto",
+    bhavcopy_validation_source: str = "bhavcopy",
     bhavcopy_min_coverage: float = 0.9,
     bhavcopy_max_mismatch_ratio: float = 0.05,
     bhavcopy_close_tolerance_pct: float = 0.01,
@@ -394,8 +394,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--bhavcopy-validation-source",
         choices=["auto", "bhavcopy", "yfinance"],
-        default="auto",
-        help="Reference source for post-ingest validation: bhavcopy, yfinance, or auto fallback.",
+        default="bhavcopy",
+        help="Reference source for post-ingest validation (default: bhavcopy).",
     )
     parser.add_argument(
         "--bhavcopy-min-coverage",

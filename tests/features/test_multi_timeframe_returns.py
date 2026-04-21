@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from features.indicators import add_multi_timeframe_returns
+from ai_trading_system.domains.features.indicators import add_multi_timeframe_returns
 
 
 def test_add_multi_timeframe_returns_computes_per_symbol() -> None:

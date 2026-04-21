@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 from core.bootstrap import ensure_project_root_on_path
 ensure_project_root_on_path(__file__)
-from utils.env import load_project_env
+from ai_trading_system.platform.utils.env import load_project_env
 
 load_project_env(__file__)
 

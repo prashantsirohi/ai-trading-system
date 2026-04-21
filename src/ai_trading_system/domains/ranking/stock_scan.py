@@ -11,7 +11,7 @@ Usage:
 from datetime import datetime
 
 import pandas as pd
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.ranking import _scan_data
 from ai_trading_system.domains.ranking._script_env import bootstrap_script_environment
 
@@ -117,10 +117,10 @@ def scan_stocks(
 
     df = df.dropna(subset=["rs"])
 
-    df["sector"] = df.index.map(lambda s: sector_map.get(s, "Other"))
+    df.loc[:, "sector"] = df.index.map(lambda s: sector_map.get(s, "Other"))
 
     sector_avg = df.groupby("sector")["rs"].transform("mean")
-    df["rs_vs_sector"] = df["rs"] - sector_avg
+    df.loc[:, "rs_vs_sector"] = df["rs"] - sector_avg
 
     df = df[df["sector"].isin(selected_sectors)]
 
@@ -128,7 +128,7 @@ def scan_stocks(
         logger.warning("No stocks after sector filter - returning empty result")
         return df
 
-    df["acceleration"] = df["rs_20"] - df["rs_50"]
+    df.loc[:, "acceleration"] = df["rs_20"] - df["rs_50"]
 
     def classify(row):
         if row["rs"] > 0.9 and row["rs_vs_sector"] > 0.2 and row["momentum"] > 0:
@@ -141,10 +141,10 @@ def scan_stocks(
             return ("REJECT", "Weak vs sector + falling")
 
     results = df.apply(classify, axis=1)
-    df["category"] = results.apply(lambda x: x[0])
-    df["why"] = results.apply(lambda x: x[1])
+    df.loc[:, "category"] = results.apply(lambda x: x[0])
+    df.loc[:, "why"] = results.apply(lambda x: x[1])
 
-    df["score"] = 0.5 * df["rs"] + 0.3 * df["rs_20"] + 0.2 * (df["rs_vs_sector"] + 0.5)
+    df.loc[:, "score"] = 0.5 * df["rs"] + 0.3 * df["rs_20"] + 0.2 * (df["rs_vs_sector"] + 0.5)
 
     df = df.sort_values("score", ascending=False)
 

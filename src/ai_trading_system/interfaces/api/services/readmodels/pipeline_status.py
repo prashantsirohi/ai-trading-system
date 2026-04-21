@@ -95,7 +95,7 @@ def get_execution_health(
             master_symbols = {
                 row[0]
                 for row in master_conn.execute(
-                    "SELECT DISTINCT Symbol FROM stock_details WHERE exchange = 'NSE'"
+                    "SELECT DISTINCT symbol_id FROM symbols WHERE exchange = 'NSE'"
                 ).fetchall()
             }
         finally:

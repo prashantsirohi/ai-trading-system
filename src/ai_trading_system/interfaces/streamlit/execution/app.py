@@ -61,12 +61,12 @@ def _display_frame(frame: pd.DataFrame, limit: int = 20) -> pd.DataFrame:
     for column in ("prediction_date", "period_start", "started_at", "ended_at", "run_date"):
         if column in display.columns:
             try:
-                display[column] = pd.to_datetime(display[column]).dt.strftime("%Y-%m-%d %H:%M")
+                display.loc[:, column] = pd.to_datetime(display[column]).dt.strftime("%Y-%m-%d %H:%M")
             except Exception:
-                display[column] = display[column].astype(str)
+                display.loc[:, column] = display[column].astype(str)
     float_cols = display.select_dtypes(include=["float64", "float32"]).columns
     if len(float_cols) > 0:
-        display[float_cols] = display[float_cols].round(2)
+        display.loc[:, float_cols] = display[float_cols].round(2)
     return display.fillna("")
 
 
@@ -156,7 +156,7 @@ def _curate_frame(title: str, frame: pd.DataFrame) -> pd.DataFrame:
         display = display[selected + remainder[:4]]
     for col in ("status", "severity", "category", "Quadrant"):
         if col in display.columns:
-            display[col] = display[col].astype(str).str.upper()
+            display.loc[:, col] = display[col].astype(str).str.upper()
     return display
 
 
@@ -227,8 +227,8 @@ def _bar_chart_option(
     if frame is None or frame.empty or label_col not in frame.columns or value_col not in frame.columns:
         return None
     chart = frame[[label_col, value_col]].head(limit).copy()
-    chart[label_col] = chart[label_col].astype(str)
-    chart[value_col] = pd.to_numeric(chart[value_col], errors="coerce")
+    chart.loc[:, label_col] = chart[label_col].astype(str)
+    chart.loc[:, value_col] = pd.to_numeric(chart[value_col], errors="coerce")
     chart = chart.dropna(subset=[value_col])
     if chart.empty:
         return None

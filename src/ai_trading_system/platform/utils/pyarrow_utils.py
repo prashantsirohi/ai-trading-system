@@ -5,7 +5,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 def read_parquet(

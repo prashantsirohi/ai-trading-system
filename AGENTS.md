@@ -1,153 +1,151 @@
-# AGENTS.md
-## Codex Operational Guidelines for AI Trading System
+# AGENTS.md — Refactor Rules for AI Trading System
 
-This file provides persistent instructions for Codex when working on this repository.
-
----
-
-## 📘 Primary Directive
-
-Before making any architectural or structural changes, Codex MUST read:
-
-
-Codex must execute tasks sequentially according to the phases defined in that document.
+## Purpose
+This file defines how automated agents (Codex, Claude, etc.) should perform
+refactoring and code changes in this repository.
 
 ---
 
-## 🎯 Repository Purpose
+## 🔒 Core Principle
 
-This repository implements a modular AI-driven trading system for NSE markets. It includes:
+> This is a **behavior-preserving refactor**, NOT a redesign.
 
-- Data ingestion and validation
-- Feature engineering
-- Technical ranking and pattern detection
-- Paper-trading execution
-- Multi-channel publishing
-- Operator UI and APIs
+If unsure → **preserve existing behavior**.
 
 ---
 
-## 🧭 Pipeline Architecture
+## 🧱 Architecture Reference
 
-ingest → features → rank → execute → publish → ui
+Pipeline stages (must remain unchanged):
 
-Each stage produces versioned artifacts stored under:
-data/pipeline_runs/
+ingest → features → rank → execute → publish
 
-These artifacts serve as the system of record.
-
----
-
-## 📌 Codex Rules of Engagement
-
-### General Rules
-- Follow the refactor plan strictly.
-- Work phase-by-phase.
-- Keep changes small and reviewable.
-- Preserve backward compatibility.
-- Maintain artifact formats unless instructed otherwise.
-- Do not introduce breaking changes without justification.
-
-### Development Standards
-- Prefer `core.*` over `utils.*`.
-- Use clear service boundaries.
-- Keep stage wrappers thin.
-- Introduce read models for UI.
-- Add tests for new logic.
-- Avoid unnecessary abstractions.
-
-### Safety Constraints
-Codex must NOT:
-- Perform a full repository rewrite.
-- Change artifact filenames or schemas.
-- Modify trading logic unless instructed.
-- Remove legacy code before replacement is verified.
-- Replace DuckDB, Parquet, or the execution framework.
-- Introduce live trading integrations.
+These are **hard contracts**, not suggestions.
 
 ---
 
-## 📁 Architectural Guidelines
+## 🚫 DO NOT CHANGE (Critical Invariants)
 
-### Runtime Infrastructure
-- Use `core.paths` for path resolution.
-- Use `core.logging` for logging.
-- Use `core.contracts` for shared data models.
+### Runtime Contracts
+- CLI flags and commands
+- Stage ordering and naming
+- Trust / DQ gating logic
+- Execution modes (paper/live/preview)
+- Publish retry + dedupe behavior
 
-### Service Layers
-Business logic should reside in:
-services/
-ingest/
-features/
-rank/
-execute/
-publish/
+### Data Contracts
+- DuckDB schema
+- Table names
+- Column names
+- Data types
 
-### UI Data Access
-The UI must use read models located in:
-ui/services/readmodels/
+### Artifact Contracts
+DO NOT rename or move:
 
-Direct filesystem access to artifacts should be avoided outside these modules.
+- ingest_summary.json
+- feature_snapshot.json
+- ranked_signals.csv
+- breakout_scan.csv
+- pattern_scan.csv
+- stock_scan.csv
+- sector_dashboard.csv
+- dashboard_payload.json
+- execute_summary.json
+- publish_summary.json
 
----
-
-## 🧪 Testing Requirements
-
-Codex must:
-- Add tests for new modules.
-- Preserve existing behavior.
-- Ensure orchestrator and API imports remain valid.
-- Validate artifact compatibility.
-
----
-
-## 🧾 Documentation Responsibilities
-
-Codex should update documentation when:
-- Architectural changes are introduced.
-- Services are extracted or refactored.
-- Contracts are modified.
-
-Relevant directories:
-
-docs/refactor/
- docs/architecture/
+### API Contracts
+- Endpoint paths
+- Response JSON structure
+- Query parameters
 
 ---
 
-## ▶️ Standard Codex Execution Prompt
+## ⚠️ Refactor Strategy (MANDATORY)
 
-When initiating work, use:
-Read docs/refactor/CODEX_REFACTOR_PLAN.md and execute the next pending phase.
+Every change MUST follow this sequence:
 
-
----
-
-## 📊 Completion Criteria
-
-The refactor is considered complete when:
-
-- All phases in CODEX_REFACTOR_PLAN.md are executed.
-- Runtime infrastructure is unified.
-- Stage wrappers are thin and modular.
-- UI read models are implemented.
-- Execution contracts are normalized.
-- Documentation is aligned with the codebase.
+1. **Move files (path only)**
+2. Add **compatibility shim**
+3. Fix imports minimally
+4. Run tests
+5. Validate artifacts
+6. THEN (in later phase) refactor internals
 
 ---
 
-## 👤 Maintainer
+## 🔁 Compatibility Shim Rule
 
-**Prashant Sirohi**  
-AI Trading System Architect
+When moving a module:
 
----
+Old file MUST remain as:
 
-## 🚀 Final Instruction to Codex
+```python
+from ai_trading_system.<new_path> import *  # noqa
 
-Always begin by reading:
+Do NOT remove shim until:
 
-docs/refactor/CODEX_REFACTOR_PLAN.md
+All imports are migrated
+Tests pass
+Explicit cleanup phase
+🧠 Decision Rules
+If something is unclear:
+Assume it is a public contract
+Do NOT modify it
+If refactor requires behavior change:
+STOP
+Document blocker
+Do not guess
+🧩 Large File Handling
 
-Then proceed with the next phase in sequence.
+Files like:
 
+feature_store.py
+dhan_collector.py
+ranking orchestration
+
+Must NOT be split during path migration.
+
+Only split in dedicated decomposition phase.
+
+🛑 Anti-Patterns to Avoid
+
+❌ Renaming fields for “clarity”
+❌ Changing JSON keys
+❌ Reordering CSV columns
+❌ Changing default config values
+❌ Adding validation rules
+❌ Introducing new abstractions prematurely
+❌ Mixing multiple domains in one refactor
+
+✅ What IS Allowed
+
+✔ Moving files
+✔ Fixing broken imports
+✔ Adding shims
+✔ Extracting helpers ONLY when necessary
+✔ Small safe bugfixes explicitly identified
+
+🧪 Validation Required After Every Change
+Tests must run
+Pipeline must still execute (canary mode acceptable)
+Artifacts must match previous schema
+📦 Output Requirements (for every task)
+
+Agent MUST provide:
+
+Files changed
+Old → New path mapping
+Shims added
+Tests result
+Risks / assumptions
+🔚 Final Cleanup Phase
+
+Only at the very end:
+
+Remove shims
+Remove dead imports
+Update docs
+Normalize imports
+🧭 Golden Rule
+
+If it might break production → don’t do it in refactor phase.

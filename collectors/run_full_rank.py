@@ -7,7 +7,7 @@ import os, sys, time
 from core.bootstrap import ensure_project_root_on_path
 project_root = str(ensure_project_root_on_path(__file__))
 
-from utils.env import load_project_env
+from ai_trading_system.platform.utils.env import load_project_env
 
 load_project_env(__file__)
 

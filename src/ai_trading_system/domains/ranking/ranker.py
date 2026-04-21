@@ -7,8 +7,8 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from core.logging import logger
-from core.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
+from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.domains.ranking.composite import (
     apply_rank_stability,
     compute_factor_scores,
@@ -115,15 +115,42 @@ class StockRanker:
         scores = self._compute_delivery(scores, date)
         scores = self._compute_sector_strength(scores, date)
         scores = compute_factor_scores(scores, weights=weights)
-        scores["rank_mode"] = rank_mode
-        scores = apply_rank_eligibility(scores)
+        scores.loc[:, "rank_mode"] = rank_mode
+
+        # ── Stage 2 enrichment (additive, non-breaking) ──────────────────
+        # stage2_score may already be present from feature_store; if so, add
+        # a conservative bonus (max +5 pts) to composite_score_adjusted and
+        # pre-filter to Stage 2 names when operating in stage2_breakout mode.
+        if "stage2_score" in scores.columns:
+            s2_score = pd.to_numeric(scores["stage2_score"], errors="coerce").fillna(0.0)
+            scores.loc[:, "stage2_score_bonus"] = (s2_score / 100.0) * 5.0
+        else:
+            scores.loc[:, "stage2_score_bonus"] = 0.0
+
+        if rank_mode == "stage2_breakout" and "is_stage2_uptrend" in scores.columns:
+            pre_filter_count = len(scores)
+            scores = scores[scores["is_stage2_uptrend"].fillna(False)].copy()
+            logger.info(
+                "stage2_breakout mode: %d → %d symbols after Stage 2 filter",
+                pre_filter_count,
+                len(scores),
+            )
+
+        scores = apply_rank_eligibility(
+            scores,
+            stage2_gate_enabled=(rank_mode == "stage2_breakout"),
+        )
         scores = compute_penalty_score(scores)
-        scores["composite_score_adjusted"] = scores["composite_score"] - scores["penalty_score"].fillna(0.0)
+        scores.loc[:, "composite_score_adjusted"] = (
+            scores["composite_score"]
+            + scores["stage2_score_bonus"]
+            - scores["penalty_score"].fillna(0.0)
+        ).clip(0.0, 100.0)
         scores = compute_rank_confidence(scores)
         scores = add_signal_freshness(scores)
         scores = apply_rank_stability(scores, previous_frame=previous_ranked)
         if apply_penalty_adjustment:
-            scores["composite_score"] = scores["composite_score_adjusted"]
+            scores.loc[:, "composite_score"] = scores["composite_score_adjusted"]
         # scores = self._apply_1yr_penalty(scores, weights)
         scores = filter_ranked_scores(scores, min_score=min_score, top_n=top_n)
         return select_rank_output_columns(scores)
@@ -195,12 +222,13 @@ class StockRanker:
         periods: List[int] = None,
     ) -> pd.DataFrame:
         _ = (date, benchmark_symbol)
-        period = (periods or [20])[0]
+        period_list = periods or [20, 60, 120]
         try:
-            return_frame = self.input_loader.load_return_frame(period=period)
+            return_frame = self.input_loader.load_return_frame_multi(periods=period_list)
         except Exception as exc:
             logger.warning("Could not compute relative strength: %s", exc)
-            return_frame = pd.DataFrame(columns=["symbol_id", "exchange", "return_pct"])
+            cols = ["symbol_id", "exchange"] + [f"return_{p}" for p in period_list]
+            return_frame = pd.DataFrame(columns=cols)
         return apply_relative_strength(data, return_frame=return_frame)
 
     def _compute_volume_intensity(self, data: pd.DataFrame) -> pd.DataFrame:

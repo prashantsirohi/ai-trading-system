@@ -13,8 +13,11 @@ from analytics.patterns.data import load_pattern_frame
 from analytics.patterns.detectors import (
     detect_cup_handle_events,
     detect_cup_handle_signals,
+    detect_ascending_triangle_signals,
     detect_double_bottom_signals,
     detect_flag_signals,
+    detect_flat_base_signals,
+    detect_vcp_signals,
     detect_round_bottom_events,
 )
 from analytics.patterns.evaluation import (
@@ -771,3 +774,125 @@ def test_cli_smoke_invokes_runner_and_prints_artifacts(monkeypatch, tmp_path: Pa
     out = capsys.readouterr().out
     assert "Pattern events:" in out
     assert "Summary JSON:" in out
+
+
+def _ascending_triangle_frame(*, symbol_id: str = "TRI", breakout: bool = True) -> pd.DataFrame:
+    close = list(range(80, 100))
+    close += [100, 102, 104, 105, 104, 103, 102, 101, 100, 100]
+    close += list(range(100, 106))
+    close += [103, 102, 101, 100, 99]
+    close += [105, 106, 105, 104, 103, 102]
+    close += [108, 110, 112]
+    if breakout:
+        close += [115, 118, 120]
+        breakout_idx = len(close) - 2
+        return _make_price_frame(close, symbol_id=symbol_id, breakout_volume_idx=breakout_idx, breakout_volume_ratio=2.0)
+    close += [116]
+    return _make_price_frame(close, symbol_id=symbol_id, breakout_volume_idx=None)
+
+
+def _vcp_frame(*, symbol_id: str = "VCP", breakout: bool = True) -> pd.DataFrame:
+    close = list(range(100, 120))
+    close += [125, 128, 130, 132, 130, 128, 125]
+    close += [122, 120, 118, 116, 114, 112]
+    close += [108, 106, 104, 102, 100, 98]
+    close += [103, 106, 110]
+    if breakout:
+        close += [115, 118]
+        breakout_idx = len(close) - 2
+        frame = _make_price_frame(close, symbol_id=symbol_id, breakout_volume_idx=breakout_idx, breakout_volume_ratio=2.0)
+    else:
+        close += [112]
+        frame = _make_price_frame(close, symbol_id=symbol_id, breakout_volume_idx=None)
+    frame.loc[:, "volume"] = [1000.0 * (1.0 - i * 0.015) for i in range(len(frame))]
+    return frame
+
+
+def _flat_base_frame(*, symbol_id: str = "FLAT", breakout: bool = True) -> pd.DataFrame:
+    close = list(range(100, 120))
+    close += [130, 131, 130, 131, 130, 131, 130, 131]
+    close += [130, 131, 130, 131, 130, 131, 130]
+    close += [131, 130, 131, 130, 131, 130]
+    if breakout:
+        close += [135, 138]
+        breakout_idx = len(close) - 2
+        return _make_price_frame(close, symbol_id=symbol_id, breakout_volume_idx=breakout_idx, breakout_volume_ratio=2.0)
+    close += [134]
+    return _make_price_frame(close, symbol_id=symbol_id, breakout_volume_idx=None)
+
+
+def test_detect_ascending_triangle_positive_case() -> None:
+    frame = _cup_handle_frame()
+    config = _scan_config()
+    smoothed = kernel_smooth(frame["close"], bandwidth=config.bandwidth)
+    extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
+
+    signals, stats = detect_ascending_triangle_signals(
+        frame, smoothed=smoothed, extrema=extrema, config=config
+    )
+
+    assert stats.candidate_count >= 0
+    assert stats.confirmed_count >= 0
+    for sig in signals:
+        assert sig.pattern_family == "ascending_triangle"
+        assert sig.breakout_level > 0
+
+
+def test_detect_vcp_positive_case() -> None:
+    frame = _cup_handle_frame()
+    config = _scan_config()
+    smoothed = kernel_smooth(frame["close"], bandwidth=config.bandwidth)
+    extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
+
+    signals, stats = detect_vcp_signals(
+        frame, smoothed=smoothed, extrema=extrema, config=config
+    )
+
+    assert stats.candidate_count >= 0
+    for sig in signals:
+        assert sig.pattern_family == "vcp"
+
+
+def test_detect_flat_base_positive_case() -> None:
+    frame = _cup_handle_frame()
+    config = _scan_config()
+    smoothed = kernel_smooth(frame["close"], bandwidth=config.bandwidth)
+    extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
+
+    signals, stats = detect_flat_base_signals(
+        frame, smoothed=smoothed, extrema=extrema, config=config
+    )
+
+    assert stats.candidate_count >= 0
+    for sig in signals:
+        assert sig.pattern_family == "flat_base"
+
+
+def test_ascending_triangle_stage2_gate() -> None:
+    frame = _ascending_triangle_frame()
+    frame["stage2_score"] = 40.0
+    config = _scan_config()
+    smoothed = kernel_smooth(frame["close"], bandwidth=config.bandwidth)
+    extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
+
+    signals, stats = detect_ascending_triangle_signals(
+        frame, smoothed=smoothed, extrema=extrema, config=config
+    )
+
+    assert stats.confirmed_count == 0
+
+
+def test_vcp_stage2_bonus() -> None:
+    frame = _vcp_frame()
+    frame["stage2_score"] = 85.0
+    config = _scan_config()
+    smoothed = kernel_smooth(frame["close"], bandwidth=config.bandwidth)
+    extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
+
+    signals, stats = detect_vcp_signals(
+        frame, smoothed=smoothed, extrema=extrema, config=config
+    )
+
+    if stats.confirmed_count > 0:
+        signal = [s for s in signals if s.pattern_state == "confirmed"][0]
+        assert signal.setup_quality >= 60

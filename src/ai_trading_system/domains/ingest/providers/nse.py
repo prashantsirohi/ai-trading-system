@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 import pandas as pd
 import requests
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 class NSECollector:

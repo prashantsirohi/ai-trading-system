@@ -5,7 +5,7 @@ import pandas as pd
 import io
 from datetime import datetime
 from typing import Optional, Dict, List
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 class MasterDataCollector:
@@ -30,6 +30,17 @@ class MasterDataCollector:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
+        def _ensure_table_columns(table_name: str, expected_columns: dict[str, str]) -> None:
+            existing = {
+                row[1]
+                for row in cursor.execute(f"PRAGMA table_info({table_name})").fetchall()
+            }
+            for column_name, column_type in expected_columns.items():
+                if column_name not in existing:
+                    cursor.execute(
+                        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+                    )
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS symbols (
                 symbol_id TEXT PRIMARY KEY,
@@ -45,9 +56,29 @@ class MasterDataCollector:
                 industry TEXT,
                 nse_symbol TEXT,
                 bse_symbol TEXT,
+                mcap REAL,
                 last_updated TEXT
             )
         """)
+        _ensure_table_columns(
+            "symbols",
+            {
+                "security_id": "TEXT",
+                "symbol_name": "TEXT",
+                "exchange": "TEXT",
+                "instrument_type": "TEXT",
+                "isin": "TEXT",
+                "lot_size": "INTEGER",
+                "tick_size": "REAL",
+                "freeze_quantity": "INTEGER",
+                "sector": "TEXT",
+                "industry": "TEXT",
+                "nse_symbol": "TEXT",
+                "bse_symbol": "TEXT",
+                "mcap": "REAL",
+                "last_updated": "TEXT",
+            },
+        )
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS sectors (
@@ -69,6 +100,21 @@ class MasterDataCollector:
                 FOREIGN KEY (sector_name) REFERENCES sectors(sector_name)
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sector_mapping (
+                industry TEXT PRIMARY KEY,
+                system_sector TEXT NOT NULL,
+                last_updated TEXT
+            )
+        """)
+        _ensure_table_columns(
+            "sector_mapping",
+            {
+                "industry": "TEXT",
+                "system_sector": "TEXT",
+                "last_updated": "TEXT",
+            },
+        )
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_symbols_exchange ON symbols(exchange)
@@ -78,6 +124,9 @@ class MasterDataCollector:
         """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_sector_constituents_sector ON sector_constituents(sector_name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sector_mapping_system_sector ON sector_mapping(system_sector)
         """)
 
         conn.commit()
@@ -227,8 +276,8 @@ class MasterDataCollector:
                 INSERT OR REPLACE INTO symbols (
                     symbol_id, security_id, symbol_name, exchange, instrument_type,
                     isin, lot_size, tick_size, freeze_quantity,
-                    sector, industry, nse_symbol, bse_symbol, last_updated
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    sector, industry, nse_symbol, bse_symbol, mcap, last_updated
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 str(row.get("symbol_id", "")),
                 str(row.get("security_id", "")),
@@ -243,8 +292,23 @@ class MasterDataCollector:
                 str(row.get("industry", "Unknown")),
                 str(row.get("symbol_id", "")),
                 str(row.get("symbol_id", "")),
+                float(row.get("mcap", row.get("MCAP", 0)) or 0),
                 timestamp
             ))
+
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO sector_mapping (industry, system_sector, last_updated)
+            SELECT DISTINCT
+                sector,
+                sector,
+                ?
+            FROM symbols
+            WHERE sector IS NOT NULL
+              AND TRIM(sector) != ''
+            """,
+            (timestamp,),
+        )
 
         zerodha_sectors = self.fetch_zerodha_sectors()
         for sector_name, index_symbol in zerodha_sectors.items():

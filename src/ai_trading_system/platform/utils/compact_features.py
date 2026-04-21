@@ -16,7 +16,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pyarrow.parquet import ParquetWriter
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 
 def compact_feature(feature_dir: str, month: str = None) -> str:

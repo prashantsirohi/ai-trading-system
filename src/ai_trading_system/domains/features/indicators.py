@@ -2,7 +2,7 @@ import os
 from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
-from core.logging import logger
+from ai_trading_system.platform.logging.logger import logger
 
 ta = None
 talib = None
@@ -29,6 +29,156 @@ def add_multi_timeframe_returns(frame: pd.DataFrame) -> pd.DataFrame:
     for period in [5, 20, 60, 120, 252]:
         output[f"return_{period}d"] = grouped["close"].pct_change(period)
     return output
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 Uptrend scoring (Weinstein methodology, NSE-calibrated)
+# ---------------------------------------------------------------------------
+_STAGE2_OUTPUT_COLS = (
+    "sma_150",
+    "sma150_slope_20d_pct",
+    "sma200_slope_20d_pct",
+    "stage2_score",
+    "is_stage2_uptrend",
+    "stage2_label",
+    "stage2_fail_reason",
+)
+
+
+def add_stage2_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute Stage 2 uptrend score, boolean flag, and label per bar.
+
+    Points-based scoring (max 100) calibrated for NSE large/mid-cap daily OHLCV.
+
+    Required input columns
+    ----------------------
+    close                -- price series
+    sma_50               -- 50-bar SMA (or computed internally if absent)
+    sma_200              -- 200-bar SMA (or computed internally if absent)
+    near_52w_high_pct    -- pct distance from 52-week high (0 = at high)
+    rel_strength_score   -- cross-sectional RS percentile 0-100
+    volume_ratio_20      -- current volume / 20-bar avg volume
+
+    Added columns
+    -------------
+    sma_150              -- 150-bar SMA (min 100 periods)
+    sma150_slope_20d_pct -- 20-bar slope of sma_150 (%)
+    sma200_slope_20d_pct -- 20-bar slope of sma_200 (%)
+    stage2_score         -- 0-100 composite score
+    is_stage2_uptrend    -- True when stage2_score >= 70
+    stage2_label         -- 'strong_stage2' | 'stage2' | 'stage1_to_stage2' | 'non_stage2'
+    stage2_fail_reason   -- comma-separated fail reasons for last bar ('' when all pass)
+    """
+    out = df.copy()
+
+    # Guard: empty frame — add typed empty columns and return
+    if out.empty or "close" not in out.columns:
+        for col in _STAGE2_OUTPUT_COLS:
+            out[col] = pd.Series(
+                dtype=float if col not in ("stage2_label", "stage2_fail_reason") else object
+            )
+        return out
+
+    close = pd.to_numeric(out["close"], errors="coerce")
+
+    # ── SMA-150 (primary Stage 2 MA) ─────────────────────────────────────
+    out.loc[:, "sma_150"] = close.rolling(150, min_periods=100).mean()
+
+    # ── SMA references (use existing columns when present) ───────────────
+    sma_150 = out["sma_150"]
+    sma_200 = pd.to_numeric(
+        out.get("sma_200", close.rolling(200, min_periods=100).mean()),
+        errors="coerce",
+    )
+    # Ensure sma_200 column is in frame for downstream scoring
+    if "sma_200" not in out.columns:
+        out.loc[:, "sma_200"] = sma_200
+
+    # ── SMA slopes (20-bar look-back, expressed as %) ────────────────────
+    out.loc[:, "sma150_slope_20d_pct"] = ((sma_150 / sma_150.shift(20)) - 1.0) * 100.0
+    out.loc[:, "sma200_slope_20d_pct"] = ((sma_200 / sma_200.shift(20)) - 1.0) * 100.0
+
+    # ── Optional fields — use defaults when absent ────────────────────────
+    near_52w = pd.to_numeric(
+        out.get("near_52w_high_pct", pd.Series(999.0, index=out.index)),
+        errors="coerce",
+    ).fillna(999.0)
+
+    rs_score = pd.to_numeric(
+        out.get("rel_strength_score", pd.Series(0.0, index=out.index)),
+        errors="coerce",
+    ).fillna(0.0)
+
+    vol_ratio = pd.to_numeric(
+        out.get("volume_ratio_20", pd.Series(1.0, index=out.index)),
+        errors="coerce",
+    ).fillna(1.0)
+
+    # ── Scoring (9 conditions, max 100 pts) ──────────────────────────────
+    # Condition 1:  close > sma_150          → 15 pts
+    # Condition 2:  close > sma_200          → 15 pts
+    # Condition 3:  sma_150 > sma_200        → 15 pts  (MA alignment)
+    # Condition 4:  sma200_slope_20d_pct > 0 → 15 pts  (SMA-200 rising)
+    # Condition 5:  near_52w_high_pct ≤ 25%  → 10 pts  (upper half of range)
+    # Condition 6:  near_52w_high_pct ≤ 15%  → 10 pts  (near breakout zone)
+    # Condition 7:  rel_strength_score ≥ 70   → 10 pts  (top 30th pct)
+    # Condition 8:  rel_strength_score ≥ 85   → 10 pts  (top 15th pct, cumulative)
+    # Condition 9:  volume_ratio_20 > 1.2     → 10 pts  (demand confirmation)
+    slope_200 = out["sma200_slope_20d_pct"].fillna(-1.0)
+
+    score = pd.Series(0.0, index=out.index)
+    score += np.where(close > sma_150, 15.0, 0.0)
+    score += np.where(close > sma_200, 15.0, 0.0)
+    score += np.where(sma_150 > sma_200, 15.0, 0.0)
+    score += np.where(slope_200 > 0.0, 15.0, 0.0)
+    score += np.where(near_52w <= 25.0, 10.0, 0.0)
+    score += np.where(near_52w <= 15.0, 10.0, 0.0)  # cumulative with ≤25
+    score += np.where(rs_score >= 70.0, 10.0, 0.0)
+    score += np.where(rs_score >= 85.0, 10.0, 0.0)  # cumulative with ≥70
+    score += np.where(vol_ratio > 1.2, 10.0, 0.0)
+
+    out.loc[:, "stage2_score"] = score.clip(0.0, 100.0)
+    out.loc[:, "is_stage2_uptrend"] = out["stage2_score"] >= 70.0
+
+    out.loc[:, "stage2_label"] = np.select(
+        [
+            out["stage2_score"] >= 85.0,
+            out["stage2_score"] >= 70.0,
+            out["stage2_score"] >= 50.0,
+        ],
+        ["strong_stage2", "stage2", "stage1_to_stage2"],
+        default="non_stage2",
+    )
+
+    # ── Fail-reason explainability (last bar only — avoids O(n) row-apply) ─
+    out.loc[:, "stage2_fail_reason"] = ""
+    if len(out) > 0 and not bool(out["is_stage2_uptrend"].iloc[-1]):
+        last = out.iloc[-1]
+        reasons: list[str] = []
+        c = float(last.get("close") or 0)
+        s150 = float(last.get("sma_150") or 0) or float("inf")
+        s200 = float(out["sma_200"].iloc[-1] if "sma_200" in out.columns else 0) or float("inf")
+        sl200 = float(last.get("sma200_slope_20d_pct") or -1)
+        n52 = float(last.get("near_52w_high_pct") or 999)
+        rs = float(last.get("rel_strength_score") or 0)
+
+        if c <= s150:
+            reasons.append("below_sma150")
+        if c <= s200:
+            reasons.append("below_sma200")
+        if s150 <= s200:
+            reasons.append("sma150_below_sma200")
+        if sl200 <= 0:
+            reasons.append("sma200_slope_negative")
+        if n52 > 25.0:
+            reasons.append("far_from_52w_high")
+        if rs < 70.0:
+            reasons.append("rs_below_70th_pctile")
+
+        if reasons:
+            out.iloc[-1, out.columns.get_loc("stage2_fail_reason")] = ",".join(reasons)
+
+    return out
 
 
 class FeatureEngine:

@@ -96,6 +96,38 @@ class ExecutionStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS execution_position_stop (
+                    position_key TEXT PRIMARY KEY,
+                    symbol_id TEXT NOT NULL,
+                    exchange TEXT NOT NULL,
+                    quantity INTEGER NOT NULL,
+                    entry_price DOUBLE NOT NULL,
+                    stop_price DOUBLE NOT NULL,
+                    atr_multiplier DOUBLE NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'ACTIVE',
+                    created_at TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP NOT NULL,
+                    metadata_json TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS execution_drawdown (
+                    run_id TEXT NOT NULL,
+                    timestamp TIMESTAMP NOT NULL,
+                    snapshot_type TEXT NOT NULL DEFAULT 'intraday',
+                    portfolio_value DOUBLE NOT NULL,
+                    peak_value DOUBLE NOT NULL,
+                    drawdown_pct DOUBLE NOT NULL,
+                    portfolio_heat DOUBLE,
+                    metadata_json TEXT,
+                    PRIMARY KEY (run_id, timestamp, snapshot_type)
+                )
+                """
+            )
         finally:
             conn.close()
 
@@ -368,6 +400,218 @@ class ExecutionStore:
             ).fetchall()
             columns = [item[0] for item in conn.description]
             return [self._trade_note_from_row(dict(zip(columns, row))) for row in rows]
+        finally:
+            conn.close()
+
+    def upsert_position_stop(
+        self,
+        *,
+        position_key: str,
+        symbol_id: str,
+        exchange: str,
+        quantity: int,
+        entry_price: float,
+        stop_price: float,
+        atr_multiplier: float,
+        status: str = "ACTIVE",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO execution_position_stop (
+                    position_key, symbol_id, exchange, quantity, entry_price,
+                    stop_price, atr_multiplier, status, created_at, updated_at, metadata_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(position_key) DO UPDATE SET
+                    quantity = excluded.quantity,
+                    entry_price = excluded.entry_price,
+                    stop_price = excluded.stop_price,
+                    atr_multiplier = excluded.atr_multiplier,
+                    status = excluded.status,
+                    updated_at = excluded.updated_at,
+                    metadata_json = excluded.metadata_json
+                """,
+                [
+                    position_key,
+                    symbol_id,
+                    exchange,
+                    quantity,
+                    entry_price,
+                    stop_price,
+                    atr_multiplier,
+                    status,
+                    now,
+                    now,
+                    json.dumps(metadata or {}, sort_keys=True),
+                ],
+            )
+        finally:
+            conn.close()
+
+    def get_position_stop(self, position_key: str) -> Optional[dict]:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM execution_position_stop
+                WHERE position_key = ?
+                """,
+                [position_key],
+            ).fetchone()
+            if row is None:
+                return None
+            columns = [item[0] for item in conn.description]
+            return dict(zip(columns, row))
+        finally:
+            conn.close()
+
+    def list_active_stops(self) -> List[dict]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM execution_position_stop
+                WHERE status = 'ACTIVE'
+                ORDER BY symbol_id
+                """
+            ).fetchall()
+            columns = [item[0] for item in conn.description]
+            return [dict(zip(columns, row)) for row in rows]
+        finally:
+            conn.close()
+
+    def deactivate_stop(self, position_key: str) -> None:
+        now = datetime.now(timezone.utc)
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE execution_position_stop
+                SET status = 'INACTIVE', updated_at = ?
+                WHERE position_key = ?
+                """,
+                [now, position_key],
+            )
+        finally:
+            conn.close()
+
+    def record_drawdown_snapshot(
+        self,
+        *,
+        run_id: str,
+        portfolio_value: float,
+        peak_value: float,
+        portfolio_heat: float | None = None,
+        snapshot_type: str = "intraday",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict:
+        now = datetime.now(timezone.utc)
+        drawdown_pct = ((portfolio_value - peak_value) / peak_value * 100) if peak_value > 0 else 0.0
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO execution_drawdown (
+                    run_id, timestamp, snapshot_type, portfolio_value, peak_value,
+                    drawdown_pct, portfolio_heat, metadata_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, timestamp, snapshot_type) DO UPDATE SET
+                    portfolio_value = excluded.portfolio_value,
+                    peak_value = excluded.peak_value,
+                    drawdown_pct = excluded.drawdown_pct,
+                    portfolio_heat = excluded.portfolio_heat,
+                    metadata_json = excluded.metadata_json
+                """,
+                [
+                    run_id,
+                    now,
+                    snapshot_type,
+                    portfolio_value,
+                    peak_value,
+                    drawdown_pct,
+                    portfolio_heat,
+                    json.dumps(metadata or {}, sort_keys=True),
+                ],
+            )
+        finally:
+            conn.close()
+        return {
+            "run_id": run_id,
+            "timestamp": now.isoformat(),
+            "snapshot_type": snapshot_type,
+            "portfolio_value": portfolio_value,
+            "peak_value": peak_value,
+            "drawdown_pct": round(drawdown_pct, 2),
+            "portfolio_heat": portfolio_heat,
+        }
+
+    def get_latest_drawdown(self, run_id: str, snapshot_type: str | None = None) -> dict | None:
+        conn = self._connect()
+        try:
+            if snapshot_type:
+                row = conn.execute(
+                    """
+                    SELECT * FROM execution_drawdown
+                    WHERE run_id = ? AND snapshot_type = ?
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                    """,
+                    [run_id, snapshot_type],
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT * FROM execution_drawdown
+                    WHERE run_id = ?
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                    """,
+                    [run_id],
+                ).fetchone()
+            if row is None:
+                return None
+            columns = [item[0] for item in conn.description]
+            return dict(zip(columns, row))
+        finally:
+            conn.close()
+
+    def get_drawdown_history(
+        self,
+        run_id: str,
+        snapshot_type: str | None = None,
+        limit: int = 100,
+    ) -> List[dict]:
+        conn = self._connect()
+        try:
+            if snapshot_type:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM execution_drawdown
+                    WHERE run_id = ? AND snapshot_type = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    [run_id, snapshot_type, limit],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM execution_drawdown
+                    WHERE run_id = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    [run_id, limit],
+                ).fetchall()
+            columns = [item[0] for item in conn.description]
+            return [dict(zip(columns, row)) for row in rows]
         finally:
             conn.close()
 

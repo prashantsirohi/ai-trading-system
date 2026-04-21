@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from execution.portfolio import POSITION_STATES, check_portfolio_constraints
+from ai_trading_system.domains.execution.portfolio import POSITION_STATES, check_portfolio_constraints
 
 
 def test_position_states_scaffold_exists() -> None:
@@ -27,4 +27,3 @@ def test_check_portfolio_constraints_enforces_limits() -> None:
     assert "max_positions_reached" in result["reasons"]
     assert "max_sector_exposure_exceeded" in result["reasons"]
     assert "max_single_stock_weight_exceeded" in result["reasons"]
-

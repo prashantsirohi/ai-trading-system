@@ -11,7 +11,7 @@ import pandas as pd
 
 from analytics.alpha.dataset_builder import AlphaDatasetBuilder
 from analytics.ml_engine import AlphaEngine
-from core.paths import ensure_domain_layout
+from ai_trading_system.platform.db.paths import ensure_domain_layout
 
 
 def _normalize_symbols(symbols: Iterable[str] | None) -> list[str] | None:
@@ -87,8 +87,9 @@ def load_pattern_frame(
         lambda series: series.pct_change(20, fill_method=None) * 100.0
     )
     frame["above_sma200"] = (frame["close"] > frame["sma_200"]).fillna(False)
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"])
-    frame["exchange"] = frame.get("exchange", exchange)
+    frame = frame.copy()
+    frame.loc[:, "timestamp"] = pd.to_datetime(frame["timestamp"])
+    frame.loc[:, "exchange"] = frame.get("exchange", exchange)
 
     keep_cols = [
         "symbol_id",
@@ -152,15 +153,16 @@ def _load_operational_pattern_frame(
     if frame.empty:
         return frame
 
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"])
+    frame = frame.copy()
+    frame.loc[:, "timestamp"] = pd.to_datetime(frame["timestamp"])
     frame = frame.sort_values(["symbol_id", "timestamp"]).reset_index(drop=True)
     by_symbol = frame.groupby("symbol_id", group_keys=False)
 
-    frame["sma_20"] = by_symbol["close"].transform(lambda series: series.rolling(20, min_periods=1).mean())
-    frame["sma_50"] = by_symbol["close"].transform(lambda series: series.rolling(50, min_periods=1).mean())
-    frame["sma_200"] = by_symbol["close"].transform(lambda series: series.rolling(200, min_periods=1).mean())
+    frame.loc[:, "sma_20"] = by_symbol["close"].transform(lambda series: series.rolling(20, min_periods=1).mean())
+    frame.loc[:, "sma_50"] = by_symbol["close"].transform(lambda series: series.rolling(50, min_periods=1).mean())
+    frame.loc[:, "sma_200"] = by_symbol["close"].transform(lambda series: series.rolling(200, min_periods=1).mean())
     for horizon in (5, 10, 20, 40):
-        frame[f"return_{horizon}d"] = by_symbol["close"].transform(
+        frame.loc[:, f"return_{horizon}d"] = by_symbol["close"].transform(
             lambda series, h=horizon: series.shift(-h) / series - 1.0
         )
     return frame

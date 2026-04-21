@@ -5,8 +5,8 @@ from pathlib import Path
 import pandas as pd
 
 from analytics.data_trust import load_data_trust_summary
-from run.stages.base import StageArtifact
-from services.publish.publish_payloads import build_publish_datasets
+from ai_trading_system.pipeline.contracts import StageArtifact
+from ai_trading_system.domains.publish.publish_payloads import build_publish_datasets
 
 
 def test_data_trust_summary_exposes_trust_confidence_envelope_for_missing_db(tmp_path: Path) -> None:
@@ -58,4 +58,3 @@ def test_publish_datasets_surface_trust_status_from_dashboard_payload(tmp_path: 
     assert datasets["publish_trust_status"] == "degraded"
     assert row["trust_status"] == "degraded"
     assert "degraded" in str(row["trust_warning"])
-
