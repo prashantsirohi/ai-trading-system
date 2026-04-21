@@ -117,3 +117,4 @@ debug_*.py
 temp_*.py
 export_excel.py
 -files               # Stray file from command errors
+.claude/worktrees/
