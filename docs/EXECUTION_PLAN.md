@@ -93,6 +93,14 @@
     - `./.venv/bin/python -m pytest -q tests/test_collectors_shim_compat.py tests/test_ingest_write_validation.py tests/test_daily_update_runner_sources.py tests/test_auth_bootstrap.py tests/test_pipeline_orchestrator.py` → **57 passed**
     - `./.venv/bin/python -m pytest -q tests/test_phase5_guardrails.py tests/lint/test_path_hygiene_ratchet.py tests/test_collectors_shim_compat.py` → **6 passed**
     - `./.venv/bin/python -m run.orchestrator --stages ingest,features,rank --run-date 2026-04-21` → completed
+- PR-4 tranche-C implementation completed and validated:
+  - Canonicalized `collectors/index_backfill.py` to `src/ai_trading_system/domains/ingest/index_backfill.py` with legacy shim compatibility.
+  - Canonicalized `collectors/stock_backfill.py` to `src/ai_trading_system/domains/ingest/stock_backfill.py` with legacy shim compatibility.
+  - Expanded collector compatibility tests and canonical mapping docs.
+  - Validation evidence:
+    - `./.venv/bin/python -m pytest -q tests/test_collectors_shim_compat.py tests/test_ingest_write_validation.py tests/test_daily_update_runner_sources.py tests/test_auth_bootstrap.py tests/test_pipeline_orchestrator.py` → **57 passed**
+    - `./.venv/bin/python -m pytest -q tests/test_phase5_guardrails.py tests/lint/test_path_hygiene_ratchet.py tests/test_collectors_shim_compat.py` → **6 passed**
+    - `./.venv/bin/python -m run.orchestrator --stages ingest,features,rank --run-date 2026-04-21` → completed
 
 **Remaining / not yet complete:**
 - Phase 0 cleanup remains: legacy entrypoints and directories are still in checkout.
@@ -101,7 +109,7 @@
 - Phase 5 remains incomplete:
   - Ratchet baseline exists, but many non-canonical path usages outside the scoped PR-2 surfaces are still open.
 - Phase 6 remains incomplete:
-  - Top-level `collectors/` still contains substantial logic (for example backfill scripts, auth/token tooling, diagnostics).
+  - Top-level `collectors/` still contains substantial logic (for example `repair_ohlcv_window.py`, auth/token tooling, diagnostics).
   - `main.py`, `tools/`, `dashboard/` remain.
 - Phase 7 and Phase 8 are still pending.
 
