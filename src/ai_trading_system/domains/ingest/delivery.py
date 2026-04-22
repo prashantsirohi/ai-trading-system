@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import duckdb
 import requests
-from collectors.nse_delivery_scraper import NseHistoricalDeliveryScraper
+from ai_trading_system.domains.ingest.nse_delivery_scraper import NseHistoricalDeliveryScraper
 from ai_trading_system.domains.ingest.validation import validate_delivery_frame
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger

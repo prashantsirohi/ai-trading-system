@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from collectors.token_manager import DhanTokenManager
+from ai_trading_system.domains.ingest.token_manager import DhanTokenManager
 from core.env import load_project_env
 
 
