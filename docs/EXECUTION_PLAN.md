@@ -13,7 +13,7 @@
 
 ---
 
-## Status snapshot (April 22, 2026, post PR-3 implementation)
+## Status snapshot (April 22, 2026, post PR-4 tranche-A implementation)
 
 | Phase | Status | Summary |
 |---|---|---|
@@ -23,7 +23,7 @@
 | Phase 3 | ✅ Implemented | `011_pattern_cache.sql`, `patterns/cache.py`, Stage 2 pre-screen + incremental orchestration in evaluation/service, and `tests/test_pattern_cache.py` are present |
 | Phase 4 | ✅ Implemented | PR-1 backend/API reliability and PR-3 UI/operator Stage 2 surfacing are both implemented |
 | Phase 5 | 🔶 Partial | Ratchet guardrail + baseline allowlist implemented in PR-2; broad path-hygiene backlog still remains |
-| Phase 6 | 🔶 Partial | Shim-first PR-2 tranche completed for high-use collector surfaces, but major legacy modules still remain |
+| Phase 6 | 🔶 Partial | PR-4 tranche-A migrated `daily_update_runner` + `reset_reingest_validate` into canonical `src` with compatibility shims; major collector modules still remain |
 | Phase 7 | 🔲 Pending | UI consolidation |
 | Phase 8 | 🔲 Pending | Operational polish + scheduler |
 
@@ -76,6 +76,15 @@
     - `./.venv/bin/python -m pytest -q tests/test_readmodel_snapshots.py tests/test_execution_api.py` → **9 passed**
     - `./.venv/bin/python -m run.orchestrator --stages rank,publish --run-date 2026-04-21 --local-publish` → completed
     - `./.venv/bin/python -m pytest -q tests/test_execution_candidate_builder.py tests/test_publish_payloads.py tests/test_pipeline_orchestrator.py` → **42 passed**
+- PR-4 tranche-A implementation completed and validated:
+  - Canonicalized `collectors/daily_update_runner.py` to `src/ai_trading_system/domains/ingest/daily_update_runner.py` with legacy shim compatibility.
+  - Canonicalized `collectors/reset_reingest_validate.py` to `src/ai_trading_system/domains/ingest/reset_reingest_validate.py` with legacy shim compatibility.
+  - Updated orchestrator auto-repair import path to canonical `src` module.
+  - Updated collector compatibility tests and canonical mapping docs.
+  - Validation evidence:
+    - `./.venv/bin/python -m pytest -q tests/test_collectors_shim_compat.py tests/test_daily_update_runner_sources.py tests/test_auth_bootstrap.py tests/test_pipeline_orchestrator.py` → **53 passed**
+    - `./.venv/bin/python -m pytest -q tests/test_phase5_guardrails.py tests/lint/test_path_hygiene_ratchet.py tests/test_collectors_shim_compat.py` → **6 passed**
+    - `./.venv/bin/python -m run.orchestrator --stages ingest,features,rank --run-date 2026-04-21` → completed
 
 **Remaining / not yet complete:**
 - Phase 0 cleanup remains: legacy entrypoints and directories are still in checkout.
@@ -84,18 +93,17 @@
 - Phase 5 remains incomplete:
   - Ratchet baseline exists, but many non-canonical path usages outside the scoped PR-2 surfaces are still open.
 - Phase 6 remains incomplete:
-  - Top-level `collectors/` still contains substantial logic (for example `daily_update_runner.py`, backfill/repair scripts).
+  - Top-level `collectors/` still contains substantial logic (for example `ingest_full.py`, backfill scripts, auth/token tooling).
   - `main.py`, `tools/`, `dashboard/` remain.
 - Phase 7 and Phase 8 are still pending.
 
 ### Next PR (recommended execution order)
 
-#### PR-4: Phase 6 deep collector migration tranche
+#### PR-4 tranche-B: Phase 6 deep collector migration continuation
 
 **Primary goal:** migrate remaining high-risk legacy collector logic into canonical `src` modules while preserving compatibility shims.
 
 **Scope:**
-- Split and migrate `collectors/daily_update_runner.py` orchestration logic into `src/ai_trading_system/domains/ingest/service.py` (or adjacent canonical modules).
 - Migrate remaining non-shim collector scripts used by operations and keep import-compatible shims at legacy paths.
 - Tighten path-hygiene ratchet allowlist by reducing existing exceptions.
 

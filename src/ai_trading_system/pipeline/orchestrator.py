@@ -515,7 +515,7 @@ def _run_auto_quarantine_repair(
     if not quarantined_dates:
         return None
 
-    from collectors.reset_reingest_validate import run_reset_reingest_validate
+    from ai_trading_system.domains.ingest.reset_reingest_validate import run_reset_reingest_validate
 
     from_date = quarantined_dates[0]
     to_date = quarantined_dates[-1]
