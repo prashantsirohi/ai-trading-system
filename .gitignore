@@ -14,6 +14,7 @@ data/*.duckdb
 data/*.parquet
 data/pipeline_runs/
 !data/masterdata.db
+src/ai_trading_system/domains/ingest/data/
 reports/
 logs/
 *.log
