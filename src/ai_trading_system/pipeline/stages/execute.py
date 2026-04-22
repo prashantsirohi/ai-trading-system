@@ -86,6 +86,8 @@ class ExecuteStage:
         "execution_max_single_stock_weight",
         "execution_use_atr_position_sizing",
         "execution_heat_gate_threshold",
+        "execution_require_stage2",
+        "execution_stage2_min_score",
     ]
     PARAMETER_KEYS = [
         "data_domain",
@@ -111,6 +113,8 @@ class ExecuteStage:
         "execution_max_single_stock_weight",
         "execution_use_atr_position_sizing",
         "execution_heat_gate_threshold",
+        "execution_require_stage2",
+        "execution_stage2_min_score",
     ]
 
     def run(self, context: StageContext) -> StageResult:
@@ -228,6 +232,7 @@ class ExecuteStage:
             "breakout_candidates_count": candidates.breakout_candidates_count,
             "breakout_qualified_count": candidates.breakout_qualified_count,
             "breakout_tier_a_count": candidates.breakout_tier_a_count,
+            "stage2_gate": candidates.stage2_gate,
             "actions_count": int(len(actions_df)),
             "order_count": int(len(cycle_orders)),
             "fill_count": int(len(cycle_fills)),

@@ -1308,6 +1308,71 @@ def test_main_auto_repairs_quarantine_and_retries(monkeypatch: pytest.MonkeyPatc
     assert "2026-04-08" in repair_calls[0]["error_message"]
 
 
+def test_main_publish_only_without_run_id_resolves_latest_publishable_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_calls: list[dict] = []
+
+    class FakeOrchestrator:
+        def __init__(self, project_root: Path) -> None:
+            self.project_root = Path(project_root)
+
+        def _build_run_id(self, run_date: str) -> str:
+            return f"pipeline-{run_date}-autogen"
+
+        def run_pipeline(self, **kwargs):
+            run_calls.append(kwargs)
+            return {"run_id": kwargs["run_id"], "status": "completed", "stages": []}
+
+    monkeypatch.setattr(orchestrator_module, "PipelineOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(
+        orchestrator_module._pipeline_orchestrator,
+        "_resolve_latest_publishable_run_id",
+        lambda *_args, **_kwargs: "pipeline-2026-04-21-retryme",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run.orchestrator",
+            "--stages",
+            "publish",
+            "--local-publish",
+        ],
+    )
+
+    orchestrator_module.main()
+
+    assert len(run_calls) == 1
+    assert run_calls[0]["run_id"] == "pipeline-2026-04-21-retryme"
+    assert run_calls[0]["stage_names"] == ["publish"]
+
+
+def test_main_publish_only_without_run_id_exits_when_no_publishable_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class FakeOrchestrator:
+        def __init__(self, project_root: Path) -> None:
+            self.project_root = Path(project_root)
+
+        def _build_run_id(self, run_date: str) -> str:
+            return f"pipeline-{run_date}-autogen"
+
+    monkeypatch.setattr(orchestrator_module, "PipelineOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(
+        orchestrator_module._pipeline_orchestrator,
+        "_resolve_latest_publishable_run_id",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run.orchestrator",
+            "--stages",
+            "publish",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        orchestrator_module.main()
+    assert exc_info.value.code == 1
+
+
 def test_main_exits_cleanly_after_final_dq_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeOrchestrator:
         def __init__(self, project_root: Path) -> None:

@@ -95,6 +95,7 @@ def build_publish_datasets(
     dashboard_payload_artifact = context_artifact_for("dashboard_payload")
 
     ranked_df = read_artifact(ranked_signals_artifact)
+    stage2_summary = _build_stage2_summary(ranked_df)
     dashboard_payload = read_json_artifact(dashboard_payload_artifact) if dashboard_payload_artifact else {}
     trust_status = str(
         (dashboard_payload.get("summary", {}) or {}).get(
@@ -144,6 +145,8 @@ def build_publish_datasets(
         "publish_mode_sheets": sheets_pack["mode"],
         "publish_mode_dashboard": dashboard_pack["mode"],
         "publish_trust_status": trust_status,
+        "stage2_summary": stage2_summary,
+        "stage2_breakdown_symbols": stage2_summary.get("top_symbols", []),
     }
 
 
@@ -152,6 +155,8 @@ def build_publish_metadata(
     rank_artifact: StageArtifact,
     ranked_df: pd.DataFrame,
     targets: list[dict[str, Any]],
+    stage2_summary: dict[str, Any] | None = None,
+    stage2_breakdown_symbols: list[str] | None = None,
 ) -> Dict[str, Any]:
     """Build publish stage metadata summary from delivery outcomes."""
     top_publish_confidence = None
@@ -167,5 +172,36 @@ def build_publish_metadata(
         "targets": targets,
         "top_symbol": ranked_df.iloc[0]["symbol_id"] if not ranked_df.empty else None,
         "top_publish_confidence": top_publish_confidence,
+        "stage2_summary": dict(stage2_summary or {}),
+        "stage2_breakdown_symbols": list(stage2_breakdown_symbols or []),
         "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _build_stage2_summary(ranked_df: pd.DataFrame, *, max_symbols: int = 10) -> dict[str, Any]:
+    if ranked_df is None or ranked_df.empty:
+        return {
+            "uptrend_count": 0,
+            "counts_by_label": {},
+            "top_symbols": [],
+        }
+
+    df = ranked_df.copy()
+    label_counts: dict[str, int] = {}
+    if "stage2_label" in df.columns:
+        labels = df["stage2_label"].fillna("unknown").astype(str)
+        label_counts = {str(key): int(value) for key, value in labels.value_counts().to_dict().items()}
+
+    uptrend_count = 0
+    if "is_stage2_uptrend" in df.columns:
+        uptrend_count = int(df["is_stage2_uptrend"].fillna(False).astype(bool).sum())
+
+    top_symbols: list[str] = []
+    if "symbol_id" in df.columns:
+        top_symbols = [str(symbol) for symbol in df["symbol_id"].dropna().astype(str).head(max_symbols).tolist()]
+
+    return {
+        "uptrend_count": uptrend_count,
+        "counts_by_label": label_counts,
+        "top_symbols": top_symbols,
     }

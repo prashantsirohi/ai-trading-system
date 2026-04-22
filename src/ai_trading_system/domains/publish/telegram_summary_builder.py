@@ -14,6 +14,7 @@ def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str
     summary = dashboard.get("summary", {})
     data_trust = dashboard.get("data_trust", {}) or {}
     ranked_df = _sorted_ranked_signals(_as_frame(datasets.get("ranked_signals")))
+    stage2_summary = dict(datasets.get("stage2_summary") or {})
     breakout_df = _sorted_breakouts(_as_frame(datasets.get("breakout_scan")))
     sector_df = _sorted_sector_dashboard(_as_frame(datasets.get("sector_dashboard")))
 
@@ -44,6 +45,9 @@ def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str
         trust_notes.append(f"Fallback ratio: {fallback_ratio * 100:.1f}%")
     if trust_notes:
         lines.append("Trust notes: " + " | ".join(trust_notes))
+    stage2_line = _format_stage2_line(stage2_summary, ranked_df)
+    if stage2_line:
+        lines.append(stage2_line)
     lines.extend(["", "<b>Top 10 Sectors</b>"])
 
     if sector_df.empty:
@@ -178,3 +182,23 @@ def _format_int(value: Any) -> str:
         return str(int(value))
     except (TypeError, ValueError):
         return "-"
+
+
+def _format_stage2_line(stage2_summary: Mapping[str, Any], ranked_df: pd.DataFrame) -> str:
+    uptrend_count = int(stage2_summary.get("uptrend_count") or 0)
+    counts_by_label = dict(stage2_summary.get("counts_by_label") or {})
+    if uptrend_count == 0 and not counts_by_label and (ranked_df is None or ranked_df.empty):
+        return ""
+
+    if not counts_by_label and ranked_df is not None and not ranked_df.empty and "stage2_label" in ranked_df.columns:
+        labels = ranked_df["stage2_label"].fillna("unknown").astype(str)
+        counts_by_label = {str(key): int(value) for key, value in labels.value_counts().to_dict().items()}
+    if uptrend_count == 0 and ranked_df is not None and not ranked_df.empty and "is_stage2_uptrend" in ranked_df.columns:
+        uptrend_count = int(ranked_df["is_stage2_uptrend"].fillna(False).astype(bool).sum())
+
+    top_labels = ", ".join(
+        f"{escape(str(label))}:{int(count)}" for label, count in list(counts_by_label.items())[:3]
+    )
+    if not top_labels:
+        top_labels = "n/a"
+    return f"Stage2: <b>{uptrend_count}</b> uptrend | labels {top_labels}"

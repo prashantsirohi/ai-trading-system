@@ -13,7 +13,7 @@
 
 ---
 
-## Status snapshot (April 22, 2026, post PR-2 implementation)
+## Status snapshot (April 22, 2026, post PR-3 implementation)
 
 | Phase | Status | Summary |
 |---|---|---|
@@ -21,7 +21,7 @@
 | Phase 1 | ✅ Implemented | Stage 2 foundation and pattern bug fixes exist; verify with current tests in this checkout before treating as green |
 | Phase 2 | ✅ Implemented | New detectors and `tests/test_new_patterns.py` exist and should be treated as current repo truth |
 | Phase 3 | ✅ Implemented | `011_pattern_cache.sql`, `patterns/cache.py`, Stage 2 pre-screen + incremental orchestration in evaluation/service, and `tests/test_pattern_cache.py` are present |
-| Phase 4 | 🔶 Partial | PR-1 backend/API reliability + Stage 2 gate/enrichment is implemented; UI-specific enrichment tasks still remain |
+| Phase 4 | ✅ Implemented | PR-1 backend/API reliability and PR-3 UI/operator Stage 2 surfacing are both implemented |
 | Phase 5 | 🔶 Partial | Ratchet guardrail + baseline allowlist implemented in PR-2; broad path-hygiene backlog still remains |
 | Phase 6 | 🔶 Partial | Shim-first PR-2 tranche completed for high-use collector surfaces, but major legacy modules still remain |
 | Phase 7 | 🔲 Pending | UI consolidation |
@@ -68,12 +68,19 @@
   - Validation evidence:
     - `./.venv/bin/python -m pytest -q tests/test_phase5_guardrails.py tests/lint/test_path_hygiene_ratchet.py tests/test_collectors_shim_compat.py tests/test_legacy_surface_guardrails.py tests/test_ingest_write_validation.py` → **13 passed**
     - `./.venv/bin/python -m run.orchestrator --stages ingest,features,rank --run-date 2026-04-21` → completed (`features/rank` skipped due to no new ingest data)
+- PR-3 implementation completed and validated:
+  - Ranking/workspace readmodels now expose Stage 2 summary/filter diagnostics and optional Stage-2-filtered ranking snapshots.
+  - Execution API ranking/workspace endpoints now accept optional `stage2_only` and `stage2_min_score` query controls.
+  - Execution UI surface now includes Stage 2 ranking view controls (`stage2_only`, `stage2_min_score`) plus Stage 2 summary diagnostics for operators.
+  - Validation evidence:
+    - `./.venv/bin/python -m pytest -q tests/test_readmodel_snapshots.py tests/test_execution_api.py` → **9 passed**
+    - `./.venv/bin/python -m run.orchestrator --stages rank,publish --run-date 2026-04-21 --local-publish` → completed
+    - `./.venv/bin/python -m pytest -q tests/test_execution_candidate_builder.py tests/test_publish_payloads.py tests/test_pipeline_orchestrator.py` → **42 passed**
 
 **Remaining / not yet complete:**
 - Phase 0 cleanup remains: legacy entrypoints and directories are still in checkout.
-- Phase 4 remains incomplete:
-  - Backend/API pieces are implemented; UI-specific Stage 2 filter/enrichment items are still open.
-  - Execution policy module (`domains/execution/entry_policy.py`) still has minimal policy logic and can be expanded if Phase 4 requires deeper policy semantics beyond candidate gating.
+- Phase 4 follow-on (optional hardening):
+  - Execution policy module (`domains/execution/entry_policy.py`) still has minimal policy logic and can be expanded if deeper policy semantics are needed beyond candidate gating.
 - Phase 5 remains incomplete:
   - Ratchet baseline exists, but many non-canonical path usages outside the scoped PR-2 surfaces are still open.
 - Phase 6 remains incomplete:
@@ -81,29 +88,7 @@
   - `main.py`, `tools/`, `dashboard/` remain.
 - Phase 7 and Phase 8 are still pending.
 
-### Next 2 PRs (recommended execution order)
-
-#### PR-3: Phase 4 UI + operator surfacing completion
-
-**Primary goal:** finish remaining Phase 4 user-facing Stage 2 visibility tasks.
-
-**Scope:**
-- Add Stage 2-specific columns/filters in execution operator UI/readmodels where needed.
-- Ensure ranking snapshot and workspace views consistently expose Stage 2 fields used by operators.
-- Keep payload shape backward-compatible for existing clients.
-
-**Suggested touch files:**
-- `src/ai_trading_system/interfaces/api/services/readmodels/rank_snapshot.py`
-- `src/ai_trading_system/interfaces/api/services/execution_operator.py`
-- `src/ai_trading_system/interfaces/streamlit/execution/app.py` (if filter surface is implemented in Streamlit)
-
-**Ship gate:**
-```bash
-./.venv/bin/python -m pytest -q tests/test_execution_api.py tests/test_readmodel_snapshots.py
-./.venv/bin/python -m run.orchestrator --stages rank,publish --run-date 2026-04-21 --local-publish
-```
-
----
+### Next PR (recommended execution order)
 
 #### PR-4: Phase 6 deep collector migration tranche
 

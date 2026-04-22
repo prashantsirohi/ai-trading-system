@@ -270,6 +270,93 @@ def _bar_chart_option(
     }
 
 
+def _as_stage2_bool(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(False)
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce").fillna(0).astype(float) > 0
+    text = series.astype(str).str.strip().str.lower()
+    return text.isin({"1", "true", "t", "yes", "y", "uptrend"})
+
+
+def _filter_ranked_by_stage2(
+    frame: pd.DataFrame,
+    *,
+    stage2_only: bool,
+    min_score: float | None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    if frame is None or frame.empty:
+        return pd.DataFrame(), {
+            "requested": bool(stage2_only or min_score is not None),
+            "gate_unavailable": bool(stage2_only or min_score is not None),
+            "before_count": 0,
+            "after_count": 0,
+            "dropped_count": 0,
+        }
+
+    display = frame.copy()
+    before_count = int(len(display.index))
+    gate_unavailable = False
+
+    if stage2_only:
+        if "is_stage2_uptrend" in display.columns:
+            display = display.loc[_as_stage2_bool(display["is_stage2_uptrend"])]
+        else:
+            gate_unavailable = True
+
+    if min_score is not None:
+        if "stage2_score" in display.columns:
+            score = pd.to_numeric(display["stage2_score"], errors="coerce")
+            display = display.loc[score >= float(min_score)]
+        else:
+            gate_unavailable = True
+
+    after_count = int(len(display.index))
+    return display, {
+        "requested": bool(stage2_only or min_score is not None),
+        "gate_unavailable": gate_unavailable,
+        "before_count": before_count,
+        "after_count": after_count,
+        "dropped_count": max(before_count - after_count, 0),
+    }
+
+
+def _stage2_summary_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+
+    rows: list[dict[str, Any]] = []
+    if "stage2_label" in frame.columns:
+        label_counts = (
+            frame["stage2_label"]
+            .fillna("unknown")
+            .astype(str)
+            .str.strip()
+            .replace("", "unknown")
+            .str.lower()
+            .value_counts()
+        )
+        for label, count in label_counts.items():
+            rows.append({"metric": "stage2_label", "name": str(label), "value": int(count)})
+
+    if "is_stage2_uptrend" in frame.columns:
+        rows.append(
+            {
+                "metric": "is_stage2_uptrend",
+                "name": "true",
+                "value": int(_as_stage2_bool(frame["is_stage2_uptrend"]).sum()),
+            }
+        )
+
+    if "stage2_score" in frame.columns:
+        scores = pd.to_numeric(frame["stage2_score"], errors="coerce").dropna()
+        if not scores.empty:
+            rows.append({"metric": "stage2_score", "name": "avg", "value": float(scores.mean())})
+            rows.append({"metric": "stage2_score", "name": "max", "value": float(scores.max())})
+
+    return pd.DataFrame(rows)
+
+
 def _chart(
     container,
     title: str,
@@ -366,6 +453,8 @@ def build_execution_ui() -> None:
         "feature_tail_bars": 252,
         "symbol_limit": 25,
         "streamlit_port": 8501,
+        "stage2_only": False,
+        "stage2_min_score": 70.0,
         "selected_run_id": None,
         "selected_task_id": None,
         "selected_process_pid": None,
@@ -501,6 +590,10 @@ def build_execution_ui() -> None:
         ui.number("Feature tail bars", value=state["feature_tail_bars"], min=50, max=400, step=10).props("outlined dense").bind_value(state, "feature_tail_bars").classes("w-full")
         ui.number("Canary symbol limit", value=state["symbol_limit"], min=5, max=200, step=5).props("outlined dense").bind_value(state, "symbol_limit").classes("w-full")
         ui.number("Research Streamlit port", value=state["streamlit_port"], min=8501, max=8999, step=1).props("outlined dense").bind_value(state, "streamlit_port").classes("w-full")
+        ui.separator().classes("my-4")
+        ui.label("Ranking View Filters").classes("text-xs uppercase tracking-[0.2em] text-slate-400")
+        ui.switch("Stage-2 uptrend only", value=state["stage2_only"], on_change=lambda e: state.__setitem__("stage2_only", bool(e.value))).classes("mt-1")
+        ui.number("Stage-2 min score", value=state["stage2_min_score"], min=0, max=100, step=1).props("outlined dense").bind_value(state, "stage2_min_score").classes("w-full")
         with ui.card().classes("mt-6 rounded-[22px] bg-slate-900 text-white border-0 p-4"):
             ui.label("Operator Note").classes("text-xs uppercase tracking-[0.2em] opacity-60")
             ui.label("Use the drawer for run defaults. Launch flows from the action board, then inspect the selected run and current task below.").classes("text-sm mt-2 opacity-90")
@@ -587,6 +680,7 @@ def build_execution_ui() -> None:
 
                 with ui.tab_panel(ranking_tab):
                     ranking_summary_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
+                    stage2_summary_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
                     with ui.row().classes("w-full gap-6 items-start"):
                         ranked_chart_container = ui.card().classes("glass-panel section-card w-[420px] rounded-[26px] shadow-sm border-0 p-5")
                         ranked_container = ui.card().classes("glass-panel section-card flex-1 rounded-[26px] shadow-sm border-0 p-5")
@@ -700,6 +794,12 @@ def build_execution_ui() -> None:
 
         summary = payload.get("summary", {})
         ranked = rank_frames.get("ranked_signals", pd.DataFrame())
+        ranked_display, stage2_filter_diag = _filter_ranked_by_stage2(
+            ranked,
+            stage2_only=bool(state["stage2_only"]),
+            min_score=float(state["stage2_min_score"]) if state["stage2_min_score"] is not None else None,
+        )
+        stage2_summary = _stage2_summary_rows(ranked)
         breakouts = rank_frames.get("breakout_scan", pd.DataFrame())
         sectors = rank_frames.get("sector_dashboard", pd.DataFrame())
         health_checks = pd.DataFrame(health.get("checks", []))
@@ -759,6 +859,8 @@ def build_execution_ui() -> None:
                 {"setting": "full_rebuild", "value": state["full_rebuild"]},
                 {"setting": "feature_tail_bars", "value": state["feature_tail_bars"]},
                 {"setting": "symbol_limit", "value": state["symbol_limit"]},
+                {"setting": "stage2_only", "value": state["stage2_only"]},
+                {"setting": "stage2_min_score", "value": state["stage2_min_score"]},
                 {"setting": "selected_run_id", "value": state["selected_run_id"] or "latest"},
                 {"setting": "selected_task_id", "value": state["selected_task_id"] or "auto"},
             ]
@@ -779,7 +881,7 @@ def build_execution_ui() -> None:
         )
 
         ranked_chart = _bar_chart_option(
-            ranked,
+            ranked_display,
             label_col="symbol_id",
             value_col="composite_score",
             title="Top Composite Scores",
@@ -796,17 +898,24 @@ def build_execution_ui() -> None:
         ranking_tiles = [
             {
                 "label": "Top Ranked Symbol",
-                "value": ranked.iloc[0]["symbol_id"] if not ranked.empty and "symbol_id" in ranked.columns else "—",
+                "value": ranked_display.iloc[0]["symbol_id"] if not ranked_display.empty and "symbol_id" in ranked_display.columns else "—",
                 "badge": "LIVE",
                 "tone": "completed",
-                "detail": f"{len(ranked)} symbols in the latest live ranking artifact.",
+                "detail": f"{len(ranked_display)} visible symbols ({len(ranked)} total) in the latest ranking artifact.",
             },
             {
                 "label": "Top Composite Score",
-                "value": ranked.iloc[0]["composite_score"] if not ranked.empty and "composite_score" in ranked.columns else "—",
+                "value": ranked_display.iloc[0]["composite_score"] if not ranked_display.empty and "composite_score" in ranked_display.columns else "—",
                 "badge": "RANKING",
                 "tone": "running",
                 "detail": "Higher values indicate stronger combined technical alignment.",
+            },
+            {
+                "label": "Stage-2 Gate",
+                "value": f"{stage2_filter_diag['after_count']}/{stage2_filter_diag['before_count']}",
+                "badge": "STAGE2",
+                "tone": "amber" if stage2_filter_diag.get("requested") else "slate",
+                "detail": "Visible/total symbols after Stage-2 ranking filters.",
             },
             {
                 "label": "Breakout Candidates",
@@ -919,6 +1028,18 @@ def build_execution_ui() -> None:
             ranking_tiles,
             empty="No ranking snapshot available yet.",
         )
+        _table(
+            stage2_summary_container,
+            "Stage-2 Summary",
+            stage2_summary,
+            limit=12,
+            subtitle=(
+                f"Filter: stage2_only={bool(state['stage2_only'])}, "
+                f"min_score={state['stage2_min_score']}, "
+                f"dropped={stage2_filter_diag['dropped_count']}"
+            ),
+            empty="No Stage-2 columns found in the ranking artifact yet.",
+        )
         _summary_tiles(
             market_summary_container,
             "Market Snapshot",
@@ -953,7 +1074,7 @@ def build_execution_ui() -> None:
         _table(
             ranked_container,
             "Top Ranked Signals",
-            ranked,
+            ranked_display,
             limit=18,
             subtitle="Current leader board with the most relevant technical factor columns first.",
         )

@@ -9,6 +9,7 @@ from ai_trading_system.domains.publish.publish_payloads import (
     build_publish_datasets,
     build_publish_metadata,
 )
+from ai_trading_system.domains.publish.telegram_summary_builder import build_telegram_summary
 
 
 def test_build_publish_datasets_loads_optional_artifacts_with_defaults(tmp_path: Path) -> None:
@@ -55,6 +56,8 @@ def test_build_publish_datasets_loads_optional_artifacts_with_defaults(tmp_path:
     assert datasets["publish_mode_dashboard"] == "structured_json"
     assert datasets["publish_rows_telegram"][0]["signal_classification"] == "actionable"
     assert datasets["publish_rows_telegram"][0]["publish_confidence"] is None
+    assert datasets["stage2_summary"]["uptrend_count"] == 0
+    assert datasets["stage2_breakdown_symbols"] == ["AAA"]
 
 
 def test_build_publish_metadata_uses_top_ranked_symbol() -> None:
@@ -80,3 +83,31 @@ def test_build_publish_metadata_uses_top_ranked_symbol() -> None:
     assert metadata["top_publish_confidence"] == 0.85
     assert metadata["targets"] == targets
     assert "completed_at" in metadata
+
+
+def test_build_publish_datasets_adds_stage2_breakdown_and_telegram_summary_line() -> None:
+    ranked_df = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "composite_score": 95.0, "stage2_label": "strong_stage2", "is_stage2_uptrend": True},
+            {"symbol_id": "BBB", "composite_score": 92.0, "stage2_label": "stage2", "is_stage2_uptrend": True},
+            {"symbol_id": "CCC", "composite_score": 89.0, "stage2_label": "stage1_to_stage2", "is_stage2_uptrend": False},
+        ]
+    )
+    ranked_artifact = StageArtifact(
+        artifact_type="ranked_signals",
+        uri="/tmp/ranked.csv",
+        content_hash="ranked-hash",
+    )
+    datasets = build_publish_datasets(
+        context_artifact_for=lambda _name: None,
+        read_artifact=lambda _artifact: ranked_df.copy(),
+        read_json_artifact=lambda _artifact: {"summary": {"run_date": "2026-04-21"}},
+        ranked_signals_artifact=ranked_artifact,
+    )
+    assert datasets["stage2_summary"]["uptrend_count"] == 2
+    assert datasets["stage2_summary"]["counts_by_label"]["strong_stage2"] == 1
+    assert datasets["stage2_breakdown_symbols"] == ["AAA", "BBB", "CCC"]
+
+    message = build_telegram_summary(run_date="2026-04-21", datasets=datasets)
+    assert "Stage2:" in message
+    assert "strong_stage2:1" in message

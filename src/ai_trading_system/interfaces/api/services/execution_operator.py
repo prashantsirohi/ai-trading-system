@@ -281,16 +281,38 @@ def get_execution_summary(project_root: str | Path) -> dict[str, Any]:
     return get_execution_summary_read_model(root, tasks=tasks)
 
 
-def get_ranking_snapshot(project_root: str | Path, *, limit: int = 25) -> dict[str, Any]:
-    return get_ranking_snapshot_read_model(project_root, limit=limit)
+def get_ranking_snapshot(
+    project_root: str | Path,
+    *,
+    limit: int = 25,
+    stage2_only: bool = False,
+    stage2_min_score: float | None = None,
+) -> dict[str, Any]:
+    return get_ranking_snapshot_read_model(
+        project_root,
+        limit=limit,
+        stage2_only=stage2_only,
+        stage2_min_score=stage2_min_score,
+    )
 
 
 def get_market_snapshot(project_root: str | Path, *, limit: int = 25) -> dict[str, Any]:
     return get_market_snapshot_read_model(project_root, limit=limit)
 
 
-def get_pipeline_workspace_snapshot(project_root: str | Path, *, limit: int = 20) -> dict[str, Any]:
-    return get_pipeline_workspace_snapshot_read_model(project_root, limit=limit)
+def get_pipeline_workspace_snapshot(
+    project_root: str | Path,
+    *,
+    limit: int = 20,
+    stage2_only: bool = False,
+    stage2_min_score: float | None = None,
+) -> dict[str, Any]:
+    return get_pipeline_workspace_snapshot_read_model(
+        project_root,
+        limit=limit,
+        stage2_only=stage2_only,
+        stage2_min_score=stage2_min_score,
+    )
 
 
 def get_shadow_snapshot(project_root: str | Path) -> dict[str, Any]:
@@ -337,11 +359,18 @@ def run_pipeline_action(
     return get_task_detail(task_id=task_id, project_root=project_root)
 
 
-def retry_publish_action(project_root: str | Path, *, local_publish: bool = False) -> dict[str, Any]:
-    publishable_run = find_latest_publishable_run(project_root, limit=50)
-    if not publishable_run:
-        raise ValueError("No publishable run found for publish retry. A completed rank artifact is required.")
-    latest_run_id = str(publishable_run["run_id"])
+def retry_publish_action(
+    project_root: str | Path,
+    *,
+    local_publish: bool = False,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    latest_run_id = str(run_id).strip() if run_id else ""
+    if not latest_run_id:
+        publishable_run = find_latest_publishable_run(project_root, limit=50)
+        if not publishable_run:
+            raise ValueError("No publishable run found for publish retry. A completed rank artifact is required.")
+        latest_run_id = str(publishable_run["run_id"])
     return run_pipeline_action(
         project_root,
         label=f"Publish retry {latest_run_id}",

@@ -3142,6 +3142,19 @@ def main():
             selected_sector = st.selectbox("Sector", sectors, key="sector_filter")
             score_min = st.slider("Min Score", 0.0, 100.0, 40.0, key="score_min")
             top_n_default = st.slider("Show Top N", 10, 200, 50, key="top_n_default")
+            stage2_filter_enabled = st.toggle(
+                "Stage-2 uptrend only",
+                value=False,
+                key="stage2_filter_enabled",
+            )
+            stage2_min_score = st.slider(
+                "Stage-2 min score",
+                0.0,
+                100.0,
+                70.0,
+                1.0,
+                key="stage2_min_score",
+            )
 
         st.divider()
 
@@ -3936,6 +3949,10 @@ def main():
 
         if rank_df is not None and not rank_df.empty:
             score_col = "composite_score"
+            stage2_has_uptrend = "is_stage2_uptrend" in rank_df.columns
+            stage2_has_score = "stage2_score" in rank_df.columns
+            stage2_has_label = "stage2_label" in rank_df.columns
+            stage2_has_bonus = "stage2_score_bonus" in rank_df.columns
 
             if selected_sector != "All":
                 try:
@@ -3955,6 +3972,32 @@ def main():
                     pass
 
             rank_df = rank_df[rank_df[score_col] >= score_min]
+            stage2_gate_unavailable = False
+            if st.session_state.get("stage2_filter_enabled", False):
+                if stage2_has_uptrend:
+                    uptrend_series = rank_df["is_stage2_uptrend"]
+                    if pd.api.types.is_bool_dtype(uptrend_series):
+                        gate = uptrend_series.fillna(False)
+                    elif pd.api.types.is_numeric_dtype(uptrend_series):
+                        gate = pd.to_numeric(uptrend_series, errors="coerce").fillna(0).astype(float) > 0
+                    else:
+                        gate = (
+                            uptrend_series.astype(str)
+                            .str.strip()
+                            .str.lower()
+                            .isin({"1", "true", "t", "yes", "y", "uptrend"})
+                        )
+                    rank_df = rank_df[gate]
+                else:
+                    stage2_gate_unavailable = True
+
+                if stage2_has_score:
+                    stage2_scores = pd.to_numeric(rank_df["stage2_score"], errors="coerce")
+                    rank_df = rank_df[stage2_scores >= float(st.session_state.get("stage2_min_score", 70.0))]
+                else:
+                    stage2_gate_unavailable = True
+
+            rank_df = rank_df.reset_index(drop=True)
             top_df = rank_df.head(top_n_default).copy()
             top_df.index = range(1, len(top_df) + 1)
             top_df.index.name = "Rank"
@@ -3994,6 +4037,27 @@ def main():
             )
             breakout_count = len(breakout_frame)
             summary_cols[4].metric("Breakout Candidates", str(breakout_count))
+            if st.session_state.get("stage2_filter_enabled", False) and stage2_gate_unavailable:
+                st.warning("Stage-2 filter requested, but Stage-2 columns are missing in this ranking dataset.")
+            elif st.session_state.get("stage2_filter_enabled", False):
+                st.caption(
+                    f"Stage-2 filter active: uptrend only, min score {float(st.session_state.get('stage2_min_score', 70.0)):.0f}"
+                )
+
+            stage2_summary_df = pd.DataFrame()
+            if stage2_has_label:
+                label_counts = (
+                    top_df["stage2_label"]
+                    .fillna("unknown")
+                    .astype(str)
+                    .str.strip()
+                    .replace("", "unknown")
+                    .str.lower()
+                    .value_counts()
+                )
+                stage2_summary_df = pd.DataFrame(
+                    [{"metric": "stage2_label", "name": str(label), "value": int(count)} for label, count in label_counts.items()]
+                )
 
             table_col, insight_col = st.columns([1.75, 1.05], gap="small")
             with table_col:
@@ -4001,6 +4065,10 @@ def main():
                     "symbol_id",
                     "close",
                     score_col,
+                    "stage2_score",
+                    "stage2_score_bonus",
+                    "is_stage2_uptrend",
+                    "stage2_label",
                     "Top Driver",
                     "Rank Trend",
                     "Δ Rank",
@@ -4023,6 +4091,10 @@ def main():
                     "prox_high_score": "Highs",
                     "delivery_pct_score": "Delivery",
                     "sector_strength_score": "Sector",
+                    "stage2_score": "S2 Score",
+                    "stage2_score_bonus": "S2 Bonus",
+                    "is_stage2_uptrend": "S2 Uptrend",
+                    "stage2_label": "S2 Label",
                 }
                 display_df = top_df[cols_show].rename(columns=rename_cols)
                 display_df = _with_symbol_hyperlink(display_df, symbol_col="Symbol")
@@ -4047,6 +4119,31 @@ def main():
                         ),
                     },
                 )
+                if stage2_has_uptrend or stage2_has_score or stage2_has_label or stage2_has_bonus:
+                    st.markdown("**Stage-2 Summary**")
+                    s2_cols = st.columns(3)
+                    if stage2_has_uptrend:
+                        uptrend_count = int(
+                            pd.Series(top_df["is_stage2_uptrend"])
+                            .astype(str)
+                            .str.strip()
+                            .str.lower()
+                            .isin({"1", "true", "t", "yes", "y", "uptrend"})
+                            .sum()
+                        )
+                        s2_cols[0].metric("S2 Uptrend", f"{uptrend_count}/{len(top_df)}")
+                    if stage2_has_score:
+                        s2_score = pd.to_numeric(top_df["stage2_score"], errors="coerce")
+                        s2_cols[1].metric("S2 Avg Score", "—" if s2_score.dropna().empty else f"{s2_score.mean():.1f}")
+                        s2_cols[2].metric("S2 Max Score", "—" if s2_score.dropna().empty else f"{s2_score.max():.1f}")
+                    elif stage2_has_bonus:
+                        s2_bonus = pd.to_numeric(top_df["stage2_score_bonus"], errors="coerce")
+                        s2_cols[1].metric("S2 Avg Bonus", "—" if s2_bonus.dropna().empty else f"{s2_bonus.mean():.1f}")
+                        s2_cols[2].metric("S2 Max Bonus", "—" if s2_bonus.dropna().empty else f"{s2_bonus.max():.1f}")
+                    if not stage2_summary_df.empty:
+                        st.dataframe(stage2_summary_df, use_container_width=True, hide_index=True, height=180)
+                else:
+                    st.caption("Stage-2 fields are not present in this rank artifact yet (only base ranking factors are available).")
 
             with insight_col:
                 ranked_symbols = top_df["symbol_id"].astype(str).tolist()

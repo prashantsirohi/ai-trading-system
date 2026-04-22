@@ -28,14 +28,14 @@ def attach_execution_weight(frame: pd.DataFrame) -> pd.DataFrame:
     """Propagate rank confidence into an execution weighting scaffold."""
     output = frame.copy()
     if output.empty:
-        output["execution_weight"] = pd.Series(dtype=float)
+        output.loc[:, "execution_weight"] = pd.Series(dtype=float)
         return output
     if "rank_confidence" not in output.columns and "feature_confidence" in output.columns:
-        output["rank_confidence"] = pd.to_numeric(output["feature_confidence"], errors="coerce")
+        output.loc[:, "rank_confidence"] = pd.to_numeric(output["feature_confidence"], errors="coerce")
     if "rank_confidence" in output.columns:
-        output["execution_weight"] = pd.to_numeric(output["rank_confidence"], errors="coerce").fillna(1.0)
+        output.loc[:, "execution_weight"] = pd.to_numeric(output["rank_confidence"], errors="coerce").fillna(1.0)
     else:
-        output["execution_weight"] = 1.0
+        output.loc[:, "execution_weight"] = 1.0
     return output
 
 
@@ -67,10 +67,13 @@ class ExecutionRequest:
     max_sector_exposure: float
     max_single_stock_weight: float
     use_atr_position_sizing: bool
+    execution_require_stage2: bool | None
+    execution_stage2_min_score: float
 
     @classmethod
     def from_context(cls, context: StageContext) -> "ExecutionRequest":
         quantity_raw = context.params.get("execution_fixed_quantity")
+        require_stage2_raw = context.params.get("execution_require_stage2")
         return cls(
             data_domain=str(context.params.get("data_domain", "operational")),
             strategy_mode=str(context.params.get("strategy_mode", "technical")),
@@ -100,6 +103,8 @@ class ExecutionRequest:
             max_sector_exposure=float(context.params.get("execution_max_sector_exposure", 0.20)),
             max_single_stock_weight=float(context.params.get("execution_max_single_stock_weight", 0.10)),
             use_atr_position_sizing=bool(context.params.get("execution_use_atr_position_sizing", False)),
+            execution_require_stage2=_coerce_optional_bool(require_stage2_raw),
+            execution_stage2_min_score=float(context.params.get("execution_stage2_min_score", 70.0)),
         )
 
 
@@ -118,6 +123,7 @@ class ExecutionCandidateBundle:
     breakout_qualified_count: int
     breakout_tier_a_count: int
     trust_confidence: dict[str, Any]
+    stage2_gate: dict[str, Any]
 
 
 class ExecutionCandidateBuilder:
@@ -135,6 +141,11 @@ class ExecutionCandidateBuilder:
             context,
             ranked_df=ranked_df,
             breakout_linkage_mode=request.breakout_linkage_mode,
+        )
+        ranked_df, stage2_gate = self._apply_stage2_gate(
+            context,
+            ranked_df=ranked_df,
+            request=request,
         )
         ranked_df = attach_execution_weight(prioritize_execution_candidates(ranked_df))
         if not ranked_df.empty:
@@ -189,6 +200,7 @@ class ExecutionCandidateBuilder:
             breakout_qualified_count=breakout_metadata["breakout_qualified_count"],
             breakout_tier_a_count=breakout_metadata["breakout_tier_a_count"],
             trust_confidence=trust_confidence,
+            stage2_gate=stage2_gate,
         )
 
     def _assert_trust_gate(self, context: StageContext, data_trust_status: str) -> None:
@@ -254,6 +266,63 @@ class ExecutionCandidateBuilder:
             "breakout_tier_a_count": breakout_tier_a,
         }
 
+    def _apply_stage2_gate(
+        self,
+        context: StageContext,
+        *,
+        ranked_df: pd.DataFrame,
+        request: ExecutionRequest,
+    ) -> tuple[pd.DataFrame, dict[str, Any]]:
+        gate_active = self._resolve_stage2_gate_active(context, request)
+        before_count = int(len(ranked_df))
+        gate_meta: dict[str, Any] = {
+            "gate_active": gate_active,
+            "gate_available": True,
+            "gate_unavailable": False,
+            "min_score": float(request.execution_stage2_min_score),
+            "before_count": before_count,
+            "after_count": before_count,
+            "dropped_count": 0,
+            "reason": "disabled",
+        }
+        if not gate_active or ranked_df.empty:
+            return ranked_df, gate_meta
+
+        required_columns = {"is_stage2_uptrend", "stage2_score"}
+        missing_columns = sorted(col for col in required_columns if col not in ranked_df.columns)
+        if missing_columns:
+            gate_meta.update(
+                {
+                    "gate_available": False,
+                    "gate_unavailable": True,
+                    "reason": "missing_stage2_columns",
+                    "missing_columns": missing_columns,
+                }
+            )
+            return ranked_df, gate_meta
+
+        output = ranked_df.copy()
+        uptrend_mask = output["is_stage2_uptrend"].fillna(False).astype(bool)
+        score_mask = pd.to_numeric(output["stage2_score"], errors="coerce").fillna(0.0) >= float(
+            request.execution_stage2_min_score
+        )
+        filtered = output.loc[uptrend_mask & score_mask].copy()
+        after_count = int(len(filtered))
+        gate_meta.update(
+            {
+                "after_count": after_count,
+                "dropped_count": max(0, before_count - after_count),
+                "reason": "filtered",
+            }
+        )
+        return filtered, gate_meta
+
+    def _resolve_stage2_gate_active(self, context: StageContext, request: ExecutionRequest) -> bool:
+        if request.execution_require_stage2 is not None:
+            return bool(request.execution_require_stage2)
+        rank_mode = str(context.params.get("rank_mode", "default")).strip().lower()
+        return rank_mode == "stage2_breakout"
+
     def _read_csv_artifact(self, context: StageContext, stage_name: str, artifact_type: str) -> pd.DataFrame:
         artifact = context.artifact_for(stage_name, artifact_type)
         if artifact is None or not Path(artifact.uri).exists():
@@ -265,3 +334,18 @@ class ExecutionCandidateBuilder:
         if artifact is None or not Path(artifact.uri).exists():
             return {}
         return json.loads(Path(artifact.uri).read_text(encoding="utf-8"))
+
+
+def _coerce_optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    parsed = str(value).strip().lower()
+    if parsed in {"1", "true", "yes", "on"}:
+        return True
+    if parsed in {"0", "false", "no", "off"}:
+        return False
+    return None

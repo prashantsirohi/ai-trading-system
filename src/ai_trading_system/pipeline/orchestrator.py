@@ -556,6 +556,37 @@ def _safe_stage_runs(orchestrator: object, run_id: str) -> list[dict[str, object
         return []
 
 
+def _resolve_latest_publishable_run_id(project_root: Path, *, limit: int = 50) -> str | None:
+    control_plane_db = project_root / "data" / "control_plane.duckdb"
+    if not control_plane_db.exists():
+        return None
+    import duckdb
+
+    conn = duckdb.connect(str(control_plane_db), read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT r.run_id, a.uri
+            FROM pipeline_run r
+            JOIN pipeline_artifact a
+              ON a.run_id = r.run_id
+             AND a.stage_name = 'rank'
+             AND a.artifact_type = 'ranked_signals'
+            ORDER BY r.started_at DESC NULLS LAST
+            LIMIT ?
+            """,
+            [int(limit)],
+        ).fetchall()
+    finally:
+        conn.close()
+
+    for row in rows:
+        artifact_path = Path(str(row[1]))
+        if artifact_path.exists():
+            return str(row[0])
+    return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Resilient trading pipeline orchestrator")
     parser.add_argument("--run-id", help="Reuse an existing run_id, typically for stage retries")
@@ -772,6 +803,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Execution linkage mode for breakout signals.",
     )
     parser.add_argument(
+        "--execution-require-stage2",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Optional execution-stage Stage 2 gate override. Defaults to auto-on for rank_mode=stage2_breakout.",
+    )
+    parser.add_argument(
+        "--execution-stage2-min-score",
+        type=float,
+        default=70.0,
+        help="Minimum stage2_score required when execution Stage 2 gate is active.",
+    )
+    parser.add_argument(
         "--terminal-mode",
         choices=["compact", "verbose", "json"],
         default="compact",
@@ -844,11 +887,22 @@ def main() -> None:
         if hasattr(orchestrator, "progress_renderer"):
             orchestrator.progress_renderer = progress_renderer
     run_date = args.run_date or date.today().isoformat()
-    run_id = args.run_id or orchestrator._build_run_id(run_date)
     if args.canary and args.stages == "ingest,features,rank,execute,publish":
         stage_names = ["ingest", "features", "rank"]
     else:
         stage_names = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
+    run_id = args.run_id
+    if run_id is None and stage_names == ["publish"]:
+        resolved_run_id = _resolve_latest_publishable_run_id(project_root, limit=50)
+        if not resolved_run_id:
+            logger.error(
+                "Publish-only run requires an existing run with rank artifacts; no publishable run found."
+            )
+            raise SystemExit(1)
+        run_id = resolved_run_id
+        logger.info("Resolved publish-only run to latest publishable run_id=%s", run_id)
+    if run_id is None:
+        run_id = orchestrator._build_run_id(run_date)
     params = {
         "force": args.force,
         "batch_size": args.batch_size,
@@ -889,6 +943,8 @@ def main() -> None:
         "breakout_symbol_near_high_max_pct": args.breakout_symbol_near_high_max_pct,
         "breakout_symbol_trend_gate_enabled": not args.disable_breakout_symbol_trend_gate,
         "execution_breakout_linkage": args.execution_breakout_linkage,
+        "execution_require_stage2": args.execution_require_stage2,
+        "execution_stage2_min_score": args.execution_stage2_min_score,
         "pattern_scan_enabled": args.pattern_scan_enabled,
         "pattern_max_symbols": args.pattern_max_symbols,
         "pattern_workers": args.pattern_workers,

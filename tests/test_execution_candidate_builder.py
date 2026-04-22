@@ -80,6 +80,8 @@ def test_execution_request_normalizes_context_params(tmp_path: Path) -> None:
     assert request.max_sector_exposure == pytest.approx(0.20)
     assert request.max_single_stock_weight == pytest.approx(0.10)
     assert request.use_atr_position_sizing is False
+    assert request.execution_require_stage2 is None
+    assert request.execution_stage2_min_score == pytest.approx(70.0)
 
 
 def test_execution_candidate_priority_and_weight_scaffolding() -> None:
@@ -147,6 +149,7 @@ def test_execution_candidate_builder_applies_soft_gate_and_loads_overlay(tmp_pat
     assert bundle.breakout_candidates_count == 2
     assert bundle.breakout_qualified_count == 1
     assert bundle.breakout_tier_a_count == 1
+    assert bundle.stage2_gate["gate_active"] is False
     assert bundle.ranked_df["symbol_id"].tolist() == ["AAA"]
     assert bundle.ml_overlay_df["symbol_id"].tolist() == ["AAA"]
 
@@ -180,3 +183,84 @@ def test_execution_candidate_builder_respects_untrusted_execution_override(tmp_p
 
     assert bundle.data_trust_status == "degraded"
     assert bundle.ranked_rows_after_linkage == 1
+
+
+def test_execution_candidate_builder_stage2_gate_auto_enabled_for_stage2_breakout(tmp_path: Path) -> None:
+    ranked_path = tmp_path / "ranked_signals.csv"
+    pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "composite_score": 95.0, "is_stage2_uptrend": True, "stage2_score": 82.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "composite_score": 94.0, "is_stage2_uptrend": False, "stage2_score": 90.0},
+            {"symbol_id": "CCC", "exchange": "NSE", "composite_score": 93.0, "is_stage2_uptrend": True, "stage2_score": 65.0},
+        ]
+    ).to_csv(ranked_path, index=False)
+    dashboard_path = tmp_path / "dashboard_payload.json"
+    dashboard_path.write_text(json.dumps({"summary": {"data_trust_status": "trusted"}}), encoding="utf-8")
+    context = _stage_context(
+        tmp_path,
+        params={"rank_mode": "stage2_breakout"},
+        artifacts={
+            "rank": {
+                "ranked_signals": StageArtifact("ranked_signals", str(ranked_path)),
+                "dashboard_payload": StageArtifact("dashboard_payload", str(dashboard_path)),
+            }
+        },
+    )
+    bundle = ExecutionCandidateBuilder().build(context, request=ExecutionRequest.from_context(context))
+    assert bundle.stage2_gate["gate_active"] is True
+    assert bundle.stage2_gate["before_count"] == 3
+    assert bundle.stage2_gate["after_count"] == 1
+    assert bundle.stage2_gate["dropped_count"] == 2
+    assert bundle.ranked_df["symbol_id"].tolist() == ["AAA"]
+
+
+def test_execution_candidate_builder_stage2_gate_override_disabled(tmp_path: Path) -> None:
+    ranked_path = tmp_path / "ranked_signals.csv"
+    pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "composite_score": 95.0, "is_stage2_uptrend": True, "stage2_score": 82.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "composite_score": 94.0, "is_stage2_uptrend": False, "stage2_score": 90.0},
+        ]
+    ).to_csv(ranked_path, index=False)
+    dashboard_path = tmp_path / "dashboard_payload.json"
+    dashboard_path.write_text(json.dumps({"summary": {"data_trust_status": "trusted"}}), encoding="utf-8")
+    context = _stage_context(
+        tmp_path,
+        params={"rank_mode": "stage2_breakout", "execution_require_stage2": False},
+        artifacts={
+            "rank": {
+                "ranked_signals": StageArtifact("ranked_signals", str(ranked_path)),
+                "dashboard_payload": StageArtifact("dashboard_payload", str(dashboard_path)),
+            }
+        },
+    )
+    bundle = ExecutionCandidateBuilder().build(context, request=ExecutionRequest.from_context(context))
+    assert bundle.stage2_gate["gate_active"] is False
+    assert bundle.ranked_df["symbol_id"].tolist() == ["AAA", "BBB"]
+
+
+def test_execution_candidate_builder_stage2_gate_unavailable_without_stage2_columns(tmp_path: Path) -> None:
+    ranked_path = tmp_path / "ranked_signals.csv"
+    pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "composite_score": 95.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "composite_score": 94.0},
+        ]
+    ).to_csv(ranked_path, index=False)
+    dashboard_path = tmp_path / "dashboard_payload.json"
+    dashboard_path.write_text(json.dumps({"summary": {"data_trust_status": "trusted"}}), encoding="utf-8")
+    context = _stage_context(
+        tmp_path,
+        params={"execution_require_stage2": True},
+        artifacts={
+            "rank": {
+                "ranked_signals": StageArtifact("ranked_signals", str(ranked_path)),
+                "dashboard_payload": StageArtifact("dashboard_payload", str(dashboard_path)),
+            }
+        },
+    )
+    bundle = ExecutionCandidateBuilder().build(context, request=ExecutionRequest.from_context(context))
+    assert bundle.stage2_gate["gate_active"] is True
+    assert bundle.stage2_gate["gate_unavailable"] is True
+    assert bundle.stage2_gate["reason"] == "missing_stage2_columns"
+    assert bundle.ranked_df["symbol_id"].tolist() == ["AAA", "BBB"]

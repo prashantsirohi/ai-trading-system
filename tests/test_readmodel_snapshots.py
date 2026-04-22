@@ -35,6 +35,9 @@ def _write_snapshot_artifacts(base: Path, run_id: str, *, score: float, smoke: b
             {
                 "symbol_id": "AAA",
                 "composite_score": score,
+                "stage2_score": 82.5,
+                "is_stage2_uptrend": True,
+                "stage2_label": "stage2_uptrend",
                 "run_date": "2026-04-21",
             }
         ]
@@ -141,10 +144,19 @@ def test_ranking_snapshot_readmodels_use_seeded_snapshot(tmp_path: Path, monkeyp
     snapshot = load_latest_operational_snapshot(tmp_path)
     ranking = get_ranking_snapshot_read_model(tmp_path, snapshot=snapshot)
     workspace = get_pipeline_workspace_snapshot_read_model(tmp_path, snapshot=snapshot)
+    ranking_stage2 = get_ranking_snapshot_read_model(tmp_path, snapshot=snapshot, stage2_only=True, stage2_min_score=80.0)
 
     assert ranking["artifact_count"] == 1
     assert ranking["top_ranked"][0]["symbol_id"] == "AAA"
     assert ranking["chart"][0]["composite_score"] == 88.0
+    assert ranking["stage2_summary"]["available"] is True
+    assert ranking["stage2_summary"]["counts_by_label"]["stage2_uptrend"] == 1
+    assert ranking["stage2_filter"]["requested"] is False
+    assert ranking_stage2["visible_count"] == 1
+    assert ranking_stage2["stage2_filter"]["requested"] is True
+    assert ranking_stage2["stage2_filter"]["gate_unavailable"] is False
     assert workspace["artifact_path"] == str(payload_path)
     assert workspace["counts"]["patterns"] == 1
+    assert workspace["visible_counts"]["ranked"] == 1
+    assert workspace["stage2_summary"]["uptrend_count"] == 1
     assert workspace["breakouts"][0]["symbol_id"] == "AAA"

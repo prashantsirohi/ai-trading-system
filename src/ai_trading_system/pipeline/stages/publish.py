@@ -87,6 +87,8 @@ class PublishStage:
             rank_artifact=rank_artifact,
             ranked_df=ranked_df if isinstance(ranked_df, pd.DataFrame) else pd.DataFrame(),
             targets=targets,
+            stage2_summary=dict(datasets.get("stage2_summary") or {}),
+            stage2_breakdown_symbols=list(datasets.get("stage2_breakdown_symbols") or []),
         )
         if failures:
             metadata["failures"] = failures

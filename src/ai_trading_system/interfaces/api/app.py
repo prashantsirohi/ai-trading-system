@@ -52,6 +52,7 @@ class PipelineRunRequest(BaseModel):
 
 class PublishRetryRequest(BaseModel):
     local_publish: bool = False
+    run_id: str | None = None
 
 
 class ShadowRunRequest(BaseModel):
@@ -114,8 +115,15 @@ def create_app() -> FastAPI:
     @app.get("/api/execution/ranking")
     def execution_ranking(
         limit: int = Query(default=25, ge=1, le=200),
+        stage2_only: bool = Query(default=False),
+        stage2_min_score: float | None = Query(default=None, ge=0.0, le=100.0),
     ) -> dict[str, Any]:
-        return get_ranking_snapshot(_project_root(), limit=limit)
+        return get_ranking_snapshot(
+            _project_root(),
+            limit=limit,
+            stage2_only=stage2_only,
+            stage2_min_score=stage2_min_score,
+        )
 
     @app.get("/api/execution/market")
     def execution_market(
@@ -126,8 +134,15 @@ def create_app() -> FastAPI:
     @app.get("/api/execution/workspace/pipeline")
     def execution_workspace_pipeline(
         limit: int = Query(default=20, ge=1, le=200),
+        stage2_only: bool = Query(default=False),
+        stage2_min_score: float | None = Query(default=None, ge=0.0, le=100.0),
     ) -> dict[str, Any]:
-        return get_pipeline_workspace_snapshot(_project_root(), limit=limit)
+        return get_pipeline_workspace_snapshot(
+            _project_root(),
+            limit=limit,
+            stage2_only=stage2_only,
+            stage2_min_score=stage2_min_score,
+        )
 
     @app.get("/api/execution/shadow")
     def execution_shadow() -> dict[str, Any]:
@@ -227,7 +242,9 @@ def create_app() -> FastAPI:
     def execution_publish_retry(request: PublishRetryRequest) -> dict[str, Any]:
         try:
             task = retry_publish_action(
-                _project_root(), local_publish=request.local_publish
+                _project_root(),
+                local_publish=request.local_publish,
+                run_id=request.run_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
