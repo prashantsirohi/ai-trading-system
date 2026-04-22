@@ -39,7 +39,7 @@ class IngestOrchestrationService:
         if self.operation is not None:
             result = self.operation(context)
         else:
-            from collectors.daily_update_runner import run as run_daily_update
+            from ai_trading_system.domains.ingest.daily_update_runner import run as run_daily_update
 
             result = run_daily_update(
                 symbols_only=True,
@@ -295,7 +295,7 @@ class IngestOrchestrationService:
             raw_df = pd.read_csv(csv_path)
             source_label = str(csv_path)
         else:
-            from collectors.nse_collector import NSECollector
+            from ai_trading_system.domains.ingest.providers.nse import NSECollector
 
             raw_dir = context.project_root / "data" / "raw" / "NSE_EQ"
             raw_dir.mkdir(parents=True, exist_ok=True)
@@ -475,7 +475,7 @@ class IngestOrchestrationService:
             }
 
         try:
-            from collectors.delivery_collector import DeliveryCollector
+            from ai_trading_system.domains.ingest.delivery import DeliveryCollector
 
             collector = DeliveryCollector(
                 ohlcv_db_path=str(context.db_path),

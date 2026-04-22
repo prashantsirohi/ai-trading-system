@@ -31,8 +31,8 @@ from analytics.data_trust import (
     resolve_quarantine_for_rows,
 )
 from analytics.registry import RegistryStore
-from collectors.daily_update_runner import _fetch_nse_bhavcopy_rows, _fetch_yfinance_rows, _rows_to_symbol_frames
-from collectors.dhan_collector import DhanCollector
+from ai_trading_system.domains.ingest.daily_update_runner import _fetch_nse_bhavcopy_rows, _fetch_yfinance_rows, _rows_to_symbol_frames
+from ai_trading_system.domains.ingest.providers.dhan import DhanCollector
 from core.env import load_project_env
 from ai_trading_system.domains.features import FeatureStore, compute_all_symbols_rs
 from ai_trading_system.platform.db.paths import ensure_domain_layout

@@ -8,7 +8,7 @@ from typing import Iterable
 
 import pandas as pd
 
-from collectors.nse_collector import NSECollector
+from ai_trading_system.domains.ingest.providers.nse import NSECollector
 
 
 @dataclass(frozen=True)

@@ -45,7 +45,7 @@ class FeaturesOrchestrationService:
         if self.operation is not None:
             return self.operation(context)
 
-        from collectors.daily_update_runner import run as run_daily_update
+        from ai_trading_system.domains.ingest.daily_update_runner import run as run_daily_update
 
         ingest_artifact = context.artifact_for("ingest", "ingest_summary")
         updated_symbols = None

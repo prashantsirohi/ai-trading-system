@@ -19,18 +19,18 @@ This document tracks which `collectors/*` modules are already compatibility shim
 | `collectors/stock_backfill.py` | `ai_trading_system.domains.ingest.stock_backfill` |
 | `collectors/token_manager.py` | `ai_trading_system.domains.ingest.token_manager` |
 | `collectors/nse_delivery_scraper.py` | `ai_trading_system.domains.ingest.nse_delivery_scraper` |
+| `collectors/archive_nse_bhavcopy.py` | `ai_trading_system.domains.ingest.archive_nse_bhavcopy` |
+| `collectors/compute_features_batch.py` | `ai_trading_system.domains.features.compute_features_batch` |
+| `collectors/delete_stale.py` | `ai_trading_system.domains.ingest.delete_stale` |
+| `collectors/dhan_ohlc_diagnostics.py` | `ai_trading_system.domains.ingest.dhan_ohlc_diagnostics` |
+| `collectors/run_full_rank.py` | `ai_trading_system.domains.ranking.run_full_rank` |
+| `collectors/test_marketfeed_ohlc.py` | `ai_trading_system.domains.ingest.test_marketfeed_ohlc` |
+| `collectors/zerodha_sector_collector.py` | `ai_trading_system.domains.ingest.zerodha_sector_collector` |
 
 ## Deferred legacy modules (explicit PR-2 boundary)
 
 These remain operational in this tranche and are not deep-migrated here:
 
 - `collectors/auth_doctor.py`
-- `collectors/archive_nse_bhavcopy.py`
-- `collectors/compute_features_batch.py`
-- `collectors/delete_stale.py`
-- `collectors/dhan_ohlc_diagnostics.py`
-- `collectors/run_full_rank.py`
-- `collectors/test_marketfeed_ohlc.py`
-- `collectors/zerodha_sector_collector.py`
 
 Follow-up PRs should migrate remaining business logic into `src/ai_trading_system/domains/ingest/*` and retain thin import shims at legacy paths for compatibility.
