@@ -12,6 +12,11 @@ Usage:
 This script is designed to run after market close (3:30 PM IST).
 It performs incremental updates - only fetching rows newer than
 the last date already stored in DuckDB.
+
+PR-2 NOTE (deferred migration boundary):
+- This file remains an operational legacy monolith in this tranche.
+- Do not add new business logic here unless absolutely required for hotfixes.
+- Canonical long-term home for orchestration is under `src/ai_trading_system/domains/ingest/`.
 """
 
 import os

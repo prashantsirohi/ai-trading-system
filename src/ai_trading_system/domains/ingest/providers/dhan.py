@@ -18,7 +18,7 @@ from ai_trading_system.domains.ingest.repository import (
 )
 from core.env import load_project_env
 from ai_trading_system.domains.features.feature_store import FeatureStore
-from collectors.ingest_validation import validate_ohlcv_frame
+from ai_trading_system.domains.ingest.validation import validate_ohlcv_frame
 from collectors.token_manager import DhanTokenManager
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger

@@ -13,7 +13,7 @@
 
 ---
 
-## Status snapshot (April 21, 2026)
+## Status snapshot (April 22, 2026, post PR-2 implementation)
 
 | Phase | Status | Summary |
 |---|---|---|
@@ -21,9 +21,9 @@
 | Phase 1 | ✅ Implemented | Stage 2 foundation and pattern bug fixes exist; verify with current tests in this checkout before treating as green |
 | Phase 2 | ✅ Implemented | New detectors and `tests/test_new_patterns.py` exist and should be treated as current repo truth |
 | Phase 3 | ✅ Implemented | `011_pattern_cache.sql`, `patterns/cache.py`, Stage 2 pre-screen + incremental orchestration in evaluation/service, and `tests/test_pattern_cache.py` are present |
-| Phase 4 | 🔶 Partial | Rank pattern side has Stage 2 context, but execution entry gate/API/UI publish enrichments listed in this phase are not complete |
-| Phase 5 | 🔶 Partial | Guardrail tests exist (`tests/test_phase5_guardrails.py`), but path-hygiene completion goals in this phase are not fully met |
-| Phase 6 | 🔶 Partial | Large migration progress exists (many legacy surfaces removed/shimmed), but top-level legacy surfaces still remain (`collectors/`, `main.py`, `tools/`, `dashboard/`) |
+| Phase 4 | 🔶 Partial | PR-1 backend/API reliability + Stage 2 gate/enrichment is implemented; UI-specific enrichment tasks still remain |
+| Phase 5 | 🔶 Partial | Ratchet guardrail + baseline allowlist implemented in PR-2; broad path-hygiene backlog still remains |
+| Phase 6 | 🔶 Partial | Shim-first PR-2 tranche completed for high-use collector surfaces, but major legacy modules still remain |
 | Phase 7 | 🔲 Pending | UI consolidation |
 | Phase 8 | 🔲 Pending | Operational polish + scheduler |
 
@@ -41,67 +41,82 @@
   - Several top-level `analytics/*` modules are now compatibility shims to `src/`
   - Former top-level `features/` and `execution/` package modules are largely removed in favor of `src/ai_trading_system/domains/*`
   - Multiple `ui/*` and `run/*` compatibility shims route to canonical `src/` code
+- PR-1 implementation completed and validated:
+  - Execution Stage 2 gate controls added in execution request/candidate flow:
+    - `execution_require_stage2` (optional override)
+    - `execution_stage2_min_score` (default `70.0`)
+    - auto-on when `rank_mode == "stage2_breakout"` unless overridden
+    - gate diagnostics emitted in execute metadata (`before/after/dropped`, active/available state)
+  - Publish Stage 2 enrichment added:
+    - `stage2_summary` and `stage2_breakdown_symbols` in publish datasets/metadata
+    - Telegram summary now includes compact Stage 2 line
+  - Publish retry/run-context reliability improved:
+    - CLI publish-only run auto-resolves latest publishable run when `--run-id` is omitted
+    - API `POST /api/execution/pipeline/publish-retry` now supports optional `run_id`
+  - Validation evidence:
+    - `./.venv/bin/python -m pytest -q tests/test_execution_candidate_builder.py tests/test_publish_payloads.py tests/test_pipeline_orchestrator.py tests/test_execution_api.py` → **48 passed**
+    - `./.venv/bin/python -m run.orchestrator --stages rank,publish --run-date 2026-04-21 --local-publish` → completed
+    - `./.venv/bin/python -m run.orchestrator --stages publish --local-publish` (no run-id) → auto-resolved latest run and completed
+- PR-2 implementation completed and validated:
+  - Added canonical ingest validation module in `src` and retained `collectors/ingest_validation.py` as compatibility shim.
+  - Added collector canonical mapping doc (`docs/refactor/collectors_canonical_map.md`) and explicit deferred boundary note for `collectors/daily_update_runner.py`.
+  - Added compatibility/deprecation guardrails:
+    - `tests/test_collectors_shim_compat.py`
+    - `tests/test_legacy_surface_guardrails.py`
+    - `tests/lint/test_path_hygiene_ratchet.py` + baseline allowlist
+  - Moved `tools/export_excel.py` logic to canonical `src/ai_trading_system/interfaces/cli/export_excel.py`, with legacy shim retained.
+  - Validation evidence:
+    - `./.venv/bin/python -m pytest -q tests/test_phase5_guardrails.py tests/lint/test_path_hygiene_ratchet.py tests/test_collectors_shim_compat.py tests/test_legacy_surface_guardrails.py tests/test_ingest_write_validation.py` → **13 passed**
+    - `./.venv/bin/python -m run.orchestrator --stages ingest,features,rank --run-date 2026-04-21` → completed (`features/rank` skipped due to no new ingest data)
 
 **Remaining / not yet complete:**
 - Phase 0 cleanup remains: legacy entrypoints and directories are still in checkout.
 - Phase 4 remains incomplete:
-  - Stage 2 execution gate behavior described in this phase is not yet implemented in execution policy path.
-  - API/UI enrichment tasks listed here are not fully present.
-  - Publish Stage 2 breakdown section task remains open.
+  - Backend/API pieces are implemented; UI-specific Stage 2 filter/enrichment items are still open.
+  - Execution policy module (`domains/execution/entry_policy.py`) still has minimal policy logic and can be expanded if Phase 4 requires deeper policy semantics beyond candidate gating.
 - Phase 5 remains incomplete:
-  - Current guardrails cover model/governance flows, but the path-hygiene completion targets in this phase are still open.
+  - Ratchet baseline exists, but many non-canonical path usages outside the scoped PR-2 surfaces are still open.
 - Phase 6 remains incomplete:
-  - Top-level `collectors/` still contains substantial logic.
+  - Top-level `collectors/` still contains substantial logic (for example `daily_update_runner.py`, backfill/repair scripts).
   - `main.py`, `tools/`, `dashboard/` remain.
 - Phase 7 and Phase 8 are still pending.
 
 ### Next 2 PRs (recommended execution order)
 
-#### PR-1: Publish/Execution Stage 2 completion + reliability hardening
+#### PR-3: Phase 4 UI + operator surfacing completion
 
-**Primary goal:** close the highest-impact functional gaps in Phase 4 and stabilize run completion behavior.
+**Primary goal:** finish remaining Phase 4 user-facing Stage 2 visibility tasks.
 
 **Scope:**
-- Implement Stage 2 execution gate behavior in execution entry policy flow (Phase 4.1/4.2 intent).
-- Add Stage 2-aware publish payload enrichment where missing (Phase 4.3/4.4/4.5 intent).
-- Ensure publish retry path consistently resolves rank artifacts by run context (avoid false missing-artifact failures).
-- Keep local/telegram publish behavior graceful when optional dependencies are absent.
+- Add Stage 2-specific columns/filters in execution operator UI/readmodels where needed.
+- Ensure ranking snapshot and workspace views consistently expose Stage 2 fields used by operators.
+- Keep payload shape backward-compatible for existing clients.
 
 **Suggested touch files:**
-- `src/ai_trading_system/domains/execution/entry_policy.py`
-- `src/ai_trading_system/domains/execution/candidate_builder.py`
-- `src/ai_trading_system/pipeline/stages/publish.py`
-- `src/ai_trading_system/domains/publish/publish_payloads.py`
-- `src/ai_trading_system/domains/publish/telegram_summary_builder.py`
-- `src/ai_trading_system/interfaces/api/services/readmodels/rank_snapshot.py` (if API payload needs Stage 2 fields)
+- `src/ai_trading_system/interfaces/api/services/readmodels/rank_snapshot.py`
+- `src/ai_trading_system/interfaces/api/services/execution_operator.py`
+- `src/ai_trading_system/interfaces/streamlit/execution/app.py` (if filter surface is implemented in Streamlit)
 
 **Ship gate:**
 ```bash
-./.venv/bin/python -m pytest -q tests/test_pipeline_orchestrator.py tests/test_publish_stage_partial_failure.py tests/test_execution_candidate_builder.py
+./.venv/bin/python -m pytest -q tests/test_execution_api.py tests/test_readmodel_snapshots.py
 ./.venv/bin/python -m run.orchestrator --stages rank,publish --run-date 2026-04-21 --local-publish
 ```
 
 ---
 
-#### PR-2: Legacy surface reduction + path hygiene closure (Phase 5/6 tranche)
+#### PR-4: Phase 6 deep collector migration tranche
 
-**Primary goal:** reduce operational ambiguity by shrinking non-canonical entry surfaces and finishing first wave of path hygiene.
+**Primary goal:** migrate remaining high-risk legacy collector logic into canonical `src` modules while preserving compatibility shims.
 
 **Scope:**
-- Convert remaining high-use top-level modules to explicit shims or remove dead surfaces where already replaced by `src/`.
-- Prioritize `collectors/` migration boundary definition (what remains real vs shim), and document canonical replacements.
-- Update/strengthen path hygiene guardrails to enforce `src/ai_trading_system/` for new logic.
-- Keep runtime compatibility for existing CLI entrypoints.
-
-**Suggested touch files:**
-- `collectors/*` (targeted shim conversion candidates)
-- `main.py`, `tools/*`, `dashboard/*` (deprecation boundary and/or shim treatment)
-- `tests/test_phase5_guardrails.py` (or successor path-hygiene guardrail suite)
-- `docs/EXECUTION_PLAN.md` + `AGENTS.md` alignment notes
+- Split and migrate `collectors/daily_update_runner.py` orchestration logic into `src/ai_trading_system/domains/ingest/service.py` (or adjacent canonical modules).
+- Migrate remaining non-shim collector scripts used by operations and keep import-compatible shims at legacy paths.
+- Tighten path-hygiene ratchet allowlist by reducing existing exceptions.
 
 **Ship gate:**
 ```bash
-./.venv/bin/python -m pytest -q tests/test_phase5_guardrails.py
+./.venv/bin/python -m pytest -q tests/test_phase5_guardrails.py tests/lint/test_path_hygiene_ratchet.py tests/test_collectors_shim_compat.py
 ./.venv/bin/python -m run.orchestrator --stages ingest,features,rank --run-date 2026-04-21
 ```
 
