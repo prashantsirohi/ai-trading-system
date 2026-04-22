@@ -14,12 +14,12 @@ This document tracks which `collectors/*` modules are already compatibility shim
 | `collectors/ingest_validation.py` | `ai_trading_system.domains.ingest.validation` |
 | `collectors/daily_update_runner.py` | `ai_trading_system.domains.ingest.daily_update_runner` |
 | `collectors/reset_reingest_validate.py` | `ai_trading_system.domains.ingest.reset_reingest_validate` |
+| `collectors/ingest_full.py` | `ai_trading_system.domains.ingest.ingest_full` |
 
 ## Deferred legacy modules (explicit PR-2 boundary)
 
 These remain operational in this tranche and are not deep-migrated here:
 
-- `collectors/ingest_full.py`
 - `collectors/repair_ohlcv_window.py`
 - `collectors/index_backfill.py`
 - `collectors/stock_backfill.py`

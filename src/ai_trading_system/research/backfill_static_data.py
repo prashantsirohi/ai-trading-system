@@ -7,8 +7,8 @@ import os
 from datetime import date
 from pathlib import Path
 
-from collectors.ingest_full import run_ingestion
-from collectors.dhan_collector import DhanCollector
+from ai_trading_system.domains.ingest.ingest_full import run_ingestion
+from ai_trading_system.domains.ingest.providers.dhan import DhanCollector
 from ai_trading_system.platform.db.paths import ensure_domain_layout, research_static_end_date
 from ai_trading_system.platform.logging.logger import log_context, logger
 
