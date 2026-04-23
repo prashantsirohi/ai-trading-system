@@ -34,6 +34,15 @@ def resolve_data_domain(data_domain: str | None = None) -> DataDomain:
     return domain  # type: ignore[return-value]
 
 
+def _default_project_root() -> Path:
+    """Infer repository root from this module location."""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "src" / "ai_trading_system").exists():
+            return parent
+    return here.parents[4]
+
+
 def get_domain_paths(
     project_root: Path | str | None = None,
     data_domain: str | None = None,
@@ -43,7 +52,7 @@ def get_domain_paths(
     Operational paths fall back to the legacy flat `data/` layout when it already
     exists, which keeps this refactor incremental and low risk.
     """
-    root = Path(project_root) if project_root else Path(__file__).resolve().parents[5]
+    root = Path(project_root) if project_root else _default_project_root()
     domain = resolve_data_domain(data_domain)
     data_root = root / "data"
 
