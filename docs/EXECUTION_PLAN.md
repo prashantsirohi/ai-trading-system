@@ -124,6 +124,13 @@
     - `./.venv/bin/python -m pytest -q tests/test_collectors_shim_compat.py tests/test_auth_bootstrap.py tests/test_pipeline_orchestrator.py tests/test_daily_update_runner_sources.py tests/test_ingest_write_validation.py` → **57 passed**
     - `./.venv/bin/python -m pytest -q tests/test_phase5_guardrails.py tests/lint/test_path_hygiene_ratchet.py tests/test_collectors_shim_compat.py` → **6 passed**
     - `./.venv/bin/python -m run.orchestrator --stages ingest,features,rank --run-date 2026-04-21` → completed
+- PR-6 implementation completed and validated:
+  - Canonicalized final collector utility `collectors/auth_doctor.py` to `src/ai_trading_system/domains/ingest/auth_doctor.py` with legacy shim compatibility.
+  - Expanded collector shim compatibility tests and canonical mapping docs.
+  - Validation evidence:
+    - `./.venv/bin/python -m pytest -q tests/test_collectors_shim_compat.py tests/test_auth_bootstrap.py tests/test_pipeline_orchestrator.py tests/test_daily_update_runner_sources.py tests/test_ingest_write_validation.py` → **57 passed**
+    - `./.venv/bin/python -m pytest -q tests/test_phase5_guardrails.py tests/lint/test_path_hygiene_ratchet.py tests/test_collectors_shim_compat.py` → **6 passed**
+    - `./.venv/bin/python -m run.orchestrator --stages ingest,features,rank --run-date 2026-04-21` → completed
 
 **Remaining / not yet complete:**
 - Phase 0 cleanup remains: legacy entrypoints and directories are still in checkout.
@@ -132,8 +139,7 @@
 - Phase 5 remains incomplete:
   - Ratchet baseline exists, but many non-canonical path usages outside the scoped PR-2 surfaces are still open.
 - Phase 6 remains incomplete:
-  - Minor legacy utility surface remains (`collectors/auth_doctor.py`).
-  - `main.py`, `tools/`, `dashboard/` remain.
+  - Collector migration is complete for high-use operational surfaces; remaining work is broader legacy surface cleanup (`main.py`, `tools/`, `dashboard/`).
 - Phase 7 and Phase 8 are still pending.
 
 ### Next PR (recommended execution order)
@@ -145,7 +151,7 @@
 **Scope:**
 - Reduce ratchet allowlist exceptions with targeted canonical path rewrites.
 - Decide and implement keep/remove plan for `main.py`, `tools/`, `dashboard/`, `config/settings.py`.
-- Optionally canonicalize final small collector utility (`collectors/auth_doctor.py`) and shim it.
+- Phase 6 collector canonicalization follow-up is complete; remaining scope moves to path hygiene + top-level legacy surface cleanup.
 
 **Ship gate:**
 ```bash

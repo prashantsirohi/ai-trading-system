@@ -26,11 +26,10 @@ This document tracks which `collectors/*` modules are already compatibility shim
 | `collectors/run_full_rank.py` | `ai_trading_system.domains.ranking.run_full_rank` |
 | `collectors/test_marketfeed_ohlc.py` | `ai_trading_system.domains.ingest.test_marketfeed_ohlc` |
 | `collectors/zerodha_sector_collector.py` | `ai_trading_system.domains.ingest.zerodha_sector_collector` |
+| `collectors/auth_doctor.py` | `ai_trading_system.domains.ingest.auth_doctor` |
 
 ## Deferred legacy modules (explicit PR-2 boundary)
 
-These remain operational in this tranche and are not deep-migrated here:
-
-- `collectors/auth_doctor.py`
+All high-use operational collector surfaces are now canonicalized to `src` with compatibility shims retained.
 
 Follow-up PRs should migrate remaining business logic into `src/ai_trading_system/domains/ingest/*` and retain thin import shims at legacy paths for compatibility.

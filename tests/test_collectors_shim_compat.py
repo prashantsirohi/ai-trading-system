@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 def test_collectors_shims_resolve_to_canonical_modules() -> None:
+    import collectors.auth_doctor as legacy_auth_doctor
     import collectors.archive_nse_bhavcopy as legacy_archive_bhavcopy
     import collectors.compute_features_batch as legacy_compute_features_batch
     import collectors.daily_update_runner as legacy_daily_runner
@@ -24,6 +25,7 @@ def test_collectors_shims_resolve_to_canonical_modules() -> None:
     import collectors.zerodha_sector_collector as legacy_zerodha_sector_collector
 
     from ai_trading_system.domains.features import compute_features_batch as canonical_compute_features_batch
+    from ai_trading_system.domains.ingest import auth_doctor as canonical_auth_doctor
     from ai_trading_system.domains.ingest import archive_nse_bhavcopy as canonical_archive_bhavcopy
     from ai_trading_system.domains.ingest import daily_update_runner as canonical_daily_runner
     from ai_trading_system.domains.ingest import delete_stale as canonical_delete_stale
@@ -64,9 +66,11 @@ def test_collectors_shims_resolve_to_canonical_modules() -> None:
     assert legacy_run_full_rank is canonical_run_full_rank
     assert legacy_test_marketfeed_ohlc is canonical_test_marketfeed_ohlc
     assert legacy_zerodha_sector_collector is canonical_zerodha_sector_collector
+    assert legacy_auth_doctor is canonical_auth_doctor
 
 
 def test_collectors_shims_keep_expected_public_symbols() -> None:
+    from collectors.auth_doctor import run_doctor
     from collectors.archive_nse_bhavcopy import archive_bhavcopy_range
     from collectors.compute_features_batch import batch_rsi
     from collectors.daily_update_runner import _fetch_nse_bhavcopy_rows, run
@@ -112,3 +116,4 @@ def test_collectors_shims_keep_expected_public_symbols() -> None:
     assert callable(fetch_ohlc_bulk)
     assert ZerodhaSectorCollector is not None
     assert callable(run_full_rank)
+    assert callable(run_doctor)
