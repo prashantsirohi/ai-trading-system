@@ -1,18 +1,11 @@
-"""Dashboard package with lightweight lazy exports."""
+"""Compatibility shim for legacy ``dashboard`` package imports."""
 
 from __future__ import annotations
 
-__all__ = ["load_features", "plot_candlestick_with_features", "StockRanker"]
+import sys as _sys
 
+from ui.research.app import *  # noqa: F401,F403
+from ui.research import app as _research_app
 
-def __getattr__(name: str):
-    if name in {"load_features", "plot_candlestick_with_features", "StockRanker"}:
-        from ui.research.app import StockRanker, load_features, plot_candlestick_with_features
+_sys.modules[__name__] = _research_app
 
-        exports = {
-            "load_features": load_features,
-            "plot_candlestick_with_features": plot_candlestick_with_features,
-            "StockRanker": StockRanker,
-        }
-        return exports[name]
-    raise AttributeError(name)

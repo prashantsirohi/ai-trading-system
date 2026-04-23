@@ -10,6 +10,7 @@ SCAN_TARGETS = [
     REPO_ROOT / "collectors",
     REPO_ROOT / "tools",
     REPO_ROOT / "dashboard",
+    REPO_ROOT / "config",
     REPO_ROOT / "main.py",
 ]
 PATTERNS: dict[str, re.Pattern[str]] = {
@@ -62,4 +63,15 @@ def test_path_hygiene_ratchet_no_new_violations() -> None:
         "Path hygiene ratchet detected new non-canonical hardcoded path patterns.\n"
         f"New violations: {unexpected}\n"
         f"Add only intentional debt to {ALLOWLIST_PATH.relative_to(REPO_ROOT)}."
+    )
+
+
+def test_path_hygiene_allowlist_has_no_stale_entries() -> None:
+    allowlist = _load_allowlist()
+    findings = _scan_findings()
+    stale = sorted(allowlist - findings)
+    assert not stale, (
+        "Path hygiene allowlist contains stale entries that should be removed.\n"
+        f"Stale entries: {stale}\n"
+        f"Clean up {ALLOWLIST_PATH.relative_to(REPO_ROOT)}."
     )

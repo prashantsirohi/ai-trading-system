@@ -1,5 +1,2 @@
 # Baseline allowlist for known legacy path-hygiene exceptions.
 # Format: relative/path.py|pattern_id
-
-collectors/delete_stale.py|literal_data_ohlcv_db
-collectors/zerodha_sector_collector.py|hardcoded_repo_data_root

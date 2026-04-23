@@ -16,6 +16,7 @@ def test_collectors_shims_resolve_to_canonical_modules() -> None:
     import collectors.masterdata as legacy_masterdata
     import collectors.nse_collector as legacy_nse
     import collectors.nse_delivery_scraper as legacy_nse_delivery_scraper
+    import collectors.repair_ohlcv_window as legacy_repair_ohlcv_window
     import collectors.reset_reingest_validate as legacy_reset_reingest
     import collectors.run_full_rank as legacy_run_full_rank
     import collectors.stock_backfill as legacy_stock_backfill
@@ -35,6 +36,7 @@ def test_collectors_shims_resolve_to_canonical_modules() -> None:
     from ai_trading_system.domains.ingest import index_backfill as canonical_index_backfill
     from ai_trading_system.domains.ingest import masterdata as canonical_masterdata
     from ai_trading_system.domains.ingest import nse_delivery_scraper as canonical_nse_delivery_scraper
+    from ai_trading_system.domains.ingest import repair as canonical_repair_ohlcv_window
     from ai_trading_system.domains.ingest import reset_reingest_validate as canonical_reset_reingest
     from ai_trading_system.domains.ingest import stock_backfill as canonical_stock_backfill
     from ai_trading_system.domains.ingest import test_marketfeed_ohlc as canonical_test_marketfeed_ohlc
@@ -58,6 +60,7 @@ def test_collectors_shims_resolve_to_canonical_modules() -> None:
     assert legacy_index_backfill is canonical_index_backfill
     assert legacy_stock_backfill is canonical_stock_backfill
     assert legacy_nse_delivery_scraper is canonical_nse_delivery_scraper
+    assert legacy_repair_ohlcv_window is canonical_repair_ohlcv_window
     assert legacy_token_manager is canonical_token_manager
     assert legacy_archive_bhavcopy is canonical_archive_bhavcopy
     assert legacy_compute_features_batch is canonical_compute_features_batch
@@ -83,6 +86,7 @@ def test_collectors_shims_keep_expected_public_symbols() -> None:
     from collectors.index_backfill import run_index_backfill
     from collectors.nse_collector import NSECollector
     from collectors.nse_delivery_scraper import NseHistoricalDeliveryScraper
+    from collectors.repair_ohlcv_window import repair_window
     from collectors.reset_reingest_validate import run_reset_reingest_validate
     from collectors.stock_backfill import fetch_yfinance_ohlc, run_stock_backfill
     from collectors.test_marketfeed_ohlc import fetch_ohlc_bulk
@@ -109,6 +113,7 @@ def test_collectors_shims_keep_expected_public_symbols() -> None:
     assert callable(run_stock_backfill)
     assert NseHistoricalDeliveryScraper is not None
     assert DhanTokenManager is not None
+    assert callable(repair_window)
     assert callable(archive_bhavcopy_range)
     assert callable(batch_rsi)
     assert callable(run_delete_stale)
