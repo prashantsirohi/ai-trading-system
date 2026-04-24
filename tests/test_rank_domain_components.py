@@ -328,3 +328,123 @@ def test_ranker_input_loader_normalizes_swapped_columns():
 
 def test_stock_ranker_exposes_externalized_default_weights():
     assert StockRanker.WEIGHTS == DEFAULT_FACTOR_WEIGHTS
+
+
+def test_stock_ranker_rank_all_preserves_stage2_columns_from_stage2_enrichment(tmp_path):
+    ranker = StockRanker(
+        ohlcv_db_path=str(tmp_path / "ohlcv.duckdb"),
+        feature_store_dir=str(tmp_path / "feature_store"),
+    )
+
+    ranker.input_loader.load_latest_market_data = lambda exchanges: pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "exchange": "NSE",
+                "timestamp": "2026-04-23",
+                "close": 100.0,
+                "volume": 1200.0,
+                "high": 105.0,
+                "low": 95.0,
+                "open": 98.0,
+            },
+            {
+                "symbol_id": "BBB",
+                "exchange": "NSE",
+                "timestamp": "2026-04-23",
+                "close": 110.0,
+                "volume": 1600.0,
+                "high": 116.0,
+                "low": 104.0,
+                "open": 108.0,
+            },
+        ]
+    )
+    ranker.input_loader.load_return_frame_multi = lambda periods: pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "return_20": 8.0, "return_60": 16.0, "return_120": 24.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "return_20": 10.0, "return_60": 18.0, "return_120": 28.0},
+        ]
+    )
+    ranker.input_loader.load_volume_frame = lambda: pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "vol_20_avg": 1000.0, "vol_20_max": 1500.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "vol_20_avg": 1100.0, "vol_20_max": 1700.0},
+        ]
+    )
+    ranker.input_loader.load_latest_adx = lambda date: pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "adx_14": 22.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "adx_14": 28.0},
+        ]
+    )
+    ranker.input_loader.load_latest_sma = lambda date: pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "sma_20": 97.0, "sma_50": 92.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "sma_20": 106.0, "sma_50": 100.0},
+        ]
+    )
+    ranker.input_loader.load_latest_highs = lambda date, window: pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "high_52w": 110.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "high_52w": 120.0},
+        ]
+    )
+    ranker.input_loader.load_latest_delivery = lambda date: pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "delivery_pct": 40.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "delivery_pct": 45.0},
+        ]
+    )
+    ranker.input_loader.load_latest_stage2 = lambda date, exchanges, rel_strength_frame=None: pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "exchange": "NSE",
+                "timestamp": "2026-04-23",
+                "close": 100.0,
+                "sma_200": 90.0,
+                "sma_150": 94.0,
+                "sma200_slope_20d_pct": 2.5,
+                "stage2_score": 88.0,
+                "is_stage2_structural": True,
+                "is_stage2_candidate": True,
+                "is_stage2_uptrend": True,
+                "stage2_label": "strong_stage2",
+                "stage2_hard_fail_reason": "",
+                "stage2_fail_reason": "",
+            },
+            {
+                "symbol_id": "BBB",
+                "exchange": "NSE",
+                "timestamp": "2026-04-23",
+                "close": 110.0,
+                "sma_200": 108.0,
+                "sma_150": 109.0,
+                "sma200_slope_20d_pct": -1.0,
+                "stage2_score": 58.0,
+                "is_stage2_structural": False,
+                "is_stage2_candidate": True,
+                "is_stage2_uptrend": False,
+                "stage2_label": "stage1_to_stage2",
+                "stage2_hard_fail_reason": "sma200_slope_negative",
+                "stage2_fail_reason": "sma200_slope_negative",
+            },
+        ]
+    )
+    ranker._load_sector_inputs = lambda: (pd.DataFrame(), pd.DataFrame(), {})
+
+    ranked = ranker.rank_all(date="2026-04-23", exchanges=["NSE"], min_score=0.0, top_n=None)
+
+    assert {"stage2_score", "is_stage2_structural", "stage2_label", "stage2_score_bonus"}.issubset(ranked.columns)
+    row_aaa = ranked.loc[ranked["symbol_id"] == "AAA"].iloc[0]
+    row_bbb = ranked.loc[ranked["symbol_id"] == "BBB"].iloc[0]
+
+    assert row_aaa["stage2_score"] == pytest.approx(88.0)
+    assert bool(row_aaa["is_stage2_structural"]) is True
+    assert row_aaa["stage2_label"] == "strong_stage2"
+    assert row_aaa["stage2_score_bonus"] == pytest.approx(4.4)
+
+    assert row_bbb["stage2_score"] == pytest.approx(58.0)
+    assert bool(row_bbb["is_stage2_structural"]) is False
+    assert row_bbb["stage2_label"] == "stage1_to_stage2"

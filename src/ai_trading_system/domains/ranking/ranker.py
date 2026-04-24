@@ -115,21 +115,27 @@ class StockRanker:
         scores = self._compute_delivery(scores, date)
         scores = self._compute_sector_strength(scores, date)
         scores = compute_factor_scores(scores, weights=weights)
+        scores = self._compute_stage2(scores, date, exchanges)
         scores.loc[:, "rank_mode"] = rank_mode
 
         # ── Stage 2 enrichment (additive, non-breaking) ──────────────────
-        # stage2_score may already be present from feature_store; if so, add
-        # a conservative bonus (max +5 pts) to composite_score_adjusted and
-        # pre-filter to Stage 2 names when operating in stage2_breakout mode.
+        # stage2_score remains a soft ranking bonus. When operating in
+        # stage2_breakout mode, hard gating comes from structural Stage 2.
         if "stage2_score" in scores.columns:
             s2_score = pd.to_numeric(scores["stage2_score"], errors="coerce").fillna(0.0)
             scores.loc[:, "stage2_score_bonus"] = (s2_score / 100.0) * 5.0
         else:
             scores.loc[:, "stage2_score_bonus"] = 0.0
 
-        if rank_mode == "stage2_breakout" and "is_stage2_uptrend" in scores.columns:
+        stage2_gate_column = None
+        if "is_stage2_structural" in scores.columns:
+            stage2_gate_column = "is_stage2_structural"
+        elif "is_stage2_uptrend" in scores.columns:
+            stage2_gate_column = "is_stage2_uptrend"
+
+        if rank_mode == "stage2_breakout" and stage2_gate_column is not None:
             pre_filter_count = len(scores)
-            scores = scores[scores["is_stage2_uptrend"].fillna(False)].copy()
+            scores = scores[scores[stage2_gate_column].fillna(False)].copy()
             logger.info(
                 "stage2_breakout mode: %d → %d symbols after Stage 2 filter",
                 pre_filter_count,
@@ -296,6 +302,59 @@ class StockRanker:
             sector_map=sector_map,
             date=date,
         )
+
+    def _compute_stage2(
+        self,
+        data: pd.DataFrame,
+        date: str,
+        exchanges: List[str],
+    ) -> pd.DataFrame:
+        try:
+            stage2_frame = self.input_loader.load_latest_stage2(
+                date=date,
+                exchanges=exchanges,
+                rel_strength_frame=data,
+            )
+        except Exception as exc:
+            logger.warning("Could not compute Stage 2 enrichment: %s", exc)
+            return data
+
+        if stage2_frame.empty:
+            return data
+
+        merged = data.merge(
+            stage2_frame,
+            on=["symbol_id", "exchange"],
+            how="left",
+            suffixes=("", "_stage2"),
+        )
+
+        for column in [
+            "timestamp",
+            "close",
+            "sma_200",
+            "sma_150",
+            "sma200_slope_20d_pct",
+            "stage2_score",
+            "is_stage2_structural",
+            "is_stage2_candidate",
+            "is_stage2_uptrend",
+            "stage2_label",
+            "stage2_hard_fail_reason",
+            "stage2_fail_reason",
+        ]:
+            stage2_column = f"{column}_stage2"
+            if stage2_column not in merged.columns:
+                continue
+            if column in merged.columns:
+                merged.loc[:, column] = merged[column].where(merged[column].notna(), merged[stage2_column])
+            else:
+                merged.loc[:, column] = merged[stage2_column]
+
+        drop_cols = [col for col in merged.columns if col.endswith("_stage2")]
+        if drop_cols:
+            merged = merged.drop(columns=drop_cols, errors="ignore")
+        return merged
 
     def rank_with_fundamentals(
         self,

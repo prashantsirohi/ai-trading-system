@@ -11,6 +11,7 @@ import pandas as pd
 from analytics.patterns.contracts import PatternBacktestConfig, PatternScanConfig
 from analytics.patterns.data import load_pattern_frame
 from analytics.patterns.detectors import (
+    _score_signal_rows,
     detect_cup_handle_events,
     detect_cup_handle_signals,
     detect_ascending_triangle_signals,
@@ -52,6 +53,8 @@ def _make_price_frame(
             "volume": 1000.0,
             "atr_value": 2.0,
             "volume_ratio_20": 1.0,
+            "volume_zscore_20": np.nan,
+            "volume_zscore_50": np.nan,
         }
     )
     frame.loc[:, "sma_20"] = frame["close"].rolling(20, min_periods=1).mean()
@@ -294,6 +297,38 @@ def test_breakout_without_volume_confirmation_is_rejected() -> None:
     assert events == []
 
 
+def test_breakout_can_confirm_from_z20_when_ratio_is_weak() -> None:
+    frame = _cup_handle_frame(breakout_volume_ratio=1.1)
+    breakout_idx = len(frame) - 5
+    frame.loc[breakout_idx, "volume_zscore_20"] = 2.6
+    config = _detector_config()
+    smoothed = kernel_smooth(frame["close"], bandwidth=config.bandwidth)
+    extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
+
+    events, _ = detect_cup_handle_events(frame, smoothed=smoothed, extrema=extrema, config=config)
+
+    assert len(events) == 1
+    assert events[0].breakout_volume_confirmed is True
+
+
+def test_non_breakout_watchlist_is_not_upgraded_by_zscore_alone() -> None:
+    frame = _double_bottom_frame(symbol_id="DBLZ", breakout=False)
+    frame.loc[frame.index[-1], "volume_zscore_20"] = 3.2
+    config = _scan_config()
+    smoothed = kernel_smooth(frame["close"], bandwidth=config.bandwidth)
+    extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
+
+    signals, stats = detect_double_bottom_signals(
+        frame,
+        smoothed=smoothed,
+        extrema=extrema,
+        config=config,
+    )
+
+    assert stats.confirmed_count == 0
+    assert any(signal.pattern_state == "watchlist" for signal in signals)
+
+
 def test_detect_double_bottom_confirmed_and_watchlist() -> None:
     config = _scan_config()
 
@@ -407,8 +442,144 @@ def test_build_pattern_signals_returns_confirmed_and_watchlist_with_deterministi
     )
 
     assert {"confirmed", "watchlist"}.issubset(set(signals["pattern_state"].astype(str)))
+    assert {
+        "pattern_operational_tier",
+        "pattern_priority_score",
+        "pattern_priority_rank",
+        "volume_zscore_20",
+        "volume_zscore_50",
+    }.issubset(signals.columns)
     assert signals["pattern_rank"].astype(int).tolist() == list(range(1, len(signals) + 1))
+    assert sorted(signals["pattern_priority_rank"].astype(int).tolist()) == list(range(1, len(signals) + 1))
     assert signals["pattern_score"].astype(float).is_monotonic_decreasing
+
+
+def test_score_signal_rows_adds_operational_priority_without_replacing_primary_rank() -> None:
+    scored = _score_signal_rows(
+        pd.DataFrame(
+            [
+                {
+                    "symbol_id": "AAA",
+                    "pattern_family": "cup_handle",
+                    "pattern_state": "watchlist",
+                    "signal_date": "2024-12-31",
+                    "breakout_volume_ratio": 1.6,
+                    "rel_strength_score": 80.0,
+                    "sector_rs_percentile": 75.0,
+                    "setup_quality": 100.0,
+                    "handle_depth_pct": 6.0,
+                    "stage2_score": 85.0,
+                },
+                {
+                    "symbol_id": "BBB",
+                    "pattern_family": "high_tight_flag",
+                    "pattern_state": "confirmed",
+                    "signal_date": "2024-12-31",
+                    "breakout_volume_ratio": 2.0,
+                    "rel_strength_score": 60.0,
+                    "sector_rs_percentile": 60.0,
+                    "setup_quality": 50.0,
+                    "stage2_score": 70.0,
+                    "volume_dry_up": True,
+                    "pole_rise_pct": 75.0,
+                    "flag_tightness_pct": 20.0,
+                },
+                {
+                    "symbol_id": "CCC",
+                    "pattern_family": "mystery_pattern",
+                    "pattern_state": "confirmed",
+                    "signal_date": "2024-12-31",
+                    "breakout_volume_ratio": 1.6,
+                    "rel_strength_score": 60.0,
+                    "sector_rs_percentile": 60.0,
+                    "setup_quality": 50.0,
+                    "stage2_score": 70.0,
+                },
+                {
+                    "symbol_id": "DDD",
+                    "pattern_family": "head_shoulders",
+                    "pattern_state": "confirmed",
+                    "signal_date": "2024-12-31",
+                    "breakout_volume_ratio": 1.6,
+                    "rel_strength_score": 60.0,
+                    "sector_rs_percentile": 60.0,
+                    "setup_quality": 50.0,
+                    "stage2_score": 70.0,
+                },
+            ]
+        )
+    )
+
+    tier_by_symbol = scored.set_index("symbol_id")["pattern_operational_tier"].to_dict()
+    priority_rank_by_symbol = scored.set_index("symbol_id")["pattern_priority_rank"].astype(int).to_dict()
+    pattern_rank_by_symbol = scored.set_index("symbol_id")["pattern_rank"].astype(int).to_dict()
+    priority_score_by_symbol = scored.set_index("symbol_id")["pattern_priority_score"].astype(float).to_dict()
+
+    assert tier_by_symbol == {
+        "AAA": "tier_1",
+        "BBB": "tier_2",
+        "CCC": "tier_2",
+        "DDD": "suppression_only",
+    }
+    assert priority_score_by_symbol["AAA"] > priority_score_by_symbol["CCC"] > priority_score_by_symbol["DDD"]
+    assert pattern_rank_by_symbol["BBB"] == 1
+    assert priority_rank_by_symbol["AAA"] == 1
+    assert pattern_rank_by_symbol["AAA"] != priority_rank_by_symbol["AAA"]
+    assert sorted(priority_rank_by_symbol.values()) == [1, 2, 3, 4]
+
+
+def test_score_signal_rows_uses_mutually_exclusive_volume_confirmation_ladder() -> None:
+    scored = _score_signal_rows(
+        pd.DataFrame(
+            [
+                {
+                    "symbol_id": "RATIO",
+                    "pattern_family": "flag",
+                    "pattern_state": "confirmed",
+                    "signal_date": "2024-12-31",
+                    "breakout_volume_ratio": 1.6,
+                    "volume_zscore_20": np.nan,
+                    "volume_zscore_50": np.nan,
+                    "rel_strength_score": 80.0,
+                    "sector_rs_percentile": 75.0,
+                    "setup_quality": 80.0,
+                    "stage2_score": 85.0,
+                },
+                {
+                    "symbol_id": "Z20",
+                    "pattern_family": "flag",
+                    "pattern_state": "confirmed",
+                    "signal_date": "2024-12-31",
+                    "breakout_volume_ratio": 1.1,
+                    "volume_zscore_20": 2.6,
+                    "volume_zscore_50": np.nan,
+                    "rel_strength_score": 80.0,
+                    "sector_rs_percentile": 75.0,
+                    "setup_quality": 80.0,
+                    "stage2_score": 85.0,
+                },
+                {
+                    "symbol_id": "COMBINED",
+                    "pattern_family": "flag",
+                    "pattern_state": "confirmed",
+                    "signal_date": "2024-12-31",
+                    "breakout_volume_ratio": 1.6,
+                    "volume_zscore_20": 2.6,
+                    "volume_zscore_50": np.nan,
+                    "rel_strength_score": 80.0,
+                    "sector_rs_percentile": 75.0,
+                    "setup_quality": 80.0,
+                    "stage2_score": 85.0,
+                },
+            ]
+        )
+    )
+    scores = scored.set_index("symbol_id")["pattern_score"].astype(float).to_dict()
+    priorities = scored.set_index("symbol_id")["pattern_priority_score"].astype(float).to_dict()
+
+    assert scores["COMBINED"] > scores["Z20"] > scores["RATIO"]
+    assert priorities["COMBINED"] > priorities["Z20"] > priorities["RATIO"]
+    assert scores["COMBINED"] - scores["RATIO"] <= 20.0
 
 
 def test_build_pattern_signals_uses_parallel_helper_when_requested(monkeypatch) -> None:
@@ -510,6 +681,57 @@ def test_build_pattern_signals_falls_back_to_serial_on_transient_parallel_resour
     assert signals.iloc[0]["symbol_id"] == "CUP"
 
 
+def test_build_pattern_signals_falls_back_to_serial_on_permission_error_from_process_pool(monkeypatch) -> None:
+    frame = pd.concat(
+        [
+            _cup_handle_frame(symbol_id="CUP"),
+            _double_bottom_frame(symbol_id="DBLW", breakout=False),
+        ],
+        ignore_index=True,
+    )
+    called: dict[str, int] = {"serial": 0}
+
+    class _FailingPool:
+        def __init__(self, *args, **kwargs):
+            raise PermissionError(1, "Operation not permitted")
+
+    def fake_serial(frame_arg, *, config, progress_callback=None):
+        called["serial"] += 1
+        return (
+            pd.DataFrame(
+                [
+                    {
+                        "symbol_id": "CUP",
+                        "pattern_family": "cup_handle",
+                        "pattern_state": "confirmed",
+                        "signal_date": "2024-12-31",
+                        "pattern_score": 90.0,
+                        "pattern_rank": 1,
+                    }
+                ]
+            ),
+            {},
+            {},
+        )
+
+    monkeypatch.setattr("analytics.patterns.evaluation.ProcessPoolExecutor", _FailingPool)
+    monkeypatch.setattr("analytics.patterns.evaluation._scan_pattern_signals", fake_serial)
+
+    signals = build_pattern_signals(
+        project_root=Path("."),
+        signal_date="2024-12-31",
+        exchange="NSE",
+        data_domain="operational",
+        config=_scan_config(),
+        frame=frame,
+        pattern_workers=4,
+    )
+
+    assert called["serial"] == 1
+    assert len(signals) == 1
+    assert signals.iloc[0]["symbol_id"] == "CUP"
+
+
 def test_load_pattern_frame_supports_operational_and_research_domains(monkeypatch, tmp_path: Path) -> None:
     raw = pd.DataFrame(
         {
@@ -571,7 +793,19 @@ def test_load_pattern_frame_supports_operational_and_research_domains(monkeypatc
     )
 
     for frame in (operational, research):
-        assert {"symbol_id", "timestamp", "open", "high", "low", "close", "volume", "volume_ratio_20", "above_sma200"}.issubset(frame.columns)
+        assert {
+            "symbol_id",
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "volume_ratio_20",
+            "volume_zscore_20",
+            "volume_zscore_50",
+            "above_sma200",
+        }.issubset(frame.columns)
     assert call_counter["count"] == 1
 
 

@@ -26,6 +26,35 @@ class DataDomainPaths:
     reports_dir: Path
 
 
+def _looks_like_repo_root(path: Path) -> bool:
+    return (
+        (path / "src" / "ai_trading_system").exists()
+        and (path / "pyproject.toml").exists()
+    )
+
+
+def canonicalize_project_root(project_root: Path | str | None = None) -> Path:
+    """Normalize a project root to the actual repo when given a workspace parent.
+
+    This guards against launch contexts that pass a parent workspace directory
+    containing exactly one repo checkout, which would otherwise create sibling
+    `data/`, `models/`, and `reports/` folders beside the repo.
+    """
+
+    root = Path(project_root).resolve() if project_root else _default_project_root()
+    if _looks_like_repo_root(root) or not root.exists():
+        return root
+
+    candidates = [
+        child.resolve()
+        for child in root.iterdir()
+        if child.is_dir() and _looks_like_repo_root(child)
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+    return root
+
+
 def resolve_data_domain(data_domain: str | None = None) -> DataDomain:
     """Normalize the configured data domain."""
     domain = (data_domain or os.getenv("DATA_DOMAIN") or "operational").lower()
@@ -52,7 +81,7 @@ def get_domain_paths(
     Operational paths fall back to the legacy flat `data/` layout when it already
     exists, which keeps this refactor incremental and low risk.
     """
-    root = Path(project_root) if project_root else _default_project_root()
+    root = canonicalize_project_root(project_root)
     domain = resolve_data_domain(data_domain)
     data_root = root / "data"
 
@@ -107,6 +136,7 @@ def research_static_end_date(today: date | None = None) -> str:
 __all__ = [
     "DataDomain",
     "DataDomainPaths",
+    "canonicalize_project_root",
     "resolve_data_domain",
     "get_domain_paths",
     "ensure_domain_layout",

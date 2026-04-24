@@ -16,6 +16,20 @@ from analytics.patterns.contracts import (
 )
 from analytics.patterns.signal import LocalExtrema
 
+TIER_1_PATTERNS = {
+    "cup_handle",
+    "flat_base",
+    "vcp",
+    "3wt",
+    "ascending_triangle",
+}
+SUPPRESSION_ONLY_PATTERNS = {
+    "head_shoulders",
+}
+VOLUME_Z20_CONFIRM_THRESHOLD = 2.0
+VOLUME_Z50_CONFIRM_THRESHOLD = 2.0
+VOLUME_Z20_STRONG_THRESHOLD = 3.0
+
 
 @dataclass(frozen=True)
 class PatternScanStats:
@@ -94,19 +108,59 @@ def _prior_uptrend_ok(frame: pd.DataFrame, *, left_idx: int, left_price: float, 
     return left_price >= prior_low * (1 + config.prior_uptrend_min_pct)
 
 
+def _coerce_optional_float(value: object) -> float | None:
+    coerced = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(coerced):
+        return None
+    return float(coerced)
+
+
+def _volume_confirmation_details(
+    row: pd.Series | dict[str, object],
+    *,
+    ratio_threshold: float,
+) -> dict[str, object]:
+    volume_ratio = _coerce_optional_float(row.get("volume_ratio_20"))
+    volume_zscore_20 = _coerce_optional_float(row.get("volume_zscore_20"))
+    volume_zscore_50 = _coerce_optional_float(row.get("volume_zscore_50"))
+
+    is_volume_ratio_confirmed = volume_ratio is not None and volume_ratio >= float(ratio_threshold)
+    is_z20_confirmed = volume_zscore_20 is not None and volume_zscore_20 >= VOLUME_Z20_CONFIRM_THRESHOLD
+    is_z50_confirmed = volume_zscore_50 is not None and volume_zscore_50 >= VOLUME_Z50_CONFIRM_THRESHOLD
+    is_any_volume_confirmed = is_volume_ratio_confirmed or is_z20_confirmed or is_z50_confirmed
+    is_strong_volume_confirmation = (
+        (is_volume_ratio_confirmed and is_z20_confirmed)
+        or (volume_zscore_20 is not None and volume_zscore_20 >= VOLUME_Z20_STRONG_THRESHOLD)
+    )
+
+    return {
+        "volume_ratio_20": volume_ratio,
+        "volume_zscore_20": volume_zscore_20,
+        "volume_zscore_50": volume_zscore_50,
+        "is_volume_ratio_confirmed": is_volume_ratio_confirmed,
+        "is_z20_confirmed": is_z20_confirmed,
+        "is_z50_confirmed": is_z50_confirmed,
+        "is_any_volume_confirmed": is_any_volume_confirmed,
+        "is_strong_volume_confirmation": is_strong_volume_confirmation,
+    }
+
+
 def _find_breakout_confirmation(
     frame: pd.DataFrame,
     *,
     start_idx: int,
     resistance_level: float,
     config: PatternBacktestConfig | PatternScanConfig,
-) -> tuple[int | None, float | None]:
+) -> tuple[int | None, dict[str, object] | None]:
     max_idx = min(len(frame) - 1, start_idx + config.max_breakout_wait_bars)
     for idx in range(start_idx + 1, max_idx + 1):
         close = float(frame.iloc[idx]["close"])
-        volume_ratio = float(frame.iloc[idx].get("volume_ratio_20", 0.0) or 0.0)
-        if close > resistance_level and volume_ratio >= config.breakout_volume_ratio_min:
-            return idx, volume_ratio
+        confirmation = _volume_confirmation_details(
+            frame.iloc[idx],
+            ratio_threshold=float(config.breakout_volume_ratio_min),
+        )
+        if close > resistance_level and bool(confirmation["is_any_volume_confirmed"]):
+            return idx, confirmation
     return None, None
 
 
@@ -149,8 +203,10 @@ def _build_signal(
     volume_ratio = (
         float(breakout_volume_ratio)
         if breakout_volume_ratio is not None
-        else float(frame.iloc[signal_idx].get("volume_ratio_20", 0.0) or 0.0)
+        else _coerce_optional_float(frame.iloc[signal_idx].get("volume_ratio_20"))
     )
+    volume_zscore_20 = _coerce_optional_float(frame.iloc[signal_idx].get("volume_zscore_20"))
+    volume_zscore_50 = _coerce_optional_float(frame.iloc[signal_idx].get("volume_zscore_50"))
     return PatternSignal(
         signal_id=f"{symbol}-{pattern_family}-{pattern_state}-{signal_date}",
         symbol_id=symbol,
@@ -171,7 +227,9 @@ def _build_signal(
         pivot_dates=tuple(timestamps.iloc[idx].date().isoformat() for idx in pivot_indices),
         pivot_prices=tuple(float(_rounded(price) or price) for price in pivot_prices),
         pivot_indices=tuple(int(idx) for idx in pivot_indices),
-        volume_ratio_20=float(round(volume_ratio, 6)),
+        volume_ratio_20=_rounded(volume_ratio),
+        volume_zscore_20=_rounded(volume_zscore_20),
+        volume_zscore_50=_rounded(volume_zscore_50),
         breakout_volume_ratio=_rounded(breakout_volume_ratio) if breakout_volume_ratio is not None else None,
         width_bars=int(width_bars) if width_bars is not None else None,
         volume_dry_up=bool(volume_dry_up),
@@ -227,6 +285,15 @@ def _signal_to_event(signal: PatternSignal) -> PatternEvent:
     )
 
 
+def _operational_tier_for_family(family: str) -> str:
+    normalized = str(family or "").strip().lower()
+    if normalized in TIER_1_PATTERNS:
+        return "tier_1"
+    if normalized in SUPPRESSION_ONLY_PATTERNS:
+        return "suppression_only"
+    return "tier_2"
+
+
 def _score_signal_rows(signals_df: pd.DataFrame) -> pd.DataFrame:
     if signals_df.empty:
         return signals_df
@@ -240,11 +307,34 @@ def _score_signal_rows(signals_df: pd.DataFrame) -> pd.DataFrame:
 
     state_bonus = np.where(scored["pattern_state"].astype(str) == "confirmed", 40.0, 20.0)
     pattern_score = pd.Series(state_bonus, index=scored.index, dtype=float)
+    family = scored["pattern_family"].astype(str)
+    scored.loc[:, "pattern_operational_tier"] = family.map(_operational_tier_for_family)
 
     breakout_volume_ratio = pd.to_numeric(_series_or_default("breakout_volume_ratio"), errors="coerce")
+    volume_zscore_20 = pd.to_numeric(_series_or_default("volume_zscore_20"), errors="coerce")
+    volume_zscore_50 = pd.to_numeric(_series_or_default("volume_zscore_50"), errors="coerce")
+    is_volume_ratio_confirmed = breakout_volume_ratio >= 1.5
+    is_z20_confirmed = volume_zscore_20 >= VOLUME_Z20_CONFIRM_THRESHOLD
+    is_z50_confirmed = volume_zscore_50 >= VOLUME_Z50_CONFIRM_THRESHOLD
+    is_strong_volume_confirmation = (
+        (is_volume_ratio_confirmed & is_z20_confirmed)
+        | (volume_zscore_20 >= VOLUME_Z20_STRONG_THRESHOLD)
+    )
+    is_combined_volume_confirmation = is_volume_ratio_confirmed & (is_z20_confirmed | is_z50_confirmed)
+    ratio_high = breakout_volume_ratio >= 2.0
+    ratio_only = is_volume_ratio_confirmed & ~is_combined_volume_confirmation
+    z20_only = is_z20_confirmed & ~is_volume_ratio_confirmed
+    z50_only = is_z50_confirmed & ~is_volume_ratio_confirmed & ~is_z20_confirmed
     pattern_score = pattern_score + np.select(
-        [breakout_volume_ratio >= 2.0, breakout_volume_ratio >= 1.5],
-        [15.0, 10.0],
+        [
+            is_strong_volume_confirmation,
+            is_combined_volume_confirmation,
+            ratio_only & ratio_high,
+            ratio_only,
+            z20_only,
+            z50_only,
+        ],
+        [20.0, 18.0, 15.0, 10.0, 14.0, 10.0],
         default=0.0,
     )
 
@@ -264,11 +354,10 @@ def _score_signal_rows(signals_df: pd.DataFrame) -> pd.DataFrame:
     volume_dry_up = _series_or_default("volume_dry_up", False)
     if volume_dry_up.dtype == object:
         volume_dry_up = volume_dry_up.infer_objects(copy=False)
-    volume_dry_up = volume_dry_up.fillna(False).astype(bool)
+    volume_dry_up = volume_dry_up.where(volume_dry_up.notna(), False).astype(bool)
     pattern_score = pattern_score + np.where(volume_dry_up, 10.0, 0.0)
 
     family_bonus = np.zeros(len(scored), dtype=float)
-    family = scored["pattern_family"].astype(str)
     family_bonus += np.where(
         (family == "cup_handle") & (pd.to_numeric(_series_or_default("handle_depth_pct"), errors="coerce") <= 8.0),
         10.0,
@@ -315,12 +404,120 @@ def _score_signal_rows(signals_df: pd.DataFrame) -> pd.DataFrame:
     if "setup_quality" not in scored.columns:
         scored.loc[:, "setup_quality"] = np.nan
     scored.loc[:, "pattern_score"] = pattern_score.clip(upper=100.0)
+
+    operational_tier = scored["pattern_operational_tier"].astype(str)
+    tier_bonus = np.select(
+        [
+            operational_tier == "tier_1",
+            operational_tier == "tier_2",
+        ],
+        [22.0, 12.0],
+        default=0.0,
+    )
+    stage2_priority_bonus = np.zeros(len(scored), dtype=float)
+    if "stage2_score" in scored.columns:
+        s2_priority = pd.to_numeric(scored["stage2_score"], errors="coerce").fillna(0.0)
+        stage2_priority_bonus = np.select(
+            [s2_priority >= 85.0, s2_priority >= 70.0, s2_priority >= 50.0],
+            [14.0, 9.0, 4.0],
+            default=0.0,
+        )
+    rs_priority_bonus = np.select(
+        [rel_strength >= 80.0, rel_strength >= 60.0],
+        [10.0, 5.0],
+        default=0.0,
+    )
+    sector_priority_bonus = np.select(
+        [sector_pct >= 70.0, sector_pct >= 60.0],
+        [6.0, 3.0],
+        default=0.0,
+    )
+    confirmed_state = scored["pattern_state"].astype(str) == "confirmed"
+    breakout_priority_bonus = np.select(
+        [
+            confirmed_state & is_strong_volume_confirmation,
+            confirmed_state & is_combined_volume_confirmation,
+            confirmed_state & ratio_only,
+            confirmed_state & z20_only,
+            confirmed_state & z50_only,
+            confirmed_state,
+            is_combined_volume_confirmation,
+            ratio_only | z20_only,
+            z50_only,
+        ],
+        [10.0, 8.0, 6.0, 6.0, 5.0, 4.0, 4.0, 3.0, 2.0],
+        default=0.0,
+    )
+    setup_quality = pd.to_numeric(_series_or_default("setup_quality"), errors="coerce").fillna(0.0)
+    setup_priority_component = np.clip(setup_quality * 0.12, 0.0, 12.0)
+
+    clarity_bonus = np.zeros(len(scored), dtype=float)
+    clarity_bonus += np.where(
+        (family == "cup_handle") & (pd.to_numeric(_series_or_default("handle_depth_pct"), errors="coerce") <= 8.0),
+        8.0,
+        0.0,
+    )
+    clarity_bonus += np.where(
+        (family == "round_bottom") & symmetry.between(0.85, 1.15, inclusive="both"),
+        8.0,
+        np.where(
+            (family == "round_bottom") & symmetry.between(0.75, 1.35, inclusive="both"),
+            4.0,
+            0.0,
+        ),
+    )
+    clarity_bonus += np.where(
+        (family == "double_bottom") & (trough_similarity <= 3.0),
+        8.0,
+        np.where(
+            (family == "double_bottom") & (trough_similarity <= 5.0),
+            4.0,
+            0.0,
+        ),
+    )
+    clarity_bonus += np.where(
+        (family == "flag") & (flag_retracement <= 25.0),
+        8.0,
+        np.where(
+            (family == "flag") & (flag_retracement <= 35.0),
+            4.0,
+            0.0,
+        ),
+    )
+    clarity_bonus += np.where(
+        (family == "high_tight_flag") & (pole_rise >= 90.0) & (flag_tightness <= 15.0),
+        10.0,
+        np.where(
+            (family == "high_tight_flag") & (pole_rise >= 75.0) & (flag_tightness <= 20.0),
+            5.0,
+            0.0,
+        ),
+    )
+    priority_score = (
+        pd.to_numeric(scored["pattern_score"], errors="coerce").fillna(0.0) * 0.35
+        + tier_bonus
+        + stage2_priority_bonus
+        + rs_priority_bonus
+        + sector_priority_bonus
+        + breakout_priority_bonus
+        + setup_priority_component
+        + clarity_bonus
+    )
+    scored.loc[:, "pattern_priority_score"] = priority_score.clip(upper=100.0)
     scored = scored.sort_values(
         ["pattern_score", "setup_quality", "symbol_id"],
         ascending=[False, False, True],
         na_position="last",
     ).reset_index(drop=True)
     scored.loc[:, "pattern_rank"] = np.arange(1, len(scored) + 1)
+    priority_view = scored.reset_index().sort_values(
+        ["pattern_priority_score", "pattern_score", "setup_quality", "symbol_id"],
+        ascending=[False, False, False, True],
+        na_position="last",
+    )
+    priority_view.loc[:, "pattern_priority_rank"] = np.arange(1, len(priority_view) + 1)
+    priority_ranks = priority_view.set_index("index")["pattern_priority_rank"]
+    scored.loc[:, "pattern_priority_rank"] = scored.index.to_series().map(priority_ranks).astype(int)
     return scored
 
 
@@ -381,7 +578,7 @@ def detect_cup_handle_signals(
             continue
 
         resistance_level = float(frame.iloc[left_idx : right_idx + 1]["high"].max())
-        breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+        breakout_idx, breakout_confirmation = _find_breakout_confirmation(
             frame,
             start_idx=handle_idx,
             resistance_level=resistance_level,
@@ -413,7 +610,7 @@ def detect_cup_handle_signals(
                 pivot_prices=(left_price, trough_price, right_price, handle_price),
                 config=config,
                 volume_dry_up=volume_dry_up,
-                breakout_volume_ratio=breakout_volume_ratio,
+                breakout_volume_ratio=(breakout_confirmation or {}).get("volume_ratio_20"),
                 width_bars=width,
                 cup_depth_pct=cup_depth * 100.0,
                 handle_depth_pct=handle_depth * 100.0,
@@ -522,7 +719,7 @@ def detect_round_bottom_signals(
             continue
 
         resistance_level = float(frame.iloc[left_idx : right_idx + 1]["high"].max())
-        breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+        breakout_idx, breakout_confirmation = _find_breakout_confirmation(
             frame,
             start_idx=right_idx,
             resistance_level=resistance_level,
@@ -555,7 +752,7 @@ def detect_round_bottom_signals(
                 pivot_prices=(left_price, trough_price, right_price),
                 config=config,
                 volume_dry_up=volume_dry_up,
-                breakout_volume_ratio=breakout_volume_ratio,
+                breakout_volume_ratio=(breakout_confirmation or {}).get("volume_ratio_20"),
                 width_bars=width,
                 cup_depth_pct=depth * 100.0,
                 symmetry_ratio=symmetry,
@@ -650,7 +847,7 @@ def detect_double_bottom_signals(
             continue
 
         breakout_level = float(frame.iloc[first_idx : second_idx + 1]["high"].max())
-        breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+        breakout_idx, breakout_confirmation = _find_breakout_confirmation(
             frame,
             start_idx=second_idx,
             resistance_level=breakout_level,
@@ -678,7 +875,7 @@ def detect_double_bottom_signals(
                 pivot_prices=(first_price, neckline, second_price),
                 config=config,
                 volume_dry_up=volume_dry_up,
-                breakout_volume_ratio=breakout_volume_ratio,
+                breakout_volume_ratio=(breakout_confirmation or {}).get("volume_ratio_20"),
                 width_bars=separation,
                 trough_similarity_pct=trough_spread * 100.0,
             )
@@ -835,14 +1032,17 @@ def detect_flag_signals(
                 # Valid flag found — compute signal, then break (shortest valid flag wins)
                 breakout_volume_min = 2.0 if high_tight_only else config.breakout_volume_ratio_min
                 breakout_idx = None
-                breakout_volume_ratio = None
+                breakout_confirmation = None
                 max_scan_idx = min(n - 1, flag_end_idx + config.max_breakout_wait_bars)
                 for idx in range(flag_end_idx + 1, max_scan_idx + 1):
                     b_close = float(frame.iloc[idx]["close"])
-                    b_vol = float(frame.iloc[idx].get("volume_ratio_20", 0.0) or 0.0)
-                    if b_close > flag_high and b_vol >= breakout_volume_min:
+                    confirmation = _volume_confirmation_details(
+                        frame.iloc[idx],
+                        ratio_threshold=float(breakout_volume_min),
+                    )
+                    if b_close > flag_high and bool(confirmation["is_any_volume_confirmed"]):
                         breakout_idx = idx
-                        breakout_volume_ratio = b_vol
+                        breakout_confirmation = confirmation
                         break
 
                 candidates += 1
@@ -878,7 +1078,7 @@ def detect_flag_signals(
                         pivot_prices=pivot_prices,
                         config=config,
                         volume_dry_up=volume_dry_up,
-                        breakout_volume_ratio=breakout_volume_ratio,
+                        breakout_volume_ratio=(breakout_confirmation or {}).get("volume_ratio_20"),
                         width_bars=flag_end_idx - pole_start_idx,
                         pole_rise_pct=pole_rise_pct,
                         flag_tightness_pct=flag_range_pct,
@@ -992,7 +1192,7 @@ def detect_ascending_triangle_signals(
         invalidation = float(t_prices[-1]) * 0.98
         res_deviation = (res_prices[1] - res_prices[0]) / res_mean
 
-        breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+        breakout_idx, breakout_confirmation = _find_breakout_confirmation(
             frame,
             start_idx=p2.index,
             resistance_level=resistance_level,
@@ -1028,7 +1228,7 @@ def detect_ascending_triangle_signals(
                 pivot_prices=pivot_prices,
                 config=config,
                 volume_dry_up=volume_dry_up,
-                breakout_volume_ratio=breakout_volume_ratio,
+                breakout_volume_ratio=(breakout_confirmation or {}).get("volume_ratio_20"),
                 width_bars=width,
             )
             if signal.signal_id not in used_signal_ids:
@@ -1142,7 +1342,7 @@ def detect_vcp_signals(
             ranges[0] - ranges[1], 1 - vols[0] / max(vols[1], 1e-9), s2_score
         )
 
-        breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+        breakout_idx, breakout_confirmation = _find_breakout_confirmation(
             frame, start_idx=end, resistance_level=pivot, config=config
         )
 
@@ -1162,7 +1362,7 @@ def detect_vcp_signals(
                 pivot_prices=(float(smoothed.iloc[start]), float(smoothed.iloc[end])),
                 config=config,
                 volume_dry_up=vols[-1] < vols[0],
-                breakout_volume_ratio=breakout_volume_ratio,
+                breakout_volume_ratio=(breakout_confirmation or {}).get("volume_ratio_20"),
                 width_bars=window,
             )
             if signal.signal_id not in used_signal_ids:
@@ -1252,7 +1452,7 @@ def detect_flat_base_signals(
             pivot = wh
             invalidation = wl
 
-            breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+            breakout_idx, breakout_confirmation = _find_breakout_confirmation(
                 frame, start_idx=end, resistance_level=pivot, config=config
             )
 
@@ -1278,7 +1478,7 @@ def detect_flat_base_signals(
                     pivot_prices=(float(smoothed.iloc[start]), float(smoothed.iloc[end])),
                     config=config,
                     volume_dry_up=volume_dry_up,
-                    breakout_volume_ratio=breakout_volume_ratio,
+                    breakout_volume_ratio=(breakout_confirmation or {}).get("volume_ratio_20"),
                     width_bars=span,
                 )
                 if signal.signal_id not in used_signal_ids:
@@ -1389,7 +1589,7 @@ def detect_3wt_signals(
 
         setup_quality = _3wt_setup_quality(tightness, adv, volume_dry_up)
 
-        breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+        breakout_idx, breakout_confirmation = _find_breakout_confirmation(
             frame, start_idx=end, resistance_level=pivot, config=config
         )
 
@@ -1415,7 +1615,7 @@ def detect_3wt_signals(
                 pivot_prices=pivot_prices,
                 config=config,
                 volume_dry_up=volume_dry_up,
-                breakout_volume_ratio=breakout_volume_ratio,
+                breakout_volume_ratio=(breakout_confirmation or {}).get("volume_ratio_20"),
                 width_bars=weeks * step,
             )
             if signal.signal_id not in used_signal_ids:
@@ -1539,7 +1739,7 @@ def detect_symmetrical_triangle_signals(
         trough_rise_pct = (t2_price - t1_price) / max(t1_price, 1e-9)
         setup_quality = _sym_tri_setup_quality(peak_drop_pct, trough_rise_pct, volume_dry_up, width)
 
-        breakout_idx, breakout_volume_ratio = _find_breakout_confirmation(
+        breakout_idx, breakout_confirmation = _find_breakout_confirmation(
             frame, start_idx=p2.index, resistance_level=resistance_level, config=config
         )
 
@@ -1562,7 +1762,7 @@ def detect_symmetrical_triangle_signals(
                 pivot_prices=pivot_prices,
                 config=config,
                 volume_dry_up=volume_dry_up,
-                breakout_volume_ratio=breakout_volume_ratio,
+                breakout_volume_ratio=(breakout_confirmation or {}).get("volume_ratio_20"),
                 width_bars=width,
             )
             if signal.signal_id not in used_signal_ids:

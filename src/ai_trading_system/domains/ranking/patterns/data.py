@@ -11,6 +11,7 @@ import pandas as pd
 
 from analytics.alpha.dataset_builder import AlphaDatasetBuilder
 from analytics.ml_engine import AlphaEngine
+from ai_trading_system.domains.features.indicators import add_volume_zscore_features
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 
 
@@ -82,11 +83,18 @@ def load_pattern_frame(
         )
         frame["volume_ratio_20"] = frame["volume"] / volume_avg_20.replace(0, np.nan)
     frame["volume_ratio_20"] = frame["volume_ratio_20"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    if (
+        "volume_zscore_20" not in frame.columns
+        or frame["volume_zscore_20"].isna().all()
+        or "volume_zscore_50" not in frame.columns
+        or frame["volume_zscore_50"].isna().all()
+    ):
+        frame = add_volume_zscore_features(frame)
 
-    frame["sma50_slope_20d_pct"] = by_symbol["sma_50"].transform(
+    frame.loc[:, "sma50_slope_20d_pct"] = by_symbol["sma_50"].transform(
         lambda series: series.pct_change(20, fill_method=None) * 100.0
     )
-    frame["above_sma200"] = (frame["close"] > frame["sma_200"]).fillna(False)
+    frame.loc[:, "above_sma200"] = (frame["close"] > frame["sma_200"]).fillna(False)
     frame = frame.copy()
     frame.loc[:, "timestamp"] = pd.to_datetime(frame["timestamp"])
     frame.loc[:, "exchange"] = frame.get("exchange", exchange)
@@ -102,6 +110,8 @@ def load_pattern_frame(
         "volume",
         "atr_value",
         "volume_ratio_20",
+        "volume_zscore_20",
+        "volume_zscore_50",
         "sma_20",
         "sma_50",
         "sma_200",

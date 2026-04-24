@@ -25,6 +25,9 @@ def _write_snapshot_artifacts(base: Path, run_id: str, *, score: float, smoke: b
         json.dumps(
             {
                 "summary": {"run_id": run_id, "smoke": smoke},
+                "ranked_leaders": [{"symbol_id": "AAA", "rank": 1}],
+                "pattern_discoveries": [{"symbol_id": "PATTERNX", "discovered_by_pattern_scan": True}],
+                "breakout_candidates": [{"symbol_id": "BREAKOUTX", "breakout_positive": True}],
                 "warnings": [],
             }
         ),
@@ -42,13 +45,56 @@ def _write_snapshot_artifacts(base: Path, run_id: str, *, score: float, smoke: b
             }
         ]
     ).to_csv(attempt_dir / "ranked_signals.csv", index=False)
-    pd.DataFrame([{"symbol_id": "AAA", "breakout_state": "qualified"}]).to_csv(
+    pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "breakout_state": "qualified",
+                "volume_zscore_20": 2.8,
+                "volume_zscore_50": 1.7,
+                "is_any_volume_confirmed": True,
+            }
+        ]
+    ).to_csv(
         attempt_dir / "breakout_scan.csv", index=False
     )
-    pd.DataFrame([{"symbol_id": "AAA", "pattern_state": "confirmed"}]).to_csv(
+    pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "pattern_state": "confirmed",
+                "pattern_operational_tier": "tier_1",
+                "pattern_priority_score": 92.0,
+                "pattern_priority_rank": 1,
+                "volume_zscore_20": 2.5,
+                "volume_zscore_50": 1.8,
+                "discovered_by_pattern_scan": False,
+                "pattern_positive": True,
+                "breakout_positive": True,
+            },
+            {
+                "symbol_id": "PATTERNX",
+                "pattern_state": "watchlist",
+                "pattern_operational_tier": "tier_1",
+                "pattern_priority_score": 89.0,
+                "pattern_priority_rank": 2,
+                "volume_zscore_20": 2.1,
+                "volume_zscore_50": 1.4,
+                "discovered_by_pattern_scan": True,
+                "pattern_positive": True,
+                "breakout_positive": False,
+            }
+        ]
+    ).to_csv(
         attempt_dir / "pattern_scan.csv", index=False
     )
-    pd.DataFrame([{"Symbol": "AAA", "category": "BUY"}]).to_csv(
+    pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "rank": 1, "composite_score": score, "pattern_positive": True, "breakout_positive": True, "discovered_by_pattern_scan": False},
+            {"symbol_id": "PATTERNX", "rank": None, "composite_score": None, "pattern_positive": True, "breakout_positive": False, "discovered_by_pattern_scan": True},
+            {"symbol_id": "BREAKOUTX", "rank": None, "composite_score": None, "pattern_positive": False, "breakout_positive": True, "discovered_by_pattern_scan": False},
+        ]
+    ).to_csv(
         attempt_dir / "stock_scan.csv", index=False
     )
     pd.DataFrame([{"Sector": "Tech", "RS": 0.8}]).to_csv(
@@ -156,7 +202,14 @@ def test_ranking_snapshot_readmodels_use_seeded_snapshot(tmp_path: Path, monkeyp
     assert ranking_stage2["stage2_filter"]["requested"] is True
     assert ranking_stage2["stage2_filter"]["gate_unavailable"] is False
     assert workspace["artifact_path"] == str(payload_path)
-    assert workspace["counts"]["patterns"] == 1
+    assert workspace["counts"]["patterns"] == 2
+    assert workspace["patterns"][0]["pattern_operational_tier"] == "tier_1"
+    assert workspace["patterns"][0]["pattern_priority_rank"] == 1
+    assert workspace["patterns"][0]["volume_zscore_20"] == 2.5
+    assert workspace["ranked_leaders"][0]["symbol_id"] == "AAA"
+    assert workspace["pattern_discoveries"][0]["symbol_id"] == "PATTERNX"
+    assert workspace["breakout_candidates"][0]["symbol_id"] == "BREAKOUTX"
     assert workspace["visible_counts"]["ranked"] == 1
     assert workspace["stage2_summary"]["uptrend_count"] == 1
     assert workspace["breakouts"][0]["symbol_id"] == "AAA"
+    assert workspace["breakouts"][0]["volume_zscore_20"] == 2.8

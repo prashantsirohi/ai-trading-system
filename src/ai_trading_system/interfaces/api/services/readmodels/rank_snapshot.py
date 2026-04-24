@@ -240,6 +240,47 @@ def get_pipeline_workspace_snapshot_read_model(
     patterns = current_snapshot.frames.get("pattern_scan", pd.DataFrame())
     sectors = current_snapshot.frames.get("sector_dashboard", pd.DataFrame())
     stock_scan = current_snapshot.frames.get("stock_scan", pd.DataFrame())
+    payload_ranked_leaders = current_snapshot.payload.get("ranked_leaders")
+    payload_pattern_discoveries = current_snapshot.payload.get("pattern_discoveries")
+    payload_breakout_candidates = current_snapshot.payload.get("breakout_candidates")
+
+    ranked_leaders = (
+        payload_ranked_leaders
+        if isinstance(payload_ranked_leaders, list)
+        else _records(
+            stock_scan.loc[pd.to_numeric(stock_scan.get("rank"), errors="coerce").notna()]
+            if stock_scan is not None and not stock_scan.empty
+            else pd.DataFrame(),
+            limit=limit,
+        )
+    )
+    pattern_discoveries = (
+        payload_pattern_discoveries
+        if isinstance(payload_pattern_discoveries, list)
+        else _records(
+            stock_scan.loc[
+                stock_scan.get("discovered_by_pattern_scan", pd.Series(False, index=stock_scan.index))
+                .fillna(False)
+                .astype(bool)
+            ]
+            if stock_scan is not None and not stock_scan.empty
+            else pd.DataFrame(),
+            limit=limit,
+        )
+    )
+    breakout_candidates = (
+        payload_breakout_candidates
+        if isinstance(payload_breakout_candidates, list)
+        else _records(
+            stock_scan.loc[
+                pd.to_numeric(stock_scan.get("rank"), errors="coerce").isna()
+                & stock_scan.get("breakout_positive", pd.Series(False, index=stock_scan.index)).fillna(False).astype(bool)
+            ]
+            if stock_scan is not None and not stock_scan.empty
+            else pd.DataFrame(),
+            limit=limit,
+        )
+    )
 
     return {
         "artifact_path": current_snapshot.payload.get("_artifact_path"),
@@ -253,6 +294,9 @@ def get_pipeline_workspace_snapshot_read_model(
         "patterns": _records(patterns, limit=limit),
         "sectors": _records(sectors, limit=limit),
         "stock_scan": _records(stock_scan, limit=limit),
+        "ranked_leaders": ranked_leaders,
+        "pattern_discoveries": pattern_discoveries,
+        "breakout_candidates": breakout_candidates,
         "stage2_summary": stage2_summary,
         "stage2_filter": stage2_filter,
         "counts": {

@@ -8,6 +8,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
+from ai_trading_system.domains.features.indicators import add_stage2_features
 from ai_trading_system.platform.logging.logger import logger
 
 
@@ -83,6 +84,137 @@ class RankerInputLoader:
             return frame
         frame.loc[:, "timestamp"] = pd.to_datetime(frame["timestamp"])
         return self.normalize_symbol_exchange_columns(frame)
+
+    def load_latest_stage2(
+        self,
+        *,
+        date: str,
+        exchanges: list[str],
+        rel_strength_frame: pd.DataFrame | None = None,
+        history_bars: int = 300,
+    ) -> pd.DataFrame:
+        conn = self.get_conn()
+        try:
+            cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
+            exchange_list = ",".join(f"'{exchange}'" for exchange in exchanges)
+            history = conn.execute(
+                f"""
+                SELECT
+                    symbol_id,
+                    exchange,
+                    timestamp,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume
+                FROM (
+                    SELECT
+                        symbol_id,
+                        exchange,
+                        timestamp,
+                        open,
+                        high,
+                        low,
+                        close,
+                        volume,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY symbol_id, exchange
+                            ORDER BY timestamp DESC
+                        ) AS rn_desc
+                    FROM _catalog
+                    WHERE exchange IN ({exchange_list})
+                      AND timestamp IS NOT NULL
+                      AND timestamp <= '{cutoff_ts}'
+                ) latest
+                WHERE rn_desc <= {int(history_bars)}
+                ORDER BY symbol_id, exchange, timestamp
+                """
+            ).fetchdf()
+        finally:
+            conn.close()
+
+        if history.empty:
+            return pd.DataFrame(
+                columns=[
+                    "symbol_id",
+                    "exchange",
+                    "timestamp",
+                    "close",
+                    "sma_200",
+                    "sma_150",
+                    "sma200_slope_20d_pct",
+                    "stage2_score",
+                    "is_stage2_structural",
+                    "is_stage2_candidate",
+                    "is_stage2_uptrend",
+                    "stage2_label",
+                    "stage2_hard_fail_reason",
+                    "stage2_fail_reason",
+                ]
+            )
+
+        history = self.normalize_symbol_exchange_columns(history)
+        history.loc[:, "timestamp"] = pd.to_datetime(history["timestamp"], errors="coerce")
+        history = history.sort_values(["symbol_id", "exchange", "timestamp"], kind="stable").reset_index(drop=True)
+
+        rs_frame = None
+        if rel_strength_frame is not None and not rel_strength_frame.empty:
+            rs_cols = [column for column in ["symbol_id", "exchange", "rel_strength_score"] if column in rel_strength_frame.columns]
+            if len(rs_cols) == 3:
+                rs_frame = (
+                    rel_strength_frame[rs_cols]
+                    .drop_duplicates(["symbol_id", "exchange"], keep="last")
+                    .reset_index(drop=True)
+                )
+
+        latest_rows: list[pd.DataFrame] = []
+        for (_, _), group in history.groupby(["symbol_id", "exchange"], sort=False):
+            enriched_input = group.copy()
+
+            high_252 = pd.to_numeric(
+                enriched_input["high"].rolling(252, min_periods=1).max(),
+                errors="coerce",
+            ).replace(0, pd.NA)
+            close = pd.to_numeric(enriched_input["close"], errors="coerce")
+            volume = pd.to_numeric(enriched_input["volume"], errors="coerce")
+            enriched_input.loc[:, "near_52w_high_pct"] = ((1.0 - close / high_252) * 100.0).clip(0.0, 100.0)
+            vol_avg = volume.rolling(20, min_periods=10).mean().replace(0, pd.NA)
+            enriched_input.loc[:, "volume_ratio_20"] = volume / vol_avg
+
+            if rs_frame is not None:
+                rs_match = rs_frame.loc[
+                    (rs_frame["symbol_id"] == enriched_input["symbol_id"].iloc[-1])
+                    & (rs_frame["exchange"] == enriched_input["exchange"].iloc[-1]),
+                    "rel_strength_score",
+                ]
+                if not rs_match.empty:
+                    enriched_input.loc[:, "rel_strength_score"] = float(pd.to_numeric(rs_match.iloc[-1], errors="coerce"))
+
+            enriched = add_stage2_features(enriched_input)
+            latest_rows.append(enriched.tail(1))
+
+        if not latest_rows:
+            return pd.DataFrame()
+
+        latest = pd.concat(latest_rows, ignore_index=True)
+        keep_cols = [
+            "symbol_id",
+            "exchange",
+            "timestamp",
+            "close",
+            "sma_200",
+            "sma_150",
+            "sma200_slope_20d_pct",
+            "stage2_score",
+            "is_stage2_structural",
+            "is_stage2_candidate",
+            "is_stage2_uptrend",
+            "stage2_label",
+            "stage2_hard_fail_reason",
+            "stage2_fail_reason",
+        ]
+        return latest[[column for column in keep_cols if column in latest.columns]].reset_index(drop=True)
 
     def load_return_frame(self, *, period: int) -> pd.DataFrame:
         conn = self.get_conn()

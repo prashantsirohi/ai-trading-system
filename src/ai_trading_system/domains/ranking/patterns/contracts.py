@@ -203,6 +203,8 @@ class PatternSignal:
     pivot_prices: tuple[float, ...] = ()
     pivot_indices: tuple[int, ...] = ()
     volume_ratio_20: float | None = None
+    volume_zscore_20: float | None = None
+    volume_zscore_50: float | None = None
     rel_strength_score: float | None = None
     sector_rs_percentile: float | None = None
     breakout_volume_ratio: float | None = None

@@ -7,6 +7,11 @@ from ai_trading_system.platform.logging.logger import logger
 ta = None
 talib = None
 
+_VOLUME_ZSCORE_OUTPUT_COLS = (
+    "volume_zscore_20",
+    "volume_zscore_50",
+)
+
 
 def add_multi_timeframe_returns(frame: pd.DataFrame) -> pd.DataFrame:
     """Add standard trailing returns across multiple horizons."""
@@ -39,14 +44,57 @@ _STAGE2_OUTPUT_COLS = (
     "sma150_slope_20d_pct",
     "sma200_slope_20d_pct",
     "stage2_score",
+    "is_stage2_structural",
+    "is_stage2_candidate",
     "is_stage2_uptrend",
     "stage2_label",
+    "stage2_hard_fail_reason",
     "stage2_fail_reason",
+    "volume_zscore_20",
+    "volume_zscore_50",
 )
 
 
+def add_volume_zscore_features(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add prior-window volume anomaly z-scores per symbol.
+
+    Uses shifted rolling statistics so the current bar is never included in
+    its own baseline. When there is insufficient history or zero variance, the
+    z-score is left as ``NaN``.
+    """
+    output = frame.copy()
+    if output.empty or "volume" not in output.columns:
+        for col in _VOLUME_ZSCORE_OUTPUT_COLS:
+            output[col] = pd.Series(dtype=float)
+        return output
+
+    if "symbol" in output.columns and "symbol_id" not in output.columns:
+        output["symbol_id"] = output["symbol"]
+
+    volume = pd.to_numeric(output["volume"], errors="coerce")
+    if "symbol_id" in output.columns:
+        grouped = volume.groupby(output["symbol_id"], sort=False)
+        avg_20_prior = grouped.transform(lambda series: series.shift(1).rolling(20, min_periods=20).mean())
+        std_20_prior = grouped.transform(lambda series: series.shift(1).rolling(20, min_periods=20).std(ddof=0))
+        avg_50_prior = grouped.transform(lambda series: series.shift(1).rolling(50, min_periods=50).mean())
+        std_50_prior = grouped.transform(lambda series: series.shift(1).rolling(50, min_periods=50).std(ddof=0))
+    else:
+        avg_20_prior = volume.shift(1).rolling(20, min_periods=20).mean()
+        std_20_prior = volume.shift(1).rolling(20, min_periods=20).std(ddof=0)
+        avg_50_prior = volume.shift(1).rolling(50, min_periods=50).mean()
+        std_50_prior = volume.shift(1).rolling(50, min_periods=50).std(ddof=0)
+
+    output.loc[:, "volume_zscore_20"] = (
+        (volume - avg_20_prior) / std_20_prior.replace(0, np.nan)
+    )
+    output.loc[:, "volume_zscore_50"] = (
+        (volume - avg_50_prior) / std_50_prior.replace(0, np.nan)
+    )
+    return output
+
+
 def add_stage2_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute Stage 2 uptrend score, boolean flag, and label per bar.
+    """Compute Stage 2 structural and score-based trend features per bar.
 
     Points-based scoring (max 100) calibrated for NSE large/mid-cap daily OHLCV.
 
@@ -65,21 +113,29 @@ def add_stage2_features(df: pd.DataFrame) -> pd.DataFrame:
     sma150_slope_20d_pct -- 20-bar slope of sma_150 (%)
     sma200_slope_20d_pct -- 20-bar slope of sma_200 (%)
     stage2_score         -- 0-100 composite score
-    is_stage2_uptrend    -- True when stage2_score >= 70
+    is_stage2_structural -- strict Weinstein structural Stage 2 gate
+    is_stage2_candidate  -- soft score-led discovery flag (stage2_score >= 50)
+    is_stage2_uptrend    -- compatibility alias for is_stage2_structural
     stage2_label         -- 'strong_stage2' | 'stage2' | 'stage1_to_stage2' | 'non_stage2'
-    stage2_fail_reason   -- comma-separated fail reasons for last bar ('' when all pass)
+    stage2_hard_fail_reason -- comma-separated failed structural predicates
+    stage2_fail_reason   -- hard fail reasons first, then softer score-only deficiencies
     """
     out = df.copy()
 
     # Guard: empty frame — add typed empty columns and return
     if out.empty or "close" not in out.columns:
         for col in _STAGE2_OUTPUT_COLS:
-            out[col] = pd.Series(
-                dtype=float if col not in ("stage2_label", "stage2_fail_reason") else object
-            )
+            if col in ("stage2_label", "stage2_hard_fail_reason", "stage2_fail_reason"):
+                dtype = object
+            elif col in ("is_stage2_structural", "is_stage2_candidate", "is_stage2_uptrend"):
+                dtype = bool
+            else:
+                dtype = float
+            out[col] = pd.Series(dtype=dtype)
         return out
 
     close = pd.to_numeric(out["close"], errors="coerce")
+    out = add_volume_zscore_features(out)
 
     # ── SMA-150 (primary Stage 2 MA) ─────────────────────────────────────
     out.loc[:, "sma_150"] = close.rolling(150, min_periods=100).mean()
@@ -93,6 +149,9 @@ def add_stage2_features(df: pd.DataFrame) -> pd.DataFrame:
     # Ensure sma_200 column is in frame for downstream scoring
     if "sma_200" not in out.columns:
         out.loc[:, "sma_200"] = sma_200
+
+    sma_150_ready = close.rolling(150, min_periods=150).count() >= 150
+    sma_200_ready = close.rolling(200, min_periods=200).count() >= 200
 
     # ── SMA slopes (20-bar look-back, expressed as %) ────────────────────
     out.loc[:, "sma150_slope_20d_pct"] = ((sma_150 / sma_150.shift(20)) - 1.0) * 100.0
@@ -138,45 +197,68 @@ def add_stage2_features(df: pd.DataFrame) -> pd.DataFrame:
     score += np.where(vol_ratio > 1.2, 10.0, 0.0)
 
     out.loc[:, "stage2_score"] = score.clip(0.0, 100.0)
-    out.loc[:, "is_stage2_uptrend"] = out["stage2_score"] >= 70.0
+
+    structural_checks = {
+        "below_sma150": sma_150_ready & (close > sma_150),
+        "below_sma200": sma_200_ready & (close > sma_200),
+        "sma150_below_sma200": sma_150_ready & sma_200_ready & (sma_150 > sma_200),
+        "sma200_slope_negative": sma_200_ready & sma_200.shift(20).notna() & (out["sma200_slope_20d_pct"] > 0.0),
+        "far_from_52w_high": near_52w.notna() & (near_52w <= 25.0),
+    }
+
+    structural_pass = pd.Series(True, index=out.index, dtype=bool)
+    for passed in structural_checks.values():
+        structural_pass &= passed.fillna(False)
+
+    out.loc[:, "is_stage2_structural"] = structural_pass
+    out.loc[:, "is_stage2_candidate"] = out["stage2_score"] >= 50.0
+    out.loc[:, "is_stage2_uptrend"] = out["is_stage2_structural"]
 
     out.loc[:, "stage2_label"] = np.select(
         [
-            out["stage2_score"] >= 85.0,
-            out["stage2_score"] >= 70.0,
-            out["stage2_score"] >= 50.0,
+            out["is_stage2_structural"] & (out["stage2_score"] >= 85.0),
+            out["is_stage2_structural"] & (out["stage2_score"] >= 70.0),
+            (~out["is_stage2_structural"]) & (out["stage2_score"] >= 50.0),
         ],
         ["strong_stage2", "stage2", "stage1_to_stage2"],
         default="non_stage2",
     )
 
-    # ── Fail-reason explainability (last bar only — avoids O(n) row-apply) ─
-    out.loc[:, "stage2_fail_reason"] = ""
-    if len(out) > 0 and not bool(out["is_stage2_uptrend"].iloc[-1]):
-        last = out.iloc[-1]
-        reasons: list[str] = []
-        c = float(last.get("close") or 0)
-        s150 = float(last.get("sma_150") or 0) or float("inf")
-        s200 = float(out["sma_200"].iloc[-1] if "sma_200" in out.columns else 0) or float("inf")
-        sl200 = float(last.get("sma200_slope_20d_pct") or -1)
-        n52 = float(last.get("near_52w_high_pct") or 999)
-        rs = float(last.get("rel_strength_score") or 0)
+    hard_reasons_per_row: list[str] = []
+    fail_reasons_per_row: list[str] = []
+    for i in out.index:
+        hard_reasons: list[str] = []
+        for reason, passed in structural_checks.items():
+            passed_value = passed.loc[i]
+            if pd.isna(passed_value) or not bool(passed_value):
+                hard_reasons.append(reason)
+        if not hard_reasons:
+            hard_reason_text = ""
+        else:
+            hard_reason_text = ",".join(hard_reasons)
+        hard_reasons_per_row.append(hard_reason_text)
 
-        if c <= s150:
-            reasons.append("below_sma150")
-        if c <= s200:
-            reasons.append("below_sma200")
-        if s150 <= s200:
-            reasons.append("sma150_below_sma200")
-        if sl200 <= 0:
-            reasons.append("sma200_slope_negative")
-        if n52 > 25.0:
-            reasons.append("far_from_52w_high")
-        if rs < 70.0:
-            reasons.append("rs_below_70th_pctile")
+        soft_reasons: list[str] = []
+        rs_value = rs_score.loc[i]
+        vol_value = vol_ratio.loc[i]
+        near_high_value = near_52w.loc[i]
 
-        if reasons:
-            out.iloc[-1, out.columns.get_loc("stage2_fail_reason")] = ",".join(reasons)
+        if pd.isna(rs_value) or rs_value < 70.0:
+            soft_reasons.append("rs_below_70th_pctile")
+        elif rs_value < 85.0:
+            soft_reasons.append("rs_below_85th_pctile")
+
+        if pd.isna(vol_value) or vol_value <= 1.2:
+            soft_reasons.append("weak_volume")
+
+        if pd.isna(near_high_value) or near_high_value > 15.0:
+            soft_reasons.append("not_near_breakout_zone")
+
+        ordered_reasons = hard_reasons + [reason for reason in soft_reasons if reason not in hard_reasons]
+        fail_reasons_per_row.append(",".join(ordered_reasons))
+
+    out.loc[:, "stage2_hard_fail_reason"] = hard_reasons_per_row
+    out.loc[:, "stage2_fail_reason"] = fail_reasons_per_row
 
     return out
 

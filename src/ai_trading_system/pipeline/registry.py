@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import duckdb
 
+from ai_trading_system.platform.db.paths import canonicalize_project_root
 from core.contracts import StageArtifact
 
 
@@ -273,7 +274,7 @@ class RegistryStore:
     """Persists run metadata and governance records into DuckDB."""
 
     def __init__(self, project_root: Path | str, db_path: Optional[Path | str] = None):
-        self.project_root = Path(project_root)
+        self.project_root = canonicalize_project_root(project_root)
         # Keep governance/control-plane metadata in a dedicated database so
         # live OHLCV writers and long-running readers do not block alerting,
         # model governance, or pipeline run tracking.

@@ -84,7 +84,15 @@ def _seed_execution_project(tmp_path: Path) -> str:
     rank_dir = pipeline_runs_dir / run_id / "rank" / "attempt_1"
     rank_dir.mkdir(parents=True, exist_ok=True)
     (rank_dir / "dashboard_payload.json").write_text(
-        json.dumps({"summary": {"top_sector": "Finance", "breakout_count": 2}, "metadata": {"source": "test"}}),
+        json.dumps(
+            {
+                "summary": {"top_sector": "Finance", "breakout_count": 2},
+                "ranked_leaders": [{"symbol_id": "AAA", "rank": 1}, {"symbol_id": "BBB", "rank": 2}],
+                "pattern_discoveries": [{"symbol_id": "PATTERNX", "discovered_by_pattern_scan": True}],
+                "breakout_candidates": [{"symbol_id": "BREAKOUTX", "breakout_positive": True}],
+                "metadata": {"source": "test"},
+            }
+        ),
         encoding="utf-8",
     )
     (rank_dir / "ranked_signals.csv").write_text(
@@ -96,14 +104,32 @@ def _seed_execution_project(tmp_path: Path) -> str:
         encoding="utf-8",
     )
     (rank_dir / "breakout_scan.csv").write_text(
-        "symbol_id,sector,setup_family,breakout_state\nAAA,Finance,high_52w_breakout,qualified\n",
+        (
+            "symbol_id,sector,setup_family,breakout_state,volume_zscore_20,volume_zscore_50,"
+            "is_any_volume_confirmed,is_strong_volume_confirmation\n"
+            "AAA,Finance,high_52w_breakout,qualified,2.7,1.8,true,true\n"
+        ),
         encoding="utf-8",
     )
     (rank_dir / "pattern_scan.csv").write_text(
-        "symbol_id,pattern_family,pattern_state,pattern_score\nAAA,flag,confirmed,91\n",
+        (
+            "symbol_id,pattern_family,pattern_state,pattern_lifecycle_state,pattern_score,"
+            "pattern_operational_tier,pattern_priority_score,pattern_priority_rank,volume_zscore_20,volume_zscore_50\n"
+            "AAA,flag,confirmed,confirmed,91,tier_2,87,1,2.6,1.9\n"
+        ),
         encoding="utf-8",
     )
     (rank_dir / "stock_scan.csv").write_text("symbol_id,close\nAAA,104\n", encoding="utf-8")
+    (rank_dir / "stock_scan.csv").write_text(
+        (
+            "symbol_id,rank,composite_score,close,pattern_positive,breakout_positive,discovered_by_pattern_scan\n"
+            "AAA,1,88.5,104,true,true,false\n"
+            "BBB,2,82.0,98,false,false,false\n"
+            "PATTERNX,,,120,true,false,true\n"
+            "BREAKOUTX,,,130,false,true,false\n"
+        ),
+        encoding="utf-8",
+    )
     (rank_dir / "sector_dashboard.csv").write_text(
         "Sector,RS_rank_pct,Quadrant\nFinance,95,Leading\n",
         encoding="utf-8",
@@ -146,6 +172,7 @@ def test_execution_api_read_endpoints(monkeypatch, tmp_path: Path) -> None:
     market = client.get("/api/execution/market?limit=10", headers=API_HEADERS)
     assert market.status_code == 200
     assert market.json()["breakouts"][0]["symbol_id"] == "AAA"
+    assert market.json()["breakouts"][0]["volume_zscore_20"] == 2.7
 
     pipeline = client.get(
         "/api/execution/workspace/pipeline?limit=10&stage2_only=true&stage2_min_score=70",
@@ -155,6 +182,12 @@ def test_execution_api_read_endpoints(monkeypatch, tmp_path: Path) -> None:
     pipeline_payload = pipeline.json()
     assert pipeline_payload["top_ranked"][0]["symbol_id"] == "AAA"
     assert pipeline_payload["patterns"][0]["pattern_family"] == "flag"
+    assert pipeline_payload["patterns"][0]["pattern_operational_tier"] == "tier_2"
+    assert pipeline_payload["patterns"][0]["pattern_priority_rank"] == 1
+    assert pipeline_payload["patterns"][0]["volume_zscore_20"] == 2.6
+    assert pipeline_payload["ranked_leaders"][0]["symbol_id"] == "AAA"
+    assert pipeline_payload["pattern_discoveries"][0]["symbol_id"] == "PATTERNX"
+    assert pipeline_payload["breakout_candidates"][0]["symbol_id"] == "BREAKOUTX"
     assert pipeline_payload["counts"]["breakouts"] == 1
     assert pipeline_payload["counts"]["ranked"] == 2
     assert pipeline_payload["visible_counts"]["ranked"] == 1

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import date
 from pathlib import Path
@@ -17,6 +18,7 @@ from run.publisher import PublisherDeliveryManager
 import run.orchestrator as orchestrator_module
 from run.orchestrator import PipelineOrchestrator
 from run.stages import FeaturesStage, IngestStage, PublishStage, RankStage
+from ai_trading_system.domains.ranking.service import build_integrated_stock_scan_view
 from ai_trading_system.pipeline.contracts import DataQualityCriticalError, PublishStageError, StageArtifact, StageContext
 from ai_trading_system.platform.db.paths import ensure_domain_layout, get_domain_paths, research_static_end_date
 
@@ -118,6 +120,131 @@ def test_stage_boundaries_and_registry_rows(tmp_path: Path) -> None:
     assert artifact_row[1]
     assert breakout_row[0].endswith("breakout_scan.csv")
     assert dashboard_payload_row[0].endswith("dashboard_payload.json")
+
+
+def test_build_integrated_stock_scan_view_preserves_discoveries_and_best_context() -> None:
+    ranked = pd.DataFrame(
+        [
+            {
+                "symbol_id": "RANKED1",
+                "exchange": "NSE",
+                "composite_score": 95.0,
+                "rel_strength_score": 90.0,
+                "stage2_score": 88.0,
+                "close": 110.0,
+            }
+        ]
+    )
+    pattern_df = pd.DataFrame(
+        [
+            {
+                "symbol_id": "DISCOVERED",
+                "exchange": "NSE",
+                "pattern_family": "cup_handle",
+                "pattern_state": "confirmed",
+                "pattern_lifecycle_state": "confirmed",
+                "pattern_operational_tier": "tier_1",
+                "pattern_priority_score": 95.0,
+                "pattern_score": 91.0,
+                "rel_strength_score": 83.0,
+                "stage2_score": 79.0,
+            },
+            {
+                "symbol_id": "DISCOVERED",
+                "exchange": "NSE",
+                "pattern_family": "flag",
+                "pattern_state": "watchlist",
+                "pattern_lifecycle_state": "watchlist",
+                "pattern_operational_tier": "tier_2",
+                "pattern_priority_score": 70.0,
+                "pattern_score": 75.0,
+                "rel_strength_score": 70.0,
+                "stage2_score": 65.0,
+            },
+            {
+                "symbol_id": "SUPPRESS",
+                "exchange": "NSE",
+                "pattern_family": "head_shoulders",
+                "pattern_state": "confirmed",
+                "pattern_lifecycle_state": "confirmed",
+                "pattern_operational_tier": "suppression_only",
+                "pattern_priority_score": 99.0,
+            },
+            {
+                "symbol_id": "EXPIRED",
+                "exchange": "NSE",
+                "pattern_family": "vcp",
+                "pattern_state": "confirmed",
+                "pattern_lifecycle_state": "expired",
+                "pattern_operational_tier": "tier_1",
+                "pattern_priority_score": 98.0,
+            },
+        ]
+    )
+    breakout_df = pd.DataFrame(
+        [
+            {
+                "symbol_id": "DISCOVERED",
+                "exchange": "NSE",
+                "breakout_state": "watchlist",
+                "breakout_score": 6.0,
+                "rel_strength_score": 81.0,
+                "stage2_score": 78.0,
+            },
+            {
+                "symbol_id": "BREAKOUT_ONLY",
+                "exchange": "NSE",
+                "breakout_state": "qualified",
+                "breakout_score": 9.0,
+                "rel_strength_score": 85.0,
+                "stage2_score": 82.0,
+            },
+            {
+                "symbol_id": "FILTERED",
+                "exchange": "NSE",
+                "breakout_state": "filtered_by_regime",
+                "breakout_score": 10.0,
+            },
+        ]
+    )
+    legacy_stock_scan = pd.DataFrame(
+        [
+            {"Symbol": "RANKED1", "category": "BUY"},
+            {"Symbol": "BREAKOUT_ONLY", "category": "WATCH"},
+        ]
+    )
+
+    merged = build_integrated_stock_scan_view(
+        ranked_df=ranked,
+        pattern_df=pattern_df,
+        breakout_df=breakout_df,
+        legacy_stock_scan_df=legacy_stock_scan,
+    )
+
+    assert merged["symbol_id"].tolist() == ["RANKED1", "DISCOVERED", "BREAKOUT_ONLY"]
+    lookup = {row["symbol_id"]: row for _, row in merged.iterrows()}
+
+    assert int(lookup["RANKED1"]["rank"]) == 1
+    assert bool(lookup["RANKED1"]["discovered_by_pattern_scan"]) is False
+    assert lookup["RANKED1"]["category"] == "BUY"
+
+    assert pd.isna(lookup["DISCOVERED"]["rank"])
+    assert pd.isna(lookup["DISCOVERED"]["composite_score"])
+    assert bool(lookup["DISCOVERED"]["pattern_positive"]) is True
+    assert bool(lookup["DISCOVERED"]["breakout_positive"]) is True
+    assert bool(lookup["DISCOVERED"]["discovered_by_pattern_scan"]) is True
+    assert lookup["DISCOVERED"]["pattern_family"] == "cup_handle"
+    assert float(lookup["DISCOVERED"]["pattern_priority_score"]) == 95.0
+
+    assert pd.isna(lookup["BREAKOUT_ONLY"]["rank"])
+    assert bool(lookup["BREAKOUT_ONLY"]["pattern_positive"]) is False
+    assert bool(lookup["BREAKOUT_ONLY"]["breakout_positive"]) is True
+    assert bool(lookup["BREAKOUT_ONLY"]["discovered_by_pattern_scan"]) is False
+    assert lookup["BREAKOUT_ONLY"]["category"] == "WATCH"
+
+    assert "SUPPRESS" not in set(merged["symbol_id"])
+    assert "EXPIRED" not in set(merged["symbol_id"])
+    assert "FILTERED" not in set(merged["symbol_id"])
 
 
 def test_dq_critical_failure_blocks_downstream(tmp_path: Path) -> None:
@@ -852,7 +979,13 @@ def test_rank_stage_writes_pattern_scan_artifact_and_dashboard_payload(tmp_path:
                         "symbol_id": "ABC",
                         "pattern_family": "cup_handle",
                         "pattern_state": "confirmed",
+                        "pattern_lifecycle_state": "confirmed",
                         "pattern_score": 88.0,
+                        "pattern_operational_tier": "tier_1",
+                        "pattern_priority_score": 93.0,
+                        "pattern_priority_rank": 1,
+                        "volume_zscore_20": 2.6,
+                        "volume_zscore_50": 1.8,
                     }
                 ]
             ),
@@ -866,7 +999,17 @@ def test_rank_stage_writes_pattern_scan_artifact_and_dashboard_payload(tmp_path:
                     "pattern_family_counts": {"cup_handle": 1},
                 },
                 "ranked_signals": [{"symbol_id": "ABC", "composite_score": 10.0}],
-                "pattern_scan": [{"symbol_id": "ABC", "pattern_family": "cup_handle"}],
+                "pattern_scan": [
+                    {
+                        "symbol_id": "ABC",
+                        "pattern_family": "cup_handle",
+                        "pattern_operational_tier": "tier_1",
+                        "pattern_priority_score": 93.0,
+                        "pattern_priority_rank": 1,
+                        "volume_zscore_20": 2.6,
+                        "volume_zscore_50": 1.8,
+                    }
+                ],
                 "warnings": [],
             },
         }
@@ -876,9 +1019,16 @@ def test_rank_stage_writes_pattern_scan_artifact_and_dashboard_payload(tmp_path:
 
     assert (context.output_dir() / "pattern_scan.csv").exists()
     assert any(artifact.artifact_type == "pattern_scan" for artifact in result.artifacts)
+    pattern_scan = pd.read_csv(context.output_dir() / "pattern_scan.csv")
+    assert pattern_scan.iloc[0]["pattern_operational_tier"] == "tier_1"
+    assert float(pattern_scan.iloc[0]["pattern_priority_score"]) == 93.0
+    assert int(pattern_scan.iloc[0]["pattern_priority_rank"]) == 1
+    assert float(pattern_scan.iloc[0]["volume_zscore_20"]) == 2.6
     dashboard_payload = (context.output_dir() / "dashboard_payload.json").read_text(encoding="utf-8")
     assert '"pattern_count": 1' in dashboard_payload
     assert '"pattern_family": "cup_handle"' in dashboard_payload
+    assert '"pattern_operational_tier": "tier_1"' in dashboard_payload
+    assert '"volume_zscore_20": 2.6' in dashboard_payload
 
 
 def test_rank_stage_incremental_pattern_scan_reuses_cached_inactive_symbols(
@@ -980,6 +1130,7 @@ def test_rank_stage_incremental_pattern_scan_reuses_cached_inactive_symbols(
     from ai_trading_system.domains.ranking import breakout as breakout_module
     from ai_trading_system.domains.ranking import sector_dashboard as sector_dashboard_module
     from ai_trading_system.domains.ranking import stock_scan as stock_scan_module
+    from ai_trading_system.domains.ranking.patterns import universe as pattern_universe_module
 
     class _FakeRanker:
         def __init__(self, *args, **kwargs):
@@ -991,6 +1142,23 @@ def test_rank_stage_incremental_pattern_scan_reuses_cached_inactive_symbols(
     monkeypatch.setattr(data_trust_module, "load_data_trust_summary", lambda *args, **kwargs: {"status": "healthy"})
     monkeypatch.setattr(ranker_module, "StockRanker", _FakeRanker)
     monkeypatch.setattr(
+        pattern_universe_module,
+        "build_pattern_seed_universe",
+        lambda **kwargs: (
+            ["AAA", "BBB"],
+            {
+                "seed_source_counts": {"cached": 1, "stage2_structural": 0, "unusual_movers": 1, "liquidity_remaining": 0},
+                "broad_universe_count": 2,
+                "feature_ready_count": 0,
+                "liquidity_pass_count": 0,
+                "seed_symbol_count": 2,
+                "latest_cached_signal_date": "2026-03-27",
+                "pattern_seed_max_symbols": 400,
+                "seed_symbols_digest": "seed-digest",
+            },
+        ),
+    )
+    monkeypatch.setattr(
         breakout_module,
         "scan_breakouts",
         lambda **kwargs: pd.DataFrame([{"symbol_id": "BBB", "breakout_tag": "fresh_breakout"}]),
@@ -998,7 +1166,7 @@ def test_rank_stage_incremental_pattern_scan_reuses_cached_inactive_symbols(
     monkeypatch.setattr(pattern_data_module, "load_pattern_frame", lambda *args, **kwargs: pattern_frame.copy())
 
     def _fake_scan(frame, *, config, progress_callback=None):
-        assert set(frame["symbol_id"].astype(str)) == {"BBB"}
+        assert set(frame["symbol_id"].astype(str)) == {"AAA", "BBB"}
         return (
             pd.DataFrame(
                 [
@@ -1058,23 +1226,412 @@ def test_rank_stage_incremental_pattern_scan_reuses_cached_inactive_symbols(
     try:
         cache_rows = cache_conn.execute(
             """
-            SELECT scan_run_id, symbol_id, signal_date
+            SELECT scan_run_id, symbol_id, signal_date, as_of_date, pattern_lifecycle_state
             FROM pattern_cache
-            ORDER BY signal_date, symbol_id
+            ORDER BY as_of_date, symbol_id
             """
         ).fetchall()
     finally:
         cache_conn.close()
 
     assert set(pattern_artifact["symbol_id"].astype(str)) == {"AAA", "BBB"}
+    assert "pattern_lifecycle_state" in pattern_artifact.columns
     assert set(cached_today["symbol_id"].astype(str)) == {"AAA", "BBB"}
-    assert ("full:2026-03-27:2", "AAA", pd.Timestamp("2026-03-27").date()) in cache_rows
-    latest_rows = [row for row in cache_rows if row[0] == "incremental:2026-03-28:1"]
+    assert ("full:2026-03-27:2", "AAA", pd.Timestamp("2026-03-27").date(), pd.Timestamp("2026-03-27").date(), "confirmed") in cache_rows
+    latest_rows = [row for row in cache_rows if row[0] == "incremental:2026-03-28:2"]
     assert latest_rows == [
-        ("incremental:2026-03-28:1", "AAA", pd.Timestamp("2026-03-28").date()),
-        ("incremental:2026-03-28:1", "BBB", pd.Timestamp("2026-03-28").date()),
+        ("incremental:2026-03-28:2", "AAA", pd.Timestamp("2026-03-27").date(), pd.Timestamp("2026-03-28").date(), "confirmed"),
+        ("incremental:2026-03-28:2", "BBB", pd.Timestamp("2026-03-28").date(), pd.Timestamp("2026-03-28").date(), "confirmed"),
     ]
     assert any(artifact.artifact_type == "pattern_scan" for artifact in result.artifacts)
+
+
+def test_rank_stage_pattern_scan_uses_broad_seed_universe_not_ranked_shortlist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path
+    paths = ensure_domain_layout(project_root=project_root, data_domain="operational")
+    registry = RegistryStore(project_root)
+
+    ranked_signals = pd.DataFrame(
+        [
+            {
+                "symbol_id": "RANKED1",
+                "exchange": "NSE",
+                "composite_score": 95.0,
+                "rel_strength_score": 90.0,
+                "sector_rs_value": 0.82,
+                "stage2_score": 88.0,
+                "stage2_label": "strong_stage2",
+            }
+        ]
+    )
+    requested_symbols: list[str] = []
+
+    import analytics.data_trust as data_trust_module
+    import analytics.patterns.data as pattern_data_module
+    import analytics.patterns.evaluation as pattern_eval_module
+    import analytics.ranker as ranker_module
+    from ai_trading_system.domains.ranking import breakout as breakout_module
+    from ai_trading_system.domains.ranking import sector_dashboard as sector_dashboard_module
+    from ai_trading_system.domains.ranking import stock_scan as stock_scan_module
+    from ai_trading_system.domains.ranking.patterns import universe as pattern_universe_module
+
+    class _FakeRanker:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def rank_all(self, **kwargs):
+            return ranked_signals.copy()
+
+    monkeypatch.setattr(data_trust_module, "load_data_trust_summary", lambda *args, **kwargs: {"status": "healthy"})
+    monkeypatch.setattr(ranker_module, "StockRanker", _FakeRanker)
+    monkeypatch.setattr(
+        pattern_universe_module,
+        "build_pattern_seed_universe",
+        lambda **kwargs: (
+            ["UNRANKED", "RANKED1"],
+            {
+                "seed_source_counts": {"cached": 0, "stage2_structural": 1, "unusual_movers": 1, "liquidity_remaining": 0},
+                "broad_universe_count": 2,
+                "feature_ready_count": 2,
+                "liquidity_pass_count": 2,
+                "seed_symbol_count": 2,
+                "latest_cached_signal_date": None,
+                "pattern_seed_max_symbols": 400,
+                "seed_symbols_digest": "seed-digest",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        breakout_module,
+        "scan_breakouts",
+        lambda **kwargs: pd.DataFrame([{"symbol_id": "RANKED1", "breakout_tag": "fresh_breakout"}]),
+    )
+
+    def _load_pattern_frame(*args, **kwargs):
+        requested_symbols.extend(kwargs.get("symbols") or [])
+        assert list(kwargs.get("symbols") or []) == ["UNRANKED", "RANKED1"]
+        return pd.DataFrame(
+            [
+                {"symbol_id": "UNRANKED", "exchange": "NSE", "timestamp": pd.Timestamp("2026-04-22"), "close": 100.0},
+                {"symbol_id": "UNRANKED", "exchange": "NSE", "timestamp": pd.Timestamp("2026-04-23"), "close": 104.0},
+                {"symbol_id": "RANKED1", "exchange": "NSE", "timestamp": pd.Timestamp("2026-04-22"), "close": 90.0},
+                {"symbol_id": "RANKED1", "exchange": "NSE", "timestamp": pd.Timestamp("2026-04-23"), "close": 92.0},
+            ]
+        )
+
+    monkeypatch.setattr(pattern_data_module, "load_pattern_frame", _load_pattern_frame)
+
+    def _fake_scan(frame, *, config, progress_callback=None):
+        assert set(frame["symbol_id"].astype(str)) == {"UNRANKED", "RANKED1"}
+        return (
+            pd.DataFrame(
+                [
+                    {
+                        "signal_id": "UNRANKED-vcp-confirmed-2026-04-23",
+                        "symbol_id": "UNRANKED",
+                        "exchange": "NSE",
+                        "pattern_family": "vcp",
+                        "pattern_state": "confirmed",
+                        "signal_date": "2026-04-23",
+                        "breakout_level": 104.0,
+                        "watchlist_trigger_level": 103.0,
+                        "invalidation_price": 99.0,
+                        "pattern_score": 82.0,
+                        "setup_quality": 76.0,
+                        "width_bars": 18,
+                    }
+                ]
+            ),
+            {},
+            {},
+        )
+
+    monkeypatch.setattr(pattern_eval_module, "_scan_pattern_signals", _fake_scan)
+    monkeypatch.setattr(stock_scan_module, "load_sector_rs", lambda: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8]}))
+    monkeypatch.setattr(stock_scan_module, "load_stock_vs_sector", lambda: pd.DataFrame({"Symbol": ["RANKED1"], "category": ["BUY"]}))
+    monkeypatch.setattr(stock_scan_module, "load_sector_mapping", lambda: pd.DataFrame({"Symbol": ["RANKED1"], "Sector": ["Tech"]}))
+    monkeypatch.setattr(stock_scan_module, "scan_stocks", lambda *args, **kwargs: pd.DataFrame({"Symbol": ["RANKED1"], "category": ["BUY"]}))
+    monkeypatch.setattr(sector_dashboard_module, "load_sector_rs", lambda: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8]}))
+    monkeypatch.setattr(sector_dashboard_module, "compute_sector_momentum", lambda *args, **kwargs: pd.DataFrame({"Sector": ["Tech"], "Momentum": [0.2]}))
+    monkeypatch.setattr(sector_dashboard_module, "build_dashboard", lambda *args, **kwargs: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8], "Momentum": [0.2]}))
+
+    context = StageContext(
+        project_root=project_root,
+        db_path=paths.ohlcv_db_path,
+        run_id="run-pattern-broad-seed",
+        run_date="2026-04-23",
+        stage_name="rank",
+        attempt_number=1,
+        registry=registry,
+        params={
+            "data_domain": "operational",
+            "pattern_scan_enabled": True,
+            "pattern_scan_mode": "full",
+            "pattern_stage2_only": False,
+            "pattern_workers": 1,
+            "pattern_max_symbols": 10,
+            "pattern_seed_max_symbols": 10,
+        },
+    )
+
+    result = RankStage().run(context)
+
+    pattern_artifact = pd.read_csv(context.output_dir() / "pattern_scan.csv")
+    assert requested_symbols == ["UNRANKED", "RANKED1"]
+    assert pattern_artifact["symbol_id"].tolist() == ["UNRANKED"]
+    assert result.metadata["pattern_seed_metadata"]["fallback_used"] is False
+
+
+def test_rank_stage_pattern_seed_falls_back_to_ranked_symbols_on_seed_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path
+    paths = ensure_domain_layout(project_root=project_root, data_domain="operational")
+    registry = RegistryStore(project_root)
+
+    ranked_signals = pd.DataFrame(
+        [
+            {
+                "symbol_id": "RANKED1",
+                "exchange": "NSE",
+                "composite_score": 95.0,
+                "rel_strength_score": 90.0,
+                "sector_rs_value": 0.82,
+                "stage2_score": 88.0,
+                "stage2_label": "strong_stage2",
+            },
+            {
+                "symbol_id": "RANKED2",
+                "exchange": "NSE",
+                "composite_score": 92.0,
+                "rel_strength_score": 84.0,
+                "sector_rs_value": 0.75,
+                "stage2_score": 80.0,
+                "stage2_label": "stage2",
+            },
+        ]
+    )
+    requested_symbols: list[str] = []
+
+    import analytics.data_trust as data_trust_module
+    import analytics.patterns.data as pattern_data_module
+    import analytics.patterns.evaluation as pattern_eval_module
+    import analytics.ranker as ranker_module
+    from ai_trading_system.domains.ranking import breakout as breakout_module
+    from ai_trading_system.domains.ranking import sector_dashboard as sector_dashboard_module
+    from ai_trading_system.domains.ranking import stock_scan as stock_scan_module
+    from ai_trading_system.domains.ranking.patterns import universe as pattern_universe_module
+
+    class _FakeRanker:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def rank_all(self, **kwargs):
+            return ranked_signals.copy()
+
+    monkeypatch.setattr(data_trust_module, "load_data_trust_summary", lambda *args, **kwargs: {"status": "healthy"})
+    monkeypatch.setattr(ranker_module, "StockRanker", _FakeRanker)
+    monkeypatch.setattr(
+        pattern_universe_module,
+        "build_pattern_seed_universe",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("seed boom")),
+    )
+    monkeypatch.setattr(
+        breakout_module,
+        "scan_breakouts",
+        lambda **kwargs: pd.DataFrame([{"symbol_id": "RANKED2", "breakout_tag": "fresh_breakout"}]),
+    )
+
+    def _load_pattern_frame(*args, **kwargs):
+        requested_symbols.extend(kwargs.get("symbols") or [])
+        assert list(kwargs.get("symbols") or []) == ["RANKED1", "RANKED2"]
+        return pd.DataFrame(
+            [
+                {"symbol_id": "RANKED1", "exchange": "NSE", "timestamp": pd.Timestamp("2026-04-22"), "close": 100.0},
+                {"symbol_id": "RANKED1", "exchange": "NSE", "timestamp": pd.Timestamp("2026-04-23"), "close": 101.0},
+                {"symbol_id": "RANKED2", "exchange": "NSE", "timestamp": pd.Timestamp("2026-04-22"), "close": 90.0},
+                {"symbol_id": "RANKED2", "exchange": "NSE", "timestamp": pd.Timestamp("2026-04-23"), "close": 95.0},
+            ]
+        )
+
+    monkeypatch.setattr(pattern_data_module, "load_pattern_frame", _load_pattern_frame)
+
+    def _fake_scan(frame, *, config, progress_callback=None):
+        assert set(frame["symbol_id"].astype(str)) == {"RANKED1", "RANKED2"}
+        return (
+            pd.DataFrame(
+                [
+                    {
+                        "signal_id": "RANKED2-vcp-confirmed-2026-04-23",
+                        "symbol_id": "RANKED2",
+                        "exchange": "NSE",
+                        "pattern_family": "vcp",
+                        "pattern_state": "confirmed",
+                        "signal_date": "2026-04-23",
+                        "breakout_level": 95.0,
+                        "watchlist_trigger_level": 94.0,
+                        "invalidation_price": 89.0,
+                        "pattern_score": 80.0,
+                        "setup_quality": 73.0,
+                        "width_bars": 16,
+                    }
+                ]
+            ),
+            {},
+            {},
+        )
+
+    monkeypatch.setattr(pattern_eval_module, "_scan_pattern_signals", _fake_scan)
+    monkeypatch.setattr(stock_scan_module, "load_sector_rs", lambda: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8]}))
+    monkeypatch.setattr(stock_scan_module, "load_stock_vs_sector", lambda: pd.DataFrame({"Symbol": ["RANKED2"], "category": ["BUY"]}))
+    monkeypatch.setattr(stock_scan_module, "load_sector_mapping", lambda: pd.DataFrame({"Symbol": ["RANKED2"], "Sector": ["Tech"]}))
+    monkeypatch.setattr(stock_scan_module, "scan_stocks", lambda *args, **kwargs: pd.DataFrame({"Symbol": ["RANKED2"], "category": ["BUY"]}))
+    monkeypatch.setattr(sector_dashboard_module, "load_sector_rs", lambda: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8]}))
+    monkeypatch.setattr(sector_dashboard_module, "compute_sector_momentum", lambda *args, **kwargs: pd.DataFrame({"Sector": ["Tech"], "Momentum": [0.2]}))
+    monkeypatch.setattr(sector_dashboard_module, "build_dashboard", lambda *args, **kwargs: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8], "Momentum": [0.2]}))
+
+    context = StageContext(
+        project_root=project_root,
+        db_path=paths.ohlcv_db_path,
+        run_id="run-pattern-seed-fallback",
+        run_date="2026-04-23",
+        stage_name="rank",
+        attempt_number=1,
+        registry=registry,
+        params={
+            "data_domain": "operational",
+            "pattern_scan_enabled": True,
+            "pattern_scan_mode": "full",
+            "pattern_stage2_only": False,
+            "pattern_workers": 1,
+            "pattern_max_symbols": 10,
+        },
+    )
+
+    result = RankStage().run(context)
+
+    pattern_artifact = pd.read_csv(context.output_dir() / "pattern_scan.csv")
+    assert requested_symbols == ["RANKED1", "RANKED2"]
+    assert pattern_artifact["symbol_id"].tolist() == ["RANKED2"]
+    assert result.metadata["pattern_seed_metadata"]["fallback_used"] is True
+
+
+def test_rank_stage_pattern_scan_failure_records_actionable_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path
+    paths = ensure_domain_layout(project_root=project_root, data_domain="operational")
+    registry = RegistryStore(project_root)
+
+    ranked_signals = pd.DataFrame(
+        [
+            {
+                "symbol_id": "RANKED1",
+                "exchange": "NSE",
+                "composite_score": 95.0,
+                "rel_strength_score": 90.0,
+                "sector_rs_value": 0.82,
+                "stage2_score": 88.0,
+                "stage2_label": "strong_stage2",
+            }
+        ]
+    )
+
+    import analytics.data_trust as data_trust_module
+    import analytics.patterns as patterns_module
+    import analytics.patterns.data as pattern_data_module
+    import analytics.ranker as ranker_module
+    from ai_trading_system.domains.ranking import breakout as breakout_module
+    from ai_trading_system.domains.ranking import sector_dashboard as sector_dashboard_module
+    from ai_trading_system.domains.ranking import stock_scan as stock_scan_module
+    from ai_trading_system.domains.ranking.patterns import universe as pattern_universe_module
+
+    class _FakeRanker:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def rank_all(self, **kwargs):
+            return ranked_signals.copy()
+
+    monkeypatch.setattr(data_trust_module, "load_data_trust_summary", lambda *args, **kwargs: {"status": "healthy"})
+    monkeypatch.setattr(ranker_module, "StockRanker", _FakeRanker)
+    monkeypatch.setattr(
+        pattern_universe_module,
+        "build_pattern_seed_universe",
+        lambda **kwargs: (
+            ["RANKED1"],
+            {
+                "seed_source_counts": {"cached": 0, "stage2_structural": 1, "unusual_movers": 0, "liquidity_remaining": 0},
+                "broad_universe_count": 1,
+                "feature_ready_count": 1,
+                "liquidity_pass_count": 1,
+                "seed_symbol_count": 1,
+                "latest_cached_signal_date": None,
+                "pattern_seed_max_symbols": 400,
+                "seed_symbols_digest": "seed-digest",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        breakout_module,
+        "scan_breakouts",
+        lambda **kwargs: pd.DataFrame([{"symbol_id": "RANKED1", "breakout_tag": "fresh_breakout"}]),
+    )
+    monkeypatch.setattr(
+        pattern_data_module,
+        "load_pattern_frame",
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {"symbol_id": "RANKED1", "exchange": "NSE", "timestamp": pd.Timestamp("2026-04-22"), "close": 100.0},
+                {"symbol_id": "RANKED1", "exchange": "NSE", "timestamp": pd.Timestamp("2026-04-23"), "close": 101.0},
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        patterns_module,
+        "build_pattern_signals",
+        lambda **kwargs: (_ for _ in ()).throw(PermissionError("pattern cache write denied")),
+    )
+    monkeypatch.setattr(stock_scan_module, "load_sector_rs", lambda: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8]}))
+    monkeypatch.setattr(stock_scan_module, "load_stock_vs_sector", lambda: pd.DataFrame({"Symbol": ["RANKED1"], "category": ["BUY"]}))
+    monkeypatch.setattr(stock_scan_module, "load_sector_mapping", lambda: pd.DataFrame({"Symbol": ["RANKED1"], "Sector": ["Tech"]}))
+    monkeypatch.setattr(stock_scan_module, "scan_stocks", lambda *args, **kwargs: pd.DataFrame({"Symbol": ["RANKED1"], "category": ["BUY"]}))
+    monkeypatch.setattr(sector_dashboard_module, "load_sector_rs", lambda: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8]}))
+    monkeypatch.setattr(sector_dashboard_module, "compute_sector_momentum", lambda *args, **kwargs: pd.DataFrame({"Sector": ["Tech"], "Momentum": [0.2]}))
+    monkeypatch.setattr(sector_dashboard_module, "build_dashboard", lambda *args, **kwargs: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8], "Momentum": [0.2]}))
+
+    context = StageContext(
+        project_root=project_root,
+        db_path=paths.ohlcv_db_path,
+        run_id="run-pattern-traceback",
+        run_date="2026-04-23",
+        stage_name="rank",
+        attempt_number=1,
+        registry=registry,
+        params={
+            "data_domain": "operational",
+            "pattern_scan_enabled": True,
+            "pattern_scan_mode": "full",
+            "pattern_stage2_only": False,
+            "pattern_workers": 1,
+            "pattern_max_symbols": 10,
+            "pattern_seed_max_symbols": 10,
+        },
+    )
+
+    RankStage().run(context)
+
+    task_status = json.loads((context.output_dir() / "task_status.json").read_text())
+    pattern_status = task_status["pattern_scan"]
+    assert pattern_status["status"] == "failed"
+    assert pattern_status["error_class"] == "PermissionError"
+    assert pattern_status["error_message"] == "pattern cache write denied"
+    assert "PermissionError: pattern cache write denied" in pattern_status["error_traceback"]
 
 
 def test_data_domain_paths_separate_operational_and_research(tmp_path: Path) -> None:
@@ -1249,10 +1806,18 @@ def test_orchestrator_parser_defaults_skip_preflight_and_uses_today() -> None:
     assert args.auto_repair_quarantine is True
     assert args.terminal_mode == "compact"
     assert args.pattern_scan_enabled is True
+    assert args.pattern_scan_mode == "incremental"
     assert args.pattern_max_symbols == 150
+    assert args.pattern_seed_max_symbols == 400
+    assert args.pattern_min_liquidity_score == 0.2
+    assert args.pattern_unusual_mover_min_vol20_avg == 100000.0
     assert args.pattern_workers == 4
     assert args.pattern_lookback_days == 260
     assert args.pattern_smoothing_method == "rolling"
+    assert args.pattern_watchlist_expiry_bars == 10
+    assert args.pattern_confirmed_expiry_bars == 20
+    assert args.pattern_invalidated_retention_bars == 5
+    assert args.pattern_incremental_ranked_buffer == 50
     assert args.stale_missing_symbol_grace_days == 3
 
 

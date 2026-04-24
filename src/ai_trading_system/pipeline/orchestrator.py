@@ -18,7 +18,7 @@ from ai_trading_system.domains.ingest.service import IngestOrchestrationService
 from core.contracts import DataQualityCriticalError, PublishStageError, StageContext, StageResult
 from core.env import load_project_env
 from ai_trading_system.platform.logging.logger import configure_terminal_output, log_context, logger
-from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout
 from run.alerts import AlertManager
 from run.preflight import PreflightChecker
 from run.stages import ExecuteStage, FeaturesStage, IngestStage, PublishStage, RankStage
@@ -102,7 +102,7 @@ class PipelineOrchestrator:
         stages: Optional[Dict[str, object]] = None,
         progress_renderer: Optional[TerminalProgressRenderer] = None,
     ):
-        self.project_root = Path(project_root)
+        self.project_root = canonicalize_project_root(project_root)
         self.registry = registry or RegistryStore(self.project_root)
         self.dq_engine = dq_engine or DataQualityEngine(self.registry)
         self.alert_manager = alert_manager or AlertManager(self.registry)
@@ -832,10 +832,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable operational pattern scanning sidecar artifact generation.",
     )
     parser.add_argument(
+        "--pattern-scan-mode",
+        choices=["weekly_full", "incremental", "full"],
+        default="incremental",
+        help="Pattern scan mode: weekly baseline full scan, daily incremental refresh, or one-off full scan.",
+    )
+    parser.add_argument(
         "--pattern-max-symbols",
         type=int,
         default=150,
-        help="Maximum ranked symbols scanned by the operational pattern sidecar.",
+        help="Maximum pattern rows retained in the operational pattern sidecar artifact.",
+    )
+    parser.add_argument(
+        "--pattern-seed-max-symbols",
+        type=int,
+        default=400,
+        help="Maximum broad-universe seed symbols considered before pattern scanning.",
+    )
+    parser.add_argument(
+        "--pattern-min-liquidity-score",
+        type=float,
+        default=0.2,
+        help="Minimum liquidity percentile required for broad-universe pattern seed eligibility.",
+    )
+    parser.add_argument(
+        "--pattern-unusual-mover-min-vol20-avg",
+        type=float,
+        default=100000.0,
+        help="Minimum 20-bar average volume required for unusual-mover seed inclusion.",
     )
     parser.add_argument(
         "--pattern-workers",
@@ -860,6 +884,30 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Soft timeout budget reserved for pattern scanning. Reserved for future per-symbol cutoffs.",
+    )
+    parser.add_argument(
+        "--pattern-watchlist-expiry-bars",
+        type=int,
+        default=10,
+        help="Trading-bar expiry used for carried watchlist pattern lifecycle rows.",
+    )
+    parser.add_argument(
+        "--pattern-confirmed-expiry-bars",
+        type=int,
+        default=20,
+        help="Trading-bar expiry used for carried confirmed pattern lifecycle rows.",
+    )
+    parser.add_argument(
+        "--pattern-invalidated-retention-bars",
+        type=int,
+        default=5,
+        help="Trading-bar retention used for invalidated lifecycle rows before they expire.",
+    )
+    parser.add_argument(
+        "--pattern-incremental-ranked-buffer",
+        type=int,
+        default=50,
+        help="Bounded top-ranked continuity bucket included in incremental pattern rescans.",
     )
     parser.add_argument(
         "--stale-missing-symbol-grace-days",
@@ -946,11 +994,19 @@ def main() -> None:
         "execution_require_stage2": args.execution_require_stage2,
         "execution_stage2_min_score": args.execution_stage2_min_score,
         "pattern_scan_enabled": args.pattern_scan_enabled,
+        "pattern_scan_mode": args.pattern_scan_mode,
         "pattern_max_symbols": args.pattern_max_symbols,
+        "pattern_seed_max_symbols": args.pattern_seed_max_symbols,
+        "pattern_min_liquidity_score": args.pattern_min_liquidity_score,
+        "pattern_unusual_mover_min_vol20_avg": args.pattern_unusual_mover_min_vol20_avg,
         "pattern_workers": args.pattern_workers,
         "pattern_lookback_days": args.pattern_lookback_days,
         "pattern_smoothing_method": args.pattern_smoothing_method,
         "pattern_timeout_seconds": args.pattern_timeout_seconds,
+        "pattern_watchlist_expiry_bars": args.pattern_watchlist_expiry_bars,
+        "pattern_confirmed_expiry_bars": args.pattern_confirmed_expiry_bars,
+        "pattern_invalidated_retention_bars": args.pattern_invalidated_retention_bars,
+        "pattern_incremental_ranked_buffer": args.pattern_incremental_ranked_buffer,
         "terminal_mode": terminal_mode,
         "verbose_terminal": bool(args.verbose_terminal),
         "stale_missing_symbol_grace_days": args.stale_missing_symbol_grace_days,

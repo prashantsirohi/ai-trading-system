@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from ai_trading_system.domains.ranking.payloads import build_dashboard_payload
 from ai_trading_system.pipeline.contracts import StageArtifact
+from ai_trading_system.pipeline.contracts import StageContext
 from ai_trading_system.domains.publish.publish_payloads import (
     build_publish_datasets,
     build_publish_metadata,
@@ -111,3 +113,45 @@ def test_build_publish_datasets_adds_stage2_breakdown_and_telegram_summary_line(
     message = build_telegram_summary(run_date="2026-04-21", datasets=datasets)
     assert "Stage2:" in message
     assert "strong_stage2:1" in message
+
+
+def test_build_dashboard_payload_explains_empty_discoveries_when_ranked_covers_stock_scan(tmp_path: Path) -> None:
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "ohlcv.duckdb",
+        run_id="pipeline-2026-04-24-fixture",
+        run_date="2026-04-24",
+        stage_name="rank",
+        attempt_number=1,
+        params={},
+    )
+    ranked_df = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "rank": 1, "composite_score": 91.0},
+            {"symbol_id": "BBB", "rank": 2, "composite_score": 88.0},
+        ]
+    )
+    stock_scan_df = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "rank": 1, "composite_score": 91.0, "pattern_positive": True, "breakout_positive": False, "discovered_by_pattern_scan": False},
+            {"symbol_id": "BBB", "rank": 2, "composite_score": 88.0, "pattern_positive": False, "breakout_positive": True, "discovered_by_pattern_scan": False},
+        ]
+    )
+
+    payload = build_dashboard_payload(
+        context=context,
+        ranked_df=ranked_df,
+        breakout_df=pd.DataFrame(),
+        pattern_df=pd.DataFrame(),
+        stock_scan_df=stock_scan_df,
+        sector_dashboard_df=pd.DataFrame(),
+        warnings=[],
+        trust_summary={"status": "trusted"},
+        task_status={},
+    )
+
+    summary = payload["summary"]
+    assert summary["ranked_universe_covers_stock_scan"] is True
+    assert summary["ranked_universe_stock_scan_coverage_pct"] == 100.0
+    assert summary["discovery_visibility_reason"] == "ranked_universe_covers_stock_scan"
+    assert "ranked universe already covers the full stock-scan symbol set" in summary["discovery_visibility_note"]

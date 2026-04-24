@@ -60,6 +60,46 @@ def build_rejection_reasons(row: dict) -> list[str]:
     return reasons
 
 
+def _discovery_visibility_summary(
+    *,
+    ranked_df: pd.DataFrame,
+    stock_scan_df: pd.DataFrame,
+    pattern_discoveries: list[dict],
+    breakout_candidates: list[dict],
+) -> dict[str, object]:
+    ranked_symbols = (
+        set(ranked_df["symbol_id"].astype(str))
+        if ranked_df is not None and not ranked_df.empty and "symbol_id" in ranked_df.columns
+        else set()
+    )
+    stock_symbols = (
+        set(stock_scan_df["symbol_id"].astype(str))
+        if stock_scan_df is not None and not stock_scan_df.empty and "symbol_id" in stock_scan_df.columns
+        else set()
+    )
+    ranked_covers_stock_scan = bool(stock_symbols) and stock_symbols.issubset(ranked_symbols)
+
+    reason = None
+    note = None
+    if ranked_covers_stock_scan and not pattern_discoveries and not breakout_candidates:
+        reason = "ranked_universe_covers_stock_scan"
+        note = (
+            "No non-ranked pattern discoveries or breakout candidates are shown because "
+            "the ranked universe already covers the full stock-scan symbol set for this run."
+        )
+
+    coverage_pct = 0.0
+    if stock_symbols:
+        coverage_pct = round((len(ranked_symbols & stock_symbols) / len(stock_symbols)) * 100.0, 2)
+
+    return {
+        "ranked_universe_covers_stock_scan": ranked_covers_stock_scan,
+        "ranked_universe_stock_scan_coverage_pct": coverage_pct,
+        "discovery_visibility_reason": reason,
+        "discovery_visibility_note": note,
+    }
+
+
 def build_dashboard_payload(
     *,
     context: StageContext,
@@ -89,6 +129,11 @@ def build_dashboard_payload(
             return enriched
         return records
 
+    def _stock_scan_records(predicate, *, limit: int = 10) -> list[dict]:
+        if stock_scan_df is None or stock_scan_df.empty:
+            return []
+        return _records(stock_scan_df.loc[predicate(stock_scan_df)], limit=limit)
+
     top_sector = None
     if not sector_dashboard_df.empty:
         sector_col = "Sector" if "Sector" in sector_dashboard_df.columns else sector_dashboard_df.columns[0]
@@ -106,6 +151,26 @@ def build_dashboard_payload(
             pattern_state_counts = pattern_df["pattern_state"].astype(str).value_counts().to_dict()
         if "pattern_family" in pattern_df.columns:
             pattern_family_counts = pattern_df["pattern_family"].astype(str).value_counts().to_dict()
+    ranked_leaders = _stock_scan_records(lambda df: pd.to_numeric(df.get("rank"), errors="coerce").notna())
+    pattern_discoveries = _stock_scan_records(
+        lambda df: (
+            df.get("discovered_by_pattern_scan", pd.Series(False, index=df.index))
+            .fillna(False)
+            .astype(bool)
+        )
+    )
+    breakout_candidates = _stock_scan_records(
+        lambda df: (
+            pd.to_numeric(df.get("rank"), errors="coerce").isna()
+            & df.get("breakout_positive", pd.Series(False, index=df.index)).fillna(False).astype(bool)
+        )
+    )
+    discovery_visibility = _discovery_visibility_summary(
+        ranked_df=ranked_df,
+        stock_scan_df=stock_scan_df,
+        pattern_discoveries=pattern_discoveries,
+        breakout_candidates=breakout_candidates,
+    )
 
     return {
         "summary": {
@@ -135,6 +200,10 @@ def build_dashboard_payload(
             "pattern_watchlist_count": int(pattern_state_counts.get("watchlist", 0)),
             "pattern_state_counts": pattern_state_counts,
             "pattern_family_counts": pattern_family_counts,
+            "ranked_leader_count": len(ranked_leaders),
+            "pattern_discovery_count": len(pattern_discoveries),
+            "breakout_candidate_count": len(breakout_candidates),
+            **discovery_visibility,
             "data_trust_status": (trust_summary or {}).get("status", "unknown"),
             "latest_trade_date": (trust_summary or {}).get("latest_trade_date"),
             "latest_validated_date": (trust_summary or {}).get("latest_validated_date"),
@@ -144,6 +213,9 @@ def build_dashboard_payload(
         "breakout_scan": _records(breakout_df, limit=10),
         "pattern_scan": _records(pattern_df, limit=10),
         "stock_scan": _records(stock_scan_df, limit=10),
+        "ranked_leaders": ranked_leaders,
+        "pattern_discoveries": pattern_discoveries,
+        "breakout_candidates": breakout_candidates,
         "sector_dashboard": _records(sector_dashboard_df, limit=10),
         "task_status": task_status or {},
         "data_trust": trust_summary or {},

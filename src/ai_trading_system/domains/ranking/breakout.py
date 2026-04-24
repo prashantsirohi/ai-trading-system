@@ -13,6 +13,10 @@ import pandas as pd
 from analytics.regime_detector import RegimeDetector
 from ai_trading_system.platform.logging.logger import logger
 
+VOLUME_Z20_CONFIRM_THRESHOLD = 2.0
+VOLUME_Z50_CONFIRM_THRESHOLD = 2.0
+VOLUME_Z20_STRONG_THRESHOLD = 3.0
+
 
 def _load_sector_map(master_db_path: str) -> dict[str, str]:
     if not os.path.exists(master_db_path):
@@ -127,9 +131,38 @@ def _normalize_market_bias_allowlist(values: Iterable[str] | str | None) -> set[
 
 def _prepare_rank_context(ranked_df: Optional[pd.DataFrame]) -> pd.DataFrame:
     if ranked_df is None or ranked_df.empty or "symbol_id" not in ranked_df.columns:
-        return pd.DataFrame(columns=["symbol_id", "rel_strength_score", "sector_rs_value", "sector_rs_percentile"])
+        return pd.DataFrame(
+            columns=[
+                "symbol_id",
+                "rel_strength_score",
+                "sector_rs_value",
+                "sector_rs_percentile",
+                "stage2_score",
+                "is_stage2_structural",
+                "is_stage2_candidate",
+                "is_stage2_uptrend",
+                "stage2_label",
+                "stage2_hard_fail_reason",
+                "stage2_fail_reason",
+            ]
+        )
 
-    cols = [col for col in ["symbol_id", "rel_strength_score", "sector_rs_value"] if col in ranked_df.columns]
+    cols = [
+        col
+        for col in [
+            "symbol_id",
+            "rel_strength_score",
+            "sector_rs_value",
+            "stage2_score",
+            "is_stage2_structural",
+            "is_stage2_candidate",
+            "is_stage2_uptrend",
+            "stage2_label",
+            "stage2_hard_fail_reason",
+            "stage2_fail_reason",
+        ]
+        if col in ranked_df.columns
+    ]
     ctx = ranked_df[cols].copy()
     ctx.loc[:, "symbol_id"] = ctx["symbol_id"].astype(str)
     if "rel_strength_score" not in ctx.columns:
@@ -140,6 +173,35 @@ def _prepare_rank_context(ranked_df: Optional[pd.DataFrame]) -> pd.DataFrame:
         pd.to_numeric(ctx["sector_rs_value"], errors="coerce").rank(pct=True, method="average") * 100.0
     )
     return ctx.drop_duplicates("symbol_id", keep="first")
+
+
+def _volume_confirmation_columns(
+    frame: pd.DataFrame,
+    *,
+    ratio_threshold: float = 1.5,
+) -> dict[str, pd.Series]:
+    ratio_series = (
+        _as_bool_series(frame, "is_volume_ratio_confirmed")
+        if "is_volume_ratio_confirmed" in frame.columns
+        else (
+            _as_bool_series(frame, "is_volume_confirmed_breakout")
+            if "is_volume_confirmed_breakout" in frame.columns
+            else _to_float_series(frame, "volume_ratio", default=np.nan).ge(float(ratio_threshold)).fillna(False)
+        )
+    )
+    z20 = _to_float_series(frame, "volume_zscore_20", default=np.nan)
+    z50 = _to_float_series(frame, "volume_zscore_50", default=np.nan)
+    is_z20_confirmed = z20.ge(VOLUME_Z20_CONFIRM_THRESHOLD).fillna(False)
+    is_z50_confirmed = z50.ge(VOLUME_Z50_CONFIRM_THRESHOLD).fillna(False)
+    is_any_volume_confirmed = ratio_series | is_z20_confirmed | is_z50_confirmed
+    is_strong_volume_confirmation = (ratio_series & is_z20_confirmed) | z20.ge(VOLUME_Z20_STRONG_THRESHOLD).fillna(False)
+    return {
+        "is_volume_ratio_confirmed": ratio_series.fillna(False).astype(bool),
+        "is_z20_confirmed": is_z20_confirmed.astype(bool),
+        "is_z50_confirmed": is_z50_confirmed.astype(bool),
+        "is_any_volume_confirmed": is_any_volume_confirmed.astype(bool),
+        "is_strong_volume_confirmation": is_strong_volume_confirmation.astype(bool),
+    }
 
 
 def compute_breakout_v2_scores(
@@ -169,13 +231,53 @@ def compute_breakout_v2_scores(
     breadth_score = float(breadth_score or 0.0)
 
     # v2 score contract (kept separate from the main composite rank).
+    volume_confirmation = _volume_confirmation_columns(df)
+    price_breakout_detected = (
+        _as_bool_series(df, "is_resistance_breakout_50d")
+        | _as_bool_series(df, "is_high_52w_breakout")
+        | _as_bool_series(df, "is_consolidation_breakout")
+        | _as_bool_series(df, "is_volatility_expansion_breakout")
+    )
+    effective_any_volume_confirmation = price_breakout_detected & volume_confirmation["is_any_volume_confirmed"]
+    effective_strong_volume_confirmation = price_breakout_detected & volume_confirmation["is_strong_volume_confirmation"]
+    effective_combined_volume_confirmation = (
+        price_breakout_detected
+        & volume_confirmation["is_volume_ratio_confirmed"]
+        & (volume_confirmation["is_z20_confirmed"] | volume_confirmation["is_z50_confirmed"])
+    )
+    ratio_only_confirmation = (
+        price_breakout_detected
+        & volume_confirmation["is_volume_ratio_confirmed"]
+        & ~effective_combined_volume_confirmation
+    )
+    z20_only_confirmation = (
+        price_breakout_detected
+        & volume_confirmation["is_z20_confirmed"]
+        & ~volume_confirmation["is_volume_ratio_confirmed"]
+    )
+    z50_only_confirmation = (
+        price_breakout_detected
+        & volume_confirmation["is_z50_confirmed"]
+        & ~volume_confirmation["is_volume_ratio_confirmed"]
+        & ~volume_confirmation["is_z20_confirmed"]
+    )
     df.loc[:, "breakout_score"] = (
         _as_bool_series(df, "is_resistance_breakout_50d").astype(int) * 1
         + _as_bool_series(df, "is_high_52w_breakout").astype(int) * 2
         + _as_bool_series(df, "is_consolidation_breakout").astype(int) * 2
-        + _as_bool_series(df, "is_volume_confirmed_breakout").astype(int) * 1
+        + volume_confirmation["is_volume_ratio_confirmed"].astype(int) * 1
         + (_to_float_series(df, "rel_strength_score", default=0.0).fillna(0.0) >= 80.0).astype(int) * 2
     )
+    volume_confirmation_bonus = np.select(
+        [
+            effective_strong_volume_confirmation,
+            effective_combined_volume_confirmation,
+            z20_only_confirmation | z50_only_confirmation,
+        ],
+        [2, 2, 1],
+        default=0,
+    )
+    df.loc[:, "breakout_score"] = df["breakout_score"] + volume_confirmation_bonus
 
     if "setup_quality" not in df.columns:
         df.loc[:, "setup_quality"] = np.nan
@@ -222,15 +324,40 @@ def compute_breakout_v2_scores(
         near_52w_high_pct <= float(breakout_symbol_near_high_max_pct)
     ).where(near_52w_high_pct.notna(), True).fillna(True).astype(bool)
 
-    # ── Tier computation — Stage 2 score drives tiering when available ──────
-    # Sprint 2: if stage2_score is present for ≥50% of rows, use it as the
-    # single authoritative trend gate.  Otherwise fall back to the 3-condition
-    # pass_count so the system degrades gracefully before Stage 2 is populated.
+    # ── Tier computation — structural Stage 2 is authoritative when present ─
     s2_score = _to_float_series(df, "stage2_score")
-    stage2_available = s2_score.notna().sum() > len(df) * 0.5
+    has_structural_stage2 = "is_stage2_structural" in df.columns
+    has_candidate_stage2 = "is_stage2_candidate" in df.columns
+    structural_stage2 = (
+        _as_bool_series(df, "is_stage2_structural")
+        if has_structural_stage2
+        else pd.Series(False, index=df.index)
+    )
+    candidate_stage2 = (
+        _as_bool_series(df, "is_stage2_candidate")
+        if has_candidate_stage2
+        else (s2_score >= 50.0).fillna(False)
+    )
+    stage2_available = has_structural_stage2 or (s2_score.notna().sum() > len(df) * 0.5)
 
-    if stage2_available:
-        # Stage 2-driven tiering: A=strong, B=standard, C=transitional, D=excluded
+    if has_structural_stage2:
+        candidate_tier = np.select(
+            [
+                structural_stage2 & (s2_score >= 85.0),
+                structural_stage2 & (s2_score >= 70.0),
+                candidate_stage2,
+            ],
+            ["A", "B", "C"],
+            default="D",
+        )
+        pass_count = np.select(
+            [candidate_tier == "A", candidate_tier == "B", candidate_tier == "C"],
+            [3, 2, 1],
+            default=0,
+        )
+        pass_count = pd.Series(pass_count, index=df.index).astype(int)
+        fail_count = 3 - pass_count
+    elif stage2_available:
         candidate_tier = np.select(
             [s2_score >= 85.0, s2_score >= 70.0, s2_score >= 50.0],
             ["A", "B", "C"],
@@ -285,14 +412,15 @@ def compute_breakout_v2_scores(
     filtered_by_regime = ~all_regime_gates_ok
     tier_series = pd.Series(candidate_tier, index=df.index)
     if breakout_symbol_trend_gate_enabled:
-        # Tier C = legacy near-miss; Tier D = Stage 2 excluded (only when stage2_available)
-        filtered_by_symbol_trend = (~filtered_by_regime) & (
-            (tier_series == "C") | (stage2_available & (tier_series == "D"))
-        )
+        if stage2_available:
+            filtered_by_symbol_trend = (~filtered_by_regime) & (tier_series == "D")
+        else:
+            filtered_by_symbol_trend = (~filtered_by_regime) & (tier_series == "C")
     else:
         filtered_by_symbol_trend = pd.Series(False, index=df.index)
 
-    # Pre-fetch stage2_fail_reason for explainable rejection reasons
+    # Pre-fetch Stage 2 explainability fields for rejection/watchlist reasons.
+    stage2_hard_fail_reason_col = df.get("stage2_hard_fail_reason", pd.Series("", index=df.index)).fillna("")
     stage2_fail_reason_col = df.get("stage2_fail_reason", pd.Series("", index=df.index)).fillna("")
 
     states: list[str] = []
@@ -304,9 +432,12 @@ def compute_breakout_v2_scores(
             reasons.append(_regime_reasons(i))
         elif bool(filtered_by_symbol_trend.iloc[i]):
             states.append("filtered_by_symbol_trend")
-            # Use stage2_fail_reason when Stage 2 is powering the exclusion
             if stage2_available and tier_i == "D":
-                reasons.append(str(stage2_fail_reason_col.iloc[i]) or "non_stage2")
+                reasons.append(
+                    str(stage2_hard_fail_reason_col.iloc[i])
+                    or str(stage2_fail_reason_col.iloc[i])
+                    or "non_structural_stage2"
+                )
             else:
                 reasons.append(trend_negative_reasons[i])
         elif tier_i == "A":
@@ -314,7 +445,14 @@ def compute_breakout_v2_scores(
             reasons.append("")
         else:
             states.append("watchlist")
-            reasons.append(trend_negative_reasons[i] or "score_below_qualified_threshold")
+            if stage2_available:
+                reasons.append(
+                    str(stage2_fail_reason_col.iloc[i])
+                    or str(stage2_hard_fail_reason_col.iloc[i])
+                    or "score_below_qualified_threshold"
+                )
+            else:
+                reasons.append(trend_negative_reasons[i] or "score_below_qualified_threshold")
 
     df.loc[:, "breakout_detected"] = True
     df.loc[:, "filtered_by_regime"] = filtered_by_regime.fillna(False).astype(bool)
@@ -325,16 +463,39 @@ def compute_breakout_v2_scores(
     df.loc[:, "symbol_trend_score"] = (pass_count / 3.0 * 100.0).round(2)
     df.loc[:, "symbol_trend_reasons"] = trend_reasons
     df.loc[:, "candidate_tier"] = candidate_tier
+    df.loc[:, "is_volume_ratio_confirmed"] = volume_confirmation["is_volume_ratio_confirmed"]
+    df.loc[:, "is_z20_confirmed"] = volume_confirmation["is_z20_confirmed"]
+    df.loc[:, "is_z50_confirmed"] = volume_confirmation["is_z50_confirmed"]
+    df.loc[:, "is_any_volume_confirmed"] = volume_confirmation["is_any_volume_confirmed"]
+    df.loc[:, "is_strong_volume_confirmation"] = volume_confirmation["is_strong_volume_confirmation"]
+    df.loc[:, "is_any_volume_confirmed_breakout"] = effective_any_volume_confirmation.astype(bool)
     # Stage 2 enrichment columns (passthrough when present, else derived)
     df.loc[:, "stage2_score"] = s2_score
-    df.loc[:, "is_stage2_uptrend"] = s2_score >= 70.0
-    df.loc[:, "stage2_gate_passed"] = s2_score >= 70.0
+    if has_structural_stage2:
+        df.loc[:, "is_stage2_structural"] = structural_stage2.fillna(False).astype(bool)
+        df.loc[:, "is_stage2_candidate"] = candidate_stage2.fillna(False).astype(bool)
+        df.loc[:, "is_stage2_uptrend"] = structural_stage2.fillna(False).astype(bool)
+        df.loc[:, "stage2_gate_passed"] = structural_stage2.fillna(False).astype(bool)
+    else:
+        df.loc[:, "is_stage2_uptrend"] = s2_score >= 70.0
+        df.loc[:, "stage2_gate_passed"] = s2_score >= 70.0
     if "stage2_label" not in df.columns:
-        df.loc[:, "stage2_label"] = np.select(
-            [s2_score >= 85.0, s2_score >= 70.0, s2_score >= 50.0],
-            ["strong_stage2", "stage2", "stage1_to_stage2"],
-            default="non_stage2",
-        )
+        if has_structural_stage2:
+            df.loc[:, "stage2_label"] = np.select(
+                [
+                    structural_stage2 & (s2_score >= 85.0),
+                    structural_stage2 & (s2_score >= 70.0),
+                    (~structural_stage2) & candidate_stage2,
+                ],
+                ["strong_stage2", "stage2", "stage1_to_stage2"],
+                default="non_stage2",
+            )
+        else:
+            df.loc[:, "stage2_label"] = np.select(
+                [s2_score >= 85.0, s2_score >= 70.0, s2_score >= 50.0],
+                ["strong_stage2", "stage2", "stage1_to_stage2"],
+                default="non_stage2",
+            )
 
     df.loc[:, "breakout_state"] = states
     df.loc[:, "filter_reason"] = reasons
@@ -388,6 +549,15 @@ def _empty_breakout_frame() -> pd.DataFrame:
             "symbol_trend_fail_count",
             "sma50_slope_20d_pct",
             "above_sma200",
+            "volume_ratio",
+            "volume_zscore_20",
+            "volume_zscore_50",
+            "is_volume_ratio_confirmed",
+            "is_z20_confirmed",
+            "is_z50_confirmed",
+            "is_any_volume_confirmed",
+            "is_any_volume_confirmed_breakout",
+            "is_strong_volume_confirmation",
             "setup_quality",
             "breakout_tag",
         ]
@@ -484,6 +654,21 @@ def scan_breakouts(
                         ORDER BY timestamp
                         ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
                     ) AS vol_20_avg,
+                    STDDEV_POP(volume) OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp
+                        ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
+                    ) AS vol_20_std,
+                    AVG(volume) OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp
+                        ROWS BETWEEN 50 PRECEDING AND 1 PRECEDING
+                    ) AS vol_50_avg,
+                    STDDEV_POP(volume) OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp
+                        ROWS BETWEEN 50 PRECEDING AND 1 PRECEDING
+                    ) AS vol_50_std,
                     MAX(high) OVER (
                         PARTITION BY symbol_id
                         ORDER BY timestamp
@@ -573,6 +758,7 @@ def scan_breakouts(
     latest.loc[:, "sector"] = latest["symbol_id"].map(sector_map).fillna("Other")
 
     latest.loc[:, "vol_20_avg"] = latest["vol_20_avg"].replace(0, pd.NA)
+    latest.loc[:, "vol_50_avg"] = latest["vol_50_avg"].replace(0, pd.NA)
     latest.loc[:, "breakout_pct"] = (
         (latest["close"] - latest["prior_range_high"]) / latest["prior_range_high"].replace(0, pd.NA) * 100
     )
@@ -586,6 +772,12 @@ def scan_breakouts(
         (latest["prior_base_high_60"] - latest["prior_base_low_60"]) / latest["prior_base_high_60"].replace(0, pd.NA) * 100
     )
     latest.loc[:, "volume_ratio"] = latest["volume"] / latest["vol_20_avg"]
+    latest.loc[:, "volume_zscore_20"] = (
+        (latest["volume"] - latest["vol_20_avg"]) / latest["vol_20_std"].replace(0, pd.NA)
+    )
+    latest.loc[:, "volume_zscore_50"] = (
+        (latest["volume"] - latest["vol_50_avg"]) / latest["vol_50_std"].replace(0, pd.NA)
+    )
     latest.loc[:, "near_52w_high_pct"] = (
         (1 - latest["close"] / latest["high_52w"].replace(0, pd.NA)) * 100
     )
@@ -618,7 +810,13 @@ def scan_breakouts(
         & latest["day_range_pct"].fillna(0).ge(latest["atr_pct"].fillna(0) * 1.2)
         & latest["atr_pct"].fillna(999).le(5.5)
     )
-    latest.loc[:, "is_volume_confirmed_breakout"] = latest["volume_ratio"].fillna(0).ge(1.5)
+    volume_confirmation = _volume_confirmation_columns(latest, ratio_threshold=1.5)
+    latest.loc[:, "is_volume_ratio_confirmed"] = volume_confirmation["is_volume_ratio_confirmed"]
+    latest.loc[:, "is_z20_confirmed"] = volume_confirmation["is_z20_confirmed"]
+    latest.loc[:, "is_z50_confirmed"] = volume_confirmation["is_z50_confirmed"]
+    latest.loc[:, "is_any_volume_confirmed"] = volume_confirmation["is_any_volume_confirmed"]
+    latest.loc[:, "is_strong_volume_confirmation"] = volume_confirmation["is_strong_volume_confirmation"]
+    latest.loc[:, "is_volume_confirmed_breakout"] = latest["is_volume_ratio_confirmed"]
 
     # Legacy families (kept for backward compatibility and migration continuity).
     common_filter = (
@@ -856,6 +1054,14 @@ def scan_breakouts(
         "base_width_pct_60",
         "contraction_ratio",
         "volume_ratio",
+        "volume_zscore_20",
+        "volume_zscore_50",
+        "is_volume_ratio_confirmed",
+        "is_z20_confirmed",
+        "is_z50_confirmed",
+        "is_any_volume_confirmed",
+        "is_any_volume_confirmed_breakout",
+        "is_strong_volume_confirmation",
         "adx_14",
         "near_52w_high_pct",
         "sma50_slope_20d_pct",

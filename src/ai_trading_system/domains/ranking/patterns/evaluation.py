@@ -29,9 +29,15 @@ from analytics.patterns.detectors import (
     detect_round_bottom_events,
 )
 from analytics.patterns.signal import find_local_extrema, kernel_smooth
-from ai_trading_system.domains.ranking.patterns.cache import PatternCacheStore
+from ai_trading_system.domains.ranking.patterns.cache import (
+    ACTIVE_LIFECYCLE_STATES,
+    PatternCacheStore,
+)
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger
+
+
+SUPPORTED_SCAN_MODES = {"weekly_full", "incremental", "full"}
 
 
 def _is_transient_resource_error(exc: BaseException) -> bool:
@@ -42,12 +48,21 @@ def _is_transient_resource_error(exc: BaseException) -> bool:
         seen.add(id(current))
         if isinstance(current, BlockingIOError):
             return True
+        if isinstance(current, PermissionError):
+            if current.errno == 1 or "operation not permitted" in str(current).lower():
+                return True
         if isinstance(current, OSError):
             if current.errno in {11, 35}:
                 return True
+            if current.errno == 1:
+                return True
             if "resource temporarily unavailable" in str(current).lower():
                 return True
+            if "operation not permitted" in str(current).lower():
+                return True
         if "resource temporarily unavailable" in str(current).lower():
+            return True
+        if "operation not permitted" in str(current).lower():
             return True
         current = current.__cause__ or current.__context__
     return False
@@ -325,12 +340,18 @@ def build_pattern_signals(
     lookback_days: int = 420,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     pattern_workers: int = 1,
-    scan_mode: str = "full",
+    scan_mode: str = "incremental",
     stage2_only: bool = False,
     min_stage2_score: float = 70.0,
+    pattern_seed_metadata: dict[str, Any] | None = None,
+    pattern_watchlist_expiry_bars: int = 10,
+    pattern_confirmed_expiry_bars: int = 20,
+    pattern_invalidated_retention_bars: int = 5,
+    pattern_incremental_ranked_buffer: int = 50,
 ) -> pd.DataFrame:
     """Build live bullish pattern signals for one domain and signal date."""
 
+    normalized_scan_mode = _normalize_scan_mode(scan_mode)
     active_config = config or PatternScanConfig(
         exchange=exchange,
         data_domain=data_domain,
@@ -358,66 +379,93 @@ def build_pattern_signals(
             data_domain=data_domain,
         )
     working_frame = _attach_stage2_context(working_frame, ranked_df=ranked_df)
-    selected_symbols, cached_carry = _resolve_scan_symbols(
+    all_symbols = list(symbols or ()) or sorted(
+        working_frame.get("symbol_id", pd.Series(dtype=str)).astype(str).unique().tolist()
+    )
+    selected_symbols, previous_snapshot, scan_resolution = _resolve_scan_symbols(
         working_frame,
         project_root=project_root,
         signal_date=signal_date,
         exchange=exchange,
         data_domain=data_domain,
-        all_symbols=list(symbols or ()) or sorted(working_frame.get("symbol_id", pd.Series(dtype=str)).astype(str).unique().tolist()),
-        scan_mode=scan_mode,
+        all_symbols=all_symbols,
+        ranked_df=ranked_df,
+        scan_mode=normalized_scan_mode,
         ohlcv_db_path=paths.ohlcv_db_path,
+        pattern_seed_metadata=pattern_seed_metadata,
+        pattern_incremental_ranked_buffer=pattern_incremental_ranked_buffer,
     )
-    scan_frame = working_frame
+    effective_scan_mode = str(scan_resolution.get("effective_scan_mode", normalized_scan_mode))
     if selected_symbols:
         scan_frame = working_frame[working_frame["symbol_id"].astype(str).isin(selected_symbols)].copy()
-    if scan_frame.empty and not cached_carry.empty:
-        signals_df = cached_carry.copy()
-        signals_df.loc[:, "signal_date"] = signal_date
-        return _attach_rank_context_and_score(signals_df, ranked_df=ranked_df).reset_index(drop=True)
+    else:
+        scan_frame = working_frame.iloc[0:0].copy()
 
     scan_frame = _apply_stage2_prescreen(
         scan_frame,
         stage2_only=stage2_only,
         min_stage2_score=min_stage2_score,
     )
-    if scan_frame.empty and not cached_carry.empty:
-        signals_df = cached_carry.copy()
-        signals_df.loc[:, "signal_date"] = signal_date
-        return _attach_rank_context_and_score(signals_df, ranked_df=ranked_df).reset_index(drop=True)
 
+    fresh_signals_df = pd.DataFrame()
     if int(pattern_workers) > 1:
-        signals_df, _, _ = _scan_pattern_signals_parallel(
+        fresh_signals_df, _, _ = _scan_pattern_signals_parallel(
             scan_frame,
             config=active_config,
             pattern_workers=int(pattern_workers),
             progress_callback=progress_callback,
         )
     else:
-        signals_df, _, _ = _scan_pattern_signals(
+        fresh_signals_df, _, _ = _scan_pattern_signals(
             scan_frame,
             config=active_config,
             progress_callback=progress_callback,
         )
-    if not cached_carry.empty and not signals_df.empty:
-        cached_carry = cached_carry.copy()
-        cached_carry.loc[:, "signal_date"] = signal_date
-        merged_records = signals_df.to_dict(orient="records") + cached_carry.to_dict(orient="records")
-        signals_df = pd.DataFrame.from_records(merged_records)
-    elif not cached_carry.empty:
-        signals_df = cached_carry.copy()
-        signals_df.loc[:, "signal_date"] = signal_date
-    signals_df = _attach_rank_context_and_score(signals_df, ranked_df=ranked_df).reset_index(drop=True)
+    snapshot_df = _build_pattern_lifecycle_snapshot(
+        fresh_signals_df=fresh_signals_df,
+        previous_snapshot_df=previous_snapshot,
+        market_frame=working_frame,
+        as_of_date=signal_date,
+        scan_mode=effective_scan_mode,
+        exchange=exchange,
+        watchlist_expiry_bars=pattern_watchlist_expiry_bars,
+        confirmed_expiry_bars=pattern_confirmed_expiry_bars,
+        invalidated_retention_bars=pattern_invalidated_retention_bars,
+    )
+    snapshot_df = _attach_rank_context_and_score(snapshot_df, ranked_df=ranked_df).reset_index(drop=True)
+    output_df = snapshot_df.copy()
+    if not output_df.empty and "pattern_lifecycle_state" in output_df.columns:
+        output_df = output_df[
+            output_df["pattern_lifecycle_state"].astype(str).str.lower() != "expired"
+        ].reset_index(drop=True)
     _write_pattern_cache(
         project_root=project_root,
         data_domain=data_domain,
         exchange=exchange,
         signal_date=signal_date,
-        scan_mode=scan_mode,
+        scan_mode=effective_scan_mode,
         selected_symbols=selected_symbols,
-        signals_df=signals_df,
+        signals_df=snapshot_df,
     )
-    return signals_df
+    output_df.attrs["pattern_scan_metrics"] = {
+        **scan_resolution,
+        "requested_scan_mode": normalized_scan_mode,
+        "effective_scan_mode": effective_scan_mode,
+        "selected_symbol_count": len(selected_symbols),
+        "snapshot_row_count": int(len(snapshot_df)),
+        "output_row_count": int(len(output_df)),
+        "carry_forward_count": int(
+            pd.to_numeric(snapshot_df.get("carry_forward_bars"), errors="coerce").fillna(0).gt(0).sum()
+        )
+        if not snapshot_df.empty
+        else 0,
+        "lifecycle_counts": (
+            snapshot_df["pattern_lifecycle_state"].astype(str).value_counts().to_dict()
+            if not snapshot_df.empty and "pattern_lifecycle_state" in snapshot_df.columns
+            else {}
+        ),
+    }
+    return output_df
 
 
 def _latest_rank_context(ranked_df: pd.DataFrame | None) -> pd.DataFrame:
@@ -532,6 +580,13 @@ def _apply_stage2_prescreen(
     return frame[frame["symbol_id"].astype(str).isin(selected_symbols)].copy()
 
 
+def _normalize_scan_mode(scan_mode: str | None) -> str:
+    normalized = str(scan_mode or "incremental").strip().lower()
+    if normalized not in SUPPORTED_SCAN_MODES:
+        raise ValueError(f"Unsupported pattern scan mode: {scan_mode}")
+    return normalized
+
+
 def _resolve_scan_symbols(
     frame: pd.DataFrame,
     *,
@@ -540,33 +595,308 @@ def _resolve_scan_symbols(
     exchange: str,
     data_domain: str,
     all_symbols: list[str],
+    ranked_df: pd.DataFrame | None,
     scan_mode: str,
     ohlcv_db_path: Path,
-) -> tuple[list[str], pd.DataFrame]:
+    pattern_seed_metadata: dict[str, Any] | None,
+    pattern_incremental_ranked_buffer: int,
+) -> tuple[list[str], pd.DataFrame, dict[str, Any]]:
+    normalized_symbols = [str(symbol).strip().upper() for symbol in all_symbols if str(symbol).strip()]
+    metadata: dict[str, Any] = {
+        "fallback_to_full": False,
+        "previous_snapshot_date": None,
+        "selected_symbol_count": len(normalized_symbols),
+        "active_cached_symbol_count": 0,
+        "changed_symbol_count": 0,
+        "unusual_symbol_count": 0,
+        "ranked_buffer_symbol_count": 0,
+        "effective_scan_mode": scan_mode,
+    }
     if frame.empty or str(data_domain).lower() != "operational":
-        return all_symbols, pd.DataFrame()
+        return normalized_symbols, pd.DataFrame(), metadata
     try:
         store = PatternCacheStore(project_root / "data" / "control_plane.duckdb")
     except duckdb.IOException:
-        return all_symbols, pd.DataFrame()
-    normalized_symbols = [str(symbol).strip().upper() for symbol in all_symbols if str(symbol).strip()]
-    if str(scan_mode).lower() != "incremental":
-        return normalized_symbols, pd.DataFrame()
-    latest_cache_date = store.latest_cached_signal_date(as_of_date=signal_date, exchange=exchange)
-    if latest_cache_date is None:
-        return normalized_symbols, pd.DataFrame()
-    active_symbols = store.symbols_needing_rescan(
+        metadata["fallback_to_full"] = True
+        metadata["effective_scan_mode"] = "full"
+        return normalized_symbols, pd.DataFrame(), metadata
+    if scan_mode in {"weekly_full", "full"}:
+        return normalized_symbols, pd.DataFrame(), metadata
+
+    previous_snapshot_date = store.latest_snapshot_date(as_of_date=signal_date, exchange=exchange)
+    metadata["previous_snapshot_date"] = previous_snapshot_date
+    if previous_snapshot_date is None:
+        metadata["fallback_to_full"] = True
+        metadata["effective_scan_mode"] = "full"
+        return normalized_symbols, pd.DataFrame(), metadata
+
+    previous_snapshot = store.read_snapshot(as_of_date=previous_snapshot_date, exchange=exchange)
+    if previous_snapshot.empty:
+        metadata["fallback_to_full"] = True
+        metadata["effective_scan_mode"] = "full"
+        return normalized_symbols, pd.DataFrame(), metadata
+
+    active_cached = store.load_latest_active_signals_before(as_of_date=signal_date, exchange=exchange)
+    active_cached_symbols = _ordered_unique(
+        active_cached.get("symbol_id", pd.Series(dtype=str)).astype(str).str.upper().tolist()
+        if not active_cached.empty and "symbol_id" in active_cached.columns
+        else []
+    )
+    changed_symbols = store.symbols_needing_rescan(
         normalized_symbols,
         ohlcv_db_path=ohlcv_db_path,
         as_of_date=signal_date,
     )
-    cached = store.read_cached_signals(signal_date=latest_cache_date, exchange=exchange)
-    if not active_symbols:
-        return [], cached
-    carry = pd.DataFrame()
-    if not cached.empty and "symbol_id" in cached.columns:
-        carry = cached[~cached["symbol_id"].astype(str).isin(active_symbols)].copy()
-    return active_symbols, carry
+    unusual_symbols = _ordered_unique(
+        [
+            str(symbol).strip().upper()
+            for symbol in (
+                ((pattern_seed_metadata or {}).get("seed_source_symbols") or {}).get("unusual_movers", [])
+            )
+            if str(symbol).strip()
+        ]
+    )
+    ranked_buffer_symbols: list[str] = []
+    if ranked_df is not None and not ranked_df.empty and "symbol_id" in ranked_df.columns:
+        ranked_buffer_symbols = (
+            ranked_df["symbol_id"]
+            .astype(str)
+            .str.upper()
+            .dropna()
+            .head(max(int(pattern_incremental_ranked_buffer or 0), 0))
+            .tolist()
+        )
+
+    ordered_symbols = _ordered_unique(
+        active_cached_symbols,
+        changed_symbols,
+        unusual_symbols,
+        ranked_buffer_symbols,
+    )
+    metadata.update(
+        {
+            "selected_symbol_count": len(ordered_symbols),
+            "active_cached_symbol_count": len(active_cached_symbols),
+            "changed_symbol_count": len(changed_symbols),
+            "unusual_symbol_count": len(unusual_symbols),
+            "ranked_buffer_symbol_count": len(ranked_buffer_symbols),
+        }
+    )
+    return ordered_symbols, previous_snapshot, metadata
+
+
+def _ordered_unique(*buckets: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for bucket in buckets:
+        for symbol in bucket:
+            normalized = str(symbol).strip().upper()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            ordered.append(normalized)
+    return ordered
+
+
+def _pattern_merge_key(row: pd.Series | dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str((row.get("symbol_id") if isinstance(row, dict) else row["symbol_id"]) or "").strip().upper(),
+        str((row.get("exchange") if isinstance(row, dict) else row["exchange"]) or "NSE").strip().upper() or "NSE",
+        str((row.get("pattern_family") if isinstance(row, dict) else row["pattern_family"]) or "").strip().lower(),
+    )
+
+
+def _normalize_fresh_signal_snapshot(
+    fresh_signals_df: pd.DataFrame,
+    *,
+    as_of_date: str,
+    exchange: str,
+    previous_by_key: dict[tuple[str, str, str], dict[str, Any]] | None = None,
+) -> pd.DataFrame:
+    if fresh_signals_df.empty:
+        return pd.DataFrame()
+    fresh = fresh_signals_df.copy()
+    if "pattern_score" not in fresh.columns:
+        fresh.loc[:, "pattern_score"] = np.nan
+    fresh.loc[:, "exchange"] = fresh.get("exchange", pd.Series(exchange, index=fresh.index)).fillna(exchange)
+    fresh.loc[:, "pattern_lifecycle_state"] = fresh["pattern_state"].astype(str).str.lower()
+    fresh.loc[:, "as_of_date"] = str(as_of_date)
+    fresh.loc[:, "fresh_signal_date"] = fresh["signal_date"]
+    fresh.loc[:, "last_seen_date"] = str(as_of_date)
+    fresh.loc[:, "invalidated_date"] = None
+    fresh.loc[:, "expired_date"] = None
+    fresh.loc[:, "carry_forward_bars"] = 0
+    previous_by_key = previous_by_key or {}
+    first_seen_dates: list[str] = []
+    for _, row in fresh.iterrows():
+        previous = previous_by_key.get(_pattern_merge_key(row))
+        first_seen_dates.append(
+            str(previous.get("first_seen_date") or previous.get("fresh_signal_date") or row["signal_date"])
+            if previous
+            else str(row["signal_date"])
+        )
+    fresh.loc[:, "first_seen_date"] = first_seen_dates
+    return (
+        fresh.sort_values(
+            ["pattern_score", "signal_date", "symbol_id"],
+            ascending=[False, False, True],
+            na_position="last",
+        )
+        .drop_duplicates(subset=["symbol_id", "exchange", "pattern_family"], keep="first")
+        .reset_index(drop=True)
+    )
+
+
+def _latest_close_map(frame: pd.DataFrame) -> dict[str, float]:
+    if frame.empty or "symbol_id" not in frame.columns or "close" not in frame.columns:
+        return {}
+    latest = frame.sort_values(["symbol_id", "timestamp"]).groupby("symbol_id", sort=False).tail(1)
+    closes = pd.to_numeric(latest["close"], errors="coerce")
+    return {
+        str(symbol).strip().upper(): float(close)
+        for symbol, close in zip(latest["symbol_id"], closes)
+        if pd.notna(close)
+    }
+
+
+def _business_bar_delta(start_date: str | None, end_date: str | None) -> int:
+    if not start_date or not end_date:
+        return 10_000
+    start = pd.Timestamp(start_date).normalize()
+    end = pd.Timestamp(end_date).normalize()
+    if end <= start:
+        return 0
+    return max(0, len(pd.bdate_range(start, end)) - 1)
+
+
+def _carry_forward_snapshot_row(
+    previous_row: dict[str, Any],
+    *,
+    as_of_date: str,
+    latest_close: float | None,
+    watchlist_expiry_bars: int,
+    confirmed_expiry_bars: int,
+    invalidated_retention_bars: int,
+) -> dict[str, Any] | None:
+    lifecycle = str(previous_row.get("pattern_lifecycle_state") or previous_row.get("pattern_state") or "").lower()
+    if lifecycle == "expired":
+        return None
+
+    row = dict(previous_row)
+    row["as_of_date"] = str(as_of_date)
+    carry_forward_value = pd.to_numeric(previous_row.get("carry_forward_bars"), errors="coerce")
+    row["carry_forward_bars"] = int(0 if pd.isna(carry_forward_value) else carry_forward_value) + 1
+
+    if lifecycle in ACTIVE_LIFECYCLE_STATES:
+        invalidation_price = pd.to_numeric(
+            pd.Series([previous_row.get("invalidation_price")]),
+            errors="coerce",
+        ).iloc[0]
+        last_seen_date = str(
+            previous_row.get("last_seen_date")
+            or previous_row.get("as_of_date")
+            or previous_row.get("fresh_signal_date")
+            or previous_row.get("signal_date")
+            or ""
+        )
+        expiry_bars = watchlist_expiry_bars if lifecycle == "watchlist" else confirmed_expiry_bars
+        if latest_close is not None and pd.notna(invalidation_price) and float(latest_close) <= float(invalidation_price):
+            row["pattern_lifecycle_state"] = "invalidated"
+            row["invalidated_date"] = str(previous_row.get("invalidated_date") or as_of_date)
+            row["expired_date"] = None
+            return row
+        if _business_bar_delta(last_seen_date, as_of_date) >= int(expiry_bars):
+            row["pattern_lifecycle_state"] = "expired"
+            row["expired_date"] = str(as_of_date)
+            return row
+        row["pattern_lifecycle_state"] = lifecycle
+        return row
+
+    if lifecycle == "invalidated":
+        invalidated_date = str(previous_row.get("invalidated_date") or previous_row.get("as_of_date") or "")
+        if _business_bar_delta(invalidated_date, as_of_date) >= int(invalidated_retention_bars):
+            row["pattern_lifecycle_state"] = "expired"
+            row["expired_date"] = str(as_of_date)
+            return row
+        row["pattern_lifecycle_state"] = "invalidated"
+        return row
+
+    return None
+
+
+def _build_pattern_lifecycle_snapshot(
+    *,
+    fresh_signals_df: pd.DataFrame,
+    previous_snapshot_df: pd.DataFrame,
+    market_frame: pd.DataFrame,
+    as_of_date: str,
+    scan_mode: str,
+    exchange: str,
+    watchlist_expiry_bars: int,
+    confirmed_expiry_bars: int,
+    invalidated_retention_bars: int,
+) -> pd.DataFrame:
+    if scan_mode in {"weekly_full", "full"}:
+        return _normalize_fresh_signal_snapshot(
+            fresh_signals_df,
+            as_of_date=as_of_date,
+            exchange=exchange,
+        )
+
+    previous_snapshot_df = previous_snapshot_df.copy() if previous_snapshot_df is not None else pd.DataFrame()
+    if not previous_snapshot_df.empty:
+        previous_snapshot_df.loc[:, "exchange"] = previous_snapshot_df.get(
+            "exchange",
+            pd.Series(exchange, index=previous_snapshot_df.index),
+        ).fillna(exchange)
+    previous_by_key = (
+        {_pattern_merge_key(row): row.to_dict() for _, row in previous_snapshot_df.iterrows()}
+        if not previous_snapshot_df.empty
+        else {}
+    )
+    fresh_snapshot = _normalize_fresh_signal_snapshot(
+        fresh_signals_df,
+        as_of_date=as_of_date,
+        exchange=exchange,
+        previous_by_key=previous_by_key,
+    )
+    fresh_keys = {_pattern_merge_key(row) for _, row in fresh_snapshot.iterrows()} if not fresh_snapshot.empty else set()
+    latest_close_by_symbol = _latest_close_map(market_frame)
+
+    carried_rows: list[dict[str, Any]] = []
+    for key, previous_row in previous_by_key.items():
+        if key in fresh_keys:
+            continue
+        carried = _carry_forward_snapshot_row(
+            previous_row,
+            as_of_date=as_of_date,
+            latest_close=latest_close_by_symbol.get(key[0]),
+            watchlist_expiry_bars=watchlist_expiry_bars,
+            confirmed_expiry_bars=confirmed_expiry_bars,
+            invalidated_retention_bars=invalidated_retention_bars,
+        )
+        if carried is not None:
+            carried_rows.append(carried)
+
+    parts: list[pd.DataFrame] = []
+    if not fresh_snapshot.empty:
+        parts.append(fresh_snapshot)
+    if carried_rows:
+        parts.append(pd.DataFrame.from_records(carried_rows))
+    if not parts:
+        return pd.DataFrame()
+    snapshot = pd.concat(parts, ignore_index=True, sort=False)
+    if "pattern_score" not in snapshot.columns:
+        snapshot.loc[:, "pattern_score"] = np.nan
+    return (
+        snapshot.sort_values(
+            ["pattern_lifecycle_state", "pattern_score", "symbol_id", "pattern_family"],
+            ascending=[True, False, True, True],
+            na_position="last",
+        )
+        .drop_duplicates(subset=["symbol_id", "exchange", "pattern_family"], keep="first")
+        .reset_index(drop=True)
+    )
 
 
 def _write_pattern_cache(
@@ -585,14 +915,22 @@ def _write_pattern_cache(
         store = PatternCacheStore(project_root / "data" / "control_plane.duckdb")
     except duckdb.IOException:
         return
-    run_prefix = "incremental" if str(scan_mode).lower() == "incremental" else "full"
-    run_scope = f"{run_prefix}:{signal_date}:"
-    scan_run_id = f"{run_scope}{len(selected_symbols)}"
+    normalized_mode = _normalize_scan_mode(scan_mode)
+    if normalized_mode == "weekly_full":
+        scan_run_id = f"weekly_full_{signal_date}"
+        run_scope = None
+    elif normalized_mode == "incremental":
+        run_scope = f"incremental:{signal_date}:"
+        scan_run_id = f"{run_scope}{len(selected_symbols)}"
+    else:
+        run_scope = f"full:{signal_date}:"
+        scan_run_id = f"{run_scope}{len(selected_symbols)}"
     store.write_signals(
         signals_df,
         scan_run_id=scan_run_id,
         replace_date=signal_date,
         replace_run_scope=run_scope,
+        as_of_date=signal_date,
     )
 
 

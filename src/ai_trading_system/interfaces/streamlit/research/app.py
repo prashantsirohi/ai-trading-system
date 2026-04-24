@@ -947,6 +947,33 @@ def load_latest_rank_fallback() -> Dict:
         sector_col = "Sector" if "Sector" in sector_df.columns else sector_df.columns[0]
         top_sector = sector_df.iloc[0].get(sector_col)
 
+    ranked_leaders = (
+        stock_scan_df.loc[pd.to_numeric(stock_scan_df.get("rank"), errors="coerce").notna()].head(10).to_dict(orient="records")
+        if not stock_scan_df.empty
+        else []
+    )
+    pattern_discoveries = (
+        stock_scan_df.loc[
+            stock_scan_df.get("discovered_by_pattern_scan", pd.Series(False, index=stock_scan_df.index))
+            .fillna(False)
+            .astype(bool)
+        ]
+        .head(10)
+        .to_dict(orient="records")
+        if not stock_scan_df.empty
+        else []
+    )
+    breakout_candidates = (
+        stock_scan_df.loc[
+            pd.to_numeric(stock_scan_df.get("rank"), errors="coerce").isna()
+            & stock_scan_df.get("breakout_positive", pd.Series(False, index=stock_scan_df.index)).fillna(False).astype(bool)
+        ]
+        .head(10)
+        .to_dict(orient="records")
+        if not stock_scan_df.empty
+        else []
+    )
+
     return {
         "summary": {
             "run_id": ranked_path.parts[-4],
@@ -957,11 +984,59 @@ def load_latest_rank_fallback() -> Dict:
             "sector_count": int(len(sector_df)),
             "top_symbol": ranked_df.iloc[0].get("symbol_id") if not ranked_df.empty else None,
             "top_sector": top_sector,
+            "ranked_universe_covers_stock_scan": bool(
+                not stock_scan_df.empty
+                and "symbol_id" in ranked_df.columns
+                and "symbol_id" in stock_scan_df.columns
+                and set(stock_scan_df["symbol_id"].astype(str)).issubset(set(ranked_df["symbol_id"].astype(str)))
+            ),
+            "ranked_universe_stock_scan_coverage_pct": (
+                round(
+                    (
+                        len(
+                            set(stock_scan_df["symbol_id"].astype(str))
+                            & set(ranked_df["symbol_id"].astype(str))
+                        )
+                        / len(set(stock_scan_df["symbol_id"].astype(str)))
+                    )
+                    * 100.0,
+                    2,
+                )
+                if not stock_scan_df.empty and "symbol_id" in ranked_df.columns and "symbol_id" in stock_scan_df.columns
+                else 0.0
+            ),
+            "discovery_visibility_reason": (
+                "ranked_universe_covers_stock_scan"
+                if (
+                    not stock_scan_df.empty
+                    and "symbol_id" in ranked_df.columns
+                    and "symbol_id" in stock_scan_df.columns
+                    and set(stock_scan_df["symbol_id"].astype(str)).issubset(set(ranked_df["symbol_id"].astype(str)))
+                    and not pattern_discoveries
+                    and not breakout_candidates
+                )
+                else None
+            ),
+            "discovery_visibility_note": (
+                "No non-ranked pattern discoveries or breakout candidates are shown because the ranked universe already covers the full stock-scan symbol set for this run."
+                if (
+                    not stock_scan_df.empty
+                    and "symbol_id" in ranked_df.columns
+                    and "symbol_id" in stock_scan_df.columns
+                    and set(stock_scan_df["symbol_id"].astype(str)).issubset(set(ranked_df["symbol_id"].astype(str)))
+                    and not pattern_discoveries
+                    and not breakout_candidates
+                )
+                else None
+            ),
         },
         "ranked_signals": ranked_df.head(10).to_dict(orient="records"),
         "breakout_scan": breakout_df.head(10).to_dict(orient="records"),
         "pattern_scan": pattern_df.head(10).to_dict(orient="records"),
         "stock_scan": stock_scan_df.head(10).to_dict(orient="records"),
+        "ranked_leaders": ranked_leaders,
+        "pattern_discoveries": pattern_discoveries,
+        "breakout_candidates": breakout_candidates,
         "sector_dashboard": sector_df.head(10).to_dict(orient="records"),
         "warnings": ["Dashboard payload missing; showing latest rank artifacts fallback."],
         "_artifact_path": str(ranked_path),
@@ -3350,6 +3425,28 @@ def main():
                 pipeline_sector_df = pd.DataFrame(dashboard_payload.get("sector_dashboard", []))
             if pipeline_stock_scan_df.empty:
                 pipeline_stock_scan_df = pd.DataFrame(dashboard_payload.get("stock_scan", []))
+            pipeline_ranked_leaders_df = pd.DataFrame(dashboard_payload.get("ranked_leaders", []))
+            pipeline_pattern_discoveries_df = pd.DataFrame(dashboard_payload.get("pattern_discoveries", []))
+            pipeline_breakout_candidates_df = pd.DataFrame(dashboard_payload.get("breakout_candidates", []))
+            if pipeline_ranked_leaders_df.empty and not pipeline_stock_scan_df.empty:
+                pipeline_ranked_leaders_df = pipeline_stock_scan_df.loc[
+                    pd.to_numeric(pipeline_stock_scan_df.get("rank"), errors="coerce").notna()
+                ].copy()
+            if pipeline_pattern_discoveries_df.empty and not pipeline_stock_scan_df.empty:
+                pipeline_pattern_discoveries_df = pipeline_stock_scan_df.loc[
+                    pipeline_stock_scan_df.get(
+                        "discovered_by_pattern_scan",
+                        pd.Series(False, index=pipeline_stock_scan_df.index),
+                    ).fillna(False).astype(bool)
+                ].copy()
+            if pipeline_breakout_candidates_df.empty and not pipeline_stock_scan_df.empty:
+                pipeline_breakout_candidates_df = pipeline_stock_scan_df.loc[
+                    pd.to_numeric(pipeline_stock_scan_df.get("rank"), errors="coerce").isna()
+                    & pipeline_stock_scan_df.get(
+                        "breakout_positive",
+                        pd.Series(False, index=pipeline_stock_scan_df.index),
+                    ).fillna(False).astype(bool)
+                ].copy()
             task_status_map = dashboard_payload.get("task_status", {}) or {}
             col_left, col_right = st.columns([1, 1])
             with col_left:
@@ -3496,12 +3593,18 @@ def main():
                             "symbol_id",
                             "pattern_family",
                             "pattern_state",
+                            "pattern_lifecycle_state",
+                            "pattern_operational_tier",
                             "pattern_score",
+                            "pattern_priority_score",
+                            "pattern_priority_rank",
                             "pattern_rank",
                             "setup_quality",
                             "breakout_level",
                             "invalidation_price",
                             "signal_date",
+                            "volume_zscore_20",
+                            "volume_zscore_50",
                         ],
                     )
                     pattern_monitor_display = _with_symbol_hyperlink(pattern_monitor_display, symbol_col="symbol_id")
@@ -3617,9 +3720,80 @@ def main():
                 else:
                     stock_scan_df = reorder_columns(
                         pipeline_stock_scan_df,
-                        ["Symbol", "symbol_id", "category", "score", "sector", "why"],
+                        [
+                            "Symbol",
+                            "symbol_id",
+                            "rank",
+                            "composite_score",
+                            "category",
+                            "score",
+                            "sector",
+                            "why",
+                            "pattern_positive",
+                            "breakout_positive",
+                            "discovered_by_pattern_scan",
+                        ],
                     )
+                    stock_scan_df = _with_symbol_hyperlink(stock_scan_df, symbol_col="symbol_id")
                     st.dataframe(stock_scan_df, use_container_width=True, hide_index=True)
+
+                st.markdown("**Ranked Leaders**")
+                if pipeline_ranked_leaders_df.empty:
+                    st.info("No ranked leaders available.")
+                else:
+                    ranked_leaders_display = reorder_columns(
+                        pipeline_ranked_leaders_df,
+                        ["symbol_id", "rank", "composite_score", "exchange", "close", "rel_strength_score", "stage2_score"],
+                    )
+                    ranked_leaders_display = _with_symbol_hyperlink(ranked_leaders_display, symbol_col="symbol_id")
+                    st.dataframe(ranked_leaders_display.head(10), use_container_width=True, hide_index=True)
+
+                st.markdown("**Pattern Discoveries**")
+                if pipeline_pattern_discoveries_df.empty:
+                    discovery_visibility_note = str(summary.get("discovery_visibility_note") or "").strip()
+                    if discovery_visibility_note:
+                        st.info(discovery_visibility_note)
+                    st.info("No pattern discoveries outside the ranked universe.")
+                else:
+                    pattern_discoveries_display = reorder_columns(
+                        pipeline_pattern_discoveries_df,
+                        [
+                            "symbol_id",
+                            "pattern_positive",
+                            "discovered_by_pattern_scan",
+                            "pattern_family",
+                            "pattern_state",
+                            "pattern_lifecycle_state",
+                            "pattern_operational_tier",
+                            "pattern_priority_score",
+                            "pattern_priority_rank",
+                            "stage2_score",
+                            "rel_strength_score",
+                        ],
+                    )
+                    pattern_discoveries_display = _with_symbol_hyperlink(pattern_discoveries_display, symbol_col="symbol_id")
+                    st.dataframe(pattern_discoveries_display.head(10), use_container_width=True, hide_index=True)
+
+                st.markdown("**Breakout Candidates**")
+                if pipeline_breakout_candidates_df.empty:
+                    discovery_visibility_note = str(summary.get("discovery_visibility_note") or "").strip()
+                    if discovery_visibility_note:
+                        st.info(discovery_visibility_note)
+                    st.info("No non-ranked breakout candidates available.")
+                else:
+                    breakout_candidates_display = reorder_columns(
+                        pipeline_breakout_candidates_df,
+                        [
+                            "symbol_id",
+                            "breakout_positive",
+                            "breakout_state",
+                            "breakout_score",
+                            "stage2_score",
+                            "rel_strength_score",
+                        ],
+                    )
+                    breakout_candidates_display = _with_symbol_hyperlink(breakout_candidates_display, symbol_col="symbol_id")
+                    st.dataframe(breakout_candidates_display.head(10), use_container_width=True, hide_index=True)
 
                 warnings = dashboard_payload.get("warnings", [])
                 if warnings:

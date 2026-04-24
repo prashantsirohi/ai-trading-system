@@ -18,6 +18,7 @@ from typing import Any
 import duckdb
 
 from ai_trading_system.domains.ingest.repair import repair_window
+from ai_trading_system.domains.ingest.trust import resolve_quarantine_for_rows
 from core.env import load_project_env
 from run.stages import IngestStage
 from ai_trading_system.pipeline.contracts import StageContext
@@ -90,6 +91,22 @@ def _delete_window(*, db_path: Path, exchange: str, from_date: str, to_date: str
             [exchange, from_date, to_date],
         ).fetchall()
         return len(deleted)
+    finally:
+        conn.close()
+
+
+def _load_window_rows(*, db_path: Path, exchange: str, from_date: str, to_date: str):
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        return conn.execute(
+            """
+            SELECT symbol_id, exchange, timestamp
+            FROM _catalog
+            WHERE exchange = ?
+              AND CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            """,
+            [exchange, from_date, to_date],
+        ).fetchdf()
     finally:
         conn.close()
 
@@ -184,6 +201,23 @@ def run_reset_reingest_validate(
     validation_result = IngestStage(operation=lambda _context: {}).run(validation_context).metadata
     payload["final_validation"] = validation_result
     payload["window_after"] = _window_summary(paths.ohlcv_db_path, exchange, from_date, to_date)
+    resolved_quarantine_rows = 0
+    if (
+        str(validation_result.get("bhavcopy_validation_status") or "").lower() == "passed"
+        and int(payload["window_after"]["rows"] or 0) > 0
+    ):
+        repaired_rows = _load_window_rows(
+            db_path=paths.ohlcv_db_path,
+            exchange=exchange,
+            from_date=from_date,
+            to_date=to_date,
+        )
+        resolved_quarantine_rows = resolve_quarantine_for_rows(
+            paths.ohlcv_db_path,
+            repaired_rows,
+            note=f"Resolved by validated reset/reingest window {from_date} to {to_date}",
+        )
+    payload["resolved_quarantine_rows"] = int(resolved_quarantine_rows)
     payload["status"] = "completed"
     return payload
 
@@ -220,7 +254,7 @@ def main() -> None:
     parser.add_argument("--close-tolerance-pct", type=float, default=0.01, help="Final validation close tolerance.")
     args = parser.parse_args()
 
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[4]
     load_project_env(project_root)
     result = run_reset_reingest_validate(
         project_root=project_root,

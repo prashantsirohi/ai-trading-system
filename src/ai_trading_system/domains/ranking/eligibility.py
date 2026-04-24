@@ -29,7 +29,8 @@ def apply_rank_eligibility(
         ``stage2_min_score`` are marked ineligible.  Enabled automatically
         when ``rank_mode == 'stage2_breakout'``.
     stage2_min_score:
-        Minimum acceptable Stage 2 score when the gate is active.
+        Legacy fallback score threshold when structural Stage 2 columns are
+        unavailable.
     """
     output = frame.copy()
     if output.empty:
@@ -59,18 +60,30 @@ def apply_rank_eligibility(
             output.at[idx, "rejection_reasons"] = output.at[idx, "rejection_reasons"] + ["insufficient_liquidity"]
 
     # ── Stage 2 gate (optional — activated by stage2_breakout rank mode) ──
-    if stage2_gate_enabled and "stage2_score" in output.columns:
-        s2 = pd.to_numeric(output["stage2_score"], errors="coerce").fillna(0.0)
-        failed_s2 = s2 < float(stage2_min_score)
+    if stage2_gate_enabled:
+        if "is_stage2_structural" in output.columns:
+            failed_s2 = ~output["is_stage2_structural"].fillna(False).astype(bool)
+            default_reason = "non_structural_stage2"
+        elif "is_stage2_uptrend" in output.columns:
+            failed_s2 = ~output["is_stage2_uptrend"].fillna(False).astype(bool)
+            default_reason = "stage2_uptrend_required"
+        elif "stage2_score" in output.columns:
+            s2 = pd.to_numeric(output["stage2_score"], errors="coerce").fillna(0.0)
+            failed_s2 = s2 < float(stage2_min_score)
+            default_reason = "stage2_score_below_threshold"
+        else:
+            failed_s2 = pd.Series(False, index=output.index)
+            default_reason = "stage2_gate_unavailable"
+
         output.loc[failed_s2, "eligible_rank"] = False
         for idx in output.index[failed_s2]:
-            fail_reason = (
-                str(output.at[idx, "stage2_fail_reason"])
-                if "stage2_fail_reason" in output.columns and output.at[idx, "stage2_fail_reason"]
-                else "stage2_score_below_threshold"
-            )
-            output.at[idx, "rejection_reasons"] = (
-                output.at[idx, "rejection_reasons"] + [f"stage2:{fail_reason}"]
-            )
+            fail_reason = ""
+            if "stage2_hard_fail_reason" in output.columns and output.at[idx, "stage2_hard_fail_reason"]:
+                fail_reason = str(output.at[idx, "stage2_hard_fail_reason"])
+            elif "stage2_fail_reason" in output.columns and output.at[idx, "stage2_fail_reason"]:
+                fail_reason = str(output.at[idx, "stage2_fail_reason"])
+            else:
+                fail_reason = default_reason
+            output.at[idx, "rejection_reasons"] = output.at[idx, "rejection_reasons"] + [f"stage2:{fail_reason}"]
 
     return output

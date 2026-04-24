@@ -85,8 +85,11 @@ RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "sector_total_symbols",
     # Stage 2 uptrend enrichment columns (added in Sprint 1)
     "stage2_score",
+    "is_stage2_structural",
+    "is_stage2_candidate",
     "is_stage2_uptrend",
     "stage2_label",
+    "stage2_hard_fail_reason",
     "stage2_fail_reason",
     "stage2_score_bonus",
     "sma200_slope_20d_pct",

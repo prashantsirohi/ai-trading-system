@@ -18,11 +18,16 @@ STAGE2_FEATURE_COLUMNS: tuple[str, ...] = (
     "sma150_slope_20d_pct",
     "sma200_slope_20d_pct",
     "stage2_score",
+    "is_stage2_structural",
+    "is_stage2_candidate",
     "is_stage2_uptrend",
     "stage2_label",
+    "stage2_hard_fail_reason",
     "stage2_fail_reason",
     "near_52w_high_pct",
     "volume_ratio_20",
+    "volume_zscore_20",
+    "volume_zscore_50",
 )
 
 

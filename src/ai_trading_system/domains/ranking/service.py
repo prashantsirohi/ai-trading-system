@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -38,6 +39,231 @@ def attach_rank_confidence_from_features(frame: pd.DataFrame) -> pd.DataFrame:
     if "feature_confidence" in output.columns and "rank_confidence" not in output.columns:
         output["rank_confidence"] = pd.to_numeric(output["feature_confidence"], errors="coerce")
     return output
+
+
+def _normalize_symbol_frame(frame: pd.DataFrame | None) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=["symbol_id"])
+    output = frame.copy()
+    if "symbol_id" not in output.columns:
+        for candidate in ("Symbol", "symbol", "index"):
+            if candidate in output.columns:
+                output.loc[:, "symbol_id"] = output[candidate]
+                break
+    if "symbol_id" not in output.columns:
+        return pd.DataFrame(columns=["symbol_id"])
+    output.loc[:, "symbol_id"] = output["symbol_id"].astype(str)
+    return output
+
+
+def _bool_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(False, index=frame.index, dtype=bool)
+    series = frame[column]
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce").fillna(0).astype(float) > 0
+    text = series.astype(str).str.strip().str.lower()
+    return text.isin({"1", "true", "t", "yes", "y"})
+
+
+def _coerce_numeric_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    output = frame.copy()
+    for column in columns:
+        if column not in output.columns:
+            output.loc[:, column] = pd.Series([pd.NA] * len(output), index=output.index)
+        output.loc[:, column] = pd.to_numeric(output[column], errors="coerce")
+    return output
+
+
+def _rename_context_columns(frame: pd.DataFrame, *, prefix: str) -> pd.DataFrame:
+    rename_map = {
+        "exchange": f"{prefix}_exchange",
+        "rel_strength_score": f"{prefix}_rel_strength_score",
+        "stage2_score": f"{prefix}_stage2_score",
+        "stage2_label": f"{prefix}_stage2_label",
+        "close": f"{prefix}_close",
+    }
+    available = {source: target for source, target in rename_map.items() if source in frame.columns}
+    return frame.rename(columns=available)
+
+
+def _select_best_pattern_rows(pattern_df: pd.DataFrame | None) -> pd.DataFrame:
+    frame = _normalize_symbol_frame(pattern_df)
+    if frame.empty:
+        return pd.DataFrame(columns=["symbol_id", "pattern_positive"])
+
+    frame = _coerce_numeric_columns(
+        frame,
+        ["pattern_priority_score", "pattern_score", "rel_strength_score", "stage2_score"],
+    )
+    if "pattern_operational_tier" not in frame.columns:
+        frame.loc[:, "pattern_operational_tier"] = "tier_2"
+    lifecycle = (
+        frame["pattern_lifecycle_state"].astype(str)
+        if "pattern_lifecycle_state" in frame.columns
+        else frame.get("pattern_state", pd.Series("", index=frame.index)).astype(str)
+    )
+    positive = frame.loc[
+        frame["pattern_operational_tier"].astype(str) != "suppression_only"
+    ].loc[lifecycle.isin({"watchlist", "confirmed"})]
+    if positive.empty:
+        return pd.DataFrame(columns=["symbol_id", "pattern_positive"])
+
+    positive = _rename_context_columns(positive, prefix="pattern")
+    positive = positive.sort_values(
+        ["pattern_priority_score", "pattern_score", "pattern_rel_strength_score", "pattern_stage2_score", "symbol_id"],
+        ascending=[False, False, False, False, True],
+        na_position="last",
+        kind="stable",
+    )
+    positive = positive.drop_duplicates(subset=["symbol_id"], keep="first").reset_index(drop=True)
+    positive.loc[:, "pattern_positive"] = True
+    return positive
+
+
+def _select_best_breakout_rows(breakout_df: pd.DataFrame | None) -> pd.DataFrame:
+    frame = _normalize_symbol_frame(breakout_df)
+    if frame.empty:
+        return pd.DataFrame(columns=["symbol_id", "breakout_positive"])
+
+    frame = _coerce_numeric_columns(frame, ["breakout_score", "rel_strength_score", "stage2_score"])
+    positive = frame.loc[
+        frame.get("breakout_state", pd.Series("", index=frame.index)).astype(str).isin({"qualified", "watchlist"})
+    ]
+    if positive.empty:
+        return pd.DataFrame(columns=["symbol_id", "breakout_positive"])
+
+    positive = _rename_context_columns(positive, prefix="breakout")
+    positive = positive.sort_values(
+        ["breakout_score", "breakout_rel_strength_score", "breakout_stage2_score", "symbol_id"],
+        ascending=[False, False, False, True],
+        na_position="last",
+        kind="stable",
+    )
+    positive = positive.drop_duplicates(subset=["symbol_id"], keep="first").reset_index(drop=True)
+    positive.loc[:, "breakout_positive"] = True
+    return positive
+
+
+def build_integrated_stock_scan_view(
+    *,
+    ranked_df: pd.DataFrame,
+    pattern_df: pd.DataFrame,
+    breakout_df: pd.DataFrame,
+    legacy_stock_scan_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    ranked = _normalize_symbol_frame(ranked_df)
+    ranked = ranked.reset_index(drop=True)
+    if "rank" not in ranked.columns:
+        ranked.loc[:, "rank"] = pd.Series(range(1, len(ranked) + 1), index=ranked.index, dtype="Int64")
+    ranked_top_universe = set(ranked["symbol_id"].astype(str)) if not ranked.empty else set()
+
+    pattern_best = _select_best_pattern_rows(pattern_df)
+    breakout_best = _select_best_breakout_rows(breakout_df)
+
+    merged = ranked.copy()
+    if merged.empty:
+        merged = pd.DataFrame(columns=["symbol_id", "rank"])
+    for extra in (pattern_best, breakout_best):
+        if extra.empty:
+            continue
+        merged = merged.merge(extra, on="symbol_id", how="outer")
+
+    if merged.empty:
+        return merged
+
+    legacy = _normalize_symbol_frame(legacy_stock_scan_df)
+    if not legacy.empty:
+        legacy = legacy.drop(columns=[col for col in ("Symbol", "symbol", "index") if col in legacy.columns])
+        legacy = legacy.drop_duplicates(subset=["symbol_id"], keep="first")
+        merged = merged.merge(legacy, on="symbol_id", how="left", suffixes=("", "_legacy"))
+
+    pattern_positive_mask = _bool_series(merged, "pattern_positive")
+    breakout_positive_mask = _bool_series(merged, "breakout_positive")
+    merged.loc[:, "pattern_positive"] = pattern_positive_mask
+    merged.loc[:, "breakout_positive"] = breakout_positive_mask
+    ranked_mask = merged["symbol_id"].astype(str).isin(ranked_top_universe)
+    merged.loc[:, "discovered_by_pattern_scan"] = (
+        ~ranked_mask
+    ) & pattern_positive_mask
+
+    for column in ("rank", "composite_score"):
+        if column not in merged.columns:
+            merged.loc[:, column] = pd.Series([pd.NA] * len(merged), index=merged.index)
+    merged.loc[:, "rank"] = pd.to_numeric(merged["rank"], errors="coerce").astype("Int64")
+    merged.loc[:, "composite_score"] = pd.to_numeric(merged["composite_score"], errors="coerce")
+
+    for base, pattern_col, breakout_col in (
+        ("exchange", "pattern_exchange", "breakout_exchange"),
+        ("rel_strength_score", "pattern_rel_strength_score", "breakout_rel_strength_score"),
+        ("stage2_score", "pattern_stage2_score", "breakout_stage2_score"),
+        ("stage2_label", "pattern_stage2_label", "breakout_stage2_label"),
+        ("close", "pattern_close", "breakout_close"),
+    ):
+        current = merged[base] if base in merged.columns else pd.Series([pd.NA] * len(merged), index=merged.index, dtype="object")
+        pattern_series = (
+            merged[pattern_col]
+            if pattern_col in merged.columns
+            else pd.Series([pd.NA] * len(merged), index=merged.index, dtype="object")
+        )
+        breakout_series = (
+            merged[breakout_col]
+            if breakout_col in merged.columns
+            else pd.Series([pd.NA] * len(merged), index=merged.index, dtype="object")
+        )
+        merged[base] = (
+            current.astype("object")
+            .combine_first(pattern_series.astype("object"))
+            .combine_first(breakout_series.astype("object"))
+        )
+
+    merged = _coerce_numeric_columns(
+        merged,
+        [
+            "rel_strength_score",
+            "stage2_score",
+            "close",
+            "pattern_priority_score",
+            "pattern_score",
+            "breakout_score",
+        ],
+    )
+
+    ranked_symbols = [symbol for symbol in ranked["symbol_id"].astype(str).tolist() if symbol in set(merged["symbol_id"].astype(str))]
+    pattern_symbols = (
+        merged.loc[(~ranked_mask) & pattern_positive_mask]
+        .sort_values(
+            ["pattern_priority_score", "rel_strength_score", "stage2_score", "symbol_id"],
+            ascending=[False, False, False, True],
+            na_position="last",
+            kind="stable",
+        )["symbol_id"]
+        .astype(str)
+        .tolist()
+    )
+    breakout_symbols = (
+        merged.loc[
+            (~ranked_mask)
+            & breakout_positive_mask
+            & (~pattern_positive_mask)
+        ]
+        .sort_values(
+            ["breakout_score", "rel_strength_score", "stage2_score", "symbol_id"],
+            ascending=[False, False, False, True],
+            na_position="last",
+            kind="stable",
+        )["symbol_id"]
+        .astype(str)
+        .tolist()
+    )
+    ordered_symbols = ranked_symbols + pattern_symbols + breakout_symbols
+    order_map = {symbol: position for position, symbol in enumerate(ordered_symbols)}
+    merged = merged.loc[merged["symbol_id"].astype(str).isin(order_map)].copy()
+    merged.loc[:, "_sort_order"] = merged["symbol_id"].astype(str).map(order_map)
+    merged = merged.sort_values("_sort_order", kind="stable").drop(columns="_sort_order").reset_index(drop=True)
+    return merged
 
 
 class RankOrchestrationService:
@@ -146,6 +372,9 @@ class RankOrchestrationService:
         from analytics.ranker import StockRanker
         from ai_trading_system.domains.ranking import sector_dashboard, stock_scan
         from ai_trading_system.domains.ranking.breakout import scan_breakouts
+        from ai_trading_system.domains.ranking.patterns.universe import (
+            build_pattern_seed_universe,
+        )
 
         paths = ensure_domain_layout(
             project_root=context.project_root,
@@ -296,9 +525,65 @@ class RankOrchestrationService:
                 f"breakout_scan unavailable: {breakout_status.get('error_message', breakout_status.get('detail'))}"
             )
 
-        raw_pattern_symbols = ranked["symbol_id"].astype(str).tolist() if not ranked.empty and "symbol_id" in ranked.columns else []
-        max_pattern_symbols = context.params.get("pattern_max_symbols", 150)
-        pattern_symbols = raw_pattern_symbols[: int(max_pattern_symbols)] if max_pattern_symbols else raw_pattern_symbols
+        fallback_pattern_symbols = (
+            ranked["symbol_id"].astype(str).tolist()
+            if not ranked.empty and "symbol_id" in ranked.columns
+            else []
+        )
+        pattern_seed_metadata: dict[str, Any] = {
+            "seed_source_counts": {
+                "cached": 0,
+                "stage2_structural": 0,
+                "unusual_movers": 0,
+                "liquidity_remaining": 0,
+            },
+            "broad_universe_count": 0,
+            "feature_ready_count": 0,
+            "liquidity_pass_count": 0,
+            "seed_symbol_count": 0,
+            "latest_cached_signal_date": None,
+            "pattern_seed_max_symbols": int(context.params.get("pattern_seed_max_symbols", 400) or 400),
+            "pattern_min_liquidity_score": float(context.params.get("pattern_min_liquidity_score", 0.2)),
+            "pattern_unusual_mover_min_vol20_avg": float(
+                context.params.get("pattern_unusual_mover_min_vol20_avg", 100_000)
+            ),
+            "seed_symbols_digest": "empty",
+            "fallback_used": False,
+            "fallback_reason": None,
+        }
+        try:
+            pattern_symbols, discovered_seed_metadata = build_pattern_seed_universe(
+                project_root=context.project_root,
+                ohlcv_db_path=context.db_path,
+                signal_date=context.run_date,
+                exchange=str(context.params.get("exchange", "NSE")),
+                data_domain=str(context.params.get("data_domain", "operational")),
+                max_symbols=int(context.params.get("pattern_seed_max_symbols", 400) or 400),
+                min_liquidity_score=float(context.params.get("pattern_min_liquidity_score", 0.2)),
+                unusual_mover_min_vol20_avg=float(
+                    context.params.get("pattern_unusual_mover_min_vol20_avg", 100_000)
+                ),
+            )
+            pattern_seed_metadata.update(discovered_seed_metadata)
+            if not pattern_symbols:
+                raise RuntimeError("broad seed universe resolved to zero usable symbols")
+        except Exception as exc:
+            pattern_symbols = fallback_pattern_symbols
+            pattern_seed_metadata["fallback_used"] = True
+            pattern_seed_metadata["fallback_reason"] = str(exc)
+            pattern_seed_metadata["seed_symbol_count"] = len(pattern_symbols)
+            pattern_seed_metadata["seed_symbols_digest"] = (
+                hashlib.sha256(
+                    json.dumps([str(symbol) for symbol in pattern_symbols], sort_keys=False).encode("utf-8")
+                ).hexdigest()
+                if pattern_symbols
+                else "empty"
+            )
+            if pattern_symbols:
+                warnings.append(f"pattern seed universe unavailable: {exc}; reverted to ranked symbols")
+            else:
+                warnings.append(f"pattern seed universe unavailable: {exc}")
+        pattern_output_max_symbols = context.params.get("pattern_max_symbols", 150)
         pattern_enabled = bool(context.params.get("pattern_scan_enabled", True))
 
         def build_pattern_output() -> pd.DataFrame:
@@ -356,6 +641,19 @@ class RankOrchestrationService:
                 scan_mode=str(context.params.get("pattern_scan_mode", "incremental")),
                 stage2_only=bool(context.params.get("pattern_stage2_only", True)),
                 min_stage2_score=float(context.params.get("pattern_min_stage2_score", 70.0)),
+                pattern_seed_metadata=pattern_seed_metadata,
+                pattern_watchlist_expiry_bars=int(
+                    context.params.get("pattern_watchlist_expiry_bars", 10)
+                ),
+                pattern_confirmed_expiry_bars=int(
+                    context.params.get("pattern_confirmed_expiry_bars", 20)
+                ),
+                pattern_invalidated_retention_bars=int(
+                    context.params.get("pattern_invalidated_retention_bars", 5)
+                ),
+                pattern_incremental_ranked_buffer=int(
+                    context.params.get("pattern_incremental_ranked_buffer", 50)
+                ),
             )
 
         pattern_df, pattern_status = self.execute_rank_task(
@@ -366,8 +664,26 @@ class RankOrchestrationService:
                 "task": "pattern_scan",
                 "run_date": context.run_date,
                 "pattern_scan_enabled": pattern_enabled,
-                "pattern_max_symbols": len(pattern_symbols),
+                "pattern_output_max_symbols": (
+                    int(pattern_output_max_symbols) if pattern_output_max_symbols else None
+                ),
+                "pattern_seed_max_symbols": pattern_seed_metadata.get("pattern_seed_max_symbols"),
+                "pattern_seed_symbol_count": len(pattern_symbols),
+                "pattern_seed_symbols_digest": pattern_seed_metadata.get("seed_symbols_digest"),
+                "pattern_seed_metadata": pattern_seed_metadata,
                 "pattern_scan_mode": str(context.params.get("pattern_scan_mode", "incremental")),
+                "pattern_watchlist_expiry_bars": int(
+                    context.params.get("pattern_watchlist_expiry_bars", 10)
+                ),
+                "pattern_confirmed_expiry_bars": int(
+                    context.params.get("pattern_confirmed_expiry_bars", 20)
+                ),
+                "pattern_invalidated_retention_bars": int(
+                    context.params.get("pattern_invalidated_retention_bars", 5)
+                ),
+                "pattern_incremental_ranked_buffer": int(
+                    context.params.get("pattern_incremental_ranked_buffer", 50)
+                ),
                 "pattern_stage2_only": bool(context.params.get("pattern_stage2_only", True)),
                 "pattern_min_stage2_score": float(context.params.get("pattern_min_stage2_score", 70.0)),
                 "pattern_bandwidth": float(context.params.get("pattern_bandwidth", 3.0)),
@@ -382,13 +698,18 @@ class RankOrchestrationService:
             optional=True,
             skip_reason=None if pattern_enabled else "pattern_scan disabled by config",
         )
+        pattern_scan_metadata = dict(getattr(pattern_df, "attrs", {}).get("pattern_scan_metrics", {}))
+        if pattern_output_max_symbols and not pattern_df.empty:
+            pattern_df = pattern_df.head(int(pattern_output_max_symbols)).reset_index(drop=True)
+        if pattern_scan_metadata:
+            pattern_seed_metadata["pattern_scan_metrics"] = pattern_scan_metadata
         outputs["pattern_scan"] = pattern_df
         if pattern_status["status"] in {"failed", "timed_out", "degraded"}:
             warnings.append(
                 f"pattern_scan unavailable: {pattern_status.get('error_message', pattern_status.get('detail'))}"
             )
 
-        stock_scan_df, stock_status = self.execute_rank_task(
+        legacy_stock_scan_df, stock_status = self.execute_rank_task(
             context=context,
             task_name="stock_scan",
             label="Build stock_scan",
@@ -400,13 +721,19 @@ class RankOrchestrationService:
             task_status=task_status,
             previous_attempt=previous_attempt,
             previous_statuses=previous_statuses,
-            builder=lambda: stock_scan.scan_stocks(
-                stock_scan.load_sector_rs(),
-                stock_scan.load_stock_vs_sector(),
-                stock_scan.load_sector_mapping(),
-            ).reset_index(),
+            builder=lambda: build_integrated_stock_scan_view(
+                ranked_df=ranked,
+                pattern_df=pattern_df,
+                breakout_df=breakout_df,
+                legacy_stock_scan_df=stock_scan.scan_stocks(
+                    stock_scan.load_sector_rs(),
+                    stock_scan.load_stock_vs_sector(),
+                    stock_scan.load_sector_mapping(),
+                ).reset_index(),
+            ),
             optional=True,
         )
+        stock_scan_df = legacy_stock_scan_df
         outputs["stock_scan"] = stock_scan_df
         if stock_status["status"] in {"failed", "timed_out", "degraded"}:
             warnings.append(
@@ -501,6 +828,7 @@ class RankOrchestrationService:
             "factor_correlation_violations": correlation_result.get("has_violations", False),
             "factor_correlation_details": correlation_result.get("violations", []),
             "factor_correlations_json": json.dumps(correlation_result.get("correlation_matrix", {})) if isinstance(correlation_result.get("correlation_matrix"), dict) else json.dumps({}),
+            "pattern_seed_metadata": pattern_seed_metadata,
         }
         outputs["__dashboard_payload__"] = dashboard_payload
         return outputs
@@ -685,7 +1013,8 @@ class RankOrchestrationService:
                 normalized.loc[:, col] = normalized[col].map(
                     lambda x: tuple(x) if isinstance(x, list) else x
                 )
-        hashed = hash_pandas_object(normalized.fillna("<NA>"), index=True).values.tobytes()
+        normalized = normalized.astype("object").where(pd.notna(normalized), "<NA>")
+        hashed = hash_pandas_object(normalized, index=True).values.tobytes()
         return hashlib.sha256(hashed).hexdigest()
 
     def task_fingerprint(self, *, task_name: str, payload: dict[str, Any]) -> str:
@@ -909,10 +1238,16 @@ class RankOrchestrationService:
             status = "timed_out"
             detail = str(exc) or f"{label} timed out"
             caught_exc = exc
+            error_traceback = "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            )
         except Exception as exc:
             status = "failed"
             detail = str(exc)
             caught_exc = exc
+            error_traceback = "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            )
         if not optional:
             failure_record = {
                 "task_name": task_name,
@@ -924,6 +1259,7 @@ class RankOrchestrationService:
                 "elapsed_seconds": round(time.perf_counter() - task_started_perf, 3),
                 "error_class": caught_exc.__class__.__name__,
                 "error_message": detail,
+                "error_traceback": error_traceback,
             }
             task_status[task_name] = failure_record
             self.persist_task_status(context, task_status)
@@ -949,6 +1285,7 @@ class RankOrchestrationService:
             "elapsed_seconds": round(time.perf_counter() - task_started_perf, 3),
             "error_class": caught_exc.__class__.__name__,
             "error_message": detail,
+            "error_traceback": error_traceback,
         }
         task_status[task_name] = failure_record
         self.persist_task_status(context, task_status)
