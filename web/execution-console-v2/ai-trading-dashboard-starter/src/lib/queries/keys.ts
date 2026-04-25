@@ -13,6 +13,8 @@
 export const queryKeys = {
   all: ['execution'] as const,
   pipelineWorkspace: () => ['execution', 'pipeline-workspace'] as const,
+  workspaceSnapshot: (topN: number) =>
+    ['execution', 'workspace-snapshot', topN] as const,
   ranking: () => ['execution', 'ranking'] as const,
   recentRuns: () => ['execution', 'runs'] as const,
   patterns: () => ['execution', 'patterns'] as const,

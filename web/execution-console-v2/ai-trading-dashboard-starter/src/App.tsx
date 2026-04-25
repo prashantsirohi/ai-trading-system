@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import AppLayout from '@/components/layout/AppLayout';
+import ControlTowerPage from '@/pages/ControlTowerPage';
 import PipelinePage from '@/pages/PipelinePage';
 import RankingPage from '@/pages/RankingPage';
 import PatternsPage from '@/pages/PatternsPage';
@@ -15,7 +16,7 @@ export default function App() {
     <AppLayout>
       <AnimatePresence mode="wait">
         <Routes>
-          <Route path="/" element={<Navigate to="/pipeline" replace />} />
+          <Route path="/" element={<ControlTowerPage />} />
           <Route path="/pipeline" element={<PipelinePage />} />
           <Route path="/ranking" element={<RankingPage />} />
           <Route path="/patterns" element={<PatternsPage />} />
@@ -24,6 +25,8 @@ export default function App() {
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/shadow" element={<ShadowPage />} />
           <Route path="/research" element={<ResearchPage />} />
+          {/* Catch-all keeps direct deep-links resilient when a page is renamed. */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AnimatePresence>
     </AppLayout>

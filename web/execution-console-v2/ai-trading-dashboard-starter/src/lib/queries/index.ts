@@ -17,6 +17,8 @@ import { getRanking } from '@/lib/api/ranking';
 import { getRuns } from '@/lib/api/runs';
 import { getSectors } from '@/lib/api/sectors';
 import { getShadow } from '@/lib/api/shadow';
+import { getWorkspaceSnapshot } from '@/lib/api/workspace';
+import type { WorkspaceSnapshot } from '@/lib/api/workspace';
 import type {
   PatternResponse,
   PipelineWorkspaceResponse,
@@ -44,6 +46,18 @@ export function usePipelineWorkspace(
   return useQuery<PipelineWorkspaceResponse, Error>({
     queryKey: queryKeys.pipelineWorkspace(),
     queryFn: getPipelineWorkspace,
+    ...LIVE_QUERY_DEFAULTS,
+    ...options,
+  });
+}
+
+export function useWorkspaceSnapshot(
+  topN: number = 3,
+  options: QueryOverrides<WorkspaceSnapshot> = {},
+): UseQueryResult<WorkspaceSnapshot, Error> {
+  return useQuery<WorkspaceSnapshot, Error>({
+    queryKey: queryKeys.workspaceSnapshot(topN),
+    queryFn: () => getWorkspaceSnapshot(topN),
     ...LIVE_QUERY_DEFAULTS,
     ...options,
   });

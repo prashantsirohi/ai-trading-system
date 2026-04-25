@@ -8,18 +8,20 @@ import {
   PresentationChartLineIcon,
   RocketLaunchIcon,
   Squares2X2Icon,
+  ViewColumnsIcon,
 } from '@heroicons/react/24/outline';
 import { cn } from '@/lib/utils/cn';
 
 const items = [
-  { to: '/pipeline', label: 'Pipeline', icon: HomeIcon },
-  { to: '/ranking', label: 'Ranking', icon: ChartBarIcon },
-  { to: '/patterns', label: 'Patterns', icon: PresentationChartLineIcon },
-  { to: '/sectors', label: 'Sectors', icon: Squares2X2Icon },
-  { to: '/execution', label: 'Execution', icon: RocketLaunchIcon },
-  { to: '/runs', label: 'Runs', icon: PlayIcon },
-  { to: '/shadow', label: 'Shadow', icon: CpuChipIcon },
-  { to: '/research', label: 'Research', icon: BeakerIcon },
+  { to: '/', label: 'Control Tower', icon: HomeIcon, end: true },
+  { to: '/pipeline', label: 'Pipeline', icon: ViewColumnsIcon, end: false },
+  { to: '/ranking', label: 'Ranking', icon: ChartBarIcon, end: false },
+  { to: '/patterns', label: 'Patterns', icon: PresentationChartLineIcon, end: false },
+  { to: '/sectors', label: 'Sectors', icon: Squares2X2Icon, end: false },
+  { to: '/execution', label: 'Execution', icon: RocketLaunchIcon, end: false },
+  { to: '/runs', label: 'Runs', icon: PlayIcon, end: false },
+  { to: '/shadow', label: 'Shadow', icon: CpuChipIcon, end: false },
+  { to: '/research', label: 'Research', icon: BeakerIcon, end: false },
 ];
 
 export default function Sidebar() {
@@ -37,12 +39,13 @@ export default function Sidebar() {
             <NavLink
               key={item.to}
               to={item.to}
+              end={item.end}
               className={({ isActive }) =>
                 cn(
                   'flex items-center gap-3 rounded-2xl border px-4 py-3 transition',
                   isActive
                     ? 'border-blue-500/40 bg-blue-500/10 text-white'
-                    : 'border-slate-800 bg-slate-900/50 text-slate-300 hover:bg-slate-900 hover:text-white'
+                    : 'border-slate-800 bg-slate-900/50 text-slate-300 hover:bg-slate-900 hover:text-white',
                 )
               }
             >

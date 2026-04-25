@@ -31,7 +31,7 @@ pattern/pipeline domain. This doc owns everything under
 | #4 | 2a — Backend | Runs introspection: `/runs/{id}/dq`, `/runs/{id}/artifacts`, gated download | ✅ shipped |
 | #5 | 2a — Backend | Stocks domain: `/stocks/{symbol}`, `/stocks/{symbol}/ohlcv` | ✅ shipped |
 | #6 | 2a — Backend | Ranking detail: `/ranking/{symbol}`, `/ranking/{symbol}/history`, lighter `/workspace/snapshot` | ✅ shipped |
-| #7 | 2b — Frontend | Control Tower view + shared chrome (TopBar, command bar, regime/breadth strip) | 📋 future |
+| #7 | 2b — Frontend | Control Tower view + shared chrome (TopBar, command bar, regime/breadth strip) | ✅ shipped |
 | #8 | 2b — Frontend | Ranking view (expandable rows, factor bars, lifecycle visual, comparison tray, score decomposition) | 📋 future |
 | #9 | 2b — Frontend | Patterns + Sectors views (funnel, pattern cards, leadership chart, rotation heatmap, drill-down) | 📋 future |
 | #10 | 2b — Frontend | Execution view (eligible/watchlist/blocked buckets, orders table, capital widget, risk dashboard) | 📋 future |
@@ -163,19 +163,32 @@ Ports the *Gemini Canvas V2* design (`/Users/prashant/Downloads/Gemini Canvas V2
 
 Each PR is bounded so it can ship independently behind feature flags or a route-level toggle.
 
-### PR #7 — Control Tower + shared chrome (📋 future)
+### PR #7 — Control Tower + shared chrome (✅ shipped)
 
-**Scope.** Top-level shell + the new home page.
+**Endpoints consumed:** `/api/execution/workspace/snapshot` (PR #6) + the existing `/api/execution/workspace/pipeline` (used by `usePipelineWorkspace` for the trust pill).
 
-- New `ControlTowerPage` (replaces or sits alongside the current dashboard landing).
-- Decision Summary banner (top-3 actions, click-through to stock detail).
-- Trust banner: System Trusted / Degraded badge + Active Quarantines + Fallback Ratio + Market State (Risk-On/Off, breadth, %>200SMA).
-- Pipeline Stage Flow visualizer (existing data, redesigned with status pill chain + DQ-warn affordance).
-- Output Summary cards (Top Ranked / Breakouts / Pattern Setups / Sector Leaders) with sparklines.
-- Shared chrome: TopBar (refresh-all, env badge, last-updated), Sidebar nav, command bar (`Cmd+K`/`/`).
-- Adds `framer-motion` + `recharts` + `@heroicons` already in `package.json`; uses existing react-query hooks.
+**Done:**
 
-**Acceptance.** Replaces the existing `pages/DashboardPage.tsx` (or equivalent). Lighthouse perf ≥ 80 on `dev` build. Zero new typecheck or lint errors.
+- `lib/api/workspace.ts` + `lib/queries/index.ts` `useWorkspaceSnapshot(topN=3)` hook keyed under `['execution', 'workspace-snapshot', topN]`.
+- `pages/ControlTowerPage.tsx` — the new landing route at `/`. Composes Decision Summary banner, Trust banner, Output Summary cards. Falls back to a graceful empty state when the snapshot is unavailable.
+- `components/control-tower/DecisionSummaryBanner.tsx` — top-N action chips with verdict-tone colour (green/amber/rose/blue).
+- `components/control-tower/TrustBanner.tsx` — system-trust pill (Trusted / Degraded / Blocked / No Run Yet) + counter strip (top sector / ranked / breakouts / patterns) + animated heartbeat dot when trusted.
+- `components/control-tower/OutputSummaryCards.tsx` — 4-card navigation row with hover glow keyed off card tone (blue / emerald / purple / amber). Cards click through to `/ranking`, `/patterns`, `/sectors`.
+- `components/control-tower/CommandBar.tsx` — modal command palette with type-to-filter scoring (exact / starts-with / contains tiers). Arrow keys navigate, Enter selects, Esc closes. Click-outside also closes.
+- `components/control-tower/icons.tsx` — six inline SVG glyphs (`TargetIcon`, `ArrowUpRightIcon`, `ShieldCheckIcon`, `ShieldAlertIcon`, `CommandIcon`) so the design doesn't pull in `lucide-react` as a second icon library.
+- `lib/hooks/useCommandBar.ts` — global keyboard hook bound to ⌘K / Ctrl+K (always) and `/` (only when not typing in an input).
+- `components/layout/AppLayout.tsx` — mounts the command bar once at the shell level so every page inherits the shortcut.
+- `components/layout/Sidebar.tsx` — adds a "Control Tower" entry pointing at `/`. Uses NavLink `end` prop on the home route so it doesn't stay highlighted on every nested path.
+- `components/layout/TopBar.tsx` — adds a colour-coded trust pill on the left and a `⌘K` command button on the right; the existing Refresh + Retry Publish buttons stay in place.
+- `App.tsx` — `/` routes to `ControlTowerPage` (replacing the previous `<Navigate to="/pipeline">`); a catch-all sends unknown paths back to `/`.
+
+**Verification:** `tsc -b --noEmit` clean. Production build (`npm run build`) succeeds (1659 modules transformed). Existing Playwright e2e specs at `tests/e2e/pipeline-and-ranking.spec.ts` are unaffected because they navigate directly to `/pipeline` and `/ranking`.
+
+**Deliberately out of scope (Canvas design parity gaps):**
+
+- Pipeline Stage Flow visualiser. Will land in PR #11 (Runs audit) where the timeline payload data lives.
+- Sparklines on the summary cards. Will land in PR #11 once `/ranking/{symbol}/history` is consumed at scale.
+- Live regime / breadth indicators. Need a new backend endpoint not yet in scope; tracked as a follow-up.
 
 ### PR #8 — Ranking view (📋 future)
 
