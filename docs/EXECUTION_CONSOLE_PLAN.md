@@ -30,7 +30,7 @@ pattern/pipeline domain. This doc owns everything under
 | #3-B | 1 — Frontend prep | env-driven config, react-query hooks, shared primitives, openapi codegen | ✅ shipped (`a8c3d38`) |
 | #4 | 2a — Backend | Runs introspection: `/runs/{id}/dq`, `/runs/{id}/artifacts`, gated download | ✅ shipped |
 | #5 | 2a — Backend | Stocks domain: `/stocks/{symbol}`, `/stocks/{symbol}/ohlcv` | ✅ shipped |
-| #6 | 2a — Backend | Ranking detail: `/ranking/{symbol}`, `/ranking/{symbol}/history`, lighter `/workspace/snapshot` | 📋 future |
+| #6 | 2a — Backend | Ranking detail: `/ranking/{symbol}`, `/ranking/{symbol}/history`, lighter `/workspace/snapshot` | ✅ shipped |
 | #7 | 2b — Frontend | Control Tower view + shared chrome (TopBar, command bar, regime/breadth strip) | 📋 future |
 | #8 | 2b — Frontend | Ranking view (expandable rows, factor bars, lifecycle visual, comparison tray, score decomposition) | 📋 future |
 | #9 | 2b — Frontend | Patterns + Sectors views (funnel, pattern cards, leadership chart, rotation heatmap, drill-down) | 📋 future |
@@ -133,12 +133,27 @@ Legend: ✅ shipped · ⏳ in flight · 📋 future.
 - Invalid date strings degrade silently to "no filter" rather than 4xx.
 - 9 tests covering happy path, unknown symbol, metadata-only fallback, full history, date-range filter, limit (most-recent retained), invalid dates, unknown symbol on OHLCV, missing DB.
 
-### PR #6 — Ranking detail (📋 future)
+### PR #6 — Ranking detail (✅ shipped)
 
-- `GET /api/execution/ranking/{symbol}?run_id=` — full per-symbol ranking row with explanation (factors, penalties, scenarios, lifecycle, decision).
-- `GET /api/execution/ranking/{symbol}/history?limit=N` — historical rank position for the sparkline.
-- Lighter `GET /api/execution/workspace/snapshot` — payload tailored to the Control Tower; current `/workspace/pipeline` endpoint stays for the deep view.
-- New readmodel: `services/readmodels/ranking_detail.py`.
+**Endpoints:**
+
+- `GET /api/execution/ranking/{symbol}?run_id=` — full per-symbol ranked row + lifecycle + decision + curated factor block. Optionally pinned to a specific run.
+- `GET /api/execution/ranking/{symbol}/history?limit=N` — historical rank position across the most recent N runs (sparkline data, newest first, gaps allowed when symbol absent from a run).
+- `GET /api/execution/workspace/snapshot?top_n=N` — slim Control Tower payload (top-N actions + sector leaders + counts) without the heavy `/workspace/pipeline` payload.
+
+**Done:**
+
+- Readmodel `services/readmodels/ranking_detail.py` — `get_ranking_detail`, `get_ranking_history`, `get_workspace_snapshot_compact`, plus helpers (`_extract_factor_block`, `_categorise_factor`, `_decision_from_category`, `_resolve_rank_attempt_dir`, `_load_snapshot_for_run`, `_walk_historical_runs`, `_infer_run_date`).
+- Factor extraction: regex-categorises numeric `*_score` / factor columns from `ranked_signals` into the four Canvas buckets (`rs`, `volume`, `trend`, `sector`); anything else lands in `other`. Each bucket's `value` is the max of its contributors so the bar magnitude is representative.
+- History walker: walks all `pipeline_runs/*/rank/attempt_*/` dirs, deduplicating to the most-recent attempt per run, sorted by mtime descending. Symbol absent from a run surfaces as `rank_position: null` so the UI can render a continuous timeline with gaps.
+- Run-pinned mode: `_load_snapshot_for_run(ctx, run_id)` resolves `pipeline_runs/{run_id}/rank/attempt_*/` and returns a `LatestOperationalSnapshot` with that pinned context.
+- Routes `routes/ranking_detail.py` registered in `routes/__init__.py`. The new router's prefix `/api/execution/ranking` does not collide with the existing list endpoint at `/api/execution/ranking` (no path param) — FastAPI routes the exact path first.
+- `routes/snapshots.py` extended with `GET /workspace/snapshot`.
+- 13 tests covering: latest happy path, run-pinned, unknown run/symbol, factor categorisation, history newest-first ordering, history gaps when symbol missing, missing runs dir, compact workspace top actions, compact workspace empty, list-endpoint regression check.
+
+### Backend Phase 2a complete
+
+With PR #6 shipped, all backend endpoints needed for the Phase 2b frontend uplift are in place. Phase 2b can now begin.
 
 ---
 

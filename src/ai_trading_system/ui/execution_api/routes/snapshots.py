@@ -13,6 +13,9 @@ from ai_trading_system.ui.execution_api.services.execution_operator import (
     get_ranking_snapshot,
     get_shadow_snapshot,
 )
+from ai_trading_system.ui.execution_api.services.readmodels.ranking_detail import (
+    get_workspace_snapshot_compact,
+)
 
 
 router = APIRouter(prefix="/api/execution", tags=["snapshots"])
@@ -56,3 +59,22 @@ def execution_workspace_pipeline(
 @router.get("/shadow")
 def execution_shadow() -> dict[str, Any]:
     return get_shadow_snapshot(project_root())
+
+
+@router.get("/workspace/snapshot")
+def execution_workspace_snapshot(
+    top_n: int = Query(
+        default=3,
+        ge=1,
+        le=10,
+        description="How many top actions / sector leaders to surface.",
+    ),
+) -> dict[str, Any]:
+    """Slim Control Tower payload — top-N actions + summary cards + leaders.
+
+    Use ``/workspace/pipeline`` for the heavier tabbed workspace view; this
+    endpoint exists to keep the landing page responsive without round-tripping
+    the full ranked / breakout / pattern / sector tables.
+    """
+
+    return get_workspace_snapshot_compact(project_root(), top_n=top_n)
