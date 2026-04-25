@@ -12,7 +12,7 @@ from core.bootstrap import ensure_project_root_on_path
 
 ensure_project_root_on_path(__file__)
 
-from ai_trading_system.interfaces.api.services import (  # noqa: E402
+from ai_trading_system.ui.execution_api.services import (  # noqa: E402
     find_latest_publishable_run,
     get_execution_db_stats,
     get_execution_health,

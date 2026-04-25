@@ -1,107 +1,18 @@
-"""Shared service layer for dashboard UIs."""
+"""Deprecated shim — import from ``ai_trading_system.ui.execution_api.services`` instead."""
 
-from .execution_data import (
-    get_execution_context,
-    get_execution_db_stats,
-    get_execution_health,
-    load_latest_rank_frames,
-    load_execution_payload,
-    load_shadow_overlay_frame,
-    load_shadow_summary_frame,
-    pivot_shadow_summary_frame,
-)
-from .control_center import (
-    find_latest_publishable_run,
-    get_recent_runs,
-    get_run_details,
-    get_operator_task,
-    get_task_logs,
-    launch_streamlit_dashboard_task,
-    launch_ml_workbench_task,
-    list_project_processes,
-    terminate_project_process,
-    launch_pipeline_task,
-    launch_shadow_monitor_task,
-    launch_prepare_dataset_task,
-    launch_recipe_bundle_task,
-    launch_recipe_run_task,
-    launch_train_model_task,
-    list_operator_tasks,
-    terminate_operator_task,
-)
-from .ml_workbench import (
-    approve_workbench_model,
-    delete_workbench_recipe,
-    delete_workbench_recipe_bundle,
-    deploy_workbench_model,
-    load_recipe_bundle_results,
-    load_recipe_results,
-    load_latest_execute_run,
-    load_workbench_trade_report,
-    load_execution_workbench_settings,
-    load_workbench_execution_fills,
-    load_workbench_execution_orders,
-    load_workbench_execution_positions,
-    load_workbench_recipe_bundles,
-    load_workbench_recipes,
-    rollback_workbench_deployment,
-    save_execution_workbench_settings,
-    save_workbench_recipe,
-    save_workbench_recipe_bundle,
-    load_workbench_datasets,
-    load_workbench_models,
-    load_workbench_deployments,
-    load_model_workbench_detail,
-    workbench_recipe_config_path,
+from __future__ import annotations
+
+import sys as _sys
+import warnings as _warnings
+
+_warnings.warn(
+    "ai_trading_system.interfaces.api.services is deprecated; "
+    "import from ai_trading_system.ui.execution_api.services instead.",
+    DeprecationWarning,
+    stacklevel=2,
 )
 
-__all__ = [
-    "get_execution_context",
-    "get_execution_db_stats",
-    "get_execution_health",
-    "load_latest_rank_frames",
-    "load_execution_payload",
-    "load_shadow_overlay_frame",
-    "load_shadow_summary_frame",
-    "pivot_shadow_summary_frame",
-    "get_recent_runs",
-    "find_latest_publishable_run",
-    "get_run_details",
-    "get_operator_task",
-    "get_task_logs",
-    "launch_streamlit_dashboard_task",
-    "launch_ml_workbench_task",
-    "list_project_processes",
-    "terminate_project_process",
-    "launch_pipeline_task",
-    "launch_shadow_monitor_task",
-    "launch_prepare_dataset_task",
-    "launch_recipe_bundle_task",
-    "launch_recipe_run_task",
-    "launch_train_model_task",
-    "list_operator_tasks",
-    "terminate_operator_task",
-    "approve_workbench_model",
-    "delete_workbench_recipe",
-    "delete_workbench_recipe_bundle",
-    "deploy_workbench_model",
-    "load_recipe_bundle_results",
-    "load_recipe_results",
-    "load_latest_execute_run",
-    "load_workbench_trade_report",
-    "load_execution_workbench_settings",
-    "load_workbench_execution_fills",
-    "load_workbench_execution_orders",
-    "load_workbench_execution_positions",
-    "load_workbench_recipe_bundles",
-    "load_workbench_recipes",
-    "rollback_workbench_deployment",
-    "save_execution_workbench_settings",
-    "save_workbench_recipe",
-    "save_workbench_recipe_bundle",
-    "load_workbench_datasets",
-    "load_workbench_models",
-    "load_workbench_deployments",
-    "load_model_workbench_detail",
-    "workbench_recipe_config_path",
-]
+from ai_trading_system.ui.execution_api import services as _services  # noqa: E402
+from ai_trading_system.ui.execution_api.services import *  # noqa: E402,F401,F403
+
+_sys.modules[__name__] = _services

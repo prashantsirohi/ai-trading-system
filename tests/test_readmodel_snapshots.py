@@ -6,11 +6,11 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from ai_trading_system.interfaces.api.services.readmodels.latest_operational_snapshot import (
+from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_snapshot import (
     LatestOperationalSnapshot,
     load_latest_operational_snapshot,
 )
-from ai_trading_system.interfaces.api.services.readmodels.rank_snapshot import (
+from ai_trading_system.ui.execution_api.services.readmodels.rank_snapshot import (
     _records,
     get_pipeline_workspace_snapshot_read_model,
     get_ranking_snapshot_read_model,
@@ -175,15 +175,15 @@ def test_ranking_snapshot_readmodels_use_seeded_snapshot(tmp_path: Path, monkeyp
     payload_path = _write_snapshot_artifacts(tmp_path, live_run, score=88.0, smoke=False)
     _seed_control_plane(tmp_path, [(live_run, {"params": {}})])
     monkeypatch.setattr(
-        "ai_trading_system.interfaces.api.services.readmodels.rank_snapshot.get_execution_health",
+        "ai_trading_system.ui.execution_api.services.readmodels.rank_snapshot.get_execution_health",
         lambda *args, **kwargs: {"status": "ok"},
     )
     monkeypatch.setattr(
-        "ai_trading_system.interfaces.api.services.readmodels.rank_snapshot.get_execution_ops_health_snapshot",
+        "ai_trading_system.ui.execution_api.services.readmodels.rank_snapshot.get_execution_ops_health_snapshot",
         lambda *args, **kwargs: {"available": True},
     )
     monkeypatch.setattr(
-        "ai_trading_system.interfaces.api.services.readmodels.rank_snapshot.get_execution_data_trust_snapshot",
+        "ai_trading_system.ui.execution_api.services.readmodels.rank_snapshot.get_execution_data_trust_snapshot",
         lambda *args, **kwargs: {"status": "ok"},
     )
 
