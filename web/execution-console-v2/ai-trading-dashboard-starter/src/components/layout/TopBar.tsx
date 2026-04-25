@@ -1,23 +1,9 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getPipelineWorkspace } from '@/lib/api/pipeline';
-
-function titleCase(value: string): string {
-  if (!value) {
-    return 'Unknown';
-  }
-  return value
-    .split(/[_\s]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(' ');
-}
+import { titleCase } from '@/lib/utils/text';
+import { usePipelineWorkspace, useRefreshAll } from '@/lib/queries';
 
 export default function TopBar() {
-  const queryClient = useQueryClient();
-  const { data } = useQuery({
-    queryKey: ['pipeline-workspace'],
-    queryFn: getPipelineWorkspace,
-  });
+  const refreshAll = useRefreshAll();
+  const { data } = usePipelineWorkspace();
 
   const summaryText = data
     ? `${data.runId} • Trust ${titleCase(data.trust)} • ${data.date}`
@@ -30,8 +16,7 @@ export default function TopBar() {
         <button
           type="button"
           onClick={() => {
-            void queryClient.invalidateQueries({ queryKey: ['pipeline-workspace'] });
-            void queryClient.invalidateQueries({ queryKey: ['ranking'] });
+            void refreshAll();
           }}
           className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-100"
         >

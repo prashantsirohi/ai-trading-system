@@ -1,18 +1,13 @@
-import { useEffect, useState } from 'react';
 import PageFrame from '@/components/common/PageFrame';
 import SectionCard from '@/components/common/SectionCard';
-import type { SectorResponse } from '@/types/api';
-import { getSectors } from '@/lib/api/sectors';
+import EmptyState from '@/components/common/EmptyState';
+import ErrorStateView from '@/components/common/ErrorState';
+import { CardSkeleton } from '@/components/common/LoadingSkeleton';
+import { useSectors } from '@/lib/queries';
 import SectorStrengthChart from '@/components/charts/SectorStrengthChart';
 
 export default function SectorsPage() {
-  const [data, setData] = useState<SectorResponse | null>(null);
-
-  useEffect(() => {
-    getSectors().then(setData);
-  }, []);
-
-  if (!data) return <div className="text-slate-400">Loading...</div>;
+  const { data, isLoading, error, refetch } = useSectors();
 
   return (
     <PageFrame
@@ -20,7 +15,18 @@ export default function SectorsPage() {
       description="Track leadership rotation and drill into the strongest groups."
     >
       <SectionCard title="Sector Strength Chart">
-        <SectorStrengthChart rows={data.sectors} />
+        {isLoading ? (
+          <CardSkeleton />
+        ) : error ? (
+          <ErrorStateView
+            error={`Failed to load sectors: ${error.message}`}
+            onRetry={() => refetch()}
+          />
+        ) : !data?.sectors?.length ? (
+          <EmptyState message="No sector data available." />
+        ) : (
+          <SectorStrengthChart rows={data.sectors} />
+        )}
       </SectionCard>
     </PageFrame>
   );

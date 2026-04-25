@@ -1,11 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
 import PageErrorBoundary from '@/components/common/PageErrorBoundary';
 import PageFrame from '@/components/common/PageFrame';
 import SectionCard from '@/components/common/SectionCard';
+import EmptyState from '@/components/common/EmptyState';
+import ErrorStateView from '@/components/common/ErrorState';
 import { TableSkeleton } from '@/components/common/LoadingSkeleton';
-import type { RankingResponse } from '@/types/api';
 import type { StockRow } from '@/types/dashboard';
-import { getRanking } from '@/lib/api/ranking';
+import { useRanking } from '@/lib/queries';
 import RankingTable from '@/components/tables/RankingTable';
 import SymbolDetailDrawer from '@/components/drawers/SymbolDetailDrawer';
 import { useState } from 'react';
@@ -13,10 +13,7 @@ import { useState } from 'react';
 function RankingContent() {
   const [selectedRow, setSelectedRow] = useState<StockRow | null>(null);
 
-  const { data, isLoading, error, refetch } = useQuery<RankingResponse>({
-    queryKey: ['ranking'],
-    queryFn: getRanking,
-  });
+  const { data, isLoading, error, refetch } = useRanking();
 
   if (isLoading) {
     return (
@@ -38,17 +35,10 @@ function RankingContent() {
         description="Review strongest candidates with sortable factor-aware rows."
       >
         <SectionCard title="Ranked Signals">
-          <div className="space-y-3">
-            <p className="text-sm text-rose-300">
-              Failed to load ranking: {error.message}
-            </p>
-            <button
-              onClick={() => refetch()}
-              className="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
-            >
-              Retry
-            </button>
-          </div>
+          <ErrorStateView
+            error={`Failed to load ranking: ${error.message}`}
+            onRetry={() => refetch()}
+          />
         </SectionCard>
       </PageFrame>
     );
@@ -61,7 +51,7 @@ function RankingContent() {
         description="Review strongest candidates with sortable factor-aware rows."
       >
         <SectionCard title="Ranked Signals">
-          <p className="text-sm text-slate-400">No ranked signals available</p>
+          <EmptyState message="No ranked signals available" />
         </SectionCard>
       </PageFrame>
     );

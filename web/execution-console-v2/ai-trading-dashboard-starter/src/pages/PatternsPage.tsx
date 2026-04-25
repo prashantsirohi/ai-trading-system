@@ -1,17 +1,12 @@
-import { useEffect, useState } from 'react';
 import PageFrame from '@/components/common/PageFrame';
 import SectionCard from '@/components/common/SectionCard';
-import type { PatternResponse } from '@/types/api';
-import { getPatterns } from '@/lib/api/patterns';
+import EmptyState from '@/components/common/EmptyState';
+import ErrorStateView from '@/components/common/ErrorState';
+import { CardSkeleton } from '@/components/common/LoadingSkeleton';
+import { usePatterns } from '@/lib/queries';
 
 export default function PatternsPage() {
-  const [data, setData] = useState<PatternResponse | null>(null);
-
-  useEffect(() => {
-    getPatterns().then(setData);
-  }, []);
-
-  if (!data) return <div className="text-slate-400">Loading...</div>;
+  const { data, isLoading, error, refetch } = usePatterns();
 
   return (
     <PageFrame
@@ -19,14 +14,30 @@ export default function PatternsPage() {
       description="Monitor cup & handle, round bottom, and related pattern setups."
     >
       <SectionCard title="Pattern Queue">
-        <div className="space-y-3">
-          {data.rows.map((row) => (
-            <div key={row.symbol} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-              <div className="font-semibold">{row.symbol}</div>
-              <div className="mt-1 text-sm text-slate-400">{row.pattern} • Tier {row.tier}</div>
-            </div>
-          ))}
-        </div>
+        {isLoading ? (
+          <CardSkeleton />
+        ) : error ? (
+          <ErrorStateView
+            error={`Failed to load patterns: ${error.message}`}
+            onRetry={() => refetch()}
+          />
+        ) : !data?.rows?.length ? (
+          <EmptyState message="No pattern candidates queued." />
+        ) : (
+          <div className="space-y-3">
+            {data.rows.map((row) => (
+              <div
+                key={row.symbol}
+                className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4"
+              >
+                <div className="font-semibold">{row.symbol}</div>
+                <div className="mt-1 text-sm text-slate-400">
+                  {row.pattern} • Tier {row.tier}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </SectionCard>
     </PageFrame>
   );

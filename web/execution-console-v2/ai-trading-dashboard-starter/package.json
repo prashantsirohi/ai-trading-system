@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e:headed": "playwright test --headed",
+    "gen:api": "openapi-typescript ./openapi.snapshot.json -o ./src/types/api.gen.ts",
+    "gen:api:live": "openapi-typescript http://127.0.0.1:8090/openapi.json -o ./src/types/api.gen.ts"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
@@ -27,6 +29,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "openapi-typescript": "^7.4.4",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.16",
     "typescript": "^5.6.3",
