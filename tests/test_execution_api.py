@@ -224,25 +224,41 @@ def test_execution_api_action_endpoints(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("EXECUTION_API_KEY", API_HEADERS["x-api-key"])
     client = TestClient(create_app())
 
-    app_module = importlib.import_module("ui.execution_api.app")
+    # PR #2 split the monolithic ``app.py`` into per-domain routers under
+    # ``ui.execution_api.routes/``. Each router does ``from ... import name``,
+    # so the bound name lives in the *route module's* namespace — that's
+    # where we have to patch.
+    # Use the canonical ``ai_trading_system.ui.execution_api...`` import path:
+    # the legacy ``ui.execution_api...`` path resolves to a *different* module
+    # object (the deprecation shim), so patching it does not affect the
+    # FastAPI app — which is wired from the canonical modules.
+    pipeline_routes = importlib.import_module(
+        "ai_trading_system.ui.execution_api.routes.pipeline"
+    )
+    processes_routes = importlib.import_module(
+        "ai_trading_system.ui.execution_api.routes.processes"
+    )
+    tasks_routes = importlib.import_module(
+        "ai_trading_system.ui.execution_api.routes.tasks"
+    )
 
     monkeypatch.setattr(
-        app_module,
+        pipeline_routes,
         "run_pipeline_action",
         lambda *args, **kwargs: {"task_id": "task-new", "status": "running", "label": kwargs["label"]},
     )
     monkeypatch.setattr(
-        app_module,
+        pipeline_routes,
         "retry_publish_action",
         lambda *args, **kwargs: {"task_id": "task-publish", "status": "running"},
     )
     monkeypatch.setattr(
-        app_module,
+        processes_routes,
         "terminate_process_action",
         lambda *args, **kwargs: {"ok": True, "message": "terminated"},
     )
     monkeypatch.setattr(
-        app_module,
+        tasks_routes,
         "terminate_task_action",
         lambda *args, **kwargs: {"ok": True, "message": "task terminated"},
     )
