@@ -134,6 +134,24 @@ def build_dashboard_payload(
             return []
         return _records(stock_scan_df.loc[predicate(stock_scan_df)], limit=limit)
 
+    def _stage2_leader_records(*, limit: int = 50) -> list[dict]:
+        if stock_scan_df is None or stock_scan_df.empty:
+            return []
+        stage2_labels = stock_scan_df.get("stage2_label", pd.Series("", index=stock_scan_df.index)).astype(str)
+        stage2_mask = stage2_labels.isin({"strong_stage2", "stage2"})
+        focused = stock_scan_df.loc[stage2_mask].copy()
+        if focused.empty:
+            return []
+        focused.loc[:, "_rank_sort"] = pd.to_numeric(focused.get("rank"), errors="coerce")
+        focused.loc[:, "_composite_sort"] = pd.to_numeric(focused.get("composite_score"), errors="coerce")
+        focused = focused.sort_values(
+            ["_rank_sort", "_composite_sort", "symbol_id"],
+            ascending=[True, False, True],
+            na_position="last",
+            kind="stable",
+        ).drop(columns=["_rank_sort", "_composite_sort"], errors="ignore")
+        return _records(focused, limit=limit)
+
     top_sector = None
     if not sector_dashboard_df.empty:
         sector_col = "Sector" if "Sector" in sector_dashboard_df.columns else sector_dashboard_df.columns[0]
@@ -165,6 +183,16 @@ def build_dashboard_payload(
             & df.get("breakout_positive", pd.Series(False, index=df.index)).fillna(False).astype(bool)
         )
     )
+    stage2_leaders = _stage2_leader_records(limit=50)
+    stage2_total_count = 0
+    stage2_label_counts: Dict[str, int] = {}
+    if stock_scan_df is not None and not stock_scan_df.empty and "stage2_label" in stock_scan_df.columns:
+        stage2_mask = stock_scan_df["stage2_label"].astype(str).isin({"strong_stage2", "stage2"})
+        stage2_total_count = int(stage2_mask.sum())
+        if stage2_total_count:
+            stage2_label_counts = (
+                stock_scan_df.loc[stage2_mask, "stage2_label"].astype(str).value_counts().to_dict()
+            )
     discovery_visibility = _discovery_visibility_summary(
         ranked_df=ranked_df,
         stock_scan_df=stock_scan_df,
@@ -203,6 +231,9 @@ def build_dashboard_payload(
             "ranked_leader_count": len(ranked_leaders),
             "pattern_discovery_count": len(pattern_discoveries),
             "breakout_candidate_count": len(breakout_candidates),
+            "stage2_leader_count": len(stage2_leaders),
+            "stage2_total_count": stage2_total_count,
+            "stage2_label_counts": stage2_label_counts,
             **discovery_visibility,
             "data_trust_status": (trust_summary or {}).get("status", "unknown"),
             "latest_trade_date": (trust_summary or {}).get("latest_trade_date"),
@@ -214,6 +245,7 @@ def build_dashboard_payload(
         "pattern_scan": _records(pattern_df, limit=10),
         "stock_scan": _records(stock_scan_df, limit=10),
         "ranked_leaders": ranked_leaders,
+        "stage2_leaders": stage2_leaders,
         "pattern_discoveries": pattern_discoveries,
         "breakout_candidates": breakout_candidates,
         "sector_dashboard": _records(sector_dashboard_df, limit=10),

@@ -155,3 +155,43 @@ def test_build_dashboard_payload_explains_empty_discoveries_when_ranked_covers_s
     assert summary["ranked_universe_stock_scan_coverage_pct"] == 100.0
     assert summary["discovery_visibility_reason"] == "ranked_universe_covers_stock_scan"
     assert "ranked universe already covers the full stock-scan symbol set" in summary["discovery_visibility_note"]
+
+
+def test_build_dashboard_payload_includes_top_stage2_leaders(tmp_path: Path) -> None:
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "ohlcv.duckdb",
+        run_id="pipeline-2026-04-24-fixture",
+        run_date="2026-04-24",
+        stage_name="rank",
+        attempt_number=1,
+        params={},
+    )
+    stock_scan_df = pd.DataFrame(
+        [
+            {"symbol_id": "A1", "rank": 3, "composite_score": 80.0, "stage2_label": "strong_stage2"},
+            {"symbol_id": "A2", "rank": 1, "composite_score": 70.0, "stage2_label": "stage2"},
+            {"symbol_id": "A3", "rank": 2, "composite_score": 90.0, "stage2_label": "strong_stage2"},
+            {"symbol_id": "A4", "rank": None, "composite_score": 95.0, "stage2_label": "stage2"},
+            {"symbol_id": "B1", "rank": 4, "composite_score": 99.0, "stage2_label": "non_stage2"},
+        ]
+    )
+    ranked_df = stock_scan_df[["symbol_id", "rank", "composite_score", "stage2_label"]].copy()
+
+    payload = build_dashboard_payload(
+        context=context,
+        ranked_df=ranked_df,
+        breakout_df=pd.DataFrame(),
+        pattern_df=pd.DataFrame(),
+        stock_scan_df=stock_scan_df,
+        sector_dashboard_df=pd.DataFrame(),
+        warnings=[],
+        trust_summary={"status": "trusted"},
+        task_status={},
+    )
+
+    stage2_leaders = payload["stage2_leaders"]
+    assert [row["symbol_id"] for row in stage2_leaders] == ["A2", "A3", "A1", "A4"]
+    assert payload["summary"]["stage2_total_count"] == 4
+    assert payload["summary"]["stage2_leader_count"] == 4
+    assert payload["summary"]["stage2_label_counts"] == {"strong_stage2": 2, "stage2": 2}

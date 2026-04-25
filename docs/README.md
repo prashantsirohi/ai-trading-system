@@ -28,6 +28,7 @@ UI and API work:
 Architecture:
 - [architecture/system-overview.md](architecture/system-overview.md): repo purpose, runtime split, storage, UI status
 - [architecture/pipeline.md](architecture/pipeline.md): stage order, stage contracts, block conditions, retries, trust and DQ gates
+- [architecture/pattern-scan.md](architecture/pattern-scan.md): end-to-end operational pattern scan flow, seed universe, lifecycle, artifacts, and operator commands
 - [architecture/data-model.md](architecture/data-model.md): DuckDB and SQLite stores, key tables, artifact layout, lineage model
 - [architecture/module-map.md](architecture/module-map.md): directory ownership and operational vs research vs legacy scope
 
