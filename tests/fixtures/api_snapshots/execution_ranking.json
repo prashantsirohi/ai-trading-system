@@ -10,6 +10,42 @@
       "symbol_id": "BBB"
     }
   ],
+  "stage2_filter": {
+    "after_count": 2,
+    "available": false,
+    "before_count": 2,
+    "dropped_count": 0,
+    "gate_unavailable": false,
+    "min_score": null,
+    "requested": false,
+    "stage2_only": false
+  },
+  "stage2_summary": {
+    "available": false,
+    "columns": {
+      "is_stage2_uptrend": false,
+      "stage2_label": false,
+      "stage2_score": false
+    },
+    "counts_by_label": {},
+    "score": {
+      "avg": null,
+      "max": null,
+      "min": null
+    },
+    "top_symbols": [
+      {
+        "composite_score": 88.5,
+        "symbol_id": "AAA"
+      },
+      {
+        "composite_score": 82.0,
+        "symbol_id": "BBB"
+      }
+    ],
+    "uptrend_count": 0,
+    "uptrend_ratio_pct": 0.0
+  },
   "top_ranked": [
     {
       "close": 104.0,
@@ -25,5 +61,6 @@
       "sector_name": "Technology",
       "symbol_id": "BBB"
     }
-  ]
+  ],
+  "visible_count": 2
 }

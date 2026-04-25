@@ -1,5 +1,6 @@
 {
   "artifact_path": "<PROJECT_ROOT>/data/pipeline_runs/pipeline-2026-04-10-smoke/rank/attempt_1/dashboard_payload.json",
+  "breakout_candidates": [],
   "breakouts": [
     {
       "breakout_score": 96,
@@ -23,14 +24,12 @@
     "db_path": "<PROJECT_ROOT>/data/ohlcv.duckdb",
     "fallback_ratio_latest": 0.0,
     "latest_provider_stats": {
-      "counts": {
-        "unknown": 2
-      },
+      "counts": {},
       "fallback_rows": 0,
       "primary_rows": 0,
-      "total_rows": 2,
+      "total_rows": 0,
       "trade_date": "2026-04-10",
-      "unknown_rows": 2
+      "unknown_rows": 0
     },
     "latest_quarantined_symbol_ratio": 0.0,
     "latest_quarantined_symbols": 0,
@@ -39,13 +38,9 @@
     "latest_trade_date": "2026-04-10",
     "latest_validated_date": null,
     "primary_ratio_latest": 0.0,
-    "provider_counts_by_date": {
-      "2026-04-10": {
-        "unknown": 2
-      }
-    },
+    "provider_counts_by_date": {},
     "status": "legacy",
-    "unknown_ratio_latest": 1.0
+    "unknown_ratio_latest": 0.0
   },
   "health": {
     "checks": [
@@ -132,6 +127,7 @@
     },
     "stale_stages": []
   },
+  "pattern_discoveries": [],
   "patterns": [
     {
       "pattern_family": "cup_handle",
@@ -141,6 +137,7 @@
       "symbol_id": "AAA"
     }
   ],
+  "ranked_leaders": [],
   "sectors": [
     {
       "Quadrant": "Leading",
@@ -148,6 +145,42 @@
       "Sector": "Finance"
     }
   ],
+  "stage2_filter": {
+    "after_count": 2,
+    "available": false,
+    "before_count": 2,
+    "dropped_count": 0,
+    "gate_unavailable": false,
+    "min_score": null,
+    "requested": false,
+    "stage2_only": false
+  },
+  "stage2_summary": {
+    "available": false,
+    "columns": {
+      "is_stage2_uptrend": false,
+      "stage2_label": false,
+      "stage2_score": false
+    },
+    "counts_by_label": {},
+    "score": {
+      "avg": null,
+      "max": null,
+      "min": null
+    },
+    "top_symbols": [
+      {
+        "composite_score": 88.5,
+        "symbol_id": "AAA"
+      },
+      {
+        "composite_score": 82.0,
+        "symbol_id": "BBB"
+      }
+    ],
+    "uptrend_count": 0,
+    "uptrend_ratio_pct": 0.0
+  },
   "stock_scan": [
     {
       "category": "BUY",
@@ -177,5 +210,8 @@
       "symbol_id": "BBB"
     }
   ],
+  "visible_counts": {
+    "ranked": 2
+  },
   "warnings": []
 }

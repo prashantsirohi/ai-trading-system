@@ -244,11 +244,20 @@ def get_pipeline_workspace_snapshot_read_model(
     payload_pattern_discoveries = current_snapshot.payload.get("pattern_discoveries")
     payload_breakout_candidates = current_snapshot.payload.get("breakout_candidates")
 
+    # ``DataFrame.get("rank")`` returns ``None`` when the column is absent,
+    # and ``pd.to_numeric(None)`` collapses to a numpy scalar that lacks
+    # ``.notna()`` — we have to provide a NaN-filled Series aligned with
+    # the DataFrame's index so the boolean mask survives a missing column.
     ranked_leaders = (
         payload_ranked_leaders
         if isinstance(payload_ranked_leaders, list)
         else _records(
-            stock_scan.loc[pd.to_numeric(stock_scan.get("rank"), errors="coerce").notna()]
+            stock_scan.loc[
+                pd.to_numeric(
+                    stock_scan.get("rank", pd.Series(pd.NA, index=stock_scan.index)),
+                    errors="coerce",
+                ).notna()
+            ]
             if stock_scan is not None and not stock_scan.empty
             else pd.DataFrame(),
             limit=limit,
@@ -273,7 +282,10 @@ def get_pipeline_workspace_snapshot_read_model(
         if isinstance(payload_breakout_candidates, list)
         else _records(
             stock_scan.loc[
-                pd.to_numeric(stock_scan.get("rank"), errors="coerce").isna()
+                pd.to_numeric(
+                    stock_scan.get("rank", pd.Series(pd.NA, index=stock_scan.index)),
+                    errors="coerce",
+                ).isna()
                 & stock_scan.get("breakout_positive", pd.Series(False, index=stock_scan.index)).fillna(False).astype(bool)
             ]
             if stock_scan is not None and not stock_scan.empty
