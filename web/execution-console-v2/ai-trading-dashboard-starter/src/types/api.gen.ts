@@ -4,15 +4,18 @@
  */
 
 export interface paths {
-    "/api/execution/summary": {
+    "/api/execution/artifacts/{run_id}/{stage}/{name}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Execution Summary */
-        get: operations["execution_summary_api_execution_summary_get"];
+        /**
+         * Download Artifact
+         * @description Serve an artifact file, gated by the registry + path-containment check.
+         */
+        get: operations["download_artifact_api_execution_artifacts__run_id___stage___name__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -38,23 +41,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/execution/ranking": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Execution Ranking */
-        get: operations["execution_ranking_api_execution_ranking_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/execution/market": {
         parameters: {
             query?: never;
@@ -72,15 +58,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/execution/workspace/pipeline": {
+    "/api/execution/pipeline/publish-retry": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Execution Workspace Pipeline */
-        get: operations["execution_workspace_pipeline_api_execution_workspace_pipeline_get"];
+        get?: never;
+        put?: never;
+        /** Execution Publish Retry */
+        post: operations["execution_publish_retry_api_execution_pipeline_publish_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/pipeline/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Execution Pipeline Run */
+        post: operations["execution_pipeline_run_api_execution_pipeline_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/processes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Execution Processes */
+        get: operations["execution_processes_api_execution_processes_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -89,17 +109,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/execution/shadow": {
+    "/api/execution/processes/{pid}/terminate": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Execution Shadow */
-        get: operations["execution_shadow_api_execution_shadow_get"];
+        get?: never;
+        put?: never;
+        /** Execution Terminate Process */
+        post: operations["execution_terminate_process_api_execution_processes__pid__terminate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/ranking": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Execution Ranking */
+        get: operations["execution_ranking_api_execution_ranking_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/ranking/{symbol}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Execution Ranking Detail */
+        get: operations["execution_ranking_detail_api_execution_ranking__symbol__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/ranking/{symbol}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Execution Ranking History */
+        get: operations["execution_ranking_history_api_execution_ranking__symbol__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/research/launch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Execution Launch Research */
+        post: operations["execution_launch_research_api_execution_research_launch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -132,6 +220,140 @@ export interface paths {
         };
         /** Execution Run Details */
         get: operations["execution_run_details_api_execution_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/runs/{run_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Execution Run Artifacts
+         * @description Return the artifact registry for ``run_id``, grouped by stage.
+         */
+        get: operations["execution_run_artifacts_api_execution_runs__run_id__artifacts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/runs/{run_id}/dq": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Execution Run Dq
+         * @description Return DQ rule results for ``run_id`` plus per-severity aggregates.
+         */
+        get: operations["execution_run_dq_api_execution_runs__run_id__dq_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/shadow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Execution Shadow */
+        get: operations["execution_shadow_api_execution_shadow_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/shadow/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Execution Shadow Run */
+        post: operations["execution_shadow_run_api_execution_shadow_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/stocks/{symbol}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Execution Stock Detail
+         * @description Return the consolidated detail payload for ``symbol``.
+         *
+         *     Always returns 200 even when sources are missing — the UI inspects
+         *     ``available`` and the per-block ``None``-ness to decide what to render.
+         */
+        get: operations["execution_stock_detail_api_execution_stocks__symbol__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/stocks/{symbol}/ohlcv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Execution Stock Ohlcv
+         * @description Return OHLCV + delivery candles for ``symbol`` in ascending time order.
+         */
+        get: operations["execution_stock_ohlcv_api_execution_stocks__symbol__ohlcv_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Execution Summary */
+        get: operations["execution_summary_api_execution_summary_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -174,23 +396,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/execution/tasks/{task_id}/logs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Execution Task Logs */
-        get: operations["execution_task_logs_api_execution_tasks__task_id__logs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/execution/tasks/{task_id}/events": {
         parameters: {
             query?: never;
@@ -200,6 +405,23 @@ export interface paths {
         };
         /** Execution Task Events */
         get: operations["execution_task_events_api_execution_tasks__task_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/tasks/{task_id}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Execution Task Logs */
+        get: operations["execution_task_logs_api_execution_tasks__task_id__logs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -225,15 +447,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/execution/processes": {
+    "/api/execution/workspace/pipeline": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Execution Processes */
-        get: operations["execution_processes_api_execution_processes_get"];
+        /** Execution Workspace Pipeline */
+        get: operations["execution_workspace_pipeline_api_execution_workspace_pipeline_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -242,85 +464,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/execution/processes/{pid}/terminate": {
+    "/api/execution/workspace/snapshot": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Execution Workspace Snapshot
+         * @description Slim Control Tower payload — top-N actions + summary cards + leaders.
+         *
+         *     Use ``/workspace/pipeline`` for the heavier tabbed workspace view; this
+         *     endpoint exists to keep the landing page responsive without round-tripping
+         *     the full ranked / breakout / pattern / sector tables.
+         */
+        get: operations["execution_workspace_snapshot_api_execution_workspace_snapshot_get"];
         put?: never;
-        /** Execution Terminate Process */
-        post: operations["execution_terminate_process_api_execution_processes__pid__terminate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/execution/pipeline/run": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Execution Pipeline Run */
-        post: operations["execution_pipeline_run_api_execution_pipeline_run_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/execution/pipeline/publish-retry": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Execution Publish Retry */
-        post: operations["execution_publish_retry_api_execution_pipeline_publish_retry_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/execution/shadow/run": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Execution Shadow Run */
-        post: operations["execution_shadow_run_api_execution_shadow_run_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/execution/research/launch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Execution Launch Research */
-        post: operations["execution_launch_research_api_execution_research_launch_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -346,16 +507,16 @@ export interface components {
              * @default Execution API pipeline run
              */
             label: string;
-            /** Stages */
-            stages?: string[];
             /** Params */
             params?: {
                 [key: string]: unknown;
             };
-            /** Run Id */
-            run_id?: string | null;
             /** Run Date */
             run_date?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Stages */
+            stages?: string[];
         };
         /**
          * PublishRetryRequest
@@ -387,15 +548,15 @@ export interface components {
          */
         ShadowRunRequest: {
             /**
-             * Label
-             * @default Shadow refresh
-             */
-            label: string;
-            /**
              * Backfill Days
              * @default 0
              */
             backfill_days: number;
+            /**
+             * Label
+             * @default Shadow refresh
+             */
+            label: string;
             /** Prediction Date */
             prediction_date?: string | null;
         };
@@ -417,11 +578,15 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    execution_summary_api_execution_summary_get: {
+    download_artifact_api_execution_artifacts__run_id___stage___name__get: {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                run_id: string;
+                stage: string;
+                name: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -432,9 +597,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -457,41 +629,6 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
-                };
-            };
-        };
-    };
-    execution_ranking_api_execution_ranking_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                stage2_only?: boolean;
-                stage2_min_score?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -529,49 +666,18 @@ export interface operations {
             };
         };
     };
-    execution_workspace_pipeline_api_execution_workspace_pipeline_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                stage2_only?: boolean;
-                stage2_min_score?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    execution_shadow_api_execution_shadow_get: {
+    execution_publish_retry_api_execution_pipeline_publish_retry_post: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishRetryRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -584,219 +690,29 @@ export interface operations {
                     };
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
-    execution_runs_api_execution_runs_get: {
+    execution_pipeline_run_api_execution_pipeline_run_post: {
         parameters: {
-            query?: {
-                limit?: number;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PipelineRunRequest"];
             };
         };
-    };
-    execution_run_details_api_execution_runs__run_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    execution_tasks_api_execution_tasks_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    execution_task_api_execution_tasks__task_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    execution_task_logs_api_execution_tasks__task_id__logs_get: {
-        parameters: {
-            query?: {
-                after?: number;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    execution_task_events_api_execution_tasks__task_id__events_get: {
-        parameters: {
-            query?: {
-                cursor?: number;
-            };
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    execution_terminate_task_api_execution_tasks__task_id__terminate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -875,7 +791,114 @@ export interface operations {
             };
         };
     };
-    execution_pipeline_run_api_execution_pipeline_run_post: {
+    execution_ranking_api_execution_ranking_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                stage2_only?: boolean;
+                stage2_min_score?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_ranking_detail_api_execution_ranking__symbol__get: {
+        parameters: {
+            query?: {
+                /** @description Pin the response to a specific run; defaults to the latest. */
+                run_id?: string | null;
+            };
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_ranking_history_api_execution_ranking__symbol__history_get: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of historical runs to return (newest first). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_launch_research_api_execution_research_launch_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -884,7 +907,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PipelineRunRequest"];
+                "application/json": components["schemas"]["ResearchLaunchRequest"];
             };
         };
         responses: {
@@ -910,18 +933,16 @@ export interface operations {
             };
         };
     };
-    execution_publish_retry_api_execution_pipeline_publish_retry_post: {
+    execution_runs_api_execution_runs_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PublishRetryRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -941,6 +962,132 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_run_details_api_execution_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_run_artifacts_api_execution_runs__run_id__artifacts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_run_dq_api_execution_runs__run_id__dq_get: {
+        parameters: {
+            query?: {
+                /** @description Filter to a single severity tier (e.g. 'warn', 'error'). */
+                severity?: string | null;
+                /** @description Filter to a single pipeline stage (e.g. 'ingest', 'features'). */
+                stage?: string | null;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_shadow_api_execution_shadow_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -980,18 +1127,317 @@ export interface operations {
             };
         };
     };
-    execution_launch_research_api_execution_research_launch_post: {
+    execution_stock_detail_api_execution_stocks__symbol__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_stock_ohlcv_api_execution_stocks__symbol__ohlcv_get: {
+        parameters: {
+            query?: {
+                /** @description Inclusive lower bound (ISO date, ``YYYY-MM-DD``). */
+                from?: string | null;
+                /** @description Inclusive upper bound (ISO date, ``YYYY-MM-DD``). */
+                to?: string | null;
+                /** @description Candle interval; only ``daily`` is supported today. */
+                interval?: string;
+                /** @description Maximum candles to return; keeps the most recent rows. */
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                symbol: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_summary_api_execution_summary_get: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ResearchLaunchRequest"];
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
             };
         };
+    };
+    execution_tasks_api_execution_tasks_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_task_api_execution_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_task_events_api_execution_tasks__task_id__events_get: {
+        parameters: {
+            query?: {
+                cursor?: number;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_task_logs_api_execution_tasks__task_id__logs_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_terminate_task_api_execution_tasks__task_id__terminate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_workspace_pipeline_api_execution_workspace_pipeline_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                stage2_only?: boolean;
+                stage2_min_score?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_workspace_snapshot_api_execution_workspace_snapshot_get: {
+        parameters: {
+            query?: {
+                /** @description How many top actions / sector leaders to surface. */
+                top_n?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
