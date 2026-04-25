@@ -29,7 +29,7 @@ pattern/pipeline domain. This doc owns everything under
 | #3-A | 1 — Boundary | AST-based layer-boundary lint + canonical entry-point paths | ✅ shipped (`ab4afdd`) |
 | #3-B | 1 — Frontend prep | env-driven config, react-query hooks, shared primitives, openapi codegen | ✅ shipped (`a8c3d38`) |
 | #4 | 2a — Backend | Runs introspection: `/runs/{id}/dq`, `/runs/{id}/artifacts`, gated download | ✅ shipped |
-| #5 | 2a — Backend | Stocks domain: `/stocks/{symbol}`, `/stocks/{symbol}/ohlcv` | 📋 future |
+| #5 | 2a — Backend | Stocks domain: `/stocks/{symbol}`, `/stocks/{symbol}/ohlcv` | ✅ shipped |
 | #6 | 2a — Backend | Ranking detail: `/ranking/{symbol}`, `/ranking/{symbol}/history`, lighter `/workspace/snapshot` | 📋 future |
 | #7 | 2b — Frontend | Control Tower view + shared chrome (TopBar, command bar, regime/breadth strip) | 📋 future |
 | #8 | 2b — Frontend | Ranking view (expandable rows, factor bars, lifecycle visual, comparison tray, score decomposition) | 📋 future |
@@ -117,12 +117,21 @@ Legend: ✅ shipped · ⏳ in flight · 📋 future.
 - `tests/test_execution_api_runs_introspection.py` — 12 tests covering happy path, severity/stage filters, missing DB, missing run, basename mismatch, path traversal at the URL layer, registry-but-file-missing, and registry-points-outside-sandbox.
 - `tests/lint/test_layer_boundaries.py` continues to pass (no `fastapi`/`uvicorn`/`starlette` import in the new readmodel).
 
-### PR #5 — Stocks domain (📋 future)
+### PR #5 — Stocks domain (✅ shipped)
 
-- `GET /api/execution/stocks/{symbol}` — fundamentals, sector, latest features, ranking position, lifecycle.
-- `GET /api/execution/stocks/{symbol}/ohlcv?from=&to=&interval=` — candle data for the auto-chart.
-- New service module: `services/stocks_detail.py`.
-- New readmodel: `services/readmodels/stock_detail.py` (joins `_catalog`, `_delivery`, `stock_details`, latest rank frame).
+**Endpoints:**
+
+- `GET /api/execution/stocks/{symbol}` — fundamentals (from canonical `symbols` master), latest quote (`_catalog` + `_delivery` LEFT JOIN), ranking position (1-based row in `ranked_signals`), lifecycle chips (`rank → breakout → pattern → execution`).
+- `GET /api/execution/stocks/{symbol}/ohlcv?from=&to=&interval=&limit=` — daily candles + delivery, ascending chronological order.
+
+**Done:**
+
+- Readmodel `services/readmodels/stock_detail.py` — `get_stock_detail`, `get_stock_ohlcv`, plus helpers (`_lifecycle`, `_frame_row_for_symbol`, `_rank_position`).
+- Routes `routes/stocks.py` registered in `routes/__init__.py`.
+- Permissive degradation: every block can be `None` independently; `available` is `True` when *any* block is populated, so a metadata-only payload (no rank frames yet) still renders.
+- DuckDB casts (`CAST(? AS DATE)` + `< CAST(? AS DATE) + INTERVAL 1 DAY`) survive the strict timestamp/varchar binder.
+- Invalid date strings degrade silently to "no filter" rather than 4xx.
+- 9 tests covering happy path, unknown symbol, metadata-only fallback, full history, date-range filter, limit (most-recent retained), invalid dates, unknown symbol on OHLCV, missing DB.
 
 ### PR #6 — Ranking detail (📋 future)
 
