@@ -68,9 +68,21 @@ def _seed_datastores(project_root: Path) -> None:
     master_db = data_dir / "masterdata.db"
     sqlite_conn = sqlite3.connect(master_db)
     try:
+        # ``stock_details`` is the legacy shape some readers still consult.
         sqlite_conn.execute("CREATE TABLE stock_details (Symbol TEXT, exchange TEXT)")
         sqlite_conn.execute("INSERT INTO stock_details VALUES ('AAA', 'NSE')")
         sqlite_conn.execute("INSERT INTO stock_details VALUES ('BBB', 'NSE')")
+        # ``symbols`` is the canonical table created by
+        # ``domains.ingest.masterdata`` and queried by the
+        # ``universe_alignment`` health check (see
+        # ``ui.execution_api.services.readmodels.pipeline_status``). Seed it
+        # to keep the catalog and master in sync so the health check returns
+        # ``ok`` instead of ``error``.
+        sqlite_conn.execute(
+            "CREATE TABLE symbols (symbol_id TEXT PRIMARY KEY, exchange TEXT)"
+        )
+        sqlite_conn.execute("INSERT INTO symbols VALUES ('AAA', 'NSE')")
+        sqlite_conn.execute("INSERT INTO symbols VALUES ('BBB', 'NSE')")
         sqlite_conn.commit()
     finally:
         sqlite_conn.close()
