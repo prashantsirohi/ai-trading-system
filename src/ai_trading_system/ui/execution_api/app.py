@@ -81,7 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     uvicorn.run(
-        "ui.execution_api.app:app", host=args.host, port=args.port, reload=False
+        "ai_trading_system.ui.execution_api.app:app",
+        host=args.host,
+        port=args.port,
+        reload=False,
     )
 
 
