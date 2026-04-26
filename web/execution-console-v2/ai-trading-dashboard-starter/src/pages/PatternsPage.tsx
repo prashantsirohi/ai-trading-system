@@ -21,6 +21,7 @@ import { CardSkeleton } from '@/components/common/LoadingSkeleton';
 import PipelineFunnel, { type FunnelStage } from '@/components/patterns/PipelineFunnel';
 import PatternCard from '@/components/patterns/PatternCard';
 import { useRanking, usePatterns } from '@/lib/queries';
+import { useWorkspace } from '@/components/workspace/WorkspaceContext';
 import type { StockRow } from '@/types/dashboard';
 
 type Filter = 'all' | 'imminent' | 'qualified';
@@ -48,9 +49,15 @@ function buildStages(universeCount: number, patternRows: StockRow[]): FunnelStag
 export default function PatternsPage() {
   const patternsQuery = usePatterns();
   const rankingQuery = useRanking();
+  const { openWorkspace } = useWorkspace();
 
   const [filter, setFilter] = useState<Filter>('all');
   const [selected, setSelected] = useState<StockRow | null>(null);
+
+  const handleSelect = (row: StockRow) => {
+    setSelected(row);
+    openWorkspace(row.symbol);
+  };
 
   const patternRows = patternsQuery.data?.rows ?? [];
   const universeCount = rankingQuery.data?.rows.length ?? patternRows.length;
@@ -99,14 +106,14 @@ export default function PatternsPage() {
             ) : (
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {visibleRows.map((row) => (
-                  <PatternCard key={row.symbol} row={row} onSelect={setSelected} />
+                  <PatternCard key={row.symbol} row={row} onSelect={handleSelect} />
                 ))}
               </div>
             )}
             {selected ? (
               <p className="text-xs text-slate-500">
                 Selected: <span className="font-semibold text-slate-300">{selected.symbol}</span> —
-                full pattern detail lands in PR #12 (Stock Detail Workspace).
+                pattern history opens in the Stock Detail Workspace.
               </p>
             ) : null}
           </div>

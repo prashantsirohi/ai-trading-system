@@ -1,10 +1,14 @@
 /**
- * Ranking page (PR #8).
+ * Ranking page (PR #8 + PR #12 wiring).
  *
  * Wires the ranked-signal list, filter chip bar, expandable rows, and the
  * comparison tray into a single Canvas-style view. The expansion panel
  * itself fetches per-symbol detail/history lazily, so this page only owns
- * the list-level query plus filter / expand / compare state.
+ * the list-level query plus filter / expand state.
+ *
+ * Compare-Factors selection now lives in WorkspaceContext (PR #12) so the
+ * Compare modal can be opened from any page; the Ranking-page tray is the
+ * primary entry point but the global tray launcher is also available.
  */
 import { useMemo, useState } from 'react';
 
@@ -17,6 +21,7 @@ import { TableSkeleton } from '@/components/common/LoadingSkeleton';
 import RankingTable from '@/components/tables/RankingTable';
 import FilterChipBar, { type RankingFilter } from '@/components/ranking/FilterChipBar';
 import ComparisonTray, { COMPARISON_LIMIT } from '@/components/ranking/ComparisonTray';
+import { useWorkspace } from '@/components/workspace/WorkspaceContext';
 import { useRanking } from '@/lib/queries';
 import type { StockRow } from '@/types/dashboard';
 
@@ -36,18 +41,28 @@ function applyFilter(rows: StockRow[], filter: RankingFilter, search: string): S
 
 function RankingContent() {
   const { data, isLoading, error, refetch } = useRanking();
+  const workspace = useWorkspace();
 
   const [filter, setFilter] = useState<RankingFilter>('all');
   const [search, setSearch] = useState('');
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
-  const [comparedRows, setComparedRows] = useState<StockRow[]>([]);
   const [pendingNotice, setPendingNotice] = useState<string | null>(null);
 
   const rows = data?.rows ?? [];
   const filtered = useMemo(() => applyFilter(rows, filter, search), [rows, filter, search]);
   const comparedSymbols = useMemo(
-    () => new Set(comparedRows.map((row) => row.symbol)),
-    [comparedRows],
+    () => new Set(workspace.compareSymbols),
+    [workspace.compareSymbols],
+  );
+
+  // The Ranking-page tray expects ``StockRow`` records — resolve the symbols
+  // pinned in WorkspaceContext back to the full rows for display.
+  const comparedRows = useMemo(
+    () =>
+      workspace.compareSymbols
+        .map((symbol) => rows.find((r) => r.symbol === symbol))
+        .filter((r): r is StockRow => Boolean(r)),
+    [workspace.compareSymbols, rows],
   );
 
   const handleToggleExpand = (symbol: string) => {
@@ -55,25 +70,15 @@ function RankingContent() {
   };
 
   const handleToggleCompare = (row: StockRow) => {
-    setComparedRows((current) => {
-      const exists = current.some((c) => c.symbol === row.symbol);
-      if (exists) {
-        return current.filter((c) => c.symbol !== row.symbol);
-      }
-      if (current.length >= COMPARISON_LIMIT) {
-        setPendingNotice(`Compare limited to ${COMPARISON_LIMIT} symbols.`);
-        window.setTimeout(() => setPendingNotice(null), 2500);
-        return current;
-      }
-      return [...current, row];
-    });
-  };
-
-  const handleClearCompare = () => setComparedRows([]);
-
-  const handleCompare = () => {
-    setPendingNotice('Compare modal lands in PR #12 — selection retained.');
-    window.setTimeout(() => setPendingNotice(null), 3000);
+    if (
+      !workspace.compareSymbols.includes(row.symbol) &&
+      workspace.compareSymbols.length >= COMPARISON_LIMIT
+    ) {
+      setPendingNotice(`Compare limited to ${COMPARISON_LIMIT} symbols.`);
+      window.setTimeout(() => setPendingNotice(null), 2500);
+      return;
+    }
+    workspace.toggleCompare(row.symbol);
   };
 
   if (isLoading) {
@@ -148,11 +153,9 @@ function RankingContent() {
       </SectionCard>
       <ComparisonTray
         rows={comparedRows}
-        onRemove={(symbol) =>
-          setComparedRows((current) => current.filter((row) => row.symbol !== symbol))
-        }
-        onClear={handleClearCompare}
-        onCompare={handleCompare}
+        onRemove={(symbol) => workspace.toggleCompare(symbol)}
+        onClear={workspace.clearCompare}
+        onCompare={workspace.openCompare}
         pendingCompareNotice={pendingNotice}
       />
     </PageFrame>

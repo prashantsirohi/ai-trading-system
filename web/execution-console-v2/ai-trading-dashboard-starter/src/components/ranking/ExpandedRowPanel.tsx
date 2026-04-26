@@ -13,6 +13,7 @@
  * loading or unavailable — every block falls back to row-level data.
  */
 import { useRankingDetail, useRankingHistory } from '@/lib/queries';
+import { useWorkspace } from '@/components/workspace/WorkspaceContext';
 import type { StockRow } from '@/types/dashboard';
 import FactorBars from './FactorBars';
 import LifecycleVisual from './LifecycleVisual';
@@ -77,6 +78,7 @@ const FALLBACK_DETAIL = (row: StockRow): RankingDetail => ({
 });
 
 export default function ExpandedRowPanel({ row, isCompared, onToggleCompare }: Props) {
+  const { openWorkspace } = useWorkspace();
   const detailQuery = useRankingDetail(row.symbol);
   const historyQuery = useRankingHistory(row.symbol, 20);
 
@@ -103,18 +105,27 @@ export default function ExpandedRowPanel({ row, isCompared, onToggleCompare }: P
             </p>
           ) : null}
         </div>
-        <button
-          type="button"
-          onClick={onToggleCompare}
-          className={cn(
-            'rounded-md border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors',
-            isCompared
-              ? 'border-blue-500/40 bg-blue-500/15 text-blue-200'
-              : 'border-slate-700 bg-slate-900/60 text-slate-300 hover:border-slate-500',
-          )}
-        >
-          {isCompared ? 'Remove from compare' : 'Add to compare'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => openWorkspace(row.symbol)}
+            className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-emerald-200 transition-colors hover:border-emerald-300/60"
+          >
+            Open workspace
+          </button>
+          <button
+            type="button"
+            onClick={onToggleCompare}
+            className={cn(
+              'rounded-md border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors',
+              isCompared
+                ? 'border-blue-500/40 bg-blue-500/15 text-blue-200'
+                : 'border-slate-700 bg-slate-900/60 text-slate-300 hover:border-slate-500',
+            )}
+          >
+            {isCompared ? 'Remove from compare' : 'Add to compare'}
+          </button>
+        </div>
       </div>
 
       <VerdictBanner decision={detail.decision} />

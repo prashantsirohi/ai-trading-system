@@ -29,6 +29,7 @@ import CapitalWidget from '@/components/execution/CapitalWidget';
 import PortfolioRiskDashboard from '@/components/execution/PortfolioRiskDashboard';
 import { deriveExecution } from '@/components/execution/derive';
 import { useRanking, useWorkspaceSnapshot } from '@/lib/queries';
+import { useWorkspace } from '@/components/workspace/WorkspaceContext';
 import { EXECUTION_MODE } from '@/lib/api/client';
 
 const CAPITAL_LIMIT_PCT = 30;
@@ -49,6 +50,7 @@ function trustPillFor(label: string | null | undefined): {
 export default function ExecutionPage() {
   const rankingQuery = useRanking();
   const snapshotQuery = useWorkspaceSnapshot(3);
+  const { openWorkspace } = useWorkspace();
 
   const rows = rankingQuery.data?.rows ?? [];
   const derived = useMemo(() => deriveExecution(rows), [rows]);
@@ -119,7 +121,11 @@ export default function ExecutionPage() {
                 : 'Live mode — orders will route per the trust pipeline.'
             }
           >
-            <OrdersTable orders={derived.orders} disabled={EXECUTION_MODE === 'preview'} />
+            <OrdersTable
+              orders={derived.orders}
+              disabled={EXECUTION_MODE === 'preview'}
+              onRowClick={(order) => openWorkspace(order.symbol)}
+            />
           </SectionCard>
           <SectionCard title="Live Timeline">
             <LiveTimeline rows={rows} limit={8} />

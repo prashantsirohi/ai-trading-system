@@ -32,11 +32,11 @@ pattern/pipeline domain. This doc owns everything under
 | #5 | 2a — Backend | Stocks domain: `/stocks/{symbol}`, `/stocks/{symbol}/ohlcv` | ✅ shipped |
 | #6 | 2a — Backend | Ranking detail: `/ranking/{symbol}`, `/ranking/{symbol}/history`, lighter `/workspace/snapshot` | ✅ shipped |
 | #7 | 2b — Frontend | Control Tower view + shared chrome (TopBar, command bar, regime/breadth strip) | ✅ shipped |
-| #8 | 2b — Frontend | Ranking view (expandable rows, factor bars, lifecycle visual, comparison tray, score decomposition) | ⏳ in flight |
-| #9 | 2b — Frontend | Patterns + Sectors views (funnel, pattern cards, leadership chart, rotation heatmap, drill-down) | ⏳ in flight |
-| #10 | 2b — Frontend | Execution view (eligible/watchlist/blocked buckets, orders table, capital widget, risk dashboard) | ⏳ in flight |
-| #11 | 2b — Frontend | Runs audit (history table, detail pane, timeline, artifacts, DQ modal, replay/retry) | 📋 future |
-| #12 | 2b — Frontend | Stock detail workspace + compare modal (modal/drawer layer, keyboard shortcuts) | 📋 future |
+| #8 | 2b — Frontend | Ranking view (expandable rows, factor bars, lifecycle visual, comparison tray, score decomposition) | ✅ shipped (`22b56be`) |
+| #9 | 2b — Frontend | Patterns + Sectors views (funnel, pattern cards, leadership chart, rotation heatmap, drill-down) | ✅ shipped (`486ae97`) |
+| #10 | 2b — Frontend | Execution view (eligible/watchlist/blocked buckets, orders table, capital widget, risk dashboard) | ✅ shipped (`30adefd`) |
+| #11 | 2b — Frontend | Runs audit (history table, detail pane, timeline, artifacts, DQ modal, replay/retry) | ✅ shipped |
+| #12 | 2b — Frontend | Stock detail workspace + compare modal (modal/drawer layer, keyboard shortcuts) | ✅ shipped |
 
 Legend: ✅ shipped · ⏳ in flight · 📋 future.
 

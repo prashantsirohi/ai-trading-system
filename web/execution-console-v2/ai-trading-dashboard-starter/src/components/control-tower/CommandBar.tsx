@@ -1,9 +1,12 @@
 /**
  * Global command palette ("⌘ K" / "/").
  *
- * For PR #7 it ships with one capability — tab navigation. PR #12 will
- * add symbol search + recent-runs jumps, but the keyboard shortcut and
- * modal scaffolding are in place now so future additions don't ripple.
+ * PR #7 shipped tab navigation. PR #12 extended this with:
+ *
+ *   * Symbol search — anything matching ``r.symbol`` from the cached ranking
+ *     query is offered; selecting it opens the Stock Detail Workspace.
+ *   * Recent runs — top 8 from the cached runs list; selecting jumps to
+ *     ``/runs#<run_id>`` so the Runs page can pre-select the row.
  *
  * The keyboard listener lives in :mod:`hooks/useGlobalShortcuts` so the
  * AppLayout can mount it once and the component itself stays stateless
@@ -14,6 +17,8 @@ import { useNavigate } from 'react-router-dom';
 
 import { CommandIcon } from './icons';
 import { cn } from '@/lib/utils/cn';
+import { useRanking, useRunsList } from '@/lib/queries';
+import { useWorkspace } from '@/components/workspace/WorkspaceContext';
 
 interface Props {
   isOpen: boolean;
@@ -24,85 +29,35 @@ interface CommandEntry {
   id: string;
   label: string;
   hint: string;
-  to: string;
+  group: 'Tab' | 'Symbol' | 'Run';
+  /** Called when the user activates this entry. */
+  perform: () => void;
   keywords: string[];
 }
 
-const COMMANDS: readonly CommandEntry[] = [
-  {
-    id: 'home',
-    label: 'Open Control Tower',
-    hint: 'home · landing',
-    to: '/',
-    keywords: ['home', 'landing', 'control', 'tower', 'overview'],
-  },
-  {
-    id: 'pipeline',
-    label: 'Open Pipeline',
-    hint: 'workspace · stages',
-    to: '/pipeline',
-    keywords: ['pipeline', 'workspace', 'stages'],
-  },
-  {
-    id: 'ranking',
-    label: 'Open Ranking',
-    hint: 'top symbols · factors',
-    to: '/ranking',
-    keywords: ['ranking', 'rank', 'symbols', 'factors', 'composite'],
-  },
-  {
-    id: 'patterns',
-    label: 'Open Patterns',
-    hint: 'cup · vcp · htf',
-    to: '/patterns',
-    keywords: ['patterns', 'cup', 'handle', 'vcp', 'flag'],
-  },
-  {
-    id: 'sectors',
-    label: 'Open Sectors',
-    hint: 'leadership · rotation',
-    to: '/sectors',
-    keywords: ['sectors', 'leadership', 'rotation', 'heatmap'],
-  },
-  {
-    id: 'execution',
-    label: 'Open Execution',
-    hint: 'orders · risk',
-    to: '/execution',
-    keywords: ['execution', 'orders', 'eligible', 'blocked', 'risk'],
-  },
-  {
-    id: 'runs',
-    label: 'Open Runs Audit',
-    hint: 'history · DQ · artifacts',
-    to: '/runs',
-    keywords: ['runs', 'history', 'dq', 'artifacts', 'audit'],
-  },
-  {
-    id: 'shadow',
-    label: 'Open Shadow',
-    hint: 'drift · agreement',
-    to: '/shadow',
-    keywords: ['shadow', 'drift', 'agreement'],
-  },
-  {
-    id: 'research',
-    label: 'Open Research',
-    hint: 'experiments · backtests',
-    to: '/research',
-    keywords: ['research', 'experiments', 'backtests'],
-  },
+const TAB_DESTINATIONS: Array<{
+  id: string;
+  label: string;
+  hint: string;
+  to: string;
+  keywords: string[];
+}> = [
+  { id: 'home', label: 'Open Control Tower', hint: 'home · landing', to: '/', keywords: ['home', 'landing', 'control', 'tower', 'overview'] },
+  { id: 'pipeline', label: 'Open Pipeline', hint: 'workspace · stages', to: '/pipeline', keywords: ['pipeline', 'workspace', 'stages'] },
+  { id: 'ranking', label: 'Open Ranking', hint: 'top symbols · factors', to: '/ranking', keywords: ['ranking', 'rank', 'symbols', 'factors', 'composite'] },
+  { id: 'patterns', label: 'Open Patterns', hint: 'cup · vcp · htf', to: '/patterns', keywords: ['patterns', 'cup', 'handle', 'vcp', 'flag'] },
+  { id: 'sectors', label: 'Open Sectors', hint: 'leadership · rotation', to: '/sectors', keywords: ['sectors', 'leadership', 'rotation', 'heatmap'] },
+  { id: 'execution', label: 'Open Execution', hint: 'orders · risk', to: '/execution', keywords: ['execution', 'orders', 'eligible', 'blocked', 'risk'] },
+  { id: 'runs', label: 'Open Runs Audit', hint: 'history · DQ · artifacts', to: '/runs', keywords: ['runs', 'history', 'dq', 'artifacts', 'audit'] },
+  { id: 'shadow', label: 'Open Shadow', hint: 'drift · agreement', to: '/shadow', keywords: ['shadow', 'drift', 'agreement'] },
+  { id: 'research', label: 'Open Research', hint: 'experiments · backtests', to: '/research', keywords: ['research', 'experiments', 'backtests'] },
 ];
 
-function score(command: CommandEntry, query: string): number {
+function score(entry: CommandEntry, query: string): number {
   if (!query) return 1;
   const q = query.trim().toLowerCase();
   if (!q) return 1;
-  const haystack = [
-    command.label.toLowerCase(),
-    command.hint.toLowerCase(),
-    ...command.keywords,
-  ];
+  const haystack = [entry.label.toLowerCase(), entry.hint.toLowerCase(), ...entry.keywords];
   for (const term of haystack) {
     if (term === q) return 1000;
     if (term.startsWith(q)) return 500;
@@ -113,8 +68,13 @@ function score(command: CommandEntry, query: string): number {
 
 export default function CommandBar({ isOpen, onClose }: Props) {
   const navigate = useNavigate();
+  const workspace = useWorkspace();
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
+
+  // Lazy-fetch ranking + runs only while the palette is open.
+  const ranking = useRanking({ enabled: isOpen });
+  const runs = useRunsList(15, { enabled: isOpen });
 
   // Reset on every open so the user always lands on a clean palette.
   useEffect(() => {
@@ -124,12 +84,61 @@ export default function CommandBar({ isOpen, onClose }: Props) {
     }
   }, [isOpen]);
 
+  const allEntries: CommandEntry[] = useMemo(() => {
+    const entries: CommandEntry[] = [];
+
+    for (const tab of TAB_DESTINATIONS) {
+      entries.push({
+        id: `tab:${tab.id}`,
+        label: tab.label,
+        hint: tab.hint,
+        group: 'Tab',
+        keywords: tab.keywords,
+        perform: () => {
+          navigate(tab.to);
+          onClose();
+        },
+      });
+    }
+
+    for (const row of ranking.data?.rows ?? []) {
+      entries.push({
+        id: `sym:${row.symbol}`,
+        label: row.symbol,
+        hint: `${row.tier} · ${row.sector}`,
+        group: 'Symbol',
+        keywords: [row.symbol.toLowerCase(), row.sector.toLowerCase()],
+        perform: () => {
+          workspace.openWorkspace(row.symbol);
+          onClose();
+        },
+      });
+    }
+
+    for (const r of runs.data?.runs ?? []) {
+      entries.push({
+        id: `run:${r.runId}`,
+        label: r.runId,
+        hint: `${r.status} · ${r.durationLabel}`,
+        group: 'Run',
+        keywords: [r.runId.toLowerCase(), (r.status ?? '').toLowerCase()],
+        perform: () => {
+          navigate(`/runs#${encodeURIComponent(r.runId)}`);
+          onClose();
+        },
+      });
+    }
+
+    return entries;
+  }, [ranking.data, runs.data, navigate, onClose, workspace]);
+
   const results = useMemo(() => {
-    const ranked = COMMANDS.map((cmd) => ({ cmd, s: score(cmd, query) }))
-      .filter((entry) => entry.s > 0)
+    const ranked = allEntries
+      .map((entry) => ({ entry, s: score(entry, query) }))
+      .filter((r) => r.s > 0)
       .sort((a, b) => b.s - a.s);
-    return ranked.map((entry) => entry.cmd);
-  }, [query]);
+    return ranked.map((r) => r.entry).slice(0, 25);
+  }, [allEntries, query]);
 
   // Keep the highlighted index inside the result list bounds.
   useEffect(() => {
@@ -158,11 +167,7 @@ export default function CommandBar({ isOpen, onClose }: Props) {
     }
     if (event.key === 'Enter') {
       event.preventDefault();
-      const cmd = results[activeIndex];
-      if (cmd) {
-        navigate(cmd.to);
-        onClose();
-      }
+      results[activeIndex]?.perform();
     }
   }
 
@@ -186,21 +191,21 @@ export default function CommandBar({ isOpen, onClose }: Props) {
           <input
             autoFocus
             type="text"
-            placeholder="Type to navigate… (↑↓ to move, ↵ to open, Esc to close)"
+            placeholder="Type to jump… symbol, tab, or run (↑↓, ↵, Esc)"
             className="w-full bg-transparent text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
         </div>
 
-        <ul className="max-h-80 overflow-y-auto p-2">
+        <ul className="max-h-[55vh] overflow-y-auto p-2">
           {results.length === 0 ? (
             <li className="px-3 py-4 text-sm text-slate-400">
               No matches for "{query}".
             </li>
           ) : (
-            results.map((cmd, idx) => (
-              <li key={cmd.id}>
+            results.map((entry, idx) => (
+              <li key={entry.id}>
                 <button
                   type="button"
                   className={cn(
@@ -210,14 +215,16 @@ export default function CommandBar({ isOpen, onClose }: Props) {
                       : 'text-slate-300 hover:bg-slate-800',
                   )}
                   onMouseEnter={() => setActiveIndex(idx)}
-                  onClick={() => {
-                    navigate(cmd.to);
-                    onClose();
-                  }}
+                  onClick={() => entry.perform()}
                 >
-                  <span className="font-medium">{cmd.label}</span>
+                  <span className="flex items-center gap-2">
+                    <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-500">
+                      {entry.group}
+                    </span>
+                    <span className="font-medium">{entry.label}</span>
+                  </span>
                   <span className="text-[10px] uppercase tracking-wider text-slate-500">
-                    {cmd.hint}
+                    {entry.hint}
                   </span>
                 </button>
               </li>
