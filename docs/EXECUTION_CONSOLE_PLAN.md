@@ -32,9 +32,9 @@ pattern/pipeline domain. This doc owns everything under
 | #5 | 2a — Backend | Stocks domain: `/stocks/{symbol}`, `/stocks/{symbol}/ohlcv` | ✅ shipped |
 | #6 | 2a — Backend | Ranking detail: `/ranking/{symbol}`, `/ranking/{symbol}/history`, lighter `/workspace/snapshot` | ✅ shipped |
 | #7 | 2b — Frontend | Control Tower view + shared chrome (TopBar, command bar, regime/breadth strip) | ✅ shipped |
-| #8 | 2b — Frontend | Ranking view (expandable rows, factor bars, lifecycle visual, comparison tray, score decomposition) | 📋 future |
-| #9 | 2b — Frontend | Patterns + Sectors views (funnel, pattern cards, leadership chart, rotation heatmap, drill-down) | 📋 future |
-| #10 | 2b — Frontend | Execution view (eligible/watchlist/blocked buckets, orders table, capital widget, risk dashboard) | 📋 future |
+| #8 | 2b — Frontend | Ranking view (expandable rows, factor bars, lifecycle visual, comparison tray, score decomposition) | ⏳ in flight |
+| #9 | 2b — Frontend | Patterns + Sectors views (funnel, pattern cards, leadership chart, rotation heatmap, drill-down) | ⏳ in flight |
+| #10 | 2b — Frontend | Execution view (eligible/watchlist/blocked buckets, orders table, capital widget, risk dashboard) | ⏳ in flight |
 | #11 | 2b — Frontend | Runs audit (history table, detail pane, timeline, artifacts, DQ modal, replay/retry) | 📋 future |
 | #12 | 2b — Frontend | Stock detail workspace + compare modal (modal/drawer layer, keyboard shortcuts) | 📋 future |
 
@@ -190,39 +190,90 @@ Each PR is bounded so it can ship independently behind feature flags or a route-
 - Sparklines on the summary cards. Will land in PR #11 once `/ranking/{symbol}/history` is consumed at scale.
 - Live regime / breadth indicators. Need a new backend endpoint not yet in scope; tracked as a follow-up.
 
-### PR #8 — Ranking view (📋 future)
+### PR #8 — Ranking view (⏳ in flight)
 
-**Scope.** The richest single view in the design.
+**Endpoints consumed:** `/api/execution/ranking?limit=` (existing list, used for the table feed) + `/api/execution/ranking/{symbol}` and `/api/execution/ranking/{symbol}/history` (PR #6, used lazily by the expanded row).
 
-- Filter chip bar (All Tiers / Tier A / Breakouts Only / Patterns Active) + search.
-- Expandable row: factor progress bars (RS / Volume / Trend / Sector), tier badge, rank-pos chip.
-- Expanded panel: Model Explanation (strongest / catalyst / limiting factor), score decomposition (`base → penalty → final`), Lifecycle Visual (`rank → breakout → pattern → execution` chain), Verdict banner, mini auto-chart with pattern overlay.
-- Comparison tray (fixed footer, up to 3 symbols) → Compare Factors modal (PR #12 finishes the modal).
-- Depends on PR #6 endpoints for the per-symbol explanation payload.
+**Done:**
 
-### PR #9 — Patterns + Sectors views (📋 future)
+- `lib/api/ranking.ts` extended with `getRankingDetail(symbol, runId?)` and `getRankingHistory(symbol, limit)` plus a typed camelCase shape (`RankingDetail`, `LifecycleStage`, `FactorBlock`, `RankingDetailDecision`, `RankingHistoryPoint`). Snake_case→camelCase mapping happens at the fetch layer.
+- `lib/queries/keys.ts` factories: `rankingDetail(symbol, runId)` and `rankingHistory(symbol, limit)` keyed under `['execution', 'ranking-detail' | 'ranking-history', …]`.
+- `lib/queries/index.ts` hooks `useRankingDetail` + `useRankingHistory`. Both gate on `enabled: Boolean(symbol)` so unmounted/empty rows don't fire.
+- `lib/mock/rankingDetails.ts` provides backend-shaped fallbacks (`getRankingDetailFallback`, `getRankingHistoryFallback`) keyed off the existing `rankingMock`. Verdict + lifecycle states are derived from tier and breakout state so the offline view stays representative.
+- `components/ranking/FilterChipBar.tsx` — pill bar (All / Tier A / Breakouts / Patterns) with a search input that matches symbol or sector. Surfaces `matched / total` count.
+- `components/ranking/TierBadge.tsx` — small circular pill, emerald/amber/rose by tier.
+- `components/ranking/FactorBars.tsx` — RS / Volume / Trend / Sector bars in two variants: `inline` (compact, 4-column grid for the row) and `expanded` (large 2-column grid for the expansion panel). Falls back to row-derived values when the backend factor block is empty.
+- `components/ranking/LifecycleVisual.tsx` — four-stage chain (`rank → breakout → pattern → execution`). State per stage drives the dot + ring colour (complete / active / blocked / pending).
+- `components/ranking/VerdictBanner.tsx` — emerald/amber/rose/blue verdict pill + confidence + reason from the decision block.
+- `components/ranking/ScoreDecomposition.tsx` — three-tile `base → penalty → final` strip. Base = mean of the four canvas factor values; penalty = whatever's required to reach the published composite; final = the composite itself.
+- `components/ranking/ModelExplanation.tsx` — three-up callout: strongest factor (emerald), catalyst (blue), limiting factor (rose). Catalyst text follows breakout > pattern > maintenance precedence.
+- `components/ranking/MiniChart.tsx` — recharts area sparkline of historical rank position with the y-axis reversed so a *higher* line means *better* rank. Drops runs where the symbol was absent so the line stays continuous.
+- `components/ranking/ExpandedRowPanel.tsx` — composes Verdict / Model Explanation / Score Decomposition / Factor Bars / Lifecycle / MiniChart. Uses the row's data as fallback so the panel never blanks out while the live detail is loading.
+- `components/ranking/ComparisonTray.tsx` — fixed bottom footer chip stack (max 3 symbols). "Compare Factors" CTA enables once two symbols are pinned. Triggers a non-blocking notice that the modal lands in PR #12 — the selection is retained.
+- `components/tables/RankingTable.tsx` — full rewrite. Sortable columns (`#`, `Ticker`, `Score`, inline factor bars, `Sector`, `Pattern`, `Breakout`, expand caret). Each row stamps `data-symbol` + `data-expanded` for e2e coverage. Expansion panel renders inline (`<tr><td colSpan>…</td></tr>`). The previous row-click → drawer behaviour is gone (the drawer is superseded by the expansion panel; PR #12 introduces the full Stock Detail Workspace).
+- Backwards-compatible: `expandedSymbol` / `onToggleExpand` / `comparedSymbols` / `onToggleCompare` are optional props on `RankingTable`. When omitted, the table renders as a slim non-interactive list — keeps `PipelinePage`'s "Top Ranked Candidates" embed working unchanged.
+- `pages/RankingPage.tsx` rewritten to own filter / expand / compare state and compose `FilterChipBar` + `RankingTable` + `ComparisonTray`. Loading / error / empty states preserved.
+- `tests/e2e/pipeline-and-ranking.spec.ts` updated: the ranking smoke test now asserts the expansion panel renders Verdict / Model Explanation / Score Decomposition / Lifecycle / Factor Bars headings, plus a third spec that adds a symbol to the compare tray.
 
-**Patterns:**
+**Verification:** `tsc -b --noEmit` clean. Production build (`npm run build`) succeeds (1668 modules transformed).
 
-- Pipeline conversion funnel (Universe → Pattern Found → Qualified (RS>70) → Execution Ready) with conversion percentages.
-- Pattern cards: type-specific SVG glyphs (Cup & Handle, VCP, High Tight Flag, fallback), urgency heat (`🔥 IMMINENT` / `⚠️ NEAR` / `⏳ EARLY`), quality tier label, RS, distance-to-breakout, failure risk + reason.
+**Deliberately out of scope:**
 
-**Sectors:**
+- Compare Factors modal — lands in PR #12 alongside the full Stock Detail Workspace; the tray retains its selection across that boundary.
+- The legacy `components/drawers/SymbolDetailDrawer.tsx` is left untouched but no longer wired in. PR #12 will retire it in favour of the workspace.
 
-- Early Leader Detection banner (emerging sector callout).
-- Sector Leadership chart with capital-flow / breadth sub-bar + per-sector stock count.
-- Sector Rotation Heatmap (D-5..D-1 dot grid).
-- Selected sector drill-down: auto-generated narrative, RS / breakouts / breadth stats, top constituents, relative-performance line chart vs NIFTY.
+### PR #9 — Patterns + Sectors views (⏳ in flight)
 
-### PR #10 — Execution view (📋 future)
+**Endpoints consumed:** `/api/execution/ranking?limit=` + `/api/execution/market` (existing — no new backend in this PR). Stage counts and per-sector constituent counts are composed client-side from the ranking feed.
 
-**Scope.** Operator-facing trade routing.
+**Patterns — done:**
 
-- Execution State banner (Live Mode disabled vs enabled, striped warning overlay in Preview), Trust badge, Capital Usage bar.
-- Three buckets: **Eligible** (green) / **Watchlist** (amber) / **Blocked** (red), each card click-through to stock detail.
-- Execution Orders table (Symbol / Entry / Stop / Target / R:R / Size% / Confidence) with row→detail.
-- Live Timeline strip (compact, per-symbol stage progression).
-- Right rail: Capital Allocation widget + Portfolio Risk dashboard (concentration, top-sector exposure, est. max drawdown).
+- `components/patterns/PatternIcons.tsx` — inline SVGs for Cup & Handle, VCP, High-Tight Flag, Round Bottom, Flat Base, Tight Flag, plus a generic fallback. Helper `patternIconFor(pattern)` maps row pattern strings to a glyph component.
+- `components/patterns/PipelineFunnel.tsx` — four-stage strip (Universe → Pattern Found → Qualified (RS>70) → Execution Ready) with width proportional to count and a `% thru` caption between stages.
+- `components/patterns/PatternCard.tsx` — Canvas-style card per symbol: type glyph, urgency pill (🔥 Imminent / ⚠️ Near / ⏳ Early), tier + RS + sector-RS micro-stats, derived distance-to-breakout, and failure-risk assessment with rationale. Card click feeds the parent's "selected" state with a hint that the full pattern detail lands in PR #12.
+- `pages/PatternsPage.tsx` rewritten to compose the funnel + a filter bar (All / Imminent / Qualified) over the pattern card grid.
+- Funnel inputs derived purely client-side: `Universe = useRanking.rows.length`, `Pattern Found = patterns rows with pattern !== 'N/A'`, `Qualified = … && rs > 70`, `Execution Ready = … && breakout`. Documented in `pages/PatternsPage.tsx`.
+
+**Sectors — done:**
+
+- `components/sectors/EarlyLeaderBanner.tsx` — surfaces the strongest sector with positive momentum that isn't yet in the top-2 by RS rank (where rotation alpha lives). Renders nothing when no sector qualifies.
+- `components/sectors/SectorLeadershipChart.tsx` — replaces the old single-bar chart with a per-sector card showing quadrant pill, ranked-constituent count, RS rank, capital-flow bar (RS), and breadth proxy bar (`1 - momentumRank/maxMomentumRank`). Click selects the sector for drill-down.
+- `components/sectors/SectorRotationHeatmap.tsx` — D-5..D-1 dot grid composed client-side from `rs100 → rs50 → rs20 → rs → momentum-adjusted rs`. Tone scale is emerald/emerald-soft/amber/rose/rose. Documented as a synthetic-but-directional read until a per-day history endpoint lands.
+- `components/sectors/SectorDrilldown.tsx` — narrative paragraph (trend × breadth × breakouts), 4-stat row (RS / Momentum / Constituents / Breakouts), recharts line chart over the 4-step rolling-RS series, and top-3 ranked constituents pulled from the ranking feed by sector match.
+- `pages/SectorsPage.tsx` rewritten to stack EarlyLeaderBanner + a 2-column grid (Leadership chart + Rotation heatmap) + Drill-down. Auto-selects the top-ranked sector on first load; selection synchronises between the chart and the heatmap.
+
+**Verification:** `tsc -b --noEmit` clean. Production build (`npm run build`) succeeds (≈1670 modules transformed).
+
+**Deliberately out of scope:**
+
+- Per-day historical RS rank endpoint. Heatmap proxies from the rolling RS columns we already have until a true history endpoint ships.
+- Relative-performance line vs NIFTY. Need a baseline-symbol endpoint not yet in scope; the drill-down currently plots the sector's own rolling RS as a temporary stand-in.
+- Pattern detail modal — lands in PR #12 alongside the Stock Detail Workspace.
+
+### PR #10 — Execution view (⏳ in flight)
+
+**Endpoints consumed:** `/api/execution/ranking?limit=` + `/api/execution/workspace/snapshot` (existing). No new backend in this PR — every per-order field is derived in `components/execution/derive.ts` until a routing endpoint lands.
+
+**Done:**
+
+- New `VITE_EXECUTION_MODE` env var (`preview` | `live`) + `EXECUTION_MODE` constant in `lib/api/client.ts`. `.env.example` and `vite-env.d.ts` updated. The toggle is cosmetic (it disables the orders table and stripes the banner) — actual gating still lives in the upstream trust pipeline.
+- `components/execution/derive.ts` — pure helpers `bucketFor(row)`, `deriveOrder(row)`, `deriveExecution(rows)`. Bucketing rule: Eligible = Tier-A + breakout, Blocked = Tier-C or sectorStrength<55, otherwise Watchlist. Per-order stop/target/size/confidence computed from price + tier + score + sector strength. Aggregates: capital used %, top-sector exposure, single-symbol concentration, naive estimated max drawdown.
+- `components/execution/ExecutionStateBanner.tsx` — Preview-mode striped overlay, mode pill, trust pill, capital-used progress bar, eligible-count caption.
+- `components/execution/BucketColumns.tsx` — three colour-coded columns (emerald / amber / rose) of routable / watchlist / blocked symbol cards. Each card surfaces tier, RS, score, sector, and breakout flag.
+- `components/execution/OrdersTable.tsx` — sortable order plan (Symbol / Entry / Stop / Target / R:R / Size% / Confidence). Confidence column ships with an inline 0-100 progress bar tone-keyed at 75/55. Row click is exposed for the future Stock Detail Workspace (PR #12). The whole table dims when `EXECUTION_MODE === 'preview'`.
+- `components/execution/LiveTimeline.tsx` — per-symbol four-dot stage progression (`rank → breakout → pattern → execution`). Active stage pulses; blocked symbols flash rose. Renders the top 8 ranked symbols.
+- `components/execution/CapitalWidget.tsx` — segmented horizontal bar coloured by symbol with a per-name legend and an "Available" footer row.
+- `components/execution/PortfolioRiskDashboard.tsx` — three threshold gauges: Concentration, Top Sector, Est. Max Drawdown. Each renders a value + tone (`Healthy` / `Watch` / `Hot`) keyed off conservative thresholds documented in code.
+- `pages/ExecutionPage.tsx` — full rewrite composing the banner, buckets, orders table, live timeline, and the right-rail capital + risk widgets. Loading / error / empty states preserved. Default capital ceiling is 30% (configurable in code; backend policy will own this once a routing endpoint exists).
+
+**Verification:** `tsc -b --noEmit` clean. Production build (`npm run build`) succeeds (≈1690 modules transformed).
+
+**Deliberately out of scope:**
+
+- Real `/api/execution/orders` (or equivalent) endpoint — orders are derived heuristically from the ranking feed today. Every derivation in `derive.ts` is documented so the swap-out is mechanical when the backend exists.
+- Live "submit" affordance / order routing button. The page deliberately *only* visualises the plan in Preview mode.
+- Per-symbol risk-adjusted size policy from the broker side. Today's size% is `min(6, 6 × tierWeight × sectorStrength/100)`.
+- Cross-jump from order rows to the Stock Detail Workspace — the click handler is wired but the workspace itself lands in PR #12.
 
 ### PR #11 — Runs audit (📋 future)
 

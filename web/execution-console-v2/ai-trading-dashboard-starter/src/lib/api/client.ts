@@ -45,6 +45,13 @@ export const DEFAULT_REFETCH_INTERVAL_MS = readNumber(
   60_000,
 );
 
+export type ExecutionMode = 'preview' | 'live';
+
+export const EXECUTION_MODE: ExecutionMode =
+  readString(import.meta.env.VITE_EXECUTION_MODE, 'preview').toLowerCase() === 'live'
+    ? 'live'
+    : 'preview';
+
 async function requestJson<T>(path: string): Promise<T> {
   const url = API_BASE_URL ? `${API_BASE_URL}${path}` : path;
   const response = await fetch(url, {

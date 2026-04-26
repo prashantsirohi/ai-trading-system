@@ -18,6 +18,12 @@ interface ImportMetaEnv {
 
   /** Default react-query refetchInterval (ms). 0 disables auto-refresh. */
   readonly VITE_DEFAULT_REFETCH_INTERVAL_MS?: string;
+
+  /**
+   * Execution view mode — "preview" or "live". Cosmetic until a backend
+   * execution endpoint lands; the trust pipeline enforces gating regardless.
+   */
+  readonly VITE_EXECUTION_MODE?: string;
 }
 
 interface ImportMeta {
