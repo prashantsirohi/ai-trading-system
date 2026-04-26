@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from analytics.lightgbm_engine import LightGBMAlphaEngine
+from ai_trading_system.analytics.lightgbm_engine import LightGBMAlphaEngine
 
 
 def _sample_training_frame(rows: int = 80) -> pd.DataFrame:

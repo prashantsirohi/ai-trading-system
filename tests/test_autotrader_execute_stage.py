@@ -7,7 +7,7 @@ import pandas as pd
 
 from ai_trading_system.domains.execution import AutoTrader, ExecutionService, ExecutionStore, PaperExecutionAdapter, PortfolioManager
 from ai_trading_system.domains.execution.models import OrderIntent
-from run.stages import ExecuteStage
+from ai_trading_system.pipeline.stages import ExecuteStage
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 
 

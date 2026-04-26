@@ -7,7 +7,7 @@ import os
 from datetime import date
 from pathlib import Path
 
-from ai_trading_system.domains.ingest.ingest_full import run_ingestion
+from ai_trading_system.domains.ingest import ingest_full
 from ai_trading_system.domains.ingest.providers.dhan import DhanCollector
 from ai_trading_system.platform.db.paths import ensure_domain_layout, research_static_end_date
 from ai_trading_system.platform.logging.logger import log_context, logger
@@ -54,7 +54,7 @@ def main() -> None:
             collector.use_api = bool(collector.client_id and collector.access_token)
             if collector.use_api:
                 collector._init_dhan_client()
-        result = run_ingestion(
+        result = ingest_full.run_ingestion(
             collector=collector,
             from_date=args.from_date,
             to_date=to_date,

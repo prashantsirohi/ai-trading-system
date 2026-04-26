@@ -6,7 +6,7 @@ security IDs in a single request - much more efficient than
 fetching one-by-one.
 
 Usage:
-    python -m collectors.test_marketfeed_ohlc
+    python -m ai_trading_system.domains.ingest.test_marketfeed_ohlc
 """
 
 import datetime
@@ -17,7 +17,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 
-from core.bootstrap import ensure_project_root_on_path
+from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
 
 
 def _resolve_project_root(anchor: str | Path) -> Path:

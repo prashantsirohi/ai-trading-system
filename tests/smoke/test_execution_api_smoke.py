@@ -8,9 +8,9 @@ import sqlite3
 import duckdb
 from fastapi.testclient import TestClient
 
-from analytics.registry import RegistryStore
-from core.contracts import StageArtifact
-from ui.execution_api.app import create_app
+from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.pipeline.contracts import StageArtifact
+from ai_trading_system.ui.execution_api.app import create_app
 
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "artifacts"
@@ -75,7 +75,7 @@ def _seed_datastores(project_root: Path) -> None:
         # ``symbols`` is the canonical table created by
         # ``domains.ingest.masterdata`` and queried by the
         # ``universe_alignment`` health check (see
-        # ``ui.execution_api.services.readmodels.pipeline_status``). Seed it
+        # ``ai_trading_system.ui.execution_api.services.readmodels.pipeline_status``). Seed it
         # to keep the catalog and master in sync so the health check returns
         # ``ok`` instead of ``error``.
         sqlite_conn.execute(

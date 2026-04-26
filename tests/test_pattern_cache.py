@@ -5,7 +5,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from analytics.patterns.evaluation import (
+from ai_trading_system.analytics.patterns.evaluation import (
     _build_pattern_lifecycle_snapshot,
     _stage2_prescreened,
     _write_pattern_cache,

@@ -6,8 +6,8 @@ import duckdb
 import pandas as pd
 import pytest
 
-from collectors import repair_ohlcv_window
-from collectors.repair_ohlcv_window import (
+from ai_trading_system.domains.ingest import repair as repair_ohlcv_window
+from ai_trading_system.domains.ingest.repair import (
     _backup_current_rows,
     _build_comparison_results,
     _compare_trade_frames,

@@ -38,12 +38,18 @@ def canonicalize_project_root(project_root: Path | str | None = None) -> Path:
 
     This guards against launch contexts that pass a parent workspace directory
     containing exactly one repo checkout, which would otherwise create sibling
-    `data/`, `models/`, and `reports/` folders beside the repo.
+    `data/`, `models/`, and `reports/` folders beside the repo. It also
+    normalizes paths inside the repo, such as package directories under `src/`,
+    back to the checkout root.
     """
 
     root = Path(project_root).resolve() if project_root else _default_project_root()
     if _looks_like_repo_root(root) or not root.exists():
         return root
+
+    for parent in root.parents:
+        if _looks_like_repo_root(parent):
+            return parent
 
     candidates = [
         child.resolve()

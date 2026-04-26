@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from analytics.breakout_research import build_breakout_dataset, summarize_breakout_period
+from ai_trading_system.analytics.breakout_research import build_breakout_dataset, summarize_breakout_period
 
 
 def build_parser() -> argparse.ArgumentParser:

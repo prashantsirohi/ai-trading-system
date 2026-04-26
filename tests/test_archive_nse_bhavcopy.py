@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from collectors import archive_nse_bhavcopy
+from ai_trading_system.domains.ingest import archive_nse_bhavcopy
 
 
 def test_bhavcopy_filename_formats_trade_date() -> None:

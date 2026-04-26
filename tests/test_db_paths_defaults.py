@@ -26,6 +26,19 @@ def test_canonicalize_project_root_prefers_single_repo_child(tmp_path: Path) -> 
     assert paths.reports_dir == repo_root / "reports"
 
 
+def test_canonicalize_project_root_climbs_from_package_dir(tmp_path: Path) -> None:
+    repo_root = tmp_path / "ai-trading-system"
+    package_dir = repo_root / "src" / "ai_trading_system" / "analytics"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (repo_root / "pyproject.toml").write_text("[project]\nname='ai-trading-system'\n", encoding="utf-8")
+
+    assert canonicalize_project_root(package_dir) == repo_root.resolve()
+
+    paths = get_domain_paths(project_root=package_dir)
+    assert paths.root_dir == repo_root / "data"
+    assert not str(paths.root_dir).endswith("src/ai_trading_system/data")
+
+
 def test_registry_store_uses_canonical_repo_child(tmp_path: Path) -> None:
     workspace_root = tmp_path / "workspace"
     repo_root = workspace_root / "ai-trading-system"

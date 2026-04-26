@@ -5,10 +5,10 @@ from pathlib import Path
 
 import duckdb
 
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.domains.execution import ExecutionService, ExecutionStore, PaperExecutionAdapter
 from ai_trading_system.domains.execution.models import OrderIntent
-from research.recipes import (
+from ai_trading_system.research.recipes import (
     build_validation_review,
     get_recipe,
     get_recipe_bundle,
@@ -16,9 +16,9 @@ from research.recipes import (
     write_recipe_bundle_summary,
     write_recipe_summary,
 )
-import research.run_recipe as run_recipe_module
-from ui.services.control_center import _TASKS, _create_task, list_operator_tasks
-from ui.services.ml_workbench import (
+import ai_trading_system.research.run_recipe as run_recipe_module
+from ai_trading_system.ui.execution_api.services.control_center import _TASKS, _create_task, list_operator_tasks
+from ai_trading_system.ui.execution_api.services.ml_workbench import (
     approve_workbench_model,
     delete_workbench_recipe,
     delete_workbench_recipe_bundle,

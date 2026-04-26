@@ -16,7 +16,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import List
 
-from core.bootstrap import ensure_project_root_on_path
+from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
 
 
 def _resolve_project_root(anchor: str) -> str:

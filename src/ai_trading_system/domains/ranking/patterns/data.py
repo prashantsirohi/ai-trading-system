@@ -9,8 +9,8 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from analytics.alpha.dataset_builder import AlphaDatasetBuilder
-from analytics.ml_engine import AlphaEngine
+from ai_trading_system.analytics.alpha.dataset_builder import AlphaDatasetBuilder
+from ai_trading_system.analytics.ml_engine import AlphaEngine
 from ai_trading_system.domains.features.indicators import add_volume_zscore_features
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 

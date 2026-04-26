@@ -14,7 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import duckdb
 
 from ai_trading_system.platform.db.paths import canonicalize_project_root
-from core.contracts import StageArtifact
+from ai_trading_system.pipeline.contracts import StageArtifact
 
 
 DEFAULT_RULES = [

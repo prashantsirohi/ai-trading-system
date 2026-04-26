@@ -7,10 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from analytics.alpha.dataset_builder import AlphaDatasetBuilder
-from analytics.alpha.policy import PromotionThresholds, evaluate_promotion_candidate
-from analytics.alpha.training import train_and_register_model
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.alpha.dataset_builder import AlphaDatasetBuilder
+from ai_trading_system.analytics.alpha.policy import PromotionThresholds, evaluate_promotion_candidate
+from ai_trading_system.analytics.alpha.training import train_and_register_model
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.research.recipes import (
     build_validation_review,
     get_recipe,
@@ -27,8 +27,8 @@ from ai_trading_system.platform.logging.logger import log_context, logger
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a simplified research recipe")
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--recipe", help="Recipe name from config/research_recipes.toml")
-    group.add_argument("--bundle", help="Bundle name from config/research_recipes.toml")
+    group.add_argument("--recipe", help="Recipe name in config/research_recipes.toml")
+    group.add_argument("--bundle", help="Bundle name in config/research_recipes.toml")
     parser.add_argument("--auto-approve", action="store_true", help="Approve the model when promotion gates pass")
     parser.add_argument("--auto-deploy", action="store_true", help="Deploy to the recipe shadow environment when gates pass")
     return parser

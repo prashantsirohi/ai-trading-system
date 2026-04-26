@@ -4,9 +4,9 @@ from pathlib import Path
 
 import duckdb
 
-from core.contracts import StageContext
+from ai_trading_system.pipeline.contracts import StageContext
 from ai_trading_system.domains.ingest.service import IngestOrchestrationService
-from run.stages.ingest import classify_freshness_status
+from ai_trading_system.pipeline.stages.ingest import classify_freshness_status
 
 
 def test_classify_freshness_status_contract() -> None:

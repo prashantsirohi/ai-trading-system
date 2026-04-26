@@ -8,10 +8,10 @@ from pathlib import Path
 import duckdb
 from fastapi.testclient import TestClient
 
-from analytics.registry import RegistryStore
-from core.contracts import StageArtifact
-from ui.execution_api.app import create_app
-from ui.services.execution_operator import retry_publish_action
+from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.pipeline.contracts import StageArtifact
+from ai_trading_system.ui.execution_api.app import create_app
+from ai_trading_system.ui.execution_api.services.execution_operator import retry_publish_action
 
 API_HEADERS = {"x-api-key": "test-api-key"}
 
@@ -225,11 +225,11 @@ def test_execution_api_action_endpoints(monkeypatch, tmp_path: Path) -> None:
     client = TestClient(create_app())
 
     # PR #2 split the monolithic ``app.py`` into per-domain routers under
-    # ``ui.execution_api.routes/``. Each router does ``from ... import name``,
+    # ``ai_trading_system.ui.execution_api.routes/``. Each router does ``from ... import name``,
     # so the bound name lives in the *route module's* namespace — that's
     # where we have to patch.
     # Use the canonical ``ai_trading_system.ui.execution_api...`` import path:
-    # the legacy ``ui.execution_api...`` path resolves to a *different* module
+    # the legacy ``ai_trading_system.ui.execution_api...`` path resolves to a *different* module
     # object (the deprecation shim), so patching it does not affect the
     # FastAPI app — which is wired from the canonical modules.
     pipeline_routes = importlib.import_module(
@@ -340,7 +340,7 @@ def test_retry_publish_action_uses_latest_publishable_run(monkeypatch, tmp_path:
         captured.update(kwargs)
         return {"task_id": "task-publish", **kwargs}
 
-    monkeypatch.setattr("ui.services.execution_operator.run_pipeline_action", _fake_run_pipeline_action)
+    monkeypatch.setattr("ai_trading_system.ui.execution_api.services.execution_operator.run_pipeline_action", _fake_run_pipeline_action)
 
     result = retry_publish_action(tmp_path, local_publish=True)
 
@@ -359,7 +359,7 @@ def test_retry_publish_action_uses_explicit_run_id(monkeypatch, tmp_path: Path) 
         captured.update(kwargs)
         return {"task_id": "task-publish", **kwargs}
 
-    monkeypatch.setattr("ui.services.execution_operator.run_pipeline_action", _fake_run_pipeline_action)
+    monkeypatch.setattr("ai_trading_system.ui.execution_api.services.execution_operator.run_pipeline_action", _fake_run_pipeline_action)
 
     result = retry_publish_action(tmp_path, local_publish=True, run_id="pipeline-explicit-123")
 

@@ -6,7 +6,7 @@ import argparse
 from datetime import date
 from pathlib import Path
 
-from analytics.patterns import PatternBacktestConfig, run_pattern_backtest
+from ai_trading_system.analytics.patterns import PatternBacktestConfig, run_pattern_backtest
 from ai_trading_system.platform.db.paths import ensure_domain_layout, research_static_end_date
 from ai_trading_system.platform.logging.logger import log_context, logger
 

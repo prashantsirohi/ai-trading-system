@@ -11,14 +11,13 @@ import threading
 import traceback
 import uuid
 import importlib
-import importlib.util
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import duckdb
 
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.platform.logging.logger import logger
 
 
@@ -28,31 +27,13 @@ _TASK_LOCK = threading.Lock()
 
 
 def _load_shadow_monitor_module():
-    """Load research.shadow_monitor robustly across UI launch contexts."""
-    module_name = "research.shadow_monitor"
-    try:
-        return importlib.import_module(module_name)
-    except ModuleNotFoundError:
-        if str(DEFAULT_PROJECT_ROOT) not in sys.path:
-            sys.path.insert(0, str(DEFAULT_PROJECT_ROOT))
-        try:
-            return importlib.import_module(module_name)
-        except ModuleNotFoundError:
-            module_path = DEFAULT_PROJECT_ROOT / "research" / "shadow_monitor.py"
-            if not module_path.exists():
-                raise
-            spec = importlib.util.spec_from_file_location(module_name, module_path)
-            if spec is None or spec.loader is None:
-                raise
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
-            spec.loader.exec_module(module)
-            return module
+    """Load the canonical shadow monitor module."""
+    return importlib.import_module("ai_trading_system.research.shadow_monitor")
 
 
 def _load_pipeline_orchestrator_class():
     """Load PipelineOrchestrator lazily to avoid UI import-time dependency chains."""
-    module_name = "run.orchestrator"
+    module_name = "ai_trading_system.pipeline.orchestrator"
     try:
         module = importlib.import_module(module_name)
     except ModuleNotFoundError:
@@ -715,7 +696,7 @@ def launch_streamlit_dashboard_task(
                 "-m",
                 "streamlit",
                 "run",
-                "ui/research/app.py",
+                "src/ai_trading_system/interfaces/streamlit/research/app.py",
                 "--server.port",
                 str(int(port)),
                 "--server.headless",
@@ -777,7 +758,7 @@ def launch_ml_workbench_task(
             "-m",
             "streamlit",
             "run",
-            "ui/ml/app.py",
+            "src/ai_trading_system/interfaces/streamlit/ml/app.py",
             "--server.port",
             str(int(port)),
             "--server.headless",
@@ -806,7 +787,7 @@ def launch_prepare_dataset_task(
         command=[
             sys.executable,
             "-m",
-            "research.prepare_training_dataset",
+            "ai_trading_system.research.prepare_training_dataset",
             "--engine",
             engine,
             "--dataset-name",
@@ -849,7 +830,7 @@ def launch_train_model_task(
     command = [
         sys.executable,
         "-m",
-        "research.train_pipeline",
+        "ai_trading_system.research.train_pipeline",
         "--engine",
         engine,
         "--model-name",
@@ -901,7 +882,7 @@ def launch_recipe_run_task(
     command = [
         sys.executable,
         "-m",
-        "research.run_recipe",
+        "ai_trading_system.research.run_recipe",
         "--recipe",
         recipe,
     ]
@@ -935,7 +916,7 @@ def launch_recipe_bundle_task(
     command = [
         sys.executable,
         "-m",
-        "research.run_recipe",
+        "ai_trading_system.research.run_recipe",
         "--bundle",
         bundle,
     ]
@@ -989,15 +970,15 @@ def list_project_processes(project_root: str | Path) -> List[Dict[str, Any]]:
         if "ps -axo" in command:
             continue
         kind = "other"
-        if "streamlit" in command and "ui/research/app.py" in command:
+        if "streamlit" in command and "interfaces/streamlit/research/app.py" in command:
             kind = "streamlit_research"
-        elif "streamlit" in command and "ui/ml/app.py" in command:
+        elif "streamlit" in command and "interfaces/streamlit/ml/app.py" in command:
             kind = "streamlit_ml"
         elif "ui.execution.app" in command:
             kind = "nicegui_execution"
-        elif "run.orchestrator" in command:
+        elif "ai_trading_system.pipeline.orchestrator" in command:
             kind = "pipeline"
-        elif "research.shadow_monitor" in command:
+        elif "ai_trading_system.research.shadow_monitor" in command:
             kind = "shadow_monitor"
         port_match = re.search(r"(?:--server\.port|--port)\s+(\d+)", command)
         rows.append(

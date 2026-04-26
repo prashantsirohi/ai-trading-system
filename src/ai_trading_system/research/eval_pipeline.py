@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from analytics.alpha.policy import evaluate_promotion_candidate
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.alpha.policy import evaluate_promotion_candidate
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.platform.logging.logger import log_context, logger
 
 

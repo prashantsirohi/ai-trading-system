@@ -366,10 +366,10 @@ class RankOrchestrationService:
         if self.operation is not None:
             return self.operation(context)
 
-        from analytics.data_trust import load_data_trust_summary
-        from analytics.patterns import PatternScanConfig, build_pattern_signals
-        from analytics.patterns.data import load_pattern_frame
-        from analytics.ranker import StockRanker
+        from ai_trading_system.analytics.data_trust import load_data_trust_summary
+        from ai_trading_system.analytics.patterns import PatternScanConfig, build_pattern_signals
+        from ai_trading_system.analytics.patterns.data import load_pattern_frame
+        from ai_trading_system.analytics.ranker import StockRanker
         from ai_trading_system.domains.ranking import sector_dashboard, stock_scan
         from ai_trading_system.domains.ranking.breakout import scan_breakouts
         from ai_trading_system.domains.ranking.patterns.universe import (
@@ -915,7 +915,7 @@ class RankOrchestrationService:
         return outputs, stage_metadata, dashboard_payload, overlay_result.get("prediction_logs", {})
 
     def default_ml_overlay_builder(self, context: StageContext, ranked_df: pd.DataFrame) -> Dict[str, Any]:
-        from analytics.alpha.scoring import OperationalMLOverlayService
+        from ai_trading_system.analytics.alpha.scoring import OperationalMLOverlayService
 
         service = OperationalMLOverlayService(
             project_root=context.project_root,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from run import daily_pipeline
+from ai_trading_system.pipeline import daily_pipeline
 
 
 class _FakeDateTime(datetime):

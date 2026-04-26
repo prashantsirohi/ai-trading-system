@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from analytics.lightgbm_research import add_technical_baseline_scores, walk_forward_compare
+from ai_trading_system.analytics.lightgbm_research import add_technical_baseline_scores, walk_forward_compare
 
 
 class _DummyModel:

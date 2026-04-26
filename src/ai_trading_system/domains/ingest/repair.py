@@ -24,16 +24,16 @@ from typing import Any, Dict, Iterable, List
 import duckdb
 import pandas as pd
 
-from analytics.data_trust import (
+from ai_trading_system.analytics.data_trust import (
     ensure_data_trust_schema,
     quarantine_symbol_dates,
     record_provenance_rows,
     resolve_quarantine_for_rows,
 )
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.domains.ingest.daily_update_runner import _fetch_nse_bhavcopy_rows, _fetch_yfinance_rows, _rows_to_symbol_frames
 from ai_trading_system.domains.ingest.providers.dhan import DhanCollector
-from core.env import load_project_env
+from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.domains.features import FeatureStore, compute_all_symbols_rs
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.symbol_master import SymbolMaster
+from ai_trading_system.domains.ingest.symbol_master import SymbolMaster
 
 
 def test_symbol_master_canonicalize_and_active_filter() -> None:

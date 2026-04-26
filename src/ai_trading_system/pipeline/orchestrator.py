@@ -12,18 +12,22 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-from analytics.dq import DataQualityEngine
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.dq import DataQualityEngine
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.domains.ingest.service import IngestOrchestrationService
-from core.contracts import DataQualityCriticalError, PublishStageError, StageContext, StageResult
-from core.env import load_project_env
-from ai_trading_system.platform.logging.logger import configure_terminal_output, log_context, logger
+from ai_trading_system.pipeline.contracts import DataQualityCriticalError, PublishStageError, StageContext, StageResult
+from ai_trading_system.platform.utils.env import load_project_env
+from ai_trading_system.platform.logging import logger as logging_module
 from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout
-from run.alerts import AlertManager
-from run.preflight import PreflightChecker
-from run.stages import ExecuteStage, FeaturesStage, IngestStage, PublishStage, RankStage
+from ai_trading_system.pipeline.alerts import AlertManager
+from ai_trading_system.pipeline.preflight import PreflightChecker
+from ai_trading_system.pipeline.stages import ExecuteStage, FeaturesStage, IngestStage, PublishStage, RankStage
 
 load_project_env(__file__)
+
+configure_terminal_output = logging_module.configure_terminal_output
+log_context = logging_module.log_context
+logger = logging_module.logger
 
 
 PIPELINE_ORDER = ["ingest", "features", "rank", "execute", "publish"]
@@ -515,7 +519,7 @@ def _run_auto_quarantine_repair(
     if not quarantined_dates:
         return None
 
-    from ai_trading_system.domains.ingest.reset_reingest_validate import run_reset_reingest_validate
+    from ai_trading_system.domains.ingest import reset_reingest_validate
 
     from_date = quarantined_dates[0]
     to_date = quarantined_dates[-1]
@@ -525,7 +529,7 @@ def _run_auto_quarantine_repair(
         from_date,
         to_date,
     )
-    repair_report = run_reset_reingest_validate(
+    repair_report = reset_reingest_validate.run_reset_reingest_validate(
         project_root=project_root,
         from_date=from_date,
         to_date=to_date,

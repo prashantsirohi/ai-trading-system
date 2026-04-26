@@ -25,7 +25,7 @@ _SECTOR_DEMEAN_FACTORS = frozenset({"rel_strength", "vol_intensity", "trend_scor
 
 
 def load_factor_weights(config_path: Path | None = None) -> dict[str, float]:
-    """Load rank factor weights from config, falling back to defaults."""
+    """Load rank factor weights using configured defaults when needed."""
     weights = dict(DEFAULT_FACTOR_WEIGHTS)
     path = config_path or (RANK_FACTOR_WEIGHTS_PATH if RANK_FACTOR_WEIGHTS_PATH.exists() else LEGACY_RANK_FACTOR_WEIGHTS_PATH)
     if not path.exists():

@@ -15,20 +15,20 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from analytics.patterns.contracts import (
+from ai_trading_system.analytics.patterns.contracts import (
     PatternBacktestConfig,
     PatternEvent,
     PatternScanConfig,
     PatternTrade,
 )
-from analytics.patterns.data import load_pattern_frame, load_pattern_research_frame
-from analytics.patterns.detectors import (
+from ai_trading_system.analytics.patterns.data import load_pattern_frame, load_pattern_research_frame
+from ai_trading_system.analytics.patterns.detectors import (
     PatternScanStats,
     detect_pattern_signals_for_symbol,
     detect_cup_handle_events,
     detect_round_bottom_events,
 )
-from analytics.patterns.signal import find_local_extrema, kernel_smooth
+from ai_trading_system.analytics.patterns.signal import find_local_extrema, kernel_smooth
 from ai_trading_system.domains.ranking.patterns.cache import (
     ACTIVE_LIFECYCLE_STATES,
     PatternCacheStore,
@@ -522,7 +522,7 @@ def _attach_rank_context_and_score(signals_df: pd.DataFrame, *, ranked_df: pd.Da
             how="left",
         )
     output = output.drop(columns=["pattern_rank"], errors="ignore")
-    from analytics.patterns.detectors import _score_signal_rows  # local import to avoid widening public surface
+    from ai_trading_system.analytics.patterns.detectors import _score_signal_rows  # local import to avoid widening public surface
 
     return _score_signal_rows(output)
 

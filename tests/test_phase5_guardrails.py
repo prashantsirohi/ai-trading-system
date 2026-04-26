@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from analytics.alpha.drift import score_drift_rows
-from analytics.alpha.policy import evaluate_promotion_candidate
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.alpha.drift import score_drift_rows
+from ai_trading_system.analytics.alpha.policy import evaluate_promotion_candidate
+from ai_trading_system.analytics.registry import RegistryStore
 
 
 def _seed_prediction_logs_and_outcomes(registry: RegistryStore, *, model_id: str, horizon: int) -> None:

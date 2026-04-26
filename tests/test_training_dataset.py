@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from analytics.alpha.dataset_builder import AlphaDatasetBuilder
-from analytics.registry import RegistryStore
-from analytics.training_dataset import TrainingDatasetBuilder
+from ai_trading_system.analytics.alpha.dataset_builder import AlphaDatasetBuilder
+from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.analytics.training_dataset import TrainingDatasetBuilder
 
 
 class StubEngine:

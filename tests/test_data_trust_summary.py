@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import duckdb
 import pandas as pd
 import pytest
 
-from analytics.data_trust import load_data_trust_summary
-from analytics.dq import DataQualityEngine
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.data_trust import load_data_trust_summary
+from ai_trading_system.analytics.dq import DataQualityEngine
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.domains.ingest.repair import _normalize_trade_frame
-from core.contracts import StageContext, StageResult
+from ai_trading_system.pipeline.contracts import StageContext, StageResult
 
 
 def _init_catalog_with_trust_columns(db_path: Path) -> None:
@@ -471,7 +472,8 @@ def test_normalize_trade_frame_avoids_futurewarning_on_trade_date_assignment() -
         ]
     )
 
-    with pytest.warns(None) as record:
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
         normalized = _normalize_trade_frame(frame)
 
     assert len(record) == 0

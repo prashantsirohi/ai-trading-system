@@ -6,11 +6,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from analytics.registry import RegistryStore
-from core.contracts import StageArtifact, StageContext
-from run.publisher import PublisherDeliveryManager
+from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
+from ai_trading_system.domains.publish.delivery_manager import PublisherDeliveryManager
 from ai_trading_system.pipeline.contracts import PublishStageError
-from run.stages.publish import PublishStage
+from ai_trading_system.pipeline.stages.publish import PublishStage
 
 
 def test_publish_stage_continues_other_channels_when_telegram_fails(tmp_path: Path) -> None:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from analytics.data_trust import load_data_trust_summary
+from ai_trading_system.analytics.data_trust import load_data_trust_summary
 from ai_trading_system.pipeline.contracts import StageArtifact
 from ai_trading_system.domains.publish.publish_payloads import build_publish_datasets
 

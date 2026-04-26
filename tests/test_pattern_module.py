@@ -8,9 +8,9 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from analytics.patterns.contracts import PatternBacktestConfig, PatternScanConfig
-from analytics.patterns.data import load_pattern_frame
-from analytics.patterns.detectors import (
+from ai_trading_system.analytics.patterns.contracts import PatternBacktestConfig, PatternScanConfig
+from ai_trading_system.analytics.patterns.data import load_pattern_frame
+from ai_trading_system.analytics.patterns.detectors import (
     _score_signal_rows,
     detect_cup_handle_events,
     detect_cup_handle_signals,
@@ -21,14 +21,14 @@ from analytics.patterns.detectors import (
     detect_vcp_signals,
     detect_round_bottom_events,
 )
-from analytics.patterns.evaluation import (
+from ai_trading_system.analytics.patterns.evaluation import (
     build_pattern_signals,
     ensure_pattern_event_chart,
     run_pattern_backtest,
     simulate_pattern_trades,
 )
-from analytics.patterns.signal import find_local_extrema, kernel_smooth
-from research import backtest_patterns
+from ai_trading_system.analytics.patterns.signal import find_local_extrema, kernel_smooth
+from ai_trading_system.research import backtest_patterns
 
 
 def _make_price_frame(
@@ -613,7 +613,7 @@ def test_build_pattern_signals_uses_parallel_helper_when_requested(monkeypatch) 
             {},
         )
 
-    monkeypatch.setattr("analytics.patterns.evaluation._scan_pattern_signals_parallel", fake_parallel)
+    monkeypatch.setattr("ai_trading_system.analytics.patterns.evaluation._scan_pattern_signals_parallel", fake_parallel)
 
     signals = build_pattern_signals(
         project_root=Path("."),
@@ -663,8 +663,8 @@ def test_build_pattern_signals_falls_back_to_serial_on_transient_parallel_resour
             {},
         )
 
-    monkeypatch.setattr("analytics.patterns.evaluation.ProcessPoolExecutor", _FailingPool)
-    monkeypatch.setattr("analytics.patterns.evaluation._scan_pattern_signals", fake_serial)
+    monkeypatch.setattr("ai_trading_system.analytics.patterns.evaluation.ProcessPoolExecutor", _FailingPool)
+    monkeypatch.setattr("ai_trading_system.analytics.patterns.evaluation._scan_pattern_signals", fake_serial)
 
     signals = build_pattern_signals(
         project_root=Path("."),
@@ -714,8 +714,8 @@ def test_build_pattern_signals_falls_back_to_serial_on_permission_error_from_pro
             {},
         )
 
-    monkeypatch.setattr("analytics.patterns.evaluation.ProcessPoolExecutor", _FailingPool)
-    monkeypatch.setattr("analytics.patterns.evaluation._scan_pattern_signals", fake_serial)
+    monkeypatch.setattr("ai_trading_system.analytics.patterns.evaluation.ProcessPoolExecutor", _FailingPool)
+    monkeypatch.setattr("ai_trading_system.analytics.patterns.evaluation._scan_pattern_signals", fake_serial)
 
     signals = build_pattern_signals(
         project_root=Path("."),
@@ -775,7 +775,7 @@ def test_load_pattern_frame_supports_operational_and_research_domains(monkeypatc
 
     call_counter = {"count": 0}
     monkeypatch.setattr(
-        "analytics.patterns.data.AlphaEngine.prepare_training_data",
+        "ai_trading_system.analytics.patterns.data.AlphaEngine.prepare_training_data",
         lambda self, **kwargs: call_counter.__setitem__("count", call_counter["count"] + 1) or raw.copy(),
     )
 

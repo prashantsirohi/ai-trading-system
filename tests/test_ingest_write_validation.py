@@ -6,9 +6,9 @@ import duckdb
 import pandas as pd
 import pytest
 
-from collectors.ingest_full import write_dfs_to_duckdb
-from collectors.ingest_validation import IngestValidationError, validate_delivery_frame, validate_ohlcv_frame
-from scripts.repair_ingest_schema import run as run_repair_ingest_schema
+from ai_trading_system.domains.ingest.ingest_full import write_dfs_to_duckdb
+from ai_trading_system.domains.ingest.validation import IngestValidationError, validate_delivery_frame, validate_ohlcv_frame
+from scripts import repair_ingest_schema
 
 
 def _create_catalog_table(conn: duckdb.DuckDBPyConnection) -> None:
@@ -131,8 +131,8 @@ def test_repair_ingest_schema_repairs_swapped_rows(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    assert run_repair_ingest_schema(db_path=str(db_path), apply=False, fail_on_drift=True) == 2
-    assert run_repair_ingest_schema(db_path=str(db_path), apply=True, fail_on_drift=True) == 0
+    assert repair_ingest_schema.run(db_path=str(db_path), apply=False, fail_on_drift=True) == 2
+    assert repair_ingest_schema.run(db_path=str(db_path), apply=True, fail_on_drift=True) == 0
 
     verify_conn = duckdb.connect(str(db_path), read_only=True)
     try:

@@ -19,8 +19,8 @@ import duckdb
 
 from ai_trading_system.domains.ingest.repair import repair_window
 from ai_trading_system.domains.ingest.trust import resolve_quarantine_for_rows
-from core.env import load_project_env
-from run.stages import IngestStage
+from ai_trading_system.platform.utils.env import load_project_env
+from ai_trading_system.pipeline.stages import IngestStage
 from ai_trading_system.pipeline.contracts import StageContext
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 

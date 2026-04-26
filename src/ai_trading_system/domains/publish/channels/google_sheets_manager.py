@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
 
 import pandas as pd
-from core.runtime_config import GoogleSheetsRuntimeConfig
+from ai_trading_system.platform.utils.runtime_config import GoogleSheetsRuntimeConfig
 from ai_trading_system.platform.utils.env import load_project_env
 
 load_project_env(__file__)

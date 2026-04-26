@@ -10,7 +10,7 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.ingest.trust import load_data_trust_summary
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.pipeline.contracts import DataQualityCriticalError, StageContext, StageResult
 
 

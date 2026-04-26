@@ -8,7 +8,7 @@ from typing import Any, Callable, Optional
 
 import pandas as pd
 
-from core.bootstrap import ensure_project_root_on_path
+from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
 
 ensure_project_root_on_path(__file__)
 
@@ -33,9 +33,11 @@ from ai_trading_system.ui.execution_api.services import (  # noqa: E402
 )
 
 try:  # pragma: no cover - optional dependency boundary
-    from nicegui import ui
+    import nicegui as _nicegui
+
+    nice_ui = _nicegui.ui
 except ImportError:  # pragma: no cover - optional dependency boundary
-    ui = None
+    nice_ui = None
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[5]
@@ -71,10 +73,10 @@ def _display_frame(frame: pd.DataFrame, limit: int = 20) -> pd.DataFrame:
 
 
 def _empty_state(icon: str, title: str, body: str) -> None:
-    with ui.column().classes("w-full items-center justify-center gap-2 py-10 text-center"):
-        ui.icon(icon).classes("text-4xl text-slate-300")
-        ui.label(title).classes("text-base font-semibold text-slate-600")
-        ui.label(body).classes("max-w-[420px] text-sm text-slate-400")
+    with nice_ui.column().classes("w-full items-center justify-center gap-2 py-10 text-center"):
+        nice_ui.icon(icon).classes("text-4xl text-slate-300")
+        nice_ui.label(title).classes("text-base font-semibold text-slate-600")
+        nice_ui.label(body).classes("max-w-[420px] text-sm text-slate-400")
 
 
 def _curate_frame(title: str, frame: pd.DataFrame) -> pd.DataFrame:
@@ -172,12 +174,12 @@ def _table(
     container.clear()
     with container:
         row_count = 0 if frame is None else len(frame.index)
-        with ui.row().classes("w-full items-center justify-between gap-3 mb-3"):
-            with ui.column().classes("gap-1"):
-                ui.label(title).classes("text-lg font-semibold text-slate-800")
+        with nice_ui.row().classes("w-full items-center justify-between gap-3 mb-3"):
+            with nice_ui.column().classes("gap-1"):
+                nice_ui.label(title).classes("text-lg font-semibold text-slate-800")
                 if subtitle:
-                    ui.label(subtitle).classes("text-sm text-slate-500")
-            ui.label(f"{row_count} rows").classes("text-xs uppercase tracking-[0.18em] text-slate-400")
+                    nice_ui.label(subtitle).classes("text-sm text-slate-500")
+            nice_ui.label(f"{row_count} rows").classes("text-xs uppercase tracking-[0.18em] text-slate-400")
         display = _display_frame(_curate_frame(title, frame), limit=limit)
         if display.empty:
             _empty_state("table_rows", title, empty)
@@ -193,7 +195,7 @@ def _table(
             for column in display.columns
         ]
         rows = display.astype(object).where(pd.notnull(display), "").to_dict(orient="records")
-        ui.table(columns=columns, rows=rows, row_key=display.columns[0]).props(
+        nice_ui.table(columns=columns, rows=rows, row_key=display.columns[0]).props(
             "dense flat bordered separator=cell wrap-cells square rows-per-page-options=[10,20,50]"
         ).classes("w-full text-sm rounded-2xl overflow-hidden")
 
@@ -207,13 +209,13 @@ def _metric(parent, title: str, value: Any, subtitle: str = "", *, tone: str = "
         "sky": "from-sky-600 to-cyan-500 text-white",
     }
     with parent:
-        with ui.card().classes(
+        with nice_ui.card().classes(
             f"min-w-[220px] rounded-[24px] border-0 bg-gradient-to-br {palette.get(tone, palette['slate'])} shadow-lg p-5"
         ):
-            ui.label(title).classes("text-xs uppercase tracking-[0.2em] opacity-75")
-            ui.label(str(value)).classes("text-3xl font-bold mt-2")
+            nice_ui.label(title).classes("text-xs uppercase tracking-[0.2em] opacity-75")
+            nice_ui.label(str(value)).classes("text-3xl font-bold mt-2")
             if subtitle:
-                ui.label(subtitle).classes("text-sm mt-1 opacity-85")
+                nice_ui.label(subtitle).classes("text-sm mt-1 opacity-85")
 
 
 def _bar_chart_option(
@@ -367,26 +369,26 @@ def _chart(
 ) -> None:
     container.clear()
     with container:
-        with ui.row().classes("w-full items-center justify-between gap-3 mb-3"):
-            with ui.column().classes("gap-1"):
-                ui.label(title).classes("text-lg font-semibold text-slate-800")
+        with nice_ui.row().classes("w-full items-center justify-between gap-3 mb-3"):
+            with nice_ui.column().classes("gap-1"):
+                nice_ui.label(title).classes("text-lg font-semibold text-slate-800")
                 if subtitle:
-                    ui.label(subtitle).classes("text-sm text-slate-500")
+                    nice_ui.label(subtitle).classes("text-sm text-slate-500")
         if not option:
             _empty_state("bar_chart", title, empty)
             return
-        ui.echart(option).classes("w-full h-[360px]")
+        nice_ui.echart(option).classes("w-full h-[360px]")
 
 
 def _summary_tiles(container, title: str, items: list[dict[str, Any]], *, empty: str) -> None:
     container.clear()
     with container:
-        with ui.row().classes("w-full items-center justify-between gap-3 mb-4"):
-            ui.label(title).classes("text-lg font-semibold text-slate-800")
+        with nice_ui.row().classes("w-full items-center justify-between gap-3 mb-4"):
+            nice_ui.label(title).classes("text-lg font-semibold text-slate-800")
         if not items:
             _empty_state("info", title, empty)
             return
-        with ui.row().classes("w-full gap-4 flex-wrap"):
+        with nice_ui.row().classes("w-full gap-4 flex-wrap"):
             for item in items:
                 tone = _status_chip(str(item.get("tone") or item.get("value")))
                 badge_palette = {
@@ -396,22 +398,22 @@ def _summary_tiles(container, title: str, items: list[dict[str, Any]], *, empty:
                     "sky": "bg-sky-100 text-sky-700",
                     "slate": "bg-slate-100 text-slate-700",
                 }
-                with ui.card().classes("min-w-[240px] rounded-[22px] border border-slate-200 shadow-none p-4 bg-white"):
-                    ui.label(str(item.get("label", ""))).classes("text-xs uppercase tracking-[0.18em] text-slate-400")
-                    ui.label(str(item.get("value", "—"))).classes("text-2xl font-semibold text-slate-900 mt-2")
+                with nice_ui.card().classes("min-w-[240px] rounded-[22px] border border-slate-200 shadow-none p-4 bg-white"):
+                    nice_ui.label(str(item.get("label", ""))).classes("text-xs uppercase tracking-[0.18em] text-slate-400")
+                    nice_ui.label(str(item.get("value", "—"))).classes("text-2xl font-semibold text-slate-900 mt-2")
                     if item.get("badge"):
-                        ui.label(str(item["badge"])).classes(
+                        nice_ui.label(str(item["badge"])).classes(
                             f"inline-flex mt-3 rounded-full px-3 py-1 text-xs font-semibold {badge_palette.get(tone, badge_palette['slate'])}"
                         )
                     if item.get("detail"):
-                        ui.label(str(item["detail"])).classes("text-sm text-slate-500 mt-2")
+                        nice_ui.label(str(item["detail"])).classes("text-sm text-slate-500 mt-2")
 
 
 def build_execution_ui() -> None:
     if ui is None:  # pragma: no cover
         raise ImportError("nicegui is not installed. Install it with `python -m pip install nicegui`.")
 
-    ui.add_head_html(
+    nice_ui.add_head_html(
         """
         <style>
           body {
@@ -475,18 +477,18 @@ def build_execution_ui() -> None:
 
     pending: dict[str, Any] = {"fn": None, "label": "", "body": ""}
 
-    with ui.dialog() as confirm_dialog, ui.card().classes("rounded-[24px] p-6 w-[520px]"):
-        confirm_title = ui.label("").classes("text-xl font-semibold text-slate-800")
-        confirm_body = ui.label("").classes("text-sm text-slate-600")
-        with ui.row().classes("justify-end gap-3 mt-4"):
-            ui.button("Cancel", on_click=confirm_dialog.close).props("flat")
+    with nice_ui.dialog() as confirm_dialog, nice_ui.card().classes("rounded-[24px] p-6 w-[520px]"):
+        confirm_title = nice_ui.label("").classes("text-xl font-semibold text-slate-800")
+        confirm_body = nice_ui.label("").classes("text-sm text-slate-600")
+        with nice_ui.row().classes("justify-end gap-3 mt-4"):
+            nice_ui.button("Cancel", on_click=confirm_dialog.close).props("flat")
 
             def _confirm() -> None:
                 confirm_dialog.close()
                 if pending["fn"]:
                     pending["fn"]()
 
-            ui.button("Run", on_click=_confirm).props("unelevated color=primary")
+            nice_ui.button("Run", on_click=_confirm).props("unelevated color=primary")
 
     def ask_confirm(label: str, body: str, fn: Callable[[], None]) -> None:
         pending["fn"] = fn
@@ -497,7 +499,7 @@ def build_execution_ui() -> None:
         confirm_dialog.open()
 
     def toast_started(label: str, task_id: str) -> None:
-        ui.notify(f"{label} started: {task_id}", type="positive", position="top")
+        nice_ui.notify(f"{label} started: {task_id}", type="positive", position="top")
         state["selected_task_id"] = task_id
         refresh_all()
 
@@ -540,7 +542,7 @@ def build_execution_ui() -> None:
     def run_publish_retry() -> None:
         publishable_run = find_latest_publishable_run(PROJECT_ROOT, limit=50)
         if not publishable_run:
-            ui.notify("No publishable run found for publish retry.", type="warning", position="top")
+            nice_ui.notify("No publishable run found for publish retry.", type="warning", position="top")
             return
         latest_run_id = str(publishable_run["run_id"])
         task_id = launch_pipeline_task(
@@ -567,50 +569,50 @@ def build_execution_ui() -> None:
     def terminate_selected_process() -> None:
         pid = state.get("selected_process_pid")
         if not pid:
-            ui.notify("No process selected.", type="warning", position="top")
+            nice_ui.notify("No process selected.", type="warning", position="top")
             return
         result = terminate_project_process(PROJECT_ROOT, int(pid))
         if result.get("ok"):
-            ui.notify(result["message"], type="positive", position="top")
+            nice_ui.notify(result["message"], type="positive", position="top")
         else:
-            ui.notify(result["message"], type="warning", position="top")
+            nice_ui.notify(result["message"], type="warning", position="top")
         refresh_all()
 
-    with ui.left_drawer(value=False).classes("glass-panel w-[360px] border-r border-slate-200 p-5") as drawer:
-        ui.label("Run Controls").classes("text-2xl font-semibold text-slate-800")
-        ui.label("Set operational parameters once, then launch from the action cards.").classes(
+    with nice_ui.left_drawer(value=False).classes("glass-panel w-[360px] border-r border-slate-200 p-5") as drawer:
+        nice_ui.label("Run Controls").classes("text-2xl font-semibold text-slate-800")
+        nice_ui.label("Set operational parameters once, then launch from the action cards.").classes(
             "text-sm text-slate-500 mb-4"
         )
-        ui.label("Pipeline Flags").classes("text-xs uppercase tracking-[0.2em] text-slate-400 mt-2")
-        ui.switch("Skip preflight", value=state["skip_preflight"], on_change=lambda e: state.__setitem__("skip_preflight", bool(e.value))).classes("mt-1")
-        ui.switch("Local publish only", value=state["local_publish"], on_change=lambda e: state.__setitem__("local_publish", bool(e.value)))
-        ui.switch("Full feature rebuild", value=state["full_rebuild"], on_change=lambda e: state.__setitem__("full_rebuild", bool(e.value)))
-        ui.separator().classes("my-4")
-        ui.label("Execution Parameters").classes("text-xs uppercase tracking-[0.2em] text-slate-400")
-        ui.number("Feature tail bars", value=state["feature_tail_bars"], min=50, max=400, step=10).props("outlined dense").bind_value(state, "feature_tail_bars").classes("w-full")
-        ui.number("Canary symbol limit", value=state["symbol_limit"], min=5, max=200, step=5).props("outlined dense").bind_value(state, "symbol_limit").classes("w-full")
-        ui.number("Research Streamlit port", value=state["streamlit_port"], min=8501, max=8999, step=1).props("outlined dense").bind_value(state, "streamlit_port").classes("w-full")
-        ui.separator().classes("my-4")
-        ui.label("Ranking View Filters").classes("text-xs uppercase tracking-[0.2em] text-slate-400")
-        ui.switch("Stage-2 uptrend only", value=state["stage2_only"], on_change=lambda e: state.__setitem__("stage2_only", bool(e.value))).classes("mt-1")
-        ui.number("Stage-2 min score", value=state["stage2_min_score"], min=0, max=100, step=1).props("outlined dense").bind_value(state, "stage2_min_score").classes("w-full")
-        with ui.card().classes("mt-6 rounded-[22px] bg-slate-900 text-white border-0 p-4"):
-            ui.label("Operator Note").classes("text-xs uppercase tracking-[0.2em] opacity-60")
-            ui.label("Use the drawer for run defaults. Launch flows from the action board, then inspect the selected run and current task below.").classes("text-sm mt-2 opacity-90")
+        nice_ui.label("Pipeline Flags").classes("text-xs uppercase tracking-[0.2em] text-slate-400 mt-2")
+        nice_ui.switch("Skip preflight", value=state["skip_preflight"], on_change=lambda e: state.__setitem__("skip_preflight", bool(e.value))).classes("mt-1")
+        nice_ui.switch("Local publish only", value=state["local_publish"], on_change=lambda e: state.__setitem__("local_publish", bool(e.value)))
+        nice_ui.switch("Full feature rebuild", value=state["full_rebuild"], on_change=lambda e: state.__setitem__("full_rebuild", bool(e.value)))
+        nice_ui.separator().classes("my-4")
+        nice_ui.label("Execution Parameters").classes("text-xs uppercase tracking-[0.2em] text-slate-400")
+        nice_ui.number("Feature tail bars", value=state["feature_tail_bars"], min=50, max=400, step=10).props("outlined dense").bind_value(state, "feature_tail_bars").classes("w-full")
+        nice_ui.number("Canary symbol limit", value=state["symbol_limit"], min=5, max=200, step=5).props("outlined dense").bind_value(state, "symbol_limit").classes("w-full")
+        nice_ui.number("Research Streamlit port", value=state["streamlit_port"], min=8501, max=8999, step=1).props("outlined dense").bind_value(state, "streamlit_port").classes("w-full")
+        nice_ui.separator().classes("my-4")
+        nice_ui.label("Ranking View Filters").classes("text-xs uppercase tracking-[0.2em] text-slate-400")
+        nice_ui.switch("Stage-2 uptrend only", value=state["stage2_only"], on_change=lambda e: state.__setitem__("stage2_only", bool(e.value))).classes("mt-1")
+        nice_ui.number("Stage-2 min score", value=state["stage2_min_score"], min=0, max=100, step=1).props("outlined dense").bind_value(state, "stage2_min_score").classes("w-full")
+        with nice_ui.card().classes("mt-6 rounded-[22px] bg-slate-900 text-white border-0 p-4"):
+            nice_ui.label("Operator Note").classes("text-xs uppercase tracking-[0.2em] opacity-60")
+            nice_ui.label("Use the drawer for run defaults. Launch flows from the action board, then inspect the selected run and current task below.").classes("text-sm mt-2 opacity-90")
 
-    ui.query("body").classes("font-[Instrument_Sans],text-slate-800")
-    with ui.column().classes("w-full max-w-[1680px] mx-auto px-6 py-6 gap-6"):
-        with ui.card().classes("hero-panel rounded-[32px] border-0 shadow-2xl p-8 text-white"):
-            with ui.row().classes("w-full justify-between items-start gap-6"):
-                with ui.column().classes("gap-2 max-w-[920px]"):
-                    ui.label("Execution Control Center").classes("text-4xl font-bold tracking-tight")
-                    ui.label(
+    nice_ui.query("body").classes("font-[Instrument_Sans],text-slate-800")
+    with nice_ui.column().classes("w-full max-w-[1680px] mx-auto px-6 py-6 gap-6"):
+        with nice_ui.card().classes("hero-panel rounded-[32px] border-0 shadow-2xl p-8 text-white"):
+            with nice_ui.row().classes("w-full justify-between items-start gap-6"):
+                with nice_ui.column().classes("gap-2 max-w-[920px]"):
+                    nice_ui.label("Execution Control Center").classes("text-4xl font-bold tracking-tight")
+                    nice_ui.label(
                         "Run the live pipeline, monitor freshness, inspect ranked signals, review alerts, and track ML challengers from one execution surface."
                     ).classes("text-base opacity-90")
-                ui.button("Open Controls", on_click=drawer.toggle).props("outline color=white").classes("rounded-xl font-semibold")
+                nice_ui.button("Open Controls", on_click=drawer.toggle).props("outline color=white").classes("rounded-xl font-semibold")
 
-            with ui.row().classes("gap-3 mt-6 flex-wrap"):
-                ui.button(
+            with nice_ui.row().classes("gap-3 mt-6 flex-wrap"):
+                nice_ui.button(
                     "Run Full Pipeline",
                     on_click=lambda: ask_confirm(
                         "Run Full Pipeline",
@@ -618,7 +620,7 @@ def build_execution_ui() -> None:
                         run_full_pipeline,
                     ),
                 ).props("unelevated").classes("bg-white text-slate-900 rounded-xl px-5 py-3 font-semibold")
-                ui.button(
+                nice_ui.button(
                     "Market Refresh",
                     on_click=lambda: ask_confirm(
                         "Run Market Refresh",
@@ -626,7 +628,7 @@ def build_execution_ui() -> None:
                         run_market_refresh,
                     ),
                 ).props("outline color=white").classes("rounded-xl px-5 py-3 font-semibold")
-                ui.button(
+                nice_ui.button(
                     "Shadow Refresh",
                     on_click=lambda: ask_confirm(
                         "Run Shadow Refresh",
@@ -635,36 +637,36 @@ def build_execution_ui() -> None:
                     ),
                 ).props("outline color=white").classes("rounded-xl px-5 py-3 font-semibold")
 
-        metrics_row = ui.row().classes("w-full gap-4 flex-wrap")
+        metrics_row = nice_ui.row().classes("w-full gap-4 flex-wrap")
 
-        with ui.column().classes("w-full gap-6"):
-            with ui.tabs().classes("w-full") as tabs:
-                control_tab = ui.tab("Control")
-                ranking_tab = ui.tab("Ranking")
-                market_tab = ui.tab("Market")
-                operations_tab = ui.tab("Operations")
-                shadow_tab = ui.tab("Shadow")
-                tasks_tab = ui.tab("Tasks")
-                processes_tab = ui.tab("Processes")
+        with nice_ui.column().classes("w-full gap-6"):
+            with nice_ui.tabs().classes("w-full") as tabs:
+                control_tab = nice_ui.tab("Control")
+                ranking_tab = nice_ui.tab("Ranking")
+                market_tab = nice_ui.tab("Market")
+                operations_tab = nice_ui.tab("Operations")
+                shadow_tab = nice_ui.tab("Shadow")
+                tasks_tab = nice_ui.tab("Tasks")
+                processes_tab = nice_ui.tab("Processes")
 
-            with ui.tab_panels(tabs, value=control_tab).classes("w-full"):
-                with ui.tab_panel(control_tab):
-                    with ui.row().classes("w-full gap-6 items-start"):
-                        action_board = ui.card().classes("glass-panel section-card w-[430px] rounded-[28px] shadow-sm border-0 p-5")
-                        control_summary_container = ui.card().classes("glass-panel section-card flex-1 rounded-[26px] shadow-sm border-0 p-5")
+            with nice_ui.tab_panels(tabs, value=control_tab).classes("w-full"):
+                with nice_ui.tab_panel(control_tab):
+                    with nice_ui.row().classes("w-full gap-6 items-start"):
+                        action_board = nice_ui.card().classes("glass-panel section-card w-[430px] rounded-[28px] shadow-sm border-0 p-5")
+                        control_summary_container = nice_ui.card().classes("glass-panel section-card flex-1 rounded-[26px] shadow-sm border-0 p-5")
 
                     with action_board:
-                        ui.label("Action Board").classes("text-xl font-semibold text-slate-800")
-                        ui.label("Run the common flows directly from here.").classes("text-sm text-slate-500 mb-3")
+                        nice_ui.label("Action Board").classes("text-xl font-semibold text-slate-800")
+                        nice_ui.label("Run the common flows directly from here.").classes("text-sm text-slate-500 mb-3")
 
                         def action_card(title: str, subtitle: str, action: Callable[[], None], confirm_text: str, icon: str) -> None:
-                            with ui.card().classes("action-tile rounded-[22px] border border-slate-200 shadow-none p-4 bg-white mb-3"):
-                                with ui.row().classes("items-start gap-3"):
-                                    ui.icon(icon).classes("text-2xl text-sky-600 mt-1")
-                                    with ui.column().classes("gap-1 flex-1"):
-                                        ui.label(title).classes("text-lg font-semibold text-slate-800")
-                                        ui.label(subtitle).classes("text-sm text-slate-500 mb-3")
-                                ui.button(
+                            with nice_ui.card().classes("action-tile rounded-[22px] border border-slate-200 shadow-none p-4 bg-white mb-3"):
+                                with nice_ui.row().classes("items-start gap-3"):
+                                    nice_ui.icon(icon).classes("text-2xl text-sky-600 mt-1")
+                                    with nice_ui.column().classes("gap-1 flex-1"):
+                                        nice_ui.label(title).classes("text-lg font-semibold text-slate-800")
+                                        nice_ui.label(subtitle).classes("text-sm text-slate-500 mb-3")
+                                nice_ui.button(
                                     "Run",
                                     on_click=lambda: ask_confirm(title, confirm_text, action),
                                 ).props("unelevated color=primary").classes("rounded-xl")
@@ -676,88 +678,88 @@ def build_execution_ui() -> None:
                         action_card("Shadow Bootstrap 30D", "Seed recent challenger-vs-champion history for weekly/monthly views.", lambda: run_shadow(30), "Backfill 30 days of shadow predictions and outcomes?", "psychology")
                         action_card("Launch Research Streamlit", "Start the research/backtesting dashboard on the configured Streamlit port.", run_streamlit_launcher, f"Launch Streamlit research dashboard on port {state['streamlit_port']}?", "monitoring")
 
-                    control_health_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mt-6")
+                    control_health_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mt-6")
 
-                with ui.tab_panel(ranking_tab):
-                    ranking_summary_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
-                    stage2_summary_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
-                    with ui.row().classes("w-full gap-6 items-start"):
-                        ranked_chart_container = ui.card().classes("glass-panel section-card w-[420px] rounded-[26px] shadow-sm border-0 p-5")
-                        ranked_container = ui.card().classes("glass-panel section-card flex-1 rounded-[26px] shadow-sm border-0 p-5")
+                with nice_ui.tab_panel(ranking_tab):
+                    ranking_summary_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
+                    stage2_summary_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
+                    with nice_ui.row().classes("w-full gap-6 items-start"):
+                        ranked_chart_container = nice_ui.card().classes("glass-panel section-card w-[420px] rounded-[26px] shadow-sm border-0 p-5")
+                        ranked_container = nice_ui.card().classes("glass-panel section-card flex-1 rounded-[26px] shadow-sm border-0 p-5")
 
-                with ui.tab_panel(market_tab):
-                    market_summary_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
-                    with ui.row().classes("w-full gap-6 items-start"):
-                        breakout_container = ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
-                        sector_chart_container = ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
-                    sectors_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5")
-                    health_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5")
+                with nice_ui.tab_panel(market_tab):
+                    market_summary_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
+                    with nice_ui.row().classes("w-full gap-6 items-start"):
+                        breakout_container = nice_ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
+                        sector_chart_container = nice_ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
+                    sectors_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5")
+                    health_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5")
 
-                with ui.tab_panel(operations_tab):
-                    operations_summary_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
-                    with ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6"):
-                        ui.label("Run Inspector").classes("text-xl font-semibold text-slate-800")
-                        ui.label("Select any recent run to inspect stage attempts, alerts, and publish activity.").classes(
+                with nice_ui.tab_panel(operations_tab):
+                    operations_summary_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
+                    with nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6"):
+                        nice_ui.label("Run Inspector").classes("text-xl font-semibold text-slate-800")
+                        nice_ui.label("Select any recent run to inspect stage attempts, alerts, and publish activity.").classes(
                             "text-sm text-slate-500 mb-4"
                         )
-                        with ui.row().classes("items-center gap-4 flex-wrap"):
-                            run_select = ui.select(
+                        with nice_ui.row().classes("items-center gap-4 flex-wrap"):
+                            run_select = nice_ui.select(
                                 options={},
                                 value=state["selected_run_id"],
                                 label="Selected run",
                                 on_change=lambda e: state.__setitem__("selected_run_id", e.value),
                             ).props("outlined dense options-dense").classes("min-w-[460px]")
-                            ui.button("Refresh Panel", on_click=lambda: refresh_all()).props("flat color=primary")
-                    with ui.row().classes("w-full gap-6 items-start"):
-                        recent_runs_container = ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
-                        run_summary_container = ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
-                    with ui.row().classes("w-full gap-6 items-start"):
-                        stage_runs_container = ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
-                        alerts_container = ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
-                    delivery_logs_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5")
+                            nice_ui.button("Refresh Panel", on_click=lambda: refresh_all()).props("flat color=primary")
+                    with nice_ui.row().classes("w-full gap-6 items-start"):
+                        recent_runs_container = nice_ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
+                        run_summary_container = nice_ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
+                    with nice_ui.row().classes("w-full gap-6 items-start"):
+                        stage_runs_container = nice_ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
+                        alerts_container = nice_ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
+                    delivery_logs_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5")
 
-                with ui.tab_panel(shadow_tab):
-                    with ui.row().classes("w-full gap-6 items-start"):
-                        overlay_container = ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
-                        weekly5_container = ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
-                    with ui.row().classes("w-full gap-6 items-start"):
-                        weekly20_container = ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
-                        monthly5_container = ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
-                    monthly20_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5")
+                with nice_ui.tab_panel(shadow_tab):
+                    with nice_ui.row().classes("w-full gap-6 items-start"):
+                        overlay_container = nice_ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
+                        weekly5_container = nice_ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
+                    with nice_ui.row().classes("w-full gap-6 items-start"):
+                        weekly20_container = nice_ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
+                        monthly5_container = nice_ui.card().classes("glass-panel section-card w-1/2 rounded-[26px] shadow-sm border-0 p-5")
+                    monthly20_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5")
 
-                with ui.tab_panel(tasks_tab):
-                    tasks_summary_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
-                    with ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6"):
-                        ui.label("Task Monitor").classes("text-xl font-semibold text-slate-800")
-                        ui.label("Follow the currently running UI-triggered task or inspect completed runs with full logs.").classes(
+                with nice_ui.tab_panel(tasks_tab):
+                    tasks_summary_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
+                    with nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6"):
+                        nice_ui.label("Task Monitor").classes("text-xl font-semibold text-slate-800")
+                        nice_ui.label("Follow the currently running UI-triggered task or inspect completed runs with full logs.").classes(
                             "text-sm text-slate-500 mb-4"
                         )
-                        with ui.row().classes("items-center gap-4 flex-wrap"):
-                            task_select = ui.select(
+                        with nice_ui.row().classes("items-center gap-4 flex-wrap"):
+                            task_select = nice_ui.select(
                                 options={},
                                 value=state["selected_task_id"],
                                 label="Selected task",
                                 on_change=lambda e: state.__setitem__("selected_task_id", e.value),
                             ).props("outlined dense options-dense").classes("min-w-[460px]")
-                            ui.button("Jump To Active", on_click=lambda: state.__setitem__("selected_task_id", None)).props("flat color=primary")
-                    task_queue_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5")
-                    task_log_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mt-6")
+                            nice_ui.button("Jump To Active", on_click=lambda: state.__setitem__("selected_task_id", None)).props("flat color=primary")
+                    task_queue_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5")
+                    task_log_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mt-6")
 
-                with ui.tab_panel(processes_tab):
-                    processes_summary_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
-                    with ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6"):
-                        ui.label("Process Control").classes("text-xl font-semibold text-slate-800")
-                        ui.label("Inspect project processes and terminate stale dashboard or pipeline sessions safely.").classes(
+                with nice_ui.tab_panel(processes_tab):
+                    processes_summary_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6")
+                    with nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5 mb-6"):
+                        nice_ui.label("Process Control").classes("text-xl font-semibold text-slate-800")
+                        nice_ui.label("Inspect project processes and terminate stale dashboard or pipeline sessions safely.").classes(
                             "text-sm text-slate-500 mb-4"
                         )
-                        with ui.row().classes("items-center gap-4 flex-wrap"):
-                            process_select = ui.select(
+                        with nice_ui.row().classes("items-center gap-4 flex-wrap"):
+                            process_select = nice_ui.select(
                                 options={},
                                 value=state["selected_process_pid"],
                                 label="Selected process",
                                 on_change=lambda e: state.__setitem__("selected_process_pid", e.value),
                             ).props("outlined dense options-dense").classes("min-w-[520px]")
-                            ui.button(
+                            nice_ui.button(
                                 "Terminate Process",
                                 on_click=lambda: ask_confirm(
                                     "Terminate Project Process",
@@ -765,10 +767,10 @@ def build_execution_ui() -> None:
                                     terminate_selected_process,
                                 ),
                             ).props("flat color=negative")
-                            ui.button("Refresh Processes", on_click=lambda: refresh_all()).props("flat color=primary")
-                    process_table_container = ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5")
+                            nice_ui.button("Refresh Processes", on_click=lambda: refresh_all()).props("flat color=primary")
+                    process_table_container = nice_ui.card().classes("glass-panel section-card w-full rounded-[26px] shadow-sm border-0 p-5")
 
-        task_log_area = ui.textarea(label="Current Task Log").props("readonly autogrow outlined").classes("w-full")
+        task_log_area = nice_ui.textarea(label="Current Task Log").props("readonly autogrow outlined").classes("w-full")
 
     def _populate_task_log() -> None:
         tasks = list_operator_tasks(PROJECT_ROOT)
@@ -1213,7 +1215,7 @@ def build_execution_ui() -> None:
         _populate_task_log()
 
     refresh_all()
-    ui.timer(5.0, refresh_all)
+    nice_ui.timer(5.0, refresh_all)
 
 
 def main(**run_kwargs: Any) -> None:
@@ -1224,7 +1226,7 @@ def main(**run_kwargs: Any) -> None:
     build_execution_ui()
     options = {"title": "AI Trading Execution Console", "reload": False}
     options.update(run_kwargs)
-    ui.run(**options)
+    nice_ui.run(**options)
 
 
 def build_parser() -> argparse.ArgumentParser:

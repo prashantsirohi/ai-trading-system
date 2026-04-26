@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from analytics.shadow_monitor import build_shadow_overlay, compute_matured_outcomes
+from ai_trading_system.analytics.shadow_monitor import build_shadow_overlay, compute_matured_outcomes
 from ai_trading_system.research.shadow_monitor import compute_rolling_spearman_ic, compute_spearman_ic
 
 

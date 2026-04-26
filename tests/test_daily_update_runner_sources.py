@@ -7,7 +7,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from collectors import daily_update_runner
+from ai_trading_system.domains.ingest import daily_update_runner
 
 
 class _FixedDateTime(datetime):

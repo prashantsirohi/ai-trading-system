@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.ui.execution_api.services.control_center import (
     find_latest_publishable_run,
     get_operator_task,

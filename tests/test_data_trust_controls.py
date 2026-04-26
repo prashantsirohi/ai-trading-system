@@ -6,10 +6,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from analytics.registry import RegistryStore
-from core.contracts import StageArtifact, StageContext
-from run.stages.execute import ExecuteStage
-from run.stages.publish import PublishStage
+from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
+from ai_trading_system.pipeline.stages.execute import ExecuteStage
+from ai_trading_system.pipeline.stages.publish import PublishStage
 
 
 def test_execute_stage_blocks_when_rank_payload_is_blocked(tmp_path: Path) -> None:

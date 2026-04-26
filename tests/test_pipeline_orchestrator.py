@@ -9,15 +9,15 @@ import duckdb
 import pandas as pd
 import pytest
 
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.domains.ranking.patterns.cache import PatternCacheStore
-from collectors.delivery_collector import DeliveryCollector
-from collectors.nse_delivery_scraper import NseHistoricalDeliveryScraper
-from run.preflight import PreflightChecker
-from run.publisher import PublisherDeliveryManager
-import run.orchestrator as orchestrator_module
-from run.orchestrator import PipelineOrchestrator
-from run.stages import FeaturesStage, IngestStage, PublishStage, RankStage
+from ai_trading_system.domains.ingest.delivery import DeliveryCollector
+from ai_trading_system.domains.ingest.nse_delivery_scraper import NseHistoricalDeliveryScraper
+from ai_trading_system.pipeline.preflight import PreflightChecker
+from ai_trading_system.domains.publish.delivery_manager import PublisherDeliveryManager
+import ai_trading_system.pipeline.orchestrator as orchestrator_module
+from ai_trading_system.pipeline.orchestrator import PipelineOrchestrator
+from ai_trading_system.pipeline.stages import FeaturesStage, IngestStage, PublishStage, RankStage
 from ai_trading_system.domains.ranking.service import build_integrated_stock_scan_view
 from ai_trading_system.pipeline.contracts import DataQualityCriticalError, PublishStageError, StageArtifact, StageContext
 from ai_trading_system.platform.db.paths import ensure_domain_layout, get_domain_paths, research_static_end_date
@@ -562,7 +562,7 @@ def test_ingest_stage_runs_delivery_collection_when_enabled(
             captured["feature_exchange"] = exchange
             return 48
 
-    monkeypatch.setattr("collectors.delivery_collector.DeliveryCollector", FakeDeliveryCollector)
+    monkeypatch.setattr("ai_trading_system.domains.ingest.delivery.DeliveryCollector", FakeDeliveryCollector)
 
     context = StageContext(
         project_root=tmp_path,
@@ -599,7 +599,7 @@ def test_ingest_stage_skips_delivery_when_disabled(
         def __init__(self, **kwargs):
             raise AssertionError("Delivery collector should not be created when disabled")
 
-    monkeypatch.setattr("collectors.delivery_collector.DeliveryCollector", FailingDeliveryCollector)
+    monkeypatch.setattr("ai_trading_system.domains.ingest.delivery.DeliveryCollector", FailingDeliveryCollector)
 
     context = StageContext(
         project_root=tmp_path,
@@ -642,7 +642,7 @@ def test_ingest_stage_bhavcopy_validation_passes(tmp_path: Path, monkeypatch: py
                 ]
             )
 
-    monkeypatch.setattr("collectors.nse_collector.NSECollector", FakeNSECollector)
+    monkeypatch.setattr("ai_trading_system.domains.ingest.providers.nse.NSECollector", FakeNSECollector)
 
     context = StageContext(
         project_root=tmp_path,
@@ -693,7 +693,7 @@ def test_ingest_stage_bhavcopy_validation_blocks_on_mismatch(
                 ]
             )
 
-    monkeypatch.setattr("collectors.nse_collector.NSECollector", FakeNSECollector)
+    monkeypatch.setattr("ai_trading_system.domains.ingest.providers.nse.NSECollector", FakeNSECollector)
 
     context = StageContext(
         project_root=tmp_path,
@@ -736,7 +736,7 @@ def test_ingest_stage_uses_explicit_bhavcopy_validation_date(
             captured["trade_date"] = trade_date
             return pd.DataFrame([{"SYMBOL": "ABC", "SERIES": "EQ", "CLOSE_PRICE": 10.5}])
 
-    monkeypatch.setattr("collectors.nse_collector.NSECollector", FakeNSECollector)
+    monkeypatch.setattr("ai_trading_system.domains.ingest.providers.nse.NSECollector", FakeNSECollector)
 
     context = StageContext(
         project_root=tmp_path,
@@ -787,7 +787,7 @@ def test_ingest_stage_bhavcopy_validation_falls_back_to_yfinance(
             index=pd.to_datetime(["2026-03-28"]),
         )
 
-    monkeypatch.setattr("collectors.nse_collector.NSECollector", EmptyBhavcopyCollector)
+    monkeypatch.setattr("ai_trading_system.domains.ingest.providers.nse.NSECollector", EmptyBhavcopyCollector)
     monkeypatch.setattr("yfinance.download", fake_download)
 
     context = StageContext(
@@ -1123,10 +1123,10 @@ def test_rank_stage_incremental_pattern_scan_reuses_cached_inactive_symbols(
         ]
     )
 
-    import analytics.data_trust as data_trust_module
-    import analytics.patterns.data as pattern_data_module
-    import analytics.patterns.evaluation as pattern_eval_module
-    import analytics.ranker as ranker_module
+    import ai_trading_system.analytics.data_trust as data_trust_module
+    import ai_trading_system.analytics.patterns.data as pattern_data_module
+    import ai_trading_system.analytics.patterns.evaluation as pattern_eval_module
+    import ai_trading_system.analytics.ranker as ranker_module
     from ai_trading_system.domains.ranking import breakout as breakout_module
     from ai_trading_system.domains.ranking import sector_dashboard as sector_dashboard_module
     from ai_trading_system.domains.ranking import stock_scan as stock_scan_module
@@ -1269,10 +1269,10 @@ def test_rank_stage_pattern_scan_uses_broad_seed_universe_not_ranked_shortlist(
     )
     requested_symbols: list[str] = []
 
-    import analytics.data_trust as data_trust_module
-    import analytics.patterns.data as pattern_data_module
-    import analytics.patterns.evaluation as pattern_eval_module
-    import analytics.ranker as ranker_module
+    import ai_trading_system.analytics.data_trust as data_trust_module
+    import ai_trading_system.analytics.patterns.data as pattern_data_module
+    import ai_trading_system.analytics.patterns.evaluation as pattern_eval_module
+    import ai_trading_system.analytics.ranker as ranker_module
     from ai_trading_system.domains.ranking import breakout as breakout_module
     from ai_trading_system.domains.ranking import sector_dashboard as sector_dashboard_module
     from ai_trading_system.domains.ranking import stock_scan as stock_scan_module
@@ -1417,10 +1417,10 @@ def test_rank_stage_pattern_seed_falls_back_to_ranked_symbols_on_seed_failure(
     )
     requested_symbols: list[str] = []
 
-    import analytics.data_trust as data_trust_module
-    import analytics.patterns.data as pattern_data_module
-    import analytics.patterns.evaluation as pattern_eval_module
-    import analytics.ranker as ranker_module
+    import ai_trading_system.analytics.data_trust as data_trust_module
+    import ai_trading_system.analytics.patterns.data as pattern_data_module
+    import ai_trading_system.analytics.patterns.evaluation as pattern_eval_module
+    import ai_trading_system.analytics.ranker as ranker_module
     from ai_trading_system.domains.ranking import breakout as breakout_module
     from ai_trading_system.domains.ranking import sector_dashboard as sector_dashboard_module
     from ai_trading_system.domains.ranking import stock_scan as stock_scan_module
@@ -1542,10 +1542,10 @@ def test_rank_stage_pattern_scan_failure_records_actionable_traceback(
         ]
     )
 
-    import analytics.data_trust as data_trust_module
-    import analytics.patterns as patterns_module
-    import analytics.patterns.data as pattern_data_module
-    import analytics.ranker as ranker_module
+    import ai_trading_system.analytics.data_trust as data_trust_module
+    import ai_trading_system.analytics.patterns as patterns_module
+    import ai_trading_system.analytics.patterns.data as pattern_data_module
+    import ai_trading_system.analytics.ranker as ranker_module
     from ai_trading_system.domains.ranking import breakout as breakout_module
     from ai_trading_system.domains.ranking import sector_dashboard as sector_dashboard_module
     from ai_trading_system.domains.ranking import stock_scan as stock_scan_module
@@ -1761,7 +1761,7 @@ def test_preflight_checker_reports_publish_dns_failures(tmp_path: Path, monkeypa
     def _dns_fail(_host, _port):
         raise OSError("dns blocked")
 
-    monkeypatch.setattr("run.preflight.socket.getaddrinfo", _dns_fail)
+    monkeypatch.setattr("ai_trading_system.pipeline.preflight.socket.getaddrinfo", _dns_fail)
 
     result = PreflightChecker(project_root).run(
         ["publish"],
@@ -1788,7 +1788,7 @@ def test_preflight_checker_can_skip_publish_dns_checks(tmp_path: Path, monkeypat
     def _dns_fail(_host, _port):
         raise OSError("dns blocked")
 
-    monkeypatch.setattr("run.preflight.socket.getaddrinfo", _dns_fail)
+    monkeypatch.setattr("ai_trading_system.pipeline.preflight.socket.getaddrinfo", _dns_fail)
 
     result = PreflightChecker(project_root).run(
         ["publish"],
@@ -1858,7 +1858,7 @@ def test_main_auto_repairs_quarantine_and_retries(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(
         "sys.argv",
         [
-            "run.orchestrator",
+            "ai_trading_system.pipeline.orchestrator",
             "--stages",
             "ingest,features,rank",
         ],
@@ -1889,14 +1889,14 @@ def test_main_publish_only_without_run_id_resolves_latest_publishable_run(monkey
 
     monkeypatch.setattr(orchestrator_module, "PipelineOrchestrator", FakeOrchestrator)
     monkeypatch.setattr(
-        orchestrator_module._pipeline_orchestrator,
+        orchestrator_module,
         "_resolve_latest_publishable_run_id",
         lambda *_args, **_kwargs: "pipeline-2026-04-21-retryme",
     )
     monkeypatch.setattr(
         "sys.argv",
         [
-            "run.orchestrator",
+            "ai_trading_system.pipeline.orchestrator",
             "--stages",
             "publish",
             "--local-publish",
@@ -1920,14 +1920,14 @@ def test_main_publish_only_without_run_id_exits_when_no_publishable_run(monkeypa
 
     monkeypatch.setattr(orchestrator_module, "PipelineOrchestrator", FakeOrchestrator)
     monkeypatch.setattr(
-        orchestrator_module._pipeline_orchestrator,
+        orchestrator_module,
         "_resolve_latest_publishable_run_id",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         "sys.argv",
         [
-            "run.orchestrator",
+            "ai_trading_system.pipeline.orchestrator",
             "--stages",
             "publish",
         ],
@@ -1951,7 +1951,7 @@ def test_main_exits_cleanly_after_final_dq_failure(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(orchestrator_module, "PipelineOrchestrator", FakeOrchestrator)
     monkeypatch.setattr(orchestrator_module, "_run_auto_quarantine_repair", lambda **kwargs: None)
-    monkeypatch.setattr("sys.argv", ["run.orchestrator"])
+    monkeypatch.setattr("sys.argv", ["ai_trading_system.pipeline.orchestrator"])
 
     with pytest.raises(SystemExit) as exc_info:
         orchestrator_module.main()
@@ -1979,15 +1979,15 @@ def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyP
             call_counts["rank_all"] += 1
             return pd.DataFrame([{"symbol_id": "AAA", "exchange": "NSE", "composite_score": 90.0}])
 
-    monkeypatch.setattr("analytics.data_trust.load_data_trust_summary", lambda *_args, **_kwargs: {"status": "trusted"})
-    monkeypatch.setattr("analytics.ranker.StockRanker", FakeRanker)
+    monkeypatch.setattr("ai_trading_system.analytics.data_trust.load_data_trust_summary", lambda *_args, **_kwargs: {"status": "trusted"})
+    monkeypatch.setattr("ai_trading_system.analytics.ranker.StockRanker", FakeRanker)
     monkeypatch.setattr(
         "ai_trading_system.domains.ranking.breakout.scan_breakouts",
         lambda **_kwargs: call_counts.__setitem__("breakout_scan", call_counts["breakout_scan"] + 1)
         or pd.DataFrame([{"symbol_id": "AAA", "breakout_state": "qualified"}]),
     )
     monkeypatch.setattr(
-        "analytics.patterns.data.load_pattern_frame",
+        "ai_trading_system.analytics.patterns.data.load_pattern_frame",
         lambda *_args, **_kwargs: pd.DataFrame(
             {
                 "symbol_id": ["AAA"] * 3,
@@ -2001,7 +2001,7 @@ def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyP
         ),
     )
     monkeypatch.setattr(
-        "analytics.patterns.build_pattern_signals",
+        "ai_trading_system.analytics.patterns.build_pattern_signals",
         lambda **_kwargs: call_counts.__setitem__("pattern_scan", call_counts["pattern_scan"] + 1)
         or pd.DataFrame([{"symbol_id": "AAA", "pattern_family": "cup_handle", "pattern_state": "confirmed"}]),
     )

@@ -3,9 +3,9 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from analytics.registry import RegistryStore
-from core.contracts import StageContext
-from run.stages.ingest import IngestStage
+from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.pipeline.contracts import StageContext
+from ai_trading_system.pipeline.stages.ingest import IngestStage
 
 
 def test_ingest_bhavcopy_parser_handles_series_with_whitespace(tmp_path: Path) -> None:

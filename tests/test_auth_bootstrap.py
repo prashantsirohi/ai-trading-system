@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from collectors import daily_update_runner
-from collectors.token_manager import DhanTokenManager
+from ai_trading_system.domains.ingest import daily_update_runner
+from ai_trading_system.domains.ingest.token_manager import DhanTokenManager
 
 
 def test_token_manager_generates_when_missing(tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 """Pattern detection helpers for research and operational workflows."""
 
-from analytics.patterns.contracts import (
+from ai_trading_system.analytics.patterns.contracts import (
     PatternBacktestConfig,
     PatternEvent,
     PatternScanConfig,
@@ -8,7 +8,7 @@ from analytics.patterns.contracts import (
     PatternTrade,
 )
 from ai_trading_system.domains.ranking.patterns.cache import PatternCacheStore
-from analytics.patterns.evaluation import (
+from ai_trading_system.analytics.patterns.evaluation import (
     build_pattern_events,
     build_pattern_signals,
     ensure_pattern_event_chart,

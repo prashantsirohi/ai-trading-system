@@ -7,7 +7,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from analytics.data_trust import ensure_data_trust_schema
+from ai_trading_system.analytics.data_trust import ensure_data_trust_schema
 from ai_trading_system.platform.logging.logger import logger
 
 

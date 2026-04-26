@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from core.bootstrap import ensure_project_root_on_path
+from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
 
 project_root = ensure_project_root_on_path(__file__)
 

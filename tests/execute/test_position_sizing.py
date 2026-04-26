@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from analytics.risk_manager import compute_atr_position_size as risk_compute_atr_position_size
-from analytics.risk_manager import RiskManager
+from ai_trading_system.analytics.risk_manager import compute_atr_position_size as risk_compute_atr_position_size
+from ai_trading_system.analytics.risk_manager import RiskManager
 from ai_trading_system.domains.execution.policies import compute_atr_position_size as policy_compute_atr_position_size
 
 
@@ -46,8 +46,8 @@ def test_risk_manager_atr_fallback_uses_parameterized_query(monkeypatch, tmp_pat
     conn = _Conn()
     manager = RiskManager(ohlcv_db_path=str(tmp_path / "ohlcv.duckdb"), feature_store_dir=str(tmp_path / "features"))
     monkeypatch.setattr(manager, "_get_conn", lambda: conn)
-    monkeypatch.setattr("analytics.risk_manager.os.path.exists", lambda _path: False)
-    monkeypatch.setattr("analytics.risk_manager.pd.read_parquet", lambda _path: pd.DataFrame())
+    monkeypatch.setattr("ai_trading_system.analytics.risk_manager.os.path.exists", lambda _path: False)
+    monkeypatch.setattr("ai_trading_system.analytics.risk_manager.pd.read_parquet", lambda _path: pd.DataFrame())
 
     atr = manager._get_atr("ABC'; DROP TABLE _catalog; --", exchange="NSE", period=14)
 

@@ -32,28 +32,17 @@ dev = [
 ]
 
 [project.scripts]
-ai-trading-pipeline = "run.orchestrator:main"
-ai-trading-publish-test = "run.publish_test:main"
-ai-trading-daily = "run.daily_pipeline:main"
-ai-trading-execution-ui = "ui.execution.app:main"
+ai-trading-pipeline = "ai_trading_system.pipeline.orchestrator:main"
+ai-trading-publish-test = "ai_trading_system.pipeline.publish_test:main"
+ai-trading-daily = "ai_trading_system.pipeline.daily_pipeline:main"
+ai-trading-execution-ui = "ai_trading_system.interfaces.streamlit.execution.app:main"
 ai-trading-execution-api = "ai_trading_system.ui.execution_api.app:main"
-ai-trading-research-recipe = "research.run_recipe:main"
+ai-trading-research-recipe = "ai_trading_system.research.run_recipe:main"
 
 [tool.setuptools.packages.find]
-where = [".", "src"]
+where = ["src"]
 include = [
   "ai_trading_system*",
-  "analytics*",
-  "collectors*",
-  "config*",
-  "core*",
-  "dashboard*",
-  "execution*",
-  "features*",
-  "publishers*",
-  "research*",
-  "run*",
-  "ui*",
 ]
 exclude = [
   "data*",

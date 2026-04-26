@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from analytics.data_trust import annotate_provider_reconciliation, reconcile_provider_row
+from ai_trading_system.analytics.data_trust import annotate_provider_reconciliation, reconcile_provider_row
 
 
 def test_reconcile_provider_row_flags_discrepancy() -> None:

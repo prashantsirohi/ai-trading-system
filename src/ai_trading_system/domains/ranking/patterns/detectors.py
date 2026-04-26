@@ -8,13 +8,13 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-from analytics.patterns.contracts import (
+from ai_trading_system.analytics.patterns.contracts import (
     PatternBacktestConfig,
     PatternEvent,
     PatternScanConfig,
     PatternSignal,
 )
-from analytics.patterns.signal import LocalExtrema
+from ai_trading_system.analytics.patterns.signal import LocalExtrema
 
 TIER_1_PATTERNS = {
     "cup_handle",

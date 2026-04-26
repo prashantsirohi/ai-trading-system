@@ -16,7 +16,7 @@ from ai_trading_system.domains.ingest.repository import (
     get_table_columns,
     initialize_ingest_duckdb,
 )
-from core.env import load_project_env
+from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.domains.features.feature_store import FeatureStore
 from ai_trading_system.domains.ingest.validation import validate_ohlcv_frame
 from ai_trading_system.domains.ingest.token_manager import DhanTokenManager

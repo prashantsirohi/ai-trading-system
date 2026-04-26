@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.registry import RegistryStore
 
 
 def test_operator_task_registry_roundtrip(tmp_path: Path) -> None:

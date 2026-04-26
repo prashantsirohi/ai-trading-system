@@ -12,8 +12,8 @@ import sys
 def main() -> int:
     message = (
         "main.py is deprecated and no longer a runnable pipeline entrypoint.\n"
-        "Use `python -m run.orchestrator` for canonical stage runs.\n"
-        "Optional wrapper: `python -m run.daily_pipeline`.\n"
+        "Use `python -m ai_trading_system.pipeline.orchestrator` for canonical stage runs.\n"
+        "Optional wrapper: `python -m ai_trading_system.pipeline.daily_pipeline`.\n"
     )
     sys.stderr.write(message)
     return 2

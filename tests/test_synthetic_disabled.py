@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from collectors import daily_update_runner
-from run.stages import FeaturesStage, IngestStage, PublishStage, RankStage
-from core.contracts import StageContext
+from ai_trading_system.domains.ingest import daily_update_runner
+from ai_trading_system.pipeline.stages import FeaturesStage, IngestStage, PublishStage, RankStage
+from ai_trading_system.pipeline.contracts import StageContext
 
 
 def _context(tmp_path: Path) -> StageContext:

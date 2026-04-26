@@ -7,9 +7,9 @@ import os
 
 import duckdb
 
-from analytics.data_trust import ensure_data_trust_schema
-from core.bootstrap import ensure_project_root_on_path
-from core.logging import logger
+from ai_trading_system.analytics.data_trust import ensure_data_trust_schema
+from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
+from ai_trading_system.platform.logging.logger import logger
 
 PROJECT_ROOT = str(ensure_project_root_on_path(__file__))
 DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "ohlcv.duckdb")

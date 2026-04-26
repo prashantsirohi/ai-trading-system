@@ -9,8 +9,8 @@ from typing import Dict
 
 import pandas as pd
 
-from analytics.risk_manager import RiskManager
-from analytics.regime_detector import RegimeDetector
+from ai_trading_system.analytics.risk_manager import RiskManager
+from ai_trading_system.analytics.regime_detector import RegimeDetector
 from ai_trading_system.domains.execution.adapters import PaperExecutionAdapter
 from ai_trading_system.domains.execution.autotrader import AutoTrader
 from ai_trading_system.domains.execution.portfolio import PortfolioManager

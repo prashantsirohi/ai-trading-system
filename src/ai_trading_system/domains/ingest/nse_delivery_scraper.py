@@ -13,7 +13,7 @@ from typing import Iterable, Optional
 import pandas as pd
 import requests
 
-from core.bootstrap import ensure_project_root_on_path
+from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger
 

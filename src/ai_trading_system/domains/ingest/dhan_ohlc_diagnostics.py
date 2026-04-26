@@ -20,7 +20,7 @@ import requests
 
 from ai_trading_system.domains.ingest.daily_update_runner import _fetch_nse_bhavcopy_rows, _fetch_yfinance_rows
 from ai_trading_system.domains.ingest.providers.dhan import DhanCollector, normalize_dhan_timestamps_ist
-from core.env import load_project_env
+from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 
 FIELDS = ["open", "high", "low", "close", "volume"]

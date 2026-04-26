@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from analytics.alpha.training import train_and_register_model, walk_forward_compare
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.alpha.training import train_and_register_model, walk_forward_compare
+from ai_trading_system.analytics.registry import RegistryStore
 
 
 class _DummyModel:

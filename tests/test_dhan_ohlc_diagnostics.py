@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from collectors import dhan_ohlc_diagnostics
+from ai_trading_system.domains.ingest import dhan_ohlc_diagnostics
 
 
 def test_build_fix_strategy_returns_actionable_steps() -> None:

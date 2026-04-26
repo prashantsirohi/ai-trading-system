@@ -6,9 +6,9 @@ import json
 import pytest
 
 from ai_trading_system.domains.publish.channels.google_sheets_manager import GoogleSheetsManager
-from analytics.registry import RegistryStore
-from core.contracts import StageArtifact, StageContext
-from run.stages.publish import PublishStage
+from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
+from ai_trading_system.pipeline.stages.publish import PublishStage
 
 
 def test_publish_portfolio_raises_when_analysis_reports_failure(monkeypatch, tmp_path: Path) -> None:
@@ -31,7 +31,7 @@ def test_publish_portfolio_raises_when_analysis_reports_failure(monkeypatch, tmp
     )
 
     monkeypatch.setattr(
-        "run.daily_pipeline.run_portfolio_analysis",
+        "ai_trading_system.pipeline.daily_pipeline.run_portfolio_analysis",
         lambda: {"ok": False, "error": "Google Sheets authentication failed"},
     )
 
@@ -59,7 +59,7 @@ def test_publish_portfolio_returns_report_metadata_on_success(monkeypatch, tmp_p
     )
 
     monkeypatch.setattr(
-        "run.daily_pipeline.run_portfolio_analysis",
+        "ai_trading_system.pipeline.daily_pipeline.run_portfolio_analysis",
         lambda: {"ok": True, "positions": 7},
     )
 

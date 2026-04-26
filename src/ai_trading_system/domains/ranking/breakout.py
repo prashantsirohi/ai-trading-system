@@ -10,7 +10,7 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from analytics.regime_detector import RegimeDetector
+from ai_trading_system.analytics.regime_detector import RegimeDetector
 from ai_trading_system.platform.logging.logger import logger
 
 VOLUME_Z20_CONFIRM_THRESHOLD = 2.0

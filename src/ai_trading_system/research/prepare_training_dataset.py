@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from analytics.alpha.dataset_builder import AlphaDatasetBuilder
-from analytics.lightgbm_engine import LightGBMAlphaEngine
-from analytics.ml_engine import AlphaEngine
+from ai_trading_system.analytics.alpha.dataset_builder import AlphaDatasetBuilder
+from ai_trading_system.analytics.lightgbm_engine import LightGBMAlphaEngine
+from ai_trading_system.analytics.ml_engine import AlphaEngine
 from ai_trading_system.platform.db.paths import ensure_domain_layout, research_static_end_date
 from ai_trading_system.platform.logging.logger import log_context, logger
 

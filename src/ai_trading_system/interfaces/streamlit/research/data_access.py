@@ -12,8 +12,8 @@ from typing import Any, Dict, Iterable, List
 import duckdb
 import pandas as pd
 import streamlit as st
-from analytics.data_trust import load_data_trust_summary, load_symbol_trust_state
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.data_trust import load_data_trust_summary, load_symbol_trust_state
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.domains.execution.store import ExecutionStore
 
@@ -152,7 +152,7 @@ def _load_latest_payload_path(project_root: str) -> Path | None:
 
 @st.cache_data(show_spinner=False, ttl=60 * 3)
 def load_latest_rank_frames(project_root: str) -> Dict[str, pd.DataFrame]:
-    """Load latest rank-stage CSV artifacts without importing ui.services package."""
+    """Load latest rank-stage CSV artifacts without importing ai_trading_system.ui.execution_api.services package."""
     payload_path = _load_latest_payload_path(project_root)
     rank_dir: Path | None = payload_path.parent if payload_path is not None else None
 
@@ -824,17 +824,31 @@ def load_portfolio_symbol_details(project_root: str) -> pd.DataFrame:
     try:
         conn = sqlite3.connect(str(db_path))
         try:
-            frame = pd.read_sql_query(
-                """
-                SELECT
-                    symbol_id,
-                    symbol_name AS company_name,
-                    sector AS sector_name
-                FROM symbols
-                WHERE symbol_id IS NOT NULL
-                """,
-                conn,
-            )
+            try:
+                frame = pd.read_sql_query(
+                    """
+                    SELECT
+                        symbol_id,
+                        symbol_name AS company_name,
+                        sector AS sector_name
+                    FROM symbols
+                    WHERE symbol_id IS NOT NULL
+                    """,
+                    conn,
+                )
+            except Exception:
+                frame = pd.read_sql_query(
+                    """
+                    SELECT
+                        Symbol AS symbol_id,
+                        Name AS company_name,
+                        Sector AS sector_name,
+                        "Industry Group" AS industry_group
+                    FROM stock_details
+                    WHERE Symbol IS NOT NULL
+                    """,
+                    conn,
+                )
         finally:
             conn.close()
     except Exception:
@@ -843,6 +857,8 @@ def load_portfolio_symbol_details(project_root: str) -> pd.DataFrame:
         return frame
     frame["symbol_id"] = frame["symbol_id"].astype(str).str.upper().str.strip()
     for column in ("company_name", "sector_name", "industry_group"):
+        if column not in frame.columns:
+            frame[column] = ""
         frame[column] = frame[column].fillna("").astype(str).str.strip()
     return frame
 

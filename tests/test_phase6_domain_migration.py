@@ -18,9 +18,9 @@ def test_collectors_top_level_modules_are_compatibility_shims() -> None:
 
 
 def test_phase6_analytics_shims_keep_legacy_import_paths() -> None:
-    import analytics.ranker as legacy_ranker
-    import analytics.regime_detector as legacy_regime_detector
-    import analytics.screener as legacy_screener
+    import ai_trading_system.analytics.ranker as legacy_ranker
+    import ai_trading_system.analytics.regime_detector as legacy_regime_detector
+    import ai_trading_system.analytics.screener as legacy_screener
 
     from ai_trading_system.domains.ranking import ranker as canonical_ranker
     from ai_trading_system.domains.ranking import regime_detector as canonical_regime_detector

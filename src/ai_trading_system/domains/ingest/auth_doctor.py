@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from ai_trading_system.domains.ingest.token_manager import DhanTokenManager
-from core.env import load_project_env
+from ai_trading_system.platform.utils.env import load_project_env
 
 
 def run_doctor(*, project_root: Path, probe_refresh: bool) -> dict:

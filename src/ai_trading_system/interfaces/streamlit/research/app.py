@@ -1,7 +1,7 @@
 """
 AI Trading System — Streamlit Command Center Dashboard
 
-Usage: streamlit run ui/research/app.py
+Usage: streamlit run src/ai_trading_system/interfaces/streamlit/research/app.py
 """
 
 import streamlit as st
@@ -29,18 +29,18 @@ PROJECT_ROOT_PATH = Path(__file__).resolve().parents[5]
 if str(PROJECT_ROOT_PATH) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT_PATH))
 
-from core.bootstrap import ensure_project_root_on_path
+from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
 ensure_project_root_on_path(__file__)
-from analytics.regime_detector import RegimeDetector
-from analytics.ranker import StockRanker
-from analytics.risk_manager import RiskManager
-from analytics.registry import RegistryStore
-from analytics.visualizations import Visualizer
-from analytics.patterns import PatternBacktestConfig, ensure_pattern_event_chart, run_pattern_backtest
-from analytics.patterns.signal import kernel_smooth
-from core.env import load_project_env
+from ai_trading_system.analytics.regime_detector import RegimeDetector
+from ai_trading_system.analytics.ranker import StockRanker
+from ai_trading_system.analytics.risk_manager import RiskManager
+from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.analytics.visualizations import Visualizer
+from ai_trading_system.analytics.patterns import PatternBacktestConfig, ensure_pattern_event_chart, run_pattern_backtest
+from ai_trading_system.analytics.patterns.signal import kernel_smooth
+from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.platform.db.paths import get_domain_paths
-from ai_trading_system.platform.db.paths import research_static_end_date
+from ai_trading_system.platform.db import paths as db_paths
 from ai_trading_system.interfaces.streamlit.research.data_access import (
     load_data_trust_snapshot,
     load_drilldown_history_for_symbols,
@@ -394,7 +394,7 @@ def load_latest_dashboard_payload() -> Dict:
 
 def _default_pattern_backtest_dates() -> tuple[datetime.date, datetime.date]:
     """Default research date window for pattern backtests."""
-    to_date = datetime.fromisoformat(research_static_end_date()).date()
+    to_date = datetime.fromisoformat(db_paths.research_static_end_date()).date()
     from_date = to_date.replace(year=max(to_date.year - 5, 2000))
     return from_date, to_date
 
@@ -4679,7 +4679,7 @@ def main():
         shadow_overlay_df = load_shadow_overlay()
         if shadow_overlay_df.empty:
             st.info(
-                "No shadow-monitor predictions recorded yet. Run `python -m research.shadow_monitor` "
+                "No shadow-monitor predictions recorded yet. Run `python -m ai_trading_system.research.shadow_monitor` "
                 "from the project venv to generate the latest overlay and comparison summaries."
             )
         else:

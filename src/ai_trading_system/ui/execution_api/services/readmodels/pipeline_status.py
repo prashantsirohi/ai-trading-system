@@ -10,8 +10,8 @@ from typing import Any, Optional
 import duckdb
 import pandas as pd
 
-from analytics.data_trust import load_data_trust_summary
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.data_trust import load_data_trust_summary
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.ui.execution_api.services.control_center import get_recent_runs
 from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_snapshot import (
     LatestOperationalSnapshot,

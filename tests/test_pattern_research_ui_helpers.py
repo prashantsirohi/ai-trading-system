@@ -4,7 +4,7 @@ import pandas as pd
 
 
 def test_build_pattern_chart_index_matches_chart_files_to_events() -> None:
-    import ui.research.app as research_app
+    import ai_trading_system.interfaces.streamlit.research.app as research_app
 
     events_df = pd.DataFrame(
         [
@@ -41,7 +41,7 @@ def test_build_pattern_chart_index_matches_chart_files_to_events() -> None:
 
 
 def test_build_pattern_chart_index_includes_events_without_precomputed_chart() -> None:
-    import ui.research.app as research_app
+    import ai_trading_system.interfaces.streamlit.research.app as research_app
 
     events_df = pd.DataFrame(
         [
@@ -62,7 +62,7 @@ def test_build_pattern_chart_index_includes_events_without_precomputed_chart() -
 
 
 def test_build_pattern_browser_rows_merges_events_trades_and_chart_paths() -> None:
-    import ui.research.app as research_app
+    import ai_trading_system.interfaces.streamlit.research.app as research_app
 
     events_df = pd.DataFrame(
         [
@@ -118,7 +118,7 @@ def test_build_pattern_browser_rows_merges_events_trades_and_chart_paths() -> No
 
 
 def test_coerce_pattern_config_converts_lists_back_to_tuples() -> None:
-    import ui.research.app as research_app
+    import ai_trading_system.interfaces.streamlit.research.app as research_app
 
     config = research_app._coerce_pattern_config(
         {
@@ -133,7 +133,7 @@ def test_coerce_pattern_config_converts_lists_back_to_tuples() -> None:
 
 
 def test_pattern_stock_button_label_is_compact_and_marks_selection() -> None:
-    import ui.research.app as research_app
+    import ai_trading_system.interfaces.streamlit.research.app as research_app
 
     label = research_app._pattern_stock_button_label(
         pd.Series(
@@ -148,7 +148,7 @@ def test_pattern_stock_button_label_is_compact_and_marks_selection() -> None:
 
 
 def test_pattern_quality_badge_distinguishes_strong_borderline_and_failed() -> None:
-    import ui.research.app as research_app
+    import ai_trading_system.interfaces.streamlit.research.app as research_app
 
     strong = research_app._pattern_quality_badge(
         pd.Series(
@@ -192,7 +192,7 @@ def test_pattern_quality_badge_distinguishes_strong_borderline_and_failed() -> N
 
 
 def test_pattern_quality_badge_html_renders_colored_pill() -> None:
-    import ui.research.app as research_app
+    import ai_trading_system.interfaces.streamlit.research.app as research_app
 
     html = research_app._pattern_quality_badge_html(
         pd.Series(
@@ -210,7 +210,7 @@ def test_pattern_quality_badge_html_renders_colored_pill() -> None:
 
 
 def test_build_pattern_overlay_option_map_orders_confirmed_first() -> None:
-    import ui.research.app as research_app
+    import ai_trading_system.interfaces.streamlit.research.app as research_app
 
     options = research_app._build_pattern_overlay_option_map(
         pd.DataFrame(
@@ -243,7 +243,7 @@ def test_build_pattern_overlay_option_map_orders_confirmed_first() -> None:
 
 
 def test_plot_candlestick_with_features_adds_pattern_overlay_annotation() -> None:
-    import ui.research.app as research_app
+    import ai_trading_system.interfaces.streamlit.research.app as research_app
 
     ohlcv = pd.DataFrame(
         {

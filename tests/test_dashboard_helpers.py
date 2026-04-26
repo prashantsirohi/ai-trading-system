@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ui.research.dashboard_helpers import build_value_sparkline_payload, prepare_sector_rotation_frame
+from ai_trading_system.interfaces.streamlit.research.dashboard_helpers import build_value_sparkline_payload, prepare_sector_rotation_frame
 
 
 def test_prepare_sector_rotation_frame_normalizes_lowercase_aliases() -> None:

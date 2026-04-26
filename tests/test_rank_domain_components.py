@@ -3,7 +3,7 @@ import json
 import pandas as pd
 import pytest
 
-from analytics.ranker import StockRanker
+from ai_trading_system.analytics.ranker import StockRanker
 from ai_trading_system.domains.ranking.composite import (
     apply_rank_stability,
     compute_factor_scores,

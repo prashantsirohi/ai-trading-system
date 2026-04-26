@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 import pandas as pd
 import requests
 
-from collectors import dhan_collector
-from collectors.dhan_collector import DhanCollector, dhan_daily_window_ist, normalize_dhan_timestamps_ist
+from ai_trading_system.domains.ingest.providers import dhan as dhan_collector
+from ai_trading_system.domains.ingest.providers.dhan import DhanCollector, dhan_daily_window_ist, normalize_dhan_timestamps_ist
 
 
 class _FixedDateTime(datetime):

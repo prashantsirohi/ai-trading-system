@@ -6,9 +6,9 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from core.contracts import StageArtifact, StageContext
+from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 from ai_trading_system.domains.features.feature_store import FeatureStore
-from run.stages.features import FeaturesStage
+from ai_trading_system.pipeline.stages.features import FeaturesStage
 
 
 def _seed_catalog(db_path: Path, periods: int) -> pd.DatetimeIndex:
@@ -119,7 +119,7 @@ def test_features_stage_uses_ingest_updated_symbols_for_incremental_runs(
         captured.update(kwargs)
         return None
 
-    monkeypatch.setattr("collectors.daily_update_runner.run", fake_run)
+    monkeypatch.setattr("ai_trading_system.domains.ingest.daily_update_runner.run", fake_run)
     monkeypatch.setattr(FeaturesStage, "_record_snapshot", lambda self, context: (1, 2, 3))
 
     context = StageContext(

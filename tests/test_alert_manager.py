@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from run.alerts import AlertManager
+from ai_trading_system.pipeline.alerts import AlertManager
 
 
 class _DummyRegistry:
@@ -58,7 +58,7 @@ def test_alert_manager_fans_out_telegram_when_env_present(monkeypatch) -> None:
         captured["timeout"] = timeout
         return object()
 
-    monkeypatch.setattr("run.alerts.requests.post", _fake_post)
+    monkeypatch.setattr("ai_trading_system.pipeline.alerts.requests.post", _fake_post)
 
     manager.emit(
         run_id="pipeline-2026-04-17",
@@ -73,4 +73,3 @@ def test_alert_manager_fans_out_telegram_when_env_present(monkeypatch) -> None:
     assert captured["json"]["chat_id"] == "12345"
     assert "telegram test" in captured["json"]["text"]
     assert captured["timeout"] == 10
-

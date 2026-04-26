@@ -9,7 +9,7 @@ from typing import Any, Dict
 import duckdb
 import pandas as pd
 
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.domains.execution.portfolio import PortfolioManager
 from ai_trading_system.domains.execution.store import ExecutionStore
 from ai_trading_system.research.recipes import (

@@ -9,7 +9,7 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 import json
 
-from run.publisher import PublisherDeliveryManager
+from ai_trading_system.domains.publish.delivery_manager import PublisherDeliveryManager
 from ai_trading_system.pipeline.contracts import PublishStageError, StageArtifact, StageContext, StageResult
 from ai_trading_system.domains.publish.publish_payloads import (
     build_publish_datasets,
@@ -192,9 +192,9 @@ class PublishStage:
         rank_artifact: StageArtifact,
         datasets: Dict[str, pd.DataFrame],
     ) -> Dict[str, Any]:
-        from run.daily_pipeline import run_portfolio_analysis
+        from ai_trading_system.pipeline import daily_pipeline
 
-        result = run_portfolio_analysis()
+        result = daily_pipeline.run_portfolio_analysis()
         if not isinstance(result, dict) or not bool(result.get("ok")):
             raise RuntimeError(str((result or {}).get("error") or "Portfolio publish failed"))
         return {"report_id": "portfolio_sheet", "positions": result.get("positions")}

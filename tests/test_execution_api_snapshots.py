@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from tests.smoke.test_execution_api_smoke import _seed_execution_project
-from ui.execution_api.app import create_app
+from ai_trading_system.ui.execution_api.app import create_app
 
 
 SNAPSHOT_DIR = Path(__file__).resolve().parent / "fixtures" / "api_snapshots"

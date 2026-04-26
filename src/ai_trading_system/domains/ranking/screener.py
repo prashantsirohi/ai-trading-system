@@ -38,12 +38,12 @@ class AIQScreener:
         output_dir: str = None,
         data_domain: str = "operational",
     ):
-        from analytics.regime_detector import RegimeDetector
-        from analytics.ranker import StockRanker
-        from analytics.ml_engine import AlphaEngine
-        from analytics.risk_manager import RiskManager
-        from analytics.backtester import EventBacktester
-        from analytics.visualizations import Visualizer
+        from ai_trading_system.analytics.regime_detector import RegimeDetector
+        from ai_trading_system.analytics.ranker import StockRanker
+        from ai_trading_system.analytics.ml_engine import AlphaEngine
+        from ai_trading_system.analytics.risk_manager import RiskManager
+        from ai_trading_system.analytics.backtester import EventBacktester
+        from ai_trading_system.analytics.visualizations import Visualizer
 
         project_root = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")

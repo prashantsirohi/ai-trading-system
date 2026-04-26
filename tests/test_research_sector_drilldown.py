@@ -6,7 +6,7 @@ import pandas as pd
 
 
 def test_resolve_sector_drilldown_rank_source_prefers_full_latest_artifact() -> None:
-    import ui.research.app as research_app
+    import ai_trading_system.interfaces.streamlit.research.app as research_app
 
     latest_rank_frames = {
         "ranked_signals": pd.DataFrame(
@@ -34,7 +34,7 @@ def test_resolve_sector_drilldown_rank_source_prefers_full_latest_artifact() -> 
 
 
 def test_resolve_drilldown_label_kind_distinguishes_sector_and_industry_group(monkeypatch) -> None:
-    import ui.research.app as research_app
+    import ai_trading_system.interfaces.streamlit.research.app as research_app
 
     lookup = pd.DataFrame(
         [
@@ -52,7 +52,7 @@ def test_build_sector_universe_frame_adds_overall_and_sector_ranks(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    import ui.research.app as research_app
+    import ai_trading_system.interfaces.streamlit.research.app as research_app
 
     monkeypatch.setattr(research_app, "MASTER_DB", str(tmp_path / "masterdata.db"))
 

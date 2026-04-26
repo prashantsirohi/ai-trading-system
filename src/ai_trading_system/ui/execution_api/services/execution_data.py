@@ -7,7 +7,7 @@ from typing import Dict
 
 import pandas as pd
 
-from analytics.registry import RegistryStore
+from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_snapshot import (
     ExecutionContext,
     get_execution_context,

@@ -24,7 +24,7 @@ from ai_trading_system.domains.ranking.patterns.detectors import (
     detect_symmetrical_triangle_signals,
     detect_vcp_signals,
 )
-from analytics.patterns.signal import find_local_extrema, kernel_smooth
+from ai_trading_system.analytics.patterns.signal import find_local_extrema, kernel_smooth
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +75,7 @@ class TestAscendingTriangle:
 
         Two peaks at 200 (flat within 1.5%) with two ascending troughs (175→183).
         """
-        from analytics.patterns.signal import LocalExtrema
+        from ai_trading_system.analytics.patterns.signal import LocalExtrema
         n = 100
         closes = np.full(n, 185.0, dtype=float)
         # Peak 1 at bar 17 (200)
@@ -337,7 +337,7 @@ class TestSymmetricalTriangle:
         Descending peaks: 210 → 195 (or 195 → 210 if descending=False)
         Ascending troughs: 160 → 175 (converging)
         """
-        from analytics.patterns.signal import LocalExtrema
+        from ai_trading_system.analytics.patterns.signal import LocalExtrema
 
         n = 100
         closes = np.full(n, 185.0, dtype=float)

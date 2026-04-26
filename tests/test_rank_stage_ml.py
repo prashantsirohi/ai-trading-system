@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from analytics.alpha.scoring import OperationalMLOverlayService
-from analytics.registry import RegistryStore
-from run.stages import RankStage
+from ai_trading_system.analytics.alpha.scoring import OperationalMLOverlayService
+from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.pipeline.stages import RankStage
 from ai_trading_system.pipeline.contracts import StageContext
 
 

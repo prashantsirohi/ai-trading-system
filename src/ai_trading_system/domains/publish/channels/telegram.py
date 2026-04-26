@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
-from core.runtime_config import TelegramRuntimeConfig
+from ai_trading_system.platform.utils.runtime_config import TelegramRuntimeConfig
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
 from ai_trading_system.platform.utils.env import load_project_env
 

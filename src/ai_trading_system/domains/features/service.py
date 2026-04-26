@@ -8,7 +8,7 @@ from typing import Callable, Dict, Optional
 
 import duckdb
 
-from analytics.data_trust import load_data_trust_summary
+from ai_trading_system.analytics.data_trust import load_data_trust_summary
 from ai_trading_system.pipeline.contracts import TrustConfidenceEnvelope
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 
@@ -45,7 +45,7 @@ class FeaturesOrchestrationService:
         if self.operation is not None:
             return self.operation(context)
 
-        from ai_trading_system.domains.ingest.daily_update_runner import run as run_daily_update
+        from ai_trading_system.domains.ingest import daily_update_runner
 
         ingest_artifact = context.artifact_for("ingest", "ingest_summary")
         updated_symbols = None
@@ -109,7 +109,7 @@ class FeaturesOrchestrationService:
                     metadata=update,
                 )
 
-        run_daily_update(
+        daily_update_runner.run(
             symbols_only=False,
             features_only=True,
             batch_size=int(context.params.get("batch_size", 700)),

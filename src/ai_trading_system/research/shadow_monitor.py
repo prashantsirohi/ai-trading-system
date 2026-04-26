@@ -9,11 +9,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from analytics.alpha.drift import score_drift_rows
-from analytics.alpha.policy import evaluate_promotion_candidate
-from analytics.lightgbm_engine import LightGBMAlphaEngine
-from analytics.registry import RegistryStore
-from analytics.shadow_monitor import (
+from ai_trading_system.analytics.alpha.drift import score_drift_rows
+from ai_trading_system.analytics.alpha.policy import evaluate_promotion_candidate
+from ai_trading_system.analytics.lightgbm_engine import LightGBMAlphaEngine
+from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.analytics.shadow_monitor import (
     build_shadow_overlay,
     compute_matured_outcomes,
     find_latest_model_metadata,

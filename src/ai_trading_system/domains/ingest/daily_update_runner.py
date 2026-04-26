@@ -31,7 +31,7 @@ import duckdb
 import pandas as pd
 import yfinance as yf
 
-from analytics.data_trust import (
+from ai_trading_system.analytics.data_trust import (
     annotate_provider_reconciliation,
     ensure_data_trust_schema,
     load_data_trust_summary,
@@ -39,8 +39,8 @@ from analytics.data_trust import (
     record_provenance_rows,
     resolve_quarantine_for_rows,
 )
-from core.bootstrap import ensure_project_root_on_path
-from core.symbol_master import SymbolMaster
+from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
+from ai_trading_system.domains.ingest.symbol_master import SymbolMaster
 
 
 def _resolve_project_root(anchor: str | Path) -> Path:

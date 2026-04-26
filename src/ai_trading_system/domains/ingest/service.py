@@ -14,7 +14,7 @@ from ai_trading_system.domains.ingest.repository import fetch_catalog_close_fram
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.pipeline.contracts import DataQualityCriticalError, StageArtifact, StageContext, StageResult
-from core.symbol_master import SymbolMaster
+from ai_trading_system.domains.ingest.symbol_master import SymbolMaster
 
 
 class IngestOrchestrationService:
@@ -39,9 +39,9 @@ class IngestOrchestrationService:
         if self.operation is not None:
             result = self.operation(context)
         else:
-            from ai_trading_system.domains.ingest.daily_update_runner import run as run_daily_update
+            from ai_trading_system.domains.ingest import daily_update_runner
 
-            result = run_daily_update(
+            result = daily_update_runner.run(
                 symbols_only=True,
                 features_only=False,
                 batch_size=int(context.params.get("batch_size", 700)),

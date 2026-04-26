@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ui.research.data_access import load_drilldown_history_for_symbols, load_sector_history_for_sectors
+from ai_trading_system.interfaces.streamlit.research.data_access import load_drilldown_history_for_symbols, load_sector_history_for_sectors
 
 
 def test_load_sector_history_for_sectors_reads_recent_sector_dashboards(tmp_path: Path) -> None:

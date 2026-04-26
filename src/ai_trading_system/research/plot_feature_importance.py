@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from analytics.visualizations import Visualizer
+from ai_trading_system.analytics.visualizations import Visualizer
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import log_context, logger
 

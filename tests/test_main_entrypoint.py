@@ -16,4 +16,4 @@ def test_main_entrypoint_is_deprecated_shim() -> None:
     )
     assert proc.returncode == 2
     assert "main.py is deprecated" in proc.stderr
-    assert "python -m run.orchestrator" in proc.stderr
+    assert "python -m ai_trading_system.pipeline.orchestrator" in proc.stderr

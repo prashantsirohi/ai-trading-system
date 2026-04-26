@@ -10,8 +10,8 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from analytics.backtester import EventBacktester
-from analytics.rank_backtester import RankBacktester
+from ai_trading_system.analytics.backtester import EventBacktester
+from ai_trading_system.analytics.rank_backtester import RankBacktester
 from ai_trading_system.platform.db.paths import ensure_domain_layout, research_static_end_date
 from ai_trading_system.platform.logging.logger import log_context, logger
 

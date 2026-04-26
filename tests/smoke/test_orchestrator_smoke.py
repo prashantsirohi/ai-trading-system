@@ -7,10 +7,10 @@ import shutil
 import duckdb
 import pandas as pd
 
-from analytics.registry import RegistryStore
-from core.contracts import StageArtifact, StageResult
-from run.orchestrator import PipelineOrchestrator
-from run.stages import FeaturesStage, IngestStage, PublishStage, RankStage
+from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.pipeline.contracts import StageArtifact, StageResult
+from ai_trading_system.pipeline.orchestrator import PipelineOrchestrator
+from ai_trading_system.pipeline.stages import FeaturesStage, IngestStage, PublishStage, RankStage
 
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "artifacts"
