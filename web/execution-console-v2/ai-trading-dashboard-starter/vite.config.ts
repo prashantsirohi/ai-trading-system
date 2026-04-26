@@ -6,8 +6,11 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const useMock = env.VITE_USE_MOCK_API === 'true' || env.VITE_USE_MOCK_API === '1';
   const proxyTarget = env.VITE_EXECUTION_PROXY_TARGET || 'http://127.0.0.1:8090';
+  // GitHub Pages serves from a repo subpath; VITE_BASE_URL sets it at build time.
+  const base = env.VITE_BASE_URL || '/';
 
   return {
+    base,
     plugins: [react()],
     resolve: {
       alias: {
