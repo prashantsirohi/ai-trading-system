@@ -16,9 +16,12 @@ const queryClient = new QueryClient({
   },
 });
 
+// Pick up the base path injected at build time (for GitHub Pages subpath).
+const basename = import.meta.env.BASE_URL ?? '/';
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename={basename}>
       <QueryClientProvider client={queryClient}>
         <App />
       </QueryClientProvider>

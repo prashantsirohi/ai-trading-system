@@ -3,7 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Trading Dashboard</title>
+    <title>Quantis Operator Console</title>
+    <!-- GitHub Pages SPA deep-link recovery (pairs with public/404.html) -->
+    <script>
+      (function(){
+        var redirect = sessionStorage.redirect;
+        delete sessionStorage.redirect;
+        if (redirect && redirect !== location.href) {
+          history.replaceState(null, null, redirect);
+        }
+        var qs = window.location.search;
+        if (qs) {
+          var p = qs.slice(1).split('&').reduce(function(r,v){ var k=v.split('='); r[k[0]]=k[1]; return r; },{});
+          if (p.p) {
+            var path = p.p.replace(/~and~/g,'&');
+            var query = p.q ? '?' + p.q.replace(/~and~/g,'&') : '';
+            history.replaceState(null, null, path + query + (window.location.hash || ''));
+          }
+        }
+      })();
+    </script>
   </head>
   <body class="bg-slate-950">
     <div id="root"></div>
