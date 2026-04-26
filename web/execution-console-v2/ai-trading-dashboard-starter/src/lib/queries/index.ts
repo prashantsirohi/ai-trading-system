@@ -13,7 +13,13 @@ import type { UseQueryOptions, UseQueryResult } from '@tanstack/react-query';
 import { DEFAULT_REFETCH_INTERVAL_MS } from '@/lib/api/client';
 import { getPatterns } from '@/lib/api/patterns';
 import { getPipelineWorkspace } from '@/lib/api/pipeline';
-import { getRanking } from '@/lib/api/ranking';
+import {
+  getRanking,
+  getRankingDetail,
+  getRankingHistory,
+  type RankingDetail,
+  type RankingHistory,
+} from '@/lib/api/ranking';
 import { getRuns } from '@/lib/api/runs';
 import { getSectors } from '@/lib/api/sectors';
 import { getShadow } from '@/lib/api/shadow';
@@ -70,6 +76,34 @@ export function useRanking(
     queryKey: queryKeys.ranking(),
     queryFn: getRanking,
     ...LIVE_QUERY_DEFAULTS,
+    ...options,
+  });
+}
+
+export function useRankingDetail(
+  symbol: string | null | undefined,
+  runId: string | null = null,
+  options: QueryOverrides<RankingDetail> = {},
+): UseQueryResult<RankingDetail, Error> {
+  const enabled = Boolean(symbol);
+  return useQuery<RankingDetail, Error>({
+    queryKey: queryKeys.rankingDetail(symbol ?? '__none__', runId),
+    queryFn: () => getRankingDetail(symbol as string, runId),
+    enabled,
+    ...options,
+  });
+}
+
+export function useRankingHistory(
+  symbol: string | null | undefined,
+  limit = 20,
+  options: QueryOverrides<RankingHistory> = {},
+): UseQueryResult<RankingHistory, Error> {
+  const enabled = Boolean(symbol);
+  return useQuery<RankingHistory, Error>({
+    queryKey: queryKeys.rankingHistory(symbol ?? '__none__', limit),
+    queryFn: () => getRankingHistory(symbol as string, limit),
+    enabled,
     ...options,
   });
 }

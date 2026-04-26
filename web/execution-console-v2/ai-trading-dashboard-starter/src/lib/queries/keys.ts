@@ -16,6 +16,10 @@ export const queryKeys = {
   workspaceSnapshot: (topN: number) =>
     ['execution', 'workspace-snapshot', topN] as const,
   ranking: () => ['execution', 'ranking'] as const,
+  rankingDetail: (symbol: string, runId: string | null = null) =>
+    ['execution', 'ranking-detail', symbol, runId] as const,
+  rankingHistory: (symbol: string, limit: number) =>
+    ['execution', 'ranking-history', symbol, limit] as const,
   recentRuns: () => ['execution', 'runs'] as const,
   patterns: () => ['execution', 'patterns'] as const,
   sectors: () => ['execution', 'sectors'] as const,

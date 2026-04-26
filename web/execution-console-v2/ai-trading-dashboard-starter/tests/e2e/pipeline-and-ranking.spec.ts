@@ -11,17 +11,30 @@ test.describe('execution-console-v2 smoke', () => {
     await expect(page.getByRole('heading', { name: 'Top Ranked Candidates' })).toBeVisible();
   });
 
-  test('opens symbol detail drawer from ranking row click', async ({ page }) => {
+  test('expands ranking row on click and surfaces verdict + lifecycle', async ({ page }) => {
     await page.goto('/ranking');
 
     const table = page.locator('table');
     await expect(table).toBeVisible();
-    await expect(page.locator('tbody tr').first()).toBeVisible();
+    const firstRow = page.locator('tbody tr[data-symbol]').first();
+    await expect(firstRow).toBeVisible();
 
-    const firstBodyRow = page.locator('tbody tr').first();
-    await firstBodyRow.click();
+    await firstRow.click();
 
-    await expect(page.getByText('Symbol Detail')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Close', exact: true })).toBeVisible();
+    // Expanded panel surfaces these section headings.
+    await expect(page.getByRole('heading', { name: 'Model Explanation' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Score Decomposition' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Lifecycle' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Factor Bars' })).toBeVisible();
+  });
+
+  test('comparison tray accepts a symbol', async ({ page }) => {
+    await page.goto('/ranking');
+
+    const firstRow = page.locator('tbody tr[data-symbol]').first();
+    await firstRow.click();
+
+    await page.getByRole('button', { name: /Add to compare/i }).click();
+    await expect(page.getByText(/Compare \(1\/3\)/)).toBeVisible();
   });
 });
