@@ -21,6 +21,13 @@ export const queryKeys = {
   rankingHistory: (symbol: string, limit: number) =>
     ['execution', 'ranking-history', symbol, limit] as const,
   recentRuns: () => ['execution', 'runs'] as const,
+  runsList: (limit: number) => ['execution', 'runs-list', limit] as const,
+  runDetail: (runId: string) => ['execution', 'run-detail', runId] as const,
+  runDq: (runId: string) => ['execution', 'run-dq', runId] as const,
+  runArtifacts: (runId: string) => ['execution', 'run-artifacts', runId] as const,
+  stockDetail: (symbol: string) => ['execution', 'stock-detail', symbol] as const,
+  stockOhlcv: (symbol: string, limit: number) =>
+    ['execution', 'stock-ohlcv', symbol, limit] as const,
   patterns: () => ['execution', 'patterns'] as const,
   sectors: () => ['execution', 'sectors'] as const,
   shadow: () => ['execution', 'shadow'] as const,

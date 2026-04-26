@@ -20,9 +20,25 @@ import {
   type RankingDetail,
   type RankingHistory,
 } from '@/lib/api/ranking';
-import { getRuns } from '@/lib/api/runs';
+import {
+  getRuns,
+  getRunsList,
+  getRunDetail,
+  getRunDqResults,
+  getRunArtifacts,
+  type RunsListResponse,
+  type RunDetail,
+  type DqResults,
+  type RunArtifacts,
+} from '@/lib/api/runs';
 import { getSectors } from '@/lib/api/sectors';
 import { getShadow } from '@/lib/api/shadow';
+import {
+  getStockDetail,
+  getStockOhlcv,
+  type StockDetail,
+  type StockOhlcv,
+} from '@/lib/api/stocks';
 import { getWorkspaceSnapshot } from '@/lib/api/workspace';
 import type { WorkspaceSnapshot } from '@/lib/api/workspace';
 import type {
@@ -118,6 +134,57 @@ export function useRecentRuns(
   });
 }
 
+export function useRunsList(
+  limit = 25,
+  options: QueryOverrides<RunsListResponse> = {},
+): UseQueryResult<RunsListResponse, Error> {
+  return useQuery<RunsListResponse, Error>({
+    queryKey: queryKeys.runsList(limit),
+    queryFn: () => getRunsList(limit),
+    ...LIVE_QUERY_DEFAULTS,
+    ...options,
+  });
+}
+
+export function useRunDetail(
+  runId: string | null | undefined,
+  options: QueryOverrides<RunDetail> = {},
+): UseQueryResult<RunDetail, Error> {
+  const enabled = Boolean(runId);
+  return useQuery<RunDetail, Error>({
+    queryKey: queryKeys.runDetail(runId ?? '__none__'),
+    queryFn: () => getRunDetail(runId as string),
+    enabled,
+    ...options,
+  });
+}
+
+export function useRunDqResults(
+  runId: string | null | undefined,
+  options: QueryOverrides<DqResults> = {},
+): UseQueryResult<DqResults, Error> {
+  const enabled = Boolean(runId);
+  return useQuery<DqResults, Error>({
+    queryKey: queryKeys.runDq(runId ?? '__none__'),
+    queryFn: () => getRunDqResults(runId as string),
+    enabled,
+    ...options,
+  });
+}
+
+export function useRunArtifacts(
+  runId: string | null | undefined,
+  options: QueryOverrides<RunArtifacts> = {},
+): UseQueryResult<RunArtifacts, Error> {
+  const enabled = Boolean(runId);
+  return useQuery<RunArtifacts, Error>({
+    queryKey: queryKeys.runArtifacts(runId ?? '__none__'),
+    queryFn: () => getRunArtifacts(runId as string),
+    enabled,
+    ...options,
+  });
+}
+
 export function usePatterns(
   options: QueryOverrides<PatternResponse> = {},
 ): UseQueryResult<PatternResponse, Error> {
@@ -134,6 +201,33 @@ export function useSectors(
   return useQuery<SectorResponse, Error>({
     queryKey: queryKeys.sectors(),
     queryFn: getSectors,
+    ...options,
+  });
+}
+
+export function useStockDetail(
+  symbol: string | null | undefined,
+  options: QueryOverrides<StockDetail> = {},
+): UseQueryResult<StockDetail, Error> {
+  const enabled = Boolean(symbol);
+  return useQuery<StockDetail, Error>({
+    queryKey: queryKeys.stockDetail(symbol ?? '__none__'),
+    queryFn: () => getStockDetail(symbol as string),
+    enabled,
+    ...options,
+  });
+}
+
+export function useStockOhlcv(
+  symbol: string | null | undefined,
+  limit = 180,
+  options: QueryOverrides<StockOhlcv> = {},
+): UseQueryResult<StockOhlcv, Error> {
+  const enabled = Boolean(symbol);
+  return useQuery<StockOhlcv, Error>({
+    queryKey: queryKeys.stockOhlcv(symbol ?? '__none__', limit),
+    queryFn: () => getStockOhlcv(symbol as string, limit),
+    enabled,
     ...options,
   });
 }
