@@ -20,16 +20,29 @@ import ErrorStateView from '@/components/common/ErrorState';
 import { CardSkeleton } from '@/components/common/LoadingSkeleton';
 import PipelineFunnel, { type FunnelStage } from '@/components/patterns/PipelineFunnel';
 import PatternCard from '@/components/patterns/PatternCard';
+import PatternCatalog, { CATALOG } from '@/components/patterns/PatternCatalog';
 import { useRanking, usePatterns } from '@/lib/queries';
 import { useWorkspace } from '@/components/workspace/WorkspaceContext';
 import type { StockRow } from '@/types/dashboard';
 
 type Filter = 'all' | 'imminent' | 'qualified';
 
-function filterRows(rows: StockRow[], filter: Filter): StockRow[] {
-  if (filter === 'imminent') return rows.filter((r) => r.breakout);
-  if (filter === 'qualified') return rows.filter((r) => r.rs > 70);
-  return rows;
+function filterRows(rows: StockRow[], filter: Filter, catalogKey: string | null): StockRow[] {
+  let out = rows;
+  if (catalogKey) {
+    const entry = CATALOG.find((e) => e.key === catalogKey);
+    if (entry) {
+      out = out.filter(
+        (r) =>
+          r.pattern &&
+          r.pattern !== 'N/A' &&
+          entry.matches.some((m) => r.pattern.toLowerCase().includes(m)),
+      );
+    }
+  }
+  if (filter === 'imminent') return out.filter((r) => r.breakout);
+  if (filter === 'qualified') return out.filter((r) => r.rs > 70);
+  return out;
 }
 
 function buildStages(universeCount: number, patternRows: StockRow[]): FunnelStage[] {
@@ -52,6 +65,7 @@ export default function PatternsPage() {
   const { openWorkspace } = useWorkspace();
 
   const [filter, setFilter] = useState<Filter>('all');
+  const [catalogKey, setCatalogKey] = useState<string | null>(null);
   const [selected, setSelected] = useState<StockRow | null>(null);
 
   const handleSelect = (row: StockRow) => {
@@ -62,7 +76,10 @@ export default function PatternsPage() {
   const patternRows = patternsQuery.data?.rows ?? [];
   const universeCount = rankingQuery.data?.rows.length ?? patternRows.length;
   const stages = useMemo(() => buildStages(universeCount, patternRows), [universeCount, patternRows]);
-  const visibleRows = useMemo(() => filterRows(patternRows, filter), [patternRows, filter]);
+  const visibleRows = useMemo(
+    () => filterRows(patternRows, filter, catalogKey),
+    [patternRows, filter, catalogKey],
+  );
 
   const isLoading = patternsQuery.isLoading;
   const error = patternsQuery.error;
@@ -88,11 +105,22 @@ export default function PatternsPage() {
         )}
       </SectionCard>
 
-      <SectionCard title="Pattern Candidates">
+      <SectionCard
+        title="Pattern Catalog"
+        description="Six named setups. Click a card to filter the active-setup grid below."
+      >
+        <PatternCatalog
+          rows={patternRows}
+          activeKey={catalogKey}
+          onSelect={setCatalogKey}
+        />
+      </SectionCard>
+
+      <SectionCard title="Active Setups">
         {isLoading ? (
           <CardSkeleton />
         ) : !patternRows.length ? (
-          <EmptyState message="No pattern candidates queued." />
+          <EmptyState message="No pattern candidates available — run the pipeline first." />
         ) : (
           <div className="space-y-4">
             <FilterBar

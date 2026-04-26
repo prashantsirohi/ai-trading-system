@@ -1,20 +1,15 @@
 /**
- * Execution view (PR #10).
+ * Execution view — Proposals #10 (base) + #06 (ticket queue / pre-trade checks).
  *
- * Stitches together:
- *
+ * Sections:
  *   * ExecutionStateBanner — Live/Preview pill + trust pill + capital used.
+ *   * Ticket queue + pre-trade checks panel (#06).
  *   * BucketColumns — Eligible / Watchlist / Blocked.
  *   * OrdersTable — eligible-only order plan.
  *   * LiveTimeline — compact per-symbol stage progression for the top names.
  *   * Capital + Risk widgets in the right rail.
- *
- * Ranking + workspace queries feed the page; per-symbol order numbers are
- * derived in ``components/execution/derive.ts`` until a routing endpoint
- * lands. The Live/Preview toggle is a cosmetic env knob today; gating is
- * still owned by the trust pipeline upstream.
  */
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import PageFrame from '@/components/common/PageFrame';
 import SectionCard from '@/components/common/SectionCard';
@@ -27,6 +22,8 @@ import OrdersTable from '@/components/execution/OrdersTable';
 import LiveTimeline from '@/components/execution/LiveTimeline';
 import CapitalWidget from '@/components/execution/CapitalWidget';
 import PortfolioRiskDashboard from '@/components/execution/PortfolioRiskDashboard';
+import TicketQueue, { ordersToTickets } from '@/components/execution/TicketQueue';
+import PreTradeChecks, { derivePreTradeChecks } from '@/components/execution/PreTradeChecks';
 import { deriveExecution } from '@/components/execution/derive';
 import { useRanking, useWorkspaceSnapshot } from '@/lib/queries';
 import { useWorkspace } from '@/components/workspace/WorkspaceContext';
@@ -56,6 +53,19 @@ export default function ExecutionPage() {
   const derived = useMemo(() => deriveExecution(rows), [rows]);
 
   const trust = trustPillFor(snapshotQuery.data?.summary.dataTrustStatus ?? null);
+
+  const tickets = useMemo(() => ordersToTickets(derived.orders), [derived.orders]);
+  const { checks: preTrade, allGreen } = useMemo(
+    () => derivePreTradeChecks(derived, trust.tone),
+    [derived, trust.tone],
+  );
+
+  const [sendNotice, setSendNotice] = useState<string | null>(null);
+
+  function handleSendAll() {
+    setSendNotice('Send-all action is not wired to the broker API yet — connect the routing endpoint to enable.');
+    setTimeout(() => setSendNotice(null), 4000);
+  }
 
   if (rankingQuery.isLoading) {
     return (
@@ -106,6 +116,32 @@ export default function ExecutionPage() {
         capitalLimitPct={CAPITAL_LIMIT_PCT}
         eligibleCount={derived.buckets.eligible.length}
       />
+
+      {/* ── Proposal #06: ticket queue + pre-trade checks ─────────────── */}
+      {tickets.length > 0 && (
+        <SectionCard
+          title="Order Tickets"
+          description="Staged tickets awaiting send-all. Pre-trade checks must all pass first."
+        >
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_360px]">
+            <TicketQueue
+              tickets={tickets}
+              onSendAll={handleSendAll}
+              allChecksGreen={allGreen}
+            />
+            <div>
+              <p className="mb-2 text-sm font-semibold text-slate-300">Pre-trade checks</p>
+              <PreTradeChecks checks={preTrade} />
+            </div>
+          </div>
+
+          {sendNotice && (
+            <div className="mt-3 rounded-xl border border-amber-700/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-300">
+              {sendNotice}
+            </div>
+          )}
+        </SectionCard>
+      )}
 
       <SectionCard title="Routing Buckets">
         <BucketColumns buckets={derived.buckets} />

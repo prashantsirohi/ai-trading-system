@@ -1,16 +1,12 @@
 /**
- * Ranking page (PR #8 + PR #12 wiring).
+ * Ranking page (PR #8 + PR #12 wiring; rail added per Quantis proposal #01).
  *
- * Wires the ranked-signal list, filter chip bar, expandable rows, and the
- * comparison tray into a single Canvas-style view. The expansion panel
- * itself fetches per-symbol detail/history lazily, so this page only owns
- * the list-level query plus filter / expand state.
- *
- * Compare-Factors selection now lives in WorkspaceContext (PR #12) so the
- * Compare modal can be opened from any page; the Ranking-page tray is the
- * primary entry point but the global tray launcher is also available.
+ * Wires the ranked-signal list, multi-facet filter rail, expandable rows,
+ * and the comparison tray into a single Canvas-style view. Filter state
+ * is the new ``RankingFilterState`` shape and lives in page state; saved
+ * views persist to ``localStorage``.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import PageErrorBoundary from '@/components/common/PageErrorBoundary';
 import PageFrame from '@/components/common/PageFrame';
@@ -19,18 +15,35 @@ import EmptyState from '@/components/common/EmptyState';
 import ErrorStateView from '@/components/common/ErrorState';
 import { TableSkeleton } from '@/components/common/LoadingSkeleton';
 import RankingTable from '@/components/tables/RankingTable';
-import FilterChipBar, { type RankingFilter } from '@/components/ranking/FilterChipBar';
+import FilterRail from '@/components/ranking/FilterRail';
+import ActiveFilterChips from '@/components/ranking/ActiveFilterChips';
 import ComparisonTray, { COMPARISON_LIMIT } from '@/components/ranking/ComparisonTray';
 import { useWorkspace } from '@/components/workspace/WorkspaceContext';
 import { useRanking } from '@/lib/queries';
+import {
+  DEFAULT_FILTER_STATE,
+  loadCustomViews,
+  saveCustomViews,
+  type RankingFilterState,
+  type SavedView,
+} from '@/lib/storage/rankingViews';
 import type { StockRow } from '@/types/dashboard';
 
-function applyFilter(rows: StockRow[], filter: RankingFilter, search: string): StockRow[] {
+function applyFilter(
+  rows: StockRow[],
+  state: RankingFilterState,
+  search: string,
+): StockRow[] {
   const needle = search.trim().toLowerCase();
+  const [scoreLo, scoreHi] = state.scoreRange;
+  const [rsLo, rsHi] = state.rsRange;
   return rows.filter((row) => {
-    if (filter === 'tier-a' && row.tier !== 'A') return false;
-    if (filter === 'breakouts' && !row.breakout) return false;
-    if (filter === 'patterns' && (!row.pattern || row.pattern === 'N/A')) return false;
+    if (row.score < scoreLo || row.score > scoreHi) return false;
+    if (row.rs < rsLo || row.rs > rsHi) return false;
+    if (state.tiers.length > 0 && !state.tiers.includes(row.tier)) return false;
+    if (state.sectors.length > 0 && !state.sectors.includes(row.sector ?? '')) return false;
+    if (state.breakoutOnly && !row.breakout) return false;
+    if (state.hasPatternOnly && (!row.pattern || row.pattern === 'N/A')) return false;
     if (needle === '') return true;
     return (
       row.symbol.toLowerCase().includes(needle) ||
@@ -43,20 +56,26 @@ function RankingContent() {
   const { data, isLoading, error, refetch } = useRanking();
   const workspace = useWorkspace();
 
-  const [filter, setFilter] = useState<RankingFilter>('all');
+  const [filterState, setFilterState] = useState<RankingFilterState>(DEFAULT_FILTER_STATE);
   const [search, setSearch] = useState('');
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
   const [pendingNotice, setPendingNotice] = useState<string | null>(null);
+  const [customViews, setCustomViews] = useState<SavedView[]>(() => loadCustomViews());
+
+  useEffect(() => {
+    saveCustomViews(customViews);
+  }, [customViews]);
 
   const rows = data?.rows ?? [];
-  const filtered = useMemo(() => applyFilter(rows, filter, search), [rows, filter, search]);
+  const filtered = useMemo(
+    () => applyFilter(rows, filterState, search),
+    [rows, filterState, search],
+  );
   const comparedSymbols = useMemo(
     () => new Set(workspace.compareSymbols),
     [workspace.compareSymbols],
   );
 
-  // The Ranking-page tray expects ``StockRow`` records — resolve the symbols
-  // pinned in WorkspaceContext back to the full rows for display.
   const comparedRows = useMemo(
     () =>
       workspace.compareSymbols
@@ -81,12 +100,21 @@ function RankingContent() {
     workspace.toggleCompare(row.symbol);
   };
 
+  const handleSaveView = (name: string) => {
+    const id = `custom-${Date.now().toString(36)}`;
+    setCustomViews((prev) => [...prev, { id, name, state: filterState }]);
+  };
+
+  const handleDeleteView = (id: string) => {
+    setCustomViews((prev) => prev.filter((v) => v.id !== id));
+  };
+
+  const description =
+    'Tier-aware ranked signals with factor decomposition, lifecycle, and rank history.';
+
   if (isLoading) {
     return (
-      <PageFrame
-        title="Ranking"
-        description="Tier-aware ranked signals with factor decomposition, lifecycle, and rank history."
-      >
+      <PageFrame title="Ranking" description={description}>
         <SectionCard title="Ranked Signals">
           <TableSkeleton rows={10} />
         </SectionCard>
@@ -96,10 +124,7 @@ function RankingContent() {
 
   if (error) {
     return (
-      <PageFrame
-        title="Ranking"
-        description="Tier-aware ranked signals with factor decomposition, lifecycle, and rank history."
-      >
+      <PageFrame title="Ranking" description={description}>
         <SectionCard title="Ranked Signals">
           <ErrorStateView
             error={`Failed to load ranking: ${error.message}`}
@@ -112,10 +137,7 @@ function RankingContent() {
 
   if (rows.length === 0) {
     return (
-      <PageFrame
-        title="Ranking"
-        description="Tier-aware ranked signals with factor decomposition, lifecycle, and rank history."
-      >
+      <PageFrame title="Ranking" description={description}>
         <SectionCard title="Ranked Signals">
           <EmptyState message="No ranked signals available" />
         </SectionCard>
@@ -124,33 +146,55 @@ function RankingContent() {
   }
 
   return (
-    <PageFrame
-      title="Ranking"
-      description="Tier-aware ranked signals with factor decomposition, lifecycle, and rank history."
-    >
+    <PageFrame title="Ranking" description={description}>
       <SectionCard title="Ranked Signals">
-        <div className="space-y-4">
-          <FilterChipBar
-            active={filter}
-            onChange={setFilter}
-            search={search}
-            onSearchChange={setSearch}
-            total={rows.length}
-            matched={filtered.length}
+        <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+          <FilterRail
+            state={filterState}
+            onChange={setFilterState}
+            rows={rows}
+            customViews={customViews}
+            onSaveView={handleSaveView}
+            onDeleteView={handleDeleteView}
+            onSelectView={(view) => setFilterState(view.state)}
           />
-          {filtered.length === 0 ? (
-            <EmptyState message="No symbols match the current filter." />
-          ) : (
-            <RankingTable
-              rows={filtered}
-              expandedSymbol={expandedSymbol}
-              onToggleExpand={handleToggleExpand}
-              comparedSymbols={comparedSymbols}
-              onToggleCompare={handleToggleCompare}
+
+          <div className="flex min-w-0 flex-col gap-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <label className="relative w-full sm:max-w-xs">
+                <span className="sr-only">Search ranked symbols</span>
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search symbol or sector…"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:border-blue-500/60 focus:outline-none"
+                />
+              </label>
+            </div>
+
+            <ActiveFilterChips
+              state={filterState}
+              onChange={setFilterState}
+              matched={filtered.length}
+              total={rows.length}
             />
-          )}
+
+            {filtered.length === 0 ? (
+              <EmptyState message="No symbols match the current filter." />
+            ) : (
+              <RankingTable
+                rows={filtered}
+                expandedSymbol={expandedSymbol}
+                onToggleExpand={handleToggleExpand}
+                comparedSymbols={comparedSymbols}
+                onToggleCompare={handleToggleCompare}
+              />
+            )}
+          </div>
         </div>
       </SectionCard>
+
       <ComparisonTray
         rows={comparedRows}
         onRemove={(symbol) => workspace.toggleCompare(symbol)}

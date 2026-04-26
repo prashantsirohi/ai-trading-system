@@ -1,12 +1,14 @@
 import { NavLink } from 'react-router-dom';
 import {
   BeakerIcon,
+  BookmarkIcon,
   ChartBarIcon,
   CpuChipIcon,
   HomeIcon,
   PlayIcon,
   PresentationChartLineIcon,
   RocketLaunchIcon,
+  ShieldExclamationIcon,
   Squares2X2Icon,
   ViewColumnsIcon,
 } from '@heroicons/react/24/outline';
@@ -16,9 +18,11 @@ const items = [
   { to: '/', label: 'Control Tower', icon: HomeIcon, end: true },
   { to: '/pipeline', label: 'Pipeline', icon: ViewColumnsIcon, end: false },
   { to: '/ranking', label: 'Ranking', icon: ChartBarIcon, end: false },
+  { to: '/watchlist', label: 'Watchlist', icon: BookmarkIcon, end: false },
   { to: '/patterns', label: 'Patterns', icon: PresentationChartLineIcon, end: false },
   { to: '/sectors', label: 'Sectors', icon: Squares2X2Icon, end: false },
   { to: '/execution', label: 'Execution', icon: RocketLaunchIcon, end: false },
+  { to: '/risk', label: 'Risk', icon: ShieldExclamationIcon, end: false },
   { to: '/runs', label: 'Runs', icon: PlayIcon, end: false },
   { to: '/shadow', label: 'Shadow', icon: CpuChipIcon, end: false },
   { to: '/research', label: 'Research', icon: BeakerIcon, end: false },

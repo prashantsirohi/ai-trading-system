@@ -12,6 +12,7 @@
  *
  * Clicking a row drives the parent's drill-down state.
  */
+import { Link } from 'react-router-dom';
 import type { SectorScore, StockRow } from '@/types/dashboard';
 import { cn } from '@/lib/utils/cn';
 
@@ -59,7 +60,13 @@ export default function SectorLeadershipChart({ sectors, rankedRows, selected, o
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-slate-100">{s.sector}</span>
+                  <Link
+                    to={`/sectors/${encodeURIComponent(s.sector)}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-sm font-semibold text-slate-100 hover:text-blue-400 hover:underline transition-colors"
+                  >
+                    {s.sector}
+                  </Link>
                   <span
                     className={cn(
                       'rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',

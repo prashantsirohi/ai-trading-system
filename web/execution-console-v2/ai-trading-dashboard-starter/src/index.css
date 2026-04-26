@@ -14,3 +14,39 @@ body {
 * {
   box-sizing: border-box;
 }
+
+/* Dual-thumb range slider used by the Ranking filter rail. The track is
+ * painted by the parent; only the thumb is styled here so both <input>s
+ * stack on the same axis. */
+.range-thumb {
+  pointer-events: none;
+}
+.range-thumb::-webkit-slider-thumb {
+  pointer-events: auto;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 12px;
+  width: 12px;
+  border-radius: 9999px;
+  background: #f1f5f9;
+  border: 2px solid #3b82f6;
+  cursor: pointer;
+  margin-top: 0;
+}
+.range-thumb::-moz-range-thumb {
+  pointer-events: auto;
+  height: 12px;
+  width: 12px;
+  border-radius: 9999px;
+  background: #f1f5f9;
+  border: 2px solid #3b82f6;
+  cursor: pointer;
+}
+.range-thumb::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 4px;
+}
+.range-thumb::-moz-range-track {
+  background: transparent;
+  height: 4px;
+}

@@ -1,3 +1,5 @@
+import { useMemo } from 'react';
+
 import PageErrorBoundary from '@/components/common/PageErrorBoundary';
 import PageFrame from '@/components/common/PageFrame';
 import MetricCard from '@/components/common/MetricCard';
@@ -9,9 +11,13 @@ import { CardSkeleton } from '@/components/common/LoadingSkeleton';
 import { titleCase } from '@/lib/utils/text';
 import { usePipelineWorkspace } from '@/lib/queries';
 import RankingTable from '@/components/tables/RankingTable';
+import FailureRecoveryPanel from '@/components/pipeline/FailureRecoveryPanel';
+import DataQualityStrip from '@/components/pipeline/DataQualityStrip';
+import { deriveDqCells } from '@/lib/pipeline/dq';
 
 function PipelineContent() {
   const { data, isLoading, error, refetch } = usePipelineWorkspace();
+  const dqCells = useMemo(() => deriveDqCells(data ?? undefined), [data]);
 
   if (isLoading) {
     return (
@@ -58,20 +64,28 @@ function PipelineContent() {
       description="Production operator view across workspace status, trust, task execution, and market summaries."
     >
       {data.isFailed && (
-        <SectionCard title="Pipeline State">
-          <div className="rounded-xl border border-rose-700 bg-rose-950/30 p-4 text-sm text-rose-200">
-            Pipeline is in a failed state. Check task status and backend logs before taking execution actions.
-          </div>
+        <SectionCard
+          title="Failure Recovery"
+          description="Pipeline reported a failed state. Inspect the failed stage, replay it, or halt the run."
+        >
+          <FailureRecoveryPanel workspace={data} />
         </SectionCard>
       )}
 
-      {data.isDegraded && (
+      {data.isDegraded && !data.isFailed && (
         <SectionCard title="Pipeline State">
           <div className="rounded-xl border border-amber-700 bg-amber-950/30 p-4 text-sm text-amber-200">
             Pipeline is degraded. Review trust and warning signals before promoting candidates.
           </div>
         </SectionCard>
       )}
+
+      <SectionCard
+        title="Data Quality"
+        description="Five-cell strip catching stale prices, missing rows, schema breaks, vendor lag, and coverage gaps."
+      >
+        <DataQualityStrip cells={dqCells} />
+      </SectionCard>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {data.metrics.map((metric) => <MetricCard key={metric.label} {...metric} />)}

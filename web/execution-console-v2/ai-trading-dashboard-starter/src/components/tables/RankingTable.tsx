@@ -10,6 +10,7 @@
  * the sort/expand state and surfaces inline tier + score.
  */
 import { Fragment, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   createColumnHelper,
   flexRender,
@@ -86,7 +87,13 @@ export default function RankingTable({
           return (
             <div className="flex items-center gap-2">
               <TierBadge tier={row.tier} />
-              <span className="font-semibold text-slate-100">{row.symbol}</span>
+              <Link
+                to={`/symbol/${row.symbol}`}
+                onClick={(e) => e.stopPropagation()}
+                className="font-semibold text-slate-100 hover:text-blue-400 hover:underline transition-colors"
+              >
+                {row.symbol}
+              </Link>
               {comparedSymbols.has(row.symbol) ? (
                 <span className="rounded-full border border-blue-500/40 bg-blue-500/15 px-1.5 text-[10px] font-semibold uppercase tracking-wider text-blue-200">
                   Compare

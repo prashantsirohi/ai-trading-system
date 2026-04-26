@@ -95,6 +95,30 @@ export function TightFlagIcon(props: IconProps) {
   );
 }
 
+export function BreakoutIcon(props: IconProps) {
+  return (
+    <svg {...asProps(props)} aria-hidden="true">
+      {/* Resistance line */}
+      <line x1="2" y1="14" x2="46" y2="14" strokeDasharray="2 4" strokeOpacity="0.5" />
+      {/* Price climbing through */}
+      <path d="M2 24 L14 20 L26 21 L34 16 L40 10 L46 5" />
+    </svg>
+  );
+}
+
+export function AscendingTriangleIcon(props: IconProps) {
+  return (
+    <svg {...asProps(props)} aria-hidden="true">
+      {/* Flat top resistance */}
+      <line x1="2" y1="8" x2="40" y2="8" strokeDasharray="2 3" />
+      {/* Rising support */}
+      <path d="M2 26 L40 8" />
+      {/* Breakout attempt */}
+      <path d="M40 8 L46 5" strokeDasharray="2 2" />
+    </svg>
+  );
+}
+
 export function GenericPatternIcon(props: IconProps) {
   return (
     <svg {...asProps(props)} aria-hidden="true">
@@ -111,5 +135,7 @@ export function patternIconFor(pattern: string | null | undefined) {
   if (norm.includes('round')) return RoundBottomIcon;
   if (norm.includes('flat base')) return FlatBaseIcon;
   if (norm.includes('flag')) return TightFlagIcon;
+  if (norm.includes('breakout') || norm.includes('52w')) return BreakoutIcon;
+  if (norm.includes('triangle') || norm.includes('ascending')) return AscendingTriangleIcon;
   return GenericPatternIcon;
 }

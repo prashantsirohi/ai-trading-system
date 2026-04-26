@@ -7,6 +7,7 @@
  * The aim is to give the operator a directional rotation read until a
  * proper history endpoint lands.
  */
+import { Link } from 'react-router-dom';
 import type { SectorScore } from '@/types/dashboard';
 import { cn } from '@/lib/utils/cn';
 
@@ -65,7 +66,15 @@ export default function SectorRotationHeatmap({ sectors, selected, onSelect }: P
                 )}
                 onClick={() => onSelect(s.sector)}
               >
-                <td className="px-3 py-2 font-semibold text-slate-200">{s.sector}</td>
+                <td className="px-3 py-2">
+                  <Link
+                    to={`/sectors/${encodeURIComponent(s.sector)}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="font-semibold text-slate-200 hover:text-blue-400 hover:underline transition-colors"
+                  >
+                    {s.sector}
+                  </Link>
+                </td>
                 {dots.map((value, idx) => (
                   <td key={idx} className="px-2 py-2 text-center">
                     <span
