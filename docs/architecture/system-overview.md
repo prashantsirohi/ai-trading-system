@@ -66,31 +66,18 @@ Reference store:
 
 ## UI surfaces and current status
 
-Research Streamlit:
-- `ui/research/app.py`
-- current analyst and research dashboard
-- reads operational and research data depending on page
-
-ML Streamlit workbench:
-- `ui/ml/app.py`
-- current ML dataset, training, deployment, and shadow-review UI
-
-NiceGUI execution console:
-- `ui/execution/app.py`
-- current Python-only operator console for runs, tasks, ranking outputs, and shadow summaries
-
 FastAPI execution backend:
-- `ui/execution_api/app.py`
+- `src/ai_trading_system/ui/execution_api/app.py`
 - current operator API backend exposing JSON and SSE endpoints
 
-React execution console:
-- `web/execution-console/`
-- current standalone frontend workspace that calls the FastAPI backend
+React V2 execution console:
+- `web/execution-console-v2/ai-trading-dashboard-starter/`
+- single dashboard frontend that calls the FastAPI backend
 - not served by the FastAPI app
 
 ## Legacy and non-canonical surfaces
 
 These modules are present but are not the current runtime source of truth:
-- `main.py`: retained compatibility shim that now exits fast with deprecation guidance to `python -m run.orchestrator`
+- `main.py`: retained compatibility shim that now exits fast with deprecation guidance to `python -m ai_trading_system.pipeline.orchestrator`
 - `dashboard/`: compatibility wrappers that re-export current UI modules
 - `config/settings.py`: legacy configuration model that does not describe the orchestrated runtime accurately enough to use as canonical documentation

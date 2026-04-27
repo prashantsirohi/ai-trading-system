@@ -177,23 +177,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/execution/research/launch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Execution Launch Research */
-        post: operations["execution_launch_research_api_execution_research_launch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/execution/runs": {
         parameters: {
             query?: never;
@@ -532,17 +515,6 @@ export interface components {
             run_id?: string | null;
         };
         /**
-         * ResearchLaunchRequest
-         * @description Body for ``POST /api/execution/research/launch``.
-         */
-        ResearchLaunchRequest: {
-            /**
-             * Port
-             * @default 8501
-             */
-            port: number;
-        };
-        /**
          * ShadowRunRequest
          * @description Body for ``POST /api/execution/shadow/run``.
          */
@@ -875,41 +847,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    execution_launch_research_api_execution_research_launch_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ResearchLaunchRequest"];
-            };
-        };
         responses: {
             /** @description Successful Response */
             200: {

@@ -39,15 +39,8 @@ class ShadowRunRequest(BaseModel):
     prediction_date: str | None = None
 
 
-class ResearchLaunchRequest(BaseModel):
-    """Body for ``POST /api/execution/research/launch``."""
-
-    port: int = 8501
-
-
 __all__ = [
     "PipelineRunRequest",
     "PublishRetryRequest",
     "ShadowRunRequest",
-    "ResearchLaunchRequest",
 ]

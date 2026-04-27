@@ -83,18 +83,6 @@
         "title": "PublishRetryRequest",
         "type": "object"
       },
-      "ResearchLaunchRequest": {
-        "description": "Body for ``POST /api/execution/research/launch``.",
-        "properties": {
-          "port": {
-            "default": 8501,
-            "title": "Port",
-            "type": "integer"
-          }
-        },
-        "title": "ResearchLaunchRequest",
-        "type": "object"
-      },
       "ShadowRunRequest": {
         "description": "Body for ``POST /api/execution/shadow/run``.",
         "properties": {
@@ -638,49 +626,6 @@
         "summary": "Execution Ranking History",
         "tags": [
           "ranking-detail"
-        ]
-      }
-    },
-    "/api/execution/research/launch": {
-      "post": {
-        "operationId": "execution_launch_research_api_execution_research_launch_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ResearchLaunchRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Launch Research Api Execution Research Launch Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Launch Research",
-        "tags": [
-          "actions"
         ]
       }
     },

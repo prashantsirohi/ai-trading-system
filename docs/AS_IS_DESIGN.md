@@ -16,7 +16,7 @@ Evidence drawn from direct inspection of `src/ai_trading_system/` (276 files, 42
 
 1. **Operational daily pipeline** — `ingest → features → rank → execute → publish`, orchestrated by `python -m run.orchestrator` (which is a shim; the real orchestrator is `src/ai_trading_system/pipeline/orchestrator.py`).
 2. **Research flow** — separate `data_domain="research"` path for dataset prep, LightGBM training, backtesting, and shadow-monitor evaluation; shares domain code but writes to a shadow data layout.
-3. **Operator surfaces** — Streamlit dashboards (research/ML), NiceGUI Python console, FastAPI + React execution console.
+3. **Operator surfaces** — FastAPI backend plus the React V2 execution console.
 4. **Repair tooling** — collector-side repair/reset/quarantine utilities for recovering from schema drift or bad ingest.
 
 ---
@@ -32,7 +32,7 @@ The repository has a **completed two-tier layout**:
 | **Canonical (src)** | `src/ai_trading_system/` | 276 files · 42,447 LOC · all domain logic, orchestration, platform utilities |
 | **Compatibility / legacy** | `run/`, `analytics/`, `collectors/`, `features/`, `execution/`, `publishers/`, `channel/` | Shims, wrappers, or legacy operational code still in maintenance mode |
 
-**Key fact:** `run/orchestrator.py` imports `from ai_trading_system.pipeline.orchestrator import *` and delegates entirely to the src orchestrator. `run/stages/*.py` each do `from ai_trading_system.pipeline.stages.<stage> import *`. They are thin compatibility shims, not the implementation.
+**Key fact:** `ai_trading_system.pipeline.orchestrator` imports `from ai_trading_system.pipeline.orchestrator import *` and delegates entirely to the src orchestrator. `run/stages/*.py` each do `from ai_trading_system.pipeline.stages.<stage> import *`. They are thin compatibility shims, not the implementation.
 
 ### Logical layers (all inside `src/ai_trading_system/`)
 
@@ -75,7 +75,7 @@ All stages write versioned artifacts under `data/pipeline_runs/<run_id>/<stage>/
 | Folder | Responsibility (observed) | Status |
 |---|---|---|
 | `main.py` | **Deprecated shim.** Exits with code 2 pointing to `run.orchestrator`. | Deleted in Phase 1a |
-| `run/` | Orchestrator **shim** (`run/orchestrator.py` → re-exports `src/ai_trading_system/pipeline/orchestrator`), per-stage shims (`run/stages/*` → re-exports pipeline stages), publisher, preflight, alerts, `daily_pipeline` wrapper | **Compatibility shims** — real logic is in `src/` |
+| `run/` | Orchestrator **shim** (`ai_trading_system.pipeline.orchestrator` → re-exports `src/ai_trading_system/pipeline/orchestrator`), per-stage shims (`run/stages/*` → re-exports pipeline stages), publisher, preflight, alerts, `daily_pipeline` wrapper | **Compatibility shims** — real logic is in `src/` |
 | `services/` | Directory structure exists but **contains no Python implementation files** — all subdirectory `__pycache__` only | **Empty** — placeholder for a future step or residue |
 | `collectors/` | NSE bhavcopy, yfinance, Dhan, delivery, masterdata, repair tools | **Legacy operational** — still used at runtime; canonical replacement is `src/ai_trading_system/domains/ingest/` |
 | `features/` | Indicator math, feature store persistence, sector RS | **Legacy operational** — canonical replacement is `src/ai_trading_system/domains/features/` |
@@ -89,8 +89,8 @@ All stages write versioned artifacts under `data/pipeline_runs/<run_id>/<stage>/
 | `config/` | `settings.py` (pydantic, legacy), `rank_factor_weights.json`, `research_recipes.toml` | Partial — pydantic model is non-canonical; JSON/TOML live files are used |
 | `data/` | DuckDB stores, SQLite masterdata, generated run/feature/report trees | **Active runtime state** |
 | `sql/` | 9 migrations for control plane | **Active** |
-| `ui/` | 4 distinct surfaces: `research/` (Streamlit), `ml/` (Streamlit), `execution/` (NiceGUI), `execution_api/` (FastAPI) | **Active** |
-| `web/execution-console/` | React frontend for FastAPI backend | **Active**, separate Vite dev server |
+| `ui/` | single FastAPI backend plus React V2 dashboard | **Active** |
+| `web/execution-console-v2/ai-trading-dashboard-starter/` | React V2 frontend for FastAPI backend | **Active**, single dashboard surface |
 | `src/ai_trading_system/` | **Canonical post-refactor package** — 276 files, 42,447 LOC — all domain logic, orchestration, platform utilities, research | **CANONICAL. This is the runtime.** `run/` is a shim pointing here. |
 | `scripts/` | `bootstrap_runtime_data.py`, `repair_ingest_schema.py` | **Active** ops helpers |
 | `tests/` | 76+ files across smoke/, integration/, ingest/, features/, rank/, execute/, publish/, fixtures/ | **Active** |
@@ -113,7 +113,7 @@ All stages write versioned artifacts under `data/pipeline_runs/<run_id>/<stage>/
 | Control plane | `data/control_plane.duckdb` | Pipeline runs, stage attempts, artifacts, DQ results, publish logs, repair runs, model governance, operator tasks | Orchestrator (`pipeline/orchestrator.py`), stages, alerts | Orchestrator, UIs, APIs |
 | Execution store | `data/execution.duckdb` | Paper orders, fills, positions, trade notes | Execute stage (`domains/execution/service.py`) | Operator console, reports |
 | Reference store | `data/masterdata.db` (SQLite, ~1.5 MB) | Symbol metadata, sector mapping, holiday calendar | `domains/ingest/masterdata.py`, bootstrap script | Any stage needing symbol/sector lookup |
-| Feature store | `data/feature_store/` (parquet) | Per-symbol technical features (including Stage 2 after Sprint 1), sector RS | Features stage (`domains/features/feature_store.py`) | Rank stage, research |
+| Feature store | `data/feature_store/` (parquet) | Per-symbol technical features (including Stage 2 after Sprint 1), sector RS | Features stage (`domains/ai_trading_system.domains.features.feature_store`) | Rank stage, research |
 | Pipeline artifacts | `data/pipeline_runs/<run_id>/<stage>/attempt_<n>/` | Stage outputs (JSON summaries, payloads) | Each stage | UIs, next-stage inputs |
 | Research shadow | `data/research/{research_ohlcv.duckdb, feature_store/, pipeline_runs/}` | Same shape, separate domain | Research flows when `data_domain="research"` | Research UIs / training |
 
@@ -135,7 +135,7 @@ domains/ingest/providers/nse.py + daily_update_runner
 ohlcv.duckdb (_catalog, _catalog_provenance, _catalog_quarantine)
         │
         ▼
-domains/features/feature_store.py
+domains/ai_trading_system.domains.features.feature_store
   ├── compute_sma / compute_rsi / compute_stage2 / ...
   └── add_stage2_features() [indicators.py — Stage 2 uptrend score]
         │
@@ -187,7 +187,7 @@ publishers/{telegram, google_sheets, dashboard, quantstats}
 
 ## E. Pipeline / Execution Flow
 
-**Canonical entry:** `python -m run.orchestrator` (shim) → `src/ai_trading_system/pipeline/orchestrator.py` (real). Ordered stages: `ingest → features → rank → execute → publish`. Wrapper `run/daily_pipeline.py` delegates to the orchestrator shim.
+**Canonical entry:** `python -m run.orchestrator` (shim) → `src/ai_trading_system/pipeline/orchestrator.py` (real). Ordered stages: `ingest → features → rank → execute → publish`. Wrapper `ai_trading_system.pipeline.daily_pipeline` delegates to the orchestrator shim.
 
 **Orchestrator responsibilities** (`src/ai_trading_system/pipeline/orchestrator.py`):
 1. Create or resume a run record in `data/control_plane.duckdb`.
@@ -203,7 +203,7 @@ publishers/{telegram, google_sheets, dashboard, quantstats}
 | Stage | Pipeline stage | Domain service | Key libraries | Key artifact |
 |---|---|---|---|---|
 | ingest | `pipeline/stages/ingest.py` | `domains/ingest/service.py` | `domains/ingest/providers/nse.py`, `yfinance.py`, `delivery.py`, `trust.py` | `ingest_summary.json` |
-| features | `pipeline/stages/features.py` | `domains/features/service.py` | `domains/features/feature_store.py`, `indicators.py`, `sector_rs.py` | `feature_snapshot.json` |
+| features | `pipeline/stages/features.py` | `domains/features/service.py` | `domains/ai_trading_system.domains.features.feature_store`, `indicators.py`, `sector_rs.py` | `feature_snapshot.json` |
 | rank | `pipeline/stages/rank.py` | `domains/ranking/service.py` | `domains/ranking/ranker.py`, `breakout.py`, `patterns/`, `screener.py`, `regime_detector.py` | `dashboard_payload.json` |
 | execute | `pipeline/stages/execute.py` | `domains/execution/service.py` | `domains/execution/autotrader.py`, `candidate_builder.py`, `entry_policy.py`, `exit_policy.py` | paper trades in `execution.duckdb` |
 | publish | `pipeline/stages/publish.py` | `domains/publish/service.py` (or `delivery_manager.py`) | `domains/publish/telegram_summary_builder.py`, `publish_payloads.py`, `channels/` | publish logs + external deliveries |
@@ -224,7 +224,7 @@ publishers/{telegram, google_sheets, dashboard, quantstats}
 - **Delivery:** `domains/ingest/delivery.py`.
 - **Trust lineage:** `domains/ingest/trust.py` — writes `_catalog_provenance`, manages `_catalog_quarantine`.
 - **Masterdata:** `domains/ingest/masterdata.py` → SQLite at `data/masterdata.db`.
-- **Repair:** `domains/ingest/repair.py`, `collectors/repair_ohlcv_window.py`, `scripts/repair_ingest_schema.py`.
+- **Repair:** `domains/ingest/repair.py`, `ai_trading_system.domains.ingest.repair`, `scripts/repair_ingest_schema.py`.
 - **Repository:** `domains/ingest/repository.py` — DuckDB OHLCV read/write.
 
 ### Masterdata
@@ -234,7 +234,7 @@ publishers/{telegram, google_sheets, dashboard, quantstats}
 
 ### Feature engineering (`domains/features/`)
 - **Indicator library:** `domains/features/indicators.py` — SMA, EMA, RSI, MACD, ATR, Supertrend, `add_multi_timeframe_returns()`, `add_stage2_features()` (Stage 2 uptrend scoring, Sprint 1).
-- **Feature store:** `domains/features/feature_store.py` — `FeatureStore` class with `compute_and_store_features()` loop; per-feature-type methods (`compute_sma`, `compute_rsi`, `compute_stage2`, …). Persists parquet under `data/feature_store/`.
+- **Feature store:** `domains/ai_trading_system.domains.features.feature_store` — `FeatureStore` class with `compute_and_store_features()` loop; per-feature-type methods (`compute_sma`, `compute_rsi`, `compute_stage2`, …). Persists parquet under `data/feature_store/`.
 - **Sector RS:** `domains/features/sector_rs.py`.
 - **Pattern features:** `domains/features/pattern_features.py`.
 
@@ -272,11 +272,10 @@ publishers/{telegram, google_sheets, dashboard, quantstats}
 - **Channels:** `domains/publish/channels/` — per-channel delivery adapters.
 
 ### Operator UIs
-- `ui/research/app.py` — canonical analyst Streamlit.
-- `ui/ml/app.py` — ML workbench Streamlit.
-- `ui/execution/app.py` — NiceGUI operator console.
-- `ui/execution_api/app.py` — FastAPI JSON + SSE backend; models in `src/ai_trading_system/interfaces/`.
-- `web/execution-console/` — React frontend (separate Vite dev server).
+- React V2 research views live under `web/execution-console-v2/ai-trading-dashboard-starter`.
+- React V2 ML workbench views live under `web/execution-console-v2/ai-trading-dashboard-starter`.
+- `web/execution-console-v2/ai-trading-dashboard-starter/` — React V2 operator dashboard.
+- `src/ai_trading_system/ui/execution_api/app.py` — FastAPI JSON + SSE backend.
 
 ---
 
@@ -310,7 +309,7 @@ publishers/{telegram, google_sheets, dashboard, quantstats}
 
 7. **`utils/` vs `core/` overlap.** `utils/env.py` + `core/env.py` and similar pairs exist. AGENTS.md mandates "prefer `core.*` over `utils.*`" — confirming the drift. `core/` is in the legacy layer; `src/ai_trading_system/platform/` is the canonical equivalent for the src tree.
 
-8. **Four UI surfaces, loosely coordinated.** `ui/research/` (Streamlit), `ui/ml/` (Streamlit), `ui/execution/` (NiceGUI), `ui/execution_api/` + `web/execution-console/` (FastAPI + React). The React app requires a separate Vite dev server; it is not served by FastAPI.
+8. **Single-dashboard UI strategy.** The only dashboard surface is React V2 under `web/execution-console-v2/ai-trading-dashboard-starter/`, backed by `src/ai_trading_system/ui/execution_api/`. The React app requires a separate Vite dev server; it is not served by FastAPI.
 
 9. **Stage gate policy is inconsistent.** Rank hard-blocks on untrusted data (unless flagged); Publish soft-fails. No single matrix documents which failures stop the pipeline vs degrade it gracefully.
 
@@ -339,7 +338,7 @@ publishers/{telegram, google_sheets, dashboard, quantstats}
 - **Masterdata in SQLite while market data is DuckDB.** Two DB engines means two lock semantics, two backup paths.
 
 **Maintainability**
-- **Large legacy monoliths** remain: `collectors/daily_update_runner.py`, `collectors/dhan_collector.py` (~82 KB each), `analytics/ranker.py`. These are change-hotspots in the legacy tree.
+- **Large legacy monoliths** remain: `ai_trading_system.domains.ingest.daily_update_runner`, `ai_trading_system.domains.ingest.providers.dhan` (~82 KB each), `analytics/ranker.py`. These are change-hotspots in the legacy tree.
 - **Config fragmentation** means any behavior change potentially needs edits in multiple formats.
 - **Duplicate pattern/breakout paths** (legacy `analytics/patterns/` + canonical `domains/ranking/patterns/`) risk behavioral divergence between dashboard, rank sidecar, and backtest.
 
@@ -353,7 +352,7 @@ publishers/{telegram, google_sheets, dashboard, quantstats}
 4. **How is `data/masterdata.db` refreshed on a cadence?** `domains/ingest/masterdata.py` exists, but whether it runs scheduled or only via bootstrap script isn't confirmed.
 5. **Authoritative rank factor weights.** `config/rank_factor_weights.json` is read by `domains/ranking/composite.py`, but whether there are any in-code weight overrides wasn't verified end-to-end.
 6. **ML shadow activation path.** `ml_mode="shadow_ml"` is mentioned but how it's set operationally (env var, CLI flag, config file) is not confirmed.
-7. **React execution console status.** `web/execution-console/` exists. Unclear whether operators actually use it or whether `ui/execution/` (NiceGUI) is the real console.
+7. **React execution console status.** `web/execution-console-v2/ai-trading-dashboard-starter/` is the intended single dashboard surface.
 8. **How much of `domains/execution/adapters/dhan.py` is live-functional vs stubbed.**
 9. **Whether `config/settings.py` has any live importers.** Labeled non-canonical and noted as unused in docs, but not confirmed by import trace.
 10. **Backup/retention story for DuckDB/SQLite stores.** Nothing in-repo; assumed operator-managed.
@@ -369,7 +368,7 @@ The following changes were made to `src/ai_trading_system/` during the implement
 | File | Change |
 |---|---|
 | `domains/features/indicators.py` | Added `add_stage2_features()` — 9-condition Weinstein Stage 2 scoring |
-| `domains/features/feature_store.py` | Added `STAGE2_FEATURE_COLUMNS`, `compute_stage2()` method, `'stage2'` entry in `feature_methods` dict |
+| `domains/ai_trading_system.domains.features.feature_store` | Added `STAGE2_FEATURE_COLUMNS`, `compute_stage2()` method, `'stage2'` entry in `feature_methods` dict |
 | `domains/ranking/contracts.py` | Added `'stage2_breakout'` to `RANK_MODES`; added 7 Stage 2 columns to `RANKED_SIGNAL_COLUMNS` |
 | `domains/ranking/eligibility.py` | Added `stage2_gate_enabled` and `stage2_min_score` params to `apply_rank_eligibility()` |
 | `domains/ranking/ranker.py` | Added Stage 2 bonus (+0–5 pts), `stage2_breakout` mode pre-filter; wired `stage2_gate_enabled` to eligibility |

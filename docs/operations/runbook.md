@@ -5,7 +5,7 @@
 Confirm:
 1. the repo virtual environment is active
 2. `data/masterdata.db` exists and contains current symbols
-3. you know which surface you are using: CLI, daily wrapper, FastAPI, or NiceGUI
+3. you know which surface you are using: CLI, daily wrapper, FastAPI, or React V2
 4. you know whether `execute` should be included, because CLI defaults and UI defaults differ
 5. publish credentials are present if you are not using `--local-publish`
 6. you are selecting the correct data domain
@@ -15,13 +15,13 @@ Confirm:
 ### Safe first local run
 
 ```bash
-python -m run.orchestrator --skip-preflight --stages ingest,features,rank,publish --local-publish
+python -m ai_trading_system.pipeline.orchestrator --skip-preflight --stages ingest,features,rank,publish --local-publish
 ```
 
 ### CLI default run
 
 ```bash
-python -m run.orchestrator
+python -m ai_trading_system.pipeline.orchestrator
 ```
 
 This includes `execute` unless you override `--stages`.
@@ -29,7 +29,7 @@ This includes `execute` unless you override `--stages`.
 ### Daily wrapper run
 
 ```bash
-python -m run.daily_pipeline
+python -m ai_trading_system.pipeline.daily_pipeline
 ```
 
 This also defaults to `execute`, and preflight runs unless `--skip-preflight` is passed.
@@ -38,53 +38,53 @@ This also defaults to `execute`, and preflight runs unless `--skip-preflight` is
 
 Ingest only:
 ```bash
-python -m run.orchestrator --skip-preflight --stages ingest
+python -m ai_trading_system.pipeline.orchestrator --skip-preflight --stages ingest
 ```
 
 Features only:
 ```bash
-python -m run.orchestrator --skip-preflight --stages features
+python -m ai_trading_system.pipeline.orchestrator --skip-preflight --stages features
 ```
 
 Rank only:
 ```bash
-python -m run.orchestrator --stages rank
+python -m ai_trading_system.pipeline.orchestrator --stages rank
 ```
 
 Execute only for an existing run id:
 ```bash
-python -m run.orchestrator --run-id <run_id> --stages execute
+python -m ai_trading_system.pipeline.orchestrator --run-id <run_id> --stages execute
 ```
 
 Publish only for an existing run id:
 ```bash
-python -m run.orchestrator --run-id <run_id> --stages publish
+python -m ai_trading_system.pipeline.orchestrator --run-id <run_id> --stages publish
 ```
 
 ## Canary runs
 
 CLI canary using the built-in reduced stage set:
 ```bash
-python -m run.orchestrator --canary --skip-preflight
+python -m ai_trading_system.pipeline.orchestrator --canary --skip-preflight
 ```
 
 This becomes `ingest,features,rank` when the default stage string is untouched.
 
 Canary plus publish:
 ```bash
-python -m run.orchestrator --canary --skip-preflight --stages ingest,features,rank,publish --local-publish
+python -m ai_trading_system.pipeline.orchestrator --canary --skip-preflight --stages ingest,features,rank,publish --local-publish
 ```
 
 ## Publish workflows
 
 Local-only publish retry for the latest publishable run:
 ```bash
-python -m run.orchestrator --run-id <run_id> --stages publish --local-publish
+python -m ai_trading_system.pipeline.orchestrator --run-id <run_id> --stages publish --local-publish
 ```
 
 Publish target healthcheck:
 ```bash
-python -m run.publish_test
+python -m ai_trading_system.pipeline.publish_test
 ```
 
 Current publish retry behavior:
@@ -104,12 +104,12 @@ When rank or execute is blocked by trust:
 
 Dry-run reset and validation:
 ```bash
-python -m collectors.reset_reingest_validate --from-date YYYY-MM-DD --to-date YYYY-MM-DD
+python -m ai_trading_system.domains.ingest.reset_reingest_validate --from-date YYYY-MM-DD --to-date YYYY-MM-DD
 ```
 
 Apply repair and validation:
 ```bash
-python -m collectors.reset_reingest_validate --from-date YYYY-MM-DD --to-date YYYY-MM-DD --apply
+python -m ai_trading_system.domains.ingest.reset_reingest_validate --from-date YYYY-MM-DD --to-date YYYY-MM-DD --apply
 ```
 
 After repair:
@@ -122,36 +122,21 @@ After repair:
 
 Use the same `run_id` and rerun `publish` only:
 ```bash
-python -m run.orchestrator --run-id <run_id> --stages publish
+python -m ai_trading_system.pipeline.orchestrator --run-id <run_id> --stages publish
 ```
 
 Add `--local-publish` if you want to verify artifact assembly without network delivery.
 
 ## UI startup
 
-NiceGUI operator console:
-```bash
-python -m ui.execution.app --port 8080
-```
-
 FastAPI backend:
 ```bash
-python -m ui.execution_api.app --port 8090
+python -m ai_trading_system.ui.execution_api.app --port 8090
 ```
 
-Research Streamlit UI:
+React V2 execution console:
 ```bash
-python -m streamlit run ui/research/app.py
-```
-
-ML Streamlit workbench:
-```bash
-python -m streamlit run ui/ml/app.py
-```
-
-React execution console:
-```bash
-cd web/execution-console
+cd web/execution-console-v2/ai-trading-dashboard-starter
 npm install
 npm run dev
 ```

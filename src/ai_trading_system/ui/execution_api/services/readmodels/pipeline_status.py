@@ -20,7 +20,7 @@ from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_s
     load_latest_operational_snapshot,
 )
 
-_SCHEMA_REPAIR_HINT = "Run `python scripts/repair_ingest_schema.py --apply`."
+_SCHEMA_REPAIR_HINT = "Run `ai-trading-repair-ingest-schema --apply`."
 
 
 def _schema_check_detail(table_name: str, swapped_rows: int) -> str:

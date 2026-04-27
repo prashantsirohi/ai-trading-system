@@ -14,12 +14,12 @@ Owns:
 - publish retry and alert helpers
 
 Key files:
-- `run/orchestrator.py`
-- `run/daily_pipeline.py`
+- `ai_trading_system.pipeline.orchestrator`
+- `ai_trading_system.pipeline.daily_pipeline`
 - `run/stages/*.py`
-- `run/preflight.py`
-- `run/publisher.py`
-- `run/publish_test.py`
+- `ai_trading_system.pipeline.preflight`
+- `ai_trading_system.domains.publish.delivery_manager`
+- `ai_trading_system.pipeline.publish_test`
 
 ### `collectors/`
 
@@ -34,15 +34,15 @@ Owns:
 - repair and reset-reingest tools
 
 Key files:
-- `collectors/daily_update_runner.py`
-- `collectors/nse_collector.py`
-- `collectors/dhan_collector.py`
-- `collectors/delivery_collector.py`
-- `collectors/masterdata.py`
-- `collectors/repair_ohlcv_window.py`
-- `collectors/reset_reingest_validate.py`
-- `collectors/token_manager.py`
-- `collectors/auth_doctor.py`
+- `ai_trading_system.domains.ingest.daily_update_runner`
+- `ai_trading_system.domains.ingest.providers.nse`
+- `ai_trading_system.domains.ingest.providers.dhan`
+- `ai_trading_system.domains.ingest.delivery`
+- `ai_trading_system.domains.ingest.masterdata`
+- `ai_trading_system.domains.ingest.repair`
+- `ai_trading_system.domains.ingest.reset_reingest_validate`
+- `ai_trading_system.domains.ingest.token_manager`
+- `ai_trading_system.domains.ingest.auth_doctor`
 
 ### `features/`
 
@@ -55,7 +55,7 @@ Owns:
 - sector relative-strength artifacts
 
 Key files:
-- `features/feature_store.py`
+- `ai_trading_system.domains.features.feature_store`
 - `features/compute_sector_rs.py`
 - `features/indicators.py`
 
@@ -148,20 +148,14 @@ Label:
 - `current research`
 
 Owns:
-- research Streamlit UI
-- ML Streamlit workbench
-- NiceGUI execution console
 - FastAPI execution backend
-- shared UI services
+- backend data/read-model services used by the React V2 dashboard
 
 Key areas:
-- `ui/research/`: `current research`
-- `ui/ml/`: `current research`
-- `ui/execution/`: `current operational`
-- `ui/execution_api/`: `current operational`
-- `ui/services/`: `current operational`
+- `src/ai_trading_system/ui/execution_api/`: `current operational`
+- `src/ai_trading_system/ui/execution_api/services/`: `current operational`
 
-### `web/execution-console/`
+### `web/execution-console-v2/ai-trading-dashboard-starter/`
 
 Label:
 - `current operational`
@@ -237,7 +231,7 @@ Label:
 
 Role:
 - compatibility shim only
-- exits with explicit deprecation guidance to `python -m run.orchestrator`
+- exits with explicit deprecation guidance to `python -m ai_trading_system.pipeline.orchestrator`
 - do not use for current operations
 
 ## Generated state directories
@@ -283,4 +277,4 @@ If you are tracing ML or offline research behavior, start in this order:
 1. `research/`
 2. `analytics/alpha/`
 3. `analytics/registry/`
-4. `ui/ml/`
+4. `src/ai_trading_system/ui/execution_api/services/ml_workbench.py`

@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from ai_trading_system.domains.ingest.masterdata import MasterDataCollector
-from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
+from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger
-from ai_trading_system.platform.db.paths import ensure_domain_layout
 
 
-PROJECT_ROOT = Path(ensure_project_root_on_path(__file__))
+PROJECT_ROOT = canonicalize_project_root(os.getenv("AI_TRADING_PROJECT_ROOT") or Path.cwd())
 
 
 def _ensure_runtime_paths(*, data_domain: str) -> dict[str, str]:

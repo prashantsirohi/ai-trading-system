@@ -2,7 +2,7 @@
 
 ## Status
 
-`ui/execution_api/app.py` exposes the current operator backend.
+`src/ai_trading_system/ui/execution_api/app.py` exposes the current operator backend.
 
 This API is:
 - internal to this repo
@@ -64,19 +64,6 @@ Body:
 
 Behavior:
 - launches the ML shadow-monitor flow
-- returns `{ "task": ... }`
-
-### `POST /api/execution/research/launch`
-
-Body:
-```json
-{
-  "port": 8501
-}
-```
-
-Behavior:
-- launches the Streamlit research dashboard as a tracked task
 - returns `{ "task": ... }`
 
 ## Read endpoints

@@ -2,7 +2,7 @@
 
 ## Canonical stage order
 
-`run/orchestrator.py` supports this stage order:
+`ai_trading_system.pipeline.orchestrator` supports this stage order:
 1. `ingest`
 2. `features`
 3. `rank`
@@ -14,17 +14,17 @@ Any run may execute a subset, but the order is fixed.
 ## Entrypoints and default stage sets
 
 Primary orchestrator:
-- `python -m run.orchestrator`
+- `python -m ai_trading_system.pipeline.orchestrator`
 
 Compatibility wrapper:
-- `python -m run.daily_pipeline`
+- `python -m ai_trading_system.pipeline.daily_pipeline`
 - delegates into the orchestrator with wrapper-specific defaults
 
 Default stage sets differ by surface:
 - CLI orchestrator default: `ingest,features,rank,execute,publish`
 - Daily wrapper default: `ingest,features,rank,execute,publish`
 - FastAPI pipeline request default: `ingest,features,rank,publish`
-- NiceGUI “full pipeline” action: `ingest,features,rank,publish`
+- React V2 pipeline action: `ingest,features,rank,publish`
 - CLI and wrapper canary with the untouched default stage string: `ingest,features,rank`
 
 Do not document one universal “full pipeline” default without naming the invoking surface.
@@ -47,15 +47,15 @@ Publish failures are handled differently:
 ### `ingest`
 
 Owner:
-- `run/stages/ingest.py`
-- primary implementation path in `collectors/daily_update_runner.py`
+- `ai_trading_system.pipeline.stages.ingest`
+- primary implementation path in `ai_trading_system.domains.ingest.daily_update_runner`
 
 Inputs:
 - domain-selected OHLCV store
 - params including `batch_size`, `nse_primary`, `symbol_limit`, `include_delivery`, validation thresholds, and trust/DQ thresholds
 
 Current default behavior in the orchestrated pipeline:
-- runs `collectors.daily_update_runner.run(..., symbols_only=True, nse_primary=True)`
+- runs `ai_trading_system.domains.ingest.daily_update_runner.run(..., symbols_only=True, nse_primary=True)`
 - ingests NSE bhavcopy rows first
 - fetches yfinance only for missing business dates
 - records provider and validation lineage on market rows
@@ -94,8 +94,8 @@ Retry behavior:
 ### `features`
 
 Owner:
-- `run/stages/features.py`
-- compute path in `collectors/daily_update_runner.py` and `features/feature_store.py`
+- `ai_trading_system.pipeline.stages.features`
+- compute path in `ai_trading_system.domains.ingest.daily_update_runner` and `ai_trading_system.domains.features.feature_store`
 
 Inputs:
 - current `_catalog`
@@ -132,7 +132,7 @@ Retry behavior:
 ### `rank`
 
 Owner:
-- `run/stages/rank.py`
+- `ai_trading_system.pipeline.stages.rank`
 - ranking core in `analytics/ranker.py`
 
 Inputs:
@@ -176,7 +176,7 @@ Retry behavior:
 ### `execute`
 
 Owner:
-- `run/stages/execute.py`
+- `ai_trading_system.pipeline.stages.execute`
 - execution service layer under `execution/`
 
 Inputs:
@@ -213,8 +213,8 @@ Retry behavior:
 ### `publish`
 
 Owner:
-- `run/stages/publish.py`
-- delivery manager in `run/publisher.py`
+- `ai_trading_system.pipeline.stages.publish`
+- delivery manager in `ai_trading_system.domains.publish.delivery_manager`
 - channel adapters in `publishers/` and `channel/`
 
 Inputs:
@@ -281,5 +281,5 @@ Stage enforcement:
 ## Preflight and repair caveats
 
 Current code has two important operational caveats:
-- `run/preflight.py` requires Dhan credentials for `ingest` and `features`, even though the default orchestrated ingest path is `NSE bhavcopy -> yfinance fallback`
+- `ai_trading_system.pipeline.preflight` requires Dhan credentials for `ingest` and `features`, even though the default orchestrated ingest path is `NSE bhavcopy -> yfinance fallback`
 - auto-repair only exists for one ingest DQ failure path and is not a generic retry framework

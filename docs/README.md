@@ -40,7 +40,7 @@ Operations:
 
 Interfaces:
 - [interfaces/api.md](interfaces/api.md): current FastAPI operator endpoints
-- [interfaces/ui.md](interfaces/ui.md): current Streamlit, NiceGUI, and React/FastAPI surfaces
+- [interfaces/ui.md](interfaces/ui.md): current React V2 and FastAPI surfaces
 
 Reference:
 - [reference/commands.md](reference/commands.md): authoritative runnable commands

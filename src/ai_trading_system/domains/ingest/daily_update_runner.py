@@ -15,7 +15,6 @@ the last date already stored in DuckDB.
 
 PR-4 NOTE (canonical migration boundary):
 - This module is now the canonical home for daily ingest orchestration.
-- `collectors/daily_update_runner.py` remains as a compatibility shim only.
 """
 
 import os
@@ -1448,7 +1447,7 @@ def run(
         logger.info(f"Daily update result: {result}")
         logger.info("")
         logger.info("TIP: Run features separately after OHLCV update:")
-        logger.info("  python collectors/daily_update_runner.py --features-only")
+        logger.info("  python -m ai_trading_system.domains.ingest.daily_update_runner --features-only")
         return result
 
     logger.info("=" * 60)
@@ -1533,7 +1532,7 @@ def run(
     logger.info("Sector RS computation complete")
     logger.info("")
     logger.info("TIP: Recompute features for updated symbols:")
-    logger.info("  python collectors/daily_update_runner.py --features-only")
+    logger.info("  python -m ai_trading_system.domains.ingest.daily_update_runner --features-only")
     return result
 
 

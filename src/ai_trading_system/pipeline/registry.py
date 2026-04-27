@@ -8,6 +8,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from importlib import resources
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -310,11 +311,16 @@ class RegistryStore:
         finally:
             conn.close()
 
-    def _migration_path(self) -> Path:
+    def _migration_files(self) -> list[Any]:
         candidate_root = self.project_root / "sql" / "migrations"
-        if candidate_root.exists():
-            return candidate_root
-        return Path(__file__).resolve().parents[3] / "sql" / "migrations"
+        migration_paths = sorted(candidate_root.glob("*.sql")) if candidate_root.exists() else []
+        if migration_paths:
+            return list(migration_paths)
+        package_root = resources.files("ai_trading_system.pipeline.migrations")
+        return sorted(
+            (migration for migration in package_root.iterdir() if migration.name.endswith(".sql")),
+            key=lambda migration: migration.name,
+        )
 
     def _ensure_initialized(self) -> None:
         db_key = str(self.db_path.resolve())
@@ -334,7 +340,7 @@ class RegistryStore:
 
     def _apply_migrations(self) -> None:
         with self._writer() as conn:
-            for migration_path in sorted(self._migration_path().glob("*.sql")):
+            for migration_path in self._migration_files():
                 conn.execute(migration_path.read_text(encoding="utf-8"))
 
     def seed_default_rules(self) -> None:

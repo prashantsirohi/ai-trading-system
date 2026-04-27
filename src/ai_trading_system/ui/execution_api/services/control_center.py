@@ -1,4 +1,4 @@
-"""Execution control services for the NiceGUI operator console."""
+"""Execution control services for the React V2 operator console."""
 
 from __future__ import annotations
 
@@ -675,99 +675,6 @@ def terminate_operator_task(task_id: str, project_root: str | Path | None = None
     }
 
 
-def launch_streamlit_dashboard_task(
-    *,
-    project_root: str | Path,
-    port: int = 8501,
-) -> str:
-    """Launch the Streamlit research dashboard as a background process."""
-    root = Path(project_root)
-    task_id = _create_task(
-        "streamlit_dashboard",
-        f"Launch Streamlit Research Dashboard ({port})",
-        {"port": int(port), "url": f"http://localhost:{int(port)}"},
-        project_root=root,
-    )
-
-    def _runner() -> None:
-        try:
-            cmd = [
-                sys.executable,
-                "-m",
-                "streamlit",
-                "run",
-                "src/ai_trading_system/interfaces/streamlit/research/app.py",
-                "--server.port",
-                str(int(port)),
-                "--server.headless",
-                "true",
-            ]
-            proc = subprocess.Popen(
-                cmd,
-                cwd=root,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            _set_task(
-                task_id,
-                project_root=root,
-                status="running",
-                metadata={
-                    **(_task_snapshot(task_id, root).get("metadata") or {}),
-                    "pid": int(proc.pid),
-                    "command": " ".join(cmd),
-                },
-                result={"pid": int(proc.pid), "url": f"http://localhost:{int(port)}"},
-            )
-            _append_task_log(task_id, f"Streamlit launched on http://localhost:{int(port)} (pid={proc.pid})", project_root=root)
-            exit_code = proc.wait()
-            final_status = "completed" if exit_code == 0 else "failed"
-            _set_task(task_id, project_root=root, status=final_status, finished_at=_now())
-            _append_task_log(task_id, f"Streamlit process exited with code={exit_code}", project_root=root)
-        except Exception as exc:
-            _append_task_log(task_id, f"Streamlit launch failed: {exc.__class__.__name__}: {exc}", project_root=root)
-            _set_task(
-                task_id,
-                project_root=root,
-                status="failed",
-                finished_at=_now(),
-                error=f"{exc.__class__.__name__}: {exc}",
-                metadata={
-                    **(_task_snapshot(task_id, root).get("metadata") or {}),
-                    "traceback": traceback.format_exc(),
-                },
-            )
-
-    threading.Thread(target=_runner, daemon=True).start()
-    return task_id
-
-
-def launch_ml_workbench_task(
-    *,
-    project_root: str | Path,
-    port: int = 8503,
-) -> str:
-    """Launch the standalone ML workbench Streamlit app as a background process."""
-    return _launch_subprocess_task(
-        project_root=project_root,
-        task_type="ml_workbench",
-        label=f"Launch ML Workbench ({port})",
-        command=[
-            sys.executable,
-            "-m",
-            "streamlit",
-            "run",
-            "src/ai_trading_system/interfaces/streamlit/ml/app.py",
-            "--server.port",
-            str(int(port)),
-            "--server.headless",
-            "true",
-        ],
-        metadata={"port": int(port), "url": f"http://localhost:{int(port)}"},
-    )
-
-
 def launch_prepare_dataset_task(
     *,
     project_root: str | Path,
@@ -970,13 +877,7 @@ def list_project_processes(project_root: str | Path) -> List[Dict[str, Any]]:
         if "ps -axo" in command:
             continue
         kind = "other"
-        if "streamlit" in command and "interfaces/streamlit/research/app.py" in command:
-            kind = "streamlit_research"
-        elif "streamlit" in command and "interfaces/streamlit/ml/app.py" in command:
-            kind = "streamlit_ml"
-        elif "ui.execution.app" in command:
-            kind = "nicegui_execution"
-        elif "ai_trading_system.pipeline.orchestrator" in command:
+        if "ai_trading_system.pipeline.orchestrator" in command:
             kind = "pipeline"
         elif "ai_trading_system.research.shadow_monitor" in command:
             kind = "shadow_monitor"

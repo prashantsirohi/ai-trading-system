@@ -7,7 +7,7 @@ Required:
 - local filesystem access to the repo workspace
 
 Optional, only for specific surfaces:
-- Node.js and npm for `web/execution-console/`
+- Node.js and npm for `web/execution-console-v2/ai-trading-dashboard-starter/`
 - Google Sheets credentials for network publish
 - Telegram bot credentials for Telegram publish
 - Dhan credentials for Dhan-primary collectors, token renewal, and current ingest/features preflight
@@ -28,7 +28,7 @@ pip install -e .
 
 Bootstrap master data:
 ```bash
-python -m collectors.masterdata
+python -m ai_trading_system.domains.ingest.masterdata
 ```
 
 Notes:
@@ -54,7 +54,7 @@ Optional runtime selectors:
 
 Recommended first local operator run:
 ```bash
-python -m run.orchestrator --skip-preflight --stages ingest,features,rank,publish --local-publish
+python -m ai_trading_system.pipeline.orchestrator --skip-preflight --stages ingest,features,rank,publish --local-publish
 ```
 
 Why this is the safest first validation:
@@ -72,29 +72,14 @@ What a healthy first run should create:
 
 ## Local operator startup
 
-NiceGUI operator console:
-```bash
-python -m ui.execution.app --port 8080
-```
-
 FastAPI operator backend:
 ```bash
-python -m ui.execution_api.app --port 8090
+python -m ai_trading_system.ui.execution_api.app --port 8090
 ```
 
-Research Streamlit UI:
+React V2 execution console:
 ```bash
-python -m streamlit run ui/research/app.py
-```
-
-ML Streamlit workbench:
-```bash
-python -m streamlit run ui/ml/app.py
-```
-
-React execution console:
-```bash
-cd web/execution-console
+cd web/execution-console-v2/ai-trading-dashboard-starter
 npm install
 npm run dev
 ```

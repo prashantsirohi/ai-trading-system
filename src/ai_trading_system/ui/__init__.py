@@ -1,1 +1,1 @@
-"""UI layer for the trading system (FastAPI, CLI, Streamlit surfaces)."""
+"""UI layer for the trading system FastAPI backend."""

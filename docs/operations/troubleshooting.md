@@ -75,7 +75,7 @@ Recovery:
 - point the React app at the correct backend URL
 - remember that FastAPI does not serve the React build directly
 
-## NiceGUI or API “full pipeline” does not execute trades
+## API “full pipeline” does not execute trades
 
 Likely cause:
 - UI-triggered default pipeline runs omit `execute`
@@ -104,7 +104,7 @@ Recovery:
 - rerun `publish` with QuantStats enabled
 - verify that enough recent rank runs exist to build a return stream
 
-## Streamlit research UI launches but pages are empty
+## React V2 dashboard pages are empty
 
 Likely cause:
 - the underlying data stores or artifacts have not been generated yet
@@ -116,7 +116,7 @@ Exact checks:
 - confirm `data/research/...` exists for research pages
 
 Recovery:
-- run `python -m collectors.masterdata`
+- run `python -m ai_trading_system.domains.ingest.masterdata`
 - run the appropriate operational or research pipeline command to generate the missing data
 
 ## `publish_test` fails
@@ -131,7 +131,7 @@ Exact checks:
 
 Recovery:
 - fix the missing credentials
-- rerun `python -m run.publish_test`
+- rerun `python -m ai_trading_system.pipeline.publish_test`
 - use `--skip-publish-network-checks` on orchestrated runs only when DNS checking itself is the blocker
 
 ## Tasks appear stuck in the operator UI

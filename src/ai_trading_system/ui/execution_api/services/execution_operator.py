@@ -15,7 +15,6 @@ from ai_trading_system.ui.execution_api.services.control_center import (
     get_run_details,
     launch_pipeline_task,
     launch_shadow_monitor_task,
-    launch_streamlit_dashboard_task,
     list_operator_tasks,
     list_project_processes,
     terminate_operator_task,
@@ -44,8 +43,6 @@ ACTION_INFERENCE = {
 
 NON_PIPELINE_PHASES = {
     "shadow_monitor": "refreshing_overlay",
-    "streamlit_dashboard": "launching_process",
-    "ml_workbench": "launching_process",
 }
 
 PUBLISH_CHANNEL_LABELS = {
@@ -85,8 +82,6 @@ def _infer_operator_action_type(task: dict[str, Any]) -> str | None:
         return ACTION_INFERENCE.get(stages, "pipeline_task")
     if task_type == "shadow_monitor":
         return "shadow_refresh"
-    if task_type == "streamlit_dashboard":
-        return "open_research"
     return task_type or None
 
 
@@ -383,11 +378,6 @@ def retry_publish_action(
 def run_shadow_action(project_root: str | Path, *, label: str, backfill_days: int = 0, prediction_date: str | None = None) -> dict[str, Any]:
     _ = Path(project_root)
     task_id = launch_shadow_monitor_task(label=label, backfill_days=backfill_days, prediction_date=prediction_date)
-    return get_task_detail(task_id=task_id, project_root=project_root)
-
-
-def launch_research_action(project_root: str | Path, *, port: int = 8501) -> dict[str, Any]:
-    task_id = launch_streamlit_dashboard_task(project_root=project_root, port=port)
     return get_task_detail(task_id=task_id, project_root=project_root)
 
 

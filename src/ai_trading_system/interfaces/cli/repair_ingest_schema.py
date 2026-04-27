@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 
 import duckdb
 
 from ai_trading_system.analytics.data_trust import ensure_data_trust_schema
-from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
+from ai_trading_system.platform.db.paths import canonicalize_project_root
 from ai_trading_system.platform.logging.logger import logger
 
-PROJECT_ROOT = str(ensure_project_root_on_path(__file__))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "ohlcv.duckdb")
+PROJECT_ROOT = canonicalize_project_root(os.getenv("AI_TRADING_PROJECT_ROOT") or Path.cwd())
+DEFAULT_DB_PATH = str(PROJECT_ROOT / "data" / "ohlcv.duckdb")
 
 
 def _table_exists(conn: duckdb.DuckDBPyConnection, table_name: str) -> bool:

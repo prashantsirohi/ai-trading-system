@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ai_trading_system.interfaces.streamlit.research.data_access import (
+from ai_trading_system.ui.execution_api.services.research_data_access import (
     load_latest_rank_frames,
     load_pattern_backtest_bundle,
     list_pattern_backtest_bundles,

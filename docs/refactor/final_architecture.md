@@ -15,13 +15,13 @@ The canonical pipeline remains:
 5. `publish`
 
 Orchestration and stage contracts:
-- `run/orchestrator.py`
+- `ai_trading_system.pipeline.orchestrator`
 - `run/stages/base.py`
-- `run/stages/ingest.py`
-- `run/stages/features.py`
-- `run/stages/rank.py`
-- `run/stages/execute.py`
-- `run/stages/publish.py`
+- `ai_trading_system.pipeline.stages.ingest`
+- `ai_trading_system.pipeline.stages.features`
+- `ai_trading_system.pipeline.stages.rank`
+- `ai_trading_system.pipeline.stages.execute`
+- `ai_trading_system.pipeline.stages.publish`
 
 The stage wrappers are now thin and defer domain work to service modules.
 
@@ -48,10 +48,10 @@ Domain services now provide the primary orchestration logic per stage:
 Critical ingest writes now validate rows before persistence:
 - shared validators: `collectors/ingest_validation.py`
 - catalog write enforcement:
-  - `collectors/dhan_collector.py` (`_upsert_ohlcv`)
+  - `ai_trading_system.domains.ingest.providers.dhan` (`_upsert_ohlcv`)
   - `collectors/ingest_full.py` (`write_dfs_to_duckdb`)
 - delivery write enforcement:
-  - `collectors/delivery_collector.py` (`_upsert_delivery`)
+  - `ai_trading_system.domains.ingest.delivery` (`_upsert_delivery`)
 
 Validation failures are fail-closed and observable (exceptions/logged errors),
 instead of silently normalizing malformed writes.
@@ -75,13 +75,13 @@ No refactor phase removed trust lineage or quarantine enforcement.
 ## 4. Publish Runtime End State
 
 Publish delivery behavior remains retry-safe and idempotent through:
-- `run/publisher.py` (`PublisherDeliveryManager`)
+- `ai_trading_system.domains.publish.delivery_manager` (`PublisherDeliveryManager`)
 
 Rendering and payload composition were separated from delivery attempts:
 - `services/publish/publish_payloads.py`
 - `services/publish/telegram_summary_builder.py`
 
-`run/stages/publish.py` remains the delivery coordinator and artifact publisher.
+`ai_trading_system.pipeline.stages.publish` remains the delivery coordinator and artifact publisher.
 
 ## 5. Compatibility Decisions
 

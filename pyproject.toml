@@ -35,9 +35,10 @@ dev = [
 ai-trading-pipeline = "ai_trading_system.pipeline.orchestrator:main"
 ai-trading-publish-test = "ai_trading_system.pipeline.publish_test:main"
 ai-trading-daily = "ai_trading_system.pipeline.daily_pipeline:main"
-ai-trading-execution-ui = "ai_trading_system.interfaces.streamlit.execution.app:main"
 ai-trading-execution-api = "ai_trading_system.ui.execution_api.app:main"
 ai-trading-research-recipe = "ai_trading_system.research.run_recipe:main"
+ai-trading-bootstrap-data = "ai_trading_system.interfaces.cli.bootstrap_runtime_data:main"
+ai-trading-repair-ingest-schema = "ai_trading_system.interfaces.cli.repair_ingest_schema:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -51,8 +52,12 @@ exclude = [
   "models*",
   "reports*",
   "sql*",
-  "streamlit*",
   "test*",
+]
+
+[tool.setuptools.package-data]
+ai_trading_system = [
+  "pipeline/migrations/*.sql",
 ]
 
 [tool.pytest.ini_options]

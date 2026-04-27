@@ -23,12 +23,12 @@ The operational entry point is:
 
 ```bash
 cd /Users/prashant/my-ai-project/trading_system/ai-trading-system
-./.venv/bin/python -m run.orchestrator --run-date 2026-04-25 --stages features,rank
+./.venv/bin/python -m ai_trading_system.pipeline.orchestrator --run-date 2026-04-25 --stages features,rank
 ```
 
 Control flow:
 
-1. `run/orchestrator.py` forwards into `ai_trading_system.pipeline.orchestrator`.
+1. `ai_trading_system.pipeline.orchestrator` forwards into `ai_trading_system.pipeline.orchestrator`.
 2. `PipelineOrchestrator` parses flags, creates a `run_id`, and executes stages in order.
 3. The `rank` stage delegates to `RankOrchestrationService`.
 4. `RankOrchestrationService.run(...)` runs these tasks in order:
@@ -46,7 +46,7 @@ Control flow:
 
 ```mermaid
 flowchart LR
-    A["python -m run.orchestrator"] --> B["PipelineOrchestrator"]
+    A["python -m ai_trading_system.pipeline.orchestrator"] --> B["PipelineOrchestrator"]
     B --> C["features stage"]
     C --> D["rank_core"]
     D --> E["breakout_scan"]
@@ -350,7 +350,7 @@ Important fields to inspect:
 ```bash
 cd /Users/prashant/my-ai-project/trading_system/ai-trading-system
 
-./.venv/bin/python -m run.orchestrator \
+./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
   --run-date 2026-04-25 \
   --stages rank \
   --local-publish \
@@ -365,7 +365,7 @@ Use `pattern-workers 1` on macOS when you want to avoid multiprocessing noise an
 ```bash
 cd /Users/prashant/my-ai-project/trading_system/ai-trading-system
 
-./.venv/bin/python -m run.orchestrator \
+./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
   --run-date 2026-04-25 \
   --stages rank \
   --local-publish \
@@ -382,7 +382,7 @@ This is the widest currently supported CLI scan over the broad eligible universe
 ```bash
 cd /Users/prashant/my-ai-project/trading_system/ai-trading-system
 
-./.venv/bin/python -m run.orchestrator \
+./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
   --run-date 2026-04-25 \
   --stages features,rank \
   --local-publish \

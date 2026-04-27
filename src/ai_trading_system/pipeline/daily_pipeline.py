@@ -10,9 +10,9 @@ resilient pipeline orchestrator:
 5. publish
 
 Usage:
-    python run/daily_pipeline.py
-    python run/daily_pipeline.py --force
-    python run/daily_pipeline.py --local-publish
+    python -m ai_trading_system.pipeline.daily_pipeline
+    python -m ai_trading_system.pipeline.daily_pipeline --force
+    python -m ai_trading_system.pipeline.daily_pipeline --local-publish
 """
 
 import os

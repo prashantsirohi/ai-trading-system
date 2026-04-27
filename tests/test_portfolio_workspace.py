@@ -10,7 +10,7 @@ from ai_trading_system.domains.execution.models import OrderIntent
 from ai_trading_system.domains.execution.portfolio import closed_trade_ref, open_position_trade_ref
 from ai_trading_system.domains.execution.service import ExecutionService
 from ai_trading_system.domains.execution.store import ExecutionStore
-from ai_trading_system.interfaces.streamlit.research.data_access import (
+from ai_trading_system.ui.execution_api.services.research_data_access import (
     build_portfolio_candidate_frame,
     load_portfolio_workspace_report,
     load_trade_report,

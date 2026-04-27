@@ -4,10 +4,10 @@ This repository runs a staged, local-first NSE workflow:
 `ingest -> features -> rank -> execute -> publish`.
 
 Current runtime foundation:
-- stage orchestration and contracts in `run/stages/*`
-- domain services in `services/ingest`, `services/features`, `services/rank`, `services/execute`, and `services/publish`
-- market ingestion and repair utilities in `collectors/*` and `scripts/*`
-- retry-safe and idempotent publish delivery via `run/publisher.py`
+- stage orchestration and contracts in `src/ai_trading_system/pipeline`
+- domain services in `src/ai_trading_system/domains`
+- market ingestion and repair utilities in `src/ai_trading_system/domains/ingest`
+- retry-safe and idempotent publish delivery via `src/ai_trading_system/domains/publish`
 - control-plane and run tracking in `data/control_plane.duckdb`
 
 ## Documentation
@@ -22,10 +22,9 @@ Recommended starting points:
 - operator runbook: [`docs/operations/runbook.md`](docs/operations/runbook.md)
 - refactor end-state and migration notes: [`docs/refactor/final_architecture.md`](docs/refactor/final_architecture.md)
 
-## Frontend Consoles
+## Frontend Console
 
-- Existing console (unchanged): [`web/execution-console`](web/execution-console)
-- Parallel V2 operator UI: [`web/execution-console-v2`](web/execution-console-v2)
+- React V2 operator dashboard: [`web/execution-console-v2/ai-trading-dashboard-starter`](web/execution-console-v2/ai-trading-dashboard-starter)
 
 ## Runtime Setup Notes
 

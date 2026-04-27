@@ -5,7 +5,7 @@
 Current runtime behavior is controlled by:
 - CLI flags on `run.orchestrator` and `run.daily_pipeline`
 - environment variables loaded from the repo `.env` when present
-- explicit request payloads sent to `ui/execution_api/app.py`
+- explicit request payloads sent to `src/ai_trading_system/ui/execution_api/app.py`
 
 `config/settings.py` is not the canonical source of runtime configuration.
 
@@ -191,10 +191,10 @@ Current canary behavior:
 
 If you want canary plus publish, pass the stage list explicitly:
 ```bash
-python -m run.orchestrator --canary --stages ingest,features,rank,publish --local-publish
+python -m ai_trading_system.pipeline.orchestrator --canary --stages ingest,features,rank,publish --local-publish
 ```
 
 Current local mode for operator verification:
 ```bash
-python -m run.orchestrator --skip-preflight --stages ingest,features,rank,publish --local-publish
+python -m ai_trading_system.pipeline.orchestrator --skip-preflight --stages ingest,features,rank,publish --local-publish
 ```

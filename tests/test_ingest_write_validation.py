@@ -8,7 +8,7 @@ import pytest
 
 from ai_trading_system.domains.ingest.ingest_full import write_dfs_to_duckdb
 from ai_trading_system.domains.ingest.validation import IngestValidationError, validate_delivery_frame, validate_ohlcv_frame
-from scripts import repair_ingest_schema
+from ai_trading_system.interfaces.cli import repair_ingest_schema
 
 
 def _create_catalog_table(conn: duckdb.DuckDBPyConnection) -> None:

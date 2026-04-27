@@ -1,4 +1,4 @@
-"""Query/data-access helpers for the research Streamlit dashboard."""
+"""Query/data-access helpers for research and portfolio dashboard data."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from typing import Any, Dict, Iterable, List
 
 import duckdb
 import pandas as pd
-import streamlit as st
 from ai_trading_system.analytics.data_trust import load_data_trust_summary, load_symbol_trust_state
 from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.platform.db.paths import get_domain_paths
@@ -19,6 +18,14 @@ from ai_trading_system.domains.execution.store import ExecutionStore
 
 
 STAGE_NAMES = ("ingest", "features", "rank", "execute", "publish")
+
+
+def _cache_data(*_args: object, **_kwargs: object):
+    """No-op cache decorator retained for call-site compatibility."""
+    def _decorator(func):
+        return func
+
+    return _decorator
 
 
 def open_position_trade_ref(symbol_id: str, exchange: str = "NSE") -> str:
@@ -150,7 +157,7 @@ def _load_latest_payload_path(project_root: str) -> Path | None:
     return candidates[0]
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 3)
+@_cache_data(show_spinner=False, ttl=60 * 3)
 def load_latest_rank_frames(project_root: str) -> Dict[str, pd.DataFrame]:
     """Load latest rank-stage CSV artifacts without importing ai_trading_system.ui.execution_api.services package."""
     payload_path = _load_latest_payload_path(project_root)
@@ -194,7 +201,7 @@ def load_latest_rank_frames(project_root: str) -> Dict[str, pd.DataFrame]:
     return frames
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 5)
+@_cache_data(show_spinner=False, ttl=60 * 5)
 def load_recent_rank_paths(pipeline_runs_dir: str, max_runs: int = 40) -> List[str]:
     """Return recent ranked_signals artifact paths (one per run)."""
     runs_dir = Path(pipeline_runs_dir)
@@ -222,7 +229,7 @@ def load_recent_rank_paths(pipeline_runs_dir: str, max_runs: int = 40) -> List[s
     return selected
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 5)
+@_cache_data(show_spinner=False, ttl=60 * 5)
 def load_recent_sector_paths(pipeline_runs_dir: str, max_runs: int = 40) -> List[str]:
     """Return recent sector_dashboard artifact paths (one per run)."""
     runs_dir = Path(pipeline_runs_dir)
@@ -250,7 +257,7 @@ def load_recent_sector_paths(pipeline_runs_dir: str, max_runs: int = 40) -> List
     return selected
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 5)
+@_cache_data(show_spinner=False, ttl=60 * 5)
 def list_pattern_backtest_bundles(reports_dir: str, max_bundles: int = 20) -> pd.DataFrame:
     """List recent pattern-backtest research bundles."""
     base = Path(reports_dir) / "pattern_backtests"
@@ -306,7 +313,7 @@ def list_pattern_backtest_bundles(reports_dir: str, max_bundles: int = 20) -> pd
     return pd.DataFrame(rows)
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 5)
+@_cache_data(show_spinner=False, ttl=60 * 5)
 def load_pattern_backtest_bundle(bundle_dir: str) -> Dict[str, Any]:
     """Load one pattern-backtest research bundle and its artifacts."""
     base = Path(bundle_dir)
@@ -343,7 +350,7 @@ def load_pattern_backtest_bundle(bundle_dir: str) -> Dict[str, Any]:
     }
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 5)
+@_cache_data(show_spinner=False, ttl=60 * 5)
 def load_rank_history_for_symbols(
     pipeline_runs_dir: str,
     symbols: Iterable[str],
@@ -414,7 +421,7 @@ def load_rank_history_for_symbols(
     return history_df
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 5)
+@_cache_data(show_spinner=False, ttl=60 * 5)
 def load_sector_history_for_sectors(
     pipeline_runs_dir: str,
     sectors: Iterable[str],
@@ -506,7 +513,7 @@ def load_sector_history_for_sectors(
     return history_df
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 5)
+@_cache_data(show_spinner=False, ttl=60 * 5)
 def load_drilldown_history_for_symbols(
     pipeline_runs_dir: str,
     symbols: Iterable[str],
@@ -548,7 +555,7 @@ def load_drilldown_history_for_symbols(
     return aggregated
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 5)
+@_cache_data(show_spinner=False, ttl=60 * 5)
 def load_ops_health_snapshot(
     project_root: str,
     stale_threshold_hours: dict[str, float] | None = None,
@@ -658,7 +665,7 @@ def load_ops_health_snapshot(
     }
 
 
-@st.cache_data(show_spinner=False, ttl=60)
+@_cache_data(show_spinner=False, ttl=60)
 def load_data_trust_snapshot(project_root: str) -> Dict[str, object]:
     """Load current operational data trust summary plus latest repair metadata."""
     paths = get_domain_paths(project_root, "operational")
@@ -668,14 +675,14 @@ def load_data_trust_snapshot(project_root: str) -> Dict[str, object]:
     return summary
 
 
-@st.cache_data(show_spinner=False, ttl=60)
+@_cache_data(show_spinner=False, ttl=60)
 def load_symbol_trust_snapshot(project_root: str, symbols: Iterable[str]) -> pd.DataFrame:
     """Load latest trust state for a set of symbols."""
     paths = get_domain_paths(project_root, "operational")
     return load_symbol_trust_state(paths.ohlcv_db_path, symbols)
 
 
-@st.cache_data(show_spinner=False, ttl=60)
+@_cache_data(show_spinner=False, ttl=60)
 def load_trade_report(project_root: str) -> Dict[str, object]:
     """Build a paper-trading P&L snapshot for the unified dashboard."""
     store = ExecutionStore(project_root)
@@ -815,7 +822,7 @@ def load_trade_report(project_root: str) -> Dict[str, object]:
     }
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 10)
+@_cache_data(show_spinner=False, ttl=60 * 10)
 def load_portfolio_symbol_details(project_root: str) -> pd.DataFrame:
     paths = get_domain_paths(project_root, "operational")
     db_path = Path(paths.master_db_path)

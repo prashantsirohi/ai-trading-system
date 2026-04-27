@@ -10,11 +10,9 @@ from ai_trading_system.ui.execution_api.routes._deps import project_root
 from ai_trading_system.ui.execution_api.schemas.requests import (
     PipelineRunRequest,
     PublishRetryRequest,
-    ResearchLaunchRequest,
     ShadowRunRequest,
 )
 from ai_trading_system.ui.execution_api.services.execution_operator import (
-    launch_research_action,
     retry_publish_action,
     run_pipeline_action,
     run_shadow_action,
@@ -58,10 +56,4 @@ def execution_shadow_run(request: ShadowRunRequest) -> dict[str, Any]:
         backfill_days=request.backfill_days,
         prediction_date=request.prediction_date,
     )
-    return {"task": task}
-
-
-@router.post("/research/launch")
-def execution_launch_research(request: ResearchLaunchRequest) -> dict[str, Any]:
-    task = launch_research_action(project_root(), port=request.port)
     return {"task": task}

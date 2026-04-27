@@ -52,7 +52,7 @@ def _normalize_symbol_exchange(frame: pd.DataFrame, *, ctx: ValidationContext) -
     swapped = normalized["symbol_id"].isin(VALID_EXCHANGES) & ~normalized["exchange"].isin(VALID_EXCHANGES)
     if swapped.any():
         _raise_invalid(
-            "detected swapped symbol_id/exchange rows (repair with scripts/repair_ingest_schema.py --apply)",
+            "detected swapped symbol_id/exchange rows (repair with ai-trading-repair-ingest-schema --apply)",
             ctx=ctx,
             sample=_sample_rows(normalized, swapped),
         )

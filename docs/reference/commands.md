@@ -18,118 +18,103 @@ pip install -e .
 
 Bootstrap master data:
 ```bash
-python -m collectors.masterdata
+python -m ai_trading_system.domains.ingest.masterdata
 ```
 
 Bootstrap runtime directories (and optionally refresh seed masterdata):
 ```bash
-python -m scripts.bootstrap_runtime_data
-python -m scripts.bootstrap_runtime_data --refresh-masterdata
+python -m ai_trading_system.interfaces.cli.bootstrap_runtime_data
+python -m ai_trading_system.interfaces.cli.bootstrap_runtime_data --refresh-masterdata
 ```
 
 ## Operational pipeline
 
 CLI default pipeline:
 ```bash
-python -m run.orchestrator
+python -m ai_trading_system.pipeline.orchestrator
 ```
 
 Safe local operator verification run:
 ```bash
-python -m run.orchestrator --skip-preflight --stages ingest,features,rank,publish --local-publish
+python -m ai_trading_system.pipeline.orchestrator --skip-preflight --stages ingest,features,rank,publish --local-publish
 ```
 
 Daily wrapper:
 ```bash
-python -m run.daily_pipeline
+python -m ai_trading_system.pipeline.daily_pipeline
 ```
 
 Run preflight explicitly on the orchestrator CLI:
 ```bash
-python -m run.orchestrator --run-preflight --stages ingest,features,rank,publish --local-publish
+python -m ai_trading_system.pipeline.orchestrator --run-preflight --stages ingest,features,rank,publish --local-publish
 ```
 
 ## Stage-only runs
 
 Ingest:
 ```bash
-python -m run.orchestrator --skip-preflight --stages ingest
+python -m ai_trading_system.pipeline.orchestrator --skip-preflight --stages ingest
 ```
 
 Features:
 ```bash
-python -m run.orchestrator --skip-preflight --stages features
+python -m ai_trading_system.pipeline.orchestrator --skip-preflight --stages features
 ```
 
 Rank:
 ```bash
-python -m run.orchestrator --stages rank
+python -m ai_trading_system.pipeline.orchestrator --stages rank
 ```
 
 Execute for an existing run:
 ```bash
-python -m run.orchestrator --run-id <run_id> --stages execute
+python -m ai_trading_system.pipeline.orchestrator --run-id <run_id> --stages execute
 ```
 
 Publish for an existing run:
 ```bash
-python -m run.orchestrator --run-id <run_id> --stages publish
+python -m ai_trading_system.pipeline.orchestrator --run-id <run_id> --stages publish
 ```
 
 ## Canary
 
 Built-in reduced canary:
 ```bash
-python -m run.orchestrator --canary --skip-preflight
+python -m ai_trading_system.pipeline.orchestrator --canary --skip-preflight
 ```
 
 Canary plus local publish:
 ```bash
-python -m run.orchestrator --canary --skip-preflight --stages ingest,features,rank,publish --local-publish
+python -m ai_trading_system.pipeline.orchestrator --canary --skip-preflight --stages ingest,features,rank,publish --local-publish
 ```
 
 ## Publish and recovery
 
 Publish target healthcheck:
 ```bash
-python -m run.publish_test
+python -m ai_trading_system.pipeline.publish_test
 ```
 
 Repair a date window without applying changes:
 ```bash
-python -m collectors.reset_reingest_validate --from-date YYYY-MM-DD --to-date YYYY-MM-DD
+python -m ai_trading_system.domains.ingest.reset_reingest_validate --from-date YYYY-MM-DD --to-date YYYY-MM-DD
 ```
 
 Repair a date window and apply changes:
 ```bash
-python -m collectors.reset_reingest_validate --from-date YYYY-MM-DD --to-date YYYY-MM-DD --apply
+python -m ai_trading_system.domains.ingest.reset_reingest_validate --from-date YYYY-MM-DD --to-date YYYY-MM-DD --apply
 ```
 
 ## UI and API
 
-NiceGUI operator console:
-```bash
-python -m ui.execution.app --port 8080
-```
-
 FastAPI operator backend:
 ```bash
-python -m ui.execution_api.app --port 8090
+python -m ai_trading_system.ui.execution_api.app --port 8090
 ```
 
-Research Streamlit UI:
+React V2 execution console:
 ```bash
-python -m streamlit run ui/research/app.py
-```
-
-ML Streamlit workbench:
-```bash
-python -m streamlit run ui/ml/app.py
-```
-
-React execution console:
-```bash
-cd web/execution-console
+cd web/execution-console-v2/ai-trading-dashboard-starter
 npm install
 npm run dev
 ```
@@ -138,22 +123,22 @@ npm run dev
 
 Run a named research recipe:
 ```bash
-python -m research.run_recipe --recipe <recipe_name>
+python -m ai_trading_system.research.run_recipe --recipe <recipe_name>
 ```
 
 Run a recipe bundle:
 ```bash
-python -m research.run_recipe --bundle <bundle_name>
+python -m ai_trading_system.research.run_recipe --bundle <bundle_name>
 ```
 
 Run the shadow monitor:
 ```bash
-python -m research.shadow_monitor
+python -m ai_trading_system.research.shadow_monitor
 ```
 
 Backfill recent shadow-monitor days:
 ```bash
-python -m research.shadow_monitor --backfill-days 30
+python -m ai_trading_system.research.shadow_monitor --backfill-days 30
 ```
 
 ## Installed console-script aliases
@@ -162,6 +147,7 @@ After `pip install -e .`, current aliases include:
 - `ai-trading-pipeline`
 - `ai-trading-publish-test`
 - `ai-trading-daily`
-- `ai-trading-execution-ui`
 - `ai-trading-execution-api`
 - `ai-trading-research-recipe`
+- `ai-trading-bootstrap-data`
+- `ai-trading-repair-ingest-schema`

@@ -1,2 +1,1 @@
-"""Interface surfaces (API + Streamlit)."""
-
+"""Interface surfaces for API and CLI entrypoints."""
