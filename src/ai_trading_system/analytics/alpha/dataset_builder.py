@@ -64,8 +64,8 @@ class AlphaDatasetBuilder:
             exchange=exchange,
             horizons=[target_spec.horizon],
         ).copy()
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df = df.sort_values(["timestamp", "symbol_id"]).reset_index(drop=True)
+        df.loc[:, "timestamp"] = pd.to_datetime(df["timestamp"])
+        df = df.sort_values(["timestamp", "symbol_id"]).reset_index(drop=True).copy()
         df = self._enrich_features(df, horizon=target_spec.horizon)
 
         feature_cols = self._resolve_feature_columns(engine, df, target_spec=target_spec)
@@ -178,60 +178,60 @@ class AlphaDatasetBuilder:
         ordered = df.sort_values(["symbol_id", "timestamp"]).copy()
         by_symbol = ordered.groupby("symbol_id", group_keys=False)
 
-        ordered["ret_5d_back"] = by_symbol["close"].pct_change(5)
-        ordered["ret_20d_back"] = by_symbol["close"].pct_change(20)
-        ordered["ret_60d_back"] = by_symbol["close"].pct_change(60)
-        ordered["volume_avg_20"] = by_symbol["volume"].transform(
+        ordered.loc[:, "ret_5d_back"] = by_symbol["close"].pct_change(5)
+        ordered.loc[:, "ret_20d_back"] = by_symbol["close"].pct_change(20)
+        ordered.loc[:, "ret_60d_back"] = by_symbol["close"].pct_change(60)
+        ordered.loc[:, "volume_avg_20"] = by_symbol["volume"].transform(
             lambda series: series.shift(1).rolling(20, min_periods=5).mean()
         )
-        ordered["volume_ratio_20"] = ordered["volume"] / ordered["volume_avg_20"].replace(0, np.nan)
-        ordered["volatility_20"] = by_symbol["close"].transform(
+        ordered.loc[:, "volume_ratio_20"] = ordered["volume"] / ordered["volume_avg_20"].replace(0, np.nan)
+        ordered.loc[:, "volatility_20"] = by_symbol["close"].transform(
             lambda series: series.pct_change().rolling(20, min_periods=10).std()
         )
-        ordered["volatility_60"] = by_symbol["close"].transform(
+        ordered.loc[:, "volatility_60"] = by_symbol["close"].transform(
             lambda series: series.pct_change().rolling(60, min_periods=20).std()
         )
 
-        ordered["sma_20"] = by_symbol["close"].transform(
+        ordered.loc[:, "sma_20"] = by_symbol["close"].transform(
             lambda series: series.rolling(20, min_periods=5).mean()
         )
-        ordered["sma_50"] = by_symbol["close"].transform(
+        ordered.loc[:, "sma_50"] = by_symbol["close"].transform(
             lambda series: series.rolling(50, min_periods=10).mean()
         )
-        ordered["sma_200"] = by_symbol["close"].transform(
+        ordered.loc[:, "sma_200"] = by_symbol["close"].transform(
             lambda series: series.rolling(200, min_periods=30).mean()
         )
-        ordered["dist_sma_20"] = (
+        ordered.loc[:, "dist_sma_20"] = (
             (ordered["close"] - ordered["sma_20"]) / ordered["sma_20"].replace(0, np.nan)
         )
-        ordered["dist_sma_50"] = (
+        ordered.loc[:, "dist_sma_50"] = (
             (ordered["close"] - ordered["sma_50"]) / ordered["sma_50"].replace(0, np.nan)
         )
-        ordered["dist_sma_200"] = (
+        ordered.loc[:, "dist_sma_200"] = (
             (ordered["close"] - ordered["sma_200"]) / ordered["sma_200"].replace(0, np.nan)
         )
 
-        ordered["high_252"] = by_symbol["high"].transform(
+        ordered.loc[:, "high_252"] = by_symbol["high"].transform(
             lambda series: series.rolling(252, min_periods=20).max()
         )
-        ordered["dist_52w_high"] = (
+        ordered.loc[:, "dist_52w_high"] = (
             1 - (ordered["close"] / ordered["high_252"].replace(0, np.nan))
         )
-        ordered["prior_range_high_20"] = by_symbol["high"].transform(
+        ordered.loc[:, "prior_range_high_20"] = by_symbol["high"].transform(
             lambda series: series.shift(1).rolling(20, min_periods=5).max()
         )
-        ordered["prior_range_low_20"] = by_symbol["low"].transform(
+        ordered.loc[:, "prior_range_low_20"] = by_symbol["low"].transform(
             lambda series: series.shift(1).rolling(20, min_periods=5).min()
         )
-        ordered["range_width_pct_20"] = (
+        ordered.loc[:, "range_width_pct_20"] = (
             (ordered["prior_range_high_20"] - ordered["prior_range_low_20"])
             / ordered["prior_range_low_20"].replace(0, np.nan)
         )
-        ordered["breakout_pct_20"] = (
+        ordered.loc[:, "breakout_pct_20"] = (
             (ordered["close"] - ordered["prior_range_high_20"])
             / ordered["prior_range_high_20"].replace(0, np.nan)
         )
-        ordered["is_range_breakout_20"] = (
+        ordered.loc[:, "is_range_breakout_20"] = (
             ordered["close"] > ordered["prior_range_high_20"]
         ).astype(int)
         st_signal = (
@@ -239,8 +239,8 @@ class AlphaDatasetBuilder:
             if "st_signal" in ordered.columns
             else pd.Series(0, index=ordered.index)
         )
-        ordered["supertrend_bullish"] = (st_signal.fillna(0) > 0).astype(int)
-        ordered["trend_alignment_score"] = (
+        ordered.loc[:, "supertrend_bullish"] = (st_signal.fillna(0) > 0).astype(int)
+        ordered.loc[:, "trend_alignment_score"] = (
             (ordered["dist_sma_20"] > 0).astype(int)
             + (ordered["dist_sma_50"] > 0).astype(int)
             + (ordered["dist_sma_200"] > 0).astype(int)
@@ -250,7 +250,7 @@ class AlphaDatasetBuilder:
     def _add_delivery_features(self, df: pd.DataFrame) -> pd.DataFrame:
         delivery_db = self.paths.ohlcv_db_path
         if not delivery_db.exists():
-            df["delivery_pct"] = 20.0
+            df.loc[:, "delivery_pct"] = 20.0
             return df
 
         conn = duckdb.connect(str(delivery_db), read_only=True)
@@ -263,7 +263,7 @@ class AlphaDatasetBuilder:
             ).fetchdf()
         except Exception:
             conn.close()
-            df["delivery_pct"] = 20.0
+            df.loc[:, "delivery_pct"] = 20.0
             return df
         finally:
             try:
@@ -272,19 +272,19 @@ class AlphaDatasetBuilder:
                 pass
 
         if delivery.empty:
-            df["delivery_pct"] = 20.0
+            df.loc[:, "delivery_pct"] = 20.0
             return df
 
-        delivery["trade_date"] = pd.to_datetime(delivery["trade_date"])
-        delivery = delivery.sort_values(["symbol_id", "trade_date"])
+        delivery.loc[:, "trade_date"] = pd.to_datetime(delivery["trade_date"])
+        delivery = delivery.sort_values(["symbol_id", "trade_date"]).copy()
         enriched = df.copy()
-        enriched["trade_date"] = enriched["timestamp"].dt.normalize()
+        enriched.loc[:, "trade_date"] = enriched["timestamp"].dt.normalize()
         enriched = enriched.merge(
             delivery[["symbol_id", "trade_date", "delivery_pct"]],
             on=["symbol_id", "trade_date"],
             how="left",
-        )
-        enriched["delivery_pct"] = enriched["delivery_pct"].fillna(20.0)
+        ).copy()
+        enriched.loc[:, "delivery_pct"] = enriched["delivery_pct"].fillna(20.0)
         return enriched.drop(columns=["trade_date"])
 
     def _load_sector_map(self) -> dict[str, str]:
@@ -304,8 +304,8 @@ class AlphaDatasetBuilder:
         sector_rs_path = all_symbols_dir / "sector_rs.parquet"
         stock_vs_sector_path = all_symbols_dir / "stock_vs_sector.parquet"
         if not sector_rs_path.exists() or not stock_vs_sector_path.exists():
-            df["sector_rs_value"] = 0.5
-            df["stock_vs_sector_value"] = 0.0
+            df.loc[:, "sector_rs_value"] = 0.5
+            df.loc[:, "stock_vs_sector_value"] = 0.0
             return df
 
         sector_map = self._load_sector_map()
@@ -317,8 +317,8 @@ class AlphaDatasetBuilder:
         stock_vs_sector = stock_vs_sector[~stock_vs_sector.index.duplicated(keep="last")]
 
         enriched = df.copy()
-        enriched["trade_date"] = enriched["timestamp"].dt.normalize()
-        enriched["sector_name"] = enriched["symbol_id"].map(sector_map).fillna("Other")
+        enriched.loc[:, "trade_date"] = enriched["timestamp"].dt.normalize()
+        enriched.loc[:, "sector_name"] = enriched["symbol_id"].map(sector_map).fillna("Other")
 
         sector_long = (
             sector_rs.stack(dropna=False)
@@ -330,46 +330,46 @@ class AlphaDatasetBuilder:
             .rename_axis(index=["trade_date", "symbol_id"])
             .reset_index(name="stock_vs_sector_value")
         )
-        sector_long["trade_date"] = pd.to_datetime(sector_long["trade_date"])
-        stock_long["trade_date"] = pd.to_datetime(stock_long["trade_date"])
+        sector_long.loc[:, "trade_date"] = pd.to_datetime(sector_long["trade_date"])
+        stock_long.loc[:, "trade_date"] = pd.to_datetime(stock_long["trade_date"])
 
-        enriched = enriched.merge(sector_long, on=["trade_date", "sector_name"], how="left")
-        enriched = enriched.merge(stock_long, on=["trade_date", "symbol_id"], how="left")
-        enriched["sector_rs_value"] = enriched["sector_rs_value"].fillna(0.5)
-        enriched["stock_vs_sector_value"] = enriched["stock_vs_sector_value"].fillna(0.0)
+        enriched = enriched.merge(sector_long, on=["trade_date", "sector_name"], how="left").copy()
+        enriched = enriched.merge(stock_long, on=["trade_date", "symbol_id"], how="left").copy()
+        enriched.loc[:, "sector_rs_value"] = enriched["sector_rs_value"].fillna(0.5)
+        enriched.loc[:, "stock_vs_sector_value"] = enriched["stock_vs_sector_value"].fillna(0.0)
         return enriched.drop(columns=["trade_date"])
 
     def _add_regime_features(self, df: pd.DataFrame) -> pd.DataFrame:
         enriched = df.copy()
-        enriched["trade_date"] = enriched["timestamp"].dt.normalize()
+        enriched.loc[:, "trade_date"] = enriched["timestamp"].dt.normalize()
         ordered = enriched.sort_values(["symbol_id", "trade_date"]).copy()
 
-        ordered["sma50_for_regime"] = ordered.groupby("symbol_id")["close"].transform(
+        ordered.loc[:, "sma50_for_regime"] = ordered.groupby("symbol_id")["close"].transform(
             lambda series: series.rolling(50, min_periods=10).mean()
         )
-        ordered["sma200_for_regime"] = ordered.groupby("symbol_id")["close"].transform(
+        ordered.loc[:, "sma200_for_regime"] = ordered.groupby("symbol_id")["close"].transform(
             lambda series: series.rolling(200, min_periods=30).mean()
         )
-        ordered["close_20_back"] = ordered.groupby("symbol_id")["close"].shift(20)
-        ordered["close_50_back"] = ordered.groupby("symbol_id")["close"].shift(50)
+        ordered.loc[:, "close_20_back"] = ordered.groupby("symbol_id")["close"].shift(20)
+        ordered.loc[:, "close_50_back"] = ordered.groupby("symbol_id")["close"].shift(50)
 
         by_trade_date = ordered.groupby("trade_date")
         regime = by_trade_date.agg(
             pct_above_50=("close", lambda series: 0.0),
         )
-        regime["pct_above_50"] = ((ordered["close"] > ordered["sma50_for_regime"]).astype(float)).groupby(
+        regime.loc[:, "pct_above_50"] = ((ordered["close"] > ordered["sma50_for_regime"]).astype(float)).groupby(
             ordered["trade_date"]
         ).mean() * 100
-        regime["pct_above_200"] = ((ordered["close"] > ordered["sma200_for_regime"]).astype(float)).groupby(
+        regime.loc[:, "pct_above_200"] = ((ordered["close"] > ordered["sma200_for_regime"]).astype(float)).groupby(
             ordered["trade_date"]
         ).mean() * 100
-        regime["pct_up_20"] = ((ordered["close"] > ordered["close_20_back"]).astype(float)).groupby(
+        regime.loc[:, "pct_up_20"] = ((ordered["close"] > ordered["close_20_back"]).astype(float)).groupby(
             ordered["trade_date"]
         ).mean() * 100
-        regime["pct_up_50"] = ((ordered["close"] > ordered["close_50_back"]).astype(float)).groupby(
+        regime.loc[:, "pct_up_50"] = ((ordered["close"] > ordered["close_50_back"]).astype(float)).groupby(
             ordered["trade_date"]
         ).mean() * 100
-        regime["breadth_score"] = regime[
+        regime.loc[:, "breadth_score"] = regime[
             ["pct_above_50", "pct_above_200", "pct_up_20", "pct_up_50"]
         ].mean(axis=1)
 
@@ -381,21 +381,21 @@ class AlphaDatasetBuilder:
         group = enriched.groupby("timestamp")
 
         if "ret_20d_back" in enriched.columns:
-            enriched["rel_strength_pct"] = group["ret_20d_back"].rank(pct=True) * 100
+            enriched.loc[:, "rel_strength_pct"] = group["ret_20d_back"].rank(pct=True) * 100
         if "volume_ratio_20" in enriched.columns:
-            enriched["vol_intensity_pct"] = group["volume_ratio_20"].rank(pct=True) * 100
+            enriched.loc[:, "vol_intensity_pct"] = group["volume_ratio_20"].rank(pct=True) * 100
         if "adx_value" in enriched.columns:
-            enriched["trend_score_pct"] = group["adx_value"].rank(pct=True) * 100
+            enriched.loc[:, "trend_score_pct"] = group["adx_value"].rank(pct=True) * 100
         if "dist_52w_high" in enriched.columns:
-            enriched["prox_high_pct"] = (1 - group["dist_52w_high"].rank(pct=True)) * 100
+            enriched.loc[:, "prox_high_pct"] = (1 - group["dist_52w_high"].rank(pct=True)) * 100
         if "delivery_pct" in enriched.columns:
-            enriched["delivery_pct_pct"] = group["delivery_pct"].rank(pct=True) * 100
+            enriched.loc[:, "delivery_pct_pct"] = group["delivery_pct"].rank(pct=True) * 100
         if "sector_rs_value" in enriched.columns:
-            enriched["sector_rs_pct"] = group["sector_rs_value"].rank(pct=True) * 100
+            enriched.loc[:, "sector_rs_pct"] = group["sector_rs_value"].rank(pct=True) * 100
         if "stock_vs_sector_value" in enriched.columns:
-            enriched["stock_vs_sector_pct"] = group["stock_vs_sector_value"].rank(pct=True) * 100
+            enriched.loc[:, "stock_vs_sector_pct"] = group["stock_vs_sector_value"].rank(pct=True) * 100
         if "breakout_pct_20" in enriched.columns:
-            enriched["breakout_strength_pct"] = group["breakout_pct_20"].rank(pct=True) * 100
+            enriched.loc[:, "breakout_strength_pct"] = group["breakout_pct_20"].rank(pct=True) * 100
         return enriched
 
     @staticmethod
@@ -409,5 +409,5 @@ class AlphaDatasetBuilder:
 
         df = pd.read_parquet(dataset_path)
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df.loc[:, "timestamp"] = pd.to_datetime(df["timestamp"])
         return df, metadata

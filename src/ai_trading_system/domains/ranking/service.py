@@ -37,7 +37,7 @@ def attach_rank_confidence_from_features(frame: pd.DataFrame) -> pd.DataFrame:
     """Propagate feature confidence when rank confidence is absent."""
     output = frame.copy()
     if "feature_confidence" in output.columns and "rank_confidence" not in output.columns:
-        output["rank_confidence"] = pd.to_numeric(output["feature_confidence"], errors="coerce")
+        output.loc[:, "rank_confidence"] = pd.to_numeric(output["feature_confidence"], errors="coerce")
     return output
 
 
@@ -89,6 +89,28 @@ def _rename_context_columns(frame: pd.DataFrame, *, prefix: str) -> pd.DataFrame
     return frame.rename(columns=available)
 
 
+def _join_on_symbol_id(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    *,
+    how: str,
+    rsuffix: str = "",
+) -> pd.DataFrame:
+    """Join symbol-scoped frames without triggering pandas merge copy warnings."""
+    if right.empty:
+        return left.copy()
+    left_frame = left.copy()
+    right_frame = right.copy()
+    left_frame.loc[:, "_join_symbol_id"] = left_frame["symbol_id"].astype(str)
+    right_frame.loc[:, "_join_symbol_id"] = right_frame["symbol_id"].astype(str)
+    left_indexed = left_frame.set_index("_join_symbol_id", drop=True)
+    right_indexed = right_frame.set_index("_join_symbol_id", drop=True).drop(columns=["symbol_id"])
+    joined = left_indexed.join(right_indexed, how=how, rsuffix=rsuffix)
+    joined = joined.reset_index().copy()
+    joined.loc[:, "symbol_id"] = joined["symbol_id"].fillna(joined["_join_symbol_id"])
+    return joined.drop(columns=["_join_symbol_id"]).reset_index(drop=True).copy()
+
+
 def _select_best_pattern_rows(pattern_df: pd.DataFrame | None) -> pd.DataFrame:
     frame = _normalize_symbol_frame(pattern_df)
     if frame.empty:
@@ -106,19 +128,20 @@ def _select_best_pattern_rows(pattern_df: pd.DataFrame | None) -> pd.DataFrame:
         else frame.get("pattern_state", pd.Series("", index=frame.index)).astype(str)
     )
     positive = frame.loc[
-        frame["pattern_operational_tier"].astype(str) != "suppression_only"
-    ].loc[lifecycle.isin({"watchlist", "confirmed"})]
+        (frame["pattern_operational_tier"].astype(str) != "suppression_only")
+        & lifecycle.isin({"watchlist", "confirmed"})
+    ].copy()
     if positive.empty:
         return pd.DataFrame(columns=["symbol_id", "pattern_positive"])
 
-    positive = _rename_context_columns(positive, prefix="pattern")
+    positive = _rename_context_columns(positive, prefix="pattern").copy()
     positive = positive.sort_values(
         ["pattern_priority_score", "pattern_score", "pattern_rel_strength_score", "pattern_stage2_score", "symbol_id"],
         ascending=[False, False, False, False, True],
         na_position="last",
         kind="stable",
     )
-    positive = positive.drop_duplicates(subset=["symbol_id"], keep="first").reset_index(drop=True)
+    positive = positive.drop_duplicates(subset=["symbol_id"], keep="first").reset_index(drop=True).copy()
     positive.loc[:, "pattern_positive"] = True
     return positive
 
@@ -131,18 +154,18 @@ def _select_best_breakout_rows(breakout_df: pd.DataFrame | None) -> pd.DataFrame
     frame = _coerce_numeric_columns(frame, ["breakout_score", "rel_strength_score", "stage2_score"])
     positive = frame.loc[
         frame.get("breakout_state", pd.Series("", index=frame.index)).astype(str).isin({"qualified", "watchlist"})
-    ]
+    ].copy()
     if positive.empty:
         return pd.DataFrame(columns=["symbol_id", "breakout_positive"])
 
-    positive = _rename_context_columns(positive, prefix="breakout")
+    positive = _rename_context_columns(positive, prefix="breakout").copy()
     positive = positive.sort_values(
         ["breakout_score", "breakout_rel_strength_score", "breakout_stage2_score", "symbol_id"],
         ascending=[False, False, False, True],
         na_position="last",
         kind="stable",
     )
-    positive = positive.drop_duplicates(subset=["symbol_id"], keep="first").reset_index(drop=True)
+    positive = positive.drop_duplicates(subset=["symbol_id"], keep="first").reset_index(drop=True).copy()
     positive.loc[:, "breakout_positive"] = True
     return positive
 
@@ -155,7 +178,7 @@ def build_integrated_stock_scan_view(
     legacy_stock_scan_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     ranked = _normalize_symbol_frame(ranked_df)
-    ranked = ranked.reset_index(drop=True)
+    ranked = ranked.reset_index(drop=True).copy()
     if "rank" not in ranked.columns:
         ranked.loc[:, "rank"] = pd.Series(range(1, len(ranked) + 1), index=ranked.index, dtype="Int64")
     ranked_top_universe = set(ranked["symbol_id"].astype(str)) if not ranked.empty else set()
@@ -169,16 +192,16 @@ def build_integrated_stock_scan_view(
     for extra in (pattern_best, breakout_best):
         if extra.empty:
             continue
-        merged = merged.merge(extra, on="symbol_id", how="outer")
+        merged = _join_on_symbol_id(merged, extra, how="outer")
 
     if merged.empty:
         return merged
 
     legacy = _normalize_symbol_frame(legacy_stock_scan_df)
     if not legacy.empty:
-        legacy = legacy.drop(columns=[col for col in ("Symbol", "symbol", "index") if col in legacy.columns])
-        legacy = legacy.drop_duplicates(subset=["symbol_id"], keep="first")
-        merged = merged.merge(legacy, on="symbol_id", how="left", suffixes=("", "_legacy"))
+        legacy = legacy.drop(columns=[col for col in ("Symbol", "symbol", "index") if col in legacy.columns]).copy()
+        legacy = legacy.drop_duplicates(subset=["symbol_id"], keep="first").copy()
+        merged = _join_on_symbol_id(merged, legacy, how="left", rsuffix="_legacy")
 
     pattern_positive_mask = _bool_series(merged, "pattern_positive")
     breakout_positive_mask = _bool_series(merged, "breakout_positive")
@@ -213,11 +236,14 @@ def build_integrated_stock_scan_view(
             if breakout_col in merged.columns
             else pd.Series([pd.NA] * len(merged), index=merged.index, dtype="object")
         )
-        merged[base] = (
+        combined = (
             current.astype("object")
             .combine_first(pattern_series.astype("object"))
             .combine_first(breakout_series.astype("object"))
         )
+        if base in {"rel_strength_score", "stage2_score", "close"}:
+            combined = pd.to_numeric(combined, errors="coerce")
+        merged.loc[:, base] = combined
 
     merged = _coerce_numeric_columns(
         merged,
@@ -262,7 +288,7 @@ def build_integrated_stock_scan_view(
     order_map = {symbol: position for position, symbol in enumerate(ordered_symbols)}
     merged = merged.loc[merged["symbol_id"].astype(str).isin(order_map)].copy()
     merged.loc[:, "_sort_order"] = merged["symbol_id"].astype(str).map(order_map)
-    merged = merged.sort_values("_sort_order", kind="stable").drop(columns="_sort_order").reset_index(drop=True)
+    merged = merged.sort_values("_sort_order", kind="stable").drop(columns="_sort_order").reset_index(drop=True).copy()
     return merged
 
 

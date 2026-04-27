@@ -19,9 +19,9 @@ class _DummyEngine:
 
     def score_frame(self, dataset_df, *, model, horizon: int):
         scored = dataset_df.copy()
-        scored["probability"] = scored["signal"]
-        scored["prediction"] = (scored["probability"] >= 0.5).astype(int)
-        scored["horizon"] = horizon
+        scored.loc[:, "probability"] = scored["signal"]
+        scored.loc[:, "prediction"] = (scored["probability"] >= 0.5).astype(int)
+        scored.loc[:, "horizon"] = horizon
         return scored
 
 

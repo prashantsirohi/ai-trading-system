@@ -86,8 +86,8 @@ def _fetch_spec_rows_for_date(
     }
     matched = matched.rename(columns=rename_map)
     for field in ("open", "high", "low", "close", "volume"):
-        matched[field] = pd.to_numeric(matched.get(field), errors="coerce")
-    matched = matched.dropna(subset=["open", "high", "low", "close"])
+        matched.loc[:, field] = pd.to_numeric(matched.get(field), errors="coerce")
+    matched = matched.dropna(subset=["open", "high", "low", "close"]).copy()
     if matched.empty:
         return pd.DataFrame()
 
@@ -148,6 +148,6 @@ def benchmark_lookup(frame: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["symbol_id", "timestamp", "benchmark_close"])
     subset = frame[["symbol_id", "timestamp", "close"]].copy()
     subset.rename(columns={"close": "benchmark_close"}, inplace=True)
-    subset["timestamp"] = pd.to_datetime(subset["timestamp"])
-    subset = subset.sort_values(["symbol_id", "timestamp"])
+    subset.loc[:, "timestamp"] = pd.to_datetime(subset["timestamp"])
+    subset = subset.sort_values(["symbol_id", "timestamp"]).copy()
     return subset

@@ -107,8 +107,8 @@ class LightGBMAlphaEngine(AlphaEngine):
         feature_cols = self._feature_cols(train_df)
 
         ordered = train_df.copy()
-        ordered["timestamp"] = pd.to_datetime(ordered["timestamp"])
-        ordered = ordered.sort_values(["timestamp", "symbol_id"]).reset_index(drop=True)
+        ordered.loc[:, "timestamp"] = pd.to_datetime(ordered["timestamp"])
+        ordered = ordered.sort_values(["timestamp", "symbol_id"]).reset_index(drop=True).copy()
         X = ordered[feature_cols].copy()
         y = ordered[target_col].copy()
         X = X.replace([np.inf, -np.inf], np.nan).fillna(0)

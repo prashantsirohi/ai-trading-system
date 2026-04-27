@@ -413,11 +413,11 @@ def load_rank_history_for_symbols(
         if run_id and run_id not in run_id_to_order:
             run_id_to_order[run_id] = idx
 
-    history_df["symbol_id"] = history_df["symbol_id"].astype(str).str.upper()
-    history_df["run_order"] = history_df["run_id"].map(run_id_to_order).fillna(-1).astype(int)
-    history_df["run_date"] = history_df["run_id"].map(_run_date_from_run_id)
-    history_df["run_date"] = pd.to_datetime(history_df["run_date"], errors="coerce")
-    history_df = history_df.sort_values(["run_order", "run_id", "rank_position"]).reset_index(drop=True)
+    history_df.loc[:, "symbol_id"] = history_df["symbol_id"].astype(str).str.upper()
+    history_df.loc[:, "run_order"] = history_df["run_id"].map(run_id_to_order).fillna(-1).astype(int)
+    history_df.loc[:, "run_date"] = history_df["run_id"].map(_run_date_from_run_id)
+    history_df.loc[:, "run_date"] = pd.to_datetime(history_df["run_date"], errors="coerce")
+    history_df = history_df.sort_values(["run_order", "run_id", "rank_position"]).reset_index(drop=True).copy()
     return history_df
 
 
@@ -468,18 +468,18 @@ def load_sector_history_for_sectors(
         rank_col = "RS_rank" if "RS_rank" in frame.columns else None
 
         working = frame.copy()
-        working["sector_name"] = working[sector_col].astype(str).str.strip()
-        working = working[working["sector_name"].map(_normalize_lookup_key).isin(target_keys)]
+        working.loc[:, "sector_name"] = working[sector_col].astype(str).str.strip()
+        working = working.loc[working["sector_name"].map(_normalize_lookup_key).isin(target_keys)].copy()
         if working.empty:
             continue
 
         if rank_col is None:
             sort_col = rs_col if rs_col else sector_col
             ascending = False if rs_col else True
-            working = working.sort_values(sort_col, ascending=ascending, na_position="last").reset_index(drop=True)
-            working["rank_position"] = working.index + 1
+            working = working.sort_values(sort_col, ascending=ascending, na_position="last").reset_index(drop=True).copy()
+            working.loc[:, "rank_position"] = working.index + 1
         else:
-            working["rank_position"] = pd.to_numeric(working[rank_col], errors="coerce")
+            working.loc[:, "rank_position"] = pd.to_numeric(working[rank_col], errors="coerce")
 
         for _, row in working.iterrows():
             rows.append(
@@ -499,8 +499,8 @@ def load_sector_history_for_sectors(
         return pd.DataFrame(
             columns=["run_id", "sector_name", "rs_value", "momentum", "rank_position", "run_order", "run_date"]
         )
-    history_df["sector_name"] = history_df["sector_name"].astype(str)
-    history_df = history_df.sort_values(["sector_name", "run_order", "run_id"]).reset_index(drop=True)
+    history_df.loc[:, "sector_name"] = history_df["sector_name"].astype(str)
+    history_df = history_df.sort_values(["sector_name", "run_order", "run_id"]).reset_index(drop=True).copy()
     dated_history = history_df[history_df["run_date"].notna()].copy()
     undated_history = history_df[history_df["run_date"].isna()].copy()
     if not dated_history.empty:
@@ -702,8 +702,8 @@ def load_trade_report(project_root: str) -> Dict[str, object]:
             "fills": pd.DataFrame(),
         }
 
-    fills["filled_at"] = pd.to_datetime(fills["filled_at"], errors="coerce")
-    fills = fills.sort_values(["filled_at", "fill_id"]).reset_index(drop=True)
+    fills.loc[:, "filled_at"] = pd.to_datetime(fills["filled_at"], errors="coerce")
+    fills = fills.sort_values(["filled_at", "fill_id"]).reset_index(drop=True).copy()
     latest_prices = _load_latest_prices(project_root)
     notes_lookup = {
         str(row.get("trade_ref")): row
@@ -862,11 +862,11 @@ def load_portfolio_symbol_details(project_root: str) -> pd.DataFrame:
         return pd.DataFrame(columns=["symbol_id", "company_name", "sector_name", "industry_group"])
     if frame.empty:
         return frame
-    frame["symbol_id"] = frame["symbol_id"].astype(str).str.upper().str.strip()
+    frame.loc[:, "symbol_id"] = frame["symbol_id"].astype(str).str.upper().str.strip()
     for column in ("company_name", "sector_name", "industry_group"):
         if column not in frame.columns:
-            frame[column] = ""
-        frame[column] = frame[column].fillna("").astype(str).str.strip()
+            frame.loc[:, column] = ""
+        frame.loc[:, column] = frame[column].fillna("").astype(str).str.strip()
     return frame
 
 
@@ -883,29 +883,29 @@ def build_portfolio_candidate_frame(
     if ranked is None or ranked.empty:
         return pd.DataFrame()
 
-    ranked["symbol_id"] = ranked["symbol_id"].astype(str).str.upper().str.strip()
+    ranked.loc[:, "symbol_id"] = ranked["symbol_id"].astype(str).str.upper().str.strip()
     if "rank_position" not in ranked.columns:
         if "composite_score" in ranked.columns:
-            ranked = ranked.sort_values("composite_score", ascending=False).reset_index(drop=True)
-            ranked["rank_position"] = ranked.index + 1
+            ranked = ranked.sort_values("composite_score", ascending=False).reset_index(drop=True).copy()
+            ranked.loc[:, "rank_position"] = ranked.index + 1
         else:
-            ranked["rank_position"] = range(1, len(ranked) + 1)
+            ranked.loc[:, "rank_position"] = range(1, len(ranked) + 1)
 
     details = load_portfolio_symbol_details(project_root)
     if not details.empty:
-        ranked = ranked.merge(details, on="symbol_id", how="left")
+        ranked = ranked.merge(details, on="symbol_id", how="left").copy()
     else:
-        ranked["company_name"] = ranked.get("company_name", "")
-        ranked["industry_group"] = ranked.get("industry_group", "")
+        ranked.loc[:, "company_name"] = ranked.get("company_name", "")
+        ranked.loc[:, "industry_group"] = ranked.get("industry_group", "")
 
     if "company_name_x" in ranked.columns or "company_name_y" in ranked.columns:
-        ranked["company_name"] = (
+        ranked.loc[:, "company_name"] = (
             ranked.get("company_name_y")
             .combine_first(ranked.get("company_name_x"))
             .fillna(ranked.get("company_name", ""))
         )
     if "industry_group_x" in ranked.columns or "industry_group_y" in ranked.columns:
-        ranked["industry_group"] = (
+        ranked.loc[:, "industry_group"] = (
             ranked.get("industry_group_y")
             .combine_first(ranked.get("industry_group_x"))
             .fillna(ranked.get("industry_group", ""))
@@ -924,12 +924,12 @@ def build_portfolio_candidate_frame(
         sector_primary = ranked.get("sector", "")
     elif "sector" in ranked.columns:
         sector_primary = sector_primary.combine_first(ranked["sector"])
-    ranked["sector_name"] = pd.Series(sector_primary, index=ranked.index).fillna("").astype(str).str.strip()
-    ranked["company_name"] = ranked.get("company_name", "").fillna("").astype(str).str.strip()
-    ranked["industry_group"] = ranked.get("industry_group", "").fillna("").astype(str).str.strip()
+    ranked.loc[:, "sector_name"] = pd.Series(sector_primary, index=ranked.index).fillna("").astype(str).str.strip()
+    ranked.loc[:, "company_name"] = ranked.get("company_name", "").fillna("").astype(str).str.strip()
+    ranked.loc[:, "industry_group"] = ranked.get("industry_group", "").fillna("").astype(str).str.strip()
 
     if breakout is not None and not breakout.empty and "symbol_id" in breakout.columns:
-        breakout["symbol_id"] = breakout["symbol_id"].astype(str).str.upper().str.strip()
+        breakout.loc[:, "symbol_id"] = breakout["symbol_id"].astype(str).str.upper().str.strip()
         keep_cols = [
             "symbol_id",
             "breakout_tag",
@@ -945,7 +945,7 @@ def build_portfolio_candidate_frame(
             breakout[keep_cols].drop_duplicates(subset=["symbol_id"]),
             on="symbol_id",
             how="left",
-        )
+        ).copy()
 
     for column in (
         "breakout_tag",
@@ -957,17 +957,17 @@ def build_portfolio_candidate_frame(
         "filter_reason",
     ):
         if column not in ranked.columns:
-            ranked[column] = ""
+            ranked.loc[:, column] = ""
 
-    ranked["has_breakout"] = ranked["breakout_tag"].fillna("").astype(str).ne("")
-    ranked["tradingview_url"] = ranked["symbol_id"].map(
+    ranked.loc[:, "has_breakout"] = ranked["breakout_tag"].fillna("").astype(str).ne("")
+    ranked.loc[:, "tradingview_url"] = ranked["symbol_id"].map(
         lambda value: f"https://www.tradingview.com/chart/?symbol=NSE%3A{value}"
     )
     if "close" in ranked.columns:
-        ranked["close"] = pd.to_numeric(ranked["close"], errors="coerce")
-    ranked["composite_score"] = pd.to_numeric(ranked.get("composite_score"), errors="coerce")
-    ranked["breakout_score"] = pd.to_numeric(ranked.get("breakout_score"), errors="coerce")
-    return ranked.sort_values(["rank_position", "composite_score"], ascending=[True, False], na_position="last").reset_index(drop=True)
+        ranked.loc[:, "close"] = pd.to_numeric(ranked["close"], errors="coerce")
+    ranked.loc[:, "composite_score"] = pd.to_numeric(ranked.get("composite_score"), errors="coerce")
+    ranked.loc[:, "breakout_score"] = pd.to_numeric(ranked.get("breakout_score"), errors="coerce")
+    return ranked.sort_values(["rank_position", "composite_score"], ascending=[True, False], na_position="last").reset_index(drop=True).copy()
 
 
 def load_portfolio_workspace_report(
@@ -1036,7 +1036,7 @@ def load_portfolio_workspace_report(
                 }
             )
             enriched_rows.append(row)
-        open_df = pd.DataFrame(enriched_rows).sort_values("unrealized_pnl", ascending=False, na_position="last").reset_index(drop=True)
+        open_df = pd.DataFrame(enriched_rows).sort_values("unrealized_pnl", ascending=False, na_position="last").reset_index(drop=True).copy()
 
     if not closed_df.empty:
         closed_rows: list[dict[str, Any]] = []
@@ -1055,33 +1055,33 @@ def load_portfolio_workspace_report(
                 }
             )
             closed_rows.append(row)
-        closed_df = pd.DataFrame(closed_rows).sort_values("filled_at", ascending=False, na_position="last").reset_index(drop=True)
+        closed_df = pd.DataFrame(closed_rows).sort_values("filled_at", ascending=False, na_position="last").reset_index(drop=True).copy()
 
     journal_frames: list[pd.DataFrame] = []
     if not open_df.empty:
         open_journal = open_df.copy()
-        open_journal["journal_status"] = "OPEN"
-        open_journal["pnl_value"] = open_journal.get("unrealized_pnl")
-        open_journal["qty"] = open_journal.get("quantity")
+        open_journal.loc[:, "journal_status"] = "OPEN"
+        open_journal.loc[:, "pnl_value"] = open_journal.get("unrealized_pnl")
+        open_journal.loc[:, "qty"] = open_journal.get("quantity")
         journal_frames.append(open_journal)
     if not closed_df.empty:
         closed_journal = closed_df.copy()
-        closed_journal["journal_status"] = "CLOSED"
-        closed_journal["pnl_value"] = closed_journal.get("realized_pnl")
-        closed_journal["qty"] = closed_journal.get("closed_quantity")
+        closed_journal.loc[:, "journal_status"] = "CLOSED"
+        closed_journal.loc[:, "pnl_value"] = closed_journal.get("realized_pnl")
+        closed_journal.loc[:, "qty"] = closed_journal.get("closed_quantity")
         journal_frames.append(closed_journal)
     journal_df = pd.concat(journal_frames, ignore_index=True, sort=False) if journal_frames else pd.DataFrame()
     if not journal_df.empty:
         timestamp_col = "filled_at" if "filled_at" in journal_df.columns else "entry_date"
-        journal_df = journal_df.sort_values(timestamp_col, ascending=False, na_position="last").reset_index(drop=True)
+        journal_df = journal_df.sort_values(timestamp_col, ascending=False, na_position="last").reset_index(drop=True).copy()
 
     realized_curve = pd.DataFrame()
     if not closed_df.empty and "filled_at" in closed_df.columns and "realized_pnl" in closed_df.columns:
         realized_curve = closed_df.copy()
-        realized_curve["filled_at"] = pd.to_datetime(realized_curve["filled_at"], errors="coerce")
-        realized_curve = realized_curve.dropna(subset=["filled_at"]).sort_values("filled_at").reset_index(drop=True)
+        realized_curve.loc[:, "filled_at"] = pd.to_datetime(realized_curve["filled_at"], errors="coerce")
+        realized_curve = realized_curve.dropna(subset=["filled_at"]).sort_values("filled_at").reset_index(drop=True).copy()
         if not realized_curve.empty:
-            realized_curve["cumulative_realized_pnl"] = realized_curve["realized_pnl"].cumsum()
+            realized_curve.loc[:, "cumulative_realized_pnl"] = realized_curve["realized_pnl"].cumsum()
 
     return {
         "summary": trade_report.get("summary", {}),

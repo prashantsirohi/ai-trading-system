@@ -31,7 +31,7 @@ def _to_numeric(df: pd.DataFrame, columns: list[str], places: int) -> pd.DataFra
     out = df.copy()
     for col in columns:
         if col in out.columns:
-            out[col] = pd.to_numeric(out[col], errors="coerce").round(places)
+            out.loc[:, col] = pd.to_numeric(out[col], errors="coerce").round(places)
     return out
 
 
@@ -50,7 +50,7 @@ def _minimal_sector_frame(df: pd.DataFrame) -> pd.DataFrame:
     out = _to_numeric(out, ["Rank"], 0)
     out = _to_numeric(out, ["RS", "Momentum"], 2)
     out = out.sort_values(["Rank", "RS"], ascending=[True, False], na_position="last")
-    return out.reset_index(drop=True)
+    return out.reset_index(drop=True).copy()
 
 
 def _minimal_rank_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -66,8 +66,8 @@ def _minimal_rank_frame(df: pd.DataFrame) -> pd.DataFrame:
     )
     out = _to_numeric(out, ["Score", "RS", "Close"], 2)
     out = out.sort_values(["Score", "RS"], ascending=[False, False], na_position="last")
-    out = out.head(25).reset_index(drop=True)
-    out["TradingView"] = out["Symbol"].astype(str).map(
+    out = out.head(25).reset_index(drop=True).copy()
+    out.loc[:, "TradingView"] = out["Symbol"].astype(str).map(
         lambda symbol: f"https://www.tradingview.com/chart/?symbol=NSE:{symbol}"
         if symbol and symbol.lower() != "nan"
         else ""
@@ -91,8 +91,8 @@ def _minimal_breakout_frame(df: pd.DataFrame) -> pd.DataFrame:
     # Explicitly keep all rows; no breakout-state filtering.
     sort_cols = [c for c in ["Score", "Symbol"] if c in out.columns]
     out = out.sort_values(sort_cols, ascending=[False, True], na_position="last")
-    out = out.reset_index(drop=True)
-    out["TradingView"] = out["Symbol"].astype(str).map(
+    out = out.reset_index(drop=True).copy()
+    out.loc[:, "TradingView"] = out["Symbol"].astype(str).map(
         lambda symbol: f"https://www.tradingview.com/chart/?symbol=NSE:{symbol}"
         if symbol and symbol.lower() != "nan"
         else ""

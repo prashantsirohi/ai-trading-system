@@ -38,7 +38,7 @@ def add_technical_baseline_scores(df: pd.DataFrame) -> pd.DataFrame:
         enriched.get("sector_rs_pct", 50.0).fillna(50.0) * 0.6
         + enriched.get("stock_vs_sector_pct", 50.0).fillna(50.0) * 0.4
     )
-    enriched["technical_score"] = (
+    enriched.loc[:, "technical_score"] = (
         enriched.get("rel_strength_pct", 50.0).fillna(50.0) * weights["relative_strength"]
         + enriched.get("vol_intensity_pct", 50.0).fillna(50.0) * weights["volume_intensity"]
         + enriched.get("trend_score_pct", 50.0).fillna(50.0) * weights["trend_persistence"]
@@ -51,14 +51,14 @@ def add_technical_baseline_scores(df: pd.DataFrame) -> pd.DataFrame:
 
 def _top_decile_by_date(df: pd.DataFrame, score_col: str, target_col: str, return_col: str) -> Dict[str, float]:
     scored = df.copy()
-    scored = scored.sort_values(["timestamp", score_col], ascending=[True, False])
-    scored["_top_n"] = scored.groupby("timestamp")["symbol_id"].transform(
+    scored = scored.sort_values(["timestamp", score_col], ascending=[True, False]).copy()
+    scored.loc[:, "_top_n"] = scored.groupby("timestamp")["symbol_id"].transform(
         lambda series: max(1, int(np.ceil(len(series) * 0.1)))
     )
-    scored["_rank_in_day"] = scored.groupby("timestamp").cumcount() + 1
-    selected = scored[scored["_rank_in_day"] <= scored["_top_n"]].drop(
+    scored.loc[:, "_rank_in_day"] = scored.groupby("timestamp").cumcount() + 1
+    selected = scored.loc[scored["_rank_in_day"] <= scored["_top_n"]].drop(
         columns=["_top_n", "_rank_in_day"]
-    )
+    ).copy()
     if selected.empty:
         return {"precision_at_10pct": 0.0, "avg_return_top_10pct": 0.0}
     return {
@@ -88,8 +88,8 @@ def walk_forward_compare(
 
     df = add_technical_baseline_scores(dataset_df)
     df = df.copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df["year"] = df["timestamp"].dt.year
+    df.loc[:, "timestamp"] = pd.to_datetime(df["timestamp"])
+    df.loc[:, "year"] = df["timestamp"].dt.year
     target_col = f"target_{horizon}d"
     return_col = f"return_{horizon}d"
     years = sorted(df["year"].dropna().unique().tolist())
@@ -113,9 +113,9 @@ def walk_forward_compare(
             show_progress=False,
         )
         eval_metrics = engine.evaluate_frame(valid_df, model=model, horizon=horizon)
-        scored_valid = engine.score_frame(valid_df, model=model, horizon=horizon)
-        scored_valid["ml_score_pct"] = scored_valid["probability"].rank(pct=True) * 100
-        scored_valid["blended_score"] = (
+        scored_valid = engine.score_frame(valid_df, model=model, horizon=horizon).copy()
+        scored_valid.loc[:, "ml_score_pct"] = scored_valid["probability"].rank(pct=True) * 100
+        scored_valid.loc[:, "blended_score"] = (
             scored_valid["technical_score"] * blend_weight_technical
             + scored_valid["ml_score_pct"] * blend_weight_ml
         )

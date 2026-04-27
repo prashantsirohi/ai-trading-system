@@ -19,9 +19,9 @@ class _DummyModel:
 class _DummyScorer:
     def score_frame(self, dataset_df, *, model, horizon: int):
         scored = dataset_df.copy()
-        scored["probability"] = model.predict_proba(scored[model.feature_names_])[:, 1]
-        scored["prediction"] = (scored["probability"] >= 0.5).astype(int)
-        scored["horizon"] = horizon
+        scored.loc[:, "probability"] = model.predict_proba(scored[model.feature_names_])[:, 1]
+        scored.loc[:, "prediction"] = (scored["probability"] >= 0.5).astype(int)
+        scored.loc[:, "horizon"] = horizon
         return scored
 
 

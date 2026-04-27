@@ -178,16 +178,17 @@ def build_dashboard_strategy_returns(
         if prev_df.empty or next_df.empty:
             continue
 
-        prev_df["symbol_id"] = prev_df["symbol_id"].astype(str)
-        next_df["symbol_id"] = next_df["symbol_id"].astype(str)
-        prev_df["close"] = pd.to_numeric(prev_df["close"], errors="coerce")
-        next_df["close"] = pd.to_numeric(next_df["close"], errors="coerce")
-        prev_df["composite_score"] = pd.to_numeric(prev_df["composite_score"], errors="coerce")
+        prev_df.loc[:, "symbol_id"] = prev_df["symbol_id"].astype(str)
+        next_df.loc[:, "symbol_id"] = next_df["symbol_id"].astype(str)
+        prev_df.loc[:, "close"] = pd.to_numeric(prev_df["close"], errors="coerce")
+        next_df.loc[:, "close"] = pd.to_numeric(next_df["close"], errors="coerce")
+        prev_df.loc[:, "composite_score"] = pd.to_numeric(prev_df["composite_score"], errors="coerce")
 
         prev_top = (
             prev_df.dropna(subset=["symbol_id", "close", "composite_score"])
             .sort_values("composite_score", ascending=False)
             .head(max(1, int(top_n)))
+            .copy()
         )
         if prev_top.empty:
             continue
@@ -196,9 +197,9 @@ def build_dashboard_strategy_returns(
             next_df.rename(columns={"close": "close_next"}),
             on="symbol_id",
             how="inner",
-        )
-        merged = merged.dropna(subset=["close", "close_next"])
-        merged = merged[merged["close"] > 0]
+        ).copy()
+        merged = merged.dropna(subset=["close", "close_next"]).copy()
+        merged = merged.loc[merged["close"] > 0].copy()
         if merged.empty:
             continue
 
@@ -224,7 +225,7 @@ def build_dashboard_strategy_returns(
     if detail_df.empty:
         return pd.Series(dtype=float), detail_df
 
-    detail_df = detail_df.sort_values("date").reset_index(drop=True)
+    detail_df = detail_df.sort_values("date").reset_index(drop=True).copy()
     returns = detail_df.set_index("date")["return"].astype(float)
     returns.index = pd.to_datetime(returns.index)
     returns.name = "dashboard_topn_returns"

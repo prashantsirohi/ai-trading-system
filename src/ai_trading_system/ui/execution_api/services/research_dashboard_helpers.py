@@ -93,7 +93,7 @@ def build_factor_attribution_frame(row: pd.Series, weights: Dict[str, float]) ->
 
     frame = pd.DataFrame(records)
     total = float(frame["contribution_points"].sum()) if not frame.empty else 0.0
-    frame["contribution_pct"] = (
+    frame.loc[:, "contribution_pct"] = (
         (frame["contribution_points"] / total) * 100.0 if total > 0 else 0.0
     ).round(2)
     return frame
@@ -263,7 +263,7 @@ def prepare_sector_rotation_frame(
 
     if "Sector" in prepared.columns:
         prepared = prepared[prepared["Sector"].notna()].copy()
-        prepared["Sector"] = prepared["Sector"].astype(str).str.strip()
+        prepared.loc[:, "Sector"] = prepared["Sector"].astype(str).str.strip()
         prepared = prepared[
             ~prepared["Sector"].str.lower().isin({"", "nan", "none", "null", "na"})
         ]
@@ -281,37 +281,37 @@ def prepare_sector_rotation_frame(
     ]
     for column in numeric_cols:
         if column in prepared.columns:
-            prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+            prepared.loc[:, column] = pd.to_numeric(prepared[column], errors="coerce")
 
     if "RS" in prepared.columns and "RS_20" in prepared.columns:
-        prepared["rs_change_20"] = prepared["RS"] - prepared["RS_20"]
+        prepared.loc[:, "rs_change_20"] = prepared["RS"] - prepared["RS_20"]
     if "RS" in prepared.columns and "RS_50" in prepared.columns:
-        prepared["rs_change_50"] = prepared["RS"] - prepared["RS_50"]
+        prepared.loc[:, "rs_change_50"] = prepared["RS"] - prepared["RS_50"]
 
     if stock_scan_df is not None and not stock_scan_df.empty:
         scan = stock_scan_df.copy()
         scan_sector_col = _find_column(scan, ("sector", "Sector", "sector_name"))
         scan_category_col = _find_column(scan, ("category", "Category", "signal", "action"))
         if scan_sector_col and scan_category_col:
-            scan["sector"] = scan[scan_sector_col].astype(str).str.strip()
-            scan["is_buy"] = scan[scan_category_col].astype(str).str.upper().isin({"BUY", "STRONG BUY"})
+            scan.loc[:, "sector"] = scan[scan_sector_col].astype(str).str.strip()
+            scan.loc[:, "is_buy"] = scan[scan_category_col].astype(str).str.upper().isin({"BUY", "STRONG BUY"})
             breadth = (
                 scan.groupby("sector", dropna=False)["is_buy"]
                 .agg(["sum", "count"])
                 .rename(columns={"sum": "buy_count", "count": "scan_count"})
                 .reset_index()
             )
-            breadth["breadth_buy_pct"] = (breadth["buy_count"] / breadth["scan_count"] * 100.0).round(2)
+            breadth.loc[:, "breadth_buy_pct"] = (breadth["buy_count"] / breadth["scan_count"] * 100.0).round(2)
 
             sector_name_col = "Sector" if "Sector" in prepared.columns else None
             if sector_name_col is not None:
-                breadth["sector"] = breadth["sector"].astype(str).str.strip()
+                breadth.loc[:, "sector"] = breadth["sector"].astype(str).str.strip()
                 prepared = prepared.merge(
                     breadth[["sector", "breadth_buy_pct"]],
                     left_on=sector_name_col,
                     right_on="sector",
                     how="left",
-                ).drop(columns=["sector"], errors="ignore")
+                ).drop(columns=["sector"], errors="ignore").copy()
 
     sort_col = None
     for candidate in ("RS_rank", "RS", "Momentum"):

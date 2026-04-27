@@ -117,9 +117,9 @@ def prepare_shadow_history_dataset(
         exchange=exchange,
         horizons=[],
     ).copy()
-    raw["timestamp"] = pd.to_datetime(raw["timestamp"])
+    raw.loc[:, "timestamp"] = pd.to_datetime(raw["timestamp"])
     enriched = builder._enrich_features(raw, horizon=5)
-    enriched["timestamp"] = pd.to_datetime(enriched["timestamp"])
+    enriched.loc[:, "timestamp"] = pd.to_datetime(enriched["timestamp"])
     enriched = add_technical_baseline_scores(enriched)
     prediction_mask = (
         enriched["timestamp"].dt.normalize() >= prediction_start_ts
@@ -154,32 +154,32 @@ def build_shadow_overlay(
             "technical_score",
         ]
     ].copy()
-    overlay["ml_5d_prob"] = scored_5d["probability"].to_numpy()
-    overlay["ml_20d_prob"] = scored_20d["probability"].to_numpy()
-    overlay["ml_5d_pct"] = overlay["ml_5d_prob"].rank(pct=True) * 100
-    overlay["ml_20d_pct"] = overlay["ml_20d_prob"].rank(pct=True) * 100
-    overlay["blend_5d_score"] = (
+    overlay.loc[:, "ml_5d_prob"] = scored_5d["probability"].to_numpy()
+    overlay.loc[:, "ml_20d_prob"] = scored_20d["probability"].to_numpy()
+    overlay.loc[:, "ml_5d_pct"] = overlay["ml_5d_prob"].rank(pct=True) * 100
+    overlay.loc[:, "ml_20d_pct"] = overlay["ml_20d_prob"].rank(pct=True) * 100
+    overlay.loc[:, "blend_5d_score"] = (
         overlay["technical_score"] * float(technical_weight)
         + overlay["ml_5d_pct"] * float(ml_weight)
     )
-    overlay["blend_20d_score"] = (
+    overlay.loc[:, "blend_20d_score"] = (
         overlay["technical_score"] * float(technical_weight)
         + overlay["ml_20d_pct"] * float(ml_weight)
     )
 
-    overlay["technical_rank"] = _descending_rank(overlay["technical_score"])
-    overlay["ml_5d_rank"] = _descending_rank(overlay["ml_5d_prob"])
-    overlay["ml_20d_rank"] = _descending_rank(overlay["ml_20d_prob"])
-    overlay["blend_5d_rank"] = _descending_rank(overlay["blend_5d_score"])
-    overlay["blend_20d_rank"] = _descending_rank(overlay["blend_20d_score"])
+    overlay.loc[:, "technical_rank"] = _descending_rank(overlay["technical_score"])
+    overlay.loc[:, "ml_5d_rank"] = _descending_rank(overlay["ml_5d_prob"])
+    overlay.loc[:, "ml_20d_rank"] = _descending_rank(overlay["ml_20d_prob"])
+    overlay.loc[:, "blend_5d_rank"] = _descending_rank(overlay["blend_5d_score"])
+    overlay.loc[:, "blend_20d_rank"] = _descending_rank(overlay["blend_20d_score"])
 
-    overlay["technical_top_decile"] = _top_decile_flag(overlay["technical_rank"])
-    overlay["ml_5d_top_decile"] = _top_decile_flag(overlay["ml_5d_rank"])
-    overlay["ml_20d_top_decile"] = _top_decile_flag(overlay["ml_20d_rank"])
-    overlay["blend_5d_top_decile"] = _top_decile_flag(overlay["blend_5d_rank"])
-    overlay["blend_20d_top_decile"] = _top_decile_flag(overlay["blend_20d_rank"])
+    overlay.loc[:, "technical_top_decile"] = _top_decile_flag(overlay["technical_rank"])
+    overlay.loc[:, "ml_5d_top_decile"] = _top_decile_flag(overlay["ml_5d_rank"])
+    overlay.loc[:, "ml_20d_top_decile"] = _top_decile_flag(overlay["ml_20d_rank"])
+    overlay.loc[:, "blend_5d_top_decile"] = _top_decile_flag(overlay["blend_5d_rank"])
+    overlay.loc[:, "blend_20d_top_decile"] = _top_decile_flag(overlay["blend_20d_rank"])
 
-    return overlay.sort_values("technical_rank").reset_index(drop=True)
+    return overlay.sort_values("technical_rank").reset_index(drop=True).copy()
 
 
 def overlay_rows_for_registry(
@@ -221,7 +221,7 @@ def load_operational_price_history(
         ).fetchdf()
     finally:
         conn.close()
-    prices["trade_date"] = pd.to_datetime(prices["trade_date"]).dt.normalize()
+    prices.loc[:, "trade_date"] = pd.to_datetime(prices["trade_date"]).dt.normalize()
     return prices
 
 
@@ -237,13 +237,15 @@ def compute_matured_outcomes(
         return []
 
     prices = price_history.copy()
-    prices["trade_date"] = pd.to_datetime(prices["trade_date"]).dt.normalize()
-    prices = prices.sort_values(["symbol_id", "exchange", "trade_date"]).reset_index(drop=True)
-    prices["future_date"] = prices.groupby(["symbol_id", "exchange"])["trade_date"].shift(-int(horizon))
-    prices["future_close"] = prices.groupby(["symbol_id", "exchange"])["close"].shift(-int(horizon))
+    prices.loc[:, "trade_date"] = pd.to_datetime(prices["trade_date"]).dt.normalize()
+    prices = prices.sort_values(["symbol_id", "exchange", "trade_date"]).reset_index(drop=True).copy()
+    prices.loc[:, "future_date"] = prices.groupby(["symbol_id", "exchange"])["trade_date"].shift(-int(horizon))
+    prices.loc[:, "future_close"] = prices.groupby(["symbol_id", "exchange"])["close"].shift(-int(horizon))
 
     prediction_df = pd.DataFrame(prediction_rows).copy()
-    prediction_df["prediction_date"] = pd.to_datetime(prediction_df["prediction_date"]).dt.normalize()
+    prediction_df = prediction_df.assign(
+        prediction_date=pd.to_datetime(prediction_df["prediction_date"]).dt.normalize()
+    )
 
     merged = prediction_df.merge(
         prices,
@@ -251,13 +253,13 @@ def compute_matured_outcomes(
         right_on=["symbol_id", "exchange", "trade_date"],
         how="left",
         suffixes=("", "_price"),
-    )
+    ).copy()
     matured = merged.dropna(subset=["future_close"]).copy()
     if matured.empty:
         return []
 
-    matured["realized_return"] = matured["future_close"] / matured["close"] - 1.0
-    matured["hit"] = matured["realized_return"] > 0
+    matured.loc[:, "realized_return"] = matured["future_close"] / matured["close"] - 1.0
+    matured.loc[:, "hit"] = matured["realized_return"] > 0
 
     rows: List[Dict[str, Any]] = []
     for row in matured.to_dict(orient="records"):
