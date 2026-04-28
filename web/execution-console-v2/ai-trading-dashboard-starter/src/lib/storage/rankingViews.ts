@@ -23,7 +23,7 @@ export interface SavedView {
   builtin?: boolean;
 }
 
-export const SCORE_BOUNDS: [number, number] = [0, 10];
+export const SCORE_BOUNDS: [number, number] = [0, 100];
 export const RS_BOUNDS: [number, number] = [0, 100];
 
 export const DEFAULT_FILTER_STATE: RankingFilterState = {
@@ -51,9 +51,9 @@ export const SEED_SAVED_VIEWS: SavedView[] = [
   },
   {
     id: 'high-score',
-    name: 'Score ≥ 7.5',
+    name: 'Score ≥ 75',
     builtin: true,
-    state: { ...DEFAULT_FILTER_STATE, scoreRange: [7.5, 10] },
+    state: { ...DEFAULT_FILTER_STATE, scoreRange: [75, 100] },
   },
 ];
 

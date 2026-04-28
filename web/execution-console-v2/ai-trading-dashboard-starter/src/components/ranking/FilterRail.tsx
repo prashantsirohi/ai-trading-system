@@ -215,10 +215,10 @@ export default function FilterRail({
         <RangeSlider
           min={SCORE_BOUNDS[0]}
           max={SCORE_BOUNDS[1]}
-          step={0.1}
+          step={1}
           value={state.scoreRange}
           onChange={(next) => onChange({ ...state, scoreRange: next })}
-          format={(v) => v.toFixed(2)}
+          format={(v) => v.toFixed(0)}
         />
       </RailSection>
 

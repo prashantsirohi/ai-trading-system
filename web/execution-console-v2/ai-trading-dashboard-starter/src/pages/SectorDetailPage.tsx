@@ -7,11 +7,10 @@
  * technical indicator filter rail (12 indicators in 5 groups), active
  * filter chips, and a constituent table with live indicator badges.
  *
- * Constituent data comes from the mock in lib/mock/sectorConstituents.ts
- * until a /api/sectors/:id endpoint ships. Sector headline stats are
- * sourced from useSectors() which is already loaded on the parent page.
+ * Constituent data is sourced from the live ranking endpoint filtered by
+ * sector name. Sector headline stats come from useSectors().
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 
 import PageFrame from '@/components/common/PageFrame';
@@ -21,7 +20,8 @@ import { CardSkeleton } from '@/components/common/LoadingSkeleton';
 import TechFilterRail, { INDICATOR_GROUPS, type IndicatorKey } from '@/components/sectors/TechFilterRail';
 import ConstituentTable from '@/components/sectors/ConstituentTable';
 import { useSectors } from '@/lib/queries';
-import { getConstituents } from '@/lib/mock/sectorConstituents';
+import type { Constituent } from '@/lib/mock/sectorConstituents';
+import { getSectorConstituents } from '@/lib/api/sectors';
 import { cn } from '@/lib/utils/cn';
 
 function quadrantPill(quadrant: string) {
@@ -43,10 +43,17 @@ export default function SectorDetailPage() {
     (s) => s.sector.toLowerCase() === sectorName.toLowerCase(),
   );
 
-  const allConstituents = useMemo(
-    () => getConstituents(sectorName || ''),
-    [sectorName],
-  );
+  // ── Live constituent data from ranking API ────────────────────────────────
+  const [allConstituents, setAllConstituents] = useState<Constituent[]>([]);
+  const [constituentsLoading, setConstituentsLoading] = useState(true);
+
+  useEffect(() => {
+    if (!sectorName) return;
+    setConstituentsLoading(true);
+    getSectorConstituents(sectorName)
+      .then(setAllConstituents)
+      .finally(() => setConstituentsLoading(false));
+  }, [sectorName]);
 
   // ── Filter rail state ─────────────────────────────────────────────────────
   const [activeFilters, setActiveFilters] = useState<Set<IndicatorKey>>(new Set());
@@ -85,7 +92,7 @@ export default function SectorDetailPage() {
     ? +(allConstituents.reduce((s, r) => s + r.chgPct, 0) / allConstituents.length).toFixed(2)
     : 0;
 
-  if (sectorsQuery.isLoading) {
+  if (sectorsQuery.isLoading || constituentsLoading) {
     return (
       <PageFrame title={sectorName || 'Sector'} description="Sector detail">
         <CardSkeleton />
