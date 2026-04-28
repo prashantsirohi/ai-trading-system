@@ -12,6 +12,8 @@ def apply_rank_eligibility(
     min_liquidity_score: float = 0.20,
     stage2_gate_enabled: bool = False,
     stage2_min_score: float = 70.0,
+    weekly_stage_gate_enabled: bool = False,
+    weekly_stage_min_confidence: float = 0.6,
 ) -> pd.DataFrame:
     """Mark explicit ranking eligibility and rejection reasons.
 
@@ -31,6 +33,13 @@ def apply_rank_eligibility(
     stage2_min_score:
         Legacy fallback score threshold when structural Stage 2 columns are
         unavailable.
+    weekly_stage_gate_enabled:
+        When *True*, symbols whose ``weekly_stage_label`` is not ``S2`` (or
+        that have a confirmed snapshot below ``weekly_stage_min_confidence``)
+        are marked ineligible.  Symbols with no snapshot pass through so the
+        ranker keeps working during backfill catch-up.
+    weekly_stage_min_confidence:
+        Minimum ``weekly_stage_confidence`` required to accept an S2 label.
     """
     output = frame.copy()
     if output.empty:
@@ -85,5 +94,30 @@ def apply_rank_eligibility(
             else:
                 fail_reason = default_reason
             output.at[idx, "rejection_reasons"] = output.at[idx, "rejection_reasons"] + [f"stage2:{fail_reason}"]
+
+    # ── Weekly stage gate (higher-timeframe regime check) ─────────────────
+    # Column `weekly_stage_label` is joined by StockRanker._apply_weekly_stage_gate
+    # before eligibility runs. Symbols with no snapshot (NaN) pass through —
+    # the gate only blocks confirmed non-S2 labels above confidence threshold.
+    if weekly_stage_gate_enabled and "weekly_stage_label" in output.columns:
+        label = output["weekly_stage_label"]
+        conf = pd.to_numeric(
+            output.get("weekly_stage_confidence", pd.Series(1.0, index=output.index)),
+            errors="coerce",
+        ).fillna(0.0)
+
+        has_snapshot = label.notna()
+        is_s2 = label == "S2"
+        confident = conf >= float(weekly_stage_min_confidence)
+
+        # Fail: has a snapshot AND (not S2, or S2 but below confidence).
+        failed = has_snapshot & (~is_s2 | ~confident)
+        output.loc[failed, "eligible_rank"] = False
+        for idx in output.index[failed]:
+            stage = str(label.at[idx]) if pd.notna(label.at[idx]) else "UNKNOWN"
+            output.at[idx, "rejection_reasons"] = (
+                output.at[idx, "rejection_reasons"]
+                + [f"weekly_stage:{stage}"]
+            )
 
     return output

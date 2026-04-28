@@ -30,6 +30,7 @@ from ai_trading_system.domains.ranking.factors import (
     compute_penalty_score,
 )
 from ai_trading_system.domains.ranking.input_loader import RankerInputLoader
+from ai_trading_system.domains.ranking.stage_store import read_latest_snapshot
 
 
 class StockRanker:
@@ -85,6 +86,7 @@ class StockRanker:
         rank_mode: str = "default",
         previous_ranked: pd.DataFrame | None = None,
         apply_penalty_adjustment: bool = False,
+        weekly_stage_gate: bool = False,
     ) -> pd.DataFrame:
         """
         Rank all symbols for a given date while preserving the current artifact contract.
@@ -116,6 +118,8 @@ class StockRanker:
         scores = self._compute_sector_strength(scores, date)
         scores = compute_factor_scores(scores, weights=weights)
         scores = self._compute_stage2(scores, date, exchanges)
+        if weekly_stage_gate:
+            scores = self._apply_weekly_stage_gate(scores, date)
         scores.loc[:, "rank_mode"] = rank_mode
 
         # ── Stage 2 enrichment (additive, non-breaking) ──────────────────
@@ -145,6 +149,7 @@ class StockRanker:
         scores = apply_rank_eligibility(
             scores,
             stage2_gate_enabled=(rank_mode == "stage2_breakout"),
+            weekly_stage_gate_enabled=weekly_stage_gate,
         )
         scores = compute_penalty_score(scores)
         scores.loc[:, "composite_score_adjusted"] = (
@@ -302,6 +307,42 @@ class StockRanker:
             sector_map=sector_map,
             date=date,
         )
+
+    def _apply_weekly_stage_gate(
+        self,
+        data: pd.DataFrame,
+        date: str,
+    ) -> pd.DataFrame:
+        """Join latest weekly stage snapshot onto `data` as two new columns.
+
+        Adds ``weekly_stage_label`` and ``weekly_stage_confidence``.
+        Symbols absent from the snapshot get NaN — they pass through the gate
+        in ``apply_rank_eligibility`` (require_snapshot defaults to False).
+        """
+        try:
+            snap = read_latest_snapshot(self.ohlcv_db_path, asof=date)
+        except Exception as exc:
+            logger.warning("Could not load weekly stage snapshot: %s", exc)
+            return data
+
+        if snap.empty:
+            logger.info("weekly_stage_gate: no snapshot rows for asof=%s — gate skipped", date)
+            return data
+
+        snap = snap[["symbol", "stage_label", "stage_confidence"]].rename(columns={
+            "symbol": "symbol_id",
+            "stage_label": "weekly_stage_label",
+            "stage_confidence": "weekly_stage_confidence",
+        })
+
+        merged = data.merge(snap, on="symbol_id", how="left")
+        s2_count = (merged["weekly_stage_label"] == "S2").sum()
+        no_snap = merged["weekly_stage_label"].isna().sum()
+        logger.info(
+            "weekly_stage_gate: %d S2, %d no-snapshot (pass-through), %d other",
+            s2_count, no_snap, len(merged) - s2_count - no_snap,
+        )
+        return merged
 
     def _compute_stage2(
         self,
