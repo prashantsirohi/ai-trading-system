@@ -400,6 +400,41 @@ class RankOrchestrationService:
             feature_store_dir=str(paths.feature_store_dir),
             data_domain=context.params.get("data_domain", "operational"),
         )
+
+        # ── Market Stage Router ───────────────────────────────────────────────
+        # Resolve the market regime from breadth snapshot (or override), then
+        # merge the resulting StrategyConfig into effective_params so all
+        # downstream lambdas use it — without mutating context.params.
+        from ai_trading_system.domains.ranking.market_stage import get_market_stage
+        from ai_trading_system.domains.ranking.strategy_router import route as _route_stage
+
+        effective_params = dict(context.params)
+        stage_override = effective_params.get("market_stage_override")
+        stage_info = (
+            {"market_stage": stage_override, "method": "override"}
+            if stage_override
+            else get_market_stage(str(context.db_path), asof=context.run_date)
+        )
+        cfg = _route_stage(stage_info["market_stage"])
+        logger.info(
+            "market_stage=%s (method=%s) → rank_mode=%s weekly_stage_gate=%s multiplier=%.1f",
+            stage_info["market_stage"], stage_info.get("method", "?"),
+            cfg.rank_mode, cfg.weekly_stage_gate, cfg.position_multiplier,
+        )
+
+        # Only override rank_mode when the caller hasn't set an explicit non-default value.
+        if not effective_params.get("rank_mode") or effective_params.get("rank_mode") == "default":
+            effective_params["rank_mode"] = cfg.rank_mode
+        effective_params["weekly_stage_gate"] = cfg.weekly_stage_gate
+        # Let caller-supplied execution_regime / multiplier take precedence.
+        effective_params.setdefault("execution_regime", cfg.position_regime)
+        effective_params.setdefault("execution_regime_multiplier", cfg.position_multiplier)
+        if cfg.breakout_active:
+            effective_params.setdefault("breakout_market_bias_allowlist", cfg.breakout_bias_allowlist)
+            effective_params.setdefault("breakout_min_breadth_score", cfg.breakout_min_breadth)
+        effective_params["__market_stage_info__"] = stage_info
+        # ─────────────────────────────────────────────────────────────────────
+
         ranked, _ = self.execute_rank_task(
             context=context,
             task_name="rank_core",
@@ -407,22 +442,24 @@ class RankOrchestrationService:
             fingerprint_payload={
                 "task": "rank_core",
                 "run_date": context.run_date,
-                "data_domain": context.params.get("data_domain", "operational"),
-                "min_score": float(context.params.get("min_score", 0.0)),
-                "top_n": context.params.get("top_n"),
-                "symbol_limit": context.params.get("symbol_limit"),
+                "data_domain": effective_params.get("data_domain", "operational"),
+                "min_score": float(effective_params.get("min_score", 0.0)),
+                "top_n": effective_params.get("top_n"),
+                "symbol_limit": effective_params.get("symbol_limit"),
+                "market_stage": stage_info["market_stage"],
             },
             task_status=task_status,
             previous_attempt=previous_attempt,
             previous_statuses=previous_statuses,
             builder=lambda: ranker.rank_all(
                 date=context.run_date,
-                min_score=float(context.params.get("min_score", 0.0)),
-                top_n=context.params.get("top_n"),
-                rank_mode=str(context.params.get("rank_mode", "default")),
+                min_score=float(effective_params.get("min_score", 0.0)),
+                top_n=effective_params.get("top_n"),
+                rank_mode=str(effective_params.get("rank_mode", "default")),
                 apply_penalty_adjustment=bool(
-                    context.params.get("rank_apply_penalty_adjustment", False)
+                    effective_params.get("rank_apply_penalty_adjustment", False)
                 ),
+                weekly_stage_gate=bool(effective_params.get("weekly_stage_gate", False)),
             ),
             optional=False,
         )
@@ -467,13 +504,15 @@ class RankOrchestrationService:
 
         outputs: Dict[str, pd.DataFrame] = {"ranked_signals": ranked}
 
-        breakout_market_bias_allowlist = context.params.get("breakout_market_bias_allowlist", "BULLISH,NEUTRAL")
+        breakout_market_bias_allowlist = effective_params.get("breakout_market_bias_allowlist", "BULLISH,NEUTRAL")
         if isinstance(breakout_market_bias_allowlist, str):
             breakout_market_bias_allowlist = [
                 item.strip()
                 for item in breakout_market_bias_allowlist.split(",")
                 if item.strip()
             ]
+        _breakout_active = cfg.breakout_active
+        _bt_market_stage = stage_info["market_stage"]
         breakout_df, breakout_status = self.execute_rank_task(
             context=context,
             task_name="breakout_scan",
@@ -481,41 +520,47 @@ class RankOrchestrationService:
             fingerprint_payload={
                 "task": "breakout_scan",
                 "run_date": context.run_date,
-                "breakout_engine": str(context.params.get("breakout_engine", "v2")),
+                "breakout_engine": str(effective_params.get("breakout_engine", "v2")),
                 "market_bias_allowlist": list(breakout_market_bias_allowlist),
-                "breakout_min_breadth_score": float(context.params.get("breakout_min_breadth_score", 45.0)),
+                "breakout_min_breadth_score": float(effective_params.get("breakout_min_breadth_score", 45.0)),
                 "ranked_fingerprint": self.dataframe_fingerprint(ranked),
+                "market_stage": _bt_market_stage,
             },
             task_status=task_status,
             previous_attempt=previous_attempt,
             previous_statuses=previous_statuses,
-            builder=lambda: scan_breakouts(
-                ohlcv_db_path=str(context.db_path),
-                feature_store_dir=str(paths.feature_store_dir),
-                master_db_path=str(paths.master_db_path),
-                date=context.run_date,
-                ranked_df=ranked,
-                breakout_engine=str(context.params.get("breakout_engine", "v2")),
-                include_legacy_families=bool(context.params.get("breakout_include_legacy_families", True)),
-                market_bias_allowlist=breakout_market_bias_allowlist,
-                min_breadth_score=float(context.params.get("breakout_min_breadth_score", 45.0)),
-                sector_rs_min=(
-                    float(context.params.get("breakout_sector_rs_min"))
-                    if context.params.get("breakout_sector_rs_min") not in (None, "")
-                    else None
-                ),
-                sector_rs_percentile_min=(
-                    float(context.params.get("breakout_sector_rs_percentile_min", 60.0))
-                    if context.params.get("breakout_sector_rs_percentile_min") not in (None, "")
-                    else None
-                ),
-                breakout_qualified_min_score=int(context.params.get("breakout_qualified_min_score", 3)),
-                breakout_symbol_trend_gate_enabled=bool(
-                    context.params.get("breakout_symbol_trend_gate_enabled", True)
-                ),
-                breakout_symbol_near_high_max_pct=float(
-                    context.params.get("breakout_symbol_near_high_max_pct", 15.0)
-                ),
+            builder=(
+                lambda: scan_breakouts(
+                    ohlcv_db_path=str(context.db_path),
+                    feature_store_dir=str(paths.feature_store_dir),
+                    master_db_path=str(paths.master_db_path),
+                    date=context.run_date,
+                    ranked_df=ranked,
+                    breakout_engine=str(effective_params.get("breakout_engine", "v2")),
+                    include_legacy_families=bool(effective_params.get("breakout_include_legacy_families", True)),
+                    market_bias_allowlist=breakout_market_bias_allowlist,
+                    min_breadth_score=float(effective_params.get("breakout_min_breadth_score", 45.0)),
+                    sector_rs_min=(
+                        float(effective_params.get("breakout_sector_rs_min"))
+                        if effective_params.get("breakout_sector_rs_min") not in (None, "")
+                        else None
+                    ),
+                    sector_rs_percentile_min=(
+                        float(effective_params.get("breakout_sector_rs_percentile_min", 60.0))
+                        if effective_params.get("breakout_sector_rs_percentile_min") not in (None, "")
+                        else None
+                    ),
+                    breakout_qualified_min_score=int(effective_params.get("breakout_qualified_min_score", 3)),
+                    breakout_symbol_trend_gate_enabled=bool(
+                        effective_params.get("breakout_symbol_trend_gate_enabled", True)
+                    ),
+                    breakout_symbol_near_high_max_pct=float(
+                        effective_params.get("breakout_symbol_near_high_max_pct", 15.0)
+                    ),
+                    market_stage=_bt_market_stage,
+                )
+                if _breakout_active
+                else lambda: pd.DataFrame()
             ),
             optional=True,
         )

@@ -216,6 +216,7 @@ def compute_breakout_v2_scores(
     breakout_qualified_min_score: int = 3,
     breakout_symbol_trend_gate_enabled: bool = True,
     breakout_symbol_near_high_max_pct: float = 15.0,
+    market_stage: str = "S2",
 ) -> pd.DataFrame:
     """
     Apply breakout-v2 score contract and regime gates.
@@ -278,6 +279,19 @@ def compute_breakout_v2_scores(
         default=0,
     )
     df.loc[:, "breakout_score"] = df["breakout_score"] + volume_confirmation_bonus
+
+    # ── Market-regime score deflation ────────────────────────────────────────
+    # In S3 (topping) markets, raise the effective qualification bar by
+    # deflating raw scores; in S4 (bear) it's a safety net — the service layer
+    # sets breakout_active=False before we even get here.
+    if market_stage == "S3":
+        df.loc[:, "breakout_score"] = (df["breakout_score"] * 0.65).round().astype(int)
+        if "setup_quality" in df.columns:
+            df.loc[:, "setup_quality"] = df["setup_quality"] * 0.65
+    elif market_stage == "S4":
+        df.loc[:, "breakout_score"] = 0
+        if "setup_quality" in df.columns:
+            df.loc[:, "setup_quality"] = 0.0
 
     if "setup_quality" not in df.columns:
         df.loc[:, "setup_quality"] = np.nan
@@ -583,6 +597,7 @@ def scan_breakouts(
     breakout_qualified_min_score: int = 3,
     breakout_symbol_trend_gate_enabled: bool = True,
     breakout_symbol_near_high_max_pct: float = 15.0,
+    market_stage: str = "S2",
 ) -> pd.DataFrame:
     """Build a breakout monitor with setup families and market-regime context."""
     conn = duckdb.connect(ohlcv_db_path, read_only=True)
@@ -1008,6 +1023,7 @@ def scan_breakouts(
             breakout_qualified_min_score=breakout_qualified_min_score,
             breakout_symbol_trend_gate_enabled=breakout_symbol_trend_gate_enabled,
             breakout_symbol_near_high_max_pct=breakout_symbol_near_high_max_pct,
+            market_stage=market_stage,
         )
 
     def _execution_label(row: pd.Series) -> str:

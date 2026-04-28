@@ -744,6 +744,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Risk multiplier applied by the execute stage.",
     )
     parser.add_argument(
+        "--market-stage-override",
+        default=None,
+        choices=["S1", "S2", "S3", "S4", "MIXED"],
+        help="Force market stage instead of auto-detecting from breadth snapshot.",
+    )
+    parser.add_argument(
         "--paper-slippage-bps",
         type=float,
         default=5.0,
@@ -984,6 +990,7 @@ def main() -> None:
         "execution_fixed_quantity": args.execution_fixed_quantity,
         "execution_regime": args.execution_regime,
         "execution_regime_multiplier": args.execution_regime_multiplier,
+        "market_stage_override": args.market_stage_override,
         "paper_slippage_bps": args.paper_slippage_bps,
         "breakout_engine": args.breakout_engine,
         "breakout_include_legacy_families": not args.disable_breakout_legacy_families,
