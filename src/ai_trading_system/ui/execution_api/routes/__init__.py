@@ -7,6 +7,7 @@ from ai_trading_system.ui.execution_api.routes import (
     processes,
     ranking_detail,
     runs,
+    sectors,
     snapshots,
     stocks,
     tasks,
@@ -22,6 +23,7 @@ ALL_ROUTERS = (
     tasks.router,
     processes.router,
     pipeline.router,
+    sectors.router,
 )
 
 
@@ -33,6 +35,7 @@ __all__ = [
     "processes",
     "ranking_detail",
     "runs",
+    "sectors",
     "snapshots",
     "stocks",
     "tasks",

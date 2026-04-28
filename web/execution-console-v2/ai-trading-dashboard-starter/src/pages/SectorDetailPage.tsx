@@ -21,7 +21,7 @@ import TechFilterRail, { INDICATOR_GROUPS, type IndicatorKey } from '@/component
 import ConstituentTable from '@/components/sectors/ConstituentTable';
 import { useSectors } from '@/lib/queries';
 import type { Constituent } from '@/lib/mock/sectorConstituents';
-import { getSectorConstituents } from '@/lib/api/sectors';
+import { getSectorConstituents, type SectorConstituentsResponse } from '@/lib/api/sectors';
 import { cn } from '@/lib/utils/cn';
 
 function quadrantPill(quadrant: string) {
@@ -43,15 +43,17 @@ export default function SectorDetailPage() {
     (s) => s.sector.toLowerCase() === sectorName.toLowerCase(),
   );
 
-  // ── Live constituent data from ranking API ────────────────────────────────
-  const [allConstituents, setAllConstituents] = useState<Constituent[]>([]);
+  // ── Live constituent data from dedicated sector endpoint ─────────────────
+  const [sectorRes, setSectorRes] = useState<SectorConstituentsResponse | null>(null);
   const [constituentsLoading, setConstituentsLoading] = useState(true);
+  const allConstituents: Constituent[] = sectorRes?.constituents ?? [];
+  const stageSummary = sectorRes?.stageSummary;
 
   useEffect(() => {
     if (!sectorName) return;
     setConstituentsLoading(true);
     getSectorConstituents(sectorName)
-      .then(setAllConstituents)
+      .then(setSectorRes)
       .finally(() => setConstituentsLoading(false));
   }, [sectorName]);
 
@@ -171,6 +173,55 @@ export default function SectorDetailPage() {
           )}
         </div>
       </SectionCard>
+
+      {/* Stage distribution bar */}
+      {stageSummary && stageSummary.labeled > 0 && (
+        <SectionCard title="Weinstein Stage Distribution">
+          <div className="flex items-center gap-4 flex-wrap">
+            {/* Stacked bar */}
+            <div className="flex h-4 flex-1 min-w-40 overflow-hidden rounded-full">
+              {(['S2','S1','S3','S4'] as const).map((s) => {
+                const pct = stageSummary[`${s}_pct` as keyof typeof stageSummary] as number;
+                if (!pct) return null;
+                const colors: Record<string,string> = {
+                  S2: 'bg-emerald-500', S1: 'bg-blue-400',
+                  S3: 'bg-amber-400',   S4: 'bg-rose-500',
+                };
+                return (
+                  <div
+                    key={s}
+                    style={{ width: `${pct}%` }}
+                    className={colors[s]}
+                    title={`${s}: ${pct}%`}
+                  />
+                );
+              })}
+            </div>
+            {/* Legend */}
+            <div className="flex gap-4 text-xs flex-wrap">
+              {(['S2','S1','S3','S4'] as const).map((s) => {
+                const count = stageSummary[s as keyof typeof stageSummary] as number;
+                const pct = stageSummary[`${s}_pct` as keyof typeof stageSummary] as number;
+                const labels: Record<string,string> = {
+                  S2:'Advancing', S1:'Basing', S3:'Topping', S4:'Declining',
+                };
+                const text: Record<string,string> = {
+                  S2:'text-emerald-300', S1:'text-blue-300',
+                  S3:'text-amber-300',   S4:'text-rose-300',
+                };
+                return (
+                  <div key={s} className="flex items-center gap-1.5">
+                    <span className={cn('font-bold', text[s])}>{s}</span>
+                    <span className="text-slate-400">{labels[s]}</span>
+                    <span className="font-mono text-slate-300">{count} <span className="text-slate-500">({pct}%)</span></span>
+                  </div>
+                );
+              })}
+              <span className="ml-2 text-slate-500 text-[10px]">{stageSummary.labeled}/{stageSummary.total} classified</span>
+            </div>
+          </div>
+        </SectionCard>
+      )}
 
       {/* Filter rail + constituent table */}
       <SectionCard title="Constituents">
