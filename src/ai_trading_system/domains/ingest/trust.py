@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
@@ -88,6 +89,89 @@ def _table_columns(conn: duckdb.DuckDBPyConnection, table_name: str) -> set[str]
         [table_name],
     ).fetchall()
     return {str(row[0]) for row in rows}
+
+
+def effective_symbol_threshold(
+    *,
+    base_threshold: int,
+    ratio_threshold: float,
+    eligible_total: int,
+) -> int:
+    """Scale symbol-count tolerances with universe size while preserving a floor."""
+    scaled_threshold = (
+        math.ceil(max(0.0, float(eligible_total) * float(ratio_threshold)))
+        if eligible_total > 0
+        else 0
+    )
+    return max(int(base_threshold), int(scaled_threshold))
+
+
+def load_critical_symbol_universe(
+    db_path_or_conn: duckdb.DuckDBPyConnection | str | Path,
+    *,
+    run_date: str | None = None,
+    top_n: int = 1000,
+    lookback_days: int = 365,
+    min_recent_days: int = 1,
+    extra_symbols: Iterable[str] | None = None,
+) -> set[str]:
+    """Return symbols important enough for quarantine rows to block production stages."""
+    conn, should_close = _connect(db_path_or_conn)
+    try:
+        catalog_columns = _table_columns(conn, "_catalog")
+        if not catalog_columns or "symbol_id" not in catalog_columns or "timestamp" not in catalog_columns:
+            return {str(symbol).strip().upper() for symbol in (extra_symbols or []) if str(symbol).strip()}
+
+        end_date = run_date
+        if end_date:
+            end_date = pd.Timestamp(end_date).date().isoformat()
+        else:
+            latest = conn.execute(
+                "SELECT MAX(CAST(timestamp AS DATE)) FROM _catalog WHERE exchange = 'NSE'"
+            ).fetchone()[0]
+            end_date = str(latest) if latest is not None else None
+        if not end_date:
+            return {str(symbol).strip().upper() for symbol in (extra_symbols or []) if str(symbol).strip()}
+
+        lookback_start = (
+            pd.Timestamp(end_date) - pd.Timedelta(days=max(1, int(lookback_days)))
+        ).date().isoformat()
+        liquidity_symbols = conn.execute(
+            """
+            SELECT symbol_id
+            FROM _catalog
+            WHERE exchange = 'NSE'
+              AND CAST(timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+              AND symbol_id IS NOT NULL
+              AND close IS NOT NULL
+              AND volume IS NOT NULL
+              AND volume > 0
+            GROUP BY symbol_id
+            HAVING COUNT(*) >= ?
+            ORDER BY MEDIAN(close * volume) DESC, AVG(close * volume) DESC, symbol_id
+            LIMIT ?
+            """,
+            [lookback_start, end_date, max(1, int(min_recent_days)), max(1, int(top_n))],
+        ).fetchall()
+        symbols = {str(row[0]).strip().upper() for row in liquidity_symbols if str(row[0]).strip()}
+
+        if "is_benchmark" in catalog_columns:
+            benchmark_rows = conn.execute(
+                """
+                SELECT DISTINCT symbol_id
+                FROM _catalog
+                WHERE exchange = 'NSE'
+                  AND COALESCE(is_benchmark, FALSE)
+                  AND symbol_id IS NOT NULL
+                """
+            ).fetchall()
+            symbols.update(str(row[0]).strip().upper() for row in benchmark_rows if str(row[0]).strip())
+
+        symbols.update(str(symbol).strip().upper() for symbol in (extra_symbols or []) if str(symbol).strip())
+        return symbols
+    finally:
+        if should_close:
+            conn.close()
 
 
 def ensure_data_trust_schema(db_path_or_conn: duckdb.DuckDBPyConnection | str | Path) -> None:
@@ -633,6 +717,7 @@ def load_data_trust_summary(
             [run_date],
         ).fetchall()
         quarantine_rows = []
+        active_quarantine_details: list[tuple[Any, str]] = []
         if _table_columns(conn, "_catalog_quarantine"):
             quarantine_rows = conn.execute(
                 """
@@ -646,6 +731,20 @@ def load_data_trust_summary(
                 """,
                 [quarantine_window_start],
             ).fetchall()
+            active_quarantine_details = conn.execute(
+                """
+                SELECT trade_date, symbol_id
+                FROM _catalog_quarantine
+                WHERE exchange = 'NSE'
+                  AND status = 'active'
+                  AND trade_date >= COALESCE(CAST(? AS DATE), CURRENT_DATE - INTERVAL 30 DAY)
+                """,
+                [quarantine_window_start],
+            ).fetchall()
+        critical_symbols = load_critical_symbol_universe(
+            conn,
+            run_date=effective_run_date or None,
+        )
         latest_repair_row = None
         if "repair_batch_id" in catalog_columns:
             latest_repair_row = conn.execute(
@@ -684,6 +783,24 @@ def load_data_trust_summary(
     latest_quarantined_symbol_ratio = (
         (latest_quarantined_symbols / latest_total) if latest_total else 0.0
     )
+    latest_critical_quarantined_symbols = {
+        str(symbol_id).strip().upper()
+        for trade_date, symbol_id in active_quarantine_details
+        if str(trade_date) == str(latest_trade_key)
+        and str(symbol_id).strip().upper() in critical_symbols
+    }
+    critical_quarantined_symbols = {
+        str(symbol_id).strip().upper()
+        for _, symbol_id in active_quarantine_details
+        if str(symbol_id).strip().upper() in critical_symbols
+    }
+    latest_critical_quarantined_symbol_count = int(len(latest_critical_quarantined_symbols))
+    critical_universe_symbol_count = int(len(critical_symbols))
+    latest_critical_quarantined_symbol_ratio = (
+        (latest_critical_quarantined_symbol_count / critical_universe_symbol_count)
+        if critical_universe_symbol_count
+        else 0.0
+    )
     latest_repair_batch = (
         {
             "repair_batch_id": str(latest_repair_row[0]),
@@ -698,8 +815,13 @@ def load_data_trust_summary(
     status = "legacy" if "validation_status" not in catalog_columns else "trusted"
     if status != "legacy":
         if latest_trade_key and latest_trade_key in active_quarantined_dates:
-            exceeds_symbol_threshold = latest_quarantined_symbols > int(blocked_quarantine_symbol_threshold)
-            exceeds_ratio_threshold = latest_quarantined_symbol_ratio > float(blocked_quarantine_ratio_threshold)
+            effective_blocked_symbol_threshold = effective_symbol_threshold(
+                base_threshold=int(blocked_quarantine_symbol_threshold),
+                ratio_threshold=float(blocked_quarantine_ratio_threshold),
+                eligible_total=int(critical_universe_symbol_count),
+            )
+            exceeds_symbol_threshold = latest_critical_quarantined_symbol_count > effective_blocked_symbol_threshold
+            exceeds_ratio_threshold = latest_critical_quarantined_symbol_ratio > float(blocked_quarantine_ratio_threshold)
             status = "blocked" if (exceeds_symbol_threshold or exceeds_ratio_threshold) else "degraded"
         elif active_quarantined_dates:
             status = "degraded"
@@ -714,6 +836,8 @@ def load_data_trust_summary(
             "status": status,
             "active_quarantined_dates": active_quarantined_dates,
             "active_quarantined_symbols": active_quarantined_symbols,
+            "critical_universe_symbol_count": critical_universe_symbol_count,
+            "latest_critical_quarantined_symbols": latest_critical_quarantined_symbol_count,
             "fallback_ratio_latest": round(fallback_ratio_latest, 4),
             "primary_ratio_latest": round(primary_ratio_latest, 4),
             "unknown_ratio_latest": round(unknown_ratio_latest, 4),
@@ -739,8 +863,12 @@ def load_data_trust_summary(
         "provider_counts_by_date": provider_counts_by_date,
         "active_quarantined_dates": active_quarantined_dates,
         "active_quarantined_symbols": active_quarantined_symbols,
+        "critical_quarantined_symbols": int(len(critical_quarantined_symbols)),
+        "critical_universe_symbol_count": critical_universe_symbol_count,
         "latest_quarantined_symbols": latest_quarantined_symbols,
         "latest_quarantined_symbol_ratio": round(latest_quarantined_symbol_ratio, 4),
+        "latest_critical_quarantined_symbols": latest_critical_quarantined_symbol_count,
+        "latest_critical_quarantined_symbol_ratio": round(latest_critical_quarantined_symbol_ratio, 4),
         "fallback_ratio_latest": round(fallback_ratio_latest, 4),
         "primary_ratio_latest": round(primary_ratio_latest, 4),
         "unknown_ratio_latest": round(unknown_ratio_latest, 4),

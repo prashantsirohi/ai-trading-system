@@ -14,6 +14,7 @@ import pandas as pd
 from pandas.util import hash_pandas_object
 
 from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.pipeline.contracts import TrustConfidenceEnvelope
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 from ai_trading_system.domains.ranking.payloads import (

@@ -21,8 +21,12 @@
   "data_trust": {
     "active_quarantined_dates": [],
     "active_quarantined_symbols": 0,
+    "critical_quarantined_symbols": 0,
+    "critical_universe_symbol_count": 2,
     "db_path": "<PROJECT_ROOT>/data/ohlcv.duckdb",
     "fallback_ratio_latest": 0.0,
+    "latest_critical_quarantined_symbol_ratio": 0.0,
+    "latest_critical_quarantined_symbols": 0,
     "latest_provider_stats": {
       "counts": {},
       "fallback_rows": 0,

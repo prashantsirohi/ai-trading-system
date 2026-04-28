@@ -33,6 +33,7 @@ import yfinance as yf
 from ai_trading_system.analytics.data_trust import (
     annotate_provider_reconciliation,
     ensure_data_trust_schema,
+    load_critical_symbol_universe,
     load_data_trust_summary,
     quarantine_symbol_dates,
     record_provenance_rows,
@@ -896,6 +897,12 @@ def _run_nse_yfinance_daily_update(
     active_eligible_symbols = historically_trusted_symbols.union(resolved_symbol_ids).union(
         set(required_symbol_dates.keys())
     )
+    critical_symbols = load_critical_symbol_universe(
+        collector.db_path,
+        run_date=target_end_date.isoformat(),
+    )
+    if not critical_symbols:
+        critical_symbols = {str(symbol_id).strip().upper() for symbol_id in active_eligible_symbols if str(symbol_id).strip()}
 
     quarantined_row_count = 0
     observed_row_count = 0
@@ -903,7 +910,12 @@ def _run_nse_yfinance_daily_update(
     unresolved_symbol_dates_active: list[tuple[str, str]] = []
     unresolved_symbol_dates_observed: list[tuple[str, str]] = []
     for symbol_id, trade_date in unresolved_symbol_dates:
-        if trade_date in unresolved_recent_set and symbol_id in active_eligible_symbols:
+        normalized_symbol = str(symbol_id).strip().upper()
+        if (
+            trade_date in unresolved_recent_set
+            and symbol_id in active_eligible_symbols
+            and normalized_symbol in critical_symbols
+        ):
             unresolved_symbol_dates_active.append((symbol_id, trade_date))
         else:
             unresolved_symbol_dates_observed.append((symbol_id, trade_date))
@@ -948,7 +960,10 @@ def _run_nse_yfinance_daily_update(
             reason="provider_unavailable",
             status="observed",
             source_run_id=run_id,
-            note="Historical unresolved provider gap retained as observed (outside active trust window).",
+            note=(
+                "Unresolved provider gap retained as observed because it is outside the "
+                "critical liquidity universe or active trust window."
+            ),
         )
 
     rows_written = 0
@@ -1030,6 +1045,8 @@ def _run_nse_yfinance_daily_update(
         "unresolved_symbol_date_count_all": len(unresolved_symbol_dates),
         "unresolved_symbol_count": len(unresolved_symbols),
         "unresolved_symbol_count_all": len(unresolved_symbols_all),
+        "critical_universe_symbol_count": int(len(critical_symbols)),
+        "noncritical_unresolved_symbol_count": max(0, len(unresolved_symbols_all) - len(unresolved_symbols)),
         "rows_written": rows_written,
         "benchmark_rows_written": benchmark_rows_written,
         "index_rows_written": index_rows_written,

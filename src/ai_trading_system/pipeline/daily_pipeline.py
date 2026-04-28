@@ -18,6 +18,7 @@ Usage:
 import os
 import sys
 from datetime import datetime, timedelta
+from typing import Iterable
 
 from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
 project_root = str(ensure_project_root_on_path(__file__))
@@ -37,6 +38,8 @@ logger.info(f"Environment: {os.getenv('ENV', 'local')}")
 logger.info(
     f"Data retention: {data_retention_years() if data_retention_years() else 'All'} years"
 )
+
+MARKET_DATA_CUTOFF_HOUR = 18
 
 
 def is_trading_holiday(date: datetime = None) -> bool:
@@ -60,6 +63,95 @@ def is_weekend(date: datetime = None) -> bool:
     if date is None:
         date = datetime.now()
     return date.weekday() >= 5
+
+
+def resolve_daily_market_date(now: datetime | None = None, *, cutoff_hour: int = MARKET_DATA_CUTOFF_HOUR) -> str:
+    """Return the trading date the daily wrapper should process by default."""
+
+    now = now or datetime.now()
+    candidate = now if now.hour >= cutoff_hour else now - timedelta(days=1)
+    while is_weekend(candidate) or is_trading_holiday(candidate):
+        candidate = candidate - timedelta(days=1)
+    return candidate.strftime("%Y-%m-%d")
+
+
+def _latest_stage_statuses(stage_runs: Iterable[dict]) -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    for stage_run in stage_runs:
+        stage_name = str(stage_run.get("stage_name") or "")
+        if stage_name:
+            statuses[stage_name] = str(stage_run.get("status") or "")
+    return statuses
+
+
+def _requested_stages_for_daily(stages: str, *, canary: bool) -> list[str]:
+    if canary and stages == "ingest,features,rank,execute,publish":
+        return ["ingest", "features", "rank"]
+    return [stage.strip() for stage in stages.split(",") if stage.strip()]
+
+
+def _resolve_existing_daily_run_id(
+    orchestrator: PipelineOrchestrator,
+    *,
+    run_date: str,
+    data_domain: str,
+    canary: bool,
+) -> str | None:
+    registry = getattr(orchestrator, "registry", None)
+    if registry is None or not hasattr(registry, "_reader"):
+        return None
+
+    with registry._reader() as conn:
+        rows = conn.execute(
+            """
+            SELECT run_id, metadata_json
+            FROM pipeline_run
+            WHERE pipeline_name = 'daily_pipeline'
+              AND CAST(run_date AS DATE) = CAST(? AS DATE)
+            ORDER BY started_at DESC NULLS LAST
+            LIMIT 25
+            """,
+            [run_date],
+        ).fetchall()
+
+    for run_id, metadata_json in rows:
+        metadata = registry._loads(metadata_json) if hasattr(registry, "_loads") else {}
+        params = dict(metadata.get("params") or {})
+        if str(params.get("data_domain", "operational")) != str(data_domain):
+            continue
+        if bool(params.get("canary", False)) != bool(canary):
+            continue
+        return str(run_id)
+    return None
+
+
+def _completed_or_skipped(stage_status: str) -> bool:
+    return stage_status in {"completed", "skipped"}
+
+
+def _build_daily_run_id(*, run_date: str, data_domain: str, canary: bool) -> str:
+    suffix = "daily"
+    if canary:
+        suffix = "canary-daily"
+    if data_domain != "operational":
+        suffix = f"{data_domain}-{suffix}"
+    return f"pipeline-{run_date}-{suffix}"
+
+
+def _requested_stages_already_finished(
+    orchestrator: PipelineOrchestrator,
+    *,
+    run_id: str,
+    requested_stages: list[str],
+) -> bool:
+    registry = getattr(orchestrator, "registry", None)
+    if registry is None or not hasattr(registry, "get_stage_runs"):
+        return False
+    stage_statuses = _latest_stage_statuses(registry.get_stage_runs(run_id))
+    return bool(requested_stages) and all(
+        _completed_or_skipped(stage_statuses.get(stage_name, ""))
+        for stage_name in requested_stages
+    )
 
 
 def run_portfolio_analysis():
@@ -217,34 +309,73 @@ def main(
 
     now = datetime.now()
     today = now.strftime("%Y-%m-%d")
-    effective_validation_date = bhavcopy_validation_date or (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    run_date = resolve_daily_market_date(now)
+    effective_validation_date = bhavcopy_validation_date or run_date
+    requested_stages = _requested_stages_for_daily(stages, canary=canary)
 
     logger.info("=" * 60)
-    logger.info(f"DAILY PIPELINE - {today}")
+    logger.info(f"DAILY PIPELINE - market_date={run_date} local_date={today}")
     logger.info("=" * 60)
+    if run_date != today:
+        logger.info(
+            "Using market_date=%s because local time is before %02d:00 or today is not a trading day.",
+            run_date,
+            MARKET_DATA_CUTOFF_HOUR,
+        )
 
     # Truncate old data if running in github/prod mode
     if should_truncate_data(data_domain):
         truncate_old_data(data_domain=data_domain)
 
     if not force:
-        if is_trading_holiday(now):
-            logger.info(f"⛔ {today} is a trading holiday. Exiting.")
+        run_date_dt = datetime.strptime(run_date, "%Y-%m-%d")
+        if is_trading_holiday(run_date_dt):
+            logger.info(f"⛔ {run_date} is a trading holiday. Exiting.")
             return
 
-        if is_weekend(now):
-            day_name = now.strftime("%A")
-            logger.info(f"⛔ {today} is {day_name}. Weekend - exiting.")
+        if is_weekend(run_date_dt):
+            day_name = run_date_dt.strftime("%A")
+            logger.info(f"⛔ {run_date} is {day_name}. Weekend - exiting.")
             return
 
     orchestrator = PipelineOrchestrator(project_root)
+    run_id = _resolve_existing_daily_run_id(
+        orchestrator,
+        run_date=run_date,
+        data_domain=data_domain,
+        canary=canary,
+    )
+    if run_id:
+        logger.info("Reusing existing daily pipeline run_id=%s for market_date=%s", run_id, run_date)
+        if _requested_stages_already_finished(
+            orchestrator,
+            run_id=run_id,
+            requested_stages=requested_stages,
+        ):
+            logger.info(
+                "Requested stages already completed or skipped for run_id=%s: %s",
+                run_id,
+                ",".join(requested_stages),
+            )
+            stage_runs = orchestrator.registry.get_stage_runs(run_id)
+            run_record = orchestrator.registry.get_run(run_id)
+            return {
+                "run_id": run_id,
+                "status": run_record.get("status", "completed"),
+                "stages": stage_runs,
+                "run": run_record,
+            }
+    else:
+        run_id = _build_daily_run_id(
+            run_date=run_date,
+            data_domain=data_domain,
+            canary=canary,
+        )
+
     result = orchestrator.run_pipeline(
-        stage_names=(
-            ["ingest", "features", "rank"]
-            if canary and stages == "ingest,features,rank,execute,publish"
-            else [stage.strip() for stage in stages.split(",") if stage.strip()]
-        ),
-        run_date=today,
+        run_id=run_id,
+        stage_names=requested_stages,
+        run_date=run_date,
         params={
             "force": force,
             "batch_size": 700,
@@ -293,6 +424,7 @@ def main(
     logger.info("=" * 60)
     logger.info(f"PIPELINE COMPLETE - run_id={result['run_id']} status={result['status']}")
     logger.info("=" * 60)
+    return result
 
 
 if __name__ == "__main__":
@@ -384,7 +516,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--bhavcopy-validation-date",
         default=None,
-        help="Override validation date (YYYY-MM-DD). Defaults to today-1 in local time.",
+        help="Override validation date (YYYY-MM-DD). Defaults to the resolved market date.",
     )
     parser.add_argument(
         "--bhavcopy-validation-csv",

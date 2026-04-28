@@ -52,7 +52,13 @@ def _init_catalog_with_trust_columns(db_path: Path) -> None:
         conn.close()
 
 
-def _insert_active_quarantine(db_path: Path, *, symbol_count: int, trade_date: str = "2026-04-08") -> None:
+def _insert_active_quarantine(
+    db_path: Path,
+    *,
+    symbol_count: int,
+    trade_date: str = "2026-04-08",
+    symbol_ids: list[str] | None = None,
+) -> None:
     conn = duckdb.connect(str(db_path))
     try:
         conn.execute(
@@ -72,15 +78,59 @@ def _insert_active_quarantine(db_path: Path, *, symbol_count: int, trade_date: s
             )
             """
         )
-        for idx in range(symbol_count):
+        symbols = symbol_ids or [f"Q{idx:04d}" for idx in range(symbol_count)]
+        for idx, symbol_id in enumerate(symbols[:symbol_count]):
             conn.execute(
                 """
                 INSERT INTO _catalog_quarantine
                 (symbol_id, security_id, exchange, trade_date, reason, status, source_run_id, note)
                 VALUES (?, ?, 'NSE', CAST(? AS DATE), 'provider_unavailable', 'active', 'test-run', 'test quarantine')
                 """,
-                [f"Q{idx:04d}", str(1000 + idx), trade_date],
+                [symbol_id, str(1000 + idx), trade_date],
             )
+    finally:
+        conn.close()
+
+
+def _insert_catalog_rows_for_date(
+    db_path: Path,
+    *,
+    trade_date: str,
+    row_count: int,
+    provider: str = "nse_bhavcopy",
+    validation_status: str = "trusted_primary",
+) -> None:
+    conn = duckdb.connect(str(db_path))
+    try:
+        rows = [
+            (
+                f"S{idx:05d}",
+                str(5000 + idx),
+                "NSE",
+                f"{trade_date} 15:30:00",
+                100.0 + idx,
+                101.0 + idx,
+                99.0 + idx,
+                100.5 + idx,
+                1000 + idx,
+                provider,
+                1,
+                validation_status,
+                None,
+                "test-run",
+                None,
+            )
+            for idx in range(row_count)
+        ]
+        conn.executemany(
+            """
+            INSERT INTO _catalog
+            (symbol_id, security_id, exchange, timestamp, open, high, low, close, volume,
+             provider, provider_priority, validation_status, validated_against, ingest_run_id, repair_batch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
     finally:
         conn.close()
 
@@ -122,7 +172,7 @@ def test_load_data_trust_summary_marks_small_latest_quarantine_as_degraded(tmp_p
 def test_load_data_trust_summary_blocks_large_latest_quarantine(tmp_path: Path) -> None:
     db_path = tmp_path / "ohlcv.duckdb"
     _init_catalog_with_trust_columns(db_path)
-    _insert_active_quarantine(db_path, symbol_count=2)
+    _insert_active_quarantine(db_path, symbol_count=2, symbol_ids=["AAA", "BBB"])
 
     summary = load_data_trust_summary(
         db_path,
@@ -134,6 +184,29 @@ def test_load_data_trust_summary_blocks_large_latest_quarantine(tmp_path: Path) 
     assert summary["status"] == "blocked"
     assert int(summary["latest_quarantined_symbols"]) == 2
     assert float(summary["latest_quarantined_symbol_ratio"]) == 1.0
+
+
+def test_load_data_trust_summary_blocks_when_critical_universe_threshold_crossed(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    _init_catalog_with_trust_columns(db_path)
+    _insert_catalog_rows_for_date(db_path, trade_date="2026-04-24", row_count=1574)
+    _insert_active_quarantine(
+        db_path,
+        symbol_count=11,
+        trade_date="2026-04-24",
+        symbol_ids=[f"S{idx:05d}" for idx in range(600, 611)],
+    )
+
+    summary = load_data_trust_summary(
+        db_path,
+        run_date="2026-04-24",
+        blocked_quarantine_symbol_threshold=10,
+        blocked_quarantine_ratio_threshold=0.01,
+    )
+
+    assert summary["status"] == "blocked"
+    assert int(summary["latest_quarantined_symbols"]) == 11
+    assert int(summary["latest_critical_quarantined_symbols"]) == 11
 
 
 def test_dq_provider_coverage_rule_fails_on_unknown_provider_rows(tmp_path: Path) -> None:
@@ -296,6 +369,39 @@ def test_dq_unresolved_dates_rule_uses_distinct_symbol_breadth_for_ratio(tmp_pat
     assert "unresolved_symbol_date_pairs=27" in outcome.message
 
 
+def test_dq_unresolved_dates_rule_scales_symbol_tolerance_with_ratio(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+    engine = DataQualityEngine(registry)
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "ohlcv.duckdb",
+        run_id="pipeline-2026-04-24-unresolved-ratio-scaled",
+        run_date="2026-04-24",
+        stage_name="ingest",
+        attempt_number=1,
+        registry=registry,
+        params={
+            "dq_max_unresolved_dates": 1,
+            "dq_max_unresolved_symbol_dates": 10,
+            "dq_max_unresolved_symbol_ratio_pct": 1.0,
+        },
+    )
+    result = StageResult(
+        metadata={
+            "unresolved_dates": ["2026-04-24"],
+            "unresolved_symbol_date_count": 11,
+            "unresolved_symbol_count": 11,
+            "active_eligible_symbol_count": 1623,
+        }
+    )
+
+    outcome = engine._rule_ingest_unresolved_dates_present(context, result, "critical")
+
+    assert outcome.status == "passed"
+    assert outcome.failed_count == 0
+    assert "effective_max_symbols=17" in outcome.message
+
+
 def test_dq_features_quarantine_rule_tolerates_small_scope_when_thresholds_allow(tmp_path: Path) -> None:
     db_path = tmp_path / "ohlcv.duckdb"
     _init_catalog_with_trust_columns(db_path)
@@ -327,7 +433,7 @@ def test_dq_features_quarantine_rule_tolerates_small_scope_when_thresholds_allow
 def test_dq_features_quarantine_rule_blocks_when_threshold_crossed(tmp_path: Path) -> None:
     db_path = tmp_path / "ohlcv.duckdb"
     _init_catalog_with_trust_columns(db_path)
-    _insert_active_quarantine(db_path, symbol_count=2)
+    _insert_active_quarantine(db_path, symbol_count=2, symbol_ids=["AAA", "BBB"])
 
     registry = RegistryStore(tmp_path)
     engine = DataQualityEngine(registry)
@@ -349,6 +455,69 @@ def test_dq_features_quarantine_rule_blocks_when_threshold_crossed(tmp_path: Pat
 
     assert outcome.status == "failed"
     assert outcome.failed_count == 1
+
+
+def test_dq_features_quarantine_rule_blocks_when_critical_universe_threshold_crossed(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    _init_catalog_with_trust_columns(db_path)
+    _insert_catalog_rows_for_date(db_path, trade_date="2026-04-24", row_count=1574)
+    _insert_active_quarantine(
+        db_path,
+        symbol_count=11,
+        trade_date="2026-04-24",
+        symbol_ids=[f"S{idx:05d}" for idx in range(600, 611)],
+    )
+
+    registry = RegistryStore(tmp_path)
+    engine = DataQualityEngine(registry)
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=db_path,
+        run_id="pipeline-2026-04-24-features-ratio-scaled",
+        run_date="2026-04-24",
+        stage_name="features",
+        attempt_number=1,
+        registry=registry,
+        params={
+            "dq_features_max_quarantined_symbols": 10,
+            "dq_features_max_quarantined_symbol_ratio_pct": 1.0,
+        },
+    )
+
+    outcome = engine._rule_features_trust_quarantine_clear(context, StageResult(metadata={}), "critical")
+
+    assert outcome.status == "failed"
+    assert outcome.failed_count == 1
+    assert "effective_max_symbols=" in outcome.message
+
+
+def test_dq_features_quarantine_rule_ignores_tail_only_quarantine_for_blocking(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    _init_catalog_with_trust_columns(db_path)
+    _insert_catalog_rows_for_date(db_path, trade_date="2026-04-24", row_count=1000)
+    _insert_active_quarantine(db_path, symbol_count=50, trade_date="2026-04-24")
+
+    registry = RegistryStore(tmp_path)
+    engine = DataQualityEngine(registry)
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=db_path,
+        run_id="pipeline-2026-04-24-features-tail-quarantine",
+        run_date="2026-04-24",
+        stage_name="features",
+        attempt_number=1,
+        registry=registry,
+        params={
+            "dq_features_max_quarantined_symbols": 1,
+            "dq_features_max_quarantined_symbol_ratio_pct": 0.1,
+        },
+    )
+
+    outcome = engine._rule_features_trust_quarantine_clear(context, StageResult(metadata={}), "critical")
+
+    assert outcome.status == "passed"
+    assert outcome.failed_count == 0
+    assert "latest_critical_symbols=0" in outcome.message
 
 
 def test_record_data_repair_run_updates_status_for_existing_run_id(tmp_path: Path) -> None:

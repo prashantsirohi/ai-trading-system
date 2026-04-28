@@ -34,16 +34,17 @@ def to_weekly(daily: pd.DataFrame) -> pd.DataFrame:
             "volume": "sum",
         })
         .dropna(subset=["close"])
+        .copy()
     )
 
-    weekly["ma10w"] = weekly["close"].rolling(10).mean()
-    weekly["ma30w"] = weekly["close"].rolling(30).mean()
-    weekly["ma40w"] = weekly["close"].rolling(40).mean()
-    weekly["ma30w_slope_4w"] = weekly["ma30w"].pct_change(4, fill_method=None)
-    weekly["vol20w_avg"] = weekly["volume"].rolling(20).mean()
-    weekly["hi_52w"] = weekly["close"].rolling(52, min_periods=10).max()
-    weekly["lo_52w"] = weekly["close"].rolling(52, min_periods=10).min()
-    weekly["weekly_volume_ratio"] = weekly["volume"] / weekly["vol20w_avg"]
+    weekly.loc[:, "ma10w"] = weekly["close"].rolling(10).mean()
+    weekly.loc[:, "ma30w"] = weekly["close"].rolling(30).mean()
+    weekly.loc[:, "ma40w"] = weekly["close"].rolling(40).mean()
+    weekly.loc[:, "ma30w_slope_4w"] = weekly["ma30w"].pct_change(4, fill_method=None)
+    weekly.loc[:, "vol20w_avg"] = weekly["volume"].rolling(20).mean()
+    weekly.loc[:, "hi_52w"] = weekly["close"].rolling(52, min_periods=10).max()
+    weekly.loc[:, "lo_52w"] = weekly["close"].rolling(52, min_periods=10).min()
+    weekly.loc[:, "weekly_volume_ratio"] = weekly["volume"] / weekly["vol20w_avg"]
 
     # True range and ATR% (volatility expansion signal for S3)
     prev_close = weekly["close"].shift(1)
@@ -55,10 +56,10 @@ def to_weekly(daily: pd.DataFrame) -> pd.DataFrame:
         ],
         axis=1,
     ).max(axis=1)
-    weekly["atr10w"] = tr.rolling(10).mean()
-    weekly["atr30w"] = tr.rolling(30).mean()
-    weekly["atr_pct_10w"] = weekly["atr10w"] / weekly["close"]
-    weekly["atr_pct_30w"] = weekly["atr30w"] / weekly["close"]
+    weekly.loc[:, "atr10w"] = tr.rolling(10).mean()
+    weekly.loc[:, "atr30w"] = tr.rolling(30).mean()
+    weekly.loc[:, "atr_pct_10w"] = weekly["atr10w"] / weekly["close"]
+    weekly.loc[:, "atr_pct_30w"] = weekly["atr30w"] / weekly["close"]
 
     return weekly
 
@@ -69,6 +70,6 @@ def _ensure_dt_index(daily: pd.DataFrame) -> pd.DataFrame:
     for col in ("date", "timestamp", "Date"):
         if col in daily.columns:
             out = daily.copy()
-            out[col] = pd.to_datetime(out[col])
+            out.loc[:, col] = pd.to_datetime(out[col])
             return out.set_index(col).sort_index()
     raise ValueError("daily frame needs DatetimeIndex or date/timestamp column")

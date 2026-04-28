@@ -1,7 +1,6 @@
 """Rule-based DQ engine for staged pipeline validation."""
 
 from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
@@ -9,7 +8,11 @@ from typing import Dict, List
 import duckdb
 import pandas as pd
 
-from ai_trading_system.domains.ingest.trust import load_data_trust_summary
+from ai_trading_system.domains.ingest.trust import (
+    effective_symbol_threshold,
+    load_critical_symbol_universe,
+    load_data_trust_summary,
+)
 from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.pipeline.contracts import DataQualityCriticalError, StageContext, StageResult
 
@@ -341,9 +344,14 @@ class DataQualityEngine:
             or 10
         )
         max_unresolved_symbol_ratio_pct = float(context.params.get("dq_max_unresolved_symbol_ratio_pct", 1.0) or 1.0)
+        effective_max_unresolved_symbols = effective_symbol_threshold(
+            base_threshold=max_unresolved_symbols,
+            ratio_threshold=(max_unresolved_symbol_ratio_pct / 100.0),
+            eligible_total=active_eligible_symbol_count,
+        )
 
         date_threshold_failed = unresolved_date_count > max_unresolved_dates
-        symbol_threshold_failed = unresolved_symbol_count > max_unresolved_symbols
+        symbol_threshold_failed = unresolved_symbol_count > effective_max_unresolved_symbols
         ratio_threshold_failed = unresolved_symbol_ratio_pct > max_unresolved_symbol_ratio_pct
 
         # Breadth is the primary safety signal. A multi-date gap affecting only a tiny,
@@ -358,6 +366,7 @@ class DataQualityEngine:
                 f"ratio={unresolved_symbol_ratio_pct:.2f}% "
                 f"(max_dates={max_unresolved_dates}, "
                 f"max_symbols={max_unresolved_symbols}, "
+                f"effective_max_symbols={effective_max_unresolved_symbols}, "
                 f"max_ratio={max_unresolved_symbol_ratio_pct:.2f}%)."
             )
             if date_threshold_failed and not failed_count:
@@ -383,45 +392,76 @@ class DataQualityEngine:
             )
         raw_lookback = context.params.get("dq_features_quarantine_lookback_days", 7)
         lookback_days = 7 if raw_lookback in (None, "") else int(raw_lookback)
-        query = f"""
-            SELECT
-                COUNT(*) AS quarantined_rows,
-                COUNT(DISTINCT symbol_id) AS quarantined_symbols
+        trust_summary = load_data_trust_summary(context.db_path, run_date=context.run_date)
+        latest_trade_date = str((trust_summary.get("latest_provider_stats") or {}).get("trade_date") or context.run_date)
+        active_rows = self._fetchall(
+            context.db_path,
+            f"""
+            SELECT CAST(trade_date AS DATE) AS trade_date, symbol_id
             FROM _catalog_quarantine
             WHERE exchange = 'NSE'
               AND status = 'active'
               AND trade_date >= DATE {self._sql_literal(context.run_date)} - INTERVAL {lookback_days} DAY
-        """
-        stats_row = self._fetchone(context.db_path, query)
-        quarantined_rows = int(stats_row[0] or 0) if stats_row else 0
-        quarantined_symbols = int(stats_row[1] or 0) if stats_row else 0
-
-        trust_summary = load_data_trust_summary(context.db_path, run_date=context.run_date)
-        latest_total_rows = int(
-            ((trust_summary.get("latest_provider_stats") or {}).get("total_rows", 0) or 0)
+            """,
         )
-        quarantined_symbol_ratio_pct = (
-            (quarantined_symbols * 100.0 / latest_total_rows)
-            if latest_total_rows > 0
-            else (100.0 if quarantined_symbols > 0 else 0.0)
+        quarantined_rows = int(len(active_rows))
+        quarantined_symbols = {
+            str(symbol_id).strip().upper()
+            for _, symbol_id in active_rows
+            if str(symbol_id).strip()
+        }
+        critical_symbols = load_critical_symbol_universe(
+            context.db_path,
+            run_date=latest_trade_date,
+        )
+        if not critical_symbols and quarantined_symbols:
+            critical_symbols = set(quarantined_symbols)
+
+        latest_critical_symbols = {
+            str(symbol_id).strip().upper()
+            for trade_date, symbol_id in active_rows
+            if str(trade_date) == latest_trade_date
+            and str(symbol_id).strip().upper() in critical_symbols
+        }
+        latest_noncritical_symbols = {
+            str(symbol_id).strip().upper()
+            for trade_date, symbol_id in active_rows
+            if str(trade_date) == latest_trade_date
+            and str(symbol_id).strip().upper() not in critical_symbols
+        }
+        critical_universe_count = int(len(critical_symbols))
+        critical_quarantined_symbol_count = int(len(latest_critical_symbols))
+        critical_quarantined_symbol_ratio_pct = (
+            (critical_quarantined_symbol_count * 100.0 / critical_universe_count)
+            if critical_universe_count > 0
+            else (100.0 if critical_quarantined_symbol_count > 0 else 0.0)
         )
         max_quarantined_symbols = int(context.params.get("dq_features_max_quarantined_symbols", 10) or 10)
         max_quarantined_symbol_ratio_pct = float(
             context.params.get("dq_features_max_quarantined_symbol_ratio_pct", 1.0) or 1.0
         )
+        effective_max_quarantined_symbols = effective_symbol_threshold(
+            base_threshold=max_quarantined_symbols,
+            ratio_threshold=(max_quarantined_symbol_ratio_pct / 100.0),
+            eligible_total=critical_universe_count,
+        )
 
         failed_count = int(
-            quarantined_symbols > max_quarantined_symbols
-            or quarantined_symbol_ratio_pct > max_quarantined_symbol_ratio_pct
+            critical_quarantined_symbol_count > effective_max_quarantined_symbols
+            or critical_quarantined_symbol_ratio_pct > max_quarantined_symbol_ratio_pct
         )
         message = (
             "No active quarantine rows remain in the current trust window."
             if quarantined_rows == 0
             else (
                 "Active quarantine rows remain in the current trust window "
-                f"(rows={quarantined_rows}, symbols={quarantined_symbols}, "
-                f"ratio={quarantined_symbol_ratio_pct:.2f}% "
+                f"(rows={quarantined_rows}, symbols={len(quarantined_symbols)}, "
+                f"latest_critical_symbols={critical_quarantined_symbol_count}, "
+                f"latest_noncritical_symbols={len(latest_noncritical_symbols)}, "
+                f"critical_universe={critical_universe_count}, "
+                f"critical_ratio={critical_quarantined_symbol_ratio_pct:.2f}% "
                 f"max_symbols={max_quarantined_symbols}, "
+                f"effective_max_symbols={effective_max_quarantined_symbols}, "
                 f"max_ratio={max_quarantined_symbol_ratio_pct:.2f}%)."
             )
         )
@@ -511,6 +551,13 @@ class DataQualityEngine:
         conn = duckdb.connect(str(db_path), read_only=True)
         try:
             return conn.execute(query).fetchone()
+        finally:
+            conn.close()
+
+    def _fetchall(self, db_path: Path, query: str) -> list[tuple]:
+        conn = duckdb.connect(str(db_path), read_only=True)
+        try:
+            return conn.execute(query).fetchall()
         finally:
             conn.close()
 
