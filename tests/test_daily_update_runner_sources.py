@@ -715,6 +715,62 @@ def test_daily_update_runner_applies_stale_grace_to_unresolved_dates(
     assert result["stale_missing_symbols"] == ["AAA"]
 
 
+def test_daily_update_runner_honors_explicit_target_end_date(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class DummyCollector:
+        def __init__(self, *args, **kwargs) -> None:
+            self.db_path = str(tmp_path / "ohlcv.duckdb")
+            self.masterdb_path = str(tmp_path / "masterdata.db")
+            self.feature_store_dir = str(tmp_path / "feature_store")
+            self.data_domain = "operational"
+
+        def get_symbols_from_masterdb(self, exchanges=None):
+            return [
+                {
+                    "symbol_id": "AAA",
+                    "security_id": "101",
+                    "symbol_name": "AAA Ltd",
+                    "industry_group": "Test Group",
+                    "industry": "Test Industry",
+                    "exchange": "NSE",
+                }
+            ]
+
+        def _get_last_dates(self, exchanges=None):
+            return {}
+
+        def _upsert_ohlcv(self, dfs):
+            return sum(len(df) for df in dfs)
+
+    captured: dict[str, object] = {}
+
+    def fake_fetch_nse_bhavcopy_rows(*, trade_dates, **kwargs):
+        captured["trade_dates"] = list(trade_dates)
+        return pd.DataFrame(), [], list(trade_dates)
+
+    monkeypatch.setattr(daily_update_runner, "project_root", str(tmp_path))
+    monkeypatch.setattr(daily_update_runner, "datetime", _FixedDateTime)
+    monkeypatch.setattr(daily_update_runner, "DhanCollector", DummyCollector)
+    monkeypatch.setattr(daily_update_runner, "_fetch_nse_bhavcopy_rows", fake_fetch_nse_bhavcopy_rows)
+    monkeypatch.setattr(daily_update_runner, "_fetch_yfinance_rows", lambda **kwargs: pd.DataFrame())
+
+    result = daily_update_runner.run(
+        symbols_only=True,
+        features_only=False,
+        batch_size=50,
+        bulk=False,
+        nse_primary=True,
+        data_domain="operational",
+        target_end_date="2026-04-07",
+    )
+
+    assert captured["trade_dates"][-1] == "2026-04-07"
+    assert "2026-04-07" in captured["trade_dates"]
+    assert result["target_end_date"] == "2026-04-07"
+
+
 def test_daily_update_runner_dhan_historical_mode_calls_collector_daily_update(
     tmp_path: Path,
     monkeypatch,

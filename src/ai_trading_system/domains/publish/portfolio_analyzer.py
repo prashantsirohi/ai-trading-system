@@ -242,7 +242,7 @@ class Portfolio:
         df = pd.DataFrame(data)
 
         if not df.empty:
-            df["weight"] = df["market_value"] / self.total_market_value * 100
+            df = df.assign(weight=df["market_value"] / self.total_market_value * 100)
             df = df.sort_values("market_value", ascending=False)
 
         return df

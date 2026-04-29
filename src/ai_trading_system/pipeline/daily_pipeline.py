@@ -16,6 +16,7 @@ Usage:
 """
 
 import os
+import re
 import sys
 from datetime import datetime, timedelta
 from typing import Iterable
@@ -154,6 +155,41 @@ def _requested_stages_already_finished(
     )
 
 
+_PORTFOLIO_SUMMARY_LABELS = {
+    "",
+    "cash",
+    "positions",
+    "summary",
+    "total",
+    "total p&l",
+    "total pnl",
+    "total value",
+}
+_PORTFOLIO_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9&.-]{0,29}$")
+
+
+def _parse_portfolio_sheet_positions(values: list[list[str]]) -> list[dict[str, float | str]]:
+    """Extract holding rows from a portfolio sheet, skipping generated summary rows."""
+    data: list[dict[str, float | str]] = []
+    for row in values[1:]:
+        if not row or len(row) < 3:
+            continue
+        symbol = str(row[0]).strip().upper()
+        if symbol.lower() in _PORTFOLIO_SUMMARY_LABELS:
+            continue
+        if not _PORTFOLIO_SYMBOL_RE.fullmatch(symbol):
+            continue
+        try:
+            qty = float(str(row[1]).replace(",", "")) if row[1] else 0.0
+            avg_price = float(str(row[2]).replace(",", "")) if row[2] else 0.0
+        except (ValueError, TypeError):
+            continue
+        if qty <= 0 or avg_price < 0:
+            continue
+        data.append({"Symbol": symbol, "Qty": qty, "Avg Price": avg_price})
+    return data
+
+
 def run_portfolio_analysis():
     """Run portfolio analysis from Google Sheets."""
     try:
@@ -190,28 +226,7 @@ def run_portfolio_analysis():
                 # Use get_all_values to read raw data (first 3 columns only)
                 values = ws.get_all_values()
                 if values and len(values) > 1:
-                    data = []
-                    for row in values[1:]:
-                        if row and len(row) >= 3:
-                            try:
-                                symbol = str(row[0]).strip()
-                                qty = float(row[1]) if row[1] else 0
-                                avg_price = float(row[2]) if row[2] else 0
-                                # Skip summary rows
-                                if (
-                                    symbol.lower() in ["total", "summary", ""]
-                                    or "positions" in symbol.lower()
-                                ):
-                                    continue
-                                data.append(
-                                    {
-                                        "Symbol": symbol,
-                                        "Qty": qty,
-                                        "Avg Price": avg_price,
-                                    }
-                                )
-                            except (ValueError, TypeError):
-                                continue
+                    data = _parse_portfolio_sheet_positions(values)
                     logger.info(f"Loaded {len(data)} positions from PORTFOLIO sheet")
 
                     # Get current prices from Yahoo Finance (more reliable than Dhan)

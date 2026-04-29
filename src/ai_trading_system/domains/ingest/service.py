@@ -52,6 +52,7 @@ class IngestOrchestrationService:
                 canary_symbol_limit=context.params.get("canary_symbol_limit"),
                 data_domain=context.params.get("data_domain", "operational"),
                 run_id=context.run_id,
+                target_end_date=context.run_date,
                 stale_missing_symbol_grace_days=int(context.params.get("stale_missing_symbol_grace_days", 3)),
                 nse_allow_yfinance_fallback=bool(context.params.get("nse_allow_yfinance_fallback", False)),
             )

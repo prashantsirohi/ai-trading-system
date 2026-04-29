@@ -142,8 +142,10 @@ def _load_operational_breadth(project_root: Path) -> pd.DataFrame:
         con.close()
     if breadth_df.empty:
         return pd.DataFrame(columns=["Date", "PctAbove200"])
-    breadth_df["trade_date"] = pd.to_datetime(breadth_df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    breadth_df["pct_above_200"] = pd.to_numeric(breadth_df["pct_above_200"], errors="coerce")
+    breadth_df = breadth_df.assign(
+        trade_date=pd.to_datetime(breadth_df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d"),
+        pct_above_200=pd.to_numeric(breadth_df["pct_above_200"], errors="coerce"),
+    )
     breadth_df = breadth_df.dropna(subset=["trade_date", "pct_above_200"])
     return breadth_df.rename(columns={"trade_date": "Date", "pct_above_200": "PctAbove200"}).reset_index(drop=True)
 

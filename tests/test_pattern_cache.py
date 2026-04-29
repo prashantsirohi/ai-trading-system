@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import duckdb
@@ -403,6 +404,60 @@ def test_build_pattern_lifecycle_snapshot_tolerates_missing_pattern_score_on_fre
     assert len(snapshot) == 1
     assert snapshot.iloc[0]["symbol_id"] == "BBB"
     assert snapshot.iloc[0]["pattern_lifecycle_state"] == "confirmed"
+    assert "pattern_score" in snapshot.columns
+
+
+def test_build_pattern_lifecycle_snapshot_avoids_all_na_concat_warning() -> None:
+    previous = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "exchange": "NSE",
+                "pattern_family": "flag",
+                "pattern_state": "watchlist",
+                "pattern_lifecycle_state": "watchlist",
+                "signal_date": "2026-04-14",
+                "as_of_date": "2026-04-18",
+                "fresh_signal_date": "2026-04-14",
+                "first_seen_date": "2026-04-14",
+                "last_seen_date": "2026-04-18",
+                "carry_forward_bars": 2,
+                "invalidation_price": 95.0,
+                "pattern_score": None,
+                "optional_all_na_context": None,
+            }
+        ]
+    )
+    fresh = pd.DataFrame(
+        [
+            {
+                "symbol_id": "BBB",
+                "exchange": "NSE",
+                "pattern_family": "vcp",
+                "pattern_state": "confirmed",
+                "signal_date": "2026-04-21",
+                "invalidation_price": 190.0,
+                "pattern_score": None,
+                "optional_all_na_context": None,
+            }
+        ]
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        snapshot = _build_pattern_lifecycle_snapshot(
+            fresh_signals_df=fresh,
+            previous_snapshot_df=previous,
+            market_frame=pd.DataFrame(),
+            as_of_date="2026-04-21",
+            exchange="NSE",
+            scan_mode="incremental",
+            watchlist_expiry_bars=10,
+            confirmed_expiry_bars=20,
+            invalidated_retention_bars=5,
+        )
+
+    assert snapshot["symbol_id"].tolist() == ["BBB", "AAA"]
     assert "pattern_score" in snapshot.columns
 
 

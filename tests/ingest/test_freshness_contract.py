@@ -49,3 +49,48 @@ def test_ingest_summary_includes_freshness_status(tmp_path: Path) -> None:
     service = IngestOrchestrationService(operation=lambda _ctx: {})
     payload = service.run_default(context)
     assert payload["freshness_status"] == "delayed"
+
+
+def test_ingest_service_passes_context_run_date_to_daily_update_runner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE _catalog (
+                symbol_id VARCHAR,
+                exchange VARCHAR,
+                timestamp TIMESTAMP
+            )
+            """
+        )
+    finally:
+        conn.close()
+
+    captured: dict[str, object] = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return {"target_end_date": kwargs["target_end_date"], "updated_symbols": []}
+
+    monkeypatch.setattr("ai_trading_system.domains.ingest.daily_update_runner.run", fake_run)
+
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=db_path,
+        run_id="run-2",
+        run_date="2026-04-08",
+        stage_name="ingest",
+        attempt_number=1,
+        params={"include_delivery": False, "validate_bhavcopy_after_ingest": False},
+    )
+
+    service = IngestOrchestrationService()
+    payload = service.run_default(context)
+
+    assert captured["target_end_date"] == "2026-04-08"
+    assert payload["target_end_date"] == "2026-04-08"
+    assert payload["freshness_status"] == "stale"

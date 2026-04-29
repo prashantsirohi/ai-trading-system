@@ -885,6 +885,7 @@ def _build_pattern_lifecycle_snapshot(
         parts.append(pd.DataFrame.from_records(carried_rows))
     if not parts:
         return pd.DataFrame()
+    parts = [part.dropna(axis=1, how="all") for part in parts]
     snapshot = pd.concat(parts, ignore_index=True, sort=False)
     if "pattern_score" not in snapshot.columns:
         snapshot.loc[:, "pattern_score"] = np.nan

@@ -714,6 +714,7 @@ def _run_nse_yfinance_daily_update(
     collector: DhanCollector,
     batch_size: int,
     symbol_limit: int | None,
+    target_end_date: date | None = None,
     run_id: str | None = None,
     days_history: int = 7,
     stale_missing_symbol_grace_days: int = 3,
@@ -728,8 +729,9 @@ def _run_nse_yfinance_daily_update(
         return {"error": "No symbols found in masterdb"}
 
     last_dates = collector._get_last_dates(exchanges=["NSE"])
-    run_date = datetime.now().date()
-    target_end_date = run_date - timedelta(days=1)
+    if target_end_date is None:
+        run_date = datetime.now().date()
+        target_end_date = run_date - timedelta(days=1)
     fallback_start = target_end_date - timedelta(days=days_history)
     earliest_needed = target_end_date + timedelta(days=1)
     updated_symbols: set[str] = set()
@@ -1288,6 +1290,7 @@ def run(
     full_rebuild: bool = False,
     feature_tail_bars: int = 252,
     run_id: str | None = None,
+    target_end_date: str | None = None,
     stale_missing_symbol_grace_days: int = 3,
     nse_allow_yfinance_fallback: bool = False,
     feature_progress_callback: Optional[Callable[[dict], None]] = None,
@@ -1437,10 +1440,12 @@ def run(
             logger.info("=" * 60)
             logger.info("MODE: Symbols Only - OHLCV fetch via NSE bhavcopy + yfinance fallback")
             logger.info("=" * 60)
+            parsed_target_end_date = date.fromisoformat(target_end_date) if target_end_date else None
             result = _run_nse_yfinance_daily_update(
                 collector=collector,
                 batch_size=batch_size,
                 symbol_limit=effective_symbol_limit,
+                target_end_date=parsed_target_end_date,
                 run_id=run_id,
                 stale_missing_symbol_grace_days=stale_missing_symbol_grace_days,
                 nse_allow_yfinance_fallback=bool(nse_allow_yfinance_fallback),

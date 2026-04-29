@@ -307,8 +307,10 @@ def _load_market_breadth_sma200(project_root: Path, start_date: str) -> pd.DataF
         con.close()
     if df.empty:
         return df
-    df["trade_date"] = pd.to_datetime(df["trade_date"])
-    df["pct_above_200"] = pd.to_numeric(df["pct_above_200"], errors="coerce")
+    df = df.assign(
+        trade_date=pd.to_datetime(df["trade_date"]),
+        pct_above_200=pd.to_numeric(df["pct_above_200"], errors="coerce"),
+    )
     return df.dropna(subset=["pct_above_200"])
 
 
@@ -359,12 +361,15 @@ def _sector_heatmap_html(sector_df: pd.DataFrame) -> str:
     if frame.empty:
         return "<p class='muted'>No sector rotation rows available.</p>"
     if "RS_20" in frame.columns and "rs_change_20" not in frame.columns and "RS" in frame.columns:
-        frame["rs_change_20"] = pd.to_numeric(frame["RS"], errors="coerce") - pd.to_numeric(frame["RS_20"], errors="coerce")
+        frame = frame.assign(
+            rs_change_20=pd.to_numeric(frame["RS"], errors="coerce")
+            - pd.to_numeric(frame["RS_20"], errors="coerce")
+        )
     metric_cols = [c for c in ["RS", "rs_change_20", "Momentum"] if c in frame.columns]
     if "Sector" not in frame.columns or not metric_cols:
         return _table_html(frame[["Sector"] + metric_cols] if "Sector" in frame.columns else frame)
 
-    frame["Sector"] = frame["Sector"].astype(str)
+    frame = frame.assign(Sector=frame["Sector"].astype(str))
     heatmap_df = frame[["Sector"] + metric_cols].dropna(how="all", subset=metric_cols)
     if heatmap_df.empty:
         return "<p class='muted'>Sector metrics unavailable for heatmap.</p>"

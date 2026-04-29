@@ -4,11 +4,23 @@ Fetches OHLCV data for NSE stocks.
 """
 
 import time
+import warnings
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 import pandas as pd
 import yfinance as yf
 from ai_trading_system.platform.logging.logger import logger
+
+
+def _download_yfinance(*args, **kwargs) -> pd.DataFrame:
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=".*ChainedAssignmentError.*",
+            category=FutureWarning,
+            module=r"yfinance(\.|$)",
+        )
+        return yf.download(*args, **kwargs)
 
 
 class YFinanceCollector:
@@ -35,7 +47,7 @@ class YFinanceCollector:
         nse_symbols = [f"{s}.NS" for s in symbols]
 
         try:
-            data = yf.download(
+            data = _download_yfinance(
                 nse_symbols,
                 period=period,
                 progress=False,
@@ -115,7 +127,7 @@ class YFinanceCollector:
         nse_symbols = [f"{s}.NS" for s in symbols]
 
         try:
-            data = yf.download(
+            data = _download_yfinance(
                 nse_symbols,
                 period="5d",
                 progress=False,

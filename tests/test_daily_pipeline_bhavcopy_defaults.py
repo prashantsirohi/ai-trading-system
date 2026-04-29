@@ -6,6 +6,26 @@ from datetime import datetime
 from ai_trading_system.pipeline import daily_pipeline
 
 
+def test_parse_portfolio_sheet_positions_skips_generated_summary_rows():
+    values = [
+        ["Symbol", "Qty", "Avg Price"],
+        ["RELIANCE", "50", "2500"],
+        ["Total Value", "125000", ""],
+        ["Cash", "10000", "0"],
+        ["Total P&L", "5000", "(4.00%)"],
+        ["Positions", "1", ""],
+        ["bad symbol", "10", "20"],
+        ["TCS", "30", "3,500"],
+    ]
+
+    positions = daily_pipeline._parse_portfolio_sheet_positions(values)
+
+    assert positions == [
+        {"Symbol": "RELIANCE", "Qty": 50.0, "Avg Price": 2500.0},
+        {"Symbol": "TCS", "Qty": 30.0, "Avg Price": 3500.0},
+    ]
+
+
 class _FakeDateTime(datetime):
     @classmethod
     def now(cls, tz=None):  # type: ignore[override]

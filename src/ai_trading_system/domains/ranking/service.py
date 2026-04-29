@@ -540,6 +540,38 @@ class RankOrchestrationService:
             ]
         _breakout_active = cfg.breakout_active
         _bt_market_stage = stage_info["market_stage"]
+        if _breakout_active:
+            breakout_builder = lambda: scan_breakouts(
+                ohlcv_db_path=str(context.db_path),
+                feature_store_dir=str(paths.feature_store_dir),
+                master_db_path=str(paths.master_db_path),
+                date=context.run_date,
+                ranked_df=ranked,
+                breakout_engine=str(effective_params.get("breakout_engine", "v2")),
+                include_legacy_families=bool(effective_params.get("breakout_include_legacy_families", True)),
+                market_bias_allowlist=breakout_market_bias_allowlist,
+                min_breadth_score=float(effective_params.get("breakout_min_breadth_score", 45.0)),
+                sector_rs_min=(
+                    float(effective_params.get("breakout_sector_rs_min"))
+                    if effective_params.get("breakout_sector_rs_min") not in (None, "")
+                    else None
+                ),
+                sector_rs_percentile_min=(
+                    float(effective_params.get("breakout_sector_rs_percentile_min", 60.0))
+                    if effective_params.get("breakout_sector_rs_percentile_min") not in (None, "")
+                    else None
+                ),
+                breakout_qualified_min_score=int(effective_params.get("breakout_qualified_min_score", 3)),
+                breakout_symbol_trend_gate_enabled=bool(
+                    effective_params.get("breakout_symbol_trend_gate_enabled", True)
+                ),
+                breakout_symbol_near_high_max_pct=float(
+                    effective_params.get("breakout_symbol_near_high_max_pct", 15.0)
+                ),
+                market_stage=_bt_market_stage,
+            )
+        else:
+            breakout_builder = lambda: pd.DataFrame()
         breakout_df, breakout_status = self.execute_rank_task(
             context=context,
             task_name="breakout_scan",
@@ -556,39 +588,7 @@ class RankOrchestrationService:
             task_status=task_status,
             previous_attempt=previous_attempt,
             previous_statuses=previous_statuses,
-            builder=(
-                lambda: scan_breakouts(
-                    ohlcv_db_path=str(context.db_path),
-                    feature_store_dir=str(paths.feature_store_dir),
-                    master_db_path=str(paths.master_db_path),
-                    date=context.run_date,
-                    ranked_df=ranked,
-                    breakout_engine=str(effective_params.get("breakout_engine", "v2")),
-                    include_legacy_families=bool(effective_params.get("breakout_include_legacy_families", True)),
-                    market_bias_allowlist=breakout_market_bias_allowlist,
-                    min_breadth_score=float(effective_params.get("breakout_min_breadth_score", 45.0)),
-                    sector_rs_min=(
-                        float(effective_params.get("breakout_sector_rs_min"))
-                        if effective_params.get("breakout_sector_rs_min") not in (None, "")
-                        else None
-                    ),
-                    sector_rs_percentile_min=(
-                        float(effective_params.get("breakout_sector_rs_percentile_min", 60.0))
-                        if effective_params.get("breakout_sector_rs_percentile_min") not in (None, "")
-                        else None
-                    ),
-                    breakout_qualified_min_score=int(effective_params.get("breakout_qualified_min_score", 3)),
-                    breakout_symbol_trend_gate_enabled=bool(
-                        effective_params.get("breakout_symbol_trend_gate_enabled", True)
-                    ),
-                    breakout_symbol_near_high_max_pct=float(
-                        effective_params.get("breakout_symbol_near_high_max_pct", 15.0)
-                    ),
-                    market_stage=_bt_market_stage,
-                )
-                if _breakout_active
-                else lambda: pd.DataFrame()
-            ),
+            builder=breakout_builder,
             optional=True,
         )
         outputs["breakout_scan"] = breakout_df
