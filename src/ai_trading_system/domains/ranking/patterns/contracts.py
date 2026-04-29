@@ -19,6 +19,7 @@ class PatternBacktestConfig:
     extrema_prominence: float = 0.02
     min_history_bars: int = 120
     breakout_volume_ratio_min: float = 1.5
+    volume_zscore_min: float = 2.0
     max_breakout_wait_bars: int = 15
     event_horizons: tuple[int, ...] = (5, 10, 20, 40)
     commission_rate: float = 0.001
@@ -51,6 +52,9 @@ class PatternBacktestConfig:
     flat_base_min_bars: int = 25
     flat_base_max_bars: int = 65
     flat_base_max_depth_pct: float = 0.15
+    stage2_reclaim_lookback_bars: int = 20
+    stage2_reclaim_max_extension_pct: float = 0.08
+    stage2_reclaim_min_slope_pct: float = 0.0
     wt3_tight_pct: float = 0.015
     wt3_prior_adv: float = 0.20
 
@@ -76,6 +80,7 @@ class PatternScanConfig:
     extrema_prominence: float = 0.02
     min_history_bars: int = 120
     breakout_volume_ratio_min: float = 1.5
+    volume_zscore_min: float = 2.0
     max_breakout_wait_bars: int = 15
     recent_signal_max_age_bars: int = 5
     prior_uptrend_lookback: int = 30
@@ -121,6 +126,9 @@ class PatternScanConfig:
     flat_base_min_bars: int = 25
     flat_base_max_bars: int = 65
     flat_base_max_depth_pct: float = 0.15
+    stage2_reclaim_lookback_bars: int = 20
+    stage2_reclaim_max_extension_pct: float = 0.08
+    stage2_reclaim_min_slope_pct: float = 0.0
     wt3_tight_pct: float = 0.015
     wt3_prior_adv: float = 0.20
 

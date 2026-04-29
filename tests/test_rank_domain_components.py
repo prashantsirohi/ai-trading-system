@@ -13,7 +13,12 @@ from ai_trading_system.domains.ranking.composite import (
 )
 from ai_trading_system.domains.ranking.contracts import DEFAULT_FACTOR_WEIGHTS
 from ai_trading_system.domains.ranking.factors import apply_sector_strength, apply_trend_persistence
-from ai_trading_system.domains.ranking.factors import apply_delivery
+from ai_trading_system.domains.ranking.factors import (
+    apply_delivery,
+    apply_momentum_acceleration,
+    apply_volume_intensity,
+    compute_penalty_score,
+)
 from ai_trading_system.domains.ranking.input_loader import RankerInputLoader
 
 
@@ -36,6 +41,11 @@ def test_load_factor_weights_overrides_defaults(tmp_path):
     assert weights["volume_intensity"] == pytest.approx(0.10)
     assert weights["sector_strength"] == pytest.approx(0.05)
     assert weights["trend_persistence"] == pytest.approx(DEFAULT_FACTOR_WEIGHTS["trend_persistence"])
+
+
+def test_default_factor_weights_sum_to_one_and_include_momentum_acceleration():
+    assert sum(DEFAULT_FACTOR_WEIGHTS.values()) == pytest.approx(1.0)
+    assert DEFAULT_FACTOR_WEIGHTS["momentum_acceleration"] == pytest.approx(0.08)
 
 
 def test_compute_factor_scores_preserves_rank_order_and_output_contract():
@@ -120,9 +130,9 @@ def test_compute_factor_scores_preserves_rank_order_and_output_contract():
         "rel_strength_score",
         "vol_intensity_score",
         "trend_score_score",
+        "momentum_acceleration_score",
         "prox_high_score",
         "delivery_pct_score",
-        "sector_strength_score",
     ]
 
 
@@ -203,6 +213,128 @@ def test_apply_delivery_imputes_from_sector_then_universe_median():
     assert scored.loc[scored["symbol_id"] == "DDD", "delivery_pct_imputed"].iloc[0]
     assert scored.loc[scored["symbol_id"] == "AAA", "delivery_pct_imputed"].iloc[0] == False
     assert scored.loc[scored["symbol_id"] == "DDD", "delivery_pct_filled"].iloc[0] == pytest.approx(40.0)
+
+
+def test_momentum_acceleration_scores_improving_roc_higher():
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "IMPROVING",
+                "exchange": "NSE",
+                "return_5": 8.0,
+                "return_10": 5.0,
+                "return_20": 1.0,
+                "rel_strength": 70.0,
+                "vol_intensity": 1.5,
+                "trend_score": 70.0,
+                "prox_high": 10.0,
+                "delivery_pct": 45.0,
+                "sector_rs_value": 0.5,
+                "stock_vs_sector_value": 0.1,
+            },
+            {
+                "symbol_id": "FADING",
+                "exchange": "NSE",
+                "return_5": 1.0,
+                "return_10": 4.0,
+                "return_20": 8.0,
+                "rel_strength": 70.0,
+                "vol_intensity": 1.5,
+                "trend_score": 70.0,
+                "prox_high": 10.0,
+                "delivery_pct": 45.0,
+                "sector_rs_value": 0.5,
+                "stock_vs_sector_value": 0.1,
+            },
+        ]
+    )
+
+    accelerated = apply_momentum_acceleration(frame)
+    scored = compute_factor_scores(accelerated, weights=DEFAULT_FACTOR_WEIGHTS).set_index("symbol_id")
+
+    assert scored.loc["IMPROVING", "momentum_acceleration"] > scored.loc["FADING", "momentum_acceleration"]
+    assert scored.loc["IMPROVING", "momentum_acceleration_score"] > scored.loc["FADING", "momentum_acceleration_score"]
+
+
+def test_volume_intensity_normalization_caps_outlier_influence():
+    data = pd.DataFrame(
+        [
+            {"symbol_id": "NORMAL", "exchange": "NSE", "volume": 2000.0},
+            {"symbol_id": "OUTLIER", "exchange": "NSE", "volume": 100000.0},
+        ]
+    )
+    volume_frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "NORMAL",
+                "exchange": "NSE",
+                "vol_20_avg": 1000.0,
+                "vol_20_max": 2500.0,
+                "volume_zscore_20": 2.0,
+            },
+            {
+                "symbol_id": "OUTLIER",
+                "exchange": "NSE",
+                "vol_20_avg": 1000.0,
+                "vol_20_max": 100000.0,
+                "volume_zscore_20": 50.0,
+            },
+        ]
+    )
+
+    scored = apply_volume_intensity(data, volume_frame=volume_frame).set_index("symbol_id")
+
+    assert scored.loc["OUTLIER", "vol_intensity"] == pytest.approx(100.0)
+    assert scored.loc["OUTLIER", "volume_intensity_normalized"] == pytest.approx(4.4)
+    assert scored.loc["NORMAL", "volume_intensity_normalized"] == pytest.approx(2.0)
+
+
+def test_exhaustion_penalty_lowers_adjusted_composite_score():
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "CLIMAX",
+                "close": 125.0,
+                "sma_20": 100.0,
+                "volume_zscore_20": 4.2,
+                "composite_score": 90.0,
+            },
+            {
+                "symbol_id": "CLEAN",
+                "close": 102.0,
+                "sma_20": 100.0,
+                "volume_zscore_20": 0.5,
+                "composite_score": 90.0,
+            },
+        ]
+    )
+
+    out = compute_penalty_score(frame)
+    out.loc[:, "composite_score_adjusted"] = out["composite_score"] - out["penalty_score"]
+    out = out.set_index("symbol_id")
+
+    assert out.loc["CLIMAX", "exhaustion_penalty"] == pytest.approx(8.0)
+    assert out.loc["CLIMAX", "exhaustion_flag"] == "strong_exhaustion"
+    assert out.loc["CLIMAX", "composite_score_adjusted"] < out.loc["CLEAN", "composite_score_adjusted"]
+
+
+def test_pivot_distance_penalty_requires_valid_pivot_and_atr():
+    frame = pd.DataFrame(
+        [
+            {"symbol_id": "NEAR", "close": 105.0, "breakout_level": 100.0, "atr_14": 4.0},
+            {"symbol_id": "FAR", "close": 112.0, "breakout_level": 100.0, "atr_14": 4.0},
+            {"symbol_id": "NO_PIVOT", "close": 112.0, "atr_14": 4.0},
+            {"symbol_id": "NO_ATR", "close": 112.0, "breakout_level": 100.0},
+        ]
+    )
+
+    out = compute_penalty_score(frame).set_index("symbol_id")
+
+    assert out.loc["NEAR", "pivot_distance_penalty"] == pytest.approx(0.0)
+    assert out.loc["FAR", "distance_from_pivot_atr"] == pytest.approx(3.0)
+    assert out.loc["FAR", "pivot_distance_penalty"] == pytest.approx(6.0)
+    assert out.loc["NO_PIVOT", "pivot_distance_penalty"] == pytest.approx(0.0)
+    assert out.loc["NO_ATR", "pivot_distance_penalty"] == pytest.approx(0.0)
 
 
 def test_compute_factor_scores_sector_demeans_sector_sensitive_raw_factors():
@@ -448,3 +580,135 @@ def test_stock_ranker_rank_all_preserves_stage2_columns_from_stage2_enrichment(t
     assert row_bbb["stage2_score"] == pytest.approx(58.0)
     assert bool(row_bbb["is_stage2_structural"]) is False
     assert row_bbb["stage2_label"] == "stage1_to_stage2"
+
+
+def test_stage2_age_bonuses_and_warnings_are_added() -> None:
+    ranker = StockRanker.__new__(StockRanker)
+    frame = pd.DataFrame(
+        [
+            {"symbol_id": "FRESH", "weekly_stage_label": "S2", "bars_in_stage": 4, "weekly_stage_transition": "NONE"},
+            {"symbol_id": "MID", "weekly_stage_label": "S2", "bars_in_stage": 12, "weekly_stage_transition": "NONE"},
+            {"symbol_id": "MATURE", "weekly_stage_label": "S2", "bars_in_stage": 18, "weekly_stage_transition": "NONE"},
+            {"symbol_id": "TRANS", "weekly_stage_label": "S2", "bars_in_stage": 3, "weekly_stage_transition": "S1_TO_S2"},
+        ]
+    )
+
+    out = ranker._apply_stage2_age_bonuses(frame).set_index("symbol_id")
+
+    assert out.loc["FRESH", "stage2_freshness_bonus"] == pytest.approx(4.0)
+    assert out.loc["MID", "stage2_freshness_bonus"] == pytest.approx(2.0)
+    assert out.loc["MATURE", "stage2_freshness_bonus"] == pytest.approx(0.0)
+    assert out.loc["MATURE", "stage2_age_warning"] == "mature_stage2"
+    assert out.loc["TRANS", "stage2_transition_bonus"] == pytest.approx(5.0)
+
+
+def test_stage2_transition_bonus_ranks_above_mature_s2_and_clips_adjusted_score() -> None:
+    ranker = StockRanker.__new__(StockRanker)
+    frame = pd.DataFrame(
+        [
+                {
+                    "symbol_id": "MATURE",
+                    "composite_score": 96.0,
+                    "stage2_score_bonus": 0.0,
+                "penalty_score": 0.0,
+                "weekly_stage_label": "S2",
+                "bars_in_stage": 20,
+                "weekly_stage_transition": "NONE",
+            },
+            {
+                "symbol_id": "TRANS",
+                "composite_score": 96.0,
+                "stage2_score_bonus": 4.0,
+                "penalty_score": 0.0,
+                "weekly_stage_label": "S2",
+                "bars_in_stage": 2,
+                "weekly_stage_transition": "S1_TO_S2",
+            },
+        ]
+    )
+    scored = ranker._apply_stage2_age_bonuses(frame)
+    scored.loc[:, "composite_score_adjusted"] = (
+        scored["composite_score"]
+        + scored["stage2_score_bonus"]
+        + scored["stage2_freshness_bonus"]
+        + scored["stage2_transition_bonus"]
+        - scored["penalty_score"]
+    ).clip(0.0, 100.0)
+
+    ranked = filter_ranked_scores(scored, min_score=0.0, top_n=None)
+
+    assert ranked.iloc[0]["symbol_id"] == "TRANS"
+    assert ranked.iloc[0]["composite_score_adjusted"] == pytest.approx(100.0)
+    assert ranked.iloc[1]["stage2_age_warning"] == "mature_stage2"
+
+
+def test_rank_projection_includes_optional_stage2_age_columns() -> None:
+    projected = select_rank_output_columns(
+        pd.DataFrame(
+            [
+                {
+                    "symbol_id": "AAA",
+                    "exchange": "NSE",
+                    "close": 100.0,
+                    "composite_score": 90.0,
+                    "weekly_stage_label": "S2",
+                    "weekly_stage_confidence": 0.9,
+                    "weekly_stage_transition": "S1_TO_S2",
+                    "bars_in_stage": 2,
+                    "stage_entry_date": "2026-03-20",
+                    "stage2_freshness_bonus": 4.0,
+                    "stage2_transition_bonus": 5.0,
+                    "stage2_age_warning": "",
+                }
+            ]
+        )
+    )
+
+    assert {
+        "weekly_stage_label",
+        "weekly_stage_confidence",
+        "weekly_stage_transition",
+        "bars_in_stage",
+        "stage_entry_date",
+        "stage2_freshness_bonus",
+        "stage2_transition_bonus",
+        "stage2_age_warning",
+    }.issubset(projected.columns)
+
+
+def test_rank_projection_includes_optional_momentum_quality_columns() -> None:
+    projected = select_rank_output_columns(
+        pd.DataFrame(
+            [
+                {
+                    "symbol_id": "AAA",
+                    "exchange": "NSE",
+                    "close": 100.0,
+                    "composite_score": 90.0,
+                    "momentum_acceleration": 4.0,
+                    "momentum_acceleration_score": 80.0,
+                    "return_5": 5.0,
+                    "return_10": 4.0,
+                    "volume_zscore_20": 2.5,
+                    "volume_intensity_normalized": 2.1,
+                    "exhaustion_penalty": 3.0,
+                    "exhaustion_flag": "mild_exhaustion",
+                    "pivot_distance_penalty": 0.0,
+                    "distance_from_pivot_atr": 1.0,
+                }
+            ]
+        )
+    )
+
+    assert {
+        "momentum_acceleration",
+        "momentum_acceleration_score",
+        "return_5",
+        "return_10",
+        "volume_zscore_20",
+        "volume_intensity_normalized",
+        "exhaustion_penalty",
+        "exhaustion_flag",
+        "pivot_distance_penalty",
+        "distance_from_pivot_atr",
+    }.issubset(projected.columns)

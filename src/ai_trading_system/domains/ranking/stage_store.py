@@ -27,6 +27,8 @@ SCHEMA_COLUMNS: tuple[str, ...] = (
     "stage_label",
     "stage_confidence",
     "stage_transition",
+    "bars_in_stage",
+    "stage_entry_date",
     "ma10w",
     "ma30w",
     "ma40w",
@@ -46,6 +48,8 @@ CREATE TABLE IF NOT EXISTS weekly_stage_snapshot (
     stage_label          VARCHAR,
     stage_confidence     DOUBLE,
     stage_transition     VARCHAR,
+    bars_in_stage        INTEGER,
+    stage_entry_date     DATE,
     ma10w                DOUBLE,
     ma30w                DOUBLE,
     ma40w                DOUBLE,
@@ -74,6 +78,10 @@ def results_to_frame(
         d = asdict(r)
         # asdict gives us a Timestamp; coerce to date for the schema.
         d["week_end_date"] = pd.Timestamp(d["week_end_date"]).date()
+        if d.get("stage_entry_date") is not None and not pd.isna(d.get("stage_entry_date")):
+            d["stage_entry_date"] = pd.Timestamp(d["stage_entry_date"]).date()
+        else:
+            d["stage_entry_date"] = None
         d["created_at"] = ts
         d["run_id"] = run_id
         rows.append(d)
@@ -150,7 +158,7 @@ def read_latest_snapshot(
                 PARTITION BY symbol ORDER BY week_end_date DESC
             ) = 1
         """
-        return conn.execute(sql, params).fetchdf()
+        return _ensure_snapshot_columns(conn.execute(sql, params).fetchdf())
     finally:
         conn.close()
 
@@ -182,6 +190,43 @@ def get_prior_stage(
         conn.close()
 
 
+def get_prior_stage_state(
+    ohlcv_db_path: Path | str,
+    *,
+    symbol: str,
+    before_date: str,
+) -> dict[str, object] | None:
+    """Look up the previous stage state used for stage age continuity."""
+    db_path = Path(ohlcv_db_path)
+    if not db_path.exists():
+        return None
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        if not _table_exists(conn, "weekly_stage_snapshot"):
+            return None
+        columns = _table_columns(conn, "weekly_stage_snapshot")
+        bars_expr = "bars_in_stage" if "bars_in_stage" in columns else "NULL AS bars_in_stage"
+        entry_expr = "stage_entry_date" if "stage_entry_date" in columns else "NULL AS stage_entry_date"
+        row = conn.execute(
+            f"""
+            SELECT stage_label, {bars_expr}, {entry_expr}
+            FROM weekly_stage_snapshot
+            WHERE symbol = ? AND week_end_date < CAST(? AS DATE)
+            ORDER BY week_end_date DESC LIMIT 1
+            """,
+            [symbol, before_date],
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "stage_label": row[0],
+            "bars_in_stage": row[1],
+            "stage_entry_date": row[2],
+        }
+    finally:
+        conn.close()
+
+
 # ---- internals ----
 
 def _write_parquet(frame: pd.DataFrame, parquet_root: Path | str) -> Path:
@@ -207,6 +252,7 @@ def _upsert_duckdb(frame: pd.DataFrame, db_path: Path | str) -> None:
     conn = duckdb.connect(str(db_path))
     try:
         conn.execute(CREATE_TABLE_SQL)
+        _migrate_weekly_stage_snapshot(conn)
         conn.register("staging_df", frame)
         # Replace rows on conflict by deleting existing keys then inserting.
         conn.execute(
@@ -231,3 +277,27 @@ def _table_exists(conn: duckdb.DuckDBPyConnection, name: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM information_schema.tables WHERE table_name = ?", [name]
     ).fetchone() is not None
+
+
+def _table_columns(conn: duckdb.DuckDBPyConnection, name: str) -> set[str]:
+    rows = conn.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+        [name],
+    ).fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def _migrate_weekly_stage_snapshot(conn: duckdb.DuckDBPyConnection) -> None:
+    columns = _table_columns(conn, "weekly_stage_snapshot")
+    if "bars_in_stage" not in columns:
+        conn.execute("ALTER TABLE weekly_stage_snapshot ADD COLUMN bars_in_stage INTEGER")
+    if "stage_entry_date" not in columns:
+        conn.execute("ALTER TABLE weekly_stage_snapshot ADD COLUMN stage_entry_date DATE")
+
+
+def _ensure_snapshot_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    output = frame.copy()
+    for column in SCHEMA_COLUMNS:
+        if column not in output.columns:
+            output.loc[:, column] = pd.NA
+    return output[list(SCHEMA_COLUMNS)] if not output.empty else pd.DataFrame(columns=list(SCHEMA_COLUMNS))

@@ -90,6 +90,13 @@ def load_pattern_frame(
         or frame["volume_zscore_50"].isna().all()
     ):
         frame = add_volume_zscore_features(frame)
+    if "sma_150" not in frame.columns:
+        frame.loc[:, "sma_150"] = by_symbol["close"].transform(
+            lambda series: series.rolling(150, min_periods=100).mean()
+        )
+    frame.loc[:, "sma150_slope_20d_pct"] = frame.groupby("symbol_id", group_keys=False)["sma_150"].transform(
+        lambda series: series.pct_change(20, fill_method=None) * 100.0
+    )
 
     frame.loc[:, "sma50_slope_20d_pct"] = by_symbol["sma_50"].transform(
         lambda series: series.pct_change(20, fill_method=None) * 100.0
@@ -114,7 +121,9 @@ def load_pattern_frame(
         "volume_zscore_50",
         "sma_20",
         "sma_50",
+        "sma_150",
         "sma_200",
+        "sma150_slope_20d_pct",
         "sma50_slope_20d_pct",
         "above_sma200",
         "return_5d",

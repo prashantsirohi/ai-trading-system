@@ -7,10 +7,12 @@ from pathlib import Path
 import duckdb
 import numpy as np
 import pandas as pd
+import pytest
 
 from ai_trading_system.analytics.patterns.contracts import PatternBacktestConfig, PatternScanConfig
 from ai_trading_system.analytics.patterns.data import load_pattern_frame
 from ai_trading_system.analytics.patterns.detectors import (
+    _build_signal,
     _score_signal_rows,
     detect_cup_handle_events,
     detect_cup_handle_signals,
@@ -18,6 +20,8 @@ from ai_trading_system.analytics.patterns.detectors import (
     detect_double_bottom_signals,
     detect_flag_signals,
     detect_flat_base_signals,
+    detect_pattern_signals_for_symbol,
+    detect_stage2_reclaim_signals,
     detect_vcp_signals,
     detect_round_bottom_events,
 )
@@ -37,6 +41,7 @@ def _make_price_frame(
     symbol_id: str = "TEST",
     breakout_volume_idx: int | None = None,
     breakout_volume_ratio: float = 2.0,
+    breakout_volume_zscore: float | None = 2.5,
 ) -> pd.DataFrame:
     dates = pd.date_range("2024-01-01", periods=len(close_values), freq="B")
     close = pd.Series(close_values, dtype=float)
@@ -68,10 +73,16 @@ def _make_price_frame(
     frame.loc[max(0, trough_idx - 2) : min(len(frame) - 1, trough_idx + 2), "volume_ratio_20"] = 0.7
     if breakout_volume_idx is not None:
         frame.loc[breakout_volume_idx, "volume_ratio_20"] = breakout_volume_ratio
+        frame.loc[breakout_volume_idx, "volume_zscore_20"] = breakout_volume_zscore
     return frame
 
 
-def _cup_handle_frame(*, symbol_id: str = "CUP", breakout_volume_ratio: float = 2.0) -> pd.DataFrame:
+def _cup_handle_frame(
+    *,
+    symbol_id: str = "CUP",
+    breakout_volume_ratio: float = 2.0,
+    breakout_volume_zscore: float | None = 2.5,
+) -> pd.DataFrame:
     close = (
         list(pd.Series(range(100, 120)))
         + [122.0]
@@ -86,6 +97,7 @@ def _cup_handle_frame(*, symbol_id: str = "CUP", breakout_volume_ratio: float = 
         symbol_id=symbol_id,
         breakout_volume_idx=breakout_idx,
         breakout_volume_ratio=breakout_volume_ratio,
+        breakout_volume_zscore=breakout_volume_zscore,
     )
 
 
@@ -297,7 +309,7 @@ def test_breakout_without_volume_confirmation_is_rejected() -> None:
     assert events == []
 
 
-def test_breakout_can_confirm_from_z20_when_ratio_is_weak() -> None:
+def test_breakout_zscore_alone_does_not_confirm_when_ratio_is_weak() -> None:
     frame = _cup_handle_frame(breakout_volume_ratio=1.1)
     breakout_idx = len(frame) - 5
     frame.loc[breakout_idx, "volume_zscore_20"] = 2.6
@@ -307,8 +319,43 @@ def test_breakout_can_confirm_from_z20_when_ratio_is_weak() -> None:
 
     events, _ = detect_cup_handle_events(frame, smoothed=smoothed, extrema=extrema, config=config)
 
-    assert len(events) == 1
-    assert events[0].breakout_volume_confirmed is True
+    assert events == []
+
+
+def test_breakout_ratio_alone_does_not_confirm_when_zscores_are_missing() -> None:
+    frame = _cup_handle_frame(breakout_volume_ratio=2.0, breakout_volume_zscore=None)
+    breakout_idx = len(frame) - 5
+    frame.loc[breakout_idx, ["volume_zscore_20", "volume_zscore_50"]] = np.nan
+    config = _detector_config()
+    smoothed = kernel_smooth(frame["close"], bandwidth=config.bandwidth)
+    extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
+
+    events, _ = detect_cup_handle_events(frame, smoothed=smoothed, extrema=extrema, config=config)
+
+    assert events == []
+
+
+def test_breakout_confirms_with_ratio_and_either_zscore() -> None:
+    config = _detector_config()
+
+    z20_frame = _cup_handle_frame(symbol_id="Z20", breakout_volume_ratio=2.0)
+    z20_idx = len(z20_frame) - 5
+    z20_frame.loc[z20_idx, ["volume_zscore_20", "volume_zscore_50"]] = [2.6, np.nan]
+    z20_smoothed = kernel_smooth(z20_frame["close"], bandwidth=config.bandwidth)
+    z20_extrema = find_local_extrema(z20_smoothed, prominence=config.extrema_prominence)
+    z20_events, _ = detect_cup_handle_events(z20_frame, smoothed=z20_smoothed, extrema=z20_extrema, config=config)
+
+    z50_frame = _cup_handle_frame(symbol_id="Z50", breakout_volume_ratio=2.0)
+    z50_idx = len(z50_frame) - 5
+    z50_frame.loc[z50_idx, ["volume_zscore_20", "volume_zscore_50"]] = [np.nan, 2.6]
+    z50_smoothed = kernel_smooth(z50_frame["close"], bandwidth=config.bandwidth)
+    z50_extrema = find_local_extrema(z50_smoothed, prominence=config.extrema_prominence)
+    z50_events, _ = detect_cup_handle_events(z50_frame, smoothed=z50_smoothed, extrema=z50_extrema, config=config)
+
+    assert len(z20_events) == 1
+    assert len(z50_events) == 1
+    assert z20_events[0].breakout_volume_confirmed is True
+    assert z50_events[0].breakout_volume_confirmed is True
 
 
 def test_non_breakout_watchlist_is_not_upgraded_by_zscore_alone() -> None:
@@ -327,6 +374,71 @@ def test_non_breakout_watchlist_is_not_upgraded_by_zscore_alone() -> None:
 
     assert stats.confirmed_count == 0
     assert any(signal.pattern_state == "watchlist" for signal in signals)
+
+
+def test_missing_volume_ratio_column_returns_no_confirmation() -> None:
+    frame = _cup_handle_frame().drop(columns=["volume_ratio_20"])
+    config = _scan_config()
+    smoothed = kernel_smooth(frame["close"], bandwidth=config.bandwidth)
+    extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
+
+    signals, stats = detect_cup_handle_signals(frame, smoothed=smoothed, extrema=extrema, config=config)
+
+    assert signals == []
+    assert stats.confirmed_count == 0
+
+
+def test_missing_zscore_columns_do_not_confirm_breakout() -> None:
+    frame = _cup_handle_frame().drop(columns=["volume_zscore_20", "volume_zscore_50"])
+    config = _scan_config()
+    smoothed = kernel_smooth(frame["close"], bandwidth=config.bandwidth)
+    extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
+
+    signals, stats = detect_cup_handle_signals(frame, smoothed=smoothed, extrema=extrema, config=config)
+
+    assert stats.confirmed_count == 0
+    assert not any(signal.pattern_state == "confirmed" for signal in signals)
+
+
+def test_constant_close_prices_emit_no_bullish_pattern_signal() -> None:
+    frame = _make_price_frame([100.0] * 140, symbol_id="FLATLINE")
+    config = _scan_config()
+    smoothed = kernel_smooth(frame["close"], bandwidth=config.bandwidth)
+    extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
+
+    signals_df, _ = detect_pattern_signals_for_symbol(
+        frame,
+        smoothed=smoothed,
+        extrema=extrema,
+        config=config,
+    )
+
+    assert extrema == []
+    assert signals_df.empty
+
+
+def test_build_signal_clamps_nonpositive_invalidation_price() -> None:
+    frame = _cup_handle_frame()
+    config = _scan_config()
+
+    signal = _build_signal(
+        frame=frame,
+        pattern_family="round_bottom",
+        pattern_state="confirmed",
+        signal_idx=len(frame) - 5,
+        pattern_start_idx=20,
+        pattern_end_idx=40,
+        breakout_level=125.0,
+        invalidation_price=-10.0,
+        setup_quality=50.0,
+        pivot_labels=("left_rim", "trough", "right_rim"),
+        pivot_indices=(20, 30, 40),
+        pivot_prices=(120.0, 90.0, 118.0),
+        config=config,
+        breakout_volume_ratio=2.0,
+    )
+
+    assert signal.invalidation_price > 0.0
 
 
 def test_detect_double_bottom_confirmed_and_watchlist() -> None:
@@ -416,7 +528,7 @@ def test_loose_flag_and_insufficient_high_tight_pole_are_rejected() -> None:
     assert weak_signals == []
 
 
-def test_build_pattern_signals_returns_confirmed_and_watchlist_with_deterministic_rank() -> None:
+def test_build_pattern_signals_returns_confirmed_and_watchlist_with_deterministic_rank(tmp_path: Path) -> None:
     frame = pd.concat(
         [
             _cup_handle_frame(symbol_id="CUP"),
@@ -432,7 +544,7 @@ def test_build_pattern_signals_returns_confirmed_and_watchlist_with_deterministi
     )
 
     signals = build_pattern_signals(
-        project_root=Path("."),
+        project_root=tmp_path,
         signal_date="2024-12-31",
         exchange="NSE",
         data_domain="research",
@@ -528,7 +640,7 @@ def test_score_signal_rows_adds_operational_priority_without_replacing_primary_r
     assert sorted(priority_rank_by_symbol.values()) == [1, 2, 3, 4]
 
 
-def test_score_signal_rows_uses_mutually_exclusive_volume_confirmation_ladder() -> None:
+def test_score_signal_rows_only_boosts_combined_volume_confirmation() -> None:
     scored = _score_signal_rows(
         pd.DataFrame(
             [
@@ -577,8 +689,8 @@ def test_score_signal_rows_uses_mutually_exclusive_volume_confirmation_ladder() 
     scores = scored.set_index("symbol_id")["pattern_score"].astype(float).to_dict()
     priorities = scored.set_index("symbol_id")["pattern_priority_score"].astype(float).to_dict()
 
-    assert scores["COMBINED"] > scores["Z20"] > scores["RATIO"]
-    assert priorities["COMBINED"] > priorities["Z20"] > priorities["RATIO"]
+    assert scores["COMBINED"] > scores["Z20"] == scores["RATIO"]
+    assert priorities["COMBINED"] > priorities["Z20"] == priorities["RATIO"]
     assert scores["COMBINED"] - scores["RATIO"] <= 20.0
 
 
@@ -1055,6 +1167,31 @@ def _flat_base_frame(*, symbol_id: str = "FLAT", breakout: bool = True) -> pd.Da
     return _make_price_frame(close, symbol_id=symbol_id, breakout_volume_idx=None)
 
 
+def _stage2_reclaim_frame(
+    *,
+    symbol_id: str = "RECLAIM",
+    cross: bool = True,
+    slope: float = 0.25,
+    extension: float = 0.03,
+    zscore: float | None = 2.5,
+) -> pd.DataFrame:
+    n = 80
+    sma150 = np.full(n, 100.0)
+    close = np.full(n, 98.0)
+    close[-2] = 99.0 if cross else 101.0
+    close[-1] = 100.0 * (1.0 + extension)
+    frame = _make_price_frame(
+        close.tolist(),
+        symbol_id=symbol_id,
+        breakout_volume_idx=n - 1,
+        breakout_volume_ratio=2.0,
+        breakout_volume_zscore=zscore,
+    )
+    frame.loc[:, "sma_150"] = sma150
+    frame.loc[:, "sma150_slope_20d_pct"] = slope
+    return frame
+
+
 def test_detect_ascending_triangle_positive_case() -> None:
     frame = _cup_handle_frame()
     config = _scan_config()
@@ -1100,6 +1237,94 @@ def test_detect_flat_base_positive_case() -> None:
     assert stats.candidate_count >= 0
     for sig in signals:
         assert sig.pattern_family == "flat_base"
+
+
+def test_flat_base_overlapping_windows_emit_single_signal() -> None:
+    config = PatternScanConfig(
+        flat_base_min_bars=25,
+        flat_base_max_bars=65,
+        flat_base_max_depth_pct=0.15,
+        breakout_volume_ratio_min=1.5,
+        volume_zscore_min=2.0,
+        recent_signal_max_age_bars=40,
+        max_breakout_wait_bars=10,
+    )
+    n = 120
+    close = np.full(n, 100.0)
+    close[:70] = np.linspace(70.0, 100.0, 70)
+    close[70:100] = np.random.default_rng(42).uniform(96.0, 104.0, 30)
+    close[100] = 106.0
+    frame = _make_price_frame(
+        close.tolist(),
+        symbol_id="FLATDUP",
+        breakout_volume_idx=100,
+        breakout_volume_ratio=2.0,
+        breakout_volume_zscore=2.5,
+    )
+    frame.loc[50:69, "volume_ratio_20"] = 1.4
+    frame.loc[70:99, "volume_ratio_20"] = 0.7
+    smoothed = pd.Series(close, index=frame.index, dtype=float)
+    extrema = find_local_extrema(smoothed, prominence=config.extrema_prominence)
+
+    signals, stats = detect_flat_base_signals(
+        frame,
+        smoothed=smoothed,
+        extrema=extrema,
+        config=config,
+        recent_only=False,
+    )
+
+    assert stats.candidate_count > 1
+    assert len(signals) == 1
+    assert stats.confirmed_count == 1
+    assert signals[0].pattern_family == "flat_base"
+
+
+def test_stage2_reclaim_detects_sma150_cross_with_strict_volume() -> None:
+    frame = _stage2_reclaim_frame()
+    config = _scan_config()
+    smoothed = pd.Series(frame["close"], index=frame.index, dtype=float)
+
+    signals, stats = detect_stage2_reclaim_signals(
+        frame,
+        smoothed=smoothed,
+        extrema=[],
+        config=config,
+        recent_only=False,
+    )
+
+    assert stats.confirmed_count == 1
+    assert len(signals) == 1
+    assert signals[0].pattern_family == "stage2_reclaim"
+    assert signals[0].pattern_state == "confirmed"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"cross": False},
+        {"slope": -0.1},
+        {"extension": 0.12},
+        {"zscore": None},
+    ],
+)
+def test_stage2_reclaim_rejects_false_reclaims(kwargs: dict[str, object]) -> None:
+    frame = _stage2_reclaim_frame(**kwargs)
+    if kwargs.get("zscore") is None:
+        frame.loc[frame.index[-1], ["volume_zscore_20", "volume_zscore_50"]] = np.nan
+    config = _scan_config()
+    smoothed = pd.Series(frame["close"], index=frame.index, dtype=float)
+
+    signals, stats = detect_stage2_reclaim_signals(
+        frame,
+        smoothed=smoothed,
+        extrema=[],
+        config=config,
+        recent_only=False,
+    )
+
+    assert signals == []
+    assert stats.confirmed_count == 0
 
 
 def test_ascending_triangle_stage2_gate() -> None:

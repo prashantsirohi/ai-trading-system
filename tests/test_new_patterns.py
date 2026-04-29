@@ -48,6 +48,8 @@ def _base_frame(closes: np.ndarray, *, vol_ratio: float = 1.5) -> pd.DataFrame:
         "close": closes,
         "volume": np.full(n, 100_000.0),
         "volume_ratio_20": np.full(n, vol_ratio),
+        "volume_zscore_20": np.full(n, np.nan),
+        "volume_zscore_50": np.full(n, np.nan),
     })
 
 
@@ -92,6 +94,7 @@ class TestAscendingTriangle:
 
         frame, smoothed = _make_manual_extrema_frame(closes)
         frame.loc[80, "volume_ratio_20"] = 2.0
+        frame.loc[80, "volume_zscore_20"] = 2.5
 
         # Manually specified extrema (independent of smoother)
         extrema = [
@@ -159,6 +162,7 @@ class TestVCP:
         frame.at[120, "close"] = 115.0
         frame.at[120, "high"] = 116.0
         frame.at[120, "volume_ratio_20"] = 2.0
+        frame.at[120, "volume_zscore_20"] = 2.5
         return frame
 
     def test_contracting_ranges_detected(self):
@@ -222,6 +226,7 @@ class TestFlatBase:
         frame.at[100, "close"] = closes[100]
         frame.at[100, "high"] = closes[100] * 1.005
         frame.at[100, "volume_ratio_20"] = 2.0
+        frame.at[100, "volume_zscore_20"] = 2.5
         return frame
 
     def test_flat_within_15pct_depth(self):
@@ -356,6 +361,7 @@ class TestSymmetricalTriangle:
 
         frame, smoothed = _make_manual_extrema_frame(closes)
         frame.loc[78, "volume_ratio_20"] = 2.0
+        frame.loc[78, "volume_zscore_20"] = 2.5
 
         extrema = [
             LocalExtrema(15, "peak", 210.0),
@@ -476,5 +482,8 @@ class TestNewConfigFields:
         assert c.flat_base_min_bars == 25
         assert c.flat_base_max_bars == 65
         assert c.flat_base_max_depth_pct == 0.15
+        assert c.stage2_reclaim_lookback_bars == 20
+        assert c.stage2_reclaim_max_extension_pct == 0.08
+        assert c.stage2_reclaim_min_slope_pct == 0.0
         assert c.wt3_tight_pct == 0.015
         assert c.wt3_prior_adv == 0.20

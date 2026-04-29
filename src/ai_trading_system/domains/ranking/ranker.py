@@ -17,11 +17,20 @@ from ai_trading_system.domains.ranking.composite import (
     load_factor_weights,
     select_rank_output_columns,
 )
-from ai_trading_system.domains.ranking.contracts import RANK_MODES
+from ai_trading_system.domains.ranking.contracts import (
+    RANK_MODES,
+    STAGE2_FRESH_BARS_MAX,
+    STAGE2_FRESHNESS_BONUS,
+    STAGE2_MID_BARS_MAX,
+    STAGE2_MID_FRESHNESS_BONUS,
+    STAGE2_TRANSITION_BONUS,
+    STAGE2_TRANSITION_BONUS_BARS_MAX,
+)
 from ai_trading_system.domains.ranking.eligibility import apply_rank_eligibility
 from ai_trading_system.domains.ranking.factors import (
     add_signal_freshness,
     apply_delivery,
+    apply_momentum_acceleration,
     apply_proximity_highs,
     apply_relative_strength,
     apply_sector_strength,
@@ -111,6 +120,7 @@ class StockRanker:
             return pd.DataFrame()
 
         scores = self._compute_relative_strength(scores, date, benchmark_symbol)
+        scores = apply_momentum_acceleration(scores)
         scores = self._compute_volume_intensity(scores)
         scores = self._compute_trend_persistence(scores, date)
         scores = self._compute_proximity_highs(scores, date)
@@ -118,6 +128,7 @@ class StockRanker:
         scores = self._compute_sector_strength(scores, date)
         scores = compute_factor_scores(scores, weights=weights)
         scores = self._compute_stage2(scores, date, exchanges)
+        scores = self._attach_weekly_stage_context(scores, date)
         if weekly_stage_gate:
             scores = self._apply_weekly_stage_gate(scores, date)
         scores.loc[:, "rank_mode"] = rank_mode
@@ -130,6 +141,7 @@ class StockRanker:
             scores.loc[:, "stage2_score_bonus"] = (s2_score / 100.0) * 5.0
         else:
             scores.loc[:, "stage2_score_bonus"] = 0.0
+        scores = self._apply_stage2_age_bonuses(scores)
 
         stage2_gate_column = None
         if "is_stage2_structural" in scores.columns:
@@ -155,6 +167,8 @@ class StockRanker:
         scores.loc[:, "composite_score_adjusted"] = (
             scores["composite_score"]
             + scores["stage2_score_bonus"]
+            + scores["stage2_freshness_bonus"]
+            + scores["stage2_transition_bonus"]
             - scores["penalty_score"].fillna(0.0)
         ).clip(0.0, 100.0)
         scores = compute_rank_confidence(scores)
@@ -233,7 +247,7 @@ class StockRanker:
         periods: List[int] = None,
     ) -> pd.DataFrame:
         _ = (date, benchmark_symbol)
-        period_list = periods or [20, 60, 120]
+        period_list = periods or [5, 10, 20, 60, 120]
         try:
             return_frame = self.input_loader.load_return_frame_multi(periods=period_list)
         except Exception as exc:
@@ -247,7 +261,9 @@ class StockRanker:
             volume_frame = self.input_loader.load_volume_frame()
         except Exception as exc:
             logger.warning("Could not compute volume intensity: %s", exc)
-            volume_frame = pd.DataFrame(columns=["symbol_id", "exchange", "vol_20_avg", "vol_20_max"])
+            volume_frame = pd.DataFrame(
+                columns=["symbol_id", "exchange", "vol_20_avg", "vol_20_max", "volume_zscore_20"]
+            )
         return apply_volume_intensity(data, volume_frame=volume_frame)
 
     def _compute_trend_persistence(
@@ -308,17 +324,14 @@ class StockRanker:
             date=date,
         )
 
-    def _apply_weekly_stage_gate(
+    def _attach_weekly_stage_context(
         self,
         data: pd.DataFrame,
         date: str,
     ) -> pd.DataFrame:
-        """Join latest weekly stage snapshot onto `data` as two new columns.
-
-        Adds ``weekly_stage_label`` and ``weekly_stage_confidence``.
-        Symbols absent from the snapshot get NaN — they pass through the gate
-        in ``apply_rank_eligibility`` (require_snapshot defaults to False).
-        """
+        """Join latest weekly stage snapshot onto rank candidates."""
+        if data.empty:
+            return data
         try:
             snap = read_latest_snapshot(self.ohlcv_db_path, asof=date)
         except Exception as exc:
@@ -326,16 +339,51 @@ class StockRanker:
             return data
 
         if snap.empty:
-            logger.info("weekly_stage_gate: no snapshot rows for asof=%s — gate skipped", date)
             return data
 
-        snap = snap[["symbol", "stage_label", "stage_confidence"]].rename(columns={
-            "symbol": "symbol_id",
-            "stage_label": "weekly_stage_label",
-            "stage_confidence": "weekly_stage_confidence",
-        })
+        snap_cols = [
+            column
+            for column in [
+                "symbol",
+                "stage_label",
+                "stage_confidence",
+                "stage_transition",
+                "bars_in_stage",
+                "stage_entry_date",
+            ]
+            if column in snap.columns
+        ]
+        snap = snap[snap_cols].rename(
+            columns={
+                "symbol": "symbol_id",
+                "stage_label": "weekly_stage_label",
+                "stage_confidence": "weekly_stage_confidence",
+                "stage_transition": "weekly_stage_transition",
+            }
+        )
+        output = data.drop(
+            columns=[
+                "weekly_stage_label",
+                "weekly_stage_confidence",
+                "weekly_stage_transition",
+                "bars_in_stage",
+                "stage_entry_date",
+            ],
+            errors="ignore",
+        )
+        return output.merge(snap, on="symbol_id", how="left")
 
-        merged = data.merge(snap, on="symbol_id", how="left")
+    def _apply_weekly_stage_gate(
+        self,
+        data: pd.DataFrame,
+        date: str,
+    ) -> pd.DataFrame:
+        """Join latest weekly stage snapshot and leave gate columns for eligibility."""
+        merged = data if "weekly_stage_label" in data.columns else self._attach_weekly_stage_context(data, date)
+        if "weekly_stage_label" not in merged.columns:
+            logger.info("weekly_stage_gate: no snapshot rows for asof=%s — gate skipped", date)
+            return merged
+
         s2_count = (merged["weekly_stage_label"] == "S2").sum()
         no_snap = merged["weekly_stage_label"].isna().sum()
         logger.info(
@@ -343,6 +391,28 @@ class StockRanker:
             s2_count, no_snap, len(merged) - s2_count - no_snap,
         )
         return merged
+
+    def _apply_stage2_age_bonuses(self, data: pd.DataFrame) -> pd.DataFrame:
+        output = data.copy()
+        output.loc[:, "stage2_freshness_bonus"] = 0.0
+        output.loc[:, "stage2_transition_bonus"] = 0.0
+        output.loc[:, "stage2_age_warning"] = ""
+        if output.empty or "weekly_stage_label" not in output.columns:
+            return output
+
+        bars = pd.to_numeric(output.get("bars_in_stage", pd.Series(pd.NA, index=output.index)), errors="coerce")
+        weekly_s2 = output["weekly_stage_label"].astype(str).eq("S2")
+        fresh = weekly_s2 & bars.notna() & (bars <= STAGE2_FRESH_BARS_MAX)
+        mid = weekly_s2 & bars.notna() & (bars > STAGE2_FRESH_BARS_MAX) & (bars <= STAGE2_MID_BARS_MAX)
+        mature = weekly_s2 & bars.notna() & (bars >= STAGE2_MID_BARS_MAX + 1)
+        output.loc[fresh, "stage2_freshness_bonus"] = STAGE2_FRESHNESS_BONUS
+        output.loc[mid, "stage2_freshness_bonus"] = STAGE2_MID_FRESHNESS_BONUS
+        output.loc[mature, "stage2_age_warning"] = "mature_stage2"
+
+        transition = output.get("weekly_stage_transition", pd.Series("", index=output.index)).astype(str)
+        recent_transition = transition.eq("S1_TO_S2") & bars.notna() & (bars <= STAGE2_TRANSITION_BONUS_BARS_MAX)
+        output.loc[recent_transition, "stage2_transition_bonus"] = STAGE2_TRANSITION_BONUS
+        return output
 
     def _compute_stage2(
         self,

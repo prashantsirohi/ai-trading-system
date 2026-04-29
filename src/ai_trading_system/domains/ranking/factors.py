@@ -35,17 +35,63 @@ def apply_relative_strength(data: pd.DataFrame, *, return_frame: pd.DataFrame) -
     return scores
 
 
+def apply_momentum_acceleration(data: pd.DataFrame) -> pd.DataFrame:
+    """Compute short-term momentum acceleration from existing ROC inputs."""
+    scores = data.copy()
+    for col in ("return_5", "return_10", "return_20"):
+        if col not in scores.columns:
+            scores.loc[:, col] = 0.0
+        scores.loc[:, col] = pd.to_numeric(scores[col], errors="coerce").fillna(0.0)
+
+    acceleration = (
+        (scores["return_5"] - scores["return_20"]) * 0.6
+        + (scores["return_10"] - scores["return_20"]) * 0.4
+    )
+
+    rs_delta = pd.Series(0.0, index=scores.index)
+    for candidate in ("rel_strength_delta", "rel_strength_slope", "rs_delta", "rs_slope"):
+        if candidate in scores.columns:
+            rs_delta = pd.to_numeric(scores[candidate], errors="coerce").fillna(0.0)
+            break
+
+    scores.loc[:, "momentum_acceleration"] = acceleration + (rs_delta * 0.25)
+    return scores
+
+
 def apply_volume_intensity(data: pd.DataFrame, *, volume_frame: pd.DataFrame) -> pd.DataFrame:
     scores = data.copy()
     if volume_frame is not None and not volume_frame.empty:
+        volume_cols = [
+            column
+            for column in [
+                "symbol_id",
+                "exchange",
+                "vol_20_avg",
+                "vol_20_max",
+                "volume_zscore_20",
+            ]
+            if column in volume_frame.columns
+        ]
         scores = scores.merge(
-            volume_frame[["symbol_id", "exchange", "vol_20_avg", "vol_20_max"]],
+            volume_frame[volume_cols],
             on=["symbol_id", "exchange"],
             how="left",
         )
+    if "vol_20_avg" not in scores.columns:
+        scores.loc[:, "vol_20_avg"] = np.nan
+    if "vol_20_max" not in scores.columns:
+        scores.loc[:, "vol_20_max"] = np.nan
+    if "volume_zscore_20" not in scores.columns:
+        scores.loc[:, "volume_zscore_20"] = np.nan
+
     scores.loc[:, "vol_intensity"] = (
-        scores["volume"] / scores["vol_20_avg"].replace(0, np.nan)
+        pd.to_numeric(scores["volume"], errors="coerce")
+        / pd.to_numeric(scores["vol_20_avg"], errors="coerce").replace(0, np.nan)
     ).fillna(1.0)
+    zscore = pd.to_numeric(scores["volume_zscore_20"], errors="coerce").fillna(0.0)
+    ratio_component = scores["vol_intensity"].clip(lower=0.0, upper=5.0)
+    z_component = (1.0 + zscore.clip(lower=-2.0, upper=5.0) / 2.0).clip(lower=0.0, upper=3.5)
+    scores.loc[:, "volume_intensity_normalized"] = (ratio_component * 0.6) + (z_component * 0.4)
     return scores
 
 
@@ -197,6 +243,10 @@ def compute_penalty_score(frame: pd.DataFrame) -> pd.DataFrame:
     """Compute additive penalty metadata while preserving core factor scores."""
     output = frame.copy()
     output["penalty_score"] = 0.0
+    output["exhaustion_penalty"] = 0.0
+    output["exhaustion_flag"] = ""
+    output["pivot_distance_penalty"] = 0.0
+    output["distance_from_pivot_atr"] = np.nan
 
     if {"close", "sma_200"}.issubset(output.columns):
         close = pd.to_numeric(output["close"], errors="coerce")
@@ -211,6 +261,57 @@ def compute_penalty_score(frame: pd.DataFrame) -> pd.DataFrame:
         atr = pd.to_numeric(output["atr_14"], errors="coerce")
         close = pd.to_numeric(output["close"], errors="coerce").replace(0, np.nan)
         output.loc[(atr / close) > 0.08, "penalty_score"] += 5.0
+
+    close = pd.to_numeric(output.get("close", pd.Series(np.nan, index=output.index)), errors="coerce")
+    volume_z = pd.to_numeric(output.get("volume_zscore_20", pd.Series(np.nan, index=output.index)), errors="coerce")
+    volume_spike = volume_z > 3.0
+    severe_volume_spike = volume_z > 4.0
+
+    bb_width_extreme = pd.Series(False, index=output.index)
+    for column in ("bb_width_percentile", "bollinger_band_width_percentile", "bb_width_pctile"):
+        if column in output.columns:
+            values = pd.to_numeric(output[column], errors="coerce")
+            threshold = 0.95 if values.dropna().le(1.0).all() else 95.0
+            bb_width_extreme = bb_width_extreme | (values > threshold)
+
+    short_ma_extension = pd.Series(np.nan, index=output.index, dtype=float)
+    if "sma_20" in output.columns:
+        sma_20 = pd.to_numeric(output["sma_20"], errors="coerce").replace(0, np.nan)
+        short_ma_extension = (close / sma_20) - 1.0
+    short_ma_extended = short_ma_extension > 0.12
+    short_ma_severe = short_ma_extension > 0.20
+
+    exhaustion_count = (
+        volume_spike.fillna(False).astype(int)
+        + bb_width_extreme.fillna(False).astype(int)
+        + short_ma_extended.fillna(False).astype(int)
+    )
+    strong_exhaustion = severe_volume_spike.fillna(False) | short_ma_severe.fillna(False) | (exhaustion_count >= 2)
+    mild_exhaustion = (exhaustion_count >= 1) & ~strong_exhaustion
+    output.loc[mild_exhaustion, "exhaustion_penalty"] = 3.0
+    output.loc[strong_exhaustion, "exhaustion_penalty"] = 8.0
+    output.loc[mild_exhaustion, "exhaustion_flag"] = "mild_exhaustion"
+    output.loc[strong_exhaustion, "exhaustion_flag"] = "strong_exhaustion"
+    output.loc[:, "penalty_score"] += output["exhaustion_penalty"]
+
+    pivot = pd.Series(np.nan, index=output.index, dtype=float)
+    for column in ("pivot_price", "breakout_level", "resistance_level", "watchlist_trigger_level"):
+        if column in output.columns:
+            candidate = pd.to_numeric(output[column], errors="coerce")
+            pivot = pivot.where(pivot.notna(), candidate)
+
+    atr = pd.Series(np.nan, index=output.index, dtype=float)
+    for column in ("atr_14", "atr_value", "atr_20"):
+        if column in output.columns:
+            candidate = pd.to_numeric(output[column], errors="coerce")
+            atr = atr.where(atr.notna(), candidate)
+
+    valid_pivot_distance = pivot.gt(0) & atr.gt(0) & close.notna()
+    distance_atr = (close - pivot) / atr.replace(0, np.nan)
+    output.loc[valid_pivot_distance, "distance_from_pivot_atr"] = distance_atr.loc[valid_pivot_distance]
+    output.loc[valid_pivot_distance & (distance_atr > 1.5), "pivot_distance_penalty"] = 3.0
+    output.loc[valid_pivot_distance & (distance_atr > 2.5), "pivot_distance_penalty"] = 6.0
+    output.loc[:, "penalty_score"] += output["pivot_distance_penalty"]
 
     output.loc[:, "penalty_score"] = output["penalty_score"].clip(lower=0.0)
     return output

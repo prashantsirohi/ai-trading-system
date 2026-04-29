@@ -20,6 +20,7 @@ TIER_1_PATTERNS = {
     "cup_handle",
     "flat_base",
     "vcp",
+    "stage2_reclaim",
     "3wt",
     "ascending_triangle",
 }
@@ -56,6 +57,7 @@ def _config_provenance(config: PatternBacktestConfig | PatternScanConfig) -> dic
         "bandwidth": config.bandwidth,
         "extrema_prominence": config.extrema_prominence,
         "breakout_volume_ratio_min": config.breakout_volume_ratio_min,
+        "volume_zscore_min": getattr(config, "volume_zscore_min", 2.0),
     }
 
 
@@ -73,6 +75,7 @@ def _scan_config_from_backtest(config: PatternBacktestConfig) -> PatternScanConf
         extrema_prominence=config.extrema_prominence,
         min_history_bars=config.min_history_bars,
         breakout_volume_ratio_min=config.breakout_volume_ratio_min,
+        volume_zscore_min=config.volume_zscore_min,
         max_breakout_wait_bars=config.max_breakout_wait_bars,
         prior_uptrend_lookback=config.prior_uptrend_lookback,
         prior_uptrend_min_pct=config.prior_uptrend_min_pct,
@@ -90,6 +93,9 @@ def _scan_config_from_backtest(config: PatternBacktestConfig) -> PatternScanConf
         round_symmetry_max=config.round_symmetry_max,
         trough_near_pct=config.trough_near_pct,
         min_trough_dwell_bars=config.min_trough_dwell_bars,
+        stage2_reclaim_lookback_bars=config.stage2_reclaim_lookback_bars,
+        stage2_reclaim_max_extension_pct=config.stage2_reclaim_max_extension_pct,
+        stage2_reclaim_min_slope_pct=config.stage2_reclaim_min_slope_pct,
         fallback_atr_stop_mult=config.fallback_atr_stop_mult,
     )
 
@@ -115,28 +121,40 @@ def _coerce_optional_float(value: object) -> float | None:
     return float(coerced)
 
 
+def _has_required_volume_ratio(frame: pd.DataFrame) -> bool:
+    return "volume_ratio_20" in frame.columns
+
+
 def _volume_confirmation_details(
     row: pd.Series | dict[str, object],
     *,
     ratio_threshold: float,
+    z_threshold: float = 2.0,
 ) -> dict[str, object]:
     volume_ratio = _coerce_optional_float(row.get("volume_ratio_20"))
     volume_zscore_20 = _coerce_optional_float(row.get("volume_zscore_20"))
     volume_zscore_50 = _coerce_optional_float(row.get("volume_zscore_50"))
 
     is_volume_ratio_confirmed = volume_ratio is not None and volume_ratio >= float(ratio_threshold)
-    is_z20_confirmed = volume_zscore_20 is not None and volume_zscore_20 >= VOLUME_Z20_CONFIRM_THRESHOLD
-    is_z50_confirmed = volume_zscore_50 is not None and volume_zscore_50 >= VOLUME_Z50_CONFIRM_THRESHOLD
-    is_any_volume_confirmed = is_volume_ratio_confirmed or is_z20_confirmed or is_z50_confirmed
+    z_min = float(z_threshold)
+    is_z20_confirmed = volume_zscore_20 is not None and volume_zscore_20 >= z_min
+    is_z50_confirmed = volume_zscore_50 is not None and volume_zscore_50 >= z_min
+    is_any_volume_confirmed = is_volume_ratio_confirmed and (is_z20_confirmed or is_z50_confirmed)
     is_strong_volume_confirmation = (
         (is_volume_ratio_confirmed and is_z20_confirmed)
-        or (volume_zscore_20 is not None and volume_zscore_20 >= VOLUME_Z20_STRONG_THRESHOLD)
+        or (
+            is_volume_ratio_confirmed
+            and volume_zscore_20 is not None
+            and volume_zscore_20 >= VOLUME_Z20_STRONG_THRESHOLD
+        )
     )
 
     return {
         "volume_ratio_20": volume_ratio,
         "volume_zscore_20": volume_zscore_20,
         "volume_zscore_50": volume_zscore_50,
+        "is_volume_ratio_missing": volume_ratio is None,
+        "is_volume_zscore_missing": volume_zscore_20 is None and volume_zscore_50 is None,
         "is_volume_ratio_confirmed": is_volume_ratio_confirmed,
         "is_z20_confirmed": is_z20_confirmed,
         "is_z50_confirmed": is_z50_confirmed,
@@ -158,6 +176,7 @@ def _find_breakout_confirmation(
         confirmation = _volume_confirmation_details(
             frame.iloc[idx],
             ratio_threshold=float(config.breakout_volume_ratio_min),
+            z_threshold=float(getattr(config, "volume_zscore_min", 2.0)),
         )
         if close > resistance_level and bool(confirmation["is_any_volume_confirmed"]):
             return idx, confirmation
@@ -168,6 +187,35 @@ def _latest_watchlist_volume(frame: pd.DataFrame) -> float:
     if frame.empty:
         return 0.0
     return float(frame.iloc[-1].get("volume_ratio_20", 0.0) or 0.0)
+
+
+def _positive_fallback_price(*values: float | None) -> float:
+    for value in values:
+        coerced = _coerce_optional_float(value)
+        if coerced is not None and coerced > 0:
+            return float(coerced)
+    return 0.01
+
+
+def _safe_invalidation_price(
+    invalidation_price: float,
+    *,
+    breakout_level: float,
+    frame: pd.DataFrame,
+    pattern_start_idx: int,
+    pattern_end_idx: int,
+) -> float:
+    raw = _coerce_optional_float(invalidation_price)
+    if raw is not None and raw > 0:
+        return raw
+    window = frame.iloc[max(0, pattern_start_idx) : min(len(frame), pattern_end_idx + 1)]
+    structural_low = None
+    if "low" in window.columns and not window.empty:
+        structural_low = _coerce_optional_float(pd.to_numeric(window["low"], errors="coerce").min())
+    level = _coerce_optional_float(breakout_level)
+    close = _coerce_optional_float(frame.iloc[min(pattern_end_idx, len(frame) - 1)].get("close"))
+    fallback = _positive_fallback_price(structural_low, close, level)
+    return max(0.01, fallback * 0.98)
 
 
 def _build_signal(
@@ -207,6 +255,13 @@ def _build_signal(
     )
     volume_zscore_20 = _coerce_optional_float(frame.iloc[signal_idx].get("volume_zscore_20"))
     volume_zscore_50 = _coerce_optional_float(frame.iloc[signal_idx].get("volume_zscore_50"))
+    safe_invalidation = _safe_invalidation_price(
+        invalidation_price,
+        breakout_level=breakout_level,
+        frame=frame,
+        pattern_start_idx=pattern_start_idx,
+        pattern_end_idx=pattern_end_idx,
+    )
     return PatternSignal(
         signal_id=f"{symbol}-{pattern_family}-{pattern_state}-{signal_date}",
         symbol_id=symbol,
@@ -221,7 +276,7 @@ def _build_signal(
         signal_bar_index=int(signal_idx),
         breakout_level=float(_rounded(breakout_level) or breakout_level),
         watchlist_trigger_level=float(_rounded(watchlist_trigger_level) or watchlist_trigger_level),
-        invalidation_price=float(_rounded(invalidation_price) or invalidation_price),
+        invalidation_price=float(_rounded(safe_invalidation) or safe_invalidation),
         setup_quality=float(round(setup_quality, 6)),
         pivot_labels=pivot_labels,
         pivot_dates=tuple(timestamps.iloc[idx].date().isoformat() for idx in pivot_indices),
@@ -316,25 +371,17 @@ def _score_signal_rows(signals_df: pd.DataFrame) -> pd.DataFrame:
     is_volume_ratio_confirmed = breakout_volume_ratio >= 1.5
     is_z20_confirmed = volume_zscore_20 >= VOLUME_Z20_CONFIRM_THRESHOLD
     is_z50_confirmed = volume_zscore_50 >= VOLUME_Z50_CONFIRM_THRESHOLD
-    is_strong_volume_confirmation = (
-        (is_volume_ratio_confirmed & is_z20_confirmed)
-        | (volume_zscore_20 >= VOLUME_Z20_STRONG_THRESHOLD)
-    )
     is_combined_volume_confirmation = is_volume_ratio_confirmed & (is_z20_confirmed | is_z50_confirmed)
-    ratio_high = breakout_volume_ratio >= 2.0
-    ratio_only = is_volume_ratio_confirmed & ~is_combined_volume_confirmation
-    z20_only = is_z20_confirmed & ~is_volume_ratio_confirmed
-    z50_only = is_z50_confirmed & ~is_volume_ratio_confirmed & ~is_z20_confirmed
+    is_strong_volume_confirmation = (
+        is_combined_volume_confirmation
+        & (is_z20_confirmed | (volume_zscore_20 >= VOLUME_Z20_STRONG_THRESHOLD))
+    )
     pattern_score = pattern_score + np.select(
         [
             is_strong_volume_confirmation,
             is_combined_volume_confirmation,
-            ratio_only & ratio_high,
-            ratio_only,
-            z20_only,
-            z50_only,
         ],
-        [20.0, 18.0, 15.0, 10.0, 14.0, 10.0],
+        [20.0, 18.0],
         default=0.0,
     )
 
@@ -437,15 +484,10 @@ def _score_signal_rows(signals_df: pd.DataFrame) -> pd.DataFrame:
         [
             confirmed_state & is_strong_volume_confirmation,
             confirmed_state & is_combined_volume_confirmation,
-            confirmed_state & ratio_only,
-            confirmed_state & z20_only,
-            confirmed_state & z50_only,
             confirmed_state,
             is_combined_volume_confirmation,
-            ratio_only | z20_only,
-            z50_only,
         ],
-        [10.0, 8.0, 6.0, 6.0, 5.0, 4.0, 4.0, 3.0, 2.0],
+        [10.0, 8.0, 4.0, 4.0],
         default=0.0,
     )
     setup_quality = pd.to_numeric(_series_or_default("setup_quality"), errors="coerce").fillna(0.0)
@@ -530,6 +572,8 @@ def detect_cup_handle_signals(
     recent_only: bool = True,
 ) -> tuple[list[PatternSignal], PatternScanStats]:
     symbol = str(frame.iloc[0]["symbol_id"])
+    if not _has_required_volume_ratio(frame):
+        return [], PatternScanStats("cup_handle", 0, 0, 0)
     extrema_list = list(extrema)
     signals: list[PatternSignal] = []
     candidates = 0
@@ -669,6 +713,8 @@ def detect_round_bottom_signals(
     config: PatternScanConfig,
     recent_only: bool = True,
 ) -> tuple[list[PatternSignal], PatternScanStats]:
+    if not _has_required_volume_ratio(frame):
+        return [], PatternScanStats("round_bottom", 0, 0, 0)
     extrema_list = list(extrema)
     signals: list[PatternSignal] = []
     candidates = 0
@@ -812,6 +858,8 @@ def detect_double_bottom_signals(
     config: PatternScanConfig,
     recent_only: bool = True,
 ) -> tuple[list[PatternSignal], PatternScanStats]:
+    if not _has_required_volume_ratio(frame):
+        return [], PatternScanStats("double_bottom", 0, 0, 0)
     extrema_list = list(extrema)
     signals: list[PatternSignal] = []
     candidates = 0
@@ -971,6 +1019,8 @@ def detect_flag_signals(
       work to O(1) amortised per qualifying pole rather than O(max_flag_bars).
     """
     pattern_family = "high_tight_flag" if high_tight_only else "flag"
+    if not _has_required_volume_ratio(frame):
+        return [], PatternScanStats(pattern_family, 0, 0, 0)
     signals: list[PatternSignal] = []
     candidates = 0
     confirmed = 0
@@ -1039,6 +1089,7 @@ def detect_flag_signals(
                     confirmation = _volume_confirmation_details(
                         frame.iloc[idx],
                         ratio_threshold=float(breakout_volume_min),
+                        z_threshold=float(getattr(config, "volume_zscore_min", 2.0)),
                     )
                     if b_close > flag_high and bool(confirmation["is_any_volume_confirmed"]):
                         breakout_idx = idx
@@ -1150,6 +1201,8 @@ def detect_ascending_triangle_signals(
     Ascending Triangle = flat resistance line + rising troughs.
     Stage 2 gate: skip if stage2_score < 50 (pre-filter).
     """
+    if not _has_required_volume_ratio(frame):
+        return [], PatternScanStats("ascending_triangle", 0, 0, 0)
     extrema_list = list(extrema)
     peaks = [e for e in extrema_list if e.kind == "peak"]
     troughs = [e for e in extrema_list if e.kind == "trough"]
@@ -1290,6 +1343,8 @@ def detect_vcp_signals(
     VCP = price range contracts across 3 sequential windows + volume contracts.
     Stage 2 bonus: +15 for strong_stage2, +10 for stage2, +5 for transitional.
     """
+    if not _has_required_volume_ratio(frame):
+        return [], PatternScanStats("vcp", 0, 0, 0)
     closes = frame["close"].to_numpy(float)
     vrat = frame["volume_ratio_20"].to_numpy(float)
     n = len(closes)
@@ -1409,6 +1464,44 @@ def _flat_base_setup_quality(depth_pct: float, volume_dry_up: bool, width: int) 
     return float(np.clip(base - depth_penalty + vol_bonus + width_bonus, 0, 100))
 
 
+def _select_flat_base_signals(candidates: list[PatternSignal]) -> list[PatternSignal]:
+    if not candidates:
+        return []
+
+    def _sort_key(signal: PatternSignal) -> tuple[int, int]:
+        return (signal.pattern_start_index, signal.pattern_end_index)
+
+    def _rank_key(signal: PatternSignal) -> tuple[int, float, int, int]:
+        state_priority = 1 if signal.pattern_state == "confirmed" else 0
+        return (
+            state_priority,
+            float(signal.setup_quality),
+            int(signal.signal_bar_index),
+            int(signal.pattern_end_index),
+        )
+
+    selected: list[PatternSignal] = []
+    group: list[PatternSignal] = []
+    group_end = -1
+    for signal in sorted(candidates, key=_sort_key):
+        if not group or signal.pattern_start_index <= group_end:
+            group.append(signal)
+            group_end = max(group_end, signal.pattern_end_index)
+            continue
+        selected.append(max(group, key=_rank_key))
+        group = [signal]
+        group_end = signal.pattern_end_index
+    if group:
+        selected.append(max(group, key=_rank_key))
+
+    unique: dict[str, PatternSignal] = {}
+    for signal in sorted(selected, key=lambda item: (item.signal_bar_index, item.pattern_end_index)):
+        current = unique.get(signal.signal_id)
+        if current is None or _rank_key(signal) > _rank_key(current):
+            unique[signal.signal_id] = signal
+    return list(unique.values())
+
+
 def detect_flat_base_signals(
     frame: pd.DataFrame,
     *,
@@ -1421,15 +1514,14 @@ def detect_flat_base_signals(
 
     Flat Base = tight price range (max depth 15%) over 25-65 bars.
     """
+    if not _has_required_volume_ratio(frame):
+        return [], PatternScanStats("flat_base", 0, 0, 0)
     highs = frame["high"].to_numpy(float)
     lows = frame["low"].to_numpy(float)
     vrat = frame["volume_ratio_20"].to_numpy(float)
     n = len(highs)
-    signals: list[PatternSignal] = []
+    candidate_signals: list[PatternSignal] = []
     candidates = 0
-    confirmed = 0
-    watchlist = 0
-    used_signal_ids: set[str] = set()
 
     min_bars = getattr(config, "flat_base_min_bars", 25)
     max_bars = getattr(config, "flat_base_max_bars", 65)
@@ -1481,11 +1573,8 @@ def detect_flat_base_signals(
                     breakout_volume_ratio=(breakout_confirmation or {}).get("volume_ratio_20"),
                     width_bars=span,
                 )
-                if signal.signal_id not in used_signal_ids:
-                    used_signal_ids.add(signal.signal_id)
-                    signals.append(signal)
-                    confirmed += 1
-                break
+                candidate_signals.append(signal)
+                continue
 
             if not _recent_enough(end, frame, config):
                 continue
@@ -1509,13 +1598,104 @@ def detect_flat_base_signals(
                     breakout_volume_ratio=_latest_watchlist_volume(frame),
                     width_bars=span,
                 )
-                if signal.signal_id not in used_signal_ids:
-                    used_signal_ids.add(signal.signal_id)
-                    signals.append(signal)
-                    watchlist += 1
-                break
+                candidate_signals.append(signal)
 
+    signals = _select_flat_base_signals(candidate_signals)
+    confirmed = sum(1 for signal in signals if signal.pattern_state == "confirmed")
+    watchlist = sum(1 for signal in signals if signal.pattern_state == "watchlist")
     return signals, PatternScanStats("flat_base", candidates, confirmed, watchlist)
+
+
+def detect_stage2_reclaim_signals(
+    frame: pd.DataFrame,
+    *,
+    smoothed: pd.Series,
+    extrema: Iterable[LocalExtrema],
+    config: PatternScanConfig,
+    recent_only: bool = True,
+) -> tuple[list[PatternSignal], PatternScanStats]:
+    """Detect a Stage 1 to Stage 2 SMA-150 reclaim setup."""
+    _ = extrema
+    pattern_type = "stage2_reclaim"
+    required = {"close", "sma_150", "sma150_slope_20d_pct"}
+    if not _has_required_volume_ratio(frame) or not required.issubset(frame.columns):
+        return [], PatternScanStats(pattern_type, 0, 0, 0)
+
+    closes = pd.to_numeric(frame["close"], errors="coerce")
+    sma150 = pd.to_numeric(frame["sma_150"], errors="coerce")
+    slope = pd.to_numeric(frame["sma150_slope_20d_pct"], errors="coerce")
+    lookback = int(getattr(config, "stage2_reclaim_lookback_bars", 20))
+    max_extension = float(getattr(config, "stage2_reclaim_max_extension_pct", 0.08))
+    min_slope = float(getattr(config, "stage2_reclaim_min_slope_pct", 0.0))
+    start_scan = max(1, len(frame) - max(lookback, 1))
+
+    signals: list[PatternSignal] = []
+    candidates = 0
+    confirmed = 0
+    used_signal_ids: set[str] = set()
+    for idx in range(start_scan, len(frame)):
+        close = _coerce_optional_float(closes.iloc[idx])
+        reclaim_level = _coerce_optional_float(sma150.iloc[idx])
+        prev_close = _coerce_optional_float(closes.iloc[idx - 1])
+        prev_level = _coerce_optional_float(sma150.iloc[idx - 1])
+        slope_value = _coerce_optional_float(slope.iloc[idx])
+        if None in (close, reclaim_level, prev_close, prev_level, slope_value):
+            continue
+        if reclaim_level <= 0 or prev_level <= 0:
+            continue
+        crossed = prev_close <= prev_level and close > reclaim_level
+        extension = (close / reclaim_level) - 1.0
+        if not crossed or slope_value < min_slope or extension < 0 or extension > max_extension:
+            continue
+
+        candidates += 1
+        confirmation = _volume_confirmation_details(
+            frame.iloc[idx],
+            ratio_threshold=float(config.breakout_volume_ratio_min),
+            z_threshold=float(getattr(config, "volume_zscore_min", 2.0)),
+        )
+        if not bool(confirmation["is_any_volume_confirmed"]):
+            continue
+        if recent_only and not _recent_enough(idx, frame, config):
+            continue
+
+        pattern_start_idx = max(0, idx - lookback)
+        invalidation = float(reclaim_level) * 0.97
+        volume_ratio = float(confirmation["volume_ratio_20"] or 0.0)
+        setup_quality = float(
+            np.clip(
+                52.0
+                + min(12.0, max(0.0, slope_value) * 2.0)
+                + min(12.0, max(0.0, volume_ratio - float(config.breakout_volume_ratio_min)) * 8.0)
+                + max(0.0, 12.0 - extension * 100.0),
+                0.0,
+                100.0,
+            )
+        )
+        signal = _build_signal(
+            frame=frame,
+            pattern_family=pattern_type,
+            pattern_state="confirmed",
+            signal_idx=idx,
+            pattern_start_idx=pattern_start_idx,
+            pattern_end_idx=idx,
+            breakout_level=float(reclaim_level),
+            invalidation_price=invalidation,
+            setup_quality=setup_quality,
+            pivot_labels=("reclaim_base", "sma150_reclaim"),
+            pivot_indices=(pattern_start_idx, idx),
+            pivot_prices=(float(smoothed.iloc[pattern_start_idx]), float(reclaim_level)),
+            config=config,
+            volume_dry_up=False,
+            breakout_volume_ratio=confirmation.get("volume_ratio_20"),
+            width_bars=idx - pattern_start_idx,
+        )
+        if signal.signal_id not in used_signal_ids:
+            used_signal_ids.add(signal.signal_id)
+            signals.append(signal)
+            confirmed += 1
+
+    return signals, PatternScanStats(pattern_type, candidates, confirmed, 0)
 
 
 def _3wt_setup_quality(tight_pct: float, prior_adv: float, volume_dry_up: bool) -> float:
@@ -1539,6 +1719,8 @@ def detect_3wt_signals(
     3WT = last 3 'weekly' (5-bar) closing prices within a tight range (default 1.5%)
     following a significant prior advance (default ≥ 20%).
     """
+    if not _has_required_volume_ratio(frame):
+        return [], PatternScanStats("three_weeks_tight", 0, 0, 0)
     closes = frame["close"].to_numpy(float)
     n = len(closes)
     signals: list[PatternSignal] = []
@@ -1675,6 +1857,8 @@ def detect_symmetrical_triangle_signals(
     Symmetrical Triangle = descending peaks + ascending troughs converging.
     Only emits BULLISH breakouts (close > upper line with volume).
     """
+    if not _has_required_volume_ratio(frame):
+        return [], PatternScanStats("symmetrical_triangle", 0, 0, 0)
     extrema_list = list(extrema)
     peaks = [e for e in extrema_list if e.kind == "peak"]
     troughs = [e for e in extrema_list if e.kind == "trough"]
@@ -1928,6 +2112,7 @@ def detect_pattern_signals_for_symbol(
     fo_detectors = [
         detect_vcp_signals,
         detect_flat_base_signals,
+        detect_stage2_reclaim_signals,
         detect_3wt_signals,
     ]
 

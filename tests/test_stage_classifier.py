@@ -15,6 +15,7 @@ from ai_trading_system.domains.ranking.stage_classifier import (
     StageResult,
     classify_latest,
 )
+from ai_trading_system.domains.ranking import stage_classifier
 
 
 def _make_daily(closes: np.ndarray, *, start: str = "2024-01-01",
@@ -152,12 +153,53 @@ def test_transition_emits_when_prior_differs():
     res = _classify(daily, symbol="X", prior_stage="S1")
     assert res.stage_label == "S2"
     assert res.stage_transition == "S1_TO_S2"
+    assert res.bars_in_stage == 1
+    assert res.stage_entry_date == res.week_end_date
 
 
 def test_transition_none_when_same():
     daily = _make_daily(_series_uptrend())
-    res = _classify(daily, symbol="X", prior_stage="S2")
+    prior_entry = pd.Timestamp("2024-03-29")
+    res = _classify(
+        daily,
+        symbol="X",
+        prior_stage="S2",
+        prior_bars_in_stage=7,
+        prior_stage_entry_date=prior_entry,
+    )
     assert res.stage_transition == "NONE"
+    assert res.bars_in_stage == 8
+    assert res.stage_entry_date == prior_entry
+
+
+def test_s2_hysteresis_uses_lower_slope_threshold_for_existing_s2(monkeypatch):
+    idx = pd.date_range("2024-01-05", periods=40, freq="W-FRI")
+    weekly = pd.DataFrame(
+        {
+            "open": 100.0,
+            "high": 106.0,
+            "low": 98.0,
+            "close": 105.0,
+            "volume": 100_000.0,
+            "ma10w": 104.0,
+            "ma30w": 100.0,
+            "ma40w": 99.0,
+            "ma30w_slope_4w": 0.003,
+            "weekly_volume_ratio": 1.2,
+            "hi_52w": 105.0,
+            "lo_52w": 80.0,
+            "atr_pct_10w": 0.02,
+            "atr_pct_30w": 0.02,
+        },
+        index=idx,
+    )
+    monkeypatch.setattr(stage_classifier, "MIN_CONFIDENCE", 0.9)
+
+    entering = classify_latest(weekly, symbol="NEW", prior_stage="S1")
+    remaining = classify_latest(weekly, symbol="OLD", prior_stage="S2")
+
+    assert entering.stage_label == "UNDEFINED"
+    assert remaining.stage_label == "S2"
 
 
 def test_to_dict_full_schema():
@@ -168,7 +210,7 @@ def test_to_dict_full_schema():
         "symbol", "week_end_date", "stage_label", "stage_confidence",
         "stage_transition", "ma10w", "ma30w", "ma40w", "ma30w_slope_4w",
         "weekly_rs_score", "weekly_volume_ratio", "support_level",
-        "resistance_level",
+        "resistance_level", "bars_in_stage", "stage_entry_date",
     }
     assert expected_keys.issubset(d.keys())
     assert d["weekly_rs_score"] == 82.5

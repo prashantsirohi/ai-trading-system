@@ -696,6 +696,7 @@ class RankOrchestrationService:
                 bandwidth=float(context.params.get("pattern_bandwidth", 3.0)),
                 extrema_prominence=float(context.params.get("pattern_extrema_prominence", 0.02)),
                 breakout_volume_ratio_min=float(context.params.get("pattern_breakout_volume_ratio_min", 1.5)),
+                volume_zscore_min=float(context.params.get("pattern_volume_zscore_min", 2.0)),
                 smoothing_method=str(context.params.get("pattern_smoothing_method", "rolling")),
             )
             return build_pattern_signals(
@@ -761,6 +762,7 @@ class RankOrchestrationService:
                 "pattern_bandwidth": float(context.params.get("pattern_bandwidth", 3.0)),
                 "pattern_extrema_prominence": float(context.params.get("pattern_extrema_prominence", 0.02)),
                 "breakout_volume_ratio_min": float(context.params.get("pattern_breakout_volume_ratio_min", 1.5)),
+                "volume_zscore_min": float(context.params.get("pattern_volume_zscore_min", 2.0)),
                 "ranked_fingerprint": self.dataframe_fingerprint(ranked),
             },
             task_status=task_status,

@@ -32,7 +32,7 @@ from ai_trading_system.domains.ranking.stage_classifier import (
     classify_latest,
 )
 from ai_trading_system.domains.ranking.stage_store import (
-    get_prior_stage,
+    get_prior_stage_state,
     write_snapshots,
 )
 from ai_trading_system.domains.ranking.weekly import to_weekly
@@ -87,8 +87,14 @@ def _classify_one(
     if weekly.empty:
         return None
     week_end = weekly.index[-1].date().isoformat()
-    prior = get_prior_stage(ohlcv_db_path, symbol=symbol, before_date=week_end)
-    return classify_latest(weekly, symbol=symbol, prior_stage=prior)
+    prior = get_prior_stage_state(ohlcv_db_path, symbol=symbol, before_date=week_end) or {}
+    return classify_latest(
+        weekly,
+        symbol=symbol,
+        prior_stage=prior.get("stage_label"),
+        prior_bars_in_stage=prior.get("bars_in_stage"),
+        prior_stage_entry_date=prior.get("stage_entry_date"),
+    )
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

@@ -21,7 +21,7 @@ _PLATFORM_CONFIG_DIR = Path(platform_config.__file__).resolve().parent
 _LEGACY_CONFIG_DIR = Path(__file__).resolve().parents[4] / "config"
 RANK_FACTOR_WEIGHTS_PATH = _PLATFORM_CONFIG_DIR / "rank_factor_weights.json"
 LEGACY_RANK_FACTOR_WEIGHTS_PATH = _LEGACY_CONFIG_DIR / "rank_factor_weights.json"
-_SECTOR_DEMEAN_FACTORS = frozenset({"rel_strength", "vol_intensity", "trend_score"})
+_SECTOR_DEMEAN_FACTORS = frozenset({"rel_strength", "volume_intensity_normalized", "trend_score"})
 
 
 def load_factor_weights(config_path: Path | None = None) -> dict[str, float]:
@@ -85,9 +85,12 @@ def normalize_raw_factor_inputs(frame: pd.DataFrame) -> pd.DataFrame:
     normalized = frame.copy()
     sector_names = normalized["sector_name"] if "sector_name" in normalized.columns else None
 
+    if "volume_intensity_normalized" not in normalized.columns and "vol_intensity" in normalized.columns:
+        normalized.loc[:, "volume_intensity_normalized"] = normalized["vol_intensity"]
+
     for factor in PRIMARY_FACTORS:
         if factor.raw_column not in normalized.columns:
-            continue
+            normalized.loc[:, factor.raw_column] = 0.0
         raw_values = winsorize_series(normalized[factor.raw_column])
         if factor.raw_column in _SECTOR_DEMEAN_FACTORS:
             raw_values = demean_by_sector(raw_values, sector_names)
@@ -138,8 +141,9 @@ def filter_ranked_scores(
     top_n: int | None,
 ) -> pd.DataFrame:
     """Apply output ordering and score cutoffs while preserving existing semantics."""
-    ranked = frame.sort_values("composite_score", ascending=False)
-    ranked = ranked[ranked["composite_score"] >= min_score]
+    score_column = "composite_score_adjusted" if "composite_score_adjusted" in frame.columns else "composite_score"
+    ranked = frame.sort_values(score_column, ascending=False)
+    ranked = ranked[pd.to_numeric(ranked[score_column], errors="coerce").fillna(0.0) >= min_score]
     if top_n:
         ranked = ranked.head(top_n)
     return ranked
@@ -225,6 +229,7 @@ FACTOR_COLUMNS = [
     "rel_strength_score",
     "vol_intensity_score",
     "trend_score_score",
+    "momentum_acceleration_score",
     "prox_high_score",
     "delivery_pct_score",
 ]

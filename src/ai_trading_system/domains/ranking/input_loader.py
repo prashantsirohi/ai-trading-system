@@ -292,19 +292,41 @@ class RankerInputLoader:
         try:
             volume = conn.execute(
                 """
+                WITH volume_features AS (
+                    SELECT
+                        symbol_id,
+                        exchange,
+                        timestamp,
+                        volume,
+                        AVG(volume) OVER w_current AS vol_20_avg,
+                        MAX(volume) OVER w_current AS vol_20_max,
+                        AVG(volume) OVER w_prior AS vol_20_avg_prior,
+                        STDDEV_SAMP(volume) OVER w_prior AS vol_20_std_prior
+                    FROM _catalog
+                    WHERE exchange = 'NSE'
+                    WINDOW
+                        w_current AS (
+                            PARTITION BY symbol_id
+                            ORDER BY timestamp
+                            ROWS BETWEEN 20 PRECEDING AND CURRENT ROW
+                        ),
+                        w_prior AS (
+                            PARTITION BY symbol_id
+                            ORDER BY timestamp
+                            ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
+                        )
+                )
                 SELECT
                     symbol_id,
                     exchange,
                     volume,
-                    AVG(volume) OVER w AS vol_20_avg,
-                    MAX(volume) OVER w AS vol_20_max
-                FROM _catalog
-                WHERE exchange = 'NSE'
-                WINDOW w AS (
-                    PARTITION BY symbol_id
-                    ORDER BY timestamp
-                    ROWS BETWEEN 20 PRECEDING AND CURRENT ROW
-                )
+                    vol_20_avg,
+                    vol_20_max,
+                    CASE
+                        WHEN vol_20_std_prior IS NULL OR vol_20_std_prior = 0 THEN NULL
+                        ELSE (volume - vol_20_avg_prior) / vol_20_std_prior
+                    END AS volume_zscore_20
+                FROM volume_features
                 QUALIFY ROW_NUMBER() OVER (
                     PARTITION BY symbol_id ORDER BY timestamp DESC
                 ) = 1

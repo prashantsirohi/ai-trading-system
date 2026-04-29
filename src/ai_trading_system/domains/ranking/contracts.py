@@ -16,20 +16,29 @@ class RankFactorDefinition:
 
 PRIMARY_FACTORS: tuple[RankFactorDefinition, ...] = (
     RankFactorDefinition("relative_strength", "rel_strength", "rel_strength_score"),
-    RankFactorDefinition("volume_intensity", "vol_intensity", "vol_intensity_score"),
+    RankFactorDefinition("volume_intensity", "volume_intensity_normalized", "vol_intensity_score"),
     RankFactorDefinition("trend_persistence", "trend_score", "trend_score_score"),
+    RankFactorDefinition("momentum_acceleration", "momentum_acceleration", "momentum_acceleration_score"),
     RankFactorDefinition("proximity_highs", "prox_high", "prox_high_score"),
     RankFactorDefinition("delivery_pct", "delivery_pct", "delivery_pct_score"),
 )
 
 DEFAULT_FACTOR_WEIGHTS: dict[str, float] = {
-    "relative_strength": 0.28,
+    "relative_strength": 0.23,
     "volume_intensity": 0.18,
-    "trend_persistence": 0.15,
+    "trend_persistence": 0.12,
+    "momentum_acceleration": 0.08,
     "proximity_highs": 0.17,
     "delivery_pct": 0.12,
     "sector_strength": 0.10,
 }
+
+STAGE2_FRESH_BARS_MAX = 8
+STAGE2_MID_BARS_MAX = 15
+STAGE2_FRESHNESS_BONUS = 4.0
+STAGE2_MID_FRESHNESS_BONUS = 2.0
+STAGE2_TRANSITION_BONUS = 5.0
+STAGE2_TRANSITION_BONUS_BARS_MAX = 8
 
 RANK_MODES: tuple[str, ...] = (
     "default",
@@ -60,11 +69,14 @@ RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "rel_strength_score",
     "vol_intensity_score",
     "trend_score_score",
+    "momentum_acceleration_score",
     "prox_high_score",
     "delivery_pct_score",
     "sector_strength_score",
     "rel_strength",
     "vol_intensity",
+    "volume_intensity_normalized",
+    "momentum_acceleration",
     "trend_score",
     "prox_high",
     "delivery_pct",
@@ -78,9 +90,16 @@ RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "sma_50",
     "volume",
     "timestamp",
+    "return_5",
+    "return_10",
     "return_20",
     "return_60",
     "return_120",
+    "volume_zscore_20",
+    "exhaustion_penalty",
+    "exhaustion_flag",
+    "pivot_distance_penalty",
+    "distance_from_pivot_atr",
     "sector_rank_within_sector",
     "sector_total_symbols",
     # Stage 2 uptrend enrichment columns (added in Sprint 1)
@@ -92,6 +111,14 @@ RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "stage2_hard_fail_reason",
     "stage2_fail_reason",
     "stage2_score_bonus",
+    "stage2_freshness_bonus",
+    "stage2_transition_bonus",
+    "stage2_age_warning",
+    "weekly_stage_label",
+    "weekly_stage_confidence",
+    "weekly_stage_transition",
+    "bars_in_stage",
+    "stage_entry_date",
     "sma200_slope_20d_pct",
     "sma_150",
 )

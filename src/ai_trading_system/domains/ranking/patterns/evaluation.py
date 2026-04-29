@@ -889,6 +889,9 @@ def _build_pattern_lifecycle_snapshot(
     snapshot = pd.concat(parts, ignore_index=True, sort=False)
     if "pattern_score" not in snapshot.columns:
         snapshot.loc[:, "pattern_score"] = np.nan
+    for public_column in ("volume_zscore_20", "volume_zscore_50"):
+        if public_column not in snapshot.columns:
+            snapshot.loc[:, public_column] = np.nan
     return (
         snapshot.sort_values(
             ["pattern_lifecycle_state", "pattern_score", "symbol_id", "pattern_family"],

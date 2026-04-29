@@ -94,7 +94,12 @@ def find_local_extrema(smoothed_prices: pd.Series, prominence: float = 0.02) -> 
     if len(series) < 3:
         return []
     values = series.to_numpy()
-    price_range = float(np.nanmax(values) - np.nanmin(values))
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size < 3:
+        return []
+    price_range = float(np.nanmax(finite_values) - np.nanmin(finite_values))
+    if price_range <= max(1e-9, abs(float(np.nanmean(finite_values))) * 1e-9):
+        return []
     abs_prominence = float(prominence if prominence >= 1 else max(price_range * prominence, 1e-6))
     scipy_find_peaks = _get_scipy_find_peaks()
     if scipy_find_peaks is None:
