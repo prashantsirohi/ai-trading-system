@@ -16,15 +16,21 @@ import pytest
 
 from ai_trading_system.domains.ranking.patterns.contracts import PatternScanConfig
 from ai_trading_system.domains.ranking.patterns.detectors import (
+    _score_signal_rows,
     detect_3wt_signals,
     detect_ascending_triangle_signals,
+    detect_ascending_base_signals,
+    detect_darvas_box_signals,
     detect_flat_base_signals,
     detect_head_shoulders_filter,
+    detect_inside_week_breakout_signals,
+    detect_ipo_base_signals,
     detect_pattern_signals_for_symbol,
+    detect_pocket_pivot_signals,
     detect_symmetrical_triangle_signals,
     detect_vcp_signals,
 )
-from ai_trading_system.analytics.patterns.signal import find_local_extrema, kernel_smooth
+from ai_trading_system.analytics.patterns.signal import LocalExtrema, find_local_extrema, kernel_smooth
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -463,6 +469,225 @@ class TestHeadShouldersFilter:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 4 canonical momentum detectors
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestCanonicalMomentumPatterns:
+    def _darvas_frame(self, *, deep: bool = False, missing_z: bool = False) -> pd.DataFrame:
+        n = 95
+        closes = np.linspace(88.0, 104.0, n)
+        closes[45:75] = 106.0
+        closes[[52, 68]] = 111.0
+        closes[76] = 115.0
+        frame = _base_frame(closes)
+        frame.loc[45:75, "high"] = 112.0
+        frame.loc[45:75, "low"] = 80.0 if deep else 100.0
+        frame.loc[76, "close"] = 115.0
+        frame.loc[76, "high"] = 116.0
+        frame.loc[76, "volume_ratio_20"] = 2.0
+        frame.loc[76, "volume_zscore_20"] = 2.5
+        if missing_z:
+            frame = frame.drop(columns=["volume_zscore_20", "volume_zscore_50"])
+        return frame
+
+    def test_darvas_box_positive_negative_and_missing_volume(self):
+        config = PatternScanConfig(min_history_bars=80, darvas_min_box_bars=15, recent_signal_max_age_bars=25)
+        frame = self._darvas_frame()
+        smoothed, extrema = _smoothed_and_extrema(frame, config)
+        signals, stats = detect_darvas_box_signals(frame, smoothed=smoothed, extrema=extrema, config=config)
+
+        assert stats.confirmed_count >= 1
+        assert signals[0].pattern_family == "darvas_box"
+        assert signals[0].invalidation_price > 0
+
+        deep_frame = self._darvas_frame(deep=True)
+        signals, stats = detect_darvas_box_signals(deep_frame, smoothed=smoothed, extrema=extrema, config=config)
+        assert signals == []
+
+        missing_frame = self._darvas_frame(missing_z=True)
+        signals, stats = detect_darvas_box_signals(missing_frame, smoothed=smoothed, extrema=extrema, config=config)
+        assert signals == []
+        assert stats.candidate_count == 0
+
+    def _pocket_pivot_frame(self, *, extended: bool = False, missing_sma: bool = False) -> pd.DataFrame:
+        n = 70
+        closes = np.full(n, 100.0)
+        closes[45:55] = [101.0, 99.0, 102.0, 100.0, 103.0, 101.0, 104.0, 102.0, 103.0, 102.5]
+        closes[55] = 115.0 if extended else 106.0
+        frame = _base_frame(closes)
+        frame.loc[:, "open"] = frame["close"] + 0.5
+        frame.loc[55, "open"] = closes[55] - 1.0
+        frame.loc[45:54, "volume"] = [1000, 1100, 900, 1200, 950, 1300, 900, 1250, 800, 1100]
+        frame.loc[55, "volume"] = 1600
+        frame["sma_20"] = 101.0
+        frame["sma_50"] = 100.0
+        frame.loc[55, "volume_ratio_20"] = 2.0
+        frame.loc[55, "volume_zscore_20"] = 2.5
+        if missing_sma:
+            frame = frame.drop(columns=["sma_20", "sma_50"])
+        return frame
+
+    def test_pocket_pivot_positive_negative_and_missing_data(self):
+        config = PatternScanConfig(min_history_bars=60, recent_signal_max_age_bars=20)
+        frame = self._pocket_pivot_frame()
+        smoothed, extrema = _smoothed_and_extrema(frame, config)
+        signals, stats = detect_pocket_pivot_signals(frame, smoothed=smoothed, extrema=extrema, config=config)
+
+        assert stats.confirmed_count == 1
+        assert signals[0].pattern_family == "pocket_pivot"
+
+        extended = self._pocket_pivot_frame(extended=True)
+        signals, _ = detect_pocket_pivot_signals(extended, smoothed=smoothed, extrema=extrema, config=config)
+        assert signals == []
+
+        missing = self._pocket_pivot_frame(missing_sma=True)
+        signals, stats = detect_pocket_pivot_signals(missing, smoothed=smoothed, extrema=extrema, config=config)
+        assert signals == []
+        assert stats.candidate_count == 0
+
+    def _ascending_base_frame(self, *, bad_lows: bool = False, missing_z: bool = False) -> tuple[pd.DataFrame, pd.Series, list[LocalExtrema]]:
+        n = 95
+        closes = np.linspace(100.0, 116.0, n)
+        lows = [100.0, 104.0, 108.0] if not bad_lows else [100.0, 98.0, 99.0]
+        for idx, value in zip([20, 45, 70], lows):
+            closes[idx - 1:idx + 2] = value
+        closes[76] = 122.0
+        frame = _base_frame(closes)
+        frame.loc[20:70, "high"] = 118.0
+        frame.loc[76, "high"] = 123.0
+        frame.loc[76, "volume_ratio_20"] = 2.0
+        frame.loc[76, "volume_zscore_20"] = 2.5
+        if missing_z:
+            frame = frame.drop(columns=["volume_zscore_20", "volume_zscore_50"])
+        smoothed = pd.Series(closes, index=frame.index)
+        extrema = [
+            LocalExtrema(20, "trough", float(lows[0])),
+            LocalExtrema(45, "trough", float(lows[1])),
+            LocalExtrema(70, "trough", float(lows[2])),
+        ]
+        return frame, smoothed, extrema
+
+    def test_ascending_base_positive_negative_and_missing_volume(self):
+        config = PatternScanConfig(min_history_bars=80, recent_signal_max_age_bars=25)
+        frame, smoothed, extrema = self._ascending_base_frame()
+        signals, stats = detect_ascending_base_signals(frame, smoothed=smoothed, extrema=extrema, config=config)
+
+        assert stats.confirmed_count == 1
+        assert signals[0].pattern_family == "ascending_base"
+
+        bad_frame, bad_smoothed, bad_extrema = self._ascending_base_frame(bad_lows=True)
+        signals, _ = detect_ascending_base_signals(bad_frame, smoothed=bad_smoothed, extrema=bad_extrema, config=config)
+        assert signals == []
+
+        missing_frame, missing_smoothed, missing_extrema = self._ascending_base_frame(missing_z=True)
+        signals, stats = detect_ascending_base_signals(missing_frame, smoothed=missing_smoothed, extrema=missing_extrema, config=config)
+        assert signals == []
+        assert stats.candidate_count == 0
+
+    def _ipo_base_frame(self, *, n: int = 80, deep: bool = False, missing_z: bool = False) -> pd.DataFrame:
+        closes = np.linspace(35.0, 46.0, n)
+        start, end = 40, min(65, n - 3)
+        closes[start:end + 1] = 44.0
+        breakout_idx = end + 1
+        closes[breakout_idx] = 51.0
+        frame = _base_frame(closes)
+        frame.loc[start:end, "high"] = 50.0
+        frame.loc[start:end, "low"] = 32.0 if deep else 40.0
+        frame.loc[breakout_idx, "high"] = 52.0
+        frame.loc[breakout_idx, "volume_ratio_20"] = 2.0
+        frame.loc[breakout_idx, "volume_zscore_20"] = 2.5
+        if missing_z:
+            frame = frame.drop(columns=["volume_zscore_20", "volume_zscore_50"])
+        return frame
+
+    def test_ipo_base_positive_negative_and_missing_volume(self):
+        config = PatternScanConfig(min_history_bars=120, ipo_base_min_history_bars=35, recent_signal_max_age_bars=25)
+        frame = self._ipo_base_frame()
+        smoothed, extrema = _smoothed_and_extrema(frame, config)
+        signals, stats = detect_ipo_base_signals(frame, smoothed=smoothed, extrema=extrema, config=config)
+
+        assert stats.confirmed_count >= 1
+        assert signals[0].pattern_family == "ipo_base"
+
+        mature = self._ipo_base_frame(n=200)
+        signals, _ = detect_ipo_base_signals(mature, smoothed=pd.Series(mature["close"]), extrema=[], config=config)
+        assert signals == []
+
+        missing = self._ipo_base_frame(missing_z=True)
+        signals, stats = detect_ipo_base_signals(missing, smoothed=pd.Series(missing["close"]), extrema=[], config=config)
+        assert signals == []
+        assert stats.candidate_count == 0
+
+    def _inside_week_frame(self, *, no_inside: bool = False, missing_timestamp: bool = False) -> pd.DataFrame:
+        closes = np.full(35, 100.0)
+        frame = _base_frame(closes)
+        frame.loc[0:4, "high"] = 110.0
+        frame.loc[0:4, "low"] = 90.0
+        frame.loc[5:9, "high"] = 112.0 if no_inside else 108.0
+        frame.loc[5:9, "low"] = 88.0 if no_inside else 92.0
+        frame.loc[10, "close"] = 109.5
+        frame.loc[10, "high"] = 110.0
+        frame.loc[10, "volume_ratio_20"] = 2.0
+        frame.loc[10, "volume_zscore_20"] = 2.5
+        if missing_timestamp:
+            frame = frame.drop(columns=["timestamp"])
+        return frame
+
+    def test_inside_week_breakout_positive_negative_and_missing_data(self):
+        config = PatternScanConfig(min_history_bars=30, recent_signal_max_age_bars=30)
+        frame = self._inside_week_frame()
+        smoothed, extrema = _smoothed_and_extrema(frame, config)
+        signals, stats = detect_inside_week_breakout_signals(frame, smoothed=smoothed, extrema=extrema, config=config)
+
+        assert stats.confirmed_count == 1
+        assert signals[0].pattern_family == "inside_week_breakout"
+
+        no_inside = self._inside_week_frame(no_inside=True)
+        signals, stats = detect_inside_week_breakout_signals(no_inside, smoothed=pd.Series(no_inside["close"]), extrema=[], config=config)
+        assert signals == []
+
+        missing = self._inside_week_frame(missing_timestamp=True)
+        signals, stats = detect_inside_week_breakout_signals(missing, smoothed=pd.Series(missing["close"]), extrema=[], config=config)
+        assert signals == []
+        assert stats.candidate_count == 0
+
+    def test_inside_week_breakout_uses_calendar_weeks_not_five_bar_buckets(self):
+        config = PatternScanConfig(min_history_bars=30, recent_signal_max_age_bars=30)
+        frame = self._inside_week_frame()
+        frame = frame.drop(index=[2]).reset_index(drop=True)
+        smoothed = pd.Series(frame["close"])
+
+        signals, stats = detect_inside_week_breakout_signals(frame, smoothed=smoothed, extrema=[], config=config)
+
+        assert stats.confirmed_count == 1
+        assert signals[0].pattern_family == "inside_week_breakout"
+
+    def test_dispatcher_emits_new_family_without_schema_change(self):
+        config = PatternScanConfig(min_history_bars=120, ipo_base_min_history_bars=35, recent_signal_max_age_bars=25)
+        frame = self._ipo_base_frame()
+        smoothed, extrema = _smoothed_and_extrema(frame, config)
+
+        signals_df, stats = detect_pattern_signals_for_symbol(frame, smoothed=smoothed, extrema=extrema, config=config)
+
+        assert "ipo_base" in stats
+        assert "ipo_base" in set(signals_df["pattern_family"])
+        assert {"pattern_family", "pattern_state", "pattern_score", "setup_quality", "invalidation_price"}.issubset(signals_df.columns)
+
+    def test_new_phase4_families_are_tier_1_for_scoring(self):
+        scored = _score_signal_rows(
+            pd.DataFrame(
+                [
+                    {"symbol_id": "IPO", "pattern_family": "ipo_base", "pattern_state": "confirmed"},
+                    {"symbol_id": "IWB", "pattern_family": "inside_week_breakout", "pattern_state": "confirmed"},
+                ]
+            )
+        ).set_index("symbol_id")
+
+        assert scored.loc["IPO", "pattern_operational_tier"] == "tier_1"
+        assert scored.loc["IWB", "pattern_operational_tier"] == "tier_1"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Config field smoke test
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -487,3 +712,8 @@ class TestNewConfigFields:
         assert c.stage2_reclaim_min_slope_pct == 0.0
         assert c.wt3_tight_pct == 0.015
         assert c.wt3_prior_adv == 0.20
+        assert c.darvas_lookback_bars == 60
+        assert c.pocket_pivot_lookback_bars == 10
+        assert c.ascending_base_min_bars == 45
+        assert c.ipo_base_min_history_bars == 35
+        assert c.inside_week_lookback_weeks == 8
