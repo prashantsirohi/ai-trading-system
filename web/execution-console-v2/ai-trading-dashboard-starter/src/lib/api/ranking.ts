@@ -65,6 +65,10 @@ export interface RankingDetailRanking {
   category: string | null;
   inBreakoutScan: boolean;
   inPatternScan: boolean;
+  stageLabel?: string | null;
+  stageTransition?: string | null;
+  barsInStage?: number | null;
+  stageEntryDate?: string | null;
 }
 
 export interface RankingDetailDecision {
@@ -82,7 +86,27 @@ export interface RankingDetail {
   decision: RankingDetailDecision;
   factors: FactorBlock[];
   sectorContext: Record<string, string | number | boolean | null> | null;
+  operatorContext: RankingOperatorContext;
   rawRow: Record<string, string | number | boolean | null> | null;
+}
+
+export interface RankingOperatorContext {
+  stageLabel: string | null;
+  stageTransition: string | null;
+  barsInStage: number | null;
+  stageEntryDate: string | null;
+  stageFreshnessBucket: string | null;
+  momentumAccelerationScore: number | null;
+  exhaustionPenalty: number | null;
+  exhaustionFlag: string | null;
+  distanceFromPivotAtr: number | null;
+  topPatternFamily: string | null;
+  topPatternState: string | null;
+  topPatternSetupQuality: number | null;
+  topPatternPivotPrice: number | null;
+  topPatternInvalidationPrice: number | null;
+  reclaimSignalFlag: boolean;
+  explanation: string[];
 }
 
 interface BackendRankingDetail {
@@ -97,11 +121,33 @@ interface BackendRankingDetail {
     category?: string | null;
     in_breakout_scan?: boolean | null;
     in_pattern_scan?: boolean | null;
+    stage_label?: string | null;
+    stage_transition?: string | null;
+    bars_in_stage?: number | null;
+    stage_entry_date?: string | null;
   } | null;
   lifecycle?: Record<string, BackendLifecycleStage | null> | null;
   decision?: { verdict?: string | null; confidence?: string | null; reason?: string | null } | null;
   factors?: Record<string, { value?: number | null; contributors?: Array<{ column?: string; value?: number | null }> }> | null;
   sector_context?: Record<string, string | number | boolean | null> | null;
+  operator_context?: {
+    stage_label?: string | null;
+    stage_transition?: string | null;
+    bars_in_stage?: number | null;
+    stage_entry_date?: string | null;
+    stage_freshness_bucket?: string | null;
+    momentum_acceleration_score?: number | null;
+    exhaustion_penalty?: number | null;
+    exhaustion_flag?: string | null;
+    distance_from_pivot_atr?: number | null;
+    top_pattern_family?: string | null;
+    top_pattern_state?: string | null;
+    top_pattern_setup_quality?: number | null;
+    top_pattern_pivot_price?: number | null;
+    top_pattern_invalidation_price?: number | null;
+    reclaim_signal_flag?: boolean | null;
+    explanation?: string[];
+  } | null;
   raw_row?: Record<string, string | number | boolean | null> | null;
 }
 
@@ -176,6 +222,27 @@ function mapFactors(raw: BackendRankingDetail['factors']): FactorBlock[] {
   return blocks;
 }
 
+function mapOperatorContext(raw: BackendRankingDetail['operator_context']): RankingOperatorContext {
+  return {
+    stageLabel: asString(raw?.stage_label),
+    stageTransition: asString(raw?.stage_transition),
+    barsInStage: asNum(raw?.bars_in_stage),
+    stageEntryDate: asString(raw?.stage_entry_date),
+    stageFreshnessBucket: asString(raw?.stage_freshness_bucket),
+    momentumAccelerationScore: asNum(raw?.momentum_acceleration_score),
+    exhaustionPenalty: asNum(raw?.exhaustion_penalty),
+    exhaustionFlag: asString(raw?.exhaustion_flag),
+    distanceFromPivotAtr: asNum(raw?.distance_from_pivot_atr),
+    topPatternFamily: asString(raw?.top_pattern_family),
+    topPatternState: asString(raw?.top_pattern_state),
+    topPatternSetupQuality: asNum(raw?.top_pattern_setup_quality),
+    topPatternPivotPrice: asNum(raw?.top_pattern_pivot_price),
+    topPatternInvalidationPrice: asNum(raw?.top_pattern_invalidation_price),
+    reclaimSignalFlag: Boolean(raw?.reclaim_signal_flag),
+    explanation: Array.isArray(raw?.explanation) ? raw.explanation.map(String) : [],
+  };
+}
+
 export async function getRankingDetail(
   symbol: string,
   runId?: string | null,
@@ -203,6 +270,10 @@ export async function getRankingDetail(
           category: asString(raw.ranking.category),
           inBreakoutScan: Boolean(raw.ranking.in_breakout_scan),
           inPatternScan: Boolean(raw.ranking.in_pattern_scan),
+          stageLabel: asString(raw.ranking.stage_label),
+          stageTransition: asString(raw.ranking.stage_transition),
+          barsInStage: asNum(raw.ranking.bars_in_stage),
+          stageEntryDate: asString(raw.ranking.stage_entry_date),
         }
       : null,
     lifecycle: mapLifecycle(raw.lifecycle),
@@ -213,6 +284,7 @@ export async function getRankingDetail(
     },
     factors: mapFactors(raw.factors),
     sectorContext: raw.sector_context ?? null,
+    operatorContext: mapOperatorContext(raw.operator_context),
     rawRow: raw.raw_row ?? null,
   };
 }

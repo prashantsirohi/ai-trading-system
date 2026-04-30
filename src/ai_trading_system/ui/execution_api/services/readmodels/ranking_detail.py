@@ -35,6 +35,9 @@ from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_s
     get_execution_context,
     load_latest_operational_snapshot,
 )
+from ai_trading_system.ui.execution_api.services.readmodels.rank_snapshot import (
+    _enrich_operator_rank_fields,
+)
 from ai_trading_system.ui.execution_api.services.readmodels.stock_detail import (
     _frame_row_for_symbol,
     _isoformat,
@@ -90,6 +93,61 @@ def _extract_factor_block(row: dict[str, Any]) -> dict[str, Any]:
     for bucket, slot in buckets.items():
         slot["value"] = max((c["value"] for c in slot["contributors"]), default=slot["value"])
     return buckets
+
+
+def _first_present(row: dict[str, Any], names: list[str]) -> Any:
+    for name in names:
+        value = row.get(name)
+        if value is not None and not pd.isna(value):
+            return value
+    return None
+
+
+def _operator_context(
+    rank_row: Optional[dict[str, Any]],
+    pattern_row: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    row = rank_row or {}
+    pattern = pattern_row or {}
+    stage_label = _first_present(row, ["stage_label", "weekly_stage_label", "stage2_label"])
+    stage_transition = _first_present(row, ["stage_transition", "weekly_stage_transition"])
+    top_pattern_family = _first_present(row, ["top_pattern_family"]) or _first_present(pattern, ["pattern_family", "setup_family"])
+    top_pattern_state = _first_present(row, ["top_pattern_state"]) or _first_present(pattern, ["pattern_state"])
+    reasons: list[str] = []
+    for label, column in [
+        ("Momentum acceleration", "momentum_acceleration_score"),
+        ("Relative strength", "rel_strength_score"),
+        ("Sector strength", "sector_strength_score"),
+    ]:
+        value = _scalar_or_none(row.get(column))
+        if isinstance(value, (int, float)) and value >= 75:
+            reasons.append(f"{label} is strong at {value:.1f}.")
+    penalty = _scalar_or_none(row.get("exhaustion_penalty"))
+    if isinstance(penalty, (int, float)) and penalty > 0:
+        reasons.append(f"Exhaustion penalty applied: {penalty:.1f}.")
+    pivot_distance = _scalar_or_none(row.get("distance_from_pivot_atr"))
+    if isinstance(pivot_distance, (int, float)) and pivot_distance >= 2:
+        reasons.append(f"Extended from pivot by {pivot_distance:.1f} ATR.")
+    if top_pattern_family:
+        reasons.append(f"Top setup: {top_pattern_family} ({top_pattern_state or 'state unknown'}).")
+    return {
+        "stage_label": _scalar_or_none(stage_label),
+        "stage_transition": _scalar_or_none(stage_transition),
+        "bars_in_stage": _scalar_or_none(row.get("bars_in_stage")),
+        "stage_entry_date": _scalar_or_none(row.get("stage_entry_date")),
+        "stage_freshness_bucket": _scalar_or_none(row.get("stage_freshness_bucket")),
+        "momentum_acceleration_score": _scalar_or_none(row.get("momentum_acceleration_score")),
+        "exhaustion_penalty": _scalar_or_none(row.get("exhaustion_penalty")),
+        "exhaustion_flag": _scalar_or_none(row.get("exhaustion_flag")),
+        "distance_from_pivot_atr": _scalar_or_none(row.get("distance_from_pivot_atr")),
+        "top_pattern_family": _scalar_or_none(top_pattern_family),
+        "top_pattern_state": _scalar_or_none(top_pattern_state),
+        "top_pattern_setup_quality": _scalar_or_none(_first_present(row, ["top_pattern_setup_quality"]) or _first_present(pattern, ["setup_quality"])),
+        "top_pattern_pivot_price": _scalar_or_none(_first_present(row, ["top_pattern_pivot_price"]) or _first_present(pattern, ["pivot_price", "breakout_level"])),
+        "top_pattern_invalidation_price": _scalar_or_none(_first_present(row, ["top_pattern_invalidation_price"]) or _first_present(pattern, ["invalidation_price"])),
+        "reclaim_signal_flag": bool(row.get("reclaim_signal_flag") or top_pattern_family == "stage2_reclaim"),
+        "explanation": reasons,
+    }
 
 
 def _decision_from_category(category: Optional[str]) -> dict[str, Any]:
@@ -197,6 +255,7 @@ def get_ranking_detail(
                 ),
                 "decision": _decision_from_category(None),
                 "factors": {},
+                "operator_context": _operator_context(None, None),
                 "raw_row": None,
             }
     else:
@@ -211,6 +270,7 @@ def get_ranking_detail(
     ranked = snap.frames.get("ranked_signals", pd.DataFrame())
     breakouts = snap.frames.get("breakout_scan", pd.DataFrame())
     patterns = snap.frames.get("pattern_scan", pd.DataFrame())
+    ranked = _enrich_operator_rank_fields(ranked, patterns)
     stock_scan = snap.frames.get("stock_scan", pd.DataFrame())
     sectors = snap.frames.get("sector_dashboard", pd.DataFrame())
 
@@ -236,6 +296,7 @@ def get_ranking_detail(
             ),
             "decision": _decision_from_category(None),
             "factors": {},
+            "operator_context": _operator_context(None, None),
             "raw_row": None,
         }
 
@@ -247,6 +308,10 @@ def get_ranking_detail(
         "category": _scalar_or_none((scan_row or {}).get("category")),
         "in_breakout_scan": breakout_row is not None,
         "in_pattern_scan": pattern_row is not None,
+        "stage_label": _scalar_or_none(_first_present(rank_row or {}, ["stage_label", "weekly_stage_label"])),
+        "stage_transition": _scalar_or_none(_first_present(rank_row or {}, ["stage_transition", "weekly_stage_transition"])),
+        "bars_in_stage": _scalar_or_none((rank_row or {}).get("bars_in_stage")),
+        "stage_entry_date": _scalar_or_none((rank_row or {}).get("stage_entry_date")),
     }
 
     lifecycle = _lifecycle(
@@ -282,6 +347,7 @@ def get_ranking_detail(
         "sector_context": sector_context,
         "breakout_row": breakout_row,
         "pattern_row": pattern_row,
+        "operator_context": _operator_context(rank_row, pattern_row),
         "raw_row": rank_row,
     }
 

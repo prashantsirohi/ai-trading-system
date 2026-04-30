@@ -3,7 +3,7 @@
  *
  * Composes the conversion funnel + per-symbol pattern cards. Both the
  * funnel inputs and the cards source from existing endpoints
- * (``/api/execution/ranking`` + ``/api/execution/market``) — no new
+ * (``/api/execution/ranking`` + ``/api/execution/workspace/pipeline``) — no new
  * backend in this PR. Funnel stage counts are derived purely client-side:
  *
  *   * Universe = ranked-signal count.
@@ -132,11 +132,14 @@ export default function PatternsPage() {
             {visibleRows.length === 0 ? (
               <EmptyState message="No pattern candidates match the current filter." />
             ) : (
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {visibleRows.map((row) => (
-                  <PatternCard key={row.symbol} row={row} onSelect={handleSelect} />
-                ))}
-              </div>
+              <>
+                <PatternRowsTable rows={visibleRows} onSelect={handleSelect} />
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {visibleRows.map((row) => (
+                    <PatternCard key={row.symbol} row={row} onSelect={handleSelect} />
+                  ))}
+                </div>
+              </>
             )}
             {selected ? (
               <p className="text-xs text-slate-500">
@@ -148,6 +151,71 @@ export default function PatternsPage() {
         )}
       </SectionCard>
     </PageFrame>
+  );
+}
+
+function PatternRowsTable({
+  rows,
+  onSelect,
+}: {
+  rows: StockRow[];
+  onSelect: (row: StockRow) => void;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-lg border border-slate-800">
+      <table className="w-full min-w-[900px] text-left text-sm">
+        <thead className="border-b border-slate-800 bg-slate-950/70 text-xs uppercase tracking-wider text-slate-500">
+          <tr>
+            <th className="px-3 py-2 font-semibold">Symbol</th>
+            <th className="px-3 py-2 font-semibold">Pattern family</th>
+            <th className="px-3 py-2 font-semibold">State</th>
+            <th className="px-3 py-2 font-semibold">Setup quality</th>
+            <th className="px-3 py-2 font-semibold">Pivot</th>
+            <th className="px-3 py-2 font-semibold">Invalidation</th>
+            <th className="px-3 py-2 font-semibold">Warnings</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr
+              key={row.symbol}
+              className="cursor-pointer border-b border-slate-800 last:border-b-0 hover:bg-slate-800/40"
+              onClick={() => onSelect(row)}
+            >
+              <td className="px-3 py-2 font-semibold text-slate-100">{row.symbol}</td>
+              <td className="px-3 py-2 text-slate-200">{row.pattern || '—'}</td>
+              <td className="px-3 py-2 text-slate-300">{row.patternState ?? '—'}</td>
+              <td className="px-3 py-2 tabular-nums text-slate-300">
+                {row.setupQuality == null ? '—' : row.setupQuality.toFixed(1)}
+              </td>
+              <td className="px-3 py-2 tabular-nums text-slate-300">
+                {row.pivotPrice == null ? '—' : row.pivotPrice.toFixed(2)}
+              </td>
+              <td className="px-3 py-2 tabular-nums text-slate-300">
+                {row.invalidationPrice == null ? '—' : row.invalidationPrice.toFixed(2)}
+              </td>
+              <td className="px-3 py-2">
+                <div className="flex flex-wrap gap-1">
+                  {row.reclaimSignal ? (
+                    <span className="rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-200">
+                      Reclaim
+                    </span>
+                  ) : null}
+                  {(row.distanceFromPivotAtr ?? 0) >= 2 ? (
+                    <span className="rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-200">
+                      Pivot extended
+                    </span>
+                  ) : null}
+                  {!row.reclaimSignal && (row.distanceFromPivotAtr ?? 0) < 2 ? (
+                    <span className="text-slate-500">—</span>
+                  ) : null}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

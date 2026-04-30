@@ -4,7 +4,7 @@
  * Surfaces:
  *
  *   * Pattern-type SVG glyph (`PatternIcons.patternIconFor`).
- *   * Urgency heat (🔥 IMMINENT / ⚠️ NEAR / ⏳ EARLY) derived from row
+ *   * Urgency heat derived from row
  *     state. The backend doesn't expose distance-to-breakout yet, so we
  *     compose urgency from the breakout flag + score band.
  *   * Quality tier label, RS, sector strength, and a derived
@@ -20,14 +20,13 @@ type Urgency = 'imminent' | 'near' | 'early';
 interface UrgencyDef {
   key: Urgency;
   label: string;
-  emoji: string;
   tone: string;
 }
 
 const URGENCY: Record<Urgency, UrgencyDef> = {
-  imminent: { key: 'imminent', label: 'Imminent', emoji: '🔥', tone: 'border-rose-500/40 bg-rose-500/15 text-rose-200' },
-  near: { key: 'near', label: 'Near', emoji: '⚠️', tone: 'border-amber-500/40 bg-amber-500/15 text-amber-200' },
-  early: { key: 'early', label: 'Early', emoji: '⏳', tone: 'border-slate-600 bg-slate-800/60 text-slate-300' },
+  imminent: { key: 'imminent', label: 'Imminent', tone: 'border-rose-500/40 bg-rose-500/15 text-rose-200' },
+  near: { key: 'near', label: 'Near', tone: 'border-amber-500/40 bg-amber-500/15 text-amber-200' },
+  early: { key: 'early', label: 'Early', tone: 'border-slate-600 bg-slate-800/60 text-slate-300' },
 };
 
 function urgencyFor(row: StockRow): UrgencyDef {
@@ -37,6 +36,11 @@ function urgencyFor(row: StockRow): UrgencyDef {
 }
 
 function distanceToBreakout(row: StockRow): string {
+  if (row.distanceFromPivotAtr != null) return `${row.distanceFromPivotAtr.toFixed(1)} ATR from pivot`;
+  if (row.pivotPrice != null && row.price > 0) {
+    const gap = ((row.price / row.pivotPrice) - 1) * 100;
+    return `${gap >= 0 ? '+' : ''}${gap.toFixed(1)}% vs pivot`;
+  }
   if (row.breakout) return 'At breakout';
   // Heuristic: lower RS = further from breakout. Returns a +%-style hint.
   const gap = Math.max(0.5, Math.min(12, (90 - row.rs) * 0.15));
@@ -109,7 +113,7 @@ export default function PatternCard({ row, onSelect }: Props) {
             urgency.tone,
           )}
         >
-          {urgency.emoji} {urgency.label}
+          {urgency.label}
         </span>
       </div>
 
@@ -128,6 +132,31 @@ export default function PatternCard({ row, onSelect }: Props) {
         </div>
       </dl>
 
+      <dl className="grid grid-cols-2 gap-2 text-xs">
+        <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-2">
+          <dt className="text-[10px] uppercase tracking-wider text-slate-500">State</dt>
+          <dd className="mt-0.5 font-semibold text-slate-100">{row.patternState ?? 'Unknown'}</dd>
+        </div>
+        <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-2">
+          <dt className="text-[10px] uppercase tracking-wider text-slate-500">Setup quality</dt>
+          <dd className="mt-0.5 font-semibold tabular-nums text-slate-100">
+            {row.setupQuality == null ? '—' : row.setupQuality.toFixed(1)}
+          </dd>
+        </div>
+        <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-2">
+          <dt className="text-[10px] uppercase tracking-wider text-slate-500">Pivot</dt>
+          <dd className="mt-0.5 font-semibold tabular-nums text-slate-100">
+            {row.pivotPrice == null ? '—' : row.pivotPrice.toFixed(2)}
+          </dd>
+        </div>
+        <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-2">
+          <dt className="text-[10px] uppercase tracking-wider text-slate-500">Invalidation</dt>
+          <dd className="mt-0.5 font-semibold tabular-nums text-slate-100">
+            {row.invalidationPrice == null ? '—' : row.invalidationPrice.toFixed(2)}
+          </dd>
+        </div>
+      </dl>
+
       <div className="flex items-center justify-between text-xs">
         <span className="text-slate-400">
           <span className="text-slate-500">Distance: </span>
@@ -137,6 +166,18 @@ export default function PatternCard({ row, onSelect }: Props) {
           <span className="text-slate-500">Failure risk: </span>
           <span className={cn('font-semibold', failure.tone)}>{failure.label}</span>
         </span>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {row.reclaimSignal ? (
+          <span className="rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-200">
+            Reclaim
+          </span>
+        ) : null}
+        {(row.distanceFromPivotAtr ?? 0) >= 2 ? (
+          <span className="rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-200">
+            Extended from pivot
+          </span>
+        ) : null}
       </div>
       <p className="text-[11px] leading-snug text-slate-500">{failure.reason}</p>
     </button>

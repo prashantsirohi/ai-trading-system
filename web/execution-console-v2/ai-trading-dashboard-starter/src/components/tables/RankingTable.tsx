@@ -54,6 +54,20 @@ function fallbackFactors(row: StockRow) {
 
 const EMPTY_COMPARE_SET: ReadonlySet<string> = new Set<string>();
 
+function stageTone(bucket?: string | null): string {
+  if (bucket === 'fresh_s2') return 'border-emerald-500/40 bg-emerald-500/15 text-emerald-200';
+  if (bucket === 'extended_s2') return 'border-amber-500/40 bg-amber-500/15 text-amber-200';
+  if (bucket === 'mature_s2') return 'border-blue-500/40 bg-blue-500/15 text-blue-200';
+  return 'border-slate-700 bg-slate-900/60 text-slate-300';
+}
+
+function stageLabel(row: StockRow): string {
+  if (!row.stageLabel) return '—';
+  if (row.stageFreshnessBucket === 'fresh_s2') return `${row.stageLabel} fresh`;
+  if (row.stageFreshnessBucket === 'extended_s2') return `${row.stageLabel} extended`;
+  return row.stageLabel;
+}
+
 export default function RankingTable({
   rows,
   expandedSymbol = null,
@@ -110,6 +124,60 @@ export default function RankingTable({
             {info.getValue().toFixed(2)}
           </span>
         ),
+      }),
+      columnHelper.display({
+        id: 'stage',
+        header: 'Stage',
+        cell: (info) => {
+          const row = info.row.original;
+          if (!row.stageLabel) return <span className="text-slate-500">—</span>;
+          return (
+            <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider', stageTone(row.stageFreshnessBucket))}>
+              {stageLabel(row)}
+            </span>
+          );
+        },
+      }),
+      columnHelper.accessor('barsInStage', {
+        header: 'Age',
+        cell: (info) => {
+          const value = info.getValue();
+          return value == null ? <span className="text-slate-500">—</span> : <span className="tabular-nums text-slate-200">{value} bars</span>;
+        },
+      }),
+      columnHelper.accessor('stageTransition', {
+        header: 'Transition',
+        cell: (info) => {
+          const value = info.getValue();
+          return value ? <span className="text-slate-200">{value}</span> : <span className="text-slate-500">—</span>;
+        },
+      }),
+      columnHelper.accessor('momentumAccelerationScore', {
+        header: 'Accel',
+        cell: (info) => {
+          const value = info.getValue();
+          return value == null ? <span className="text-slate-500">—</span> : <span className="font-semibold tabular-nums text-slate-100">{value.toFixed(1)}</span>;
+        },
+      }),
+      columnHelper.display({
+        id: 'warnings',
+        header: 'Warnings',
+        cell: (info) => {
+          const row = info.row.original;
+          const warnings = [];
+          if ((row.exhaustionPenalty ?? 0) > 0) warnings.push('Exhaustion');
+          if ((row.distanceFromPivotAtr ?? 0) >= 2) warnings.push('Pivot extended');
+          if (warnings.length === 0) return <span className="text-slate-500">—</span>;
+          return (
+            <div className="flex flex-wrap gap-1">
+              {warnings.map((warning) => (
+                <span key={warning} className="rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-200">
+                  {warning}
+                </span>
+              ))}
+            </div>
+          );
+        },
       }),
       columnHelper.display({
         id: 'factors',
@@ -174,7 +242,7 @@ export default function RankingTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[960px] text-left text-sm">
+      <table className="w-full min-w-[1280px] text-left text-sm">
         <thead className="border-y border-slate-800 text-slate-400">
           {table.getHeaderGroups().map((headerGroup) => (
             <tr key={headerGroup.id}>
@@ -249,4 +317,3 @@ export default function RankingTable({
     </div>
   );
 }
-

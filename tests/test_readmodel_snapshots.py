@@ -41,6 +41,13 @@ def _write_snapshot_artifacts(base: Path, run_id: str, *, score: float, smoke: b
                 "stage2_score": 82.5,
                 "is_stage2_uptrend": True,
                 "stage2_label": "stage2_uptrend",
+                "weekly_stage_label": "S2",
+                "weekly_stage_transition": "S1_TO_S2",
+                "bars_in_stage": 3,
+                "stage_entry_date": "2026-04-03",
+                "momentum_acceleration_score": 81.0,
+                "exhaustion_penalty": 2.0,
+                "distance_from_pivot_atr": 2.4,
                 "run_date": "2026-04-21",
             }
         ]
@@ -62,10 +69,14 @@ def _write_snapshot_artifacts(base: Path, run_id: str, *, score: float, smoke: b
         [
             {
                 "symbol_id": "AAA",
+                "pattern_family": "flag",
                 "pattern_state": "confirmed",
                 "pattern_operational_tier": "tier_1",
                 "pattern_priority_score": 92.0,
                 "pattern_priority_rank": 1,
+                "setup_quality": 86.0,
+                "pivot_price": 101.0,
+                "invalidation_price": 96.0,
                 "volume_zscore_20": 2.5,
                 "volume_zscore_50": 1.8,
                 "discovered_by_pattern_scan": False,
@@ -194,6 +205,10 @@ def test_ranking_snapshot_readmodels_use_seeded_snapshot(tmp_path: Path, monkeyp
 
     assert ranking["artifact_count"] == 1
     assert ranking["top_ranked"][0]["symbol_id"] == "AAA"
+    assert ranking["top_ranked"][0]["stage_label"] == "S2"
+    assert ranking["top_ranked"][0]["stage_transition"] == "S1_TO_S2"
+    assert ranking["top_ranked"][0]["stage_freshness_bucket"] == "fresh_s2"
+    assert ranking["top_ranked"][0]["top_pattern_family"] == "flag"
     assert ranking["chart"][0]["composite_score"] == 88.0
     assert ranking["stage2_summary"]["available"] is True
     assert ranking["stage2_summary"]["counts_by_label"]["stage2_uptrend"] == 1
@@ -205,6 +220,11 @@ def test_ranking_snapshot_readmodels_use_seeded_snapshot(tmp_path: Path, monkeyp
     assert workspace["counts"]["patterns"] == 2
     assert workspace["patterns"][0]["pattern_operational_tier"] == "tier_1"
     assert workspace["patterns"][0]["pattern_priority_rank"] == 1
+    assert workspace["top_ranked"][0]["momentum_acceleration_score"] == 81.0
+    assert workspace["top_ranked"][0]["exhaustion_penalty"] == 2.0
+    assert workspace["top_ranked"][0]["distance_from_pivot_atr"] == 2.4
+    assert workspace["top_ranked"][0]["top_pattern_state"] == "confirmed"
+    assert workspace["top_ranked"][0]["top_pattern_setup_quality"] == 86.0
     assert workspace["patterns"][0]["volume_zscore_20"] == 2.5
     assert workspace["ranked_leaders"][0]["symbol_id"] == "AAA"
     assert workspace["pattern_discoveries"][0]["symbol_id"] == "PATTERNX"

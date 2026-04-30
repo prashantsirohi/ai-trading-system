@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, asdict
+from pathlib import Path
 from typing import Optional
 
 import duckdb
@@ -56,6 +57,50 @@ def load_all_daily(ohlcv_db_path: str, exchange: str = "NSE") -> pd.DataFrame:
 def load_close_pivot(daily: pd.DataFrame) -> pd.DataFrame:
     """Wide pivot: index=date, columns=symbol, values=close."""
     return daily.pivot_table(index="date", columns="symbol", values="close")
+
+
+def load_weekly_stage_snapshots(
+    ohlcv_db_path: str,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> pd.DataFrame:
+    """Load persisted weekly stage snapshots for validation reports."""
+    conn = duckdb.connect(ohlcv_db_path, read_only=True)
+    try:
+        exists = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_name = 'weekly_stage_snapshot'
+            """
+        ).fetchone()[0]
+        if not exists:
+            return pd.DataFrame()
+        clauses = []
+        params: list[object] = []
+        if start:
+            clauses.append("week_end_date >= CAST(? AS DATE)")
+            params.append(start)
+        if end:
+            clauses.append("week_end_date <= CAST(? AS DATE)")
+            params.append(end)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        snapshots = conn.execute(
+            f"""
+            SELECT symbol, week_end_date, stage_label, stage_transition,
+                   bars_in_stage, stage_confidence
+            FROM weekly_stage_snapshot
+            {where}
+            ORDER BY week_end_date, symbol
+            """,
+            params,
+        ).fetchdf()
+    finally:
+        conn.close()
+    if not snapshots.empty:
+        snapshots["week_end_date"] = pd.to_datetime(snapshots["week_end_date"])
+    return snapshots
 
 
 # ── In-memory weekly stage snapshot ──────────────────────────────────────────
@@ -212,7 +257,7 @@ def run_comparison(
     market_stage_s2_only: bool = True,
 ) -> pd.DataFrame:
     """Run gated vs baseline comparison. Returns a long-form results frame."""
-    from analytics.rank_backtester import RankBacktester
+    from ai_trading_system.analytics.rank_backtester import RankBacktester
 
     bt = RankBacktester(
         ohlcv_db_path=ohlcv_db_path,
@@ -340,6 +385,118 @@ def summarise(results: pd.DataFrame) -> pd.DataFrame:
         })
     summary = pd.DataFrame(rows).set_index("mode")
     return summary
+
+
+def stage2_freshness_bucket(row: pd.Series, *, fresh_bars: int = 8) -> str:
+    """Classify a stage snapshot row into the Stage 2 freshness cohorts."""
+    transition = str(row.get("stage_transition") or "").upper()
+    label = str(row.get("stage_label") or "").upper()
+    bars = pd.to_numeric(pd.Series([row.get("bars_in_stage")]), errors="coerce").iloc[0]
+    if transition == "S1_TO_S2":
+        return "S1_TO_S2"
+    if label == "S2":
+        if pd.notna(bars) and int(bars) <= int(fresh_bars):
+            return "fresh_s2"
+        return "mature_s2"
+    return "non_s2"
+
+
+def evaluate_stage2_freshness(
+    snapshots: pd.DataFrame,
+    close_pivot: pd.DataFrame,
+    *,
+    fresh_bars: int = 8,
+    horizons: dict[str, int] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compare forward returns for fresh S2, mature S2, S1_TO_S2, and non-S2."""
+    horizons = horizons or FORWARD_WINDOWS
+    if snapshots.empty or close_pivot.empty:
+        empty_summary = pd.DataFrame(
+            columns=["bucket", "horizon", "n", "mean_return", "median_return", "win_rate", "p25", "p75"]
+        )
+        return pd.DataFrame(), empty_summary
+
+    close_pivot = close_pivot.sort_index()
+    rows = []
+    for _, snap in snapshots.iterrows():
+        symbol = str(snap["symbol"])
+        asof = pd.Timestamp(snap["week_end_date"])
+        bucket = stage2_freshness_bucket(snap, fresh_bars=fresh_bars)
+        if symbol not in close_pivot.columns:
+            continue
+        dates = close_pivot.index
+        entry_loc = dates.searchsorted(asof)
+        if entry_loc >= len(dates):
+            continue
+        entry_price = close_pivot.iloc[entry_loc].get(symbol)
+        if pd.isna(entry_price) or entry_price <= 0:
+            continue
+        record = {
+            "date": dates[entry_loc].date().isoformat(),
+            "symbol": symbol,
+            "bucket": bucket,
+            "stage_label": snap.get("stage_label"),
+            "stage_transition": snap.get("stage_transition"),
+            "bars_in_stage": snap.get("bars_in_stage"),
+        }
+        for label, days in horizons.items():
+            exit_loc = entry_loc + int(days)
+            if exit_loc >= len(dates):
+                record[f"ret_{label}"] = np.nan
+                continue
+            exit_price = close_pivot.iloc[exit_loc].get(symbol)
+            record[f"ret_{label}"] = (
+                float((exit_price / entry_price - 1.0) * 100)
+                if pd.notna(exit_price) and exit_price > 0
+                else np.nan
+            )
+        rows.append(record)
+
+    detail = pd.DataFrame(rows)
+    summary_rows = []
+    for bucket in ["fresh_s2", "mature_s2", "S1_TO_S2", "non_s2"]:
+        sub = detail[detail["bucket"] == bucket] if not detail.empty else pd.DataFrame()
+        for label in horizons:
+            col = f"ret_{label}"
+            vals = pd.to_numeric(sub.get(col, pd.Series(dtype=float)), errors="coerce").dropna()
+            summary_rows.append(
+                {
+                    "bucket": bucket,
+                    "horizon": label,
+                    "n": int(len(vals)),
+                    "mean_return": round(float(vals.mean()), 2) if not vals.empty else np.nan,
+                    "median_return": round(float(vals.median()), 2) if not vals.empty else np.nan,
+                    "win_rate": round(float((vals > 0).mean() * 100), 1) if not vals.empty else np.nan,
+                    "p25": round(float(vals.quantile(0.25)), 2) if not vals.empty else np.nan,
+                    "p75": round(float(vals.quantile(0.75)), 2) if not vals.empty else np.nan,
+                }
+            )
+    return detail, pd.DataFrame(summary_rows)
+
+
+def run_stage2_freshness_report(
+    ohlcv_db_path: str,
+    *,
+    exchange: str = "NSE",
+    start: str | None = None,
+    end: str | None = None,
+    output_dir: str | Path | None = None,
+) -> dict[str, object]:
+    """Generate Stage 2 freshness forward-return detail and summary reports."""
+    daily = load_all_daily(ohlcv_db_path, exchange=exchange)
+    close_pivot = load_close_pivot(daily)
+    snapshots = load_weekly_stage_snapshots(ohlcv_db_path, start=start, end=end)
+    detail, summary = evaluate_stage2_freshness(snapshots, close_pivot)
+    paths: dict[str, str] = {}
+    if output_dir is not None:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        detail_path = out / "stage2_freshness_detail.csv"
+        summary_path = out / "stage2_freshness_summary.csv"
+        detail.to_csv(detail_path, index=False)
+        summary.to_csv(summary_path, index=False)
+        paths = {"detail": str(detail_path), "summary": str(summary_path)}
+    return {"detail": detail, "summary": summary, "paths": paths}
 
 
 def print_report(results: pd.DataFrame, summary: pd.DataFrame) -> None:

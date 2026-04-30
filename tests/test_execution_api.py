@@ -97,9 +97,11 @@ def _seed_execution_project(tmp_path: Path) -> str:
     )
     (rank_dir / "ranked_signals.csv").write_text(
         (
-            "symbol_id,composite_score,close,stage2_score,is_stage2_uptrend,stage2_label\n"
-            "AAA,88.5,104,84.0,true,stage2_uptrend\n"
-            "BBB,82.0,98,62.0,false,stage1_baseline\n"
+            "symbol_id,composite_score,close,stage2_score,is_stage2_uptrend,stage2_label,"
+            "weekly_stage_label,weekly_stage_transition,bars_in_stage,stage_entry_date,"
+            "momentum_acceleration_score,exhaustion_penalty,exhaustion_flag,distance_from_pivot_atr\n"
+            "AAA,88.5,104,84.0,true,stage2_uptrend,S2,S1_TO_S2,3,2026-04-03,82.0,2.5,mild_exhaustion,2.2\n"
+            "BBB,82.0,98,62.0,false,stage1_baseline,S1,NONE,12,,40.0,0,,0.8\n"
         ),
         encoding="utf-8",
     )
@@ -114,8 +116,9 @@ def _seed_execution_project(tmp_path: Path) -> str:
     (rank_dir / "pattern_scan.csv").write_text(
         (
             "symbol_id,pattern_family,pattern_state,pattern_lifecycle_state,pattern_score,"
-            "pattern_operational_tier,pattern_priority_score,pattern_priority_rank,volume_zscore_20,volume_zscore_50\n"
-            "AAA,flag,confirmed,confirmed,91,tier_2,87,1,2.6,1.9\n"
+            "pattern_operational_tier,pattern_priority_score,pattern_priority_rank,setup_quality,"
+            "pivot_price,invalidation_price,volume_zscore_20,volume_zscore_50\n"
+            "AAA,stage2_reclaim,confirmed,confirmed,91,tier_2,87,1,88,103,97,2.6,1.9\n"
         ),
         encoding="utf-8",
     )
@@ -156,6 +159,10 @@ def test_execution_api_read_endpoints(monkeypatch, tmp_path: Path) -> None:
     ranking = client.get("/api/execution/ranking?limit=10", headers=API_HEADERS)
     assert ranking.status_code == 200
     assert ranking.json()["top_ranked"][0]["symbol_id"] == "AAA"
+    assert ranking.json()["top_ranked"][0]["stage_label"] == "S2"
+    assert ranking.json()["top_ranked"][0]["stage_freshness_bucket"] == "fresh_s2"
+    assert ranking.json()["top_ranked"][0]["top_pattern_family"] == "stage2_reclaim"
+    assert ranking.json()["top_ranked"][0]["reclaim_signal_flag"] is True
     assert ranking.json()["artifact_count"] == 2
     assert ranking.json()["visible_count"] == 2
     assert ranking.json()["stage2_summary"]["uptrend_count"] == 1
@@ -181,10 +188,13 @@ def test_execution_api_read_endpoints(monkeypatch, tmp_path: Path) -> None:
     assert pipeline.status_code == 200
     pipeline_payload = pipeline.json()
     assert pipeline_payload["top_ranked"][0]["symbol_id"] == "AAA"
-    assert pipeline_payload["patterns"][0]["pattern_family"] == "flag"
+    assert pipeline_payload["patterns"][0]["pattern_family"] == "stage2_reclaim"
     assert pipeline_payload["patterns"][0]["pattern_operational_tier"] == "tier_2"
     assert pipeline_payload["patterns"][0]["pattern_priority_rank"] == 1
     assert pipeline_payload["patterns"][0]["volume_zscore_20"] == 2.6
+    assert pipeline_payload["top_ranked"][0]["momentum_acceleration_score"] == 82.0
+    assert pipeline_payload["top_ranked"][0]["exhaustion_flag"] == "mild_exhaustion"
+    assert pipeline_payload["top_ranked"][0]["distance_from_pivot_atr"] == 2.2
     assert pipeline_payload["ranked_leaders"][0]["symbol_id"] == "AAA"
     assert pipeline_payload["pattern_discoveries"][0]["symbol_id"] == "PATTERNX"
     assert pipeline_payload["breakout_candidates"][0]["symbol_id"] == "BREAKOUTX"

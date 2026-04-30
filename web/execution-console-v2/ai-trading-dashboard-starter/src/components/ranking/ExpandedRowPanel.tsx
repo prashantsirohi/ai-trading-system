@@ -74,6 +74,24 @@ const FALLBACK_DETAIL = (row: StockRow): RankingDetail => ({
   decision: { verdict: null, confidence: null, reason: null },
   factors: [],
   sectorContext: null,
+  operatorContext: {
+    stageLabel: row.stageLabel ?? null,
+    stageTransition: row.stageTransition ?? null,
+    barsInStage: row.barsInStage ?? null,
+    stageEntryDate: row.stageEntryDate ?? null,
+    stageFreshnessBucket: row.stageFreshnessBucket ?? null,
+    momentumAccelerationScore: row.momentumAccelerationScore ?? null,
+    exhaustionPenalty: row.exhaustionPenalty ?? null,
+    exhaustionFlag: row.exhaustionFlag ?? null,
+    distanceFromPivotAtr: row.distanceFromPivotAtr ?? null,
+    topPatternFamily: row.pattern !== 'N/A' ? row.pattern : null,
+    topPatternState: row.patternState ?? null,
+    topPatternSetupQuality: row.setupQuality ?? null,
+    topPatternPivotPrice: row.pivotPrice ?? null,
+    topPatternInvalidationPrice: row.invalidationPrice ?? null,
+    reclaimSignalFlag: Boolean(row.reclaimSignal),
+    explanation: [],
+  },
   rawRow: null,
 });
 
@@ -136,6 +154,86 @@ export default function ExpandedRowPanel({ row, isCompared, onToggleCompare }: P
 
       <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
         <h4 className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+          Operator Notes
+        </h4>
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          <DetailMetric label="Stage" value={detail.operatorContext.stageLabel ?? row.stageLabel ?? '—'} />
+          <DetailMetric
+            label="Stage age"
+            value={
+              detail.operatorContext.barsInStage == null
+                ? '—'
+                : `${detail.operatorContext.barsInStage} bars`
+            }
+          />
+          <DetailMetric label="Transition" value={detail.operatorContext.stageTransition ?? row.stageTransition ?? '—'} />
+          <DetailMetric
+            label="Momentum acceleration"
+            value={
+              detail.operatorContext.momentumAccelerationScore == null
+                ? '—'
+                : detail.operatorContext.momentumAccelerationScore.toFixed(1)
+            }
+          />
+          <DetailMetric
+            label="Exhaustion"
+            value={
+              detail.operatorContext.exhaustionPenalty == null
+                ? '—'
+                : `${detail.operatorContext.exhaustionPenalty.toFixed(1)} ${detail.operatorContext.exhaustionFlag ?? ''}`.trim()
+            }
+          />
+          <DetailMetric
+            label="Pivot distance"
+            value={
+              detail.operatorContext.distanceFromPivotAtr == null
+                ? '—'
+                : `${detail.operatorContext.distanceFromPivotAtr.toFixed(1)} ATR`
+            }
+          />
+          <DetailMetric label="Top pattern" value={detail.operatorContext.topPatternFamily ?? row.pattern ?? '—'} />
+          <DetailMetric label="Pattern state" value={detail.operatorContext.topPatternState ?? row.patternState ?? '—'} />
+          <DetailMetric
+            label="Invalidation"
+            value={
+              detail.operatorContext.topPatternInvalidationPrice == null
+                ? '—'
+                : detail.operatorContext.topPatternInvalidationPrice.toFixed(2)
+            }
+          />
+        </div>
+        <div className="mt-3 flex flex-wrap gap-1">
+          {detail.operatorContext.stageFreshnessBucket === 'fresh_s2' ? (
+            <WarningLabel tone="green" label="Fresh S2" />
+          ) : null}
+          {detail.operatorContext.stageFreshnessBucket === 'extended_s2' ? (
+            <WarningLabel tone="amber" label="Extended S2" />
+          ) : null}
+          {(detail.operatorContext.exhaustionPenalty ?? 0) > 0 ? (
+            <WarningLabel tone="amber" label="Exhaustion risk" />
+          ) : null}
+          {(detail.operatorContext.distanceFromPivotAtr ?? 0) >= 2 ? (
+            <WarningLabel tone="amber" label="Distance from pivot extended" />
+          ) : null}
+          {detail.operatorContext.reclaimSignalFlag ? (
+            <WarningLabel tone="green" label="Reclaim signal" />
+          ) : null}
+        </div>
+        {detail.operatorContext.explanation.length > 0 ? (
+          <ul className="mt-3 space-y-1 text-xs text-slate-400">
+            {detail.operatorContext.explanation.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-xs text-slate-500">
+            No additional score or penalty explanation is available for this artifact.
+          </p>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+        <h4 className="text-xs font-semibold uppercase tracking-widest text-slate-400">
           Factor Bars
         </h4>
         <FactorBars
@@ -162,5 +260,29 @@ export default function ExpandedRowPanel({ row, isCompared, onToggleCompare }: P
 
       <MiniChart history={historyQuery.data} row={row} isLoading={historyQuery.isLoading} />
     </div>
+  );
+}
+
+function DetailMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</div>
+      <div className="mt-1 text-sm font-semibold text-slate-100">{value}</div>
+    </div>
+  );
+}
+
+function WarningLabel({ label, tone }: { label: string; tone: 'green' | 'amber' }) {
+  return (
+    <span
+      className={cn(
+        'rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+        tone === 'green'
+          ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-200'
+          : 'border-amber-500/40 bg-amber-500/15 text-amber-200',
+      )}
+    >
+      {label}
+    </span>
   );
 }

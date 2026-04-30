@@ -22,10 +22,24 @@ export interface StockRow {
   sector: string;
   breakout: boolean;
   pattern: string;
+  patternState?: string | null;
+  setupQuality?: number | null;
+  pivotPrice?: number | null;
+  invalidationPrice?: number | null;
+  reclaimSignal?: boolean;
   tier: 'A' | 'B' | 'C';
   price: number;
   sectorStrength: number;
   trend: number;
+  stageLabel?: string | null;
+  stageTransition?: string | null;
+  barsInStage?: number | null;
+  stageEntryDate?: string | null;
+  stageFreshnessBucket?: string | null;
+  momentumAccelerationScore?: number | null;
+  exhaustionPenalty?: number | null;
+  exhaustionFlag?: string | null;
+  distanceFromPivotAtr?: number | null;
 }
 
 export interface RunStage {

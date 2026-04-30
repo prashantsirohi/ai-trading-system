@@ -37,6 +37,25 @@ function toBreakout(value: BackendValue): boolean {
   return false;
 }
 
+function toBoolean(value: BackendValue): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    return ['true', 'yes', '1', 'y'].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
+function optionalText(value: BackendValue): string | null {
+  const text = toText(value, '').trim();
+  return text === '' ? null : text;
+}
+
+function optionalNumber(value: BackendValue): number | null {
+  const parsed = toNumber(value, Number.NaN);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function normalizeVolume(raw: BackendValue): 'High' | 'Medium' | 'Low' {
   const normalized = toText(raw, '').toLowerCase();
   if (normalized.includes('high')) {
@@ -76,10 +95,24 @@ export function mapBackendStockRow(row: BackendRecord): StockRow {
     volume: normalizeVolume(row.volume_state ?? row.volume),
     sector: toText(row.sector_name ?? row.sector, 'Unknown'),
     breakout: toBreakout(row.breakout_state ?? row.breakout),
-    pattern: toText(row.pattern_family ?? row.setup_family ?? row.pattern, 'N/A'),
+    pattern: toText(row.top_pattern_family ?? row.pattern_family ?? row.setup_family ?? row.pattern, 'N/A'),
+    patternState: optionalText(row.top_pattern_state ?? row.pattern_state),
+    setupQuality: optionalNumber(row.top_pattern_setup_quality ?? row.setup_quality),
+    pivotPrice: optionalNumber(row.top_pattern_pivot_price ?? row.pivot_price ?? row.breakout_level),
+    invalidationPrice: optionalNumber(row.top_pattern_invalidation_price ?? row.invalidation_price),
+    reclaimSignal: toBoolean(row.reclaim_signal_flag),
     tier: normalizeTier(row.candidate_tier ?? row.tier, score),
     price,
     sectorStrength,
     trend,
+    stageLabel: optionalText(row.stage_label ?? row.weekly_stage_label ?? row.stage2_label),
+    stageTransition: optionalText(row.stage_transition ?? row.weekly_stage_transition),
+    barsInStage: optionalNumber(row.bars_in_stage),
+    stageEntryDate: optionalText(row.stage_entry_date),
+    stageFreshnessBucket: optionalText(row.stage_freshness_bucket),
+    momentumAccelerationScore: optionalNumber(row.momentum_acceleration_score),
+    exhaustionPenalty: optionalNumber(row.exhaustion_penalty),
+    exhaustionFlag: optionalText(row.exhaustion_flag),
+    distanceFromPivotAtr: optionalNumber(row.distance_from_pivot_atr),
   };
 }

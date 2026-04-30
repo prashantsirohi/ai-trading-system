@@ -1,8 +1,10 @@
 import os
+import json
 import sqlite3
 import sys
 import warnings
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Tuple, Dict, List, Optional
 
 import numpy as np
@@ -59,6 +61,15 @@ class RankBacktester:
         self._sector_rs_cache: Optional[pd.DataFrame] = None
         self._stock_vs_sector_cache: Optional[pd.DataFrame] = None
         self._sector_map_cache: Optional[dict[str, str]] = None
+
+    @staticmethod
+    def normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
+        """Return a complete factor-weight dict normalized to sum to 1.0."""
+        normalized = {key: float(weights.get(key, 0.0)) for key in RankBacktester.DEFAULT_WEIGHTS}
+        total = sum(max(value, 0.0) for value in normalized.values())
+        if total <= 0:
+            return dict(RankBacktester.DEFAULT_WEIGHTS)
+        return {key: max(value, 0.0) / total for key, value in normalized.items()}
 
     def _get_conn(self):
         return duckdb.connect(self.ohlcv_db_path)
@@ -338,6 +349,7 @@ class RankBacktester:
         """
         if weights is None:
             weights = self.DEFAULT_WEIGHTS
+        weights = self.normalize_weights(weights)
 
         df = self.load_features_for_ranking(date, exchange)
 
@@ -385,6 +397,7 @@ class RankBacktester:
         """
         if weights is None:
             weights = self.DEFAULT_WEIGHTS
+        weights = self.normalize_weights(weights)
 
         dates = sorted(prices.index)
         n_dates = len(dates)
@@ -417,6 +430,7 @@ class RankBacktester:
         signals: pd.DataFrame,
         initial_cash: float = 1_000_000,
         fees: float = 0.001,
+        slippage_bps: float = 0.0,
     ) -> Tuple[dict, pd.DataFrame, pd.DataFrame]:
         """
         Run equal-weight long-only basket backtest.
@@ -425,8 +439,11 @@ class RankBacktester:
         active stocks and compounds equity forward.
         Returns (metrics, equity_curve, trades).
         """
-        entries = signals.reindex(prices.index).fillna(False)
-        exits = entries.shift(self.rebalance_days).fillna(False)
+        transaction_cost = float(fees)
+        slippage_rate = float(slippage_bps) / 10_000.0
+        round_trip_cost_rate = 2.0 * (transaction_cost + slippage_rate)
+        entries = signals.reindex(prices.index).fillna(False).astype(bool)
+        exits = entries.shift(self.rebalance_days, fill_value=False).astype(bool)
 
         common_cols = prices.columns.intersection(entries.columns)
         prices_sub = prices[common_cols]
@@ -437,9 +454,12 @@ class RankBacktester:
         equity_values = []
         trades = []
         wins = 0
+        gross_wins = 0
 
         n_rows = len(prices_sub)
         current_equity = initial_cash
+        gross_equity = initial_cash
+        gross_equity_values = []
 
         for period_start_idx in range(0, n_rows, self.rebalance_days):
             period_end_idx = period_start_idx + self.rebalance_days
@@ -471,26 +491,42 @@ class RankBacktester:
                 continue
 
             equal_wt_return = float(valid_stocks.mean())
+            net_period_return = equal_wt_return - round_trip_cost_rate
             n_traded = len(valid_stocks)
             trade_cash = current_equity / n_traded
-            fees_paid = trade_cash * fees * 2 * n_traded
-            pnl = trade_cash * equal_wt_return * n_traded - fees_paid
+            gross_trade_cash = gross_equity / n_traded
+            transaction_cost_paid = trade_cash * transaction_cost * 2 * n_traded
+            slippage_paid = trade_cash * slippage_rate * 2 * n_traded
+            total_cost_paid = transaction_cost_paid + slippage_paid
+            pnl = trade_cash * net_period_return * n_traded
             current_equity = max(0, current_equity + pnl)
+            gross_pnl = gross_trade_cash * equal_wt_return * n_traded
+            gross_equity = max(0, gross_equity + gross_pnl)
 
             equity_dates.append(prices_sub.index[period_end_idx])
             equity_values.append(current_equity)
+            gross_equity_values.append(gross_equity)
 
-            if equal_wt_return > 0:
+            if net_period_return > 0:
                 wins += 1
+            if equal_wt_return > 0:
+                gross_wins += 1
             trades.append(
                 {
                     "entry_date": prices_sub.index[period_start_idx],
                     "exit_date": prices_sub.index[period_end_idx],
                     "n_stocks": n_traded,
-                    "avg_return": equal_wt_return,
-                    "fees_paid": fees_paid,
+                    "avg_gross_return": equal_wt_return,
+                    "avg_net_return": net_period_return,
+                    "avg_return": net_period_return,
+                    "transaction_cost_paid": transaction_cost_paid,
+                    "slippage_paid": slippage_paid,
+                    "total_cost_paid": total_cost_paid,
+                    "fees_paid": transaction_cost_paid,
                     "pnl": pnl,
+                    "gross_pnl": gross_pnl,
                     "equity": current_equity,
+                    "gross_equity": gross_equity,
                 }
             )
 
@@ -503,10 +539,23 @@ class RankBacktester:
         equity_series.index = pd.to_datetime(equity_series.index)
 
         final_equity = equity_series.iloc[-1]
+        gross_equity_series = pd.Series(
+            [initial_cash] + gross_equity_values,
+            index=[prices_sub.index[0]] + equity_dates,
+        )
+        gross_equity_series.index = pd.to_datetime(gross_equity_series.index)
+
+        final_gross_equity = gross_equity_series.iloc[-1]
         total_return = (final_equity / initial_cash - 1) * 100
+        gross_total_return = (final_gross_equity / initial_cash - 1) * 100
         n_days = (equity_series.index[-1] - equity_series.index[0]).days
         annual_return = (
             ((final_equity / initial_cash) ** (365.0 / max(n_days, 1)) - 1) * 100
+            if n_days > 0
+            else 0
+        )
+        gross_annual_return = (
+            ((final_gross_equity / initial_cash) ** (365.0 / max(n_days, 1)) - 1) * 100
             if n_days > 0
             else 0
         )
@@ -516,7 +565,6 @@ class RankBacktester:
             - 1
         )
         period_returns = period_returns.replace([np.inf, -np.inf], np.nan).dropna()
-
         running_max = equity_series.cummax()
         drawdown = (equity_series - running_max) / running_max.clip(lower=1e-9)
         max_drawdown = float(drawdown.min() * 100)
@@ -536,21 +584,35 @@ class RankBacktester:
             sortino = 0
 
         win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+        gross_win_rate = (gross_wins / total_trades * 100) if total_trades > 0 else 0
+        total_cost_paid = float(sum(t["total_cost_paid"] for t in trades)) if trades else 0.0
 
         metrics = {
             "total_return": round(total_return, 2),
+            "net_total_return": round(total_return, 2),
+            "gross_total_return": round(gross_total_return, 2),
             "annual_return": round(annual_return, 2),
+            "net_annual_return": round(annual_return, 2),
+            "gross_annual_return": round(gross_annual_return, 2),
             "annual_vol": round(annual_vol, 2),
             "sharpe_ratio": round(sharpe, 2),
             "sortino_ratio": round(sortino, 2),
             "max_drawdown": round(max_drawdown, 2),
             "n_trades": total_trades,
             "win_rate": round(win_rate, 1),
+            "net_win_rate": round(win_rate, 1),
+            "gross_win_rate": round(gross_win_rate, 1),
             "final_value": round(final_equity, 2),
+            "net_final_value": round(final_equity, 2),
+            "gross_final_value": round(final_gross_equity, 2),
+            "transaction_cost": round(transaction_cost, 6),
+            "slippage_bps": round(slippage_bps, 4),
+            "total_cost_paid": round(total_cost_paid, 2),
         }
 
         equity_df = equity_series.reset_index()
         equity_df.columns = ["date", "equity"]
+        equity_df["gross_equity"] = gross_equity_series.values
         trades_df = pd.DataFrame(trades) if trades else pd.DataFrame()
 
         return metrics, equity_df, trades_df
@@ -561,6 +623,8 @@ class RankBacktester:
         self,
         prices: pd.DataFrame,
         grid: List[Dict[str, float]] = None,
+        transaction_cost: float = 0.001,
+        slippage_bps: float = 0.0,
     ) -> Tuple[Dict[str, float], pd.DataFrame]:
         """
         Step 3: Grid search over weight combinations.
@@ -575,7 +639,12 @@ class RankBacktester:
         for w in grid:
             try:
                 signals = self.generate_signals(prices, w)
-                metrics, _, _ = self.run_backtest(prices, signals)
+                metrics, _, _ = self.run_backtest(
+                    prices,
+                    signals,
+                    fees=transaction_cost,
+                    slippage_bps=slippage_bps,
+                )
                 results.append(
                     {
                         **w,
@@ -594,7 +663,9 @@ class RankBacktester:
             "trend_persistence": float(best["trend_persistence"]),
             "proximity_highs": float(best["proximity_highs"]),
             "delivery_pct": float(best["delivery_pct"]),
+            "sector_strength": float(best["sector_strength"]),
         }
+        best_weights = self.normalize_weights(best_weights)
         logger.info(f"Best weights: {best_weights}")
         logger.info(f"Best Sharpe: {best['sharpe_ratio']:.2f}")
         return best_weights, results_df
@@ -606,8 +677,10 @@ class RankBacktester:
             for vol in [0.1, 0.15, 0.2, 0.25]:
                 for trend in [0.05, 0.1, 0.15, 0.2]:
                     for prox in [0.1, 0.15, 0.2, 0.25]:
-                        deliv = round(1.0 - rs - vol - trend - prox, 2)
-                        if deliv >= 0.05:
+                        for sector in [0.05, 0.1, 0.15, 0.2]:
+                            deliv = round(1.0 - rs - vol - trend - prox - sector, 2)
+                            if deliv < 0.05:
+                                continue
                             grid.append(
                                 {
                                     "relative_strength": rs,
@@ -615,6 +688,7 @@ class RankBacktester:
                                     "trend_persistence": trend,
                                     "proximity_highs": prox,
                                     "delivery_pct": deliv,
+                                    "sector_strength": sector,
                                 }
                             )
         unique = []
@@ -625,6 +699,143 @@ class RankBacktester:
                 seen.add(key)
                 unique.append(g)
         return unique
+
+    def run_walk_forward_validation(
+        self,
+        from_date: str,
+        to_date: str,
+        *,
+        train_months: int = 12,
+        test_months: int = 3,
+        initial_cash: float = 1_000_000,
+        transaction_cost: float = 0.001,
+        slippage_bps: float = 0.0,
+    ) -> Dict:
+        """Optimize on rolling history, test on the next forward window."""
+        all_prices = self.load_ohlcv(from_date, to_date)
+        if all_prices.empty:
+            empty = pd.DataFrame()
+            return {"windows": empty, "aggregate_metrics": {}, "config": {}}
+
+        start = pd.Timestamp(from_date)
+        end = pd.Timestamp(to_date)
+        test_start = start + pd.DateOffset(months=train_months)
+        records = []
+        equity_curves = []
+        trades = []
+
+        window_id = 1
+        while test_start < end:
+            train_start = test_start - pd.DateOffset(months=train_months)
+            train_end = test_start - pd.Timedelta(days=1)
+            test_end = min(test_start + pd.DateOffset(months=test_months) - pd.Timedelta(days=1), end)
+
+            train_prices = all_prices.loc[
+                (all_prices.index >= train_start) & (all_prices.index <= train_end)
+            ]
+            test_prices = all_prices.loc[
+                (all_prices.index >= test_start) & (all_prices.index <= test_end)
+            ]
+            if len(train_prices) < self.rebalance_days * 2 or len(test_prices) < self.rebalance_days:
+                test_start = test_start + pd.DateOffset(months=test_months)
+                continue
+
+            best_weights, grid_results = self.grid_search_weights(
+                train_prices,
+                transaction_cost=transaction_cost,
+                slippage_bps=slippage_bps,
+            )
+            signals = self.generate_signals(test_prices, best_weights)
+            metrics, equity, trade_df = self.run_backtest(
+                test_prices,
+                signals,
+                initial_cash=initial_cash,
+                fees=transaction_cost,
+                slippage_bps=slippage_bps,
+            )
+            record = {
+                "window_id": window_id,
+                "train_start": train_start.date().isoformat(),
+                "train_end": train_end.date().isoformat(),
+                "test_start": test_start.date().isoformat(),
+                "test_end": test_end.date().isoformat(),
+                "grid_rows": int(len(grid_results)),
+                **{f"weight_{key}": value for key, value in best_weights.items()},
+                **metrics,
+            }
+            records.append(record)
+            if not equity.empty:
+                equity = equity.copy()
+                equity["window_id"] = window_id
+                equity_curves.append(equity)
+            if not trade_df.empty:
+                trade_df = trade_df.copy()
+                trade_df["window_id"] = window_id
+                trades.append(trade_df)
+
+            window_id += 1
+            test_start = test_start + pd.DateOffset(months=test_months)
+
+        windows = pd.DataFrame(records)
+        aggregate_metrics = self._aggregate_walk_forward_metrics(windows)
+        return {
+            "windows": windows,
+            "aggregate_metrics": aggregate_metrics,
+            "equity_curves": pd.concat(equity_curves, ignore_index=True) if equity_curves else pd.DataFrame(),
+            "trades": pd.concat(trades, ignore_index=True) if trades else pd.DataFrame(),
+            "config": {
+                "from_date": from_date,
+                "to_date": to_date,
+                "train_months": train_months,
+                "test_months": test_months,
+                "rebalance_days": self.rebalance_days,
+                "top_n": self.top_n,
+                "transaction_cost": transaction_cost,
+                "slippage_bps": slippage_bps,
+            },
+        }
+
+    @staticmethod
+    def _aggregate_walk_forward_metrics(windows: pd.DataFrame) -> Dict[str, float]:
+        if windows.empty:
+            return {"n_windows": 0}
+        aggregate = {
+            "n_windows": int(len(windows)),
+            "mean_net_total_return": round(float(windows["net_total_return"].mean()), 2),
+            "median_net_total_return": round(float(windows["net_total_return"].median()), 2),
+            "mean_gross_total_return": round(float(windows["gross_total_return"].mean()), 2),
+            "mean_sharpe_ratio": round(float(windows["sharpe_ratio"].mean()), 2),
+            "mean_max_drawdown": round(float(windows["max_drawdown"].mean()), 2),
+            "total_trades": int(windows["n_trades"].sum()),
+            "positive_windows_pct": round(float((windows["net_total_return"] > 0).mean() * 100), 1),
+        }
+        return {key: value for key, value in aggregate.items() if key in aggregate and pd.notna(value)}
+
+    def write_walk_forward_report(
+        self,
+        report: Dict,
+        output_dir: str | Path,
+        *,
+        stem: str = "rank_walk_forward",
+    ) -> Dict[str, str]:
+        """Write walk-forward windows, aggregate metrics, and trades to disk."""
+        output = Path(output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        windows_path = output / f"{stem}_windows.csv"
+        aggregate_path = output / f"{stem}_summary.json"
+        trades_path = output / f"{stem}_trades.csv"
+        report.get("windows", pd.DataFrame()).to_csv(windows_path, index=False)
+        report.get("trades", pd.DataFrame()).to_csv(trades_path, index=False)
+        payload = {
+            "aggregate_metrics": report.get("aggregate_metrics", {}),
+            "config": report.get("config", {}),
+        }
+        aggregate_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        return {
+            "windows": str(windows_path),
+            "summary": str(aggregate_path),
+            "trades": str(trades_path),
+        }
 
     # â”€â”€â”€ Steps 4-7: Full pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -685,7 +896,10 @@ class RankBacktester:
         self._print_metrics("  Equal-weight (train)", eq_metrics_train)
 
         logger.info("Step 3: Grid search on train set...")
-        best_weights, grid_results = self.grid_search_weights(train_prices)
+        best_weights, grid_results = self.grid_search_weights(
+            train_prices,
+            transaction_cost=fees,
+        )
         logger.info(f"  Grid evaluated {len(grid_results)} combinations")
         self._print_metrics("  Optimized (train)", grid_results.iloc[0].to_dict())
 
@@ -798,9 +1012,44 @@ def main():
     parser.add_argument("--top-n", type=int, default=20)
     parser.add_argument("--rebalance-days", type=int, default=21)
     parser.add_argument("--cash", type=float, default=1_000_000)
+    parser.add_argument("--walk-forward", action="store_true")
+    parser.add_argument("--from-date")
+    parser.add_argument("--to-date")
+    parser.add_argument("--train-months", type=int, default=12)
+    parser.add_argument("--test-months", type=int, default=3)
+    parser.add_argument("--transaction-cost", type=float, default=0.001)
+    parser.add_argument("--slippage-bps", type=float, default=0.0)
+    parser.add_argument("--output-dir", default="reports/research/rank_validation")
     args = parser.parse_args()
 
     bt = RankBacktester(top_n=args.top_n, rebalance_days=args.rebalance_days)
+    if args.walk_forward:
+        to_date = args.to_date
+        if to_date is None:
+            conn = bt._get_conn()
+            try:
+                latest = conn.execute(
+                    "SELECT MAX(timestamp) FROM _catalog WHERE exchange = 'NSE'"
+                ).fetchone()[0]
+            finally:
+                conn.close()
+            to_date = str(latest)[:10]
+        from_date = args.from_date or (
+            pd.to_datetime(to_date) - pd.DateOffset(years=5)
+        ).strftime("%Y-%m-%d")
+        report = bt.run_walk_forward_validation(
+            from_date,
+            to_date,
+            train_months=args.train_months,
+            test_months=args.test_months,
+            initial_cash=args.cash,
+            transaction_cost=args.transaction_cost,
+            slippage_bps=args.slippage_bps,
+        )
+        paths = bt.write_walk_forward_report(report, args.output_dir)
+        logger.info("Walk-forward report written: %s", paths)
+        return report
+
     result = bt.run_full_pipeline(
         train_years=args.train_years,
         test_years=args.test_years,

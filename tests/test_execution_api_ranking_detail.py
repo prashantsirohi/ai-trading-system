@@ -113,6 +113,10 @@ def test_ranking_detail_latest_happy_path(client: TestClient) -> None:
 
     # raw_row preserves the source DataFrame row for advanced UI displays.
     assert body["raw_row"]["symbol_id"] == "AAA"
+    assert "operator_context" in body
+    assert body["operator_context"]["stage_label"] is None
+    assert body["operator_context"]["top_pattern_family"] == "cup_handle"
+    assert body["operator_context"]["explanation"] == ["Top setup: cup_handle (confirmed)."]
 
 
 def test_ranking_detail_pinned_to_run_id(client: TestClient) -> None:

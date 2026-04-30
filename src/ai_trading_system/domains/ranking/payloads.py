@@ -62,6 +62,106 @@ def build_rejection_reasons(row: dict) -> list[str]:
     return reasons
 
 
+def _first_present(row: dict, names: list[str]):
+    for name in names:
+        value = row.get(name)
+        if value is not None and not pd.isna(value):
+            return value
+    return None
+
+
+def stage_freshness_bucket(row: dict) -> str | None:
+    label = str(_first_present(row, ["stage_label", "weekly_stage_label", "stage2_label"]) or "").strip()
+    transition = str(_first_present(row, ["stage_transition", "weekly_stage_transition"]) or "").strip()
+    try:
+        bars = float(row.get("bars_in_stage"))
+    except (TypeError, ValueError):
+        bars = None
+    if transition.upper() == "S1_TO_S2":
+        return "fresh_s2"
+    if label.upper() == "S2" or label.lower() in {"stage2", "strong_stage2", "stage2_uptrend"}:
+        if bars is None:
+            return "s2"
+        if bars <= 8:
+            return "fresh_s2"
+        if bars <= 15:
+            return "mature_s2"
+        return "extended_s2"
+    return None
+
+
+def _top_pattern_summary(pattern_df: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "symbol_id",
+        "top_pattern_family",
+        "top_pattern_state",
+        "top_pattern_setup_quality",
+        "top_pattern_pivot_price",
+        "top_pattern_invalidation_price",
+        "reclaim_signal_flag",
+    ]
+    if pattern_df is None or pattern_df.empty or "symbol_id" not in pattern_df.columns:
+        return pd.DataFrame(columns=columns)
+    ranked = pattern_df.copy()
+    ranked.loc[:, "_confirmed_sort"] = ranked.get("pattern_state", pd.Series("", index=ranked.index)).astype(str).str.lower().eq("confirmed").astype(int)
+    ranked.loc[:, "_priority_sort"] = pd.to_numeric(ranked.get("pattern_priority_rank", pd.Series(pd.NA, index=ranked.index)), errors="coerce")
+    ranked.loc[:, "_score_sort"] = pd.to_numeric(
+        ranked.get("pattern_priority_score", ranked.get("pattern_score", pd.Series(pd.NA, index=ranked.index))),
+        errors="coerce",
+    )
+    ranked = ranked.sort_values(
+        ["symbol_id", "_confirmed_sort", "_priority_sort", "_score_sort"],
+        ascending=[True, False, True, False],
+        na_position="last",
+        kind="stable",
+    ).drop_duplicates(subset=["symbol_id"], keep="first")
+
+    def first(row: pd.Series, names: list[str]):
+        for name in names:
+            if name in row and pd.notna(row[name]):
+                return row[name]
+        return None
+
+    rows = []
+    for _, row in ranked.iterrows():
+        family = first(row, ["pattern_family", "setup_family", "pattern_type", "pattern"])
+        rows.append(
+            {
+                "symbol_id": row.get("symbol_id"),
+                "top_pattern_family": family,
+                "top_pattern_state": first(row, ["pattern_state", "pattern_lifecycle_state"]),
+                "top_pattern_setup_quality": first(row, ["setup_quality", "pattern_score", "pattern_priority_score"]),
+                "top_pattern_pivot_price": first(row, ["pivot_price", "breakout_level", "pivot_level"]),
+                "top_pattern_invalidation_price": first(row, ["invalidation_price", "stop_price"]),
+                "reclaim_signal_flag": str(family or "").lower() == "stage2_reclaim",
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def enrich_operator_dashboard_fields(
+    ranked_df: pd.DataFrame,
+    pattern_df: pd.DataFrame,
+) -> pd.DataFrame:
+    if ranked_df is None or ranked_df.empty:
+        return ranked_df
+    output = ranked_df.copy()
+    if "stage_label" not in output.columns:
+        if "weekly_stage_label" in output.columns:
+            output.loc[:, "stage_label"] = output["weekly_stage_label"]
+        elif "stage2_label" in output.columns:
+            output.loc[:, "stage_label"] = output["stage2_label"]
+    if "stage_transition" not in output.columns and "weekly_stage_transition" in output.columns:
+        output.loc[:, "stage_transition"] = output["weekly_stage_transition"]
+    if "stage_freshness_bucket" not in output.columns:
+        output.loc[:, "stage_freshness_bucket"] = output.apply(lambda row: stage_freshness_bucket(row.to_dict()), axis=1)
+    summary = _top_pattern_summary(pattern_df)
+    if not summary.empty and "symbol_id" in output.columns:
+        output = output.drop(columns=[c for c in summary.columns if c != "symbol_id" and c in output.columns], errors="ignore")
+        output = output.merge(summary, on="symbol_id", how="left")
+    return output
+
+
 def _discovery_visibility_summary(
     *,
     ranked_df: pd.DataFrame,
@@ -115,6 +215,7 @@ def build_dashboard_payload(
     task_status: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, object]:
     """Assemble a unified operator payload from the rank-stage artifacts."""
+    ranked_df = enrich_operator_dashboard_fields(ranked_df, pattern_df)
 
     def _records(df: pd.DataFrame, limit: int = 10) -> list[dict]:
         if df is None or df.empty:
