@@ -8,13 +8,19 @@ from the StageContext (these are not in the default datasets dict).
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pandas as pd
 
+from ai_trading_system.domains.publish.channels.weekly_pdf import history
+from ai_trading_system.domains.publish.channels.weekly_pdf.breadth import compute_market_breadth
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -29,6 +35,12 @@ class WeeklyReportData:
     dashboard_payload: Dict[str, Any] = field(default_factory=dict)
     rank_summary: Dict[str, Any] = field(default_factory=dict)
     trust_status: str = "unknown"
+    prior_run_id: Optional[str] = None
+    prior_run_date: Optional[str] = None
+    prior_ranked_signals: pd.DataFrame = field(default_factory=pd.DataFrame)
+    prior_sector_dashboard: pd.DataFrame = field(default_factory=pd.DataFrame)
+    prior_breakouts_per_run: list = field(default_factory=list)
+    market_breadth: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def _read_csv_artifact(artifact: Optional[StageArtifact]) -> pd.DataFrame:
@@ -85,7 +97,7 @@ def load_report_data(
         or "unknown"
     )
 
-    return WeeklyReportData(
+    data = WeeklyReportData(
         run_id=context.run_id,
         run_date=context.run_date,
         ranked_signals=ranked_signals,
@@ -97,3 +109,81 @@ def load_report_data(
         rank_summary=dict(rank_summary),
         trust_status=str(trust_status),
     )
+    _attach_phase2_inputs(context, data)
+    return data
+
+
+def _attach_phase2_inputs(context: StageContext, data: WeeklyReportData) -> None:
+    """Best-effort load of prior-week snapshot, lookback breakouts, and breadth.
+
+    Failures here degrade gracefully — Phase 2 sections are optional.
+    """
+    project_root = getattr(context, "project_root", None)
+    if project_root is None:
+        return
+    data_domain = (context.params or {}).get("data_domain", "operational")
+    pipeline_runs_dir = history.resolve_pipeline_runs_dir(project_root, data_domain)
+
+    current_date = history.parse_run_date(context.run_id) or _safe_date(context.run_date)
+    if current_date is None:
+        logger.info("weekly_pdf: could not parse run_date from run_id=%s", context.run_id)
+
+    if current_date is not None:
+        try:
+            prior = history.find_prior_run(
+                pipeline_runs_dir,
+                current_run_id=context.run_id,
+                current_run_date=current_date,
+                target_days_back=7,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("weekly_pdf: prior-run discovery failed: %s", exc)
+            prior = None
+        if prior is not None:
+            try:
+                prior_arts = history.load_prior_artifacts(prior)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("weekly_pdf: failed to load prior artifacts: %s", exc)
+                prior_arts = {}
+            data.prior_run_id = prior.run_id
+            data.prior_run_date = prior.run_date.isoformat()
+            data.prior_ranked_signals = prior_arts.get("ranked_signals", pd.DataFrame())
+            data.prior_sector_dashboard = prior_arts.get("sector_dashboard", pd.DataFrame())
+
+        try:
+            recent = history.find_recent_runs_for_failed_breakout(
+                pipeline_runs_dir, context.run_id, current_date, lookback_days=10
+            )
+            data.prior_breakouts_per_run = [
+                (r.run_id, _safe_read_csv(r.breakout_scan_path)) for r in recent
+            ]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("weekly_pdf: lookback breakout discovery failed: %s", exc)
+            data.prior_breakouts_per_run = []
+
+        ohlcv_path = project_root / "data" / "ohlcv.duckdb"
+        try:
+            data.market_breadth = compute_market_breadth(
+                ohlcv_path, end_date=current_date, weeks=26
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("weekly_pdf: market breadth computation failed: %s", exc)
+            data.market_breadth = pd.DataFrame()
+
+
+def _safe_read_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
+def _safe_date(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None

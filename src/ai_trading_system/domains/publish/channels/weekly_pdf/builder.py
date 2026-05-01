@@ -62,6 +62,19 @@ def build_report(
         trust_status_fallback=data.trust_status,
     )
 
+    rank_improvers, rank_decliners = metrics.compute_rank_movers(
+        data.ranked_signals, data.prior_ranked_signals
+    )
+    sector_movers = metrics.compute_sector_movers(
+        data.sector_dashboard, data.prior_sector_dashboard
+    )
+    failed_breakouts = metrics.detect_failed_breakouts(
+        data.breakout_scan,
+        data.prior_breakouts_per_run,
+        data.ranked_signals,
+    )
+    breadth_latest = data.market_breadth.iloc[-1].to_dict() if not data.market_breadth.empty else {}
+
     template_context = {
         "week_ending": data.run_date,
         "run_id": data.run_id,
@@ -72,6 +85,14 @@ def build_report(
         "tier_a": _df_to_records(tier_a),
         "tier_b": _df_to_records(tier_b),
         "patterns": _df_to_records(patterns),
+        "prior_run_id": data.prior_run_id,
+        "prior_run_date": data.prior_run_date,
+        "rank_improvers": _df_to_records(rank_improvers),
+        "rank_decliners": _df_to_records(rank_decliners),
+        "sector_movers": _df_to_records(sector_movers),
+        "failed_breakouts": _df_to_records(failed_breakouts),
+        "breadth_latest": breadth_latest,
+        "breadth_rows": _df_to_records(data.market_breadth.tail(10)) if not data.market_breadth.empty else [],
     }
 
     html_path, pdf_path, pdf_error = render(template_context, output_dir)
@@ -85,6 +106,11 @@ def build_report(
             "weekly_breakouts_tier_a": tier_a,
             "weekly_breakouts_tier_b": tier_b,
             "weekly_patterns": patterns,
+            "weekly_rank_improvers": rank_improvers,
+            "weekly_rank_decliners": rank_decliners,
+            "weekly_sector_movers": sector_movers,
+            "weekly_failed_breakouts": failed_breakouts,
+            "market_breadth": data.market_breadth,
         },
     )
 
@@ -105,7 +131,15 @@ def build_report(
             "tier_a": len(tier_a),
             "tier_b": len(tier_b),
             "patterns": len(patterns),
+            "rank_improvers": len(rank_improvers),
+            "rank_decliners": len(rank_decliners),
+            "sector_movers": len(sector_movers),
+            "failed_breakouts": len(failed_breakouts),
+            "breadth_rows": int(len(data.market_breadth)),
         },
+        "prior_run_id": data.prior_run_id,
+        "prior_run_date": data.prior_run_date,
+        "breadth_latest": breadth_latest,
         "generated_at": datetime.utcnow().isoformat() + "Z",
     }
 
