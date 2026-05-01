@@ -119,6 +119,12 @@ RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "weekly_stage_transition",
     "bars_in_stage",
     "stage_entry_date",
+    "rs_vs_nifty_5",
+    "rs_vs_nifty_10",
+    "rs_vs_nifty_20",
+    "rs_vs_nifty_60",
+    "rs_vs_nifty_120",
+    "rs_vs_nifty_score",
     "sma200_slope_20d_pct",
     "sma_150",
 )

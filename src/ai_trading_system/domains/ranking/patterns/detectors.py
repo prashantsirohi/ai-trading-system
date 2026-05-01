@@ -23,6 +23,7 @@ TIER_1_PATTERNS = {
     "stage2_reclaim",
     "3wt",
     "ascending_triangle",
+    "pocket_pivot",
 }
 SUPPRESSION_ONLY_PATTERNS = {
     "head_shoulders",
@@ -1079,8 +1080,14 @@ def detect_flag_signals(
                 if slope > 0.2:
                     continue
 
-                # Valid flag found — compute signal, then break (shortest valid flag wins)
-                breakout_volume_min = 2.0 if high_tight_only else config.breakout_volume_ratio_min
+                # Valid flag found — compute signal, then break (shortest valid flag wins).
+                # HTF threshold sourced from config, not hard-coded.
+                if high_tight_only:
+                    breakout_volume_min = float(
+                        getattr(config, "high_tight_breakout_volume_ratio_min", 2.0)
+                    )
+                else:
+                    breakout_volume_min = float(config.breakout_volume_ratio_min)
                 breakout_idx = None
                 breakout_confirmation = None
                 max_scan_idx = min(n - 1, flag_end_idx + config.max_breakout_wait_bars)
@@ -1986,6 +1993,390 @@ def detect_symmetrical_triangle_signals(
     return signals, PatternScanStats("symmetrical_triangle", candidates, confirmed, watchlist)
 
 
+# ─────────────────────── New Tier-2 detectors (frame-only) ─────────────────
+
+
+def detect_pocket_pivot_signals(
+    frame: pd.DataFrame,
+    *,
+    smoothed: pd.Series | None = None,
+    extrema: Iterable[LocalExtrema] | None = None,
+    config: PatternScanConfig,
+    recent_only: bool = True,
+) -> tuple[list[PatternSignal], PatternScanStats]:
+    """Pocket Pivot (Minervini): up-day volume > max down-day volume of last N.
+
+    A buy signal in an existing uptrend rather than a fresh breakout.
+    Conditions on the candidate bar:
+      - close > prior close (up day)
+      - volume strictly greater than the max volume of the prior N **down**
+        days (default N=10)
+      - close ≥ SMA-10 (still in trend)
+      - prior ``pocket_pivot_uptrend_lookback`` return ≥ ``min_uptrend_pct``
+    """
+    del smoothed, extrema  # frame-only
+    candidates = 0
+    confirmed = 0
+    signals: list[PatternSignal] = []
+    used_signal_ids: set[str] = set()
+
+    if not {"close", "volume"}.issubset(frame.columns):
+        return signals, PatternScanStats("pocket_pivot", 0, 0, 0)
+
+    n = len(frame)
+    lookback = int(config.pocket_pivot_lookback)
+    sma_w = int(config.pocket_pivot_sma_window)
+    uptrend_w = int(config.pocket_pivot_uptrend_lookback)
+    min_uptrend = float(config.pocket_pivot_min_uptrend_pct)
+    min_above_sma = float(config.pocket_pivot_min_close_above_sma_pct)
+
+    if n < max(lookback, sma_w, uptrend_w) + 2:
+        return signals, PatternScanStats("pocket_pivot", 0, 0, 0)
+
+    close = pd.to_numeric(frame["close"], errors="coerce")
+    volume = pd.to_numeric(frame["volume"], errors="coerce")
+    sma_short = close.rolling(sma_w, min_periods=sma_w).mean()
+
+    scan_start = max(lookback + 1, n - lookback - 1) if recent_only else lookback + 1
+    for idx in range(scan_start, n):
+        c_now = close.iloc[idx]
+        c_prev = close.iloc[idx - 1]
+        v_now = volume.iloc[idx]
+        if pd.isna(c_now) or pd.isna(c_prev) or pd.isna(v_now):
+            continue
+        if c_now <= c_prev:
+            continue  # not an up day
+
+        win_close_curr = pd.to_numeric(
+            frame["close"].iloc[idx - lookback : idx].reset_index(drop=True),
+            errors="coerce",
+        )
+        win_close_prev = pd.to_numeric(
+            frame["close"].iloc[idx - lookback - 1 : idx - 1].reset_index(drop=True),
+            errors="coerce",
+        )
+        win_volume = pd.to_numeric(
+            frame["volume"].iloc[idx - lookback : idx].reset_index(drop=True),
+            errors="coerce",
+        )
+        down_mask = win_close_curr < win_close_prev
+        down_volumes = win_volume.where(down_mask)
+        max_down_vol = float(down_volumes.max(skipna=True)) if down_mask.any() else 0.0
+
+        if not (float(v_now) > max_down_vol and max_down_vol > 0):
+            continue
+        candidates += 1
+
+        s_now = sma_short.iloc[idx]
+        if pd.isna(s_now) or float(c_now) < float(s_now) * (1.0 + min_above_sma):
+            continue
+
+        c_prior = close.iloc[idx - uptrend_w]
+        if pd.isna(c_prior) or c_prior <= 0:
+            continue
+        prior_ret = (float(c_now) - float(c_prior)) / float(c_prior)
+        if prior_ret < min_uptrend:
+            continue
+
+        vol_ratio = float(v_now) / max(max_down_vol, 1e-9)
+        setup_quality = float(min(85.0, 50.0 + min(vol_ratio - 1.0, 1.5) * 20.0))
+
+        pivot = float(c_now)
+        recent_low = float(
+            pd.to_numeric(frame["low"].iloc[idx - lookback : idx + 1], errors="coerce").min()
+            if "low" in frame.columns
+            else c_now * 0.95
+        )
+        invalidation = recent_low
+
+        signal = _build_signal(
+            frame=frame,
+            pattern_family="pocket_pivot",
+            pattern_state="confirmed",
+            signal_idx=idx,
+            pattern_start_idx=idx - lookback,
+            pattern_end_idx=idx,
+            breakout_level=pivot,
+            invalidation_price=invalidation,
+            setup_quality=setup_quality,
+            pivot_labels=("pocket_pivot_bar",),
+            pivot_indices=(idx,),
+            pivot_prices=(pivot,),
+            config=config,
+        )
+        if signal.signal_id not in used_signal_ids:
+            used_signal_ids.add(signal.signal_id)
+            signals.append(signal)
+            confirmed += 1
+
+    return signals, PatternScanStats("pocket_pivot", candidates, confirmed, 0)
+
+
+def detect_darvas_box_signals(
+    frame: pd.DataFrame,
+    *,
+    smoothed: pd.Series | None = None,
+    extrema: Iterable[LocalExtrema] | None = None,
+    config: PatternScanConfig,
+    recent_only: bool = True,
+) -> tuple[list[PatternSignal], PatternScanStats]:
+    """Darvas Box: high holds for ≥N bars, low holds for ≥M bars, then breakout.
+
+    Box top = highest high of the box window that was *not* exceeded for
+    ``darvas_top_hold_bars`` consecutive bars after being set; box bottom =
+    similar for the low. Breakout = latest close > box-top with volume
+    confirmation. Stop = box-bottom × ``darvas_invalidation_pct``.
+    """
+    del smoothed, extrema, recent_only  # frame-only; always evaluates last bar
+    candidates = 0
+    confirmed = 0
+    signals: list[PatternSignal] = []
+    used_signal_ids: set[str] = set()
+
+    if not {"high", "low", "close"}.issubset(frame.columns):
+        return signals, PatternScanStats("darvas_box", 0, 0, 0)
+
+    n = len(frame)
+    min_box = int(config.darvas_min_box_bars)
+    max_box = int(config.darvas_max_box_bars)
+    top_hold = int(config.darvas_top_hold_bars)
+    bot_hold = int(config.darvas_bottom_hold_bars)
+    max_depth = float(config.darvas_max_box_depth_pct)
+
+    if n < min_box + top_hold + 2:
+        return signals, PatternScanStats("darvas_box", 0, 0, 0)
+
+    high = pd.to_numeric(frame["high"], errors="coerce").to_numpy()
+    low = pd.to_numeric(frame["low"], errors="coerce").to_numpy()
+    close_arr = pd.to_numeric(frame["close"], errors="coerce").to_numpy()
+
+    breakout_idx = n - 1
+    breakout_close = close_arr[breakout_idx]
+    if not np.isfinite(breakout_close):
+        return signals, PatternScanStats("darvas_box", 0, 0, 0)
+
+    for width in range(min_box, min(max_box, n - 2) + 1):
+        box_end = breakout_idx - 1
+        box_start = box_end - width + 1
+        if box_start < 0:
+            continue
+        box_high = float(np.nanmax(high[box_start : box_end + 1]))
+        box_low = float(np.nanmin(low[box_start : box_end + 1]))
+        if box_high <= 0 or not np.isfinite(box_high) or not np.isfinite(box_low):
+            continue
+
+        depth = (box_high - box_low) / max(box_high, 1e-9)
+        if depth > max_depth:
+            continue
+
+        top_idx_in_window = int(np.nanargmax(high[box_start : box_end + 1])) + box_start
+        if (box_end - top_idx_in_window) < top_hold:
+            continue
+        post_high = high[top_idx_in_window + 1 : box_end + 1]
+        if post_high.size and float(np.nanmax(post_high)) > box_high:
+            continue
+
+        bot_idx_in_window = int(np.nanargmin(low[box_start : box_end + 1])) + box_start
+        if (box_end - bot_idx_in_window) < bot_hold:
+            continue
+        post_low = low[bot_idx_in_window + 1 : box_end + 1]
+        if post_low.size and float(np.nanmin(post_low)) < box_low:
+            continue
+
+        candidates += 1
+        if breakout_close <= box_high:
+            continue
+
+        confirmation = _volume_confirmation_details(
+            frame.iloc[breakout_idx],
+            ratio_threshold=float(config.breakout_volume_ratio_min),
+        )
+        if not bool(confirmation["is_any_volume_confirmed"]):
+            continue
+
+        invalidation = box_low * float(config.darvas_invalidation_pct)
+        depth_score = max(0.0, (max_depth - depth) / max_depth) * 30.0
+        vol_score = (
+            20.0
+            if confirmation["is_strong_volume_confirmation"]
+            else 10.0
+            if confirmation["is_volume_ratio_confirmed"]
+            else 5.0
+        )
+        setup_quality = float(min(90.0, 40.0 + depth_score + vol_score))
+
+        signal = _build_signal(
+            frame=frame,
+            pattern_family="darvas_box",
+            pattern_state="confirmed",
+            signal_idx=breakout_idx,
+            pattern_start_idx=box_start,
+            pattern_end_idx=box_end,
+            breakout_level=box_high,
+            invalidation_price=invalidation,
+            setup_quality=setup_quality,
+            pivot_labels=("box_top", "box_bottom"),
+            pivot_indices=(top_idx_in_window, bot_idx_in_window),
+            pivot_prices=(box_high, box_low),
+            config=config,
+            volume_dry_up=False,
+            breakout_volume_ratio=confirmation.get("volume_ratio_20"),
+            width_bars=width,
+        )
+        if signal.signal_id not in used_signal_ids:
+            used_signal_ids.add(signal.signal_id)
+            signals.append(signal)
+            confirmed += 1
+            break  # shortest valid width wins
+
+    return signals, PatternScanStats("darvas_box", candidates, confirmed, 0)
+
+
+def detect_inside_day_signals(
+    frame: pd.DataFrame,
+    *,
+    smoothed: pd.Series | None = None,
+    extrema: Iterable[LocalExtrema] | None = None,
+    config: PatternScanConfig,
+    recent_only: bool = True,
+) -> tuple[list[PatternSignal], PatternScanStats]:
+    """Inside-Day Breakout: 1-3 inside bars after a mother bar, then break.
+
+    Inside bar := high ≤ prior high AND low ≥ prior low. The breakout bar
+    must close above the high of the mother bar (the bar immediately
+    preceding the first inside bar) on volume confirmation.
+    """
+    del smoothed, extrema, recent_only
+    candidates = 0
+    confirmed = 0
+    signals: list[PatternSignal] = []
+    used_signal_ids: set[str] = set()
+
+    if not {"high", "low", "close"}.issubset(frame.columns):
+        return signals, PatternScanStats("inside_day", 0, 0, 0)
+
+    n = len(frame)
+    max_lookback = int(config.inside_day_max_lookback_bars)
+    if n < max_lookback + 2:
+        return signals, PatternScanStats("inside_day", 0, 0, 0)
+
+    high = pd.to_numeric(frame["high"], errors="coerce").to_numpy()
+    low = pd.to_numeric(frame["low"], errors="coerce").to_numpy()
+    close_arr = pd.to_numeric(frame["close"], errors="coerce").to_numpy()
+
+    breakout_idx = n - 1
+    breakout_close = close_arr[breakout_idx]
+    if not np.isfinite(breakout_close):
+        return signals, PatternScanStats("inside_day", 0, 0, 0)
+
+    inside_count = 0
+    for back in range(1, max_lookback + 1):
+        cand = breakout_idx - back
+        ref = cand - 1
+        if ref < 0:
+            break
+        if not (
+            np.isfinite(high[cand]) and np.isfinite(low[cand])
+            and np.isfinite(high[ref]) and np.isfinite(low[ref])
+        ):
+            break
+        if high[cand] <= high[ref] and low[cand] >= low[ref]:
+            inside_count += 1
+        else:
+            break
+
+    if inside_count == 0:
+        return signals, PatternScanStats("inside_day", 0, 0, 0)
+    candidates += 1
+
+    first_inside_idx = breakout_idx - inside_count
+    mother_idx = first_inside_idx - 1
+    if mother_idx < 0:
+        return signals, PatternScanStats("inside_day", candidates, 0, 0)
+    mother_high = float(high[mother_idx])
+    mother_low = float(low[mother_idx])
+
+    confirmation = _volume_confirmation_details(
+        frame.iloc[breakout_idx],
+        ratio_threshold=float(config.breakout_volume_ratio_min),
+    )
+    if not (breakout_close > mother_high and bool(confirmation["is_any_volume_confirmed"])):
+        return signals, PatternScanStats("inside_day", candidates, 0, 0)
+
+    avg_inside_range = float(
+        np.nanmean(high[first_inside_idx : breakout_idx] - low[first_inside_idx : breakout_idx])
+    )
+    mother_range = max(mother_high - mother_low, 1e-9)
+    tightness = 1.0 - min(avg_inside_range / mother_range, 1.0)
+    setup_quality = float(min(80.0, 45.0 + tightness * 25.0 + (5.0 if inside_count >= 2 else 0.0)))
+
+    signal = _build_signal(
+        frame=frame,
+        pattern_family="inside_day",
+        pattern_state="confirmed",
+        signal_idx=breakout_idx,
+        pattern_start_idx=mother_idx,
+        pattern_end_idx=breakout_idx - 1,
+        breakout_level=mother_high,
+        invalidation_price=mother_low,
+        setup_quality=setup_quality,
+        pivot_labels=("mother_bar",),
+        pivot_indices=(mother_idx,),
+        pivot_prices=(mother_high,),
+        config=config,
+        volume_dry_up=False,
+        breakout_volume_ratio=confirmation.get("volume_ratio_20"),
+        width_bars=inside_count,
+    )
+    if signal.signal_id not in used_signal_ids:
+        used_signal_ids.add(signal.signal_id)
+        signals.append(signal)
+        confirmed += 1
+
+    return signals, PatternScanStats("inside_day", candidates, confirmed, 0)
+
+
+def _build_head_shoulders_signal(
+    frame: pd.DataFrame,
+    *,
+    neckline: float,
+    config: PatternScanConfig,
+) -> PatternSignal | None:
+    """Materialize a first-class bearish H&S signal from the breakdown bar."""
+    if frame.empty:
+        return None
+    timestamps = frame["timestamp"]
+    breakdown_idx = len(frame) - 1
+    signal_date = timestamps.iloc[breakdown_idx].date().isoformat()
+    symbol = str(frame.iloc[0]["symbol_id"])
+    look = frame.iloc[max(0, breakdown_idx - 60) : breakdown_idx + 1]
+    invalidation = float(pd.to_numeric(look["high"], errors="coerce").max())
+    if not np.isfinite(invalidation) or invalidation <= 0:
+        invalidation = float(neckline) * 1.05
+    return PatternSignal(
+        signal_id=f"{symbol}-head_shoulders-confirmed-{signal_date}",
+        symbol_id=symbol,
+        pattern_family="head_shoulders",
+        pattern_state="confirmed",
+        signal_direction="bearish",
+        pattern_start=timestamps.iloc[max(0, breakdown_idx - 60)].date().isoformat(),
+        pattern_end=signal_date,
+        signal_date=signal_date,
+        pattern_start_index=int(max(0, breakdown_idx - 60)),
+        pattern_end_index=int(breakdown_idx),
+        signal_bar_index=int(breakdown_idx),
+        breakout_level=float(_rounded(neckline) or neckline),
+        watchlist_trigger_level=float(_rounded(neckline) or neckline),
+        invalidation_price=float(_rounded(invalidation) or invalidation),
+        setup_quality=50.0,
+        pivot_labels=("neckline",),
+        pivot_dates=(signal_date,),
+        pivot_prices=(float(_rounded(neckline) or neckline),),
+        pivot_indices=(int(breakdown_idx),),
+        config_provenance=_config_provenance(config),
+    )
+
+
 def detect_head_shoulders_filter(
     frame: pd.DataFrame,
     *,
@@ -2091,11 +2482,23 @@ def detect_pattern_signals_for_symbol(
         frame, smoothed=smoothed, extrema=extrema_list, config=config
     )
     if is_hs:
-        # Symbol is in confirmed bearish H&S breakdown — return no bullish signals
+        # Symbol is in confirmed bearish H&S breakdown — emit a first-class
+        # bearish signal so risk dashboards / short-watch surfaces can use it,
+        # but still suppress all bullish signals for this symbol.
         hs_stats: dict[str, PatternScanStats] = {
             "head_shoulders": PatternScanStats("head_shoulders", 1, 1, 0)
         }
-        return pd.DataFrame(), hs_stats
+        hs_signal = _build_head_shoulders_signal(frame, neckline=_neckline, config=config)
+        if hs_signal is None:
+            return pd.DataFrame(), hs_stats
+        signals_df = pd.DataFrame([hs_signal.to_record()])
+        # Skip score normalisation (it assumes bullish primary scoring).
+        signals_df["pattern_score"] = 0.0
+        signals_df["pattern_rank"] = 1
+        signals_df["pattern_priority_score"] = 0.0
+        signals_df["pattern_priority_rank"] = 1
+        signals_df["pattern_operational_tier"] = "suppression_only"
+        return signals_df, hs_stats
 
     # --- Smoothed-extrema detectors ---
     se_detectors = [
@@ -2114,6 +2517,9 @@ def detect_pattern_signals_for_symbol(
         detect_flat_base_signals,
         detect_stage2_reclaim_signals,
         detect_3wt_signals,
+        detect_pocket_pivot_signals,
+        detect_darvas_box_signals,
+        detect_inside_day_signals,
     ]
 
     rows: list[dict[str, object]] = []
