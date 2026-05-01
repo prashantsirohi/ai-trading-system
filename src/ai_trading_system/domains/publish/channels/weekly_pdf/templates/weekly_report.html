@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Weekly Market Report — {{ week_ending }}</title>
+  <style>{{ inline_css|safe }}</style>
+</head>
+<body>
+
+<section class="cover" data-week="{{ week_ending }}">
+  <h1>Weekly Market Report</h1>
+  <div class="subtitle">Week ending {{ week_ending }} · run <span class="muted">{{ run_id }}</span></div>
+
+  <div class="banner {{ regime.trust_status|lower }}">
+    <strong>Data trust:</strong> {{ regime.trust_status|upper }}
+    {% if regime.trust_confidence is not none %}· confidence {{ regime.trust_confidence|fmt_num(2) }}{% endif %}
+    {% if regime.ml_status %}· ML: {{ regime.ml_status }}{% endif %}
+  </div>
+
+  <div class="kpi-grid">
+    <div class="kpi"><div class="label">Market Stage</div><div class="value">{{ regime.market_stage or "—" }}</div></div>
+    <div class="kpi"><div class="label">Universe</div><div class="value">{{ regime.universe_count or "—" }}</div></div>
+    <div class="kpi"><div class="label">Stage 2 names</div><div class="value">{{ regime.stage2_count }}</div></div>
+    <div class="kpi"><div class="label">Tier-A breakouts</div><div class="value">{{ tier_a|length }}</div></div>
+    <div class="kpi"><div class="label">Tier-B breakouts</div><div class="value">{{ tier_b|length }}</div></div>
+    <div class="kpi"><div class="label">Pattern setups</div><div class="value">{{ patterns|length }}</div></div>
+  </div>
+
+  <h3>Sector quadrant distribution</h3>
+  <table>
+    <thead><tr><th>Quadrant</th><th class="num">Count</th></tr></thead>
+    <tbody>
+      {% for q, n in regime.sector_quadrant_counts.items() %}
+      <tr><td>{{ q }}</td><td class="num">{{ n }}</td></tr>
+      {% else %}
+      <tr><td colspan="2" class="muted">No sector data</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <p class="small muted">
+    This is a Phase&nbsp;1 skeleton. Charts, week-over-week rank movers, market breadth (% above SMA20/50/200),
+    failed-breakout detection, and watchlist impact ship in subsequent phases.
+  </p>
+</section>
+
+<section class="section">
+  <h2>1. Sector Leaders</h2>
+  {% if sectors|length %}
+  <table>
+    <thead>
+      <tr>
+        <th>Sector</th><th class="num">RS</th><th class="num">RS&nbsp;20</th><th class="num">RS&nbsp;50</th>
+        <th class="num">Momentum</th><th>Quadrant</th><th class="num">RS&nbsp;rank</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in sectors %}
+      <tr>
+        <td>{{ row.Sector }}</td>
+        <td class="num">{{ row.RS|fmt_num }}</td>
+        <td class="num">{{ row.RS_20|fmt_num }}</td>
+        <td class="num">{{ row.RS_50|fmt_num }}</td>
+        <td class="num">{{ row.Momentum|fmt_num }}</td>
+        <td>{{ row.Quadrant or "—" }}</td>
+        <td class="num">{{ row.RS_rank|fmt_num(0) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No sector dashboard available.</p>{% endif %}
+</section>
+
+<section class="section">
+  <h2>2. Top Ranked Stocks</h2>
+  {% if top_ranked|length %}
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>Symbol</th><th>Sector</th>
+        <th class="num">Composite</th><th class="num">Confidence</th>
+        <th>Stage</th><th class="num">Ret&nbsp;5d</th><th class="num">Ret&nbsp;20d</th>
+        <th class="num">Delivery%</th><th>DQ</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in top_ranked %}
+      <tr>
+        <td class="num">{{ loop.index }}</td>
+        <td><strong>{{ row.symbol_id }}</strong></td>
+        <td>{{ row.sector_name or "—" }}</td>
+        <td class="num">{{ row.composite_score|fmt_num }}</td>
+        <td class="num">{{ row.rank_confidence|fmt_num }}</td>
+        <td>{{ row.stage2_label or "—" }}</td>
+        <td class="num">{{ row.return_5|fmt_pct }}</td>
+        <td class="num">{{ row.return_20|fmt_pct }}</td>
+        <td class="num">{{ row.delivery_pct|fmt_num(1) }}</td>
+        <td>
+          {% if row.delivery_pct_imputed %}<span class="tag imputed">IMPUTED</span>
+          {% else %}<span class="tag real">REAL</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No ranked signals available.</p>{% endif %}
+</section>
+
+<section class="section">
+  <h2>3. Volume + Delivery Movers</h2>
+  <p class="small muted">Filter: weekly return ≥ 5% and delivery ≥ 40%. Imputed delivery flagged.</p>
+  {% if volume_delivery|length %}
+  <table>
+    <thead>
+      <tr><th>Symbol</th><th>Sector</th><th class="num">Ret&nbsp;5d</th>
+          <th class="num">Ret&nbsp;20d</th><th class="num">Delivery%</th>
+          <th>DQ</th><th class="num">Composite</th><th>Stage</th></tr>
+    </thead>
+    <tbody>
+      {% for row in volume_delivery %}
+      <tr>
+        <td><strong>{{ row.symbol_id }}</strong></td>
+        <td>{{ row.sector_name or "—" }}</td>
+        <td class="num">{{ row.return_5|fmt_pct }}</td>
+        <td class="num">{{ row.return_20|fmt_pct }}</td>
+        <td class="num">{{ row.delivery_pct|fmt_num(1) }}</td>
+        <td>{% if row.delivery_pct_imputed %}<span class="tag imputed">IMPUTED</span>{% else %}<span class="tag real">REAL</span>{% endif %}</td>
+        <td class="num">{{ row.composite_score|fmt_num }}</td>
+        <td>{{ row.stage2_label or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No qualifying movers.</p>{% endif %}
+</section>
+
+<section class="section">
+  <h2>4. Tier-A Breakouts (actionable)</h2>
+  {% if tier_a|length %}
+  <table>
+    <thead>
+      <tr><th>Symbol</th><th>Sector</th><th>State</th>
+          <th class="num">Pass</th><th class="num">Dist&nbsp;%</th>
+          <th class="num">Vol&nbsp;Conf</th><th>Stage2</th></tr>
+    </thead>
+    <tbody>
+      {% for row in tier_a %}
+      <tr>
+        <td><strong>{{ row.symbol_id }}</strong> <span class="tag tier-a">A</span></td>
+        <td>{{ row.sector_name or "—" }}</td>
+        <td>{{ row.breakout_state or "—" }}</td>
+        <td class="num">{{ row.pass_count|fmt_num(0) }}</td>
+        <td class="num">{{ row.distance_from_breakout|fmt_num(2) }}</td>
+        <td class="num">{{ row.volume_confirmation|fmt_num }}</td>
+        <td>{{ row.stage2_structural }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No Tier-A breakouts this run.</p>{% endif %}
+
+  <h3>Tier-B Breakouts (watchlist)</h3>
+  {% if tier_b|length %}
+  <table>
+    <thead><tr><th>Symbol</th><th>Sector</th><th>State</th><th class="num">Pass</th><th class="num">Dist&nbsp;%</th><th class="num">Vol&nbsp;Conf</th></tr></thead>
+    <tbody>
+      {% for row in tier_b %}
+      <tr>
+        <td><strong>{{ row.symbol_id }}</strong> <span class="tag tier-b">B</span></td>
+        <td>{{ row.sector_name or "—" }}</td>
+        <td>{{ row.breakout_state or "—" }}</td>
+        <td class="num">{{ row.pass_count|fmt_num(0) }}</td>
+        <td class="num">{{ row.distance_from_breakout|fmt_num(2) }}</td>
+        <td class="num">{{ row.volume_confirmation|fmt_num }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No Tier-B breakouts.</p>{% endif %}
+</section>
+
+<section class="section">
+  <h2>5. Pattern Setups</h2>
+  {% if patterns|length %}
+  <table>
+    <thead>
+      <tr><th>Symbol</th><th>Sector</th><th>Pattern</th><th>State</th>
+          <th>Tier</th><th class="num">Pattern&nbsp;Score</th>
+          <th class="num">Breakout&nbsp;Level</th><th class="num">Vol&nbsp;Ratio</th><th>Stage</th></tr>
+    </thead>
+    <tbody>
+      {% for row in patterns %}
+      <tr>
+        <td><strong>{{ row.symbol_id }}</strong></td>
+        <td>{{ row.sector_name or "—" }}</td>
+        <td>{{ row.pattern_family }}</td>
+        <td>{{ row.pattern_state }}</td>
+        <td>{{ row.pattern_priority_tier or "—" }}</td>
+        <td class="num">{{ row.pattern_score|fmt_num }}</td>
+        <td class="num">{{ row.breakout_level|fmt_num }}</td>
+        <td class="num">{{ row.volume_ratio_20|fmt_num }}</td>
+        <td>{{ row.stage2_label or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No pattern signals available.</p>{% endif %}
+</section>
+
+<section class="section appendix">
+  <h2>Appendix · Data Quality &amp; Methodology</h2>
+  <p>
+    <strong>Trust status:</strong> {{ regime.trust_status }} ·
+    <strong>Confidence:</strong> {{ regime.trust_confidence|fmt_num(2) }} ·
+    <strong>ML:</strong> {{ regime.ml_status or "—" }} ·
+    <strong>Run:</strong> {{ run_id }} ({{ run_date }})
+  </p>
+  <p>
+    Composite ranking factor weights — RS 0.23, Volume Intensity 0.18, Proximity to Highs 0.17,
+    Trend Persistence 0.12, Delivery 0.12, Sector Strength 0.10, Momentum Acceleration 0.08.
+    Delivery values flagged <span class="tag imputed">IMPUTED</span> were filled via
+    sector-median → universe-median fallback.
+  </p>
+  <p class="small muted">
+    Phase 1 release: tables only. Charts (breadth, candlesticks), rank movers, and watchlist
+    intersection coming in Phases 2–4.
+  </p>
+</section>
+
+</body>
+</html>

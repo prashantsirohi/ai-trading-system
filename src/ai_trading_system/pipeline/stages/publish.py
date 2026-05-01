@@ -27,6 +27,7 @@ class PublishStage:
         "google_sheets_dashboard": "publish_of_record",
         "quantstats_dashboard_tearsheet": "publish_of_record",
         "telegram_summary": "informational",
+        "weekly_pdf": "informational",
         "local_summary": "diagnostic",
     }
 
@@ -128,6 +129,8 @@ class PublishStage:
             handlers["google_sheets_dashboard"] = self._publish_dashboard_payload
         if bool(context.params.get("publish_quantstats", True)):
             handlers["quantstats_dashboard_tearsheet"] = self._publish_quantstats_dashboard
+        if bool(context.params.get("publish_weekly_pdf", False)):
+            handlers["weekly_pdf"] = self._publish_weekly_pdf
         return handlers
 
     def _publish_local_summary(
@@ -239,6 +242,16 @@ class PublishStage:
             "tearsheet_path": result.get("tearsheet_path"),
             "observations": result.get("observations"),
         }
+
+    def _publish_weekly_pdf(
+        self,
+        context: StageContext,
+        rank_artifact: StageArtifact,
+        datasets: Dict[str, pd.DataFrame],
+    ) -> Dict[str, Any]:
+        from ai_trading_system.domains.publish.channels.weekly_pdf import publish_weekly_pdf
+
+        return publish_weekly_pdf(context, rank_artifact, datasets)
 
     def _publish_telegram_summary(
         self,

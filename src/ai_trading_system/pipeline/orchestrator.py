@@ -686,6 +686,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also emit raw QuantStats core HTML alongside the enriched dashboard tear sheet.",
     )
     parser.add_argument(
+        "--publish-weekly-pdf",
+        action="store_true",
+        help="Generate the weekly market PDF report alongside other publish channels.",
+    )
+    parser.add_argument(
         "--full-rebuild",
         action="store_true",
         help="Force full feature recomputation instead of incremental operational tail updates.",
@@ -980,6 +985,7 @@ def main() -> None:
         "quantstats_min_overlap": args.quantstats_min_overlap,
         "quantstats_max_runs": args.quantstats_max_runs,
         "quantstats_write_core_html": args.quantstats_write_core_html,
+        "publish_weekly_pdf": args.publish_weekly_pdf,
         "full_rebuild": args.full_rebuild,
         "feature_tail_bars": args.feature_tail_bars,
         "strategy_mode": args.strategy_mode,
