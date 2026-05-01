@@ -115,7 +115,7 @@ export default function FilterRail({
   };
 
   return (
-    <aside className="rounded-2xl border border-slate-800 bg-slate-950/50 p-3.5">
+    <aside className="rounded-xl border border-slate-800 bg-slate-950/50 p-3.5">
       {/* Saved Views */}
       <RailSection title="Saved Views" first>
         <ul className="flex flex-col gap-1">

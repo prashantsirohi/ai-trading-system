@@ -7,14 +7,17 @@
  */
 import { useWorkspace } from './WorkspaceContext';
 import { cn } from '@/lib/utils/cn';
+import { useLocation } from 'react-router-dom';
 
 export default function CompareTrayLauncher() {
   const { compareSymbols, openCompare, toggleCompare, clearCompare, compareOpen, workspaceSymbol } =
     useWorkspace();
+  const { pathname } = useLocation();
 
   // Hide while the modal is open or while the workspace covers the screen
-  // — both already give the user direct access to compare actions.
-  if (compareSymbols.length === 0 || compareOpen || workspaceSymbol) return null;
+  // — both already give the user direct access to compare actions. Ranking
+  // owns a richer footer tray, so avoid rendering two compare controls there.
+  if (compareSymbols.length === 0 || compareOpen || workspaceSymbol || pathname.startsWith('/ranking')) return null;
 
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-4 z-30 flex justify-center px-4">

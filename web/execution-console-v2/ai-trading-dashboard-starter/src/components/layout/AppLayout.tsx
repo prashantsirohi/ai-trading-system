@@ -8,7 +8,6 @@ import { TimeMachineBanner } from '@/components/layout/TimeMachineBar';
 import StockDetailWorkspace from '@/components/workspace/StockDetailWorkspace';
 import CompareFactorsModal from '@/components/workspace/CompareFactorsModal';
 import CompareTrayLauncher from '@/components/workspace/CompareTrayLauncher';
-import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 
 function NavShortcutsMounter() {
@@ -24,15 +23,12 @@ export default function AppLayout({ children }: PropsWithChildren) {
       <WorkspaceProvider>
         <NavShortcutsMounter />
         <div className="min-h-screen bg-slate-950 text-slate-100">
-          <div className="flex min-h-screen">
-            <Sidebar />
-            <div className="flex min-h-screen flex-1 flex-col">
-              <TopBar onOpenCommandBar={command.open} />
-              <main className="flex-1 p-4 md:p-6">
-                <TimeMachineBanner />
-                {children}
-              </main>
-            </div>
+          <div className="flex min-h-screen flex-col">
+            <TopBar onOpenCommandBar={command.open} />
+            <main className="flex-1 p-4 md:p-6">
+              <TimeMachineBanner />
+              {children}
+            </main>
           </div>
           <CommandBar isOpen={command.isOpen} onClose={command.close} />
           <StockDetailWorkspace />

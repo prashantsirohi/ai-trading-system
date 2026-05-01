@@ -51,7 +51,7 @@ export default function FactorBars({ factors, fallback, variant = 'inline', clas
     <div
       className={cn(
         variant === 'inline'
-          ? 'grid w-full max-w-[280px] grid-cols-4 gap-2'
+          ? 'grid w-44 max-w-full grid-cols-4 gap-1.5'
           : 'grid grid-cols-1 gap-3 sm:grid-cols-2',
         className,
       )}
@@ -63,7 +63,7 @@ export default function FactorBars({ factors, fallback, variant = 'inline', clas
         if (variant === 'inline') {
           return (
             <div key={bucket} className="min-w-0">
-              <div className="flex items-baseline justify-between text-[10px] uppercase tracking-wider text-slate-500">
+              <div className="flex items-baseline justify-between gap-1 text-[9px] uppercase tracking-wider text-slate-500">
                 <span>{LABELS[bucket]}</span>
                 <span className="tabular-nums text-slate-300">{Math.round(value)}</span>
               </div>

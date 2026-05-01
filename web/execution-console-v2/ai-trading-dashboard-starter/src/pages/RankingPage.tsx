@@ -7,6 +7,7 @@
  * views persist to ``localStorage``.
  */
 import { useEffect, useMemo, useState } from 'react';
+import { AdjustmentsHorizontalIcon, XMarkIcon } from '@heroicons/react/24/outline';
 
 import PageErrorBoundary from '@/components/common/PageErrorBoundary';
 import PageFrame from '@/components/common/PageFrame';
@@ -61,6 +62,7 @@ function RankingContent() {
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
   const [pendingNotice, setPendingNotice] = useState<string | null>(null);
   const [customViews, setCustomViews] = useState<SavedView[]>(() => loadCustomViews());
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   useEffect(() => {
     saveCustomViews(customViews);
@@ -148,30 +150,86 @@ function RankingContent() {
   return (
     <PageFrame title="Ranking" description={description}>
       <SectionCard title="Ranked Signals">
-        <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
-          <FilterRail
-            state={filterState}
-            onChange={setFilterState}
-            rows={rows}
-            customViews={customViews}
-            onSaveView={handleSaveView}
-            onDeleteView={handleDeleteView}
-            onSelectView={(view) => setFilterState(view.state)}
-          />
+        <div className="grid gap-4 2xl:grid-cols-[240px_minmax(0,1fr)]">
+          <div className="hidden 2xl:block">
+            <FilterRail
+              state={filterState}
+              onChange={setFilterState}
+              rows={rows}
+              customViews={customViews}
+              onSaveView={handleSaveView}
+              onDeleteView={handleDeleteView}
+              onSelectView={(view) => setFilterState(view.state)}
+            />
+          </div>
 
           <div className="flex min-w-0 flex-col gap-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <label className="relative w-full sm:max-w-xs">
-                <span className="sr-only">Search ranked symbols</span>
-                <input
-                  type="search"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search symbol or sector…"
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:border-blue-500/60 focus:outline-none"
-                />
-              </label>
+              <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+                <button
+                  type="button"
+                  onClick={() => setFiltersOpen(true)}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-950/60 px-3 text-sm font-medium text-slate-200 hover:border-blue-500/50 hover:text-white 2xl:hidden"
+                >
+                  <AdjustmentsHorizontalIcon className="h-4 w-4" />
+                  Filters
+                </button>
+                <label className="relative w-full sm:w-80">
+                  <span className="sr-only">Search ranked symbols</span>
+                  <input
+                    type="search"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search symbol or sector…"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:border-blue-500/60 focus:outline-none"
+                  />
+                </label>
+              </div>
+              <div className="text-xs text-slate-500">
+                {filtered.length} of {rows.length} match
+              </div>
             </div>
+
+            {filtersOpen ? (
+              <div className="fixed inset-0 z-50 2xl:hidden" role="dialog" aria-modal="true" aria-label="Ranking filters">
+                <button
+                  type="button"
+                  className="absolute inset-0 bg-slate-950/70"
+                  aria-label="Close filters"
+                  onClick={() => setFiltersOpen(false)}
+                />
+                <div className="absolute inset-y-0 left-0 flex w-[min(88vw,320px)] flex-col border-r border-slate-800 bg-slate-950 p-4 shadow-2xl">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-100">Ranking Filters</div>
+                      <div className="text-xs text-slate-500">{filtered.length} of {rows.length} match</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setFiltersOpen(false)}
+                      className="rounded-lg border border-slate-800 bg-slate-900 p-2 text-slate-400 hover:text-white"
+                      aria-label="Close filters"
+                    >
+                      <XMarkIcon className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="min-h-0 overflow-y-auto">
+                    <FilterRail
+                      state={filterState}
+                      onChange={setFilterState}
+                      rows={rows}
+                      customViews={customViews}
+                      onSaveView={handleSaveView}
+                      onDeleteView={handleDeleteView}
+                      onSelectView={(view) => {
+                        setFilterState(view.state);
+                        setFiltersOpen(false);
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <ActiveFilterChips
               state={filterState}

@@ -116,6 +116,7 @@ export default function RankingTable({
             </div>
           );
         },
+        size: 180,
       }),
       columnHelper.accessor('score', {
         header: 'Score',
@@ -124,6 +125,7 @@ export default function RankingTable({
             {info.getValue().toFixed(2)}
           </span>
         ),
+        size: 92,
       }),
       columnHelper.display({
         id: 'stage',
@@ -137,6 +139,7 @@ export default function RankingTable({
             </span>
           );
         },
+        size: 132,
       }),
       columnHelper.accessor('barsInStage', {
         header: 'Age',
@@ -144,6 +147,7 @@ export default function RankingTable({
           const value = info.getValue();
           return value == null ? <span className="text-slate-500">—</span> : <span className="tabular-nums text-slate-200">{value} bars</span>;
         },
+        size: 72,
       }),
       columnHelper.accessor('stageTransition', {
         header: 'Transition',
@@ -151,6 +155,7 @@ export default function RankingTable({
           const value = info.getValue();
           return value ? <span className="text-slate-200">{value}</span> : <span className="text-slate-500">—</span>;
         },
+        size: 118,
       }),
       columnHelper.accessor('momentumAccelerationScore', {
         header: 'Accel',
@@ -158,6 +163,7 @@ export default function RankingTable({
           const value = info.getValue();
           return value == null ? <span className="text-slate-500">—</span> : <span className="font-semibold tabular-nums text-slate-100">{value.toFixed(1)}</span>;
         },
+        size: 88,
       }),
       columnHelper.display({
         id: 'warnings',
@@ -178,6 +184,7 @@ export default function RankingTable({
             </div>
           );
         },
+        size: 140,
       }),
       columnHelper.display({
         id: 'factors',
@@ -189,8 +196,9 @@ export default function RankingTable({
             variant="inline"
           />
         ),
+        size: 190,
       }),
-      columnHelper.accessor('sector', { header: 'Sector' }),
+      columnHelper.accessor('sector', { header: 'Sector', size: 132 }),
       columnHelper.accessor('pattern', {
         header: 'Pattern',
         cell: (info) => {
@@ -198,6 +206,7 @@ export default function RankingTable({
           if (!value || value === 'N/A') return <span className="text-slate-500">—</span>;
           return <span className="text-slate-200">{value}</span>;
         },
+        size: 140,
       }),
       columnHelper.display({
         id: 'breakout',
@@ -210,6 +219,7 @@ export default function RankingTable({
           ) : (
             <span className="text-slate-500">—</span>
           ),
+        size: 112,
       }),
       columnHelper.display({
         id: 'expand',
@@ -242,7 +252,7 @@ export default function RankingTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[1280px] text-left text-sm">
+      <table className="w-full min-w-[1220px] table-fixed text-left text-sm">
         <thead className="border-y border-slate-800 text-slate-400">
           {table.getHeaderGroups().map((headerGroup) => (
             <tr key={headerGroup.id}>

@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils/cn';
 import PresenceAvatars from './PresenceAvatars';
 import AuditLogDrawer from './AuditLogDrawer';
 import TimeMachineBar from './TimeMachineBar';
+import ModuleNav from './ModuleNav';
 
 interface Props {
   onOpenCommandBar: () => void;
@@ -36,7 +37,7 @@ export default function TopBar({ onOpenCommandBar }: Props) {
 
   return (
     <>
-      <header className="flex h-16 items-center justify-between gap-4 border-b border-slate-800 bg-slate-950 px-4 md:px-6">
+      <header className="flex min-h-16 items-center justify-between gap-4 border-b border-slate-800 bg-slate-950 px-4 py-3 md:px-6">
         {/* Left: trust pill + run ID */}
         <div className="flex min-w-0 items-center gap-3">
           {data ? (
@@ -91,7 +92,7 @@ export default function TopBar({ onOpenCommandBar }: Props) {
             type="button"
             onClick={onOpenCommandBar}
             className={cn(
-              'inline-flex items-center gap-1.5 rounded-2xl border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs',
+              'inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs',
               'text-slate-300 hover:bg-slate-800 hover:text-white',
             )}
             aria-label="Open command palette (Cmd+K or /)"
@@ -106,7 +107,7 @@ export default function TopBar({ onOpenCommandBar }: Props) {
           <button
             type="button"
             onClick={() => { void refreshAll(); }}
-            className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-100 hover:bg-slate-800"
+            className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-100 hover:bg-slate-800"
           >
             Refresh
           </button>
@@ -114,13 +115,14 @@ export default function TopBar({ onOpenCommandBar }: Props) {
           <button
             type="button"
             disabled
-            className="rounded-2xl bg-blue-600/80 px-4 py-2 text-sm font-medium text-white opacity-70"
+            className="hidden rounded-xl bg-blue-600/80 px-4 py-2 text-sm font-medium text-white opacity-70 sm:inline-flex"
             title="Retry publish wiring is not enabled in this React console yet."
           >
             Retry Publish
           </button>
         </div>
       </header>
+      <ModuleNav />
 
       {/* Collapsible time machine slider row */}
       <TimeMachineBar isOpen={tmOpen} />
