@@ -170,14 +170,32 @@ class PublishStage:
         datasets: Dict[str, pd.DataFrame],
     ) -> Dict[str, Any]:
         from ai_trading_system.domains.publish.dashboard import publish_dashboard_payload
+        from ai_trading_system.domains.publish.channels.weekly_pdf import metrics as weekly_metrics
+
+        weekly_data = self._load_weekly_report_data(context, datasets)
+        prior_ranked_df = pd.DataFrame()
+        pattern_df = pd.DataFrame()
+        failed_breakouts_df = pd.DataFrame()
+        if weekly_data is not None:
+            prior_ranked_df = weekly_data.prior_ranked_signals
+            pattern_df = weekly_data.pattern_scan
+            failed_breakouts_df = weekly_metrics.detect_failed_breakouts(
+                weekly_data.breakout_scan,
+                weekly_data.prior_breakouts_per_run,
+                weekly_data.ranked_signals,
+                top_n=25,
+            )
 
         result = publish_dashboard_payload(
             datasets.get("dashboard_payload", {}),
             project_root=context.project_root,
             run_date=context.run_date,
-            ranked_df=pd.DataFrame(datasets.get("publish_rows_dashboard", [])),
+            ranked_df=datasets.get("ranked_signals"),
             breakout_df=datasets.get("breakout_scan"),
             sector_df=datasets.get("sector_dashboard"),
+            prior_ranked_df=prior_ranked_df,
+            failed_breakouts_df=failed_breakouts_df,
+            pattern_df=pattern_df,
         )
         return {
             "report_id": "dashboard_sheet",
@@ -270,6 +288,11 @@ class PublishStage:
 
         reporter = TelegramReporter(report_dir=context.project_root / "reports")
         telegram_datasets = dict(datasets)
+        telegram_datasets["ranked_signals_full"] = datasets.get("ranked_signals")
+        weekly_data = self._load_weekly_report_data(context, datasets)
+        if weekly_data is not None:
+            telegram_datasets["prior_ranked_signals"] = weekly_data.prior_ranked_signals
+            telegram_datasets["prior_breakouts_per_run"] = weekly_data.prior_breakouts_per_run
         publish_rows = pd.DataFrame(datasets.get("publish_rows_telegram", []))
         if not publish_rows.empty:
             telegram_datasets["ranked_signals"] = publish_rows
@@ -290,3 +313,16 @@ class PublishStage:
         datasets: Dict[str, pd.DataFrame],
     ) -> str:
         return build_telegram_summary(run_date=context.run_date, datasets=datasets)
+
+    def _load_weekly_report_data(
+        self,
+        context: StageContext,
+        datasets: Dict[str, Any],
+    ) -> Any | None:
+        """Best-effort weekly intelligence load shared by publish channels."""
+        try:
+            from ai_trading_system.domains.publish.channels.weekly_pdf.data_loader import load_report_data
+
+            return load_report_data(context, datasets)
+        except Exception:
+            return None

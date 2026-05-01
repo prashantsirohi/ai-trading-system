@@ -95,7 +95,7 @@ def find_prior_run(
     if not earlier:
         return None
     best = min(earlier, key=lambda r: abs((r.run_date - target).days))
-    if abs((best.run_date - target).days) > tolerance_days + target_days_back:
+    if abs((best.run_date - target).days) > tolerance_days:
         return None
     return best
 

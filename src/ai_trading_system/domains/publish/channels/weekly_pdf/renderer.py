@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader, Undefined, select_autoescape
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +26,12 @@ def _build_env() -> Environment:
     )
     env.filters["fmt_num"] = _fmt_num
     env.filters["fmt_pct"] = _fmt_pct
+    env.filters["fmt_pct_points"] = _fmt_pct_points
     return env
 
 
 def _fmt_num(value: Any, digits: int = 2) -> str:
-    if value is None or value == "":
+    if _is_blank(value):
         return "—"
     try:
         return f"{float(value):,.{digits}f}"
@@ -39,12 +40,25 @@ def _fmt_num(value: Any, digits: int = 2) -> str:
 
 
 def _fmt_pct(value: Any, digits: int = 1) -> str:
-    if value is None or value == "":
+    if _is_blank(value):
         return "—"
     try:
         return f"{float(value) * 100:,.{digits}f}%"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _fmt_pct_points(value: Any, digits: int = 1) -> str:
+    if _is_blank(value):
+        return "—"
+    try:
+        return f"{float(value):,.{digits}f}%"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _is_blank(value: Any) -> bool:
+    return value is None or value == "" or isinstance(value, Undefined)
 
 
 def render_html(context: Dict[str, Any]) -> str:

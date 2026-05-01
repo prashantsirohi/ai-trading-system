@@ -14,6 +14,7 @@
   <div class="banner {{ regime.trust_status|lower }}">
     <strong>Data trust:</strong> {{ regime.trust_status|upper }}
     {% if regime.trust_confidence is not none %}· confidence {{ regime.trust_confidence|fmt_num(2) }}{% endif %}
+    {% if regime.trust_headlines %}· {{ regime.trust_headlines|join(" · ") }}{% endif %}
     {% if regime.ml_status %}· ML: {{ regime.ml_status }}{% endif %}
   </div>
 
@@ -51,8 +52,8 @@
   </table>
 
   <p class="small muted">
-    This is a Phase&nbsp;1 skeleton. Charts, week-over-week rank movers, market breadth (% above SMA20/50/200),
-    failed-breakout detection, and watchlist impact ship in subsequent phases.
+    Compact weekly snapshot of breadth, sector leadership, price-volume-delivery moves,
+    unusual volume accumulation, breakouts, failed moves, rank rotation, and pattern setups.
   </p>
 </section>
 
@@ -107,8 +108,8 @@
         <td class="num">{{ row.composite_score|fmt_num }}</td>
         <td class="num">{{ row.rank_confidence|fmt_num }}</td>
         <td>{{ row.stage2_label or "—" }}</td>
-        <td class="num">{{ row.return_5|fmt_pct }}</td>
-        <td class="num">{{ row.return_20|fmt_pct }}</td>
+        <td class="num">{{ row.return_5|fmt_pct_points }}</td>
+        <td class="num">{{ row.return_20|fmt_pct_points }}</td>
         <td class="num">{{ row.delivery_pct|fmt_num(1) }}</td>
         <td>
           {% if row.delivery_pct_imputed %}<span class="tag imputed">IMPUTED</span>
@@ -122,31 +123,55 @@
 </section>
 
 <section class="section">
-  <h2>3. Volume + Delivery Movers</h2>
-  <p class="small muted">Filter: weekly return ≥ 5% and delivery ≥ 40%. Imputed delivery flagged.</p>
-  {% if volume_delivery|length %}
-  <table>
-    <thead>
-      <tr><th>Symbol</th><th>Sector</th><th class="num">Ret&nbsp;5d</th>
-          <th class="num">Ret&nbsp;20d</th><th class="num">Delivery%</th>
-          <th>DQ</th><th class="num">Composite</th><th>Stage</th></tr>
-    </thead>
-    <tbody>
-      {% for row in volume_delivery %}
-      <tr>
-        <td><strong>{{ row.symbol_id }}</strong></td>
-        <td>{{ row.sector_name or "—" }}</td>
-        <td class="num">{{ row.return_5|fmt_pct }}</td>
-        <td class="num">{{ row.return_20|fmt_pct }}</td>
-        <td class="num">{{ row.delivery_pct|fmt_num(1) }}</td>
-        <td>{% if row.delivery_pct_imputed %}<span class="tag imputed">IMPUTED</span>{% else %}<span class="tag real">REAL</span>{% endif %}</td>
-        <td class="num">{{ row.composite_score|fmt_num }}</td>
-        <td>{{ row.stage2_label or "—" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}<p class="muted">No qualifying movers.</p>{% endif %}
+  <h2>3. Market Moves Snapshot</h2>
+  <p class="small muted">One-page scan for price, volume, delivery, accumulation shocks, rotation, and failed moves.</p>
+  <div class="move-grid">
+    <div class="move-card">
+      <h3>Price + Volume + Delivery</h3>
+      <table class="compact">
+        <thead><tr><th>Symbol</th><th class="num">5d</th><th class="num">Del%</th><th class="num">Vol&nbsp;Z</th></tr></thead>
+        <tbody>
+          {% for row in volume_delivery %}{% if loop.index <= 8 %}
+          <tr><td><strong>{{ row.symbol_id }}</strong></td><td class="num">{{ row.return_5|fmt_pct_points }}</td><td class="num">{{ row.delivery_pct|fmt_num(0) }}</td><td class="num">{{ row.volume_zscore_20|fmt_num(1) }}</td></tr>
+          {% endif %}{% else %}<tr><td colspan="4" class="muted">No qualifying names.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="move-card">
+      <h3>Unusual Volume Shockers</h3>
+      <table class="compact">
+        <thead><tr><th>Symbol</th><th class="num">Vol&nbsp;Z</th><th class="num">Del%</th><th class="num">5d</th></tr></thead>
+        <tbody>
+          {% for row in volume_shockers %}{% if loop.index <= 8 %}
+          <tr><td><strong>{{ row.symbol_id }}</strong></td><td class="num">{{ row.volume_zscore_20|fmt_num(1) }}</td><td class="num">{{ row.delivery_pct|fmt_num(0) }}</td><td class="num">{{ row.return_5|fmt_pct_points }}</td></tr>
+          {% endif %}{% else %}<tr><td colspan="4" class="muted">No accumulation shocks.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="move-card">
+      <h3>Rank Climbers</h3>
+      <table class="compact">
+        <thead><tr><th>Symbol</th><th class="num">Rank&nbsp;Δ</th><th class="num">Score&nbsp;Δ</th><th class="num">5d</th></tr></thead>
+        <tbody>
+          {% for row in rank_improvers %}{% if loop.index <= 8 %}
+          <tr><td><strong>{{ row.symbol_id }}</strong></td><td class="num">+{{ row.rank_change|fmt_num(0) }}</td><td class="num">{{ row.score_change|fmt_num(1) }}</td><td class="num">{{ row.return_5|fmt_pct_points }}</td></tr>
+          {% endif %}{% else %}<tr><td colspan="4" class="muted">No prior-week comparison.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="move-card">
+      <h3>Failed Move Risk</h3>
+      <table class="compact">
+        <thead><tr><th>Symbol</th><th class="num">Drop</th><th class="num">Close</th><th>Tier</th></tr></thead>
+        <tbody>
+          {% for row in failed_breakouts %}{% if loop.index <= 8 %}
+          <tr><td><strong>{{ row.symbol_id }}</strong></td><td class="num">{{ row.drop_pct|fmt_num(1) }}%</td><td class="num">{{ row.current_close|fmt_num(1) }}</td><td>{{ row.trigger_tier or "—" }}</td></tr>
+          {% endif %}{% else %}<tr><td colspan="4" class="muted">No failed breakouts.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <p class="small muted">Unusual volume shockers are a proxy for institutional accumulation: unusual volume, high delivery, non-negative 5d return, and no exhaustion flag.</p>
 </section>
 
 <section class="section">
@@ -198,6 +223,33 @@
     </tbody>
   </table>
   {% else %}<p class="muted">No Tier-B breakouts.</p>{% endif %}
+</section>
+
+<section class="section">
+  <h2>5. Pattern Setups</h2>
+  {% if patterns|length %}
+  <table class="pattern-table">
+    <thead>
+      <tr><th>Symbol</th><th>Pattern</th><th>State</th>
+          <th>Tier</th><th class="num">Score</th>
+          <th class="num">Trigger</th><th class="num">Vol&nbsp;Ratio</th><th>Stage</th></tr>
+    </thead>
+    <tbody>
+      {% for row in patterns %}
+      <tr>
+        <td><strong>{{ row.symbol_id }}</strong></td>
+        <td>{{ row.pattern_family }}</td>
+        <td>{{ row.pattern_state }}</td>
+        <td>{{ row.pattern_operational_tier or "—" }}</td>
+        <td class="num">{{ row.pattern_score|fmt_num }}</td>
+        <td class="num">{{ row.breakout_level|fmt_num }}</td>
+        <td class="num">{{ row.volume_ratio_20|fmt_num }}</td>
+        <td>{{ row.stage2_label or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No pattern signals available.</p>{% endif %}
 </section>
 
 <section class="section">
@@ -255,7 +307,7 @@
         <td class="num">{{ row.rank_position|fmt_num(0) }}</td>
         <td class="num">{{ row.prev_rank_position|fmt_num(0) }}</td>
         <td class="num">{{ row.score_change|fmt_num(2) }}</td>
-        <td class="num">{{ row.return_5|fmt_pct }}</td>
+        <td class="num">{{ row.return_5|fmt_pct_points }}</td>
         <td>{{ row.stage2_label or "—" }}</td>
       </tr>
       {% endfor %}
@@ -280,7 +332,7 @@
         <td class="num">{{ row.rank_position|fmt_num(0) }}</td>
         <td class="num">{{ row.prev_rank_position|fmt_num(0) }}</td>
         <td class="num">{{ row.score_change|fmt_num(2) }}</td>
-        <td class="num">{{ row.return_5|fmt_pct }}</td>
+        <td class="num">{{ row.return_5|fmt_pct_points }}</td>
         <td>{{ row.stage2_label or "—" }}</td>
       </tr>
       {% endfor %}
@@ -347,38 +399,7 @@
       {% endfor %}
     </tbody>
   </table>
-  <p class="small muted">Phase 3 will add a 26-week breadth line chart in place of this table.</p>
   {% else %}<p class="muted">Market breadth unavailable (ohlcv DB not reachable from this run).</p>{% endif %}
-</section>
-
-<section class="section">
-  <h2>5. Pattern Setups</h2>
-  {% if patterns|length %}
-  <table>
-    <thead>
-      <tr><th>Symbol</th><th>Pattern</th><th>State</th>
-          <th>Tier</th><th class="num">Score</th><th class="num">Priority</th>
-          <th class="num">Trigger</th><th class="num">Vol&nbsp;Ratio</th>
-          <th>Quality</th><th>Stage</th></tr>
-    </thead>
-    <tbody>
-      {% for row in patterns %}
-      <tr>
-        <td><strong>{{ row.symbol_id }}</strong></td>
-        <td>{{ row.pattern_family }}</td>
-        <td>{{ row.pattern_state }}</td>
-        <td>{{ row.pattern_operational_tier or "—" }}</td>
-        <td class="num">{{ row.pattern_score|fmt_num }}</td>
-        <td class="num">{{ row.pattern_priority_score|fmt_num }}</td>
-        <td class="num">{{ row.breakout_level|fmt_num }}</td>
-        <td class="num">{{ row.volume_ratio_20|fmt_num }}</td>
-        <td>{{ row.setup_quality or "—" }}</td>
-        <td>{{ row.stage2_label or "—" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}<p class="muted">No pattern signals available.</p>{% endif %}
 </section>
 
 {% if charts and charts.stocks and charts.stocks|length %}
@@ -405,6 +426,9 @@
     <strong>ML:</strong> {{ regime.ml_status or "—" }} ·
     <strong>Run:</strong> {{ run_id }} ({{ run_date }})
   </p>
+  {% if regime.trust_details %}
+  <p class="small muted"><strong>Trust details:</strong> {{ regime.trust_details }}</p>
+  {% endif %}
   <p>
     Composite ranking factor weights — RS 0.23, Volume Intensity 0.18, Proximity to Highs 0.17,
     Trend Persistence 0.12, Delivery 0.12, Sector Strength 0.10, Momentum Acceleration 0.08.
@@ -412,8 +436,7 @@
     sector-median → universe-median fallback.
   </p>
   <p class="small muted">
-    Phase 1 release: tables only. Charts (breadth, candlesticks), rank movers, and watchlist
-    intersection coming in Phases 2–4.
+    Watchlist intersection is deferred to Phase 4.
   </p>
 </section>
 

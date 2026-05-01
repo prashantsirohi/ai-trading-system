@@ -45,12 +45,16 @@ class _FakeSpreadsheet:
 
 class _FakeManager:
     last_instance = None
+    preexisting_titles: set[str] = set()
 
     def __init__(self):
         _FakeManager.last_instance = self
         self.last_error = None
         self.spreadsheet = _FakeSpreadsheet()
-        self.sheets: dict[str, _FakeWorksheet] = {}
+        self.sheets: dict[str, _FakeWorksheet] = {
+            title: _FakeWorksheet(title=title, sheet_id=700 + idx)
+            for idx, title in enumerate(sorted(_FakeManager.preexisting_titles))
+        }
         self.writes: list[tuple[str, str, pd.DataFrame, bool]] = []
 
     def open_spreadsheet(self):
@@ -94,13 +98,22 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         [
             {
                 "symbol_id": f"S{i:03d}",
+                "sector_name": "Banks",
                 "composite_score": float(200 - i),
                 "rel_strength_score": float(100 - i / 2),
                 "close": float(100 + i),
+                "return_5": float(12 - i * 0.2),
+                "return_20": float(24 - i * 0.3),
+                "delivery_pct": float(65 - i * 0.5),
+                "volume_zscore_20": float(3.0 if i < 6 else 1.2),
+                "stage2_label": "strong_stage2" if i < 8 else "stage2",
             }
             for i in range(30)
         ]
     )
+    prior_ranked_df = ranked_df.copy()
+    prior_ranked_df.loc[:, "composite_score"] = prior_ranked_df["composite_score"] - 10
+    prior_ranked_df.loc[0, "composite_score"] = 100.0
     sector_df = pd.DataFrame(
         [
             {"Sector": "Banks", "RS_rank": 1, "RS": 0.62, "Momentum": 0.12, "Quadrant": "Leading"},
@@ -125,6 +138,33 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             },
         ]
     )
+    failed_breakouts_df = pd.DataFrame(
+        [
+            {
+                "symbol_id": "S001",
+                "sector_name": "Banks",
+                "trigger_run_id": "pipeline-2026-04-02-rank",
+                "trigger_level": 115.0,
+                "current_close": 101.0,
+                "drop_pct": -12.17,
+                "trigger_tier": "A",
+            }
+        ]
+    )
+    pattern_df = pd.DataFrame(
+        [
+            {
+                "symbol_id": "S002",
+                "pattern_family": "cup_handle",
+                "pattern_state": "ready",
+                "pattern_operational_tier": "tier_1",
+                "pattern_score": 91.5,
+                "breakout_level": 125.0,
+                "volume_ratio_20": 2.4,
+                "stage2_label": "strong_stage2",
+            }
+        ]
+    )
 
     payload = {"summary": {"run_date": "2026-04-09", "data_trust_status": "trusted"}}
     result = publish_dashboard_payload(
@@ -134,12 +174,31 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         ranked_df=ranked_df,
         breakout_df=breakout_df,
         sector_df=sector_df,
+        prior_ranked_df=prior_ranked_df,
+        failed_breakouts_df=failed_breakouts_df,
+        pattern_df=pattern_df,
     )
 
     manager = _FakeManager.last_instance
     assert manager is not None
     assert result["sheet_name"] == "2026-04-09"
     assert all(write[0] == "2026-04-09" for write in manager.writes)
+
+    move_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "Ret5", "Ret20", "Delivery", "VolZ", "Score", "Stage"]]
+    assert move_frames
+    assert move_frames[0].iloc[0]["Symbol"] == "S000"
+
+    shocker_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "VolZ", "Delivery", "Ret5", "Ret20", "Score"]]
+    assert shocker_frames
+    assert shocker_frames[0].iloc[0]["VolZ"] == 3.0
+
+    failed_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "TriggerRun", "Trigger", "Close", "DropPct", "Tier"]]
+    assert failed_frames
+    assert failed_frames[0].iloc[0]["Symbol"] == "S001"
+
+    pattern_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Pattern", "State", "Tier", "Score", "Trigger", "VolRatio", "Stage"]]
+    assert pattern_frames
+    assert pattern_frames[0].iloc[0]["Pattern"] == "cup_handle"
 
     breakout_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Setup", "State", "Tier", "Score", "TradingView"]]
     assert breakout_frames
@@ -159,3 +218,29 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert manager.spreadsheet.batch_requests
     assert any("addChart" in req for call in manager.spreadsheet.batch_requests for req in call.get("requests", []))
     assert any("updateDimensionProperties" in req for call in manager.spreadsheet.batch_requests for req in call.get("requests", []))
+
+
+def test_publish_dashboard_payload_keeps_existing_same_date_sheet(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("ai_trading_system.domains.publish.dashboard.GoogleSheetsManager", _FakeManager)
+    monkeypatch.setattr(
+        "ai_trading_system.domains.publish.dashboard._load_operational_breadth",
+        lambda _root: pd.DataFrame(),
+    )
+    _FakeManager.preexisting_titles = {"2026-04-09"}
+    try:
+        result = publish_dashboard_payload(
+            {"summary": {"run_date": "2026-04-09"}},
+            project_root=tmp_path,
+            run_date="2026-04-09",
+            ranked_df=pd.DataFrame([{"symbol_id": "AAA", "composite_score": 90.0}]),
+            breakout_df=pd.DataFrame(),
+            sector_df=pd.DataFrame(),
+        )
+    finally:
+        _FakeManager.preexisting_titles = set()
+
+    manager = _FakeManager.last_instance
+    assert manager is not None
+    assert result["base_sheet_name"] == "2026-04-09"
+    assert result["sheet_name"] == "2026-04-09 attempt 2"
+    assert manager.spreadsheet.deleted == []

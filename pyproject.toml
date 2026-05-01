@@ -61,6 +61,8 @@ exclude = [
 [tool.setuptools.package-data]
 ai_trading_system = [
   "pipeline/migrations/*.sql",
+  "domains/publish/channels/weekly_pdf/templates/*.html",
+  "domains/publish/channels/weekly_pdf/static/*.css",
 ]
 
 [tool.pytest.ini_options]

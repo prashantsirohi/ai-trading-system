@@ -12,6 +12,7 @@ import pandas as pd
 from ai_trading_system.domains.publish.channels.google_sheets import GoogleSheetsManager
 from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
+from ai_trading_system.domains.publish.channels.weekly_pdf import metrics as weekly_metrics
 
 
 def _frame(records: Iterable[Dict[str, Any]]) -> pd.DataFrame:
@@ -25,6 +26,18 @@ def _resolve_sheet_name(payload: Dict[str, Any], run_date: str | None) -> str:
         candidate = datetime.now().strftime("%Y-%m-%d")
     safe = "".join(ch for ch in candidate if ch.isalnum() or ch in ("-", "_", " ")).strip()
     return safe[:95] or datetime.now().strftime("%Y-%m-%d")
+
+
+def _resolve_unique_sheet_name(manager: GoogleSheetsManager, base_name: str) -> str:
+    if manager.get_worksheet(base_name) is None:
+        manager.last_error = None
+        return base_name
+    for attempt in range(2, 100):
+        candidate = f"{base_name} attempt {attempt}"
+        if manager.get_worksheet(candidate) is None:
+            manager.last_error = None
+            return candidate[:95]
+    return f"{base_name} {datetime.now().strftime('%H%M%S')}"[:95]
 
 
 def _to_numeric(df: pd.DataFrame, columns: list[str], places: int) -> pd.DataFrame:
@@ -73,6 +86,104 @@ def _minimal_rank_frame(df: pd.DataFrame) -> pd.DataFrame:
         else ""
     )
     return out
+
+
+def _weekly_move_frame(df: pd.DataFrame) -> pd.DataFrame:
+    moves = weekly_metrics.volume_delivery_movers(df, n=25)
+    if moves.empty:
+        return pd.DataFrame(columns=["Symbol", "Sector", "Ret5", "Ret20", "Delivery", "VolZ", "Score", "Stage"])
+    out = pd.DataFrame(
+        {
+            "Symbol": moves.get("symbol_id", ""),
+            "Sector": moves.get("sector_name", ""),
+            "Ret5": moves.get("return_5", ""),
+            "Ret20": moves.get("return_20", ""),
+            "Delivery": moves.get("delivery_pct", ""),
+            "VolZ": moves.get("volume_zscore_20", ""),
+            "Score": moves.get("composite_score", ""),
+            "Stage": moves.get("stage2_label", ""),
+        }
+    )
+    return _to_numeric(out, ["Ret5", "Ret20", "Delivery", "VolZ", "Score"], 2)
+
+
+def _volume_shocker_frame(df: pd.DataFrame) -> pd.DataFrame:
+    shockers = weekly_metrics.unusual_volume_shockers(df, n=25)
+    if shockers.empty:
+        return pd.DataFrame(columns=["Symbol", "Sector", "VolZ", "Delivery", "Ret5", "Ret20", "Score"])
+    out = pd.DataFrame(
+        {
+            "Symbol": shockers.get("symbol_id", ""),
+            "Sector": shockers.get("sector_name", ""),
+            "VolZ": shockers.get("volume_zscore_20", ""),
+            "Delivery": shockers.get("delivery_pct", ""),
+            "Ret5": shockers.get("return_5", ""),
+            "Ret20": shockers.get("return_20", ""),
+            "Score": shockers.get("composite_score", ""),
+        }
+    )
+    return _to_numeric(out, ["VolZ", "Delivery", "Ret5", "Ret20", "Score"], 2)
+
+
+def _rank_mover_frame(current: pd.DataFrame, prior: pd.DataFrame | None = None) -> pd.DataFrame:
+    improvers, decliners = weekly_metrics.compute_rank_movers(current, prior if isinstance(prior, pd.DataFrame) else pd.DataFrame(), top_n=15)
+    frames = []
+    for label, frame in (("Improver", improvers), ("Decliner", decliners)):
+        if frame.empty:
+            continue
+        out = pd.DataFrame(
+            {
+                "Move": label,
+                "Symbol": frame.get("symbol_id", ""),
+                "Sector": frame.get("sector_name", ""),
+                "RankDelta": frame.get("rank_change", ""),
+                "ScoreDelta": frame.get("score_change", ""),
+                "Ret5": frame.get("return_5", ""),
+                "Score": frame.get("composite_score", ""),
+            }
+        )
+        frames.append(out)
+    if not frames:
+        return pd.DataFrame(columns=["Move", "Symbol", "Sector", "RankDelta", "ScoreDelta", "Ret5", "Score"])
+    return _to_numeric(pd.concat(frames, ignore_index=True), ["RankDelta", "ScoreDelta", "Ret5", "Score"], 2)
+
+
+def _failed_breakout_frame(failed: pd.DataFrame | None) -> pd.DataFrame:
+    if failed is None or failed.empty:
+        return pd.DataFrame(columns=["Symbol", "Sector", "TriggerRun", "Trigger", "Close", "DropPct", "Tier"])
+    out = pd.DataFrame(
+        {
+            "Symbol": failed.get("symbol_id", ""),
+            "Sector": failed.get("sector_name", ""),
+            "TriggerRun": failed.get("trigger_run_id", ""),
+            "Trigger": failed.get("trigger_level", ""),
+            "Close": failed.get("current_close", ""),
+            "DropPct": failed.get("drop_pct", ""),
+            "Tier": failed.get("trigger_tier", ""),
+        }
+    )
+    return _to_numeric(out, ["Trigger", "Close", "DropPct"], 2)
+
+
+def _pattern_frame(df: pd.DataFrame | None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["Symbol", "Pattern", "State", "Tier", "Score", "Trigger", "VolRatio", "Stage"])
+    out = pd.DataFrame(
+        {
+            "Symbol": df.get("symbol_id", ""),
+            "Pattern": df.get("pattern_family", ""),
+            "State": df.get("pattern_state", ""),
+            "Tier": df.get("pattern_operational_tier", ""),
+            "Score": df.get("pattern_score", ""),
+            "Trigger": df.get("breakout_level", ""),
+            "VolRatio": df.get("volume_ratio_20", ""),
+            "Stage": df.get("stage2_label", ""),
+        }
+    )
+    out = _to_numeric(out, ["Score", "Trigger", "VolRatio"], 2)
+    if "Score" in out.columns:
+        out = out.sort_values("Score", ascending=False, na_position="last")
+    return out.head(25).reset_index(drop=True)
 
 
 def _minimal_breakout_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -360,6 +471,9 @@ def publish_dashboard_payload(
     ranked_df: pd.DataFrame | None = None,
     breakout_df: pd.DataFrame | None = None,
     sector_df: pd.DataFrame | None = None,
+    prior_ranked_df: pd.DataFrame | None = None,
+    failed_breakouts_df: pd.DataFrame | None = None,
+    pattern_df: pd.DataFrame | None = None,
 ) -> Dict[str, Any]:
     """Write a single compact daily sheet with sector/rank/breakout and breadth chart."""
     manager = GoogleSheetsManager()
@@ -367,10 +481,8 @@ def publish_dashboard_payload(
         message = manager.last_error or "spreadsheet unavailable"
         raise RuntimeError(f"Dashboard publish failed: {message}")
 
-    sheet_name = _resolve_sheet_name(payload, run_date=run_date)
-    existing = manager.get_worksheet(sheet_name)
-    if existing is not None and manager.spreadsheet is not None:
-        manager.spreadsheet.del_worksheet(existing)
+    base_sheet_name = _resolve_sheet_name(payload, run_date=run_date)
+    sheet_name = _resolve_unique_sheet_name(manager, base_sheet_name)
     worksheet = manager.get_or_create_sheet(sheet_name, rows=5000, cols=20)
     if worksheet is None:
         raise RuntimeError(f"Dashboard publish failed creating sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
@@ -385,6 +497,11 @@ def publish_dashboard_payload(
     sector_min = _minimal_sector_frame(source_sector)
     rank_min = _minimal_rank_frame(source_ranked)
     breakout_min = _minimal_breakout_frame(source_breakout)
+    weekly_moves = _weekly_move_frame(source_ranked)
+    volume_shockers = _volume_shocker_frame(source_ranked)
+    rank_movers = _rank_mover_frame(source_ranked, prior_ranked_df)
+    failed_breakouts = _failed_breakout_frame(failed_breakouts_df)
+    patterns = _pattern_frame(pattern_df)
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
 
     summary = pd.DataFrame(
@@ -395,6 +512,10 @@ def publish_dashboard_payload(
                 "Sectors": int(len(sector_min)),
                 "Ranks": int(len(rank_min)),
                 "BreakoutsAll": int(len(breakout_min)),
+                "MarketMoves": int(len(weekly_moves)),
+                "VolumeShockers": int(len(volume_shockers)),
+                "FailedBreakouts": int(len(failed_breakouts)),
+                "Patterns": int(len(patterns)),
                 "BreadthRows": int(len(breadth)),
             }
         ]
@@ -404,74 +525,40 @@ def publish_dashboard_payload(
 
     row = 4
     section_layouts: list[dict[str, int | None]] = []
-    section_title_row = row
-    row, _, _ = _write_section(
-        manager=manager,
-        worksheet=worksheet,
-        sheet_name=sheet_name,
-        start_row=row,
-        title="SECTOR (minimal)",
-        frame=sector_min,
-    )
-    section_layouts.append(
-        {
-            "title_row": section_title_row,
-            "header_row": section_title_row + 1 if len(sector_min) > 0 else None,
-            "row_count": int(len(sector_min)),
-            "col_count": int(len(sector_min.columns)),
-        }
-    )
-    section_title_row = row
-    row, _, _ = _write_section(
-        manager=manager,
-        worksheet=worksheet,
-        sheet_name=sheet_name,
-        start_row=row,
-        title="RANKS (minimal)",
-        frame=rank_min,
-    )
-    section_layouts.append(
-        {
-            "title_row": section_title_row,
-            "header_row": section_title_row + 1 if len(rank_min) > 0 else None,
-            "row_count": int(len(rank_min)),
-            "col_count": int(len(rank_min.columns)),
-        }
-    )
-    section_title_row = row
-    row, _, _ = _write_section(
-        manager=manager,
-        worksheet=worksheet,
-        sheet_name=sheet_name,
-        start_row=row,
-        title="BREAKOUTS (all, unfiltered)",
-        frame=breakout_min,
-    )
-    section_layouts.append(
-        {
-            "title_row": section_title_row,
-            "header_row": section_title_row + 1 if len(breakout_min) > 0 else None,
-            "row_count": int(len(breakout_min)),
-            "col_count": int(len(breakout_min.columns)),
-        }
-    )
-    section_title_row = row
-    row, breadth_header_row, breadth_rows = _write_section(
-        manager=manager,
-        worksheet=worksheet,
-        sheet_name=sheet_name,
-        start_row=row,
-        title="LONG-TERM BREADTH (operational)",
-        frame=breadth,
-    )
-    section_layouts.append(
-        {
-            "title_row": section_title_row,
-            "header_row": int(breadth_header_row) if breadth_header_row is not None else None,
-            "row_count": int(breadth_rows),
-            "col_count": int(len(breadth.columns)),
-        }
-    )
+    breadth_header_row: int | None = None
+    breadth_rows = 0
+    sections = [
+        ("MARKET MOVES SNAPSHOT", weekly_moves),
+        ("UNUSUAL VOLUME SHOCKERS", volume_shockers),
+        ("RANK MOVERS", rank_movers),
+        ("FAILED BREAKOUTS", failed_breakouts),
+        ("PATTERN SETUPS", patterns),
+        ("SECTOR LEADERS", sector_min),
+        ("TOP RANKED", rank_min),
+        ("BREAKOUTS (all, unfiltered)", breakout_min),
+        ("LONG-TERM BREADTH (operational)", breadth),
+    ]
+    for title, frame in sections:
+        section_title_row = row
+        row, header_row, row_count = _write_section(
+            manager=manager,
+            worksheet=worksheet,
+            sheet_name=sheet_name,
+            start_row=row,
+            title=title,
+            frame=frame,
+        )
+        if title.startswith("LONG-TERM BREADTH"):
+            breadth_header_row = int(header_row) if header_row is not None else None
+            breadth_rows = int(row_count)
+        section_layouts.append(
+            {
+                "title_row": section_title_row,
+                "header_row": int(header_row) if header_row is not None else None,
+                "row_count": int(row_count),
+                "col_count": int(len(frame.columns)),
+            }
+        )
 
     try:
         _apply_sheet_readability_layout(
@@ -494,7 +581,7 @@ def publish_dashboard_payload(
             logger.warning("Breadth chart creation failed on sheet %s: %s", sheet_name, exc)
 
     logger.info("Dashboard payload published to single dated sheet '%s'", sheet_name)
-    return {"sheet_name": sheet_name, "rows_written": int(row)}
+    return {"sheet_name": sheet_name, "base_sheet_name": base_sheet_name, "rows_written": int(row)}
 
 
 __all__ = ["publish_dashboard_payload"]

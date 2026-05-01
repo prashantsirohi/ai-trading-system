@@ -466,10 +466,18 @@ def test_publish_stage_builds_compact_telegram_tearsheet(tmp_path: Path) -> None
                 "composite_score": 90 - i,
                 "close": 1000 + i,
                 "rel_strength_score": 80 - i / 10,
+                "return_5": 11 - i * 0.2,
+                "return_20": 22 - i * 0.4,
+                "delivery_pct": 62 - i,
+                "volume_zscore_20": 2.5 if i < 5 else 1.1,
+                "stage2_label": "strong_stage2" if i < 4 else "stage2",
             }
             for i in range(12)
         ]
     )
+    prior_ranked_df = ranked_df.copy()
+    prior_ranked_df.loc[:, "composite_score"] = prior_ranked_df["composite_score"] - 5
+    prior_ranked_df.loc[0, "composite_score"] = 70.0
     breakout_df = pd.DataFrame(
         [
             {
@@ -499,12 +507,34 @@ def test_publish_stage_builds_compact_telegram_tearsheet(tmp_path: Path) -> None
         context,
         {
             "ranked_signals": ranked_df,
+            "ranked_signals_full": ranked_df,
+            "prior_ranked_signals": prior_ranked_df,
+            "prior_breakouts_per_run": [
+                (
+                    "pipeline-2026-03-30-rank",
+                    pd.DataFrame(
+                        [
+                            {
+                                "symbol_id": "SYM00",
+                                "breakout_detected": True,
+                                "prior_range_high": 1010.0,
+                                "candidate_tier": "A",
+                            }
+                        ]
+                    ),
+                )
+            ],
             "breakout_scan": breakout_df,
             "sector_dashboard": sector_df,
             "dashboard_payload": {"summary": {"run_date": "2026-04-06", "top_symbol": "SYM00", "top_sector": "Sector00"}},
         },
     )
 
+    assert "<b>Market Moves Snapshot</b>" in message
+    assert "P+V+D: SYM00 11.0% Del 62 VolZ 2.5" in message
+    assert "Volume shock: SYM00 VolZ 2.5 Del 62 5d 11.0%" in message
+    assert "Rank climber: SYM00 RankΔ +11 ScoreΔ +20.0" in message
+    assert "Failed risk: SYM00 -1.0% below A" in message
     assert "<b>Top 10 Sectors</b>" in message
     assert "<b>Top 10 Breakouts</b>" in message
     assert "<b>Top 10 Ranked Stocks</b>" in message

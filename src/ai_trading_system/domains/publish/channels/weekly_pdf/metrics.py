@@ -29,6 +29,18 @@ def _select_existing(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
     return df.loc[:, keep].copy() if keep else pd.DataFrame()
 
 
+def _truthy(value: Any) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _with_volume_ratio(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if {"volume", "vol_20_avg"}.issubset(out.columns):
+        denom = pd.to_numeric(out["vol_20_avg"], errors="coerce").replace(0, pd.NA)
+        out.loc[:, "volume_ratio_20d"] = pd.to_numeric(out["volume"], errors="coerce") / denom
+    return out
+
+
 def top_ranked(ranked: pd.DataFrame, n: int = 25) -> pd.DataFrame:
     if ranked.empty or "composite_score" not in ranked.columns:
         return pd.DataFrame()
@@ -103,19 +115,28 @@ def sector_leaders(sector_df: pd.DataFrame, n: int = 10) -> pd.DataFrame:
 
 
 def volume_delivery_movers(ranked: pd.DataFrame, n: int = 25) -> pd.DataFrame:
-    """Stage1 accumulation filter: meaningful weekly return + high delivery + price above SMA50.
+    """Weekly price movers backed by volume activity and high delivery.
 
     Uses fields available in ranked_signals; missing columns degrade gracefully.
     """
-    if ranked.empty:
+    if ranked.empty or "return_5" not in ranked.columns:
         return pd.DataFrame()
-    df = ranked.copy()
+    df = _with_volume_ratio(ranked)
 
     mask = pd.Series(True, index=df.index)
-    if "return_5" in df.columns:
-        mask &= df["return_5"].fillna(0) >= 0.05
+    mask &= pd.to_numeric(df["return_5"], errors="coerce").fillna(0) >= 5.0
     if "delivery_pct" in df.columns:
-        mask &= df["delivery_pct"].fillna(0) >= 40.0
+        mask &= pd.to_numeric(df["delivery_pct"], errors="coerce").fillna(0) >= 40.0
+    volume_masks = []
+    if "volume_zscore_20" in df.columns:
+        volume_masks.append(pd.to_numeric(df["volume_zscore_20"], errors="coerce").fillna(0) >= 1.0)
+    if "volume_ratio_20d" in df.columns:
+        volume_masks.append(pd.to_numeric(df["volume_ratio_20d"], errors="coerce").fillna(0) >= 1.25)
+    if volume_masks:
+        volume_mask = volume_masks[0]
+        for item in volume_masks[1:]:
+            volume_mask |= item
+        mask &= volume_mask
     out = df[mask]
     sort_col = "return_5" if "return_5" in out.columns else "composite_score"
     if sort_col in out.columns:
@@ -128,6 +149,72 @@ def volume_delivery_movers(ranked: pd.DataFrame, n: int = 25) -> pd.DataFrame:
         "return_20",
         "delivery_pct",
         "delivery_pct_imputed",
+        "volume_zscore_20",
+        "volume_ratio_20d",
+        "composite_score",
+        "stage2_label",
+    ]
+    return _select_existing(out, cols).head(n).reset_index(drop=True)
+
+
+def unusual_volume_shockers(ranked: pd.DataFrame, n: int = 20) -> pd.DataFrame:
+    """Institutional-buying proxy: unusual volume + high delivery + non-negative 5d price."""
+    if ranked.empty:
+        return pd.DataFrame()
+    df = _with_volume_ratio(ranked)
+    if "delivery_pct" not in df.columns:
+        return pd.DataFrame()
+
+    mask = pd.to_numeric(df["delivery_pct"], errors="coerce").fillna(0) >= 50.0
+    if "return_5" in df.columns:
+        mask &= pd.to_numeric(df["return_5"], errors="coerce").fillna(0) >= 0.0
+    if "exhaustion_flag" in df.columns:
+        mask &= ~df["exhaustion_flag"].map(_truthy).fillna(False)
+
+    volume_masks = []
+    if "volume_zscore_20" in df.columns:
+        volume_masks.append(pd.to_numeric(df["volume_zscore_20"], errors="coerce").fillna(0) >= 2.0)
+    if "volume_ratio_20d" in df.columns:
+        volume_masks.append(pd.to_numeric(df["volume_ratio_20d"], errors="coerce").fillna(0) >= 1.75)
+    if not volume_masks:
+        return pd.DataFrame()
+    volume_mask = volume_masks[0]
+    for item in volume_masks[1:]:
+        volume_mask |= item
+    out = df[mask & volume_mask].copy()
+    if out.empty:
+        return pd.DataFrame()
+
+    sort_cols = [c for c in ("volume_zscore_20", "delivery_pct", "return_5") if c in out.columns]
+    if sort_cols:
+        out = out.sort_values(sort_cols, ascending=False)
+    cols = [
+        "symbol_id",
+        "sector_name",
+        "return_5",
+        "return_20",
+        "delivery_pct",
+        "volume_zscore_20",
+        "volume_ratio_20d",
+        "composite_score",
+        "stage2_label",
+    ]
+    return _select_existing(out, cols).head(n).reset_index(drop=True)
+
+
+def weekly_price_movers(ranked: pd.DataFrame, n: int = 10) -> pd.DataFrame:
+    if ranked.empty or "return_5" not in ranked.columns:
+        return pd.DataFrame()
+    df = _with_volume_ratio(ranked)
+    out = df.sort_values("return_5", ascending=False)
+    cols = [
+        "symbol_id",
+        "sector_name",
+        "return_5",
+        "return_20",
+        "delivery_pct",
+        "volume_zscore_20",
+        "volume_ratio_20d",
         "composite_score",
         "stage2_label",
     ]
@@ -151,15 +238,33 @@ def regime_summary(
     if not ranked.empty and "stage2_label" in ranked.columns:
         stage2_count = int((ranked["stage2_label"].astype(str).str.lower() == "stage2").sum())
 
-    trust_status = (
+    trust_status = str(
         rank_summary.get("data_trust_status")
         or summary.get("data_trust_status")
         or trust_status_fallback
     )
+    trust_confidence = rank_summary.get("trust_confidence")
+    trust_headlines: list[str] = []
+    trust_score = None
+    if isinstance(trust_confidence, dict):
+        trust_score = trust_confidence.get("rank_confidence") or trust_confidence.get("provider_confidence")
+        quarantined_dates = trust_confidence.get("active_quarantined_dates") or []
+        quarantined_symbols = trust_confidence.get("active_quarantined_symbols")
+        if quarantined_dates:
+            trust_headlines.append(f"{len(quarantined_dates)} quarantined dates")
+        if quarantined_symbols:
+            trust_headlines.append(f"{quarantined_symbols} quarantined symbols")
+        unknown_ratio = trust_confidence.get("unknown_ratio_latest")
+        if unknown_ratio:
+            trust_headlines.append(f"{float(unknown_ratio) * 100:.1f}% unknown rows latest")
+    else:
+        trust_score = trust_confidence
 
     return {
         "trust_status": trust_status,
-        "trust_confidence": rank_summary.get("trust_confidence"),
+        "trust_confidence": trust_score,
+        "trust_headlines": trust_headlines[:2],
+        "trust_details": trust_confidence,
         "ml_status": rank_summary.get("ml_status"),
         "market_stage": summary.get("market_stage") or rank_summary.get("market_stage"),
         "universe_count": rank_summary.get("symbol_universe_count"),

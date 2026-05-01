@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -51,6 +51,8 @@ def build_report(
     sectors = metrics.sector_leaders(data.sector_dashboard)
     top_ranked = metrics.top_ranked(data.ranked_signals)
     volume_delivery = metrics.volume_delivery_movers(data.ranked_signals)
+    weekly_price = metrics.weekly_price_movers(data.ranked_signals)
+    volume_shockers = metrics.unusual_volume_shockers(data.ranked_signals)
     tier_a = metrics.tier_a_breakouts(data.breakout_scan)
     tier_b = metrics.tier_b_breakouts(data.breakout_scan)
     patterns = metrics.top_patterns(data.pattern_scan)
@@ -94,6 +96,8 @@ def build_report(
         "sectors": _df_to_records(sectors),
         "top_ranked": _df_to_records(top_ranked),
         "volume_delivery": _df_to_records(volume_delivery),
+        "weekly_price": _df_to_records(weekly_price),
+        "volume_shockers": _df_to_records(volume_shockers),
         "tier_a": _df_to_records(tier_a),
         "tier_b": _df_to_records(tier_b),
         "patterns": _df_to_records(patterns),
@@ -116,6 +120,8 @@ def build_report(
             "weekly_sector_leaders": sectors,
             "weekly_ranked_top": top_ranked,
             "weekly_volume_delivery_movers": volume_delivery,
+            "weekly_price_movers": weekly_price,
+            "weekly_unusual_volume_shockers": volume_shockers,
             "weekly_breakouts_tier_a": tier_a,
             "weekly_breakouts_tier_b": tier_b,
             "weekly_patterns": patterns,
@@ -141,6 +147,8 @@ def build_report(
             "sectors": len(sectors),
             "top_ranked": len(top_ranked),
             "volume_delivery": len(volume_delivery),
+            "weekly_price": len(weekly_price),
+            "volume_shockers": len(volume_shockers),
             "tier_a": len(tier_a),
             "tier_b": len(tier_b),
             "patterns": len(patterns),
@@ -154,7 +162,7 @@ def build_report(
         "prior_run_date": data.prior_run_date,
         "breadth_latest": breadth_latest,
         "charts": chart_paths,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
 
     json_path = output_dir / "weekly_market_report.json"

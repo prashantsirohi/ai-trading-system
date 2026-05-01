@@ -7,6 +7,8 @@ from typing import Any, Mapping, Optional
 
 import pandas as pd
 
+from ai_trading_system.domains.publish.channels.weekly_pdf import metrics as weekly_metrics
+
 
 def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str:
     """Build the compact Telegram market tearsheet."""
@@ -14,9 +16,21 @@ def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str
     summary = dashboard.get("summary", {})
     data_trust = dashboard.get("data_trust", {}) or {}
     ranked_df = _sorted_ranked_signals(_as_frame(datasets.get("ranked_signals")))
+    full_ranked_df = _as_frame(datasets.get("ranked_signals_full", datasets.get("ranked_signals")))
     stage2_summary = dict(datasets.get("stage2_summary") or {})
     breakout_df = _sorted_breakouts(_as_frame(datasets.get("breakout_scan")))
     sector_df = _sorted_sector_dashboard(_as_frame(datasets.get("sector_dashboard")))
+    prior_ranked_df = _as_frame(datasets.get("prior_ranked_signals"))
+    prior_breakouts_per_run = datasets.get("prior_breakouts_per_run") or []
+    move_df = weekly_metrics.volume_delivery_movers(full_ranked_df, n=5)
+    shocker_df = weekly_metrics.unusual_volume_shockers(full_ranked_df, n=5)
+    rank_improvers, _rank_decliners = weekly_metrics.compute_rank_movers(full_ranked_df, prior_ranked_df, top_n=5)
+    failed_df = weekly_metrics.detect_failed_breakouts(
+        breakout_df,
+        prior_breakouts_per_run,
+        full_ranked_df,
+        top_n=5,
+    )
 
     top_symbol = summary.get("top_symbol")
     if not top_symbol and not ranked_df.empty and "symbol_id" in ranked_df.columns:
@@ -48,6 +62,11 @@ def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str
     stage2_line = _format_stage2_line(stage2_summary, ranked_df)
     if stage2_line:
         lines.append(stage2_line)
+    lines.extend(["", "<b>Market Moves Snapshot</b>"])
+    lines.extend(_format_move_block("P+V+D", move_df, _format_move_line))
+    lines.extend(_format_move_block("Volume shock", shocker_df, _format_shocker_line))
+    lines.extend(_format_move_block("Rank climber", rank_improvers, _format_rank_climber_line))
+    lines.extend(_format_move_block("Failed risk", failed_df, _format_failed_breakout_line))
     lines.extend(["", "<b>Top 10 Sectors</b>"])
 
     if sector_df.empty:
@@ -157,6 +176,46 @@ def _format_ranked_line(index: int, row: pd.Series) -> str:
     )
 
 
+def _format_move_block(title: str, df: pd.DataFrame, formatter) -> list[str]:
+    if df is None or df.empty:
+        return [f"{title}: n/a"]
+    return [f"{title}: " + " ; ".join(formatter(row) for _, row in df.head(3).iterrows())]
+
+
+def _format_move_line(row: pd.Series) -> str:
+    return (
+        f"{escape(str(row.get('symbol_id', 'n/a')))} "
+        f"{_format_pct_points(row.get('return_5'))} "
+        f"Del {_format_decimal(row.get('delivery_pct'), 0)} "
+        f"VolZ {_format_decimal(row.get('volume_zscore_20'), 1)}"
+    )
+
+
+def _format_shocker_line(row: pd.Series) -> str:
+    return (
+        f"{escape(str(row.get('symbol_id', 'n/a')))} "
+        f"VolZ {_format_decimal(row.get('volume_zscore_20'), 1)} "
+        f"Del {_format_decimal(row.get('delivery_pct'), 0)} "
+        f"5d {_format_pct_points(row.get('return_5'))}"
+    )
+
+
+def _format_rank_climber_line(row: pd.Series) -> str:
+    return (
+        f"{escape(str(row.get('symbol_id', 'n/a')))} "
+        f"RankΔ {_format_signed_int(row.get('rank_change'))} "
+        f"ScoreΔ {_format_signed_decimal(row.get('score_change'), 1)}"
+    )
+
+
+def _format_failed_breakout_line(row: pd.Series) -> str:
+    return (
+        f"{escape(str(row.get('symbol_id', 'n/a')))} "
+        f"{_format_decimal(row.get('drop_pct'), 1)}% "
+        f"below {escape(str(row.get('trigger_tier') or 'tier n/a'))}"
+    )
+
+
 def _format_decimal(value: Any, places: int = 2) -> str:
     if pd.isna(value):
         return "n/a"
@@ -182,6 +241,24 @@ def _format_int(value: Any) -> str:
         return str(int(value))
     except (TypeError, ValueError):
         return "-"
+
+
+def _format_signed_int(value: Any) -> str:
+    if pd.isna(value):
+        return "-"
+    try:
+        return f"{int(value):+d}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _format_pct_points(value: Any, places: int = 1) -> str:
+    if pd.isna(value):
+        return "n/a"
+    try:
+        return f"{float(value):.{places}f}%"
+    except (TypeError, ValueError):
+        return "n/a"
 
 
 def _format_stage2_line(stage2_summary: Mapping[str, Any], ranked_df: pd.DataFrame) -> str:
