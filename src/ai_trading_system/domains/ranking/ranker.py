@@ -42,6 +42,14 @@ from ai_trading_system.domains.ranking.input_loader import RankerInputLoader
 from ai_trading_system.domains.ranking.stage_store import read_latest_snapshot
 
 
+# Weight given to NIFTY-relative RS in the blended ``rel_strength`` factor.
+# 0.0 = pure absolute multi-period RS (legacy); 1.0 = pure benchmark-relative.
+# 0.4 mixes the two: existing percentile-ranked RS still dominates, but
+# stocks lagging NIFTY are penalised in proportion. No-op when benchmark
+# history is unavailable in the loader / DuckDB store.
+NIFTY_RS_BLEND: float = 0.4
+
+
 class StockRanker:
     """Facade that preserves the legacy ranking API over modular rank services."""
 
@@ -246,7 +254,6 @@ class StockRanker:
         benchmark_symbol: str,
         periods: List[int] = None,
     ) -> pd.DataFrame:
-        _ = (date, benchmark_symbol)
         period_list = periods or [5, 10, 20, 60, 120]
         try:
             return_frame = self.input_loader.load_return_frame_multi(periods=period_list)
@@ -254,7 +261,130 @@ class StockRanker:
             logger.warning("Could not compute relative strength: %s", exc)
             cols = ["symbol_id", "exchange"] + [f"return_{p}" for p in period_list]
             return_frame = pd.DataFrame(columns=cols)
-        return apply_relative_strength(data, return_frame=return_frame)
+        scored = apply_relative_strength(data, return_frame=return_frame)
+
+        # Stock-vs-NIFTY relative strength: subtract benchmark per-period
+        # returns from each symbol's, percentile-rank the blend, mix into
+        # ``rel_strength`` at ``NIFTY_RS_BLEND``. Defensive: no-op when the
+        # benchmark history isn't available (test fixtures, missing DB).
+        try:
+            scored = self._blend_nifty_relative_rs(
+                scored,
+                date=date,
+                benchmark_symbol=benchmark_symbol,
+                periods=period_list,
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning("NIFTY-relative RS blend skipped: %s", exc)
+        return scored
+
+    def _blend_nifty_relative_rs(
+        self,
+        data: pd.DataFrame,
+        *,
+        date: str,
+        benchmark_symbol: str,
+        periods: List[int],
+    ) -> pd.DataFrame:
+        if data.empty:
+            return data
+        benchmark_returns = self._load_benchmark_returns(
+            loader=self.input_loader,
+            date=date,
+            benchmark_symbol=benchmark_symbol,
+            periods=periods,
+        )
+        if not benchmark_returns:
+            return data
+
+        scored = data.copy()
+        deltas: list[pd.Series] = []
+        for period in periods:
+            col = f"return_{period}"
+            if col not in scored.columns:
+                continue
+            symbol_ret = pd.to_numeric(scored[col], errors="coerce").fillna(0.0)
+            bench_ret = float(benchmark_returns.get(period, 0.0))
+            scored.loc[:, f"rs_vs_nifty_{period}"] = symbol_ret - bench_ret
+            deltas.append(scored[f"rs_vs_nifty_{period}"])
+
+        if deltas:
+            blended = pd.concat(deltas, axis=1).mean(axis=1)
+            nifty_rs_score = blended.rank(pct=True) * 100.0
+            scored.loc[:, "rs_vs_nifty_score"] = nifty_rs_score
+            if "rel_strength" in scored.columns:
+                scored.loc[:, "rel_strength"] = (
+                    pd.to_numeric(scored["rel_strength"], errors="coerce").fillna(0.0)
+                    * (1.0 - NIFTY_RS_BLEND)
+                    + nifty_rs_score * NIFTY_RS_BLEND
+                )
+        return scored
+
+    def _load_benchmark_returns(
+        self,
+        *,
+        loader: "RankerInputLoader",
+        date: str,
+        benchmark_symbol: str,
+        periods: List[int],
+    ) -> Dict[int, float]:
+        """Best-effort fetch of NIFTY's multi-period returns.
+
+        Tries (in order):
+          1. ``loader.load_benchmark_returns(symbol, date, periods)`` if defined.
+          2. Direct DuckDB query against ``self.ohlcv_db_path``.
+          3. Empty dict (no-op blend).
+        """
+        method = getattr(loader, "load_benchmark_returns", None)
+        if callable(method):
+            try:
+                returns = method(symbol=benchmark_symbol, date=date, periods=periods)
+                if isinstance(returns, dict):
+                    return {int(k): float(v) for k, v in returns.items()}
+            except Exception as exc:  # pragma: no cover
+                logger.debug("benchmark loader method failed: %s", exc)
+
+        try:
+            import duckdb
+        except ImportError:  # pragma: no cover
+            return {}
+        if not self.ohlcv_db_path or not os.path.exists(self.ohlcv_db_path):
+            return {}
+
+        try:
+            conn = duckdb.connect(self.ohlcv_db_path, read_only=True)
+        except Exception:  # pragma: no cover
+            return {}
+        try:
+            history = conn.execute(
+                """
+                SELECT timestamp, close FROM ohlcv
+                WHERE symbol_id = ? AND timestamp <= CAST(? AS TIMESTAMP)
+                ORDER BY timestamp DESC LIMIT 250
+                """,
+                [benchmark_symbol, date or "9999-12-31"],
+            ).fetchdf()
+        except Exception:
+            return {}
+        finally:
+            conn.close()
+
+        if history.empty or "close" not in history.columns:
+            return {}
+        history = history.sort_values("timestamp").reset_index(drop=True)
+        latest_close = float(history["close"].iloc[-1])
+        if latest_close <= 0:
+            return {}
+
+        out: Dict[int, float] = {}
+        for period in periods:
+            if len(history) <= period:
+                continue
+            past_close = float(history["close"].iloc[-period - 1])
+            if past_close <= 0:
+                continue
+            out[int(period)] = (latest_close - past_close) / past_close * 100.0
+        return out
 
     def _compute_volume_intensity(self, data: pd.DataFrame) -> pd.DataFrame:
         try:

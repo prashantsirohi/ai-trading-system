@@ -116,6 +116,7 @@ class PatternScanConfig:
     high_tight_pole_max_bars: int = 40
     high_tight_flag_max_range_pct: float = 0.15
     high_tight_flag_max_retracement_pct: float = 0.25
+    high_tight_breakout_volume_ratio_min: float = 2.0
     fallback_atr_stop_mult: float = 2.0
 
     asc_tri_flat_tol: float = 0.015
@@ -131,6 +132,24 @@ class PatternScanConfig:
     stage2_reclaim_min_slope_pct: float = 0.0
     wt3_tight_pct: float = 0.015
     wt3_prior_adv: float = 0.20
+
+    # Pocket Pivot (Minervini): up-day vol > max prior-N down-day vol.
+    pocket_pivot_lookback: int = 10
+    pocket_pivot_sma_window: int = 10
+    pocket_pivot_min_close_above_sma_pct: float = 0.0
+    pocket_pivot_uptrend_lookback: int = 20
+    pocket_pivot_min_uptrend_pct: float = 0.05
+
+    # Darvas Box: top/bottom hold periods + breakout.
+    darvas_top_hold_bars: int = 3
+    darvas_bottom_hold_bars: int = 3
+    darvas_min_box_bars: int = 10
+    darvas_max_box_bars: int = 60
+    darvas_max_box_depth_pct: float = 0.15
+    darvas_invalidation_pct: float = 0.97
+
+    # Inside-Day Breakout: 1-3 inside bars before mother-bar break.
+    inside_day_max_lookback_bars: int = 3
 
     def to_metadata(self) -> dict[str, Any]:
         payload = asdict(self)
