@@ -307,13 +307,19 @@ class PipelineOrchestrator:
                         latest_attempt = run
                         break
                 if latest_attempt and latest_attempt.get("status") == "completed":
-                    if self.progress_renderer is not None:
-                        self.progress_renderer.emit_stage(
-                            stage_name=stage_name,
-                            status="skip",
-                            detail="already completed",
-                        )
-                    continue
+                    if not bool(params.get("force_rerun", False)):
+                        if self.progress_renderer is not None:
+                            self.progress_renderer.emit_stage(
+                                stage_name=stage_name,
+                                status="skip",
+                                detail="already completed",
+                            )
+                        continue
+                    logger.info(
+                        "run_id=%s stage=%s force_rerun=true (creating new attempt despite prior completion)",
+                        run_id,
+                        stage_name,
+                    )
 
                 skip_plan = planned_stage_skips.get(stage_name)
                 if skip_plan is not None:
@@ -605,6 +611,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Logical trading date, defaults to today's date.",
     )
     parser.add_argument("--force", action="store_true", help="Preserved for compatibility with wrappers")
+    parser.add_argument(
+        "--force-rerun",
+        action="store_true",
+        help="Re-run the listed --stages even if a previous attempt completed (creates a new attempt).",
+    )
     parser.add_argument("--batch-size", type=int, default=700)
     parser.add_argument("--bulk", action="store_true")
     parser.add_argument("--top-n", type=int, default=None)
@@ -968,6 +979,7 @@ def main() -> None:
         run_id = orchestrator._build_run_id(run_date)
     params = {
         "force": args.force,
+        "force_rerun": args.force_rerun,
         "batch_size": args.batch_size,
         "bulk": args.bulk,
         "top_n": args.top_n,

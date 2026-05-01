@@ -33,7 +33,9 @@ class PublisherDeliveryManager:
             raise RuntimeError("StageContext.registry is required for publisher delivery logging")
 
         dedupe_key = self.build_dedupe_key(channel, artifact)
-        successful = context.registry.get_successful_delivery(dedupe_key)
+        bypass_channels = (context.params or {}).get("bypass_dedupe_channels") or []
+        bypass_dedupe = channel in bypass_channels
+        successful = None if bypass_dedupe else context.registry.get_successful_delivery(dedupe_key)
         if successful:
             attempt_number = context.registry.next_delivery_attempt(dedupe_key)
             context.registry.record_delivery_log(

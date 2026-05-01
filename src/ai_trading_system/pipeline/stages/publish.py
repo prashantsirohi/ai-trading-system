@@ -131,6 +131,13 @@ class PublishStage:
             handlers["quantstats_dashboard_tearsheet"] = self._publish_quantstats_dashboard
         if bool(context.params.get("publish_weekly_pdf", False)):
             handlers["weekly_pdf"] = self._publish_weekly_pdf
+            # weekly_pdf writes only to the per-attempt directory and has no
+            # external side effects, so each publish attempt should produce
+            # a fresh report regardless of delivery dedup state.
+            existing = list(context.params.get("bypass_dedupe_channels") or [])
+            if "weekly_pdf" not in existing:
+                existing.append("weekly_pdf")
+                context.params["bypass_dedupe_channels"] = existing
         return handlers
 
     def _publish_local_summary(
