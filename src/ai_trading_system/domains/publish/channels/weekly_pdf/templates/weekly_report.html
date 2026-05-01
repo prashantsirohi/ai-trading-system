@@ -58,6 +58,9 @@
 
 <section class="section">
   <h2>1. Sector Leaders</h2>
+  {% if charts and charts.sectors %}
+  <div class="chart"><img src="{{ charts.sectors }}" alt="Sector RS bars" /></div>
+  {% endif %}
   {% if sectors|length %}
   <table>
     <thead>
@@ -226,6 +229,9 @@
 
 <section class="section">
   <h2>7. Rank Movers (week-over-week)</h2>
+  {% if charts and charts.movers %}
+  <div class="chart"><img src="{{ charts.movers }}" alt="Top rank movers" /></div>
+  {% endif %}
   {% if prior_run_id %}
   <p class="small muted">Comparison against prior run <strong>{{ prior_run_id }}</strong> ({{ prior_run_date }}).</p>
   {% else %}
@@ -310,8 +316,15 @@
 </section>
 
 <section class="section">
-  <h2>8. Market Breadth (last 10 sessions)</h2>
+  <h2>8. Market Breadth</h2>
+  {% if charts and charts.breadth %}
+  <div class="chart">
+    <img src="{{ charts.breadth }}" alt="Market breadth above SMAs" />
+    <div class="caption">26-week trend of % stocks above SMA20 / SMA50 / SMA200 (NSE universe).</div>
+  </div>
+  {% endif %}
   {% if breadth_rows|length %}
+  <h3>Last 10 sessions</h3>
   <table>
     <thead>
       <tr><th>Date</th>
@@ -367,6 +380,22 @@
   </table>
   {% else %}<p class="muted">No pattern signals available.</p>{% endif %}
 </section>
+
+{% if charts and charts.stocks and charts.stocks|length %}
+<section class="section">
+  <h2>9. Stock Snapshots</h2>
+  <p class="small muted">6-month OHLCV for top-ranked, top rank improvers, and Tier-A breakouts. Lines: SMA20 (blue), SMA50 (green), SMA200 (red), 52W high (gray dash). Orange dotted = breakout trigger.</p>
+  <div class="stock-grid">
+    {% for s in charts.stocks %}
+    <div class="stock-card">
+      <div class="label">{{ s.symbol_id }}</div>
+      <div class="source">{{ s.source }}</div>
+      <img src="{{ s.path }}" alt="{{ s.symbol_id }} candlestick" />
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 
 <section class="section appendix">
   <h2>Appendix · Data Quality &amp; Methodology</h2>

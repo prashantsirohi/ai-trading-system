@@ -68,7 +68,8 @@ def render(context: Dict[str, Any], output_dir: Path) -> Tuple[Path, Optional[Pa
         from weasyprint import HTML  # type: ignore
 
         pdf_path = output_dir / "weekly_market_report.pdf"
-        HTML(string=html, base_url=str(_STATIC_DIR)).write_pdf(str(pdf_path))
+        # base_url = output_dir so relative chart paths (charts/*.png) resolve.
+        HTML(string=html, base_url=str(output_dir)).write_pdf(str(pdf_path))
     except ImportError as exc:
         pdf_error = f"weasyprint not installed: {exc}"
         logger.warning(pdf_error)

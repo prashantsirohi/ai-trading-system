@@ -47,3 +47,13 @@ tr:nth-child(even) td { background: #fbfbfb; }
 .tag.tier-b  { background: #f3e5f5; color: #6a1b9a; }
 
 .appendix { font-size: 8.5pt; color: #555; }
+
+.chart { margin: 6pt 0 12pt 0; page-break-inside: avoid; }
+.chart img { max-width: 100%; height: auto; display: block; }
+.chart .caption { font-size: 8.5pt; color: #888; margin-top: 2pt; }
+
+.stock-grid { display: flex; flex-wrap: wrap; gap: 6pt; margin: 6pt 0; }
+.stock-card { width: 48%; page-break-inside: avoid; padding: 4pt; border: 1pt solid #eee; border-radius: 3pt; }
+.stock-card img { width: 100%; height: auto; }
+.stock-card .label { font-size: 9pt; font-weight: 600; color: #333; }
+.stock-card .source { font-size: 8pt; color: #888; }

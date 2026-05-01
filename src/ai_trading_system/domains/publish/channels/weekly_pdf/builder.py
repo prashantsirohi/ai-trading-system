@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from ai_trading_system.domains.publish.channels.weekly_pdf import metrics
+from ai_trading_system.domains.publish.channels.weekly_pdf import charts, metrics
 from ai_trading_system.domains.publish.channels.weekly_pdf.data_loader import (
     WeeklyReportData,
     load_report_data,
@@ -75,6 +75,18 @@ def build_report(
     )
     breadth_latest = data.market_breadth.iloc[-1].to_dict() if not data.market_breadth.empty else {}
 
+    chart_paths = _render_charts(
+        output_dir=output_dir,
+        project_root=getattr(context, "project_root", None),
+        run_date=data.run_date,
+        breadth=data.market_breadth,
+        sectors_full=data.sector_dashboard,
+        improvers=rank_improvers,
+        decliners=rank_decliners,
+        ranked=data.ranked_signals,
+        breakouts=data.breakout_scan,
+    )
+
     template_context = {
         "week_ending": data.run_date,
         "run_id": data.run_id,
@@ -93,6 +105,7 @@ def build_report(
         "failed_breakouts": _df_to_records(failed_breakouts),
         "breadth_latest": breadth_latest,
         "breadth_rows": _df_to_records(data.market_breadth.tail(10)) if not data.market_breadth.empty else [],
+        "charts": chart_paths,
     }
 
     html_path, pdf_path, pdf_error = render(template_context, output_dir)
@@ -140,6 +153,7 @@ def build_report(
         "prior_run_id": data.prior_run_id,
         "prior_run_date": data.prior_run_date,
         "breadth_latest": breadth_latest,
+        "charts": chart_paths,
         "generated_at": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -147,3 +161,75 @@ def build_report(
     json_path.write_text(json.dumps(manifest, indent=2, default=str), encoding="utf-8")
     manifest["json_path"] = str(json_path)
     return manifest
+
+
+def _render_charts(
+    *,
+    output_dir: Path,
+    project_root: Optional[Path],
+    run_date: str,
+    breadth: pd.DataFrame,
+    sectors_full: pd.DataFrame,
+    improvers: pd.DataFrame,
+    decliners: pd.DataFrame,
+    ranked: pd.DataFrame,
+    breakouts: pd.DataFrame,
+) -> Dict[str, Any]:
+    """Generate all charts. Each is independently optional."""
+    chart_dir = output_dir / "charts"
+    chart_dir.mkdir(parents=True, exist_ok=True)
+
+    out: Dict[str, Any] = {"breadth": None, "sectors": None, "movers": None, "stocks": []}
+
+    breadth_path = charts.breadth_chart(breadth, chart_dir / "breadth_above_smas.png")
+    if breadth_path is not None:
+        out["breadth"] = "charts/" + breadth_path.name
+
+    sector_path = charts.sector_rs_bars(sectors_full, chart_dir / "sector_rs.png")
+    if sector_path is not None:
+        out["sectors"] = "charts/" + sector_path.name
+
+    mover_path = charts.rank_mover_bars(improvers, decliners, chart_dir / "rank_movers.png")
+    if mover_path is not None:
+        out["movers"] = "charts/" + mover_path.name
+
+    if project_root is None:
+        return out
+    ohlcv_path = project_root / "data" / "ohlcv.duckdb"
+    if not ohlcv_path.exists():
+        return out
+    end_date = _safe_date(run_date)
+    if end_date is None:
+        return out
+
+    targets = charts.pick_candle_targets(ranked, improvers, breakouts)
+    stocks_dir = chart_dir / "stocks"
+    stocks_dir.mkdir(parents=True, exist_ok=True)
+    rendered: List[Dict[str, Any]] = []
+    for tgt in targets:
+        sym = tgt["symbol_id"]
+        png = stocks_dir / f"{sym}.png"
+        path = charts.candlestick(
+            ohlcv_db_path=ohlcv_path,
+            symbol_id=sym,
+            end_date=end_date,
+            output_path=png,
+            breakout_level=tgt.get("breakout_level"),
+        )
+        if path is not None:
+            rendered.append({
+                "symbol_id": sym,
+                "source": tgt.get("source"),
+                "path": "charts/stocks/" + path.name,
+            })
+    out["stocks"] = rendered
+    return out
+
+
+def _safe_date(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None

@@ -105,7 +105,7 @@ def compute_market_breadth(
     if df.empty:
         return df
     df = df.copy()
-    df.loc[:, "trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+    df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
     return df[df["trade_date"] >= display_start].reset_index(drop=True)
 
 
