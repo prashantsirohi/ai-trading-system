@@ -37,6 +37,7 @@ dev = [
 
 [project.scripts]
 ai-trading-pipeline = "ai_trading_system.pipeline.orchestrator:main"
+ai-trading-healthcheck = "ai_trading_system.interfaces.cli.healthcheck:main"
 ai-trading-publish-test = "ai_trading_system.pipeline.publish_test:main"
 ai-trading-daily = "ai_trading_system.pipeline.daily_pipeline:main"
 ai-trading-execution-api = "ai_trading_system.ui.execution_api.app:main"
