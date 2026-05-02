@@ -115,6 +115,15 @@ class PublisherDeliveryManager:
 
     def build_dedupe_key(self, channel: str, artifact: StageArtifact) -> str:
         seed = f"{channel}:{artifact.content_hash or artifact.uri}"
+        # When the artifact carries event_hashes from the events stage, fold
+        # them into the dedup key so per-symbol-per-category dedup carries
+        # over: re-publishing the same enriched-signal set is suppressed even
+        # if other content in the artifact changed.
+        meta = getattr(artifact, "metadata", None) or {}
+        event_hashes = meta.get("event_hashes") if isinstance(meta, dict) else None
+        if event_hashes:
+            joined = "|".join(sorted(str(h) for h in event_hashes))
+            seed = f"{seed}|events:{joined}"
         return hashlib.sha256(seed.encode("utf-8")).hexdigest()
 
     def _normalize_sender_payload(self, payload: Dict[str, Any] | bool | None) -> Dict[str, Any]:
