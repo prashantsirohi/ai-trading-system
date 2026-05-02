@@ -21,7 +21,7 @@ from ai_trading_system.platform.logging import logger as logging_module
 from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
-from ai_trading_system.pipeline.stages import ExecuteStage, FeaturesStage, IngestStage, PublishStage, RankStage
+from ai_trading_system.pipeline.stages import EventsStage, ExecuteStage, FeaturesStage, IngestStage, PublishStage, RankStage
 
 load_project_env(__file__)
 
@@ -30,7 +30,7 @@ log_context = logging_module.log_context
 logger = logging_module.logger
 
 
-PIPELINE_ORDER = ["ingest", "features", "rank", "execute", "publish"]
+PIPELINE_ORDER = ["ingest", "features", "rank", "events", "execute", "publish"]
 SUPPORTED_STAGES = ["ingest", "features", "rank", "execute", "publish"]
 
 
@@ -115,6 +115,7 @@ class PipelineOrchestrator:
             "ingest": IngestStage(),
             "features": FeaturesStage(),
             "rank": RankStage(),
+            "events": EventsStage(),
             "execute": ExecuteStage(),
             "publish": PublishStage(),
         }
@@ -126,6 +127,7 @@ class PipelineOrchestrator:
             "ingest": "fetching OHLCV and validating source data",
             "features": "computing technical features and writing feature store",
             "rank": "scoring symbols and building ranked outputs",
+            "events": "enriching ranked signals with corporate-action context",
             "execute": "evaluating execution actions",
             "publish": "publishing reports and channel payloads",
         }

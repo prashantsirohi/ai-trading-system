@@ -172,7 +172,9 @@ def collect_breakout_triggers(
                 return None
 
             symbol_col = col("symbol", "symbol_id", "ticker")
-            tier_col = col("tier", "breakout_tier", "stage_tier")
+            tier_col = col(
+                "tier", "breakout_tier", "stage_tier", "candidate_tier",
+            )
             score_col = col(
                 "score", "breakout_score", "stage2_score", "composite_score",
             )
