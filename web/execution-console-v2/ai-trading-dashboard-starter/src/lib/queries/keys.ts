@@ -15,6 +15,7 @@ export const queryKeys = {
   pipelineWorkspace: () => ['execution', 'pipeline-workspace'] as const,
   workspaceSnapshot: (topN: number) =>
     ['execution', 'workspace-snapshot', topN] as const,
+  marketBreadth: (limit: number) => ['execution', 'market-breadth', limit] as const,
   ranking: () => ['execution', 'ranking'] as const,
   rankingDetail: (symbol: string, runId: string | null = null) =>
     ['execution', 'ranking-detail', symbol, runId] as const,

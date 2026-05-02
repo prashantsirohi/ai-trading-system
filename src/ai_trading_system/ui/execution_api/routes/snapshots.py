@@ -16,6 +16,9 @@ from ai_trading_system.ui.execution_api.services.execution_operator import (
 from ai_trading_system.ui.execution_api.services.readmodels.ranking_detail import (
     get_workspace_snapshot_compact,
 )
+from ai_trading_system.ui.execution_api.services.readmodels.market_breadth import (
+    get_market_breadth_history,
+)
 
 
 router = APIRouter(prefix="/api/execution", tags=["snapshots"])
@@ -40,6 +43,18 @@ def execution_market(
     limit: int = Query(default=25, ge=1, le=200),
 ) -> dict[str, Any]:
     return get_market_snapshot(project_root(), limit=limit)
+
+
+@router.get("/market/breadth")
+def execution_market_breadth(
+    limit: int = Query(
+        default=0,
+        ge=0,
+        le=10000,
+        description="Most recent rows to return. Use 0 for all operational history.",
+    ),
+) -> dict[str, Any]:
+    return get_market_breadth_history(project_root(), limit=limit)
 
 
 @router.get("/workspace/pipeline")

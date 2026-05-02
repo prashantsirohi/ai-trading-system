@@ -20,15 +20,18 @@ import { CardSkeleton } from '@/components/common/LoadingSkeleton';
 import DecisionSummaryBanner from '@/components/control-tower/DecisionSummaryBanner';
 import TrustBanner from '@/components/control-tower/TrustBanner';
 import OutputSummaryCards from '@/components/control-tower/OutputSummaryCards';
-import { useWorkspaceSnapshot } from '@/lib/queries';
+import MovingAverageBreadthChart from '@/components/control-tower/MovingAverageBreadthChart';
+import { useMarketBreadth, useWorkspaceSnapshot } from '@/lib/queries';
 
 export default function ControlTowerPage() {
   const { data, isLoading, error, refetch } = useWorkspaceSnapshot(3);
+  const breadthQuery = useMarketBreadth();
 
   return (
     <PageFrame
       title="Control Tower"
       description="Top-of-funnel actions, system trust, and quick jumps into the deep views."
+      headerAside={!error && data ? <TrustBanner snapshot={data} isLoading={isLoading} compact /> : undefined}
     >
       {error ? (
         <ErrorStateView
@@ -43,13 +46,12 @@ export default function ControlTowerPage() {
         </div>
       ) : !data || !data.available ? (
         <div className="space-y-4">
-          <TrustBanner snapshot={data} isLoading={isLoading} />
           <EmptyState message="No workspace snapshot yet — the latest pipeline run hasn't produced a dashboard payload." />
         </div>
       ) : (
         <div className="space-y-4">
           <DecisionSummaryBanner actions={data.topActions} />
-          <TrustBanner snapshot={data} isLoading={isLoading} />
+          <MovingAverageBreadthChart rows={breadthQuery.data ?? []} />
           <OutputSummaryCards snapshot={data} />
         </div>
       )}

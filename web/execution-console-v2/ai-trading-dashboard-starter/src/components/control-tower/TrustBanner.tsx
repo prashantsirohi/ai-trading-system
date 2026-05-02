@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils/cn';
 interface Props {
   snapshot: WorkspaceSnapshot | undefined;
   isLoading?: boolean;
+  compact?: boolean;
 }
 
 type Tone = 'trusted' | 'degraded' | 'failed' | 'unknown';
@@ -57,10 +58,57 @@ const TONE_STYLES: Record<Tone, { container: string; pill: string; label: string
   },
 };
 
-export default function TrustBanner({ snapshot, isLoading }: Props) {
+export default function TrustBanner({ snapshot, isLoading, compact = false }: Props) {
   const tone = resolveTone(snapshot);
   const styles = TONE_STYLES[tone];
   const Icon = tone === 'trusted' ? ShieldCheckIcon : ShieldAlertIcon;
+
+  if (compact) {
+    return (
+      <div
+        className={cn(
+          'rounded-lg border px-3 py-2.5 shadow-soft',
+          styles.container,
+        )}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div
+              className={cn(
+                'flex h-9 w-9 shrink-0 items-center justify-center rounded-full border',
+                styles.pill,
+              )}
+            >
+              <Icon size={18} />
+            </div>
+            <div className="min-w-0">
+              <div
+                className={cn(
+                  'inline-flex items-center gap-2 rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest',
+                  styles.pill,
+                )}
+              >
+                {styles.label}
+              </div>
+              <p className="mt-1 truncate text-xs text-slate-400">{styles.sub}</p>
+            </div>
+          </div>
+          {isLoading ? (
+            <span className="shrink-0 text-[10px] uppercase tracking-widest text-slate-500">
+              refreshing
+            </span>
+          ) : null}
+        </div>
+
+        <dl className="mt-2 grid grid-cols-4 gap-2 border-t border-slate-800/70 pt-2">
+          <Metric compact label="Sector" value={snapshot?.summary.topSector ?? '—'} />
+          <Metric compact label="Ranked" value={String(snapshot?.counts.ranked ?? 0)} />
+          <Metric compact label="Breakouts" value={String(snapshot?.counts.breakouts ?? 0)} />
+          <Metric compact label="Patterns" value={String(snapshot?.counts.patterns ?? 0)} />
+        </dl>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -113,11 +161,13 @@ export default function TrustBanner({ snapshot, isLoading }: Props) {
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, compact = false }: { label: string; value: string; compact?: boolean }) {
   return (
-    <div className="flex flex-col items-end">
+    <div className={cn('flex flex-col', compact ? 'items-start' : 'items-end')}>
       <dt className="text-[10px] uppercase tracking-[0.16em] text-slate-500">{label}</dt>
-      <dd className="text-xl font-bold tabular-nums text-slate-200">{value}</dd>
+      <dd className={cn('font-bold tabular-nums text-slate-200', compact ? 'truncate text-sm' : 'text-xl')}>
+        {value}
+      </dd>
     </div>
   );
 }

@@ -43,7 +43,7 @@ export default function SectorsPage() {
   return (
     <PageFrame
       title="Sectors"
-      description="Leadership rotation, capital flow, breadth, and per-sector drill-down."
+      description="Rotation, breadth, and constituent drill-down."
     >
       {sectorsQuery.isLoading ? (
         <CardSkeleton />
@@ -60,8 +60,8 @@ export default function SectorsPage() {
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <SectionCard
-              title="Sector Leadership"
-              description="Capital flow + breadth proxy with per-sector ranked counts."
+              title="Leadership"
+              description="Capital flow, breadth proxy, and ranked counts."
             >
               <SectorLeadershipChart
                 sectors={sectors}
@@ -73,7 +73,7 @@ export default function SectorsPage() {
 
             <SectionCard
               title="Rotation Heatmap"
-              description="Synthetic D-5 → D-1 dot grid using rolling RS columns."
+              description="D-5 to D-1 relative-strength rotation."
             >
               <SectorRotationHeatmap
                 sectors={sectors}

@@ -31,6 +31,9 @@ export interface StockRow {
   price: number;
   sectorStrength: number;
   trend: number;
+  aboveSma20?: boolean | null;
+  aboveSma50?: boolean | null;
+  aboveSma200?: boolean | null;
   stageLabel?: string | null;
   stageTransition?: string | null;
   barsInStage?: number | null;

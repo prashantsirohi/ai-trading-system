@@ -87,11 +87,11 @@ export default function PatternsPage() {
   return (
     <PageFrame
       title="Patterns"
-      description="Pipeline funnel and pattern candidates with urgency, quality, and failure-risk signals."
+      description="Setups by funnel stage, quality, and urgency."
     >
       <SectionCard
-        title="Pipeline Funnel"
-        description="From ranked universe to execution-ready candidates."
+        title="Funnel"
+        description="Ranked universe to execution-ready candidates."
       >
         {isLoading ? (
           <CardSkeleton />
@@ -106,8 +106,8 @@ export default function PatternsPage() {
       </SectionCard>
 
       <SectionCard
-        title="Pattern Catalog"
-        description="Six named setups. Click a card to filter the active-setup grid below."
+        title="Catalog"
+        description="Select a setup family to filter active candidates."
       >
         <PatternCatalog
           rows={patternRows}

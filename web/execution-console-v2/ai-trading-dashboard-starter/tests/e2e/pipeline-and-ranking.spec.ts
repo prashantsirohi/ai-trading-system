@@ -5,9 +5,8 @@ test.describe('execution-console-v2 smoke', () => {
     await page.goto('/pipeline');
 
     await expect(page.getByText('Ranked Signals')).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Pipeline Workspace' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Workspace Status' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Signal Summaries' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Pipeline' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Health' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Top Ranked Candidates' })).toBeVisible();
   });
 

@@ -25,22 +25,24 @@ interface Props {
 
 export default function DataQualityStrip({ cells }: Props) {
   return (
-    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="flex flex-wrap gap-1.5">
       {cells.map((cell) => (
         <div
           key={cell.label}
           className={cn(
-            'rounded-xl border bg-slate-950/50 p-3',
+            'min-w-[92px] rounded-md border bg-slate-950/40 px-2 py-1.5',
             TONE_BORDER[cell.tone],
           )}
+          title={cell.hint}
         >
-          <div className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">
-            {cell.label}
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+              {cell.label}
+            </span>
+            <span className={cn('font-mono text-xs font-semibold', TONE_TEXT[cell.tone])}>
+              {cell.value}
+            </span>
           </div>
-          <div className={cn('mt-1 font-mono text-base font-semibold', TONE_TEXT[cell.tone])}>
-            {cell.value}
-          </div>
-          <div className="mt-0.5 text-[10px] text-slate-500">{cell.hint}</div>
         </div>
       ))}
     </div>

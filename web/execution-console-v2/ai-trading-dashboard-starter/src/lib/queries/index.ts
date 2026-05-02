@@ -12,6 +12,7 @@ import type { UseQueryOptions, UseQueryResult } from '@tanstack/react-query';
 
 import { DEFAULT_REFETCH_INTERVAL_MS } from '@/lib/api/client';
 import { getPatterns } from '@/lib/api/patterns';
+import { getMarketBreadth, type MarketBreadthPoint } from '@/lib/api/breadth';
 import { getPipelineWorkspace } from '@/lib/api/pipeline';
 import {
   getRanking,
@@ -80,6 +81,18 @@ export function useWorkspaceSnapshot(
   return useQuery<WorkspaceSnapshot, Error>({
     queryKey: queryKeys.workspaceSnapshot(topN),
     queryFn: () => getWorkspaceSnapshot(topN),
+    ...LIVE_QUERY_DEFAULTS,
+    ...options,
+  });
+}
+
+export function useMarketBreadth(
+  limit = 0,
+  options: QueryOverrides<MarketBreadthPoint[]> = {},
+): UseQueryResult<MarketBreadthPoint[], Error> {
+  return useQuery<MarketBreadthPoint[], Error>({
+    queryKey: queryKeys.marketBreadth(limit),
+    queryFn: () => getMarketBreadth(limit),
     ...LIVE_QUERY_DEFAULTS,
     ...options,
   });

@@ -8,7 +8,6 @@ import StatusBadge from '@/components/common/StatusBadge';
 import EmptyState from '@/components/common/EmptyState';
 import ErrorStateView from '@/components/common/ErrorState';
 import { CardSkeleton } from '@/components/common/LoadingSkeleton';
-import { titleCase } from '@/lib/utils/text';
 import { usePipelineWorkspace } from '@/lib/queries';
 import RankingTable from '@/components/tables/RankingTable';
 import FailureRecoveryPanel from '@/components/pipeline/FailureRecoveryPanel';
@@ -22,8 +21,8 @@ function PipelineContent() {
   if (isLoading) {
     return (
       <PageFrame
-        title="Pipeline Workspace"
-        description="Production operator view across workspace status, trust, task execution, and market summaries."
+        title="Pipeline"
+        description="Workspace health, data quality, task state, and current candidates."
       >
         <SectionCard title="Workspace Status">
           <CardSkeleton />
@@ -37,7 +36,7 @@ function PipelineContent() {
 
   if (error) {
     return (
-      <PageFrame title="Pipeline Workspace" description="Unified operator view across ranking, patterns, sectors, and publish state.">
+      <PageFrame title="Pipeline" description="Workspace health, data quality, task state, and current candidates.">
         <SectionCard title="Error">
           <ErrorStateView
             error={`Failed to load pipeline: ${error.message}`}
@@ -50,7 +49,7 @@ function PipelineContent() {
 
   if (!data) {
     return (
-      <PageFrame title="Pipeline Workspace" description="Unified operator view across ranking, patterns, sectors, and publish state.">
+      <PageFrame title="Pipeline" description="Workspace health, data quality, task state, and current candidates.">
         <SectionCard title="No Data">
           <EmptyState message="No pipeline data available" />
         </SectionCard>
@@ -60,8 +59,36 @@ function PipelineContent() {
 
   return (
     <PageFrame
-      title="Pipeline Workspace"
-      description="Production operator view across workspace status, trust, task execution, and market summaries."
+      title="Pipeline"
+      description="Workspace health, data quality, task state, and current candidates."
+      headerAside={
+        <div className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2.5 shadow-soft">
+          <div className="mb-2 flex items-center justify-between gap-3 border-b border-slate-800 pb-2">
+            <h2 className="text-sm font-semibold text-slate-100">Health</h2>
+            <div className="flex items-center gap-2">
+              <StatusBadge status={data.status} />
+              <StatusBadge status={data.trust} />
+            </div>
+          </div>
+          <div className="mb-2 grid gap-2 md:grid-cols-3">
+            <div className="min-w-0 rounded-md border border-slate-800 bg-slate-950/40 px-2 py-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Run</p>
+              <p className="mt-0.5 truncate font-mono text-xs text-slate-300">{data.runId}</p>
+            </div>
+            <div className="rounded-md border border-slate-800 bg-slate-950/40 px-2 py-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">As Of</p>
+              <p className="mt-0.5 font-mono text-xs text-slate-300">{data.date}</p>
+            </div>
+            <div className="rounded-md border border-slate-800 bg-slate-950/40 px-2 py-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Task</p>
+              <p className="mt-0.5 truncate text-xs text-slate-300">
+                {data.task ? data.task.currentStageLabel : 'No recent task'}
+              </p>
+            </div>
+          </div>
+          <DataQualityStrip cells={dqCells} />
+        </div>
+      }
     >
       {data.isFailed && (
         <SectionCard
@@ -72,73 +99,9 @@ function PipelineContent() {
         </SectionCard>
       )}
 
-      {data.isDegraded && !data.isFailed && (
-        <SectionCard title="Pipeline State">
-          <div className="rounded-xl border border-amber-700 bg-amber-950/30 p-4 text-sm text-amber-200">
-            Pipeline is degraded. Review trust and warning signals before promoting candidates.
-          </div>
-        </SectionCard>
-      )}
-
-      <SectionCard
-        title="Data Quality"
-        description="Five-cell strip catching stale prices, missing rows, schema breaks, vendor lag, and coverage gaps."
-      >
-        <DataQualityStrip cells={dqCells} />
-      </SectionCard>
-
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {data.metrics.map((metric) => <MetricCard key={metric.label} {...metric} />)}
       </div>
-
-      <SectionCard title="Workspace Status">
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-            <p className="text-xs uppercase tracking-wide text-slate-400">Workspace</p>
-            <div className="mt-2">
-              <StatusBadge status={data.status} />
-            </div>
-            <p className="mt-3 text-xs text-slate-400">Run ID: {data.runId}</p>
-            <p className="mt-1 text-xs text-slate-400">As of: {data.date}</p>
-          </div>
-
-          <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-            <p className="text-xs uppercase tracking-wide text-slate-400">Trust State</p>
-            <div className="mt-2">
-              <StatusBadge status={data.trust} />
-            </div>
-            <p className="mt-3 text-xs text-slate-400">Trust Mode: {titleCase(data.trustStatus)}</p>
-            <p className="mt-1 text-xs text-slate-400">Warnings: {data.warnings.length}</p>
-          </div>
-
-          <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-            <p className="text-xs uppercase tracking-wide text-slate-400">Task Status</p>
-            {data.task ? (
-              <>
-                <div className="mt-2">
-                  <StatusBadge status={data.task.status} />
-                </div>
-                <p className="mt-3 text-xs text-slate-400">{data.task.label}</p>
-                <p className="mt-1 text-xs text-slate-400">Stage: {data.task.currentStageLabel}</p>
-              </>
-            ) : (
-              <p className="mt-2 text-sm text-slate-400">No recent pipeline task found.</p>
-            )}
-          </div>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Signal Summaries">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {Object.values(data.summaries).map((summary) => (
-            <div key={summary.label} className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-400">{summary.label}</p>
-              <p className="mt-2 text-2xl font-semibold text-slate-100">{summary.count}</p>
-              <p className="mt-2 text-xs text-slate-400">{summary.highlight}</p>
-            </div>
-          ))}
-        </div>
-      </SectionCard>
 
       <SectionCard title="Top Ranked Candidates">
         {data.isEmpty ? (

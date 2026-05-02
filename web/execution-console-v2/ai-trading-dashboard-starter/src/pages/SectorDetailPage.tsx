@@ -113,22 +113,20 @@ export default function SectorDetailPage() {
   return (
     <PageFrame
       title={sectorName}
-      description={`Constituents, technical filters, and indicator breakdown · /sectors/${encodeURIComponent(sectorName)}`}
+      description="Constituents, technical filters, and indicator breakdown."
     >
       {/* Breadcrumb */}
       <div className="mb-4 flex items-center gap-2 text-xs text-slate-500">
         <Link to="/sectors" className="hover:text-slate-300 transition-colors">Sectors</Link>
         <span>›</span>
-        <span className="text-slate-300">{sectorName}</span>
+        <span className="text-slate-300">Detail</span>
       </div>
 
       {/* Sector header card */}
-      <SectionCard title={sectorName}>
+      <SectionCard title="Overview">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-[10px] uppercase tracking-widest text-slate-500">Sector</p>
-            <h2 className="text-2xl font-bold text-slate-100">{sectorName}</h2>
-            <p className="mt-0.5 text-xs text-slate-500">
+            <p className="text-xs text-slate-500">
               {allConstituents.length} constituents · NSE · last updated 09:24 IST
             </p>
             {sectorData && (

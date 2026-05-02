@@ -56,6 +56,26 @@ function optionalNumber(value: BackendValue): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function optionalBoolean(value: BackendValue): boolean | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', 'yes', '1', 'y', 'above'].includes(normalized)) return true;
+    if (['false', 'no', '0', 'n', 'below'].includes(normalized)) return false;
+  }
+  return null;
+}
+
+function priceAbove(price: number, level: BackendValue, explicit: BackendValue): boolean | null {
+  const explicitValue = optionalBoolean(explicit);
+  if (explicitValue !== null) return explicitValue;
+  const ma = optionalNumber(level);
+  if (!ma || !price) return null;
+  return price > ma;
+}
+
 function normalizeVolume(raw: BackendValue): 'High' | 'Medium' | 'Low' {
   const normalized = toText(raw, '').toLowerCase();
   if (normalized.includes('high')) {
@@ -105,6 +125,9 @@ export function mapBackendStockRow(row: BackendRecord): StockRow {
     price,
     sectorStrength,
     trend,
+    aboveSma20: priceAbove(price, row.sma_20 ?? row.ma_20 ?? row.ema_20, row.above_sma20 ?? row.above_sma_20 ?? row.above_ma20),
+    aboveSma50: priceAbove(price, row.sma_50 ?? row.ma_50, row.above_sma50 ?? row.above_sma_50 ?? row.above_ma50),
+    aboveSma200: priceAbove(price, row.sma_200 ?? row.ma_200, row.above_sma200 ?? row.above_sma_200 ?? row.above_ma200),
     stageLabel: optionalText(row.stage_label ?? row.weekly_stage_label ?? row.stage2_label),
     stageTransition: optionalText(row.stage_transition ?? row.weekly_stage_transition),
     barsInStage: optionalNumber(row.bars_in_stage),
