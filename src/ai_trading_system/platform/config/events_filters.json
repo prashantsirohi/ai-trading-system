@@ -1,0 +1,63 @@
+{
+  "_doc": "Noise-reduction filter config for the events pipeline stage. Loaded by domains/events/noise_filter.load_default_config(). Override per-run via StageContext.params.",
+
+  "category_whitelist": [
+    "capex_expansion",
+    "demerger",
+    "mna_partnership",
+    "buyback",
+    "fundraise",
+    "regulatory_legal",
+    "management_change",
+    "promoter_activity",
+    "sast_filing",
+    "insider_buy",
+    "insider_sell",
+    "rating_upgrade",
+    "rating_downgrade",
+    "major_order_win",
+    "bulk_deal",
+    "block_deal"
+  ],
+
+  "min_trust_score": 80.0,
+
+  "materiality": {
+    "_doc": "Per-category deal_value / market_cap thresholds. The lowest 'medium' threshold below acts as the gate; events with material_pct < medium are dropped. material_pct=null (unknown deal value or market cap) is allowed through (neutral).",
+    "drop_below": "medium",
+    "thresholds": {
+      "capex_expansion":  {"medium": 0.02, "high": 0.05, "critical": 0.10},
+      "major_order_win":  {"medium": 0.01, "high": 0.03, "critical": 0.08},
+      "buyback":          {"medium": 0.02, "high": 0.05, "critical": 0.10},
+      "fundraise":        {"medium": 0.02, "high": 0.05, "critical": 0.10},
+      "mna_partnership":  {"medium": 0.01, "high": 0.05, "critical": 0.15},
+      "demerger":         {"medium": 0.05, "high": 0.15, "critical": 0.30},
+      "bulk_deal":        {"medium": 0.005, "high": 0.01, "critical": 0.02},
+      "block_deal":       {"medium": 0.005, "high": 0.01, "critical": 0.02},
+      "sast_filing":      {"medium": 0.02, "high": 0.05, "critical": 0.10},
+      "insider_buy":      {"medium": 0.001, "high": 0.005, "critical": 0.02},
+      "insider_sell":     {"medium": 0.001, "high": 0.005, "critical": 0.02}
+    }
+  },
+
+  "time_decay": {
+    "_doc": "Hard lookback cutoff. Categories in extended_categories use the longer window because M&A / litigation / SAST processes drag on.",
+    "routine_lookback_days": 30,
+    "extended_lookback_days": 90,
+    "extended_categories": [
+      "mna_partnership", "demerger", "regulatory_legal", "sast_filing"
+    ]
+  },
+
+  "per_symbol_dedup": {
+    "_doc": "Suppress an enriched signal when the same (symbol, top_category) already produced a delivered publish within the last N days.",
+    "enabled": true,
+    "lookback_days": 7
+  },
+
+  "corroboration": {
+    "_doc": "If the same event appears at NSE and BSE within this window, mark corroborated=true on the kept events. Drives Phase 6 publish routing (corroborated => higher routing tier).",
+    "enabled": true,
+    "window_hours": 24
+  }
+}

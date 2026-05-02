@@ -270,14 +270,29 @@ class EventsStage:
             )
             query_svc = _NullQuerier()
 
+        # Build the default noise filter chain on first call. Tests can
+        # inject a different chain via the constructor.
+        noise_filter = self._noise_filter or self._build_default_chain()
+
         svc = EnrichmentService(
             query_service=query_svc,
-            noise_filter=self._noise_filter,
+            noise_filter=noise_filter,
             lookback_days=cfg.lookback_days,
             per_trigger_event_limit=cfg.per_trigger_event_limit,
             min_trust=cfg.min_trust,
         )
         return svc.enrich(triggers)
+
+    def _build_default_chain(self):
+        """Default filter chain; pure-function filters only by default.
+
+        Phase-6 callers can extend by passing market_cap_provider /
+        conn_provider via constructor.
+        """
+        from ai_trading_system.domains.events.noise_filter import (
+            build_default_filter_chain,
+        )
+        return build_default_filter_chain()
 
     # ----------------------------------------------------------------- emit
 
