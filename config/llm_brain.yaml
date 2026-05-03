@@ -1,0 +1,21 @@
+llm_brain:
+  event_classification_recheck:
+    primary: qwen/qwen3-235b-a22b-2507
+    fallback: deepseek/deepseek-v4-flash
+    max_output_tokens: 500
+    temperature: 0.0
+  event_pdf_summary:
+    primary: deepseek/deepseek-v4-flash
+    fallback: qwen/qwen3-235b-a22b-2507
+    max_output_tokens: 1200
+    temperature: 0.1
+  daily_market_report:
+    primary: deepseek/deepseek-v4-flash
+    fallback: qwen/qwen3-235b-a22b-2507
+    max_output_tokens: 3200
+    temperature: 0.2
+  weekly_market_report:
+    primary: deepseek/deepseek-v4-flash
+    fallback: deepseek/deepseek-v4-pro
+    max_output_tokens: 4000
+    temperature: 0.25

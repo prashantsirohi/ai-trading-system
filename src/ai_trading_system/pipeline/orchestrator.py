@@ -21,7 +21,7 @@ from ai_trading_system.platform.logging import logger as logging_module
 from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
-from ai_trading_system.pipeline.stages import EventsStage, ExecuteStage, FeaturesStage, IngestStage, PublishStage, RankStage
+from ai_trading_system.pipeline.stages import EventsStage, ExecuteStage, FeaturesStage, IngestStage, InsightStage, PublishStage, RankStage
 
 load_project_env(__file__)
 
@@ -30,8 +30,8 @@ log_context = logging_module.log_context
 logger = logging_module.logger
 
 
-PIPELINE_ORDER = ["ingest", "features", "rank", "events", "execute", "publish"]
-SUPPORTED_STAGES = ["ingest", "features", "rank", "events", "execute", "publish"]
+PIPELINE_ORDER = ["ingest", "features", "rank", "events", "execute", "insight", "publish"]
+SUPPORTED_STAGES = ["ingest", "features", "rank", "events", "execute", "insight", "publish"]
 
 
 class TerminalProgressRenderer:
@@ -117,6 +117,7 @@ class PipelineOrchestrator:
             "rank": RankStage(),
             "events": EventsStage(),
             "execute": ExecuteStage(),
+            "insight": InsightStage(),
             "publish": PublishStage(),
         }
         if stages:
@@ -129,6 +130,7 @@ class PipelineOrchestrator:
             "rank": "scoring symbols and building ranked outputs",
             "events": "enriching ranked signals with corporate-action context",
             "execute": "evaluating execution actions",
+            "insight": "building event-aware market insight",
             "publish": "publishing reports and channel payloads",
         }
 
@@ -151,7 +153,12 @@ class PipelineOrchestrator:
         stage_names: list[str],
         ingest_metadata: Dict[str, object],
     ) -> Dict[str, object] | None:
-        requested_downstream = [stage for stage in stage_names if stage in PIPELINE_ORDER and PIPELINE_ORDER.index(stage) > PIPELINE_ORDER.index("ingest")]
+        requested_downstream = [
+            stage
+            for stage in stage_names
+            if stage in {"features", "rank", "execute"}
+            and PIPELINE_ORDER.index(stage) > PIPELINE_ORDER.index("ingest")
+        ]
         if not requested_downstream:
             return None
 
@@ -343,6 +350,8 @@ class PipelineOrchestrator:
                         detail=f"attempt {attempt_number}",
                     )
                 artifacts = self.registry.get_artifact_map(run_id)
+                if stage_name in {"events", "execute", "insight", "publish"}:
+                    self._attach_latest_rank_artifacts(artifacts, run_id=run_id)
                 context = StageContext(
                     project_root=self.project_root,
                     db_path=domain_paths.ohlcv_db_path,
@@ -507,6 +516,36 @@ class PipelineOrchestrator:
     def _build_run_id(self, run_date: str) -> str:
         return f"pipeline-{run_date}-{uuid.uuid4().hex[:8]}"
 
+    def _attach_latest_rank_artifacts(self, artifacts: Dict[str, Dict[str, StageArtifact]], *, run_id: str) -> None:
+        """Let event/insight/publish stages reuse the latest completed rank outputs.
+
+        This preserves the independent event-intelligence cadence: a new run can
+        refresh events and reports even when ingest/features/rank were skipped
+        because the OHLCV input fingerprint did not change.
+        """
+        rank_artifacts = artifacts.setdefault("rank", {})
+        for artifact_type in (
+            "ranked_signals",
+            "breakout_scan",
+            "volume_shockers",
+            "dashboard_payload",
+            "sector_dashboard",
+            "stock_scan",
+            "pattern_scan",
+            "rank_summary",
+        ):
+            if artifact_type in rank_artifacts:
+                continue
+            latest = self.registry.get_latest_artifact(
+                stage_name="rank",
+                artifact_type=artifact_type,
+                limit=1,
+                exclude_run_id=run_id,
+                run_status="completed",
+            )
+            if latest:
+                rank_artifacts[artifact_type] = latest[0]
+
 
 def _extract_quarantined_dates(message: str) -> list[str]:
     """Parse quarantined trade dates from an ingest DQ failure message."""
@@ -604,7 +643,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", help="Reuse an existing run_id, typically for stage retries")
     parser.add_argument(
         "--stages",
-        default="ingest,features,rank,events,execute,publish",
+        default="ingest,features,rank,events,execute,insight,publish",
         help="Comma-separated stage list. Example: publish",
     )
     parser.add_argument(
@@ -963,7 +1002,7 @@ def main() -> None:
         if hasattr(orchestrator, "progress_renderer"):
             orchestrator.progress_renderer = progress_renderer
     run_date = args.run_date or date.today().isoformat()
-    if args.canary and args.stages == "ingest,features,rank,events,execute,publish":
+    if args.canary and args.stages == "ingest,features,rank,events,execute,insight,publish":
         stage_names = ["ingest", "features", "rank"]
     else:
         stage_names = [stage.strip() for stage in args.stages.split(",") if stage.strip()]

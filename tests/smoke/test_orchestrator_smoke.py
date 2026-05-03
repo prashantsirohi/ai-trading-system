@@ -133,7 +133,7 @@ def test_orchestrator_smoke_runs_all_stages_and_registers_artifacts(tmp_path: Pa
     )
 
     assert result["status"] == "completed"
-    assert [row["stage_name"] for row in result["stages"]] == ["ingest", "features", "rank", "events", "execute", "publish"]
+    assert [row["stage_name"] for row in result["stages"]] == ["ingest", "features", "rank", "events", "execute", "insight", "publish"]
     assert all(row["status"] == "completed" for row in result["stages"])
 
     run_id = result["run_id"]

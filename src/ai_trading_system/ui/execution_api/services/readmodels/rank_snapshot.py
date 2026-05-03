@@ -11,6 +11,7 @@ from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_s
     LatestOperationalSnapshot,
     load_latest_operational_snapshot,
 )
+from ai_trading_system.ui.execution_api.services.readmodels.latest_insight import get_latest_insight
 from ai_trading_system.ui.execution_api.services.readmodels.pipeline_status import (
     get_execution_data_trust_snapshot,
     get_execution_health,
@@ -349,6 +350,7 @@ def get_pipeline_workspace_snapshot_read_model(
     health = get_execution_health(project_root, snapshot=current_snapshot)
     ops_health = get_execution_ops_health_snapshot(project_root)
     data_trust = get_execution_data_trust_snapshot(project_root)
+    latest_insight = get_latest_insight(project_root)
 
     ranked = current_snapshot.frames.get("ranked_signals", pd.DataFrame())
     patterns = current_snapshot.frames.get("pattern_scan", pd.DataFrame())
@@ -423,6 +425,7 @@ def get_pipeline_workspace_snapshot_read_model(
         "health": health,
         "ops_health": ops_health,
         "data_trust": data_trust,
+        "latest_insight": latest_insight,
         "top_ranked": _records(filtered_ranked, limit=limit),
         "breakouts": _records(breakouts, limit=limit),
         "patterns": _records(patterns, limit=limit),

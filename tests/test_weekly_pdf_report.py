@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import tomllib
+import warnings
 from datetime import date
+from datetime import timedelta
 from importlib import resources
 from pathlib import Path
 
 import pandas as pd
 
-from ai_trading_system.domains.publish.channels.weekly_pdf import history, metrics
+from ai_trading_system.domains.publish.channels.weekly_pdf import breadth, history, metrics
 from ai_trading_system.domains.publish.channels.weekly_pdf.builder import build_report
 from ai_trading_system.domains.publish.channels.weekly_pdf.renderer import render_html
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
@@ -205,6 +207,31 @@ def test_rank_sector_movers_and_failed_breakouts() -> None:
     )
     assert failed.iloc[0]["symbol_id"] == "AAA"
     assert failed.iloc[0]["drop_pct"] == -10.0
+
+
+def test_market_breadth_date_normalization_has_no_chained_assignment_warning(tmp_path: Path) -> None:
+    import duckdb
+
+    db_path = tmp_path / "ohlcv.duckdb"
+    con = duckdb.connect(str(db_path))
+    con.execute(
+        "CREATE TABLE _catalog(timestamp TIMESTAMP, symbol_id VARCHAR, close DOUBLE, exchange VARCHAR)"
+    )
+    start = date(2025, 1, 1)
+    rows = []
+    for idx in range(260):
+        trade_date = start + timedelta(days=idx)
+        rows.append((trade_date.isoformat(), "AAA", 100.0 + idx * 0.1, "NSE"))
+        rows.append((trade_date.isoformat(), "BBB", 100.0 - idx * 0.05, "NSE"))
+    con.executemany("INSERT INTO _catalog VALUES (?, ?, ?, ?)", rows)
+    con.close()
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        result = breadth.compute_market_breadth(db_path, start + timedelta(days=259), weeks=4)
+
+    assert not result.empty
+    assert not any("ChainedAssignmentError" in str(w.message) for w in captured)
 
 
 def test_build_report_writes_html_manifest_and_tables(tmp_path: Path) -> None:

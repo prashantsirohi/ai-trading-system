@@ -21,8 +21,8 @@ Compatibility wrapper:
 - delegates into the orchestrator with wrapper-specific defaults
 
 Default stage sets differ by surface:
-- CLI orchestrator default: `ingest,features,rank,events,execute,publish`
-- Daily wrapper default: `ingest,features,rank,events,execute,publish`
+- CLI orchestrator default: `ingest,features,rank,events,execute,insight,publish`
+- Daily wrapper default: `ingest,features,rank,events,execute,insight,publish`
 - FastAPI pipeline request default: `ingest,features,rank,publish`
 - React V2 pipeline action: `ingest,features,rank,publish`
 - CLI and wrapper canary with the untouched default stage string: `ingest,features,rank`

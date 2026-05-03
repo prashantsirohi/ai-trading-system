@@ -69,6 +69,7 @@ class PublishStage:
             stage_name=self.name,
         )
         self._attach_event_datasets(context, datasets)
+        self._attach_insight_datasets(context, datasets)
         ranked_df = datasets.get("ranked_signals", pd.DataFrame())
         delivery_artifact = StageArtifact(
             artifact_type=rank_artifact.artifact_type,
@@ -78,6 +79,7 @@ class PublishStage:
             metadata={
                 **(rank_artifact.metadata or {}),
                 "event_hashes": list(datasets.get("event_hashes") or []),
+                "insight_hash": datasets.get("insight_hash"),
             },
             attempt_number=rank_artifact.attempt_number,
         )
@@ -137,6 +139,35 @@ class PublishStage:
         dashboard_payload = datasets.get("dashboard_payload")
         if isinstance(dashboard_payload, dict):
             self._overlay_events_on_dashboard(dashboard_payload, signals, snapshot_events)
+
+    def _attach_insight_datasets(self, context: StageContext, datasets: Dict[str, Any]) -> None:
+        telegram_artifact = context.artifact_for("insight", "telegram_summary")
+        confluence_artifact = context.artifact_for("insight", "event_confluence")
+        daily_json = (
+            context.artifact_for("insight", "daily_insight_json")
+            or context.artifact_for("insight", "weekly_insight_json")
+        )
+        if telegram_artifact is not None:
+            try:
+                text = Path(telegram_artifact.uri).read_text(encoding="utf-8")
+                datasets["insight_telegram_summary"] = text
+                datasets["insight_hash"] = telegram_artifact.content_hash
+            except Exception:
+                pass
+        if confluence_artifact is not None:
+            try:
+                datasets["event_confluence"] = self._read_artifact(confluence_artifact)
+            except Exception:
+                datasets["event_confluence"] = pd.DataFrame()
+        if daily_json is not None:
+            datasets["latest_insight"] = self._read_json_artifact_safe(daily_json)
+        dashboard_payload = datasets.get("dashboard_payload")
+        if isinstance(dashboard_payload, dict):
+            confluence_df = datasets.get("event_confluence")
+            if isinstance(confluence_df, pd.DataFrame) and not confluence_df.empty:
+                dashboard_payload["event_confluence"] = confluence_df.head(50).to_dict(orient="records")
+            if datasets.get("latest_insight"):
+                dashboard_payload["latest_insight"] = datasets["latest_insight"]
 
     def _read_json_artifact_safe(self, artifact: StageArtifact | None) -> Dict[str, Any]:
         if artifact is None:
@@ -392,7 +423,9 @@ class PublishStage:
         publish_rows = pd.DataFrame(datasets.get("publish_rows_telegram", []))
         if not publish_rows.empty:
             telegram_datasets["ranked_signals"] = publish_rows
-        message = self._build_telegram_tearsheet(context, telegram_datasets)
+        message = str(datasets.get("insight_telegram_summary") or "").strip()
+        if not message:
+            message = self._build_telegram_tearsheet(context, telegram_datasets)
         if not reporter.send_message(message):
             detail = reporter.last_error or "unknown Telegram error"
             if reporter.last_health_check and reporter.last_health_check.get("status") == "failed":

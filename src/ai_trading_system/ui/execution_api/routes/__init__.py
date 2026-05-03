@@ -3,6 +3,7 @@
 from ai_trading_system.ui.execution_api.routes import (
     artifacts,
     health,
+    insight,
     pipeline,
     processes,
     ranking_detail,
@@ -15,6 +16,7 @@ from ai_trading_system.ui.execution_api.routes import (
 
 ALL_ROUTERS = (
     health.router,
+    insight.router,
     snapshots.router,
     runs.router,
     artifacts.router,
@@ -31,6 +33,7 @@ __all__ = [
     "ALL_ROUTERS",
     "artifacts",
     "health",
+    "insight",
     "pipeline",
     "processes",
     "ranking_detail",

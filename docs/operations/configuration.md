@@ -63,7 +63,7 @@ Used by isolated current modules:
 ## Stage and mode selection
 
 Primary selectors on `run.orchestrator`:
-- `--stages`: comma-separated stage list, default `ingest,features,rank,events,execute,publish`
+- `--stages`: comma-separated stage list, default `ingest,features,rank,events,execute,insight,publish`
 - `--run-id`: reuse an existing run id, mainly for stage retries
 - `--run-date`: logical trading date
 - `--data-domain operational|research`

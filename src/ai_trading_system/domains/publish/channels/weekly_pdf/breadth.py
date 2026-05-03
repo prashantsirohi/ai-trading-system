@@ -104,9 +104,8 @@ def compute_market_breadth(
 
     if df.empty:
         return df
-    df = df.copy()
-    df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
-    return df[df["trade_date"] >= display_start].reset_index(drop=True)
+    df = df.assign(trade_date=pd.to_datetime(df["trade_date"]).dt.date)
+    return df.loc[df["trade_date"] >= display_start].reset_index(drop=True)
 
 
 def latest_breadth_row(breadth: pd.DataFrame) -> Optional[dict]:

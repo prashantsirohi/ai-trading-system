@@ -203,15 +203,33 @@
       "close": 104.0,
       "composite_score": 88.5,
       "exchange": "NSE",
+      "reclaim_signal_flag": false,
       "sector_name": "Finance",
-      "symbol_id": "AAA"
+      "stage_freshness_bucket": null,
+      "stage_label": null,
+      "stage_transition": null,
+      "symbol_id": "AAA",
+      "top_pattern_family": "cup_handle",
+      "top_pattern_invalidation_price": null,
+      "top_pattern_pivot_price": null,
+      "top_pattern_setup_quality": 91.0,
+      "top_pattern_state": "confirmed"
     },
     {
       "close": 98.0,
       "composite_score": 82.0,
       "exchange": "NSE",
+      "reclaim_signal_flag": false,
       "sector_name": "Technology",
-      "symbol_id": "BBB"
+      "stage_freshness_bucket": null,
+      "stage_label": null,
+      "stage_transition": null,
+      "symbol_id": "BBB",
+      "top_pattern_family": null,
+      "top_pattern_invalidation_price": null,
+      "top_pattern_pivot_price": null,
+      "top_pattern_setup_quality": null,
+      "top_pattern_state": null
     }
   ],
   "visible_counts": {

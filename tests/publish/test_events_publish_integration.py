@@ -117,3 +117,26 @@ def test_dedupe_key_includes_event_hashes(tmp_path):
     )
     assert manager.build_dedupe_key("telegram", base) != manager.build_dedupe_key("telegram", with_events)
     assert manager.build_dedupe_key("telegram", with_events) != manager.build_dedupe_key("telegram", with_other_events)
+
+
+def test_publish_stage_loads_existing_insight_artifacts(tmp_path):
+    ctx = _context(tmp_path)
+    insight_dir = tmp_path / "data" / "operational" / "pipeline_runs" / "r1" / "insight" / "attempt_1"
+    insight_dir.mkdir(parents=True)
+    telegram = insight_dir / "telegram_summary.txt"
+    telegram.write_text("event-aware summary", encoding="utf-8")
+    confluence = insight_dir / "event_confluence.csv"
+    confluence.write_text("symbol,event_materiality_score\nRELIANCE,95\n", encoding="utf-8")
+    daily = insight_dir / "daily_insight.json"
+    daily.write_text(json.dumps({"run_id": "r1", "status": "passed"}), encoding="utf-8")
+    ctx.artifacts["insight"] = {
+        "telegram_summary": StageArtifact.from_file("telegram_summary", telegram),
+        "event_confluence": StageArtifact.from_file("event_confluence", confluence),
+        "daily_insight_json": StageArtifact.from_file("daily_insight_json", daily),
+    }
+    stage = PublishStage(operation=lambda ctx: {})
+    datasets = {"dashboard_payload": {}}
+    stage._attach_insight_datasets(ctx, datasets)
+    assert datasets["insight_telegram_summary"] == "event-aware summary"
+    assert not datasets["event_confluence"].empty
+    assert datasets["dashboard_payload"]["latest_insight"]["run_id"] == "r1"
