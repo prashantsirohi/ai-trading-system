@@ -57,6 +57,22 @@ class PatternBacktestConfig:
     stage2_reclaim_min_slope_pct: float = 0.0
     wt3_tight_pct: float = 0.015
     wt3_prior_adv: float = 0.20
+    darvas_lookback_bars: int = 60
+    darvas_min_box_bars: int = 15
+    darvas_resistance_tolerance_pct: float = 0.02
+    darvas_max_box_depth_pct: float = 0.20
+    pocket_pivot_lookback_bars: int = 10
+    pocket_pivot_max_extension_pct: float = 0.10
+    ascending_base_min_bars: int = 45
+    ascending_base_max_bars: int = 80
+    ascending_base_max_pullback_depth_pct: float = 0.20
+    ascending_base_min_low_rise_pct: float = 0.02
+    ipo_base_min_history_bars: int = 35
+    ipo_base_max_history_bars: int = 180
+    ipo_base_min_bars: int = 15
+    ipo_base_max_bars: int = 65
+    ipo_base_max_depth_pct: float = 0.30
+    inside_week_lookback_weeks: int = 8
 
     def to_metadata(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -132,6 +148,22 @@ class PatternScanConfig:
     stage2_reclaim_min_slope_pct: float = 0.0
     wt3_tight_pct: float = 0.015
     wt3_prior_adv: float = 0.20
+    darvas_lookback_bars: int = 60
+    darvas_min_box_bars: int = 15
+    darvas_resistance_tolerance_pct: float = 0.02
+    darvas_max_box_depth_pct: float = 0.20
+    pocket_pivot_lookback_bars: int = 10
+    pocket_pivot_max_extension_pct: float = 0.10
+    ascending_base_min_bars: int = 45
+    ascending_base_max_bars: int = 80
+    ascending_base_max_pullback_depth_pct: float = 0.20
+    ascending_base_min_low_rise_pct: float = 0.02
+    ipo_base_min_history_bars: int = 35
+    ipo_base_max_history_bars: int = 180
+    ipo_base_min_bars: int = 15
+    ipo_base_max_bars: int = 65
+    ipo_base_max_depth_pct: float = 0.30
+    inside_week_lookback_weeks: int = 8
 
     # Pocket Pivot (Minervini): up-day vol > max prior-N down-day vol.
     pocket_pivot_lookback: int = 10
@@ -143,9 +175,7 @@ class PatternScanConfig:
     # Darvas Box: top/bottom hold periods + breakout.
     darvas_top_hold_bars: int = 3
     darvas_bottom_hold_bars: int = 3
-    darvas_min_box_bars: int = 10
     darvas_max_box_bars: int = 60
-    darvas_max_box_depth_pct: float = 0.15
     darvas_invalidation_pct: float = 0.97
 
     # Inside-Day Breakout: 1-3 inside bars before mother-bar break.
