@@ -76,6 +76,7 @@ def build_report(
         data.ranked_signals,
     )
     breadth_latest = data.market_breadth.iloc[-1].to_dict() if not data.market_breadth.empty else {}
+    events_of_week = _events_of_week(data)
 
     chart_paths = _render_charts(
         output_dir=output_dir,
@@ -109,6 +110,7 @@ def build_report(
         "failed_breakouts": _df_to_records(failed_breakouts),
         "breadth_latest": breadth_latest,
         "breadth_rows": _df_to_records(data.market_breadth.tail(10)) if not data.market_breadth.empty else [],
+        "events_of_week": events_of_week,
         "charts": chart_paths,
     }
 
@@ -157,10 +159,12 @@ def build_report(
             "sector_movers": len(sector_movers),
             "failed_breakouts": len(failed_breakouts),
             "breadth_rows": int(len(data.market_breadth)),
+            "events": int(events_of_week.get("headline_count", 0)),
         },
         "prior_run_id": data.prior_run_id,
         "prior_run_date": data.prior_run_date,
         "breadth_latest": breadth_latest,
+        "events_of_week": events_of_week,
         "charts": chart_paths,
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
@@ -169,6 +173,33 @@ def build_report(
     json_path.write_text(json.dumps(manifest, indent=2, default=str), encoding="utf-8")
     manifest["json_path"] = str(json_path)
     return manifest
+
+
+def _events_of_week(data: WeeklyReportData) -> dict[str, Any]:
+    events = list((data.market_events_snapshot or {}).get("events") or [])
+    severity_counts: dict[str, int] = {}
+    category_counts: dict[str, int] = {}
+    rows = []
+    for row in events:
+        severity = "high" if row.get("tier") == "A" or row.get("materiality_label") in {"high", "critical"} else "medium"
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        category = str(row.get("category") or "unknown")
+        category_counts[category] = category_counts.get(category, 0) + 1
+        rows.append({
+            "symbol": row.get("symbol"),
+            "severity": severity,
+            "category": category,
+            "headline": row.get("title") or row.get("summary"),
+            "materiality_label": row.get("materiality_label"),
+            "freshness_days": row.get("freshness_days"),
+        })
+    rows.sort(key=lambda r: (r["severity"] == "high", str(r.get("headline") or "")), reverse=True)
+    return {
+        "headline_count": len(events),
+        "by_severity": severity_counts,
+        "by_category": category_counts,
+        "top_events": rows[:10],
+    }
 
 
 def _render_charts(

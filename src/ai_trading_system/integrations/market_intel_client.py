@@ -81,14 +81,16 @@ def get_event_query_service(
             ) from exc
 
         if not Path(resolved).exists():
-            logger.warning(
-                "market_intel DuckDB not found at %s — querying will return "
-                "empty results until the collector process is started.",
-                resolved,
+            raise FileNotFoundError(
+                f"market_intel DuckDB not found at {resolved}; start the collector "
+                "before expecting event snapshots."
             )
 
-        db = Database(db_path=resolved)
-        service = EventQueryService(db=db)
+        if hasattr(EventQueryService, "from_readonly_path"):
+            service = EventQueryService.from_readonly_path(resolved)
+        else:  # pragma: no cover - compatibility with older market_intel
+            db = Database.open_readonly(resolved)
+            service = EventQueryService(db=db)
         _cached_service = service
         _cached_db_path = resolved
         return service

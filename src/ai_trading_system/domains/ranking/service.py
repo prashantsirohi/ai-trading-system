@@ -529,7 +529,28 @@ class RankOrchestrationService:
         weekly_turnover = compute_factor_turnover(ranked, previous_week_df)
         correlation_result = compute_factor_correlations(ranked)
 
-        outputs: Dict[str, pd.DataFrame] = {"ranked_signals": ranked}
+        from ai_trading_system.domains.ranking.volume_shocker import (
+            VolumeShockerConfig,
+            detect_volume_shockers,
+        )
+
+        symbol_universe = None
+        if not ranked.empty and "symbol_id" in ranked.columns:
+            symbol_universe = frozenset(ranked["symbol_id"].dropna().astype(str))
+        volume_shockers = detect_volume_shockers(
+            ranked,
+            config=VolumeShockerConfig(
+                z_threshold=float(effective_params.get("volume_shocker_z_threshold", 3.0)),
+                min_turnover_cr=float(effective_params.get("volume_shocker_min_turnover_cr", 1.0)),
+                min_market_cap_cr=float(effective_params.get("volume_shocker_min_market_cap_cr", 500.0)),
+                universe_symbols=symbol_universe,
+            ),
+        )
+
+        outputs: Dict[str, pd.DataFrame] = {
+            "ranked_signals": ranked,
+            "volume_shockers": volume_shockers,
+        }
 
         breakout_market_bias_allowlist = effective_params.get("breakout_market_bias_allowlist", "BULLISH,NEUTRAL")
         if isinstance(breakout_market_bias_allowlist, str):

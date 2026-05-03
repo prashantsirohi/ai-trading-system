@@ -276,14 +276,15 @@ class PerSymbolDedupFilter:
         try:
             row = conn.execute(
                 """
-                SELECT 1 FROM events_enrichment_log
+                SELECT event_hashes_json FROM events_enrichment_log
                 WHERE symbol = ? AND top_category = ?
                   AND suppressed = FALSE
-                  AND created_at >= current_timestamp - INTERVAL ? DAY
-                LIMIT 1
+                  AND created_at >= current_timestamp - (? * INTERVAL 1 DAY)
+                ORDER BY created_at DESC
+                LIMIT 5
                 """,
                 [trigger.symbol, top_cat, self.lookback_days],
-            ).fetchone()
+            ).fetchall()
         except Exception as exc:
             logger.debug("PerSymbolDedupFilter: query failed (%s); skipping", exc)
             return events, None
@@ -292,7 +293,18 @@ class PerSymbolDedupFilter:
                 conn.close()
             except Exception:
                 pass
-        if row is not None:
+        current_hashes = {
+            str(_get_attr(ev, "event_hash"))
+            for ev in events
+            if _get_attr(ev, "event_hash")
+        }
+        previous_hashes: set[str] = set()
+        for item in row or []:
+            try:
+                previous_hashes.update(str(h) for h in json.loads(item[0] or "[]") if h)
+            except Exception:
+                continue
+        if row and (not current_hashes or current_hashes.issubset(previous_hashes)):
             return [], f"per_symbol_dedup({top_cat},{self.lookback_days}d)"
         return events, None
 

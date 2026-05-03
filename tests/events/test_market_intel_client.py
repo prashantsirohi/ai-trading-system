@@ -35,15 +35,20 @@ def test_resolve_db_path_default(monkeypatch):
 
 
 def test_get_event_query_service_caches(monkeypatch, tmp_path):
-    # Use an in-memory market_intel DB by pointing to a fresh path
+    from market_intel.storage.db import Database
+
     db_path = str(tmp_path / "mi.duckdb")
+    Database(db_path=db_path).close()
     svc1 = market_intel_client.get_event_query_service(db_path=db_path)
     svc2 = market_intel_client.get_event_query_service(db_path=db_path)
     assert svc1 is svc2
 
 
 def test_service_returns_empty_for_unseeded_db(tmp_path):
+    from market_intel.storage.db import Database
+
     db_path = str(tmp_path / "mi.duckdb")
+    Database(db_path=db_path).close()
     svc = market_intel_client.get_event_query_service(db_path=db_path)
     out = svc.get_events_for_symbol(
         "RELIANCE",
@@ -51,3 +56,10 @@ def test_service_returns_empty_for_unseeded_db(tmp_path):
         min_trust=80.0,
     )
     assert out == []
+
+
+def test_get_event_query_service_does_not_create_missing_db(tmp_path):
+    db_path = tmp_path / "missing.duckdb"
+    with pytest.raises(FileNotFoundError):
+        market_intel_client.get_event_query_service(db_path=str(db_path))
+    assert not db_path.exists()

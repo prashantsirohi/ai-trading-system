@@ -31,7 +31,7 @@ logger = logging_module.logger
 
 
 PIPELINE_ORDER = ["ingest", "features", "rank", "events", "execute", "publish"]
-SUPPORTED_STAGES = ["ingest", "features", "rank", "execute", "publish"]
+SUPPORTED_STAGES = ["ingest", "features", "rank", "events", "execute", "publish"]
 
 
 class TerminalProgressRenderer:
@@ -604,7 +604,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", help="Reuse an existing run_id, typically for stage retries")
     parser.add_argument(
         "--stages",
-        default="ingest,features,rank,execute,publish",
+        default="ingest,features,rank,events,execute,publish",
         help="Comma-separated stage list. Example: publish",
     )
     parser.add_argument(
@@ -963,7 +963,7 @@ def main() -> None:
         if hasattr(orchestrator, "progress_renderer"):
             orchestrator.progress_renderer = progress_renderer
     run_date = args.run_date or date.today().isoformat()
-    if args.canary and args.stages == "ingest,features,rank,execute,publish":
+    if args.canary and args.stages == "ingest,features,rank,events,execute,publish":
         stage_names = ["ingest", "features", "rank"]
     else:
         stage_names = [stage.strip() for stage in args.stages.split(",") if stage.strip()]

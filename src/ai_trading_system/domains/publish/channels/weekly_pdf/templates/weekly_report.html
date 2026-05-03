@@ -175,7 +175,27 @@
 </section>
 
 <section class="section">
-  <h2>4. Tier-A Breakouts (actionable)</h2>
+  <h2>4. Events of the Week</h2>
+  {% if events_of_week and events_of_week.top_events|length %}
+  <table>
+    <thead><tr><th>Symbol</th><th>Category</th><th>Severity</th><th>Materiality</th><th>Headline</th></tr></thead>
+    <tbody>
+      {% for row in events_of_week.top_events %}
+      <tr>
+        <td><strong>{{ row.symbol }}</strong></td>
+        <td>{{ row.category }}</td>
+        <td>{{ row.severity }}</td>
+        <td>{{ row.materiality_label or "neutral" }}</td>
+        <td>{{ row.headline }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No important corporate-action events in the snapshot.</p>{% endif %}
+</section>
+
+<section class="section">
+  <h2>5. Tier-A Breakouts (actionable)</h2>
   {% if tier_a|length %}
   <table>
     <thead>
@@ -226,7 +246,7 @@
 </section>
 
 <section class="section">
-  <h2>5. Pattern Setups</h2>
+  <h2>6. Pattern Setups</h2>
   {% if patterns|length %}
   <table class="pattern-table">
     <thead>
@@ -253,7 +273,7 @@
 </section>
 
 <section class="section">
-  <h2>6. Failed Breakouts (lookback)</h2>
+  <h2>7. Failed Breakouts (lookback)</h2>
   <p class="small muted">Symbols that triggered a breakout in the last 10 days but now sit below the trigger level.</p>
   {% if failed_breakouts|length %}
   <table>

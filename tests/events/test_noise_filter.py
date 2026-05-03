@@ -243,9 +243,12 @@ class _MockCursor:
     def fetchone(self):
         return self.rows[0] if self.rows else None
 
+    def fetchall(self):
+        return self.rows
+
 
 def test_per_symbol_dedup_suppresses_when_match_exists():
-    conn = _MockConn(rows=[(1,)])
+    conn = _MockConn(rows=[('["h"]',)])
     f = PerSymbolDedupFilter(conn_provider=lambda: conn, lookback_days=7)
     ev = _Event("REL", "capex_expansion")
     kept, reason = f.apply(trigger=_trig("REL"), events=[ev])

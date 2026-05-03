@@ -25,7 +25,7 @@ import csv
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +36,25 @@ from ai_trading_system.pipeline.contracts import (
 )
 
 logger = logging.getLogger(__name__)
+
+SNAPSHOT_CATEGORIES = (
+    "capex_expansion",
+    "demerger",
+    "mna_partnership",
+    "buyback",
+    "fundraise",
+    "regulatory_legal",
+    "management_change",
+    "promoter_activity",
+    "sast_filing",
+    "insider_buy",
+    "insider_sell",
+    "rating_upgrade",
+    "rating_downgrade",
+    "major_order_win",
+    "bulk_deal",
+    "block_deal",
+)
 
 
 @dataclass
@@ -52,6 +71,8 @@ class EventsStageConfig:
     lookback_days: int = 30
     per_trigger_event_limit: int = 10
     min_trust: float = 80.0
+    market_snapshot_limit: int = 500
+    min_importance: float = 0.0
 
 
 class EventsStage:
@@ -80,13 +101,14 @@ class EventsStage:
                 metadata={"events_enabled": False, "skipped": True},
             )
 
+        snapshot, market_intel_status = self._collect_market_snapshot(context, cfg)
         triggers = self._collect_triggers(context, cfg)
         if not triggers:
             logger.info("events stage: no triggers produced; emitting empty artifacts")
-            return self._emit_empty(context)
+            return self._emit_empty(context, snapshot, market_intel_status)
 
-        signals = self._enrich(triggers, cfg)
-        return self._emit(context, triggers, signals, cfg)
+        signals = self._enrich(context, triggers, cfg)
+        return self._emit(context, triggers, signals, cfg, snapshot, market_intel_status)
 
     # ----------------------------------------------------------------- helpers
 
@@ -117,6 +139,12 @@ class EventsStage:
                 min_trust=float(
                     params.get("events_min_trust", cfg.min_trust)
                 ),
+                market_snapshot_limit=int(
+                    params.get("events_snapshot_limit", cfg.market_snapshot_limit)
+                ),
+                min_importance=float(
+                    params.get("events_min_importance", cfg.min_importance)
+                ),
             )
         return cfg
 
@@ -135,6 +163,145 @@ class EventsStage:
             except ValueError:
                 pass
         return datetime.utcnow().date()
+
+    def _as_of_datetime(self, context: StageContext) -> datetime:
+        return datetime.combine(self._as_of_date(context), datetime.min.time()).replace(tzinfo=timezone.utc)
+
+    # ----------------------------------------------------------------- snapshot
+
+    def _collect_market_snapshot(self, context: StageContext, cfg: EventsStageConfig) -> tuple[list[dict[str, Any]], str]:
+        try:
+            query_svc = self._query_service()
+        except FileNotFoundError:
+            return [], "missing"
+        except Exception as exc:
+            logger.warning("events stage: market_intel snapshot query unavailable: %s", exc)
+            return [], "degraded"
+
+        status = self._collector_status(query_svc)
+        as_of_dt = self._as_of_datetime(context)
+        since = as_of_dt - timedelta(days=cfg.lookback_days)
+        try:
+            events = query_svc.get_important_events(
+                since=since,
+                until=as_of_dt + timedelta(days=1),
+                categories=SNAPSHOT_CATEGORIES,
+                tiers=("A", "B"),
+                min_importance=cfg.min_importance,
+                min_trust=cfg.min_trust,
+                limit=cfg.market_snapshot_limit,
+            )
+        except Exception as exc:
+            logger.warning("events stage: important-event snapshot failed: %s", exc)
+            return [], "degraded"
+
+        events = self._apply_snapshot_filters(context, cfg, query_svc, events)
+        rows = [self._snapshot_row(event, as_of_dt=as_of_dt) for event in events]
+        rows.sort(
+            key=lambda row: (
+                {"critical": 4, "high": 3, "medium": 2, "low": 1, None: 0}.get(row.get("materiality_label"), 0),
+                float(row.get("importance_score") or 0.0),
+                str(row.get("event_date") or row.get("published_at") or ""),
+            ),
+            reverse=True,
+        )
+        return rows, status
+
+    def _collector_status(self, query_svc) -> str:
+        try:
+            health = query_svc.get_collector_health()
+        except Exception:
+            return "ok"
+        heartbeat = health.get("last_heartbeat")
+        if not heartbeat:
+            return "stale"
+        if not isinstance(heartbeat, datetime):
+            try:
+                heartbeat = datetime.fromisoformat(str(heartbeat))
+            except Exception:
+                return "stale"
+        if heartbeat.tzinfo is None:
+            heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+        return "stale" if datetime.now(timezone.utc) - heartbeat > timedelta(minutes=15) else "ok"
+
+    def _apply_snapshot_filters(self, context: StageContext, cfg: EventsStageConfig, query_svc, events):
+        if not events:
+            return []
+        from ai_trading_system.domains.events.noise_filter import build_default_filter_chain
+        from ai_trading_system.domains.events.triggers import Trigger
+
+        chain = build_default_filter_chain(
+            market_cap_provider=self._market_cap_provider(query_svc, events),
+            conn_provider=self._registry_conn_provider(context),
+            as_of=self._as_of_datetime(context),
+        )
+        kept = []
+        for event in events:
+            symbol = str(getattr(event, "symbol", "") or "").upper()
+            if not symbol:
+                continue
+            trigger = Trigger(
+                symbol=symbol,
+                trigger_type="breakout",
+                as_of_date=self._as_of_date(context),
+                trigger_strength=float(getattr(event, "importance_score", 1.0) or 1.0),
+                trigger_metadata={"snapshot": True},
+            )
+            filtered, _reason = chain.apply(trigger=trigger, events=[event])
+            kept.extend(filtered)
+        return kept
+
+    def _snapshot_row(self, event, *, as_of_dt: datetime) -> dict[str, Any]:
+        event_dt = getattr(event, "event_date", None) or getattr(event, "published_at", None)
+        freshness_days = None
+        if isinstance(event_dt, datetime):
+            event_dt = event_dt if event_dt.tzinfo else event_dt.replace(tzinfo=timezone.utc)
+            freshness_days = max(0, int((as_of_dt - event_dt).total_seconds() // 86400))
+        return {
+            "symbol": getattr(event, "symbol", None),
+            "company_name": getattr(event, "company_name", None),
+            "event_date": _iso(getattr(event, "event_date", None)),
+            "published_at": _iso(getattr(event, "published_at", None)),
+            "category": getattr(event, "primary_category", None),
+            "tier": getattr(event, "event_tier", None),
+            "importance_score": getattr(event, "importance_score", None),
+            "trust_score": getattr(event, "trust_score", None),
+            "materiality_label": _get_marker(event, "_materiality_label"),
+            "materiality_pct": _get_marker(event, "_material_pct"),
+            "source": getattr(event, "source", None),
+            "event_hash": getattr(event, "event_hash", None),
+            "title": getattr(event, "title", None),
+            "summary": getattr(event, "one_line_summary", None) or getattr(event, "description", None),
+            "freshness_days": freshness_days,
+            "corroborated": bool(_get_marker(event, "_corroborated")),
+            "source_url": getattr(event, "link", None) or getattr(event, "attachment_url", None),
+        }
+
+    def _market_cap_provider(self, query_svc, events):
+        symbols = sorted({str(getattr(event, "symbol", "") or "").upper() for event in events if getattr(event, "symbol", None)})
+        caps: dict[str, float] = {}
+        if hasattr(query_svc, "get_market_caps"):
+            try:
+                caps = dict(query_svc.get_market_caps(symbols))
+            except Exception:
+                caps = {}
+
+        def provider(symbol: str) -> float | None:
+            key = str(symbol).upper()
+            if key not in caps and hasattr(query_svc, "get_market_caps"):
+                try:
+                    caps.update(query_svc.get_market_caps([key]))
+                except Exception:
+                    pass
+            return caps.get(key)
+
+        return provider
+
+    def _registry_conn_provider(self, context: StageContext):
+        registry = getattr(context, "registry", None)
+        if registry is None or not hasattr(registry, "connection"):
+            return None
+        return registry.connection
 
     # ----------------------------------------------------------------- triggers
 
@@ -256,7 +423,7 @@ class EventsStage:
 
     # ----------------------------------------------------------------- enrich
 
-    def _enrich(self, triggers, cfg: EventsStageConfig):
+    def _enrich(self, context: StageContext, triggers, cfg: EventsStageConfig):
         from ai_trading_system.domains.events.enrichment_service import (
             EnrichmentService,
         )
@@ -272,7 +439,7 @@ class EventsStage:
 
         # Build the default noise filter chain on first call. Tests can
         # inject a different chain via the constructor.
-        noise_filter = self._noise_filter or self._build_default_chain()
+        noise_filter = self._noise_filter or self._build_default_chain(context, query_svc)
 
         svc = EnrichmentService(
             query_service=query_svc,
@@ -283,7 +450,7 @@ class EventsStage:
         )
         return svc.enrich(triggers)
 
-    def _build_default_chain(self):
+    def _build_default_chain(self, context: StageContext | None = None, query_svc=None):
         """Default filter chain; pure-function filters only by default.
 
         Phase-6 callers can extend by passing market_cap_provider /
@@ -292,34 +459,55 @@ class EventsStage:
         from ai_trading_system.domains.events.noise_filter import (
             build_default_filter_chain,
         )
-        return build_default_filter_chain()
+        return build_default_filter_chain(
+            market_cap_provider=(
+                self._market_cap_provider(query_svc, []) if query_svc is not None else None
+            ),
+            conn_provider=self._registry_conn_provider(context) if context is not None else None,
+            as_of=self._as_of_datetime(context) if context is not None else None,
+        )
 
     # ----------------------------------------------------------------- emit
 
-    def _emit_empty(self, context: StageContext) -> StageResult:
+    def _emit_empty(self, context: StageContext, snapshot: list[dict[str, Any]] | None = None, market_intel_status: str = "unknown") -> StageResult:
         out_dir = context.output_dir()
         triggers_path = out_dir / "events_triggers.csv"
         triggers_path.write_text("symbol,trigger_type,as_of_date,trigger_strength\n")
+        snapshot_payload = {
+            "run_id": context.run_id,
+            "run_date": context.run_date,
+            "market_intel_status": market_intel_status,
+            "events": snapshot or [],
+        }
+        snapshot_path = context.write_json("market_events_snapshot.json", snapshot_payload)
         enrichment_path = context.write_json("events_enrichment.json", {"signals": []})
         summary_path = context.write_json(
             "events_summary.json",
             {
                 "trigger_count": 0,
                 "event_count": 0,
+                "snapshot_event_count": len(snapshot or []),
                 "suppressed_count": 0,
                 "by_trigger_type": {},
                 "by_severity": {},
                 "by_top_category": {},
                 "by_materiality": {},
+                "market_intel_status": market_intel_status,
             },
         )
         return StageResult(
             artifacts=[
+                StageArtifact.from_file("market_events_snapshot", snapshot_path, row_count=len(snapshot or [])),
                 StageArtifact.from_file("events_triggers", triggers_path, row_count=0),
                 StageArtifact.from_file("events_enrichment", enrichment_path),
                 StageArtifact.from_file("events_summary", summary_path),
             ],
-            metadata={"trigger_count": 0, "event_count": 0},
+            metadata={
+                "trigger_count": 0,
+                "event_count": 0,
+                "snapshot_event_count": len(snapshot or []),
+                "market_intel_status": market_intel_status,
+            },
         )
 
     def _emit(
@@ -328,6 +516,8 @@ class EventsStage:
         triggers,
         signals,
         cfg: EventsStageConfig,
+        snapshot: list[dict[str, Any]],
+        market_intel_status: str,
     ) -> StageResult:
         from ai_trading_system.domains.events.enrichment_service import summarize
 
@@ -354,16 +544,33 @@ class EventsStage:
                     ),
                 })
 
+        snapshot_payload = {
+            "run_id": context.run_id,
+            "run_date": context.run_date,
+            "market_intel_status": market_intel_status,
+            "events": snapshot,
+        }
+        snapshot_path = context.write_json("market_events_snapshot.json", snapshot_payload)
+
         enrichment_payload = {"signals": [s.to_dict() for s in signals]}
         enrichment_path = context.write_json("events_enrichment.json", enrichment_payload)
 
         summary = summarize(signals)
+        summary["snapshot_event_count"] = len(snapshot)
+        summary["market_intel_status"] = market_intel_status
         summary_path = context.write_json("events_summary.json", summary)
 
         # Persist to events_enrichment_log if the registry has a connection.
         self._persist_log(context, signals)
 
         artifacts = [
+            StageArtifact.from_file(
+                "market_events_snapshot", snapshot_path, row_count=len(snapshot),
+                metadata={
+                    "market_intel_status": market_intel_status,
+                    "event_hashes": [row.get("event_hash") for row in snapshot if row.get("event_hash")],
+                },
+            ),
             StageArtifact.from_file(
                 "events_triggers", triggers_path, row_count=len(triggers),
             ),
@@ -379,8 +586,10 @@ class EventsStage:
             metadata={
                 "trigger_count": len(triggers),
                 "event_count": summary["event_count"],
+                "snapshot_event_count": len(snapshot),
                 "suppressed_count": summary["suppressed_count"],
                 "by_severity": summary["by_severity"],
+                "market_intel_status": market_intel_status,
             },
         )
 
@@ -458,3 +667,17 @@ def _safe_float(value: Any) -> float | None:
         return float(str(value).replace(",", ""))
     except (TypeError, ValueError):
         return None
+
+
+def _iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
+
+
+def _get_marker(event: Any, key: str) -> Any:
+    if isinstance(event, dict):
+        return event.get(key)
+    return getattr(event, key, None)

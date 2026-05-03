@@ -119,7 +119,7 @@ def test_stage_emits_empty_artifacts_when_no_triggers(tmp_path):
     assert result.metadata["trigger_count"] == 0
     artifact_types = {a.artifact_type for a in result.artifacts}
     assert artifact_types == {
-        "events_triggers", "events_enrichment", "events_summary",
+        "market_events_snapshot", "events_triggers", "events_enrichment", "events_summary",
     }
     # Empty enrichment payload should still be valid JSON
     enrich = next(a for a in result.artifacts if a.artifact_type == "events_enrichment")
@@ -147,6 +147,7 @@ def test_stage_enriches_breakout_triggers(tmp_path):
 
     assert result.metadata["trigger_count"] == 2  # only Tier A + B
     assert result.metadata["event_count"] == 1
+    assert "snapshot_event_count" in result.metadata
 
     enrich = next(a for a in result.artifacts if a.artifact_type == "events_enrichment")
     payload = json.loads(Path(enrich.uri).read_text())
@@ -233,3 +234,11 @@ def test_stage_in_orchestrator_pipeline_order():
     events_idx = orchestrator.PIPELINE_ORDER.index("events")
     execute_idx = orchestrator.PIPELINE_ORDER.index("execute")
     assert rank_idx < events_idx < execute_idx
+    assert "events" in orchestrator.SUPPORTED_STAGES
+
+
+def test_orchestrator_cli_default_includes_events():
+    from ai_trading_system.pipeline.orchestrator import build_parser
+
+    args = build_parser().parse_args([])
+    assert "events" in args.stages.split(",")

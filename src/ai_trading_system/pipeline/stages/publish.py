@@ -68,7 +68,19 @@ class PublishStage:
             run_id=context.run_id,
             stage_name=self.name,
         )
+        self._attach_event_datasets(context, datasets)
         ranked_df = datasets.get("ranked_signals", pd.DataFrame())
+        delivery_artifact = StageArtifact(
+            artifact_type=rank_artifact.artifact_type,
+            uri=rank_artifact.uri,
+            row_count=rank_artifact.row_count,
+            content_hash=rank_artifact.content_hash,
+            metadata={
+                **(rank_artifact.metadata or {}),
+                "event_hashes": list(datasets.get("event_hashes") or []),
+            },
+            attempt_number=rank_artifact.attempt_number,
+        )
 
         failures = []
         targets = []
@@ -76,7 +88,7 @@ class PublishStage:
             delivery = self.delivery_manager.deliver(
                 context=context,
                 channel=channel,
-                artifact=rank_artifact,
+                artifact=delivery_artifact,
                 sender=lambda channel_handler=handler: channel_handler(context, rank_artifact, datasets),
             )
             delivery["delivery_role"] = self.CHANNEL_ROLES.get(channel, "publish_auxiliary")
@@ -95,6 +107,90 @@ class PublishStage:
             metadata["failures"] = failures
             raise PublishStageError("; ".join(failures))
         return metadata
+
+    def _attach_event_datasets(self, context: StageContext, datasets: Dict[str, Any]) -> None:
+        snapshot = self._read_json_artifact_safe(context.artifact_for("events", "market_events_snapshot"))
+        enrichment = self._read_json_artifact_safe(context.artifact_for("events", "events_enrichment"))
+        summary = self._read_json_artifact_safe(context.artifact_for("events", "events_summary"))
+        signals = list(enrichment.get("signals") or [])
+        snapshot_events = list(snapshot.get("events") or [])
+        event_hashes = sorted({
+            str(h)
+            for h in (
+                [row.get("event_hash") for row in snapshot_events if isinstance(row, dict)]
+                + [
+                    h
+                    for sig in signals if isinstance(sig, dict)
+                    for h in list(sig.get("event_hashes") or [])
+                ]
+            )
+            if h
+        })
+        datasets["market_events_snapshot"] = snapshot
+        datasets["enriched_event_signals"] = signals
+        datasets["events_summary"] = summary
+        datasets["event_hashes"] = event_hashes
+        status = str(snapshot.get("market_intel_status") or summary.get("market_intel_status") or "unknown")
+        datasets["market_intel_status"] = status
+        if status in {"missing", "stale", "degraded"}:
+            datasets["event_freshness_warning"] = f"market_intel status: {status}"
+        dashboard_payload = datasets.get("dashboard_payload")
+        if isinstance(dashboard_payload, dict):
+            self._overlay_events_on_dashboard(dashboard_payload, signals, snapshot_events)
+
+    def _read_json_artifact_safe(self, artifact: StageArtifact | None) -> Dict[str, Any]:
+        if artifact is None:
+            return {}
+        try:
+            return self._read_json_artifact(artifact)
+        except Exception:
+            return {}
+
+    def _overlay_events_on_dashboard(
+        self,
+        dashboard_payload: Dict[str, Any],
+        signals: list[dict[str, Any]],
+        snapshot_events: list[dict[str, Any]],
+    ) -> None:
+        by_symbol: dict[str, list[dict[str, Any]]] = {}
+        events_index: list[dict[str, Any]] = []
+        for sig in signals:
+            trigger = sig.get("trigger") or {}
+            symbol = str(trigger.get("symbol") or "").upper()
+            if not symbol:
+                continue
+            by_symbol.setdefault(symbol, []).append(sig)
+            events_index.append({
+                "symbol": symbol,
+                "trigger_type": trigger.get("trigger_type"),
+                "severity": sig.get("severity"),
+                "top_category": sig.get("top_category"),
+                "materiality_label": sig.get("materiality_label"),
+                "event_count": sig.get("event_count"),
+                "suppressed": sig.get("suppressed"),
+            })
+        for row in snapshot_events:
+            symbol = str(row.get("symbol") or "").upper()
+            if symbol and symbol not in by_symbol:
+                events_index.append({
+                    "symbol": symbol,
+                    "trigger_type": "market_snapshot",
+                    "severity": _snapshot_severity(row),
+                    "top_category": row.get("category"),
+                    "materiality_label": row.get("materiality_label"),
+                    "event_count": 1,
+                    "suppressed": False,
+                })
+        for value in dashboard_payload.values():
+            if not isinstance(value, list):
+                continue
+            for row in value:
+                if not isinstance(row, dict):
+                    continue
+                symbol = str(row.get("symbol") or row.get("symbol_id") or row.get("ticker") or "").upper()
+                if symbol in by_symbol:
+                    row["events"] = by_symbol[symbol]
+        dashboard_payload["events_index"] = events_index
 
     def _read_artifact(self, artifact: StageArtifact) -> pd.DataFrame:
         try:
@@ -326,3 +422,13 @@ class PublishStage:
             return load_report_data(context, datasets)
         except Exception:
             return None
+
+
+def _snapshot_severity(row: dict[str, Any]) -> str:
+    if row.get("materiality_label") in {"critical", "high"}:
+        return "high"
+    if row.get("tier") == "A":
+        return "high"
+    if row.get("tier") == "B":
+        return "medium"
+    return "low-info"

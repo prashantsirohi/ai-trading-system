@@ -67,6 +67,13 @@ def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str
     lines.extend(_format_move_block("Volume shock", shocker_df, _format_shocker_line))
     lines.extend(_format_move_block("Rank climber", rank_improvers, _format_rank_climber_line))
     lines.extend(_format_move_block("Failed risk", failed_df, _format_failed_breakout_line))
+    event_warning = datasets.get("event_freshness_warning")
+    if event_warning:
+        lines.append(f"Events: {escape(str(event_warning))}")
+    event_lines = _format_important_events(datasets)
+    if event_lines:
+        lines.extend(["", "<b>Important Events</b>"])
+        lines.extend(event_lines)
     lines.extend(["", "<b>Top 10 Sectors</b>"])
 
     if sector_df.empty:
@@ -214,6 +221,32 @@ def _format_failed_breakout_line(row: pd.Series) -> str:
         f"{_format_decimal(row.get('drop_pct'), 1)}% "
         f"below {escape(str(row.get('trigger_tier') or 'tier n/a'))}"
     )
+
+
+def _format_important_events(datasets: Mapping[str, Any], *, limit: int = 5) -> list[str]:
+    snapshot = datasets.get("market_events_snapshot") or {}
+    events = list(snapshot.get("events") or [])
+    if not events:
+        return []
+    severity_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1, None: 0}
+    events.sort(
+        key=lambda row: (
+            severity_rank.get(row.get("materiality_label"), 0),
+            float(row.get("importance_score") or 0.0),
+        ),
+        reverse=True,
+    )
+    lines: list[str] = []
+    for row in events[:limit]:
+        symbol = escape(str(row.get("symbol") or "n/a"))
+        category = escape(str(row.get("category") or "event"))
+        title = escape(str(row.get("title") or row.get("summary") or ""))
+        tier = escape(str(row.get("tier") or "n/a"))
+        mat = escape(str(row.get("materiality_label") or "neutral"))
+        age = row.get("freshness_days")
+        age_text = f" | {int(age)}d" if isinstance(age, int) else ""
+        lines.append(f"{symbol} | {category} | Tier {tier} | {mat}{age_text} | {title[:120]}")
+    return lines
 
 
 def _format_decimal(value: Any, places: int = 2) -> str:

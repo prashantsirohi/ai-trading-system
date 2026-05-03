@@ -46,7 +46,7 @@ def _seed_market_intel_db(db_path: str) -> None:
             INSERT INTO tracked_entity (symbol, company_name, sector, market_cap_cr)
             VALUES (?, ?, ?, ?)
             """,
-            ["RELIANCE", "Reliance Industries Limited", "Energy", 1_500_000.0],
+            ["RELIANCE", "Reliance Industries Limited", "Energy", 500_000.0],
         )
         # raw_event for the capex announcement
         conn.execute(
@@ -148,7 +148,7 @@ def test_events_stage_end_to_end(tmp_path, monkeypatch):
     assert result.metadata["event_count"] >= 1
     artifact_types = {a.artifact_type for a in result.artifacts}
     assert artifact_types == {
-        "events_triggers", "events_enrichment", "events_summary",
+        "market_events_snapshot", "events_triggers", "events_enrichment", "events_summary",
     }
 
     # Inspect the enrichment payload
@@ -233,7 +233,7 @@ def test_events_stage_smoke_handles_missing_market_intel_db(tmp_path):
     # Stage produced artifacts (breakout trigger flowed through; events empty)
     artifact_types = {a.artifact_type for a in result.artifacts}
     assert artifact_types == {
-        "events_triggers", "events_enrichment", "events_summary",
+        "market_events_snapshot", "events_triggers", "events_enrichment", "events_summary",
     }
     enrich_path = next(
         a.uri for a in result.artifacts if a.artifact_type == "events_enrichment"

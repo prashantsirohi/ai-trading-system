@@ -41,6 +41,8 @@ class WeeklyReportData:
     prior_sector_dashboard: pd.DataFrame = field(default_factory=pd.DataFrame)
     prior_breakouts_per_run: list = field(default_factory=list)
     market_breadth: pd.DataFrame = field(default_factory=pd.DataFrame)
+    market_events_snapshot: Dict[str, Any] = field(default_factory=dict)
+    enriched_event_signals: list = field(default_factory=list)
 
 
 def _read_csv_artifact(artifact: Optional[StageArtifact]) -> pd.DataFrame:
@@ -90,6 +92,8 @@ def load_report_data(
     pattern_scan = _read_csv_artifact(context.artifact_for("rank", "pattern_scan"))
     rank_summary = _read_json_artifact(context.artifact_for("rank", "rank_summary"))
     dashboard_payload = datasets.get("dashboard_payload") or {}
+    market_events_snapshot = datasets.get("market_events_snapshot") or {}
+    enriched_event_signals = list(datasets.get("enriched_event_signals") or [])
 
     trust_status = (
         datasets.get("publish_trust_status")
@@ -108,6 +112,8 @@ def load_report_data(
         dashboard_payload=dict(dashboard_payload),
         rank_summary=dict(rank_summary),
         trust_status=str(trust_status),
+        market_events_snapshot=dict(market_events_snapshot),
+        enriched_event_signals=enriched_event_signals,
     )
     _attach_phase2_inputs(context, data)
     return data

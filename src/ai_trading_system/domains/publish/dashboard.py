@@ -502,6 +502,7 @@ def publish_dashboard_payload(
     rank_movers = _rank_mover_frame(source_ranked, prior_ranked_df)
     failed_breakouts = _failed_breakout_frame(failed_breakouts_df)
     patterns = _pattern_frame(pattern_df)
+    events_index = _frame(payload.get("events_index", []))
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
 
     summary = pd.DataFrame(
@@ -516,6 +517,7 @@ def publish_dashboard_payload(
                 "VolumeShockers": int(len(volume_shockers)),
                 "FailedBreakouts": int(len(failed_breakouts)),
                 "Patterns": int(len(patterns)),
+                "Events": int(len(events_index)),
                 "BreadthRows": int(len(breadth)),
             }
         ]
@@ -532,6 +534,7 @@ def publish_dashboard_payload(
         ("UNUSUAL VOLUME SHOCKERS", volume_shockers),
         ("RANK MOVERS", rank_movers),
         ("FAILED BREAKOUTS", failed_breakouts),
+        ("IMPORTANT EVENTS", events_index),
         ("PATTERN SETUPS", patterns),
         ("SECTOR LEADERS", sector_min),
         ("TOP RANKED", rank_min),
