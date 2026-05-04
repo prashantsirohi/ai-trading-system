@@ -91,6 +91,14 @@ def backfill(db_path: Path, bhavcopy_dir: Path, *, dry_run: bool) -> dict[str, i
 
     if not bhav_df.empty:
         conn.register("bhav_lookup", bhav_df)
+        bhav_count_sql = """
+            SELECT COUNT(*) FROM _catalog c
+            JOIN bhav_lookup b
+              ON UPPER(c.symbol_id) = b.symbol_raw
+             AND CAST(c.timestamp AS DATE) = b.trade_date
+            WHERE c.exchange = 'NSE'
+              AND (c.series IS NULL OR c.trading_segment IS NULL)
+        """
         update_sql = """
             UPDATE _catalog
             SET series = b.series,
@@ -106,23 +114,17 @@ def backfill(db_path: Path, bhavcopy_dir: Path, *, dry_run: bool) -> dict[str, i
               AND CAST(_catalog.timestamp AS DATE) = b.trade_date
               AND (_catalog.series IS NULL OR _catalog.trading_segment IS NULL)
         """
-        if dry_run:
-            preview = conn.execute(
-                """
-                SELECT COUNT(*) FROM _catalog c
-                JOIN bhav_lookup b
-                  ON UPPER(c.symbol_id) = b.symbol_raw
-                 AND CAST(c.timestamp AS DATE) = b.trade_date
-                WHERE c.exchange = 'NSE'
-                  AND (c.series IS NULL OR c.trading_segment IS NULL)
-                """
-            ).fetchone()
-            counts["from_bhavcopy"] = int(preview[0] or 0)
-        else:
+        counts["from_bhavcopy"] = int(conn.execute(bhav_count_sql).fetchone()[0] or 0)
+        if not dry_run:
             conn.execute(update_sql)
-            counts["from_bhavcopy"] = int(conn.execute("SELECT changes()").fetchone()[0] or 0)
         conn.unregister("bhav_lookup")
 
+    fallback_count_sql = """
+        SELECT COUNT(*) FROM _catalog
+        WHERE exchange = 'NSE'
+          AND series IS NULL
+          AND trading_segment IS NULL
+    """
     fallback_sql = """
         UPDATE _catalog
         SET series = 'EQ', trading_segment = 'regular'
@@ -130,19 +132,9 @@ def backfill(db_path: Path, bhavcopy_dir: Path, *, dry_run: bool) -> dict[str, i
           AND series IS NULL
           AND trading_segment IS NULL
     """
-    if dry_run:
-        preview = conn.execute(
-            """
-            SELECT COUNT(*) FROM _catalog
-            WHERE exchange = 'NSE'
-              AND series IS NULL
-              AND trading_segment IS NULL
-            """
-        ).fetchone()
-        counts["from_master_fallback"] = int(preview[0] or 0)
-    else:
+    counts["from_master_fallback"] = int(conn.execute(fallback_count_sql).fetchone()[0] or 0)
+    if not dry_run:
         conn.execute(fallback_sql)
-        counts["from_master_fallback"] = int(conn.execute("SELECT changes()").fetchone()[0] or 0)
 
     conn.close()
     return counts
