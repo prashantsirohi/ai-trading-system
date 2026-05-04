@@ -380,15 +380,43 @@ class DataQualityEngine:
             message,
         )
 
+    def _rule_ingest_latest_trade_date_quarantine_clear(
+        self, context: StageContext, result: StageResult, severity: str
+    ) -> DQRuleFailure:
+        return self._evaluate_active_quarantine_rule(
+            context=context,
+            severity=severity,
+            rule_id="ingest_latest_trade_date_quarantine_clear",
+            message_prefix="after ingest",
+            include_trade_dates=True,
+        )
+
     def _rule_features_trust_quarantine_clear(
         self, context: StageContext, result: StageResult, severity: str
     ) -> DQRuleFailure:
+        return self._evaluate_active_quarantine_rule(
+            context=context,
+            severity=severity,
+            rule_id="features_trust_quarantine_clear",
+            message_prefix="in the current trust window",
+            include_trade_dates=False,
+        )
+
+    def _evaluate_active_quarantine_rule(
+        self,
+        *,
+        context: StageContext,
+        severity: str,
+        rule_id: str,
+        message_prefix: str,
+        include_trade_dates: bool,
+    ) -> DQRuleFailure:
         if not self._table_exists(context.db_path, "_catalog_quarantine"):
             return self._make_result(
-                "features_trust_quarantine_clear",
+                rule_id,
                 severity,
                 0,
-                "No quarantine table present; treating current trust window as clear.",
+                f"No quarantine table present; treating {message_prefix} as clear.",
             )
         raw_lookback = context.params.get("dq_features_quarantine_lookback_days", 7)
         lookback_days = 7 if raw_lookback in (None, "") else int(raw_lookback)
@@ -450,12 +478,23 @@ class DataQualityEngine:
             critical_quarantined_symbol_count > effective_max_quarantined_symbols
             or critical_quarantined_symbol_ratio_pct > max_quarantined_symbol_ratio_pct
         )
+        active_trade_dates = sorted(
+            {
+                str(trade_date)
+                for trade_date, _symbol_id in active_rows
+                if trade_date is not None
+            }
+        )
+        trade_dates_detail = ""
+        if include_trade_dates and active_trade_dates:
+            trade_dates_detail = f"trade_dates={', '.join(active_trade_dates[:10])}, "
         message = (
-            "No active quarantine rows remain in the current trust window."
+            f"No active quarantine rows remain {message_prefix}."
             if quarantined_rows == 0
             else (
-                "Active quarantine rows remain in the current trust window "
-                f"(rows={quarantined_rows}, symbols={len(quarantined_symbols)}, "
+                f"Active quarantine rows remain {message_prefix} "
+                f"({trade_dates_detail}rows={quarantined_rows}, symbols={len(quarantined_symbols)}, "
+                f"latest_trade_date={latest_trade_date}, "
                 f"latest_critical_symbols={critical_quarantined_symbol_count}, "
                 f"latest_noncritical_symbols={len(latest_noncritical_symbols)}, "
                 f"critical_universe={critical_universe_count}, "
@@ -466,7 +505,7 @@ class DataQualityEngine:
             )
         )
         return self._make_result(
-            "features_trust_quarantine_clear",
+            rule_id,
             severity,
             failed_count,
             message,

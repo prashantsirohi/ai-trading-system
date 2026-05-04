@@ -1,0 +1,53 @@
+@page {
+  size: A4;
+  margin: 18mm 14mm 18mm 14mm;
+  background: #fff;
+  @bottom-right { content: "Page " counter(page) " / " counter(pages); font-size: 9pt; color: #888; }
+  @bottom-left  { content: "Daily Gainers - " string(report-date); font-size: 9pt; color: #888; }
+}
+
+html { background: #fff; }
+
+body {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 10pt;
+  color: #222;
+  line-height: 1.35;
+  background: #fff;
+}
+
+h1 { font-size: 26pt; margin: 0 0 4pt 0; }
+h2 { font-size: 14pt; margin: 18pt 0 6pt 0; padding-bottom: 3pt; border-bottom: 1pt solid #ccc; }
+h3 { font-size: 11pt; margin: 12pt 0 4pt 0; color: #333; }
+a { color: #1565c0; text-decoration: none; }
+
+.cover { string-set: report-date attr(data-date); page-break-after: always; }
+.subtitle { color: #666; font-size: 11pt; margin-bottom: 12pt; }
+
+.kpi-grid { display: flex; flex-wrap: wrap; gap: 6pt; margin: 6pt 0 12pt 0; }
+.kpi { flex: 1 1 30%; padding: 6pt 8pt; background: #fafafa; border: 1pt solid #e0e0e0; border-radius: 3pt; }
+.kpi .label { font-size: 8pt; color: #777; text-transform: uppercase; letter-spacing: 0.4pt; }
+.kpi .value { font-size: 14pt; font-weight: 600; color: #222; }
+
+.summary { padding: 8pt 10pt; border-left: 4pt solid #2e7d32; background: #f6fbf6; }
+.summary p { margin: 0 0 6pt 0; }
+.summary p:last-child { margin-bottom: 0; }
+
+table { width: 100%; border-collapse: collapse; margin: 6pt 0 10pt 0; font-size: 9pt; }
+thead { display: table-header-group; }
+th, td { padding: 4pt 6pt; text-align: left; border-bottom: 1pt solid #eee; vertical-align: top; }
+th { background: #f5f5f5; font-weight: 600; color: #333; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr { break-inside: avoid; page-break-inside: avoid; }
+tr:nth-child(even) td { background: #fbfbfb; }
+
+.section { break-inside: auto; page-break-inside: auto; }
+.stock-block { page-break-inside: avoid; margin-bottom: 10pt; }
+.takeaway { margin: 2pt 0 5pt 0; }
+.gain { color: #2e7d32; font-weight: 600; }
+.muted { color: #999; }
+.small { font-size: 8.5pt; }
+.tag { display: inline-block; padding: 1pt 5pt; border-radius: 8pt; font-size: 8pt; background: #e8f5e9; color: #2e7d32; }
+table.compact { font-size: 8.5pt; margin-top: 3pt; }
+table.compact th, table.compact td { padding: 3pt 4pt; overflow-wrap: anywhere; }
+

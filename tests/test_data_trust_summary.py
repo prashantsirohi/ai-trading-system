@@ -5,8 +5,6 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
-import pytest
-
 from ai_trading_system.analytics.data_trust import load_data_trust_summary
 from ai_trading_system.analytics.dq import DataQualityEngine
 from ai_trading_system.analytics.registry import RegistryStore
@@ -447,7 +445,7 @@ def test_dq_features_quarantine_rule_blocks_when_threshold_crossed(tmp_path: Pat
         registry=registry,
         params={
             "dq_features_max_quarantined_symbols": 1,
-            "dq_features_max_quarantined_symbol_ratio_pct": 40.0,
+            "dq_features_max_quarantined_symbol_ratio_pct": 0.1,
         },
     )
 
@@ -455,6 +453,37 @@ def test_dq_features_quarantine_rule_blocks_when_threshold_crossed(tmp_path: Pat
 
     assert outcome.status == "failed"
     assert outcome.failed_count == 1
+
+
+def test_dq_ingest_latest_trade_date_quarantine_rule_blocks_with_trade_dates(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    _init_catalog_with_trust_columns(db_path)
+    _insert_catalog_rows_for_date(db_path, trade_date="2026-04-24", row_count=1000)
+    _insert_active_quarantine(db_path, symbol_count=2, trade_date="2026-04-23", symbol_ids=["S00600", "S00601"])
+    _insert_active_quarantine(db_path, symbol_count=2, trade_date="2026-04-24", symbol_ids=["S00600", "S00601"])
+
+    registry = RegistryStore(tmp_path)
+    engine = DataQualityEngine(registry)
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=db_path,
+        run_id="pipeline-2026-04-24-ingest-blocked",
+        run_date="2026-04-24",
+        stage_name="ingest",
+        attempt_number=1,
+        registry=registry,
+        params={
+            "dq_features_max_quarantined_symbols": 1,
+            "dq_features_max_quarantined_symbol_ratio_pct": 0.1,
+        },
+    )
+
+    outcome = engine._rule_ingest_latest_trade_date_quarantine_clear(context, StageResult(metadata={}), "critical")
+
+    assert outcome.status == "failed"
+    assert outcome.failed_count == 1
+    assert "trade_dates=2026-04-23, 2026-04-24" in outcome.message
+    assert "latest_trade_date=2026-04-24" in outcome.message
 
 
 def test_dq_features_quarantine_rule_blocks_when_critical_universe_threshold_crossed(tmp_path: Path) -> None:

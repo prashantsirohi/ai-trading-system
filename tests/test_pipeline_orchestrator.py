@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import date
 from pathlib import Path
 
@@ -1901,6 +1900,61 @@ def test_main_auto_repairs_quarantine_and_retries(monkeypatch: pytest.MonkeyPatc
     assert run_calls[0]["params"]["preflight"] is False
     assert repair_calls[0]["data_domain"] == "operational"
     assert "2026-04-08" in repair_calls[0]["error_message"]
+
+
+def test_main_auto_repairs_pre_features_quarantine_and_retries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_calls: list[dict] = []
+    repair_calls: list[dict] = []
+
+    class FakeOrchestrator:
+        def __init__(self, project_root: Path) -> None:
+            self.project_root = Path(project_root)
+
+        def _build_run_id(self, run_date: str) -> str:
+            return f"pipeline-{run_date}-autotest"
+
+        def run_pipeline(self, **kwargs):
+            run_calls.append(kwargs)
+            if len(run_calls) == 1:
+                raise DataQualityCriticalError(
+                    "ingest_latest_trade_date_quarantine_clear: Active quarantine rows remain after ingest "
+                    "(trade_dates=2026-04-30, 2026-05-04, rows=11, symbols=11, latest_trade_date=2026-05-04, "
+                    "latest_critical_symbols=11, latest_noncritical_symbols=0, critical_universe=1000, "
+                    "critical_ratio=1.10% max_symbols=10, effective_max_symbols=10, max_ratio=1.00%)."
+                )
+            return {"run_id": kwargs["run_id"], "status": "completed", "stages": []}
+
+    def fake_repair(*, project_root: Path, run_id: str, error_message: str, data_domain: str):
+        repair_calls.append(
+            {
+                "project_root": Path(project_root),
+                "run_id": run_id,
+                "error_message": error_message,
+                "data_domain": data_domain,
+            }
+        )
+        return {"status": "completed", "report_dir": str(tmp_path)}
+
+    monkeypatch.setattr(orchestrator_module, "PipelineOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(orchestrator_module, "_run_auto_quarantine_repair", fake_repair)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ai_trading_system.pipeline.orchestrator",
+            "--stages",
+            "ingest,features,rank",
+            "--run-date",
+            "2026-05-04",
+        ],
+    )
+
+    orchestrator_module.main()
+
+    assert len(run_calls) == 2
+    assert run_calls[0]["run_id"] == run_calls[1]["run_id"]
+    assert repair_calls[0]["data_domain"] == "operational"
+    assert "2026-04-30" in repair_calls[0]["error_message"]
+    assert "2026-05-04" in repair_calls[0]["error_message"]
 
 
 def test_main_publish_only_without_run_id_resolves_latest_publishable_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

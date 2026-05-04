@@ -15,7 +15,13 @@ from typing import Dict, Iterable, List, Optional
 from ai_trading_system.analytics.dq import DataQualityEngine
 from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.domains.ingest.service import IngestOrchestrationService
-from ai_trading_system.pipeline.contracts import DataQualityCriticalError, PublishStageError, StageContext, StageResult
+from ai_trading_system.pipeline.contracts import (
+    DataQualityCriticalError,
+    PublishStageError,
+    StageArtifact,
+    StageContext,
+    StageResult,
+)
 from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.platform.logging import logger as logging_module
 from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout
@@ -551,6 +557,18 @@ def _extract_quarantined_dates(message: str) -> list[str]:
     """Parse quarantined trade dates from an ingest DQ failure message."""
 
     return sorted(set(re.findall(r"\b\d{4}-\d{2}-\d{2}\b", str(message or ""))))
+
+
+def _is_auto_repairable_quarantine_failure(message: str) -> bool:
+    text = str(message or "")
+    return any(
+        token in text
+        for token in (
+            "ingest_unresolved_dates_present",
+            "ingest_latest_trade_date_quarantine_clear",
+            "features_trust_quarantine_clear",
+        )
+    )
 
 
 def _run_auto_quarantine_repair(
@@ -1093,7 +1111,7 @@ def main() -> None:
             bool(args.auto_repair_quarantine)
             and args.data_domain == "operational"
             and "ingest" in stage_names
-            and "ingest_unresolved_dates_present" in str(exc)
+            and _is_auto_repairable_quarantine_failure(str(exc))
         )
         if not can_auto_repair:
             logger.error("Pipeline blocked by data-quality gate.")

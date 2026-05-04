@@ -36,6 +36,7 @@ class IngestOrchestrationService:
         return StageResult(artifacts=[artifact], metadata=metadata)
 
     def run_default(self, context: StageContext) -> Dict:
+        fallback_enabled, fallback_reason = self.resolve_yfinance_fallback_policy(context)
         if self.operation is not None:
             result = self.operation(context)
         else:
@@ -54,7 +55,7 @@ class IngestOrchestrationService:
                 run_id=context.run_id,
                 target_end_date=context.run_date,
                 stale_missing_symbol_grace_days=int(context.params.get("stale_missing_symbol_grace_days", 3)),
-                nse_allow_yfinance_fallback=bool(context.params.get("nse_allow_yfinance_fallback", False)),
+                nse_allow_yfinance_fallback=fallback_enabled,
             )
 
         catalog_rows, symbol_count, latest_ts = fetch_catalog_summary(context.db_path)
@@ -73,6 +74,8 @@ class IngestOrchestrationService:
                     target_end_date=target_end_date,
                     latest_available_date=latest_catalog_date,
                 ),
+                "nse_allow_yfinance_fallback_effective": bool(fallback_enabled),
+                "nse_allow_yfinance_fallback_reason": fallback_reason,
             }
         )
         payload.update(self.run_bhavcopy_validation(context, payload))
@@ -81,13 +84,45 @@ class IngestOrchestrationService:
         payload["downstream_input_fingerprint"] = self.build_downstream_input_fingerprint(payload)
         return payload
 
+    def resolve_yfinance_fallback_policy(self, context: StageContext) -> tuple[bool, str]:
+        if "nse_allow_yfinance_fallback" in context.params:
+            enabled = bool(context.params.get("nse_allow_yfinance_fallback", False))
+            return enabled, "explicit"
+
+        auto_enabled = bool(context.params.get("auto_enable_yfinance_fallback", True))
+        if not auto_enabled:
+            return False, "auto_disabled"
+
+        if not Path(context.db_path).exists():
+            return True, "catalog_stale"
+
+        try:
+            _catalog_rows, _symbol_count, latest_ts = fetch_catalog_summary(context.db_path)
+        except Exception:
+            return True, "catalog_stale"
+        latest_catalog_date = None
+        if latest_ts is not None:
+            latest_catalog_date = pd.Timestamp(latest_ts).date().isoformat()
+        freshness_status = self.classify_freshness_status(
+            target_end_date=str(context.run_date),
+            latest_available_date=latest_catalog_date,
+        )
+        return freshness_status != "fresh", f"catalog_{freshness_status}"
+
     @staticmethod
     def is_downstream_skip_eligible(payload: Dict) -> bool:
         if "rows_written" not in payload and "updated_symbols" not in payload:
             return False
         updated_symbols = payload.get("updated_symbols")
         rows_written = int(payload.get("rows_written", 0) or 0)
-        return rows_written == 0 and not bool(updated_symbols)
+        unresolved_date_count = int(payload.get("unresolved_date_count_all", payload.get("unresolved_date_count", 0)) or 0)
+        freshness_status = str(payload.get("freshness_status") or "").strip().lower()
+        return (
+            rows_written == 0
+            and not bool(updated_symbols)
+            and unresolved_date_count == 0
+            and freshness_status == "fresh"
+        )
 
     @staticmethod
     def build_downstream_input_fingerprint(payload: Dict) -> str:

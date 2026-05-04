@@ -17,8 +17,9 @@ PR-4 NOTE (canonical migration boundary):
 - This module is now the canonical home for daily ingest orchestration.
 """
 
+# ruff: noqa: E402
+
 import os
-import sys
 import argparse
 import time
 import sqlite3
@@ -101,6 +102,18 @@ def _business_dates(from_date: str, to_date: str, *, masterdb_path: str | None =
     if not holidays:
         return business_days
     return [day for day in business_days if day not in holidays]
+
+
+def _trading_gap_days(last_date: date, target_end_date: date, *, masterdb_path: str | None = None) -> int:
+    """Count missing trading sessions between the last catalog date and target_end_date."""
+    if target_end_date <= last_date:
+        return 0
+    missing_dates = _business_dates(
+        (last_date + timedelta(days=1)).isoformat(),
+        target_end_date.isoformat(),
+        masterdb_path=masterdb_path,
+    )
+    return len(missing_dates)
 
 
 def _compute_canary_blocked(result: dict, *, canary_mode: bool) -> bool:
@@ -544,9 +557,10 @@ def _rows_to_symbol_frames(rows: pd.DataFrame) -> list[pd.DataFrame]:
         "isin",
     ]
     for (symbol_id, security_id, exchange), part in rows.groupby(["symbol_id", "security_id", "exchange"], sort=True):
+        part = part.copy()
         for column in optional_columns:
             if column not in part.columns:
-                part[column] = None
+                part.loc[:, column] = None
         frame = (
             part[
                 [
@@ -752,9 +766,12 @@ def _run_nse_yfinance_daily_update(
                 up_to_date_symbols.append(sym_id)
             else:
                 stale_symbols.append(sym_id)
-                if (target_end_date - last_date).days > grace_days:
+                if _trading_gap_days(
+                    last_date,
+                    target_end_date,
+                    masterdb_path=collector.masterdb_path,
+                ) > grace_days:
                     stale_gap_symbols.append(sym_id)
-                    continue
         else:
             start_date = fallback_start
             no_data_symbols.append(sym_id)
@@ -923,7 +940,6 @@ def _run_nse_yfinance_daily_update(
             unresolved_symbol_dates_observed.append((symbol_id, trade_date))
 
     unresolved_dates = sorted({trade_date for _, trade_date in unresolved_symbol_dates_active})
-    unresolved_dates_observed = sorted({trade_date for _, trade_date in unresolved_symbol_dates_observed})
     unresolved_symbols = sorted({symbol_id for symbol_id, _ in unresolved_symbol_dates_active})
     unresolved_symbols_all = sorted({symbol_id for symbol_id, _ in unresolved_symbol_dates})
 

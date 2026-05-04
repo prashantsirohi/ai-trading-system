@@ -679,7 +679,7 @@ def test_daily_update_runner_applies_stale_grace_to_unresolved_dates(
 
         def _get_last_dates(self, exchanges=None):
             # The fixed run date in this test is 2026-04-07, so target_end_date is 2026-04-06.
-            # A 5-day stale gap should be excluded when grace is set to 1.
+            # The symbol is stale beyond grace, but the runner should still attempt a catch-up fetch.
             return {"AAA": "2026-04-01"}
 
         def _upsert_ohlcv(self, dfs):
@@ -688,15 +688,17 @@ def test_daily_update_runner_applies_stale_grace_to_unresolved_dates(
     monkeypatch.setattr(daily_update_runner, "project_root", str(tmp_path))
     monkeypatch.setattr(daily_update_runner, "datetime", _FixedDateTime)
     monkeypatch.setattr(daily_update_runner, "DhanCollector", DummyCollector)
-    monkeypatch.setattr(
-        daily_update_runner,
-        "_fetch_nse_bhavcopy_rows",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("No fetch expected when all symbols are beyond stale grace")),
-    )
+    captured: dict[str, object] = {}
+
+    def fake_fetch_nse_bhavcopy_rows(*, trade_dates, **kwargs):
+        captured["trade_dates"] = list(trade_dates)
+        return pd.DataFrame(), [], list(trade_dates)
+
+    monkeypatch.setattr(daily_update_runner, "_fetch_nse_bhavcopy_rows", fake_fetch_nse_bhavcopy_rows)
     monkeypatch.setattr(
         daily_update_runner,
         "_fetch_yfinance_rows",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("No fallback fetch expected when all symbols are beyond stale grace")),
+        lambda **kwargs: pd.DataFrame(),
     )
 
     result = daily_update_runner.run(
@@ -710,9 +712,88 @@ def test_daily_update_runner_applies_stale_grace_to_unresolved_dates(
     )
 
     assert result["symbols_updated"] == 0
-    assert result["unresolved_dates"] == []
+    assert captured["trade_dates"] == ["2026-04-02", "2026-04-03", "2026-04-06"]
+    assert result["unresolved_dates"] == ["2026-04-02", "2026-04-03", "2026-04-06"]
     assert result["stale_missing_symbol_count"] == 1
     assert result["stale_missing_symbols"] == ["AAA"]
+
+
+def test_daily_update_runner_counts_trading_gap_not_calendar_gap(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class DummyCollector:
+        def __init__(self, *args, **kwargs) -> None:
+            self.db_path = str(tmp_path / "ohlcv.duckdb")
+            self.masterdb_path = str(tmp_path / "masterdata.db")
+            self.feature_store_dir = str(tmp_path / "feature_store")
+            self.data_domain = "operational"
+
+        def get_symbols_from_masterdb(self, exchanges=None):
+            return [
+                {
+                    "symbol_id": "AAA",
+                    "security_id": "101",
+                    "symbol_name": "AAA Ltd",
+                    "industry_group": "Test Group",
+                    "industry": "Test Industry",
+                    "exchange": "NSE",
+                }
+            ]
+
+        def _get_last_dates(self, exchanges=None):
+            return {"AAA": "2026-04-30"}
+
+        def _upsert_ohlcv(self, dfs):
+            return sum(len(df) for df in dfs)
+
+    masterdb = sqlite3.connect(tmp_path / "masterdata.db")
+    try:
+        masterdb.execute("CREATE TABLE nse_holidays (date TEXT)")
+        masterdb.execute("INSERT INTO nse_holidays (date) VALUES ('2026-05-01')")
+        masterdb.commit()
+    finally:
+        masterdb.close()
+
+    captured: dict[str, object] = {}
+
+    def fake_fetch_nse_bhavcopy_rows(*, trade_dates, **kwargs):
+        captured["trade_dates"] = list(trade_dates)
+        return pd.DataFrame(
+            [
+                {
+                    "symbol_id": "AAA",
+                    "security_id": "101",
+                    "exchange": "NSE",
+                    "timestamp": pd.Timestamp("2026-05-04"),
+                    "open": 104.0,
+                    "high": 106.0,
+                    "low": 103.0,
+                    "close": 105.0,
+                    "volume": 1200,
+                }
+            ]
+        ), ["2026-05-04"], []
+
+    monkeypatch.setattr(daily_update_runner, "project_root", str(tmp_path))
+    monkeypatch.setattr(daily_update_runner, "DhanCollector", DummyCollector)
+    monkeypatch.setattr(daily_update_runner, "_fetch_nse_bhavcopy_rows", fake_fetch_nse_bhavcopy_rows)
+    monkeypatch.setattr(daily_update_runner, "_fetch_yfinance_rows", lambda **kwargs: pd.DataFrame())
+
+    result = daily_update_runner.run(
+        symbols_only=True,
+        features_only=False,
+        batch_size=50,
+        bulk=False,
+        nse_primary=True,
+        data_domain="operational",
+        target_end_date="2026-05-04",
+    )
+
+    assert captured["trade_dates"] == ["2026-05-04"]
+    assert result["stale_missing_symbol_count"] == 0
+    assert result["symbols_updated"] == 1
+    assert result["nse_bhavcopy_dates"] == ["2026-05-04"]
 
 
 def test_daily_update_runner_honors_explicit_target_end_date(

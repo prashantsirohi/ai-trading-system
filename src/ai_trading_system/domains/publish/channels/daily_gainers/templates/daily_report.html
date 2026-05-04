@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Daily Gainers Report - {{ report_date }}</title>
+  <style>{{ inline_css|safe }}</style>
+</head>
+<body>
+
+<section class="cover" data-date="{{ report_date }}">
+  <h1>Daily Gainers Report</h1>
+  <div class="subtitle">{{ report_date }} · NSE equity close-to-close moves above {{ threshold|fmt_num(1) }}%</div>
+
+  <div class="kpi-grid">
+    <div class="kpi"><div class="label">Gainers</div><div class="value">{{ gainers_count }}</div></div>
+    <div class="kpi"><div class="label">Threshold</div><div class="value">&gt; {{ threshold|fmt_num(1) }}%</div></div>
+    <div class="kpi"><div class="label">Event Lookback</div><div class="value">{{ lookback_days }}d</div></div>
+  </div>
+
+  <h2>LLM Summary</h2>
+  <div class="summary">{{ summary_html|safe }}</div>
+</section>
+
+<section class="section">
+  <h2>Gainers Table</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol</th>
+        <th class="num">Move</th>
+        <th class="num">Close</th>
+        <th class="num">Volume</th>
+        <th class="num">Events</th>
+        <th>Top Event</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in gainers %}
+      <tr>
+        <td><strong>{{ row.symbol_id }}</strong></td>
+        <td class="num gain">{{ row.pct_change|fmt_pct_points }}</td>
+        <td class="num">{{ row.close|fmt_num(2) }}</td>
+        <td class="num">{{ row.volume|fmt_num(0) }}</td>
+        <td class="num">{{ row.events_count }}</td>
+        <td>{{ row.top_event or "-" }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="muted">No symbols crossed the threshold.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="section">
+  <h2>Per-Stock Detail</h2>
+  {% for row in gainers %}
+  <div class="stock-block">
+    <h3>{{ row.symbol_id }} <span class="tag">{{ row.pct_change|fmt_pct_points }}</span></h3>
+    {% if row.takeaway %}
+    <p class="takeaway">{{ row.takeaway }}</p>
+    {% endif %}
+    {% if row.events %}
+    <table class="compact">
+      <thead><tr><th>Date</th><th>Category</th><th>Event</th><th class="num">Trust</th></tr></thead>
+      <tbody>
+        {% for event in row.events %}
+        <tr>
+          <td>{{ event.event_date.date() if event.event_date else "-" }}</td>
+          <td>{{ event.category or "-" }}</td>
+          <td>
+            {% if event.link %}<a href="{{ event.link }}">{{ event.summary }}</a>{% else %}{{ event.summary }}{% endif %}
+          </td>
+          <td class="num">{{ event.trust_score|fmt_num(0) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted small">No qualifying market-intel events in the lookback window.</p>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="muted">No per-stock detail to show.</p>
+  {% endfor %}
+</section>
+
+</body>
+</html>
+

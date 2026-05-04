@@ -143,6 +143,15 @@ DEFAULT_RULES = [
         "owner": "pipeline",
     },
     {
+        "rule_id": "ingest_latest_trade_date_quarantine_clear",
+        "stage_name": "ingest",
+        "dataset_name": "_catalog_quarantine",
+        "severity": "critical",
+        "rule_sql": None,
+        "description": "Ingest should repair latest-trade-date quarantine before downstream feature computation.",
+        "owner": "pipeline",
+    },
+    {
         "rule_id": "features_snapshot_created",
         "stage_name": "features",
         "dataset_name": "feature_snapshot",
