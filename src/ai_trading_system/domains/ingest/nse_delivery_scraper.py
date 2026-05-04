@@ -16,6 +16,7 @@ import requests
 from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger
+from ai_trading_system.domains.ingest.series_policy import is_supported
 
 
 def _resolve_project_root(anchor: str | Path) -> Path:
@@ -193,7 +194,7 @@ class NseHistoricalDeliveryScraper:
             }
         )
         if "series" in normalized.columns:
-            normalized = normalized[normalized["series"] == "EQ"]
+            normalized = normalized[normalized["series"].apply(is_supported)]
         if normalized.empty:
             return pd.DataFrame(
                 columns=[

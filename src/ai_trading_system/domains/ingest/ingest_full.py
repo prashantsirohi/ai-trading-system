@@ -172,6 +172,10 @@ def write_dfs_to_duckdb(conn, dfs: list, from_date: str, to_date: str) -> tuple:
 
     all_rows = pd.concat(dfs, ignore_index=True)
     all_rows = validate_ohlcv_frame(all_rows, source_label="ingest_full.write_dfs_to_duckdb")
+    if "series" not in all_rows.columns:
+        all_rows["series"] = None
+    if "trading_segment" not in all_rows.columns:
+        all_rows["trading_segment"] = None
 
     rows_written = 0
     symbols_written = 0
@@ -185,18 +189,22 @@ def write_dfs_to_duckdb(conn, dfs: list, from_date: str, to_date: str) -> tuple:
             conn.execute("""
                 INSERT INTO _catalog
                     (symbol_id, security_id, exchange, timestamp,
-                     open, high, low, close, volume)
+                     open, high, low, close, volume,
+                     series, trading_segment)
                 SELECT
                     symbol_id, security_id, exchange, timestamp,
                     open, high, low, close,
-                    COALESCE(volume, 0) AS volume
+                    COALESCE(volume, 0) AS volume,
+                    series, trading_segment
                 FROM temp_sym
                 ON CONFLICT (symbol_id, exchange, timestamp) DO UPDATE SET
                     open = EXCLUDED.open,
                     high = EXCLUDED.high,
                     low = EXCLUDED.low,
                     close = EXCLUDED.close,
-                    volume = EXCLUDED.volume
+                    volume = EXCLUDED.volume,
+                    series = COALESCE(EXCLUDED.series, _catalog.series),
+                    trading_segment = COALESCE(EXCLUDED.trading_segment, _catalog.trading_segment)
             """)
         finally:
             conn.execute("DROP VIEW temp_sym")

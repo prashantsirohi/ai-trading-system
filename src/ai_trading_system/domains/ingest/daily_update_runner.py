@@ -65,6 +65,7 @@ project_root = str(_resolve_project_root(__file__))
 
 from ai_trading_system.domains.ingest.providers.dhan import DhanCollector, dhan_daily_window_ist
 from ai_trading_system.domains.ingest.providers.nse import NSECollector
+from ai_trading_system.domains.ingest.series_policy import is_supported, trading_segment
 from ai_trading_system.domains.features.feature_store import FeatureStore
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger
@@ -469,7 +470,7 @@ def _normalize_bhavcopy_frame(
 ) -> pd.DataFrame:
     if raw_df is None or raw_df.empty:
         return pd.DataFrame(
-            columns=["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume"]
+            columns=["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume", "series", "trading_segment"]
         )
 
     df = raw_df.copy()
@@ -488,7 +489,12 @@ def _normalize_bhavcopy_frame(
     }
     df = df.rename(columns=rename_map)
     if "series" in df.columns:
-        df = df[df["series"].astype(str).str.strip().str.upper() == "EQ"]
+        df = df[df["series"].apply(is_supported)]
+        df.loc[:, "series"] = df["series"].apply(lambda v: str(v).strip().upper())
+        df.loc[:, "trading_segment"] = df["series"].apply(trading_segment)
+    else:
+        df.loc[:, "series"] = ""
+        df.loc[:, "trading_segment"] = "unknown"
     symbol_map = {str(symbol): row for symbol, row in security_map.items()}
     isin_lookup = {str(k): v for k, v in (isin_map or {}).items()}
 
@@ -511,7 +517,7 @@ def _normalize_bhavcopy_frame(
     df = df[df["symbol_id"].astype(str).str.strip() != ""].copy()
     if df.empty:
         return pd.DataFrame(
-            columns=["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume"]
+            columns=["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume", "series", "trading_segment"]
         )
 
     for field in ["open", "high", "low", "close", "volume"]:
@@ -519,7 +525,7 @@ def _normalize_bhavcopy_frame(
     df = df.dropna(subset=["open", "high", "low", "close"])
     if df.empty:
         return pd.DataFrame(
-            columns=["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume"]
+            columns=["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume", "series", "trading_segment"]
         )
 
     df.loc[:, "timestamp"] = pd.to_datetime(trade_date)
@@ -532,8 +538,25 @@ def _normalize_bhavcopy_frame(
     df.loc[:, "exchange"] = "NSE"
     volume = pd.to_numeric(df["volume"], errors="coerce")
     df.loc[:, "volume"] = volume.where(volume.notna(), 0).astype("int64")
+    if "series" not in df.columns:
+        df.loc[:, "series"] = ""
+    if "trading_segment" not in df.columns:
+        df.loc[:, "trading_segment"] = "unknown"
     return df[
-        ["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume", "isin"]
+        [
+            "symbol_id",
+            "security_id",
+            "exchange",
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "isin",
+            "series",
+            "trading_segment",
+        ]
     ].drop_duplicates(subset=["symbol_id", "exchange", "timestamp"])
 
 

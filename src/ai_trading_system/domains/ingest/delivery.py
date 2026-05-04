@@ -11,6 +11,7 @@ from ai_trading_system.domains.ingest.nse_delivery_scraper import NseHistoricalD
 from ai_trading_system.domains.ingest.validation import validate_delivery_frame
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger
+from ai_trading_system.domains.ingest.series_policy import is_supported
 
 
 class DeliveryCollector:
@@ -177,7 +178,7 @@ class DeliveryCollector:
             if parts[0] != "20":
                 continue
             series = parts[3].strip()
-            if series != "EQ":
+            if not is_supported(series):
                 continue
             try:
                 symbol = parts[2].strip()
