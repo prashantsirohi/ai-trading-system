@@ -6,6 +6,7 @@ import io
 from datetime import datetime
 from typing import Optional, Dict, List
 from ai_trading_system.platform.logging.logger import logger
+from ai_trading_system.domains.ingest.series_policy import SUPPORTED_SERIES, is_supported
 
 
 class MasterDataCollector:
@@ -246,12 +247,15 @@ class MasterDataCollector:
         df = df.rename(columns=column_mapping)
 
         eq_df = df[
-            (df["segment"] == "E") & 
-            (df["exch_type"] == "ES") &
-            (df["series"] == "EQ")
+            (df["segment"] == "E")
+            & (df["exch_type"] == "ES")
+            & (df["series"].apply(is_supported))
         ].copy()
-        
-        logger.info(f"Found {len(eq_df)} E + ES + EQ equity symbols (excluding ETF/Index)")
+
+        logger.info(
+            f"Found {len(eq_df)} E + ES + supported-series equity symbols "
+            f"(series in {SUPPORTED_SERIES}, excluding ETF/Index)"
+        )
         
         eq_df["sector"] = "Unknown"
         eq_df["industry"] = "Unknown"

@@ -143,6 +143,15 @@ DEFAULT_RULES = [
         "owner": "pipeline",
     },
     {
+        "rule_id": "ingest_segment_distribution_drift",
+        "stage_name": "ingest",
+        "dataset_name": "_catalog",
+        "severity": "high",
+        "rule_sql": None,
+        "description": "Share of non-regular (T2T/BZ) trading segments should not jump abruptly week-over-week.",
+        "owner": "pipeline",
+    },
+    {
         "rule_id": "ingest_latest_trade_date_quarantine_clear",
         "stage_name": "ingest",
         "dataset_name": "_catalog_quarantine",

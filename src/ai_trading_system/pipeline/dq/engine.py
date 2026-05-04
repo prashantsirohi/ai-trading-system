@@ -380,6 +380,87 @@ class DataQualityEngine:
             message,
         )
 
+    def _rule_ingest_segment_distribution_drift(
+        self, context: StageContext, result: StageResult, severity: str
+    ) -> DQRuleFailure:
+        if not self._table_exists(context.db_path, "_catalog"):
+            return self._make_result(
+                "ingest_segment_distribution_drift",
+                severity,
+                0,
+                "Catalog table not present; skipping segment-drift check.",
+            )
+        column_rows = self._fetchall(
+            context.db_path,
+            "SELECT column_name FROM information_schema.columns WHERE table_name = '_catalog'",
+        )
+        catalog_columns = {str(row[0]) for row in column_rows}
+        if "trading_segment" not in catalog_columns:
+            return self._make_result(
+                "ingest_segment_distribution_drift",
+                severity,
+                0,
+                "trading_segment column not yet populated; skipping segment-drift check.",
+            )
+        max_jump_pct = float(context.params.get("dq_segment_drift_max_jump_pct", 5.0) or 5.0)
+        lookback_days = int(context.params.get("dq_segment_drift_lookback_days", 7) or 7)
+        baseline_lookback = int(context.params.get("dq_segment_drift_baseline_days", 30) or 30)
+        run_date_lit = self._sql_literal(context.run_date)
+        rows = self._fetchall(
+            context.db_path,
+            f"""
+            WITH recent AS (
+                SELECT
+                    SUM(CASE WHEN COALESCE(trading_segment, 'unknown') <> 'regular' THEN 1 ELSE 0 END) * 100.0 /
+                        NULLIF(COUNT(*), 0) AS non_regular_pct
+                FROM _catalog
+                WHERE exchange = 'NSE'
+                  AND CAST(timestamp AS DATE) >= DATE {run_date_lit} - INTERVAL {lookback_days} DAY
+                  AND CAST(timestamp AS DATE) <= DATE {run_date_lit}
+            ),
+            baseline AS (
+                SELECT
+                    SUM(CASE WHEN COALESCE(trading_segment, 'unknown') <> 'regular' THEN 1 ELSE 0 END) * 100.0 /
+                        NULLIF(COUNT(*), 0) AS non_regular_pct
+                FROM _catalog
+                WHERE exchange = 'NSE'
+                  AND CAST(timestamp AS DATE) >= DATE {run_date_lit} - INTERVAL {baseline_lookback} DAY
+                  AND CAST(timestamp AS DATE) <  DATE {run_date_lit} - INTERVAL {lookback_days} DAY
+            )
+            SELECT recent.non_regular_pct, baseline.non_regular_pct
+            FROM recent, baseline
+            """,
+        )
+        if not rows or rows[0][0] is None or rows[0][1] is None:
+            return self._make_result(
+                "ingest_segment_distribution_drift",
+                severity,
+                0,
+                "Insufficient data to evaluate segment drift.",
+            )
+        recent_pct = float(rows[0][0])
+        baseline_pct = float(rows[0][1])
+        delta = recent_pct - baseline_pct
+        failed_count = int(delta > max_jump_pct)
+        message = (
+            f"Segment distribution stable (recent_non_regular_pct={recent_pct:.2f}%, "
+            f"baseline_non_regular_pct={baseline_pct:.2f}%, delta={delta:+.2f}%, "
+            f"max_jump_pct={max_jump_pct:.2f}%)."
+            if failed_count == 0
+            else (
+                f"Non-regular segment share jumped recent_non_regular_pct={recent_pct:.2f}% "
+                f"vs baseline_non_regular_pct={baseline_pct:.2f}% (delta={delta:+.2f}%, "
+                f"max_jump_pct={max_jump_pct:.2f}%). Likely an NSE reclassification batch — "
+                f"review _catalog series distribution."
+            )
+        )
+        return self._make_result(
+            "ingest_segment_distribution_drift",
+            severity,
+            failed_count,
+            message,
+        )
+
     def _rule_ingest_latest_trade_date_quarantine_clear(
         self, context: StageContext, result: StageResult, severity: str
     ) -> DQRuleFailure:

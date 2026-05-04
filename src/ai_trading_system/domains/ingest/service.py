@@ -11,6 +11,7 @@ from typing import Callable, Dict, Optional
 import pandas as pd
 
 from ai_trading_system.domains.ingest.repository import fetch_catalog_close_frame, fetch_catalog_summary
+from ai_trading_system.domains.ingest.series_policy import is_supported
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.pipeline.contracts import DataQualityCriticalError, StageArtifact, StageContext, StageResult
@@ -368,7 +369,10 @@ class IngestOrchestrationService:
                 f"Bhavcopy validation failed: expected SYMBOL/CLOSE columns not found in source {source_label}."
             )
         if series_col:
-            frame = frame[frame[series_col].astype(str).str.strip().str.upper().eq("EQ")]
+            allowed = context.params.get("nse_supported_series") if context.params else None
+            frame = frame[
+                frame[series_col].apply(lambda value: is_supported(value, allowed=allowed))
+            ]
         isin_col = "ISIN" if "ISIN" in frame.columns else None
         symbol_master = SymbolMaster.from_masterdb(
             str(

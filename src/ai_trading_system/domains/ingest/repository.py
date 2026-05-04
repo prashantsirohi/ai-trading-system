@@ -56,6 +56,8 @@ def ensure_catalog_compatibility(conn: duckdb.DuckDBPyConnection) -> None:
             "is_benchmark",
             "benchmark_label",
             "isin",
+            "series",
+            "trading_segment",
         },
         "_catalog_history": {
             "security_id",
@@ -81,6 +83,8 @@ def ensure_catalog_compatibility(conn: duckdb.DuckDBPyConnection) -> None:
             "is_benchmark",
             "benchmark_label",
             "isin",
+            "series",
+            "trading_segment",
         },
     }
 

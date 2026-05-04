@@ -33,6 +33,8 @@ CATALOG_TRUST_COLUMNS: dict[str, str] = {
     "is_benchmark": "BOOLEAN",
     "benchmark_label": "VARCHAR",
     "isin": "VARCHAR",
+    "series": "VARCHAR",
+    "trading_segment": "VARCHAR",
 }
 
 # Index catalog schemas for sectoral indices (NIFTY BANK, NIFTY AUTO, etc.)
