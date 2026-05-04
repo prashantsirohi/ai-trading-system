@@ -445,6 +445,22 @@ def load_model_workbench_detail(
     model_record = registry.get_model_record(model_id)
     metadata = model_record.get("metadata", {}) or {}
     horizon = metadata.get("horizon")
+    as_of_date = None
+
+    if horizon is not None:
+        with registry._reader() as conn:
+            row = conn.execute(
+                """
+                SELECT MAX(prediction_date)
+                FROM prediction_log
+                WHERE model_id = ?
+                  AND horizon = ?
+                  AND deployment_mode = ?
+                """,
+                [model_id, int(horizon), "shadow_ml"],
+            ).fetchone()
+        if row and row[0] is not None:
+            as_of_date = str(row[0])
 
     detail: Dict[str, Any] = {
         "model": model_record,
@@ -463,6 +479,7 @@ def load_model_workbench_detail(
             horizon=int(horizon),
             deployment_mode="shadow_ml",
             lookback_days=lookback_days,
+            as_of_date=as_of_date,
         )
     return detail
 

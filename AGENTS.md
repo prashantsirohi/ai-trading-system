@@ -1,151 +1,67 @@
-# AGENTS.md — Refactor Rules for AI Trading System
+# AGENTS.md
+behavioral guidelines to reduce common LLM coding mistakes.
+Merge with project-specific instructions as needed.
 
-## Purpose
-This file defines how automated agents (Codex, Claude, etc.) should perform
-refactoring and code changes in this repository.
+**Tradeoff:** These guidelines bias toward caution over speed.
+For trivial tasks, use judgment.
 
----
+## 1. Think Before Coding
 
-## 🔒 Core Principle
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
 
-> This is a **behavior-preserving refactor**, NOT a redesign.
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them. Don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
 
-If unsure → **preserve existing behavior**.
+## 2. Simplicity First
 
----
+**Minimum code that solves the problem. Nothing speculative.**
 
-## 🧱 Architecture Reference
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
 
-Pipeline stages (must remain unchanged):
+Ask yourself: "Would a senior engineer say this is overcomplicated?"
+If yes, simplify.
 
-ingest → features → rank → execute → publish
+## 3. Surgical Changes
 
-These are **hard contracts**, not suggestions.
+**Touch only what you must. Clean up only your own mess.**
 
----
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it. Don't delete it.
 
-## 🚫 DO NOT CHANGE (Critical Invariants)
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
 
-### Runtime Contracts
-- CLI flags and commands
-- Stage ordering and naming
-- Trust / DQ gating logic
-- Execution modes (paper/live/preview)
-- Publish retry + dedupe behavior
+The test: every changed line should trace directly to the user's request.
 
-### Data Contracts
-- DuckDB schema
-- Table names
-- Column names
-- Data types
+## 4. Goal-Driven Execution
 
-### Artifact Contracts
-DO NOT rename or move:
+**Define success criteria. Loop until verified.**
 
-- ingest_summary.json
-- feature_snapshot.json
-- ranked_signals.csv
-- breakout_scan.csv
-- pattern_scan.csv
-- stock_scan.csv
-- sector_dashboard.csv
-- dashboard_payload.json
-- execute_summary.json
-- publish_summary.json
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
 
-### API Contracts
-- Endpoint paths
-- Response JSON structure
-- Query parameters
+For multi-step tasks, state a brief plan:
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
 
----
-
-## ⚠️ Refactor Strategy (MANDATORY)
-
-Every change MUST follow this sequence:
-
-1. **Move files (path only)**
-2. Add **compatibility shim**
-3. Fix imports minimally
-4. Run tests
-5. Validate artifacts
-6. THEN (in later phase) refactor internals
+Strong success criteria let you loop independently.
+Weak criteria ("make it work") require constant clarification.
 
 ---
 
-## 🔁 Compatibility Shim Rule
-
-When moving a module:
-
-Old file MUST remain as:
-
-```python
-from ai_trading_system.<new_path> import *  # noqa
-
-Do NOT remove shim until:
-
-All imports are migrated
-Tests pass
-Explicit cleanup phase
-🧠 Decision Rules
-If something is unclear:
-Assume it is a public contract
-Do NOT modify it
-If refactor requires behavior change:
-STOP
-Document blocker
-Do not guess
-🧩 Large File Handling
-
-Files like:
-
-feature_store.py
-dhan_collector.py
-ranking orchestration
-
-Must NOT be split during path migration.
-
-Only split in dedicated decomposition phase.
-
-🛑 Anti-Patterns to Avoid
-
-❌ Renaming fields for “clarity”
-❌ Changing JSON keys
-❌ Reordering CSV columns
-❌ Changing default config values
-❌ Adding validation rules
-❌ Introducing new abstractions prematurely
-❌ Mixing multiple domains in one refactor
-
-✅ What IS Allowed
-
-✔ Moving files
-✔ Fixing broken imports
-✔ Adding shims
-✔ Extracting helpers ONLY when necessary
-✔ Small safe bugfixes explicitly identified
-
-🧪 Validation Required After Every Change
-Tests must run
-Pipeline must still execute (canary mode acceptable)
-Artifacts must match previous schema
-📦 Output Requirements (for every task)
-
-Agent MUST provide:
-
-Files changed
-Old → New path mapping
-Shims added
-Tests result
-Risks / assumptions
-🔚 Final Cleanup Phase
-
-Only at the very end:
-
-Remove shims
-Remove dead imports
-Update docs
-Normalize imports
-🧭 Golden Rule
-
-If it might break production → don’t do it in refactor phase.
+**These guidelines are working if:** fewer unnecessary changes in diffs,
+fewer rewrites due to overcomplication, and clarifying questions com

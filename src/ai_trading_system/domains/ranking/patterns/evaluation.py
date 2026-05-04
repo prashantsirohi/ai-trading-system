@@ -146,7 +146,7 @@ def _scan_pattern_signals(
     eligible_symbols = [
         (str(symbol), symbol_frame)
         for symbol, symbol_frame in frame.groupby("symbol_id", sort=True)
-        if len(symbol_frame) >= config.min_history_bars
+        if len(symbol_frame) >= min(int(config.min_history_bars), int(getattr(config, "ipo_base_min_history_bars", 35)))
     ]
     total_symbols = len(eligible_symbols)
 
@@ -238,8 +238,9 @@ def _scan_pattern_signals_parallel(
         return pd.DataFrame(), {}, {}
 
     eligible_symbols = []
+    min_scan_bars = min(int(config.min_history_bars), int(getattr(config, "ipo_base_min_history_bars", 35)))
     for symbol, symbol_frame in frame.groupby("symbol_id", sort=True):
-        if len(symbol_frame) < config.min_history_bars:
+        if len(symbol_frame) < min_scan_bars:
             continue
         ordered = symbol_frame.sort_values("timestamp").reset_index(drop=True)
         eligible_symbols.append(

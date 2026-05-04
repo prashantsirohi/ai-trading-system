@@ -448,7 +448,7 @@ class TestHeadShouldersFilter:
         assert neckline == 0.0
 
     def test_hs_suppresses_bullish_signals(self):
-        """When H&S filter fires, detect_pattern_signals_for_symbol returns empty signals."""
+        """When H&S fires, bullish signals are suppressed and a bearish marker is emitted."""
         config = PatternScanConfig()
         frame = self._make_hs_frame()
         smoothed, extrema = _smoothed_and_extrema(frame, config)
@@ -464,7 +464,11 @@ class TestHeadShouldersFilter:
         signals_df, stats = detect_pattern_signals_for_symbol(
             frame, smoothed=smoothed, extrema=extrema, config=config
         )
-        assert signals_df.empty, "H&S top should suppress all bullish signals"
+        assert len(signals_df.index) == 1
+        row = signals_df.iloc[0]
+        assert row["pattern_family"] == "head_shoulders"
+        assert row["pattern_operational_tier"] == "suppression_only"
+        assert row["pattern_score"] == 0.0
         assert "head_shoulders" in stats
 
 

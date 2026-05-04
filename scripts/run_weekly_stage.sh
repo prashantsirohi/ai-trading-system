@@ -17,8 +17,8 @@ mkdir -p "$LOG_DIR"
 # Pull PATH additions like ~/.local/bin where uv typically lives.
 # shellcheck disable=SC1090
 [ -f "$HOME/.profile" ] && . "$HOME/.profile"
-# shellcheck disable=SC1090
-[ -f "$HOME/.zshrc" ] && . "$HOME/.zshrc" 2>/dev/null || true
+# Avoid sourcing ~/.zshrc under bash because zsh-specific commands can abort
+# the wrapper before the job starts. PATH is extended explicitly below.
 export PATH="$HOME/.local/bin:$PATH"
 
 cd "$REPO_DIR"

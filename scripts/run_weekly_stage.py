@@ -119,7 +119,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
 
     paths = ensure_domain_layout(data_domain=args.data_domain)
-    ohlcv_db_path = Path(args.ohlcv_db) if args.ohlcv_db else ohlcv_db_path
+    ohlcv_db_path = Path(args.ohlcv_db) if args.ohlcv_db else paths.ohlcv_db_path
     if not ohlcv_db_path.exists():
         LOG.error("ohlcv.duckdb not found at %s", ohlcv_db_path)
         return 2
