@@ -83,7 +83,39 @@ class IngestOrchestrationService:
         payload.update(self.run_delivery_collection(context, payload))
         payload["downstream_skip_eligible"] = self.is_downstream_skip_eligible(payload)
         payload["downstream_input_fingerprint"] = self.build_downstream_input_fingerprint(payload)
+        payload["stale_quarantine_sweep"] = self.run_stale_quarantine_sweep(context)
         return payload
+
+    def run_stale_quarantine_sweep(self, context: StageContext) -> Dict:
+        """Mark long-stuck quarantine rows as permanently_unavailable.
+
+        Symbols whose most recent _catalog row is older than the stale
+        threshold get auto-promoted into ``_symbol_state_overrides`` so the
+        critical-universe denominator and quarantine numerator naturally
+        shrink. Failures here must not block ingest — they are logged and
+        the empty result returned.
+        """
+        try:
+            from ai_trading_system.domains.ingest.trust import sweep_stale_quarantine
+        except Exception as exc:
+            logger.warning("sweep_stale_quarantine import failed: %s", exc)
+            return {"flipped": 0, "marked": 0, "skipped": "import_failed"}
+        try:
+            stale_days = int(context.params.get("dq_stale_quarantine_days", 14) or 14)
+            counts = sweep_stale_quarantine(
+                str(context.db_path),
+                run_date=str(context.run_date),
+                stale_days=stale_days,
+            )
+            if counts.get("marked"):
+                logger.warning(
+                    "stale_quarantine_sweep: marked=%s flipped=%s stale_days=%s",
+                    counts.get("marked"), counts.get("flipped"), stale_days,
+                )
+            return counts
+        except Exception as exc:
+            logger.warning("sweep_stale_quarantine failed: %s", exc)
+            return {"flipped": 0, "marked": 0, "skipped": "exception", "error": str(exc)}
 
     def resolve_yfinance_fallback_policy(self, context: StageContext) -> tuple[bool, str]:
         if "nse_allow_yfinance_fallback" in context.params:

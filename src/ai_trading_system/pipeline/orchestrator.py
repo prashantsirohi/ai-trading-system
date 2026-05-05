@@ -17,6 +17,7 @@ from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.domains.ingest.service import IngestOrchestrationService
 from ai_trading_system.pipeline.contracts import (
     DataQualityCriticalError,
+    DataQualityRepairableError,
     PublishStageError,
     StageArtifact,
     StageContext,
@@ -462,8 +463,11 @@ class PipelineOrchestrator:
                         break
                     except Exception as exc:
                         final_status = "failed"
-                        severity = "critical" if exc.__class__.__name__ == "DataQualityCriticalError" else "high"
-                        alert_type = "critical_dq_failure" if exc.__class__.__name__ == "DataQualityCriticalError" else "pipeline_failure"
+                        is_dq_exc = exc.__class__.__name__ in (
+                            "DataQualityCriticalError", "DataQualityRepairableError",
+                        )
+                        severity = "critical" if is_dq_exc else "high"
+                        alert_type = "critical_dq_failure" if is_dq_exc else "pipeline_failure"
                         self.alert_manager.emit(
                             run_id=run_id,
                             alert_type=alert_type,
@@ -494,6 +498,18 @@ class PipelineOrchestrator:
                         raise
 
             if final_status == "completed":
+                # If any DQ rule was relaxed this run, surface it in the run status
+                # so dashboards/alerts distinguish a clean run from a degraded one.
+                if self._run_had_dq_relaxations(run_id):
+                    final_status = "completed_with_dq_relaxations"
+                    self.alert_manager.emit(
+                        run_id=run_id,
+                        alert_type="dq_relaxed",
+                        severity="high",
+                        stage_name="ingest",
+                        message="One or more critical DQ rules were relaxed (dq_mode=relaxed). "
+                                "See dq_result.relaxed_from for details.",
+                    )
                 self.registry.update_run(
                     run_id,
                     status=final_status,
@@ -521,6 +537,21 @@ class PipelineOrchestrator:
 
     def _build_run_id(self, run_date: str) -> str:
         return f"pipeline-{run_date}-{uuid.uuid4().hex[:8]}"
+
+    def _run_had_dq_relaxations(self, run_id: str) -> bool:
+        """Return True if any dq_result row for this run has relaxed_from set."""
+        try:
+            with self.registry._reader() as conn:  # noqa: SLF001 — internal access acceptable here
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) FROM dq_result
+                    WHERE run_id = ? AND relaxed_from IS NOT NULL AND relaxed_from <> ''
+                    """,
+                    [run_id],
+                ).fetchone()
+                return bool(row and int(row[0] or 0) > 0)
+        except Exception:
+            return False
 
     def _attach_latest_rank_artifacts(self, artifacts: Dict[str, Dict[str, StageArtifact]], *, run_id: str) -> None:
         """Let event/insight/publish stages reuse the latest completed rank outputs.
@@ -711,6 +742,24 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Automatically repair quarantined ingest dates with reset_reingest_validate and retry once.",
+    )
+    parser.add_argument(
+        "--dq-strict",
+        action="store_true",
+        help=(
+            "Run with dq_mode=strict — repairable DQ failures hard-block the pipeline. "
+            "Default (relaxed) downgrades repairable failures to warnings and finishes "
+            "the run as completed_with_dq_relaxations."
+        ),
+    )
+    parser.add_argument(
+        "--dq-stale-quarantine-days",
+        type=int,
+        default=14,
+        help=(
+            "Days after which an active quarantine row with no provider data gets "
+            "auto-marked permanently_unavailable and excluded from the critical universe."
+        ),
     )
     parser.add_argument(
         "--skip-publish-network-checks",
@@ -1098,6 +1147,8 @@ def main() -> None:
         "terminal_mode": terminal_mode,
         "verbose_terminal": bool(args.verbose_terminal),
         "stale_missing_symbol_grace_days": args.stale_missing_symbol_grace_days,
+        "dq_mode": "strict" if args.dq_strict else "relaxed",
+        "dq_stale_quarantine_days": int(args.dq_stale_quarantine_days),
     }
     try:
         result = orchestrator.run_pipeline(
@@ -1106,7 +1157,7 @@ def main() -> None:
             run_date=run_date,
             params=params,
         )
-    except DataQualityCriticalError as exc:
+    except (DataQualityCriticalError, DataQualityRepairableError) as exc:
         can_auto_repair = (
             bool(args.auto_repair_quarantine)
             and args.data_domain == "operational"
@@ -1148,7 +1199,7 @@ def main() -> None:
             run_date=run_date,
             params=params,
         )
-    except DataQualityCriticalError as exc:
+    except (DataQualityCriticalError, DataQualityRepairableError) as exc:
         logger.error("Pipeline blocked by data-quality gate after retry handling.")
         logger.error("run_id=%s status=blocked_by_dq run_date=%s", run_id, run_date)
         logger.error("dq_message=%s", str(exc))
