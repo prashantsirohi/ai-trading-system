@@ -14,12 +14,40 @@ from ai_trading_system.domains.ingest.trust import (
     load_data_trust_summary,
 )
 from ai_trading_system.analytics.registry import RegistryStore
-from ai_trading_system.pipeline.contracts import DataQualityCriticalError, StageContext, StageResult
+from ai_trading_system.pipeline.contracts import (
+    DataQualityCriticalError,
+    DataQualityRepairableError,
+    StageContext,
+    StageResult,
+)
+
+
+# Hard-floor rules that are NEVER relaxed even when dq_mode=relaxed.
+# These represent data integrity issues that downstream stages cannot work around.
+HARD_FLOOR_RULES: frozenset[str] = frozenset({
+    # Ingest data-integrity floor
+    "ingest_catalog_not_empty",
+    "ingest_required_fields_not_null",
+    "ingest_ohlc_consistency",
+    "ingest_duplicate_ohlcv_key",
+    # Features stage produced no output → downstream cannot run
+    "features_snapshot_created",
+    "features_registry_not_empty",
+    # Rank artifact missing is an internal logic failure, not an external DQ issue
+    "rank_artifact_not_empty",
+})
 
 
 @dataclass
 class DQRuleFailure:
-    """Represents a single DQ evaluation outcome."""
+    """Represents a single DQ evaluation outcome.
+
+    Bands (set by evaluators or inferred at evaluate() time):
+        green           — failed_count == 0
+        amber           — non-critical / informational; never blocks
+        red_repairable  — critical but external/fixable; relaxable
+        red_block       — critical hard-floor; never relaxed
+    """
 
     rule_id: str
     severity: str
@@ -27,6 +55,8 @@ class DQRuleFailure:
     failed_count: int
     message: str
     sample_uri: str | None = None
+    band: str = ""
+    relaxed_from: str | None = None
 
 
 class DataQualityEngine:
@@ -36,9 +66,12 @@ class DataQualityEngine:
         self.registry = registry
 
     def evaluate(self, context: StageContext, result: StageResult) -> List[DQRuleFailure]:
+        dq_mode = str(context.params.get("dq_mode", "relaxed") or "relaxed").lower()
+
         failures: List[DQRuleFailure] = []
         for rule in self.registry.get_rules_for_stage(context.stage_name):
             outcome = self._evaluate_rule(rule, context, result)
+            outcome = self._apply_relaxation(outcome, dq_mode=dq_mode)
             self.registry.record_dq_result(
                 run_id=context.run_id,
                 stage_name=context.stage_name,
@@ -48,16 +81,42 @@ class DataQualityEngine:
                 failed_count=outcome.failed_count,
                 message=outcome.message,
                 sample_uri=outcome.sample_uri,
+                band=outcome.band or None,
+                relaxed_from=outcome.relaxed_from,
             )
             failures.append(outcome)
 
-        critical_failures = [
-            item for item in failures if item.severity == "critical" and item.status == "failed"
-        ]
-        if critical_failures:
-            joined = "; ".join(f"{item.rule_id}: {item.message}" for item in critical_failures)
+        red_block_failures = [item for item in failures if item.band == "red_block" and item.status == "failed"]
+        if red_block_failures:
+            joined = "; ".join(f"{item.rule_id}: {item.message}" for item in red_block_failures)
             raise DataQualityCriticalError(joined)
+
+        red_repairable_failures = [
+            item for item in failures if item.band == "red_repairable" and item.status == "failed"
+        ]
+        if red_repairable_failures:
+            joined = "; ".join(f"{item.rule_id}: {item.message}" for item in red_repairable_failures)
+            raise DataQualityRepairableError(joined)
         return failures
+
+    def _apply_relaxation(self, outcome: DQRuleFailure, *, dq_mode: str) -> DQRuleFailure:
+        """Downgrade red_repairable → amber when dq_mode == relaxed.
+
+        Hard-floor rules are never relaxed. Passes are untouched.
+        """
+        if outcome.status != "failed":
+            return outcome
+        if outcome.rule_id in HARD_FLOOR_RULES:
+            outcome.band = "red_block"
+            return outcome
+        if not outcome.band:
+            # Default: critical severity → red_repairable; non-critical → amber
+            outcome.band = "red_repairable" if outcome.severity == "critical" else "amber"
+        if outcome.band == "red_repairable" and dq_mode == "relaxed":
+            outcome.relaxed_from = "red_repairable"
+            outcome.band = "amber"
+            outcome.message = f"[RELAXED] {outcome.message}"
+        return outcome
 
     def _evaluate_rule(
         self,

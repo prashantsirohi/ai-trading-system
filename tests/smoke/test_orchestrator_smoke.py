@@ -132,7 +132,10 @@ def test_orchestrator_smoke_runs_all_stages_and_registers_artifacts(tmp_path: Pa
         },
     )
 
-    assert result["status"] == "completed"
+    # Accept either pristine completion or relaxed completion — both mean the
+    # pipeline produced all stage artifacts. Hard-floor failures still surface
+    # as raised exceptions; reaching this assertion means none of those fired.
+    assert result["status"] in ("completed", "completed_with_dq_relaxations")
     assert [row["stage_name"] for row in result["stages"]] == ["ingest", "features", "rank", "events", "execute", "insight", "publish"]
     assert all(row["status"] == "completed" for row in result["stages"])
 

@@ -360,6 +360,26 @@ class RegistryStore:
         with self._writer() as conn:
             for migration_path in self._migration_files():
                 conn.execute(migration_path.read_text(encoding="utf-8"))
+            self._ensure_dq_result_band_columns(conn)
+
+    @staticmethod
+    def _ensure_dq_result_band_columns(conn: duckdb.DuckDBPyConnection) -> None:
+        """Idempotently add band/relaxed_from columns to dq_result.
+
+        These extend Part B's graduated severity model. Older databases
+        without these columns get them via ALTER; new ones already have
+        them via the migration if it is updated. ADD COLUMN IF NOT EXISTS
+        keeps this safe to re-run.
+        """
+        existing = {
+            row[0] for row in conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'dq_result'"
+            ).fetchall()
+        }
+        if "band" not in existing:
+            conn.execute("ALTER TABLE dq_result ADD COLUMN band VARCHAR")
+        if "relaxed_from" not in existing:
+            conn.execute("ALTER TABLE dq_result ADD COLUMN relaxed_from VARCHAR")
 
     def seed_default_rules(self) -> None:
         with self._writer() as conn:
@@ -817,16 +837,20 @@ class RegistryStore:
         failed_count: int,
         message: str,
         sample_uri: Optional[str] = None,
+        band: Optional[str] = None,
+        relaxed_from: Optional[str] = None,
     ) -> None:
         result_id = f"dq-{uuid.uuid4().hex[:12]}"
         with self._writer() as conn:
             conn.execute(
                 """
                 INSERT INTO dq_result
-                (result_id, run_id, stage_name, rule_id, severity, status, failed_count, message, sample_uri, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                (result_id, run_id, stage_name, rule_id, severity, status, failed_count,
+                 message, sample_uri, band, relaxed_from, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
-                [result_id, run_id, stage_name, rule_id, severity, status, failed_count, message, sample_uri],
+                [result_id, run_id, stage_name, rule_id, severity, status, failed_count,
+                 message, sample_uri, band, relaxed_from],
             )
 
     def get_successful_delivery(self, dedupe_key: str) -> Optional[Dict[str, Any]]:

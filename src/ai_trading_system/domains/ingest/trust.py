@@ -170,6 +170,15 @@ def load_critical_symbol_universe(
             symbols.update(str(row[0]).strip().upper() for row in benchmark_rows if str(row[0]).strip())
 
         symbols.update(str(symbol).strip().upper() for symbol in (extra_symbols or []) if str(symbol).strip())
+
+        # Exclude symbols flagged as delisted/suspended/permanently_unavailable
+        # via the symbol-state override registry. These are genuinely external
+        # situations and should not block production gates.
+        if _table_columns(conn, "_symbol_state_overrides"):
+            blocked = load_blocking_symbol_overrides(conn, run_date=end_date)
+            if blocked:
+                symbols = {sym for sym in symbols if sym not in blocked}
+
         return symbols
     finally:
         if should_close:
@@ -270,6 +279,227 @@ def ensure_data_trust_schema(db_path_or_conn: duckdb.DuckDBPyConnection | str | 
             ON _catalog_provenance (exchange, timestamp, provider, symbol_id)
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS _symbol_state_overrides (
+                symbol_id VARCHAR NOT NULL,
+                exchange VARCHAR NOT NULL,
+                state VARCHAR NOT NULL,
+                effective_from DATE,
+                effective_to DATE,
+                reason VARCHAR,
+                source VARCHAR,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_symbol_state_overrides_scope
+            ON _symbol_state_overrides (exchange, symbol_id, effective_from)
+            """
+        )
+    finally:
+        if should_close:
+            conn.close()
+
+
+# Symbol-state vocabulary. Symbols in any of these states are excluded from
+# the critical universe and therefore from blocking quarantine ratios.
+SYMBOL_STATE_BLOCKING: frozenset[str] = frozenset({
+    "delisted",
+    "suspended",
+    "permanently_unavailable",
+})
+
+
+def mark_symbol_state(
+    db_path_or_conn: duckdb.DuckDBPyConnection | str | Path,
+    *,
+    symbol_id: str,
+    exchange: str,
+    state: str,
+    reason: str | None = None,
+    effective_from: str | date | None = None,
+    effective_to: str | date | None = None,
+    source: str = "manual",
+) -> None:
+    """Insert (or replace) a symbol-state override row."""
+    conn, should_close = _connect(db_path_or_conn)
+    try:
+        ensure_data_trust_schema(conn)
+        conn.execute(
+            """
+            DELETE FROM _symbol_state_overrides
+            WHERE symbol_id = ? AND exchange = ? AND state = ?
+              AND COALESCE(effective_from, DATE '1900-01-01') = COALESCE(CAST(? AS DATE), DATE '1900-01-01')
+            """,
+            [symbol_id, exchange, state, effective_from],
+        )
+        conn.execute(
+            """
+            INSERT INTO _symbol_state_overrides
+                (symbol_id, exchange, state, effective_from, effective_to, reason, source, created_at)
+            VALUES (?, ?, ?, CAST(? AS DATE), CAST(? AS DATE), ?, ?, CURRENT_TIMESTAMP)
+            """,
+            [symbol_id, exchange, state, effective_from, effective_to, reason, source],
+        )
+    finally:
+        if should_close:
+            conn.close()
+
+
+def clear_symbol_state(
+    db_path_or_conn: duckdb.DuckDBPyConnection | str | Path,
+    *,
+    symbol_id: str,
+    exchange: str,
+    state: str | None = None,
+) -> int:
+    """Delete override rows. If state is None, clear all states for the symbol.
+
+    Returns the number of rows deleted.
+    """
+    conn, should_close = _connect(db_path_or_conn)
+    try:
+        ensure_data_trust_schema(conn)
+        before = int(conn.execute(
+            "SELECT COUNT(*) FROM _symbol_state_overrides WHERE symbol_id = ? AND exchange = ?"
+            + (" AND state = ?" if state else ""),
+            [symbol_id, exchange] + ([state] if state else []),
+        ).fetchone()[0] or 0)
+        if state:
+            conn.execute(
+                "DELETE FROM _symbol_state_overrides WHERE symbol_id = ? AND exchange = ? AND state = ?",
+                [symbol_id, exchange, state],
+            )
+        else:
+            conn.execute(
+                "DELETE FROM _symbol_state_overrides WHERE symbol_id = ? AND exchange = ?",
+                [symbol_id, exchange],
+            )
+        return before
+    finally:
+        if should_close:
+            conn.close()
+
+
+def load_blocking_symbol_overrides(
+    db_path_or_conn: duckdb.DuckDBPyConnection | str | Path,
+    *,
+    run_date: str | None = None,
+    exchange: str = "NSE",
+) -> set[str]:
+    """Return the set of symbol_ids whose override state should exclude them
+    from the critical universe on ``run_date``.
+    """
+    conn, should_close = _connect(db_path_or_conn)
+    try:
+        if not _table_columns(conn, "_symbol_state_overrides"):
+            return set()
+        run_date_clause = ""
+        params: list[object] = [exchange, list(SYMBOL_STATE_BLOCKING)]
+        if run_date:
+            run_date_clause = (
+                " AND (effective_from IS NULL OR effective_from <= CAST(? AS DATE))"
+                " AND (effective_to IS NULL OR effective_to >= CAST(? AS DATE))"
+            )
+            params.extend([run_date, run_date])
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT UPPER(TRIM(symbol_id))
+            FROM _symbol_state_overrides
+            WHERE exchange = ?
+              AND state IN (SELECT UNNEST(?))
+              {run_date_clause}
+            """,
+            params,
+        ).fetchall()
+        return {str(row[0]) for row in rows if row[0]}
+    finally:
+        if should_close:
+            conn.close()
+
+
+def sweep_stale_quarantine(
+    db_path_or_conn: duckdb.DuckDBPyConnection | str | Path,
+    *,
+    run_date: str,
+    exchange: str = "NSE",
+    stale_days: int = 14,
+) -> dict[str, int]:
+    """Mark long-stuck quarantine rows as ``permanently_unavailable``.
+
+    Rows whose trade_date is older than ``run_date - stale_days`` AND whose
+    symbol has no successful catalog row at-or-after that trade_date are
+    flipped from ``status='active'`` to ``status='permanently_unavailable'``.
+    The same symbols get a row in ``_symbol_state_overrides`` so the critical
+    universe excludes them.
+
+    Returns a counts dict for telemetry: ``{"flipped": N, "marked": M}``.
+    """
+    conn, should_close = _connect(db_path_or_conn)
+    try:
+        ensure_data_trust_schema(conn)
+        if not _table_columns(conn, "_catalog_quarantine"):
+            return {"flipped": 0, "marked": 0}
+
+        candidate_rows = conn.execute(
+            """
+            SELECT q.symbol_id, MIN(q.trade_date) AS oldest_active_date
+            FROM _catalog_quarantine q
+            WHERE q.exchange = ?
+              AND q.status = 'active'
+              AND q.trade_date < CAST(? AS DATE) - INTERVAL (?) DAY
+              AND NOT EXISTS (
+                  SELECT 1 FROM _catalog c
+                  WHERE c.exchange = q.exchange
+                    AND UPPER(c.symbol_id) = UPPER(q.symbol_id)
+                    AND CAST(c.timestamp AS DATE) >= q.trade_date
+              )
+            GROUP BY q.symbol_id
+            """,
+            [exchange, run_date, int(stale_days)],
+        ).fetchall()
+        symbols = [str(row[0]) for row in candidate_rows if row and row[0]]
+        if not symbols:
+            return {"flipped": 0, "marked": 0}
+
+        flipped = 0
+        for symbol in symbols:
+            res = conn.execute(
+                """
+                UPDATE _catalog_quarantine
+                SET status = 'permanently_unavailable',
+                    resolved_at = CURRENT_TIMESTAMP,
+                    note = COALESCE(note, '') || ' | swept stale ' || ?
+                WHERE exchange = ?
+                  AND symbol_id = ?
+                  AND status = 'active'
+                  AND trade_date < CAST(? AS DATE) - INTERVAL (?) DAY
+                """,
+                [run_date, exchange, symbol, run_date, int(stale_days)],
+            )
+            count = conn.execute(
+                """
+                SELECT COUNT(*) FROM _catalog_quarantine
+                WHERE exchange = ? AND symbol_id = ? AND status = 'permanently_unavailable'
+                """,
+                [exchange, symbol],
+            ).fetchone()[0] or 0
+            flipped += int(count)
+
+            mark_symbol_state(
+                conn,
+                symbol_id=symbol,
+                exchange=exchange,
+                state="permanently_unavailable",
+                reason=f"sweep_stale_quarantine on {run_date} (stale_days={stale_days})",
+                effective_from=run_date,
+                source="auto_sweep",
+            )
+
+        return {"flipped": flipped, "marked": len(symbols)}
     finally:
         if should_close:
             conn.close()

@@ -119,7 +119,22 @@ class PipelineStageError(RuntimeError):
 
 
 class DataQualityCriticalError(PipelineStageError):
-    """Raised when a critical DQ rule fails and downstream work must stop."""
+    """Raised when a critical DQ rule fails and downstream work must stop.
+
+    Use for hard-floor rules that should never be relaxed (catalog empty,
+    duplicate keys, OHLC inconsistency, required-field nulls).
+    """
+
+
+class DataQualityRepairableError(PipelineStageError):
+    """Raised when a critical-but-repairable DQ rule fails.
+
+    Triggered for issues with an external root cause (provider gap, NSE
+    reclassification, stuck quarantine) where auto-repair or relaxation
+    can recover. Caught by the orchestrator to invoke repair logic; if
+    ``dq_mode=relaxed``, the run is allowed to continue with status
+    ``completed_with_dq_relaxations``.
+    """
 
 
 class PublishStageError(PipelineStageError):
