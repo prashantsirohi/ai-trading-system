@@ -10,10 +10,15 @@ from typing import Any
 import pandas as pd
 
 from ai_trading_system.domains.events.event_llm_router import (
-    build_deterministic_market_report,
-    build_market_report,
+    build_deterministic_synthesis,
+    build_market_synthesis,
+    render_market_report_markdown,
 )
 from ai_trading_system.domains.events.event_packet_builder import build_event_packet
+from ai_trading_system.domains.events.analyst_brief_builder import (
+    build_analyst_brief,
+    build_event_features_frame,
+)
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 
 
@@ -57,16 +62,24 @@ class InsightStage:
             "portfolio": {"symbols": sorted(portfolio_symbols)},
             "watchlist": {"symbols": sorted(watchlist_symbols)},
         }
+        analyst_brief = build_analyst_brief(combined_packet)
+        combined_packet["analyst_brief"] = analyst_brief
 
-        report_markdown, model_usage = build_market_report(
+        llm_synthesis, model_usage = build_market_synthesis(
             combined_packet,
             project_root=context.project_root,
             report_type=report_type,
         )
+        report_markdown = render_market_report_markdown(
+            llm_synthesis,
+            analyst_brief=analyst_brief,
+            report_type=report_type,
+            model_usage=model_usage,
+        )
         validation = validate_report(report_markdown, combined_packet, model_usage=model_usage)
         if validation["status"] != "passed":
             original_usage = dict(model_usage)
-            fallback_markdown = build_deterministic_market_report(combined_packet, report_type=report_type)
+            llm_synthesis = build_deterministic_synthesis(analyst_brief)
             fallback_usage = {
                 **original_usage,
                 "status": "validation_fallback",
@@ -75,6 +88,12 @@ class InsightStage:
                 "possible_truncation": False,
                 "validation_fallback_issues": validation.get("issues") or [],
             }
+            fallback_markdown = render_market_report_markdown(
+                llm_synthesis,
+                analyst_brief=analyst_brief,
+                report_type=report_type,
+                model_usage=fallback_usage,
+            )
             fallback_validation = validate_report(fallback_markdown, combined_packet, model_usage=fallback_usage)
             if fallback_validation["status"] == "passed":
                 report_markdown = fallback_markdown
@@ -84,6 +103,12 @@ class InsightStage:
 
         technical_path = context.write_json("technical_packet.json", technical_packet)
         event_path = context.write_json("event_packet.json", event_packet)
+        analyst_brief_path = context.write_json("analyst_brief.json", analyst_brief)
+        llm_synthesis_path = context.write_json("llm_synthesis.json", llm_synthesis)
+        llm_synthesis_raw_path = context.write_json(
+            "llm_synthesis_raw.json",
+            model_usage.get("llm_synthesis_raw") or llm_synthesis,
+        )
         combined_path = context.write_json("combined_insight_packet.json", combined_packet)
         daily_json_path = context.write_json(
             f"{report_type}_insight.json",
@@ -94,6 +119,8 @@ class InsightStage:
                 "status": validation["status"],
                 "report_markdown": report_markdown,
                 "market_intel": event_packet,
+                "analyst_brief": analyst_brief,
+                "llm_synthesis": llm_synthesis,
                 "model_usage": model_usage,
                 "validation": validation,
             },
@@ -120,15 +147,21 @@ class InsightStage:
                 ]
             )
         confluence_df.to_csv(confluence_path, index=False)
+        event_features_path = out_dir / "event_features.csv"
+        build_event_features_frame(analyst_brief).to_csv(event_features_path, index=False)
 
         artifacts = [
             StageArtifact.from_file("technical_packet", technical_path),
             StageArtifact.from_file("event_packet", event_path, row_count=len(event_packet.get("top_events") or [])),
+            StageArtifact.from_file("analyst_brief", analyst_brief_path, row_count=len(analyst_brief.get("symbol_cards") or [])),
+            StageArtifact.from_file("llm_synthesis", llm_synthesis_path),
+            StageArtifact.from_file("llm_synthesis_raw", llm_synthesis_raw_path),
             StageArtifact.from_file("combined_insight_packet", combined_path),
             StageArtifact.from_file(f"{report_type}_insight_json", daily_json_path),
             StageArtifact.from_file(f"{report_type}_insight_markdown", markdown_path),
             StageArtifact.from_file("telegram_summary", telegram_path),
             StageArtifact.from_file("event_confluence", confluence_path, row_count=len(confluence_df)),
+            StageArtifact.from_file("event_features", event_features_path),
             StageArtifact.from_file("model_usage", model_usage_path),
             StageArtifact.from_file("validation_report", validation_path),
         ]

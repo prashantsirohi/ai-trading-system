@@ -148,6 +148,7 @@ def test_build_integrated_stock_scan_view_preserves_discoveries_and_best_context
                 "pattern_score": 91.0,
                 "rel_strength_score": 83.0,
                 "stage2_score": 79.0,
+                "volume_zscore_20": 2.6,
             },
             {
                 "symbol_id": "DISCOVERED",
@@ -160,6 +161,7 @@ def test_build_integrated_stock_scan_view_preserves_discoveries_and_best_context
                 "pattern_score": 75.0,
                 "rel_strength_score": 70.0,
                 "stage2_score": 65.0,
+                "volume_zscore_20": 2.1,
             },
             {
                 "symbol_id": "SUPPRESS",
@@ -190,6 +192,7 @@ def test_build_integrated_stock_scan_view_preserves_discoveries_and_best_context
                 "breakout_score": 6.0,
                 "rel_strength_score": 81.0,
                 "stage2_score": 78.0,
+                "volume_zscore_20": 2.8,
             },
             {
                 "symbol_id": "BREAKOUT_ONLY",
@@ -198,6 +201,7 @@ def test_build_integrated_stock_scan_view_preserves_discoveries_and_best_context
                 "breakout_score": 9.0,
                 "rel_strength_score": 85.0,
                 "stage2_score": 82.0,
+                "volume_zscore_20": 3.2,
             },
             {
                 "symbol_id": "FILTERED",
@@ -235,12 +239,14 @@ def test_build_integrated_stock_scan_view_preserves_discoveries_and_best_context
     assert bool(lookup["DISCOVERED"]["discovered_by_pattern_scan"]) is True
     assert lookup["DISCOVERED"]["pattern_family"] == "cup_handle"
     assert float(lookup["DISCOVERED"]["pattern_priority_score"]) == 95.0
+    assert float(lookup["DISCOVERED"]["volume_zscore_20"]) == 2.6
 
     assert pd.isna(lookup["BREAKOUT_ONLY"]["rank"])
     assert bool(lookup["BREAKOUT_ONLY"]["pattern_positive"]) is False
     assert bool(lookup["BREAKOUT_ONLY"]["breakout_positive"]) is True
     assert bool(lookup["BREAKOUT_ONLY"]["discovered_by_pattern_scan"]) is False
     assert lookup["BREAKOUT_ONLY"]["category"] == "WATCH"
+    assert float(lookup["BREAKOUT_ONLY"]["volume_zscore_20"]) == 3.2
 
     assert "SUPPRESS" not in set(merged["symbol_id"])
     assert "EXPIRED" not in set(merged["symbol_id"])

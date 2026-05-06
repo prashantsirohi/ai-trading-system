@@ -85,6 +85,8 @@ def _rename_context_columns(frame: pd.DataFrame, *, prefix: str) -> pd.DataFrame
         "stage2_score": f"{prefix}_stage2_score",
         "stage2_label": f"{prefix}_stage2_label",
         "close": f"{prefix}_close",
+        "volume_zscore_20": f"{prefix}_volume_zscore_20",
+        "volume_zscore_50": f"{prefix}_volume_zscore_50",
     }
     available = {source: target for source, target in rename_map.items() if source in frame.columns}
     return frame.rename(columns=available)
@@ -225,6 +227,8 @@ def build_integrated_stock_scan_view(
         ("stage2_score", "pattern_stage2_score", "breakout_stage2_score"),
         ("stage2_label", "pattern_stage2_label", "breakout_stage2_label"),
         ("close", "pattern_close", "breakout_close"),
+        ("volume_zscore_20", "pattern_volume_zscore_20", "breakout_volume_zscore_20"),
+        ("volume_zscore_50", "pattern_volume_zscore_50", "breakout_volume_zscore_50"),
     ):
         current = merged[base] if base in merged.columns else pd.Series([pd.NA] * len(merged), index=merged.index, dtype="object")
         pattern_series = (
@@ -242,7 +246,7 @@ def build_integrated_stock_scan_view(
             .combine_first(pattern_series.astype("object"))
             .combine_first(breakout_series.astype("object"))
         )
-        if base in {"rel_strength_score", "stage2_score", "close"}:
+        if base in {"rel_strength_score", "stage2_score", "close", "volume_zscore_20", "volume_zscore_50"}:
             combined = pd.to_numeric(combined, errors="coerce")
         merged.loc[:, base] = combined
 
@@ -252,6 +256,8 @@ def build_integrated_stock_scan_view(
             "rel_strength_score",
             "stage2_score",
             "close",
+            "volume_zscore_20",
+            "volume_zscore_50",
             "pattern_priority_score",
             "pattern_score",
             "breakout_score",

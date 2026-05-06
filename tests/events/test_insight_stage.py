@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ai_trading_system.domains.events.event_llm_router import _build_llm_packet, _enforce_report_contract
+from ai_trading_system.domains.events.event_llm_router import _build_llm_packet, _enforce_report_contract, normalize_synthesis_json
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 from ai_trading_system.pipeline.stages.insight import InsightStage, validate_report
 
@@ -79,6 +79,13 @@ def test_insight_stage_writes_event_confluence_for_top_ranked_event(tmp_path, mo
     assert df.iloc[0]["rank_position"] == 1
     usage = json.loads(Path(next(a for a in result.artifacts if a.artifact_type == "model_usage").uri).read_text())
     assert usage["status"] == "skipped_no_api_key"
+    artifact_types = {a.artifact_type for a in result.artifacts}
+    assert "analyst_brief" in artifact_types
+    assert "llm_synthesis" in artifact_types
+    assert "llm_synthesis_raw" in artifact_types
+    assert "event_features" in artifact_types
+    markdown = Path(next(a for a in result.artifacts if a.artifact_type == "daily_insight_markdown").uri).read_text()
+    assert "LLM synthesis: skipped, deterministic fallback used." in markdown
 
 
 def test_report_validator_rejects_uncited_event_and_guarantee_language():
@@ -191,15 +198,21 @@ def test_validator_allows_client_name_tokens_inside_cited_event_lines():
 
 
 def test_insight_stage_falls_back_when_llm_output_fails_validation(tmp_path, monkeypatch):
-    def bad_report(*args, **kwargs):
-        return "RELIANCE has an uncited capex event and is a guaranteed buy.", {
+    def bad_synthesis(*args, **kwargs):
+        return {
+            "market_read": "bad",
+            "top_opportunities": [{"symbol": "INVENTED", "action_bucket": "eligible"}],
+            "caution_list": [],
+            "sector_rotation": [],
+            "tomorrow_watchlist": [],
+        }, {
             "status": "completed",
             "route": "daily_market_report",
             "model": "test-model",
             "possible_truncation": True,
         }
 
-    monkeypatch.setattr("ai_trading_system.pipeline.stages.insight.build_market_report", bad_report)
+    monkeypatch.setattr("ai_trading_system.pipeline.stages.insight.build_market_synthesis", bad_synthesis)
     result = InsightStage().run(_context(tmp_path))
     assert result.metadata["validation_status"] == "passed"
     assert result.metadata["model_status"] == "validation_fallback"
@@ -207,3 +220,22 @@ def test_insight_stage_falls_back_when_llm_output_fails_validation(tmp_path, mon
     assert usage["llm_status"] == "completed"
     assert usage["llm_possible_truncation"] is True
     assert usage["possible_truncation"] is False
+
+
+def test_synthesis_normalizer_recovers_string_watchlist_item():
+    analyst_brief = {
+        "symbol_cards": [
+            {"symbol": "RELIANCE"},
+            {"symbol": "TCS"},
+        ]
+    }
+    synthesis = {
+        "market_read": "test",
+        "top_opportunities": [],
+        "caution_list": [],
+        "sector_rotation": [],
+        "tomorrow_watchlist": ["RELIANCE remains interesting because event confirmation is fresh."],
+    }
+    normalized = normalize_synthesis_json(synthesis, analyst_brief)
+    assert normalized["tomorrow_watchlist"][0]["symbol"] == "RELIANCE"
+    assert isinstance(normalized["tomorrow_watchlist"][0], dict)
