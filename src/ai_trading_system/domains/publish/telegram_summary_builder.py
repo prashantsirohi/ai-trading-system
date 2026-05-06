@@ -8,6 +8,7 @@ from typing import Any, Mapping, Optional
 import pandas as pd
 
 from ai_trading_system.domains.publish.channels.weekly_pdf import metrics as weekly_metrics
+from ai_trading_system.domains.publish.channels.watchlist_digest import render_watchlist_telegram
 
 
 def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str:
@@ -19,6 +20,7 @@ def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str
     full_ranked_df = _as_frame(datasets.get("ranked_signals_full", datasets.get("ranked_signals")))
     stage2_summary = dict(datasets.get("stage2_summary") or {})
     breakout_df = _sorted_breakouts(_as_frame(datasets.get("breakout_scan")))
+    watchlist_df = _as_frame(datasets.get("watchlist_candidates"))
     sector_df = _sorted_sector_dashboard(_as_frame(datasets.get("sector_dashboard")))
     prior_ranked_df = _as_frame(datasets.get("prior_ranked_signals"))
     prior_breakouts_per_run = datasets.get("prior_breakouts_per_run") or []
@@ -74,6 +76,8 @@ def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str
     if event_lines:
         lines.extend(["", "<b>Important Events</b>"])
         lines.extend(event_lines)
+    if not watchlist_df.empty:
+        lines.extend(["", render_watchlist_telegram(watchlist_df, top_n=10)])
     lines.extend(["", "<b>Top 10 Sectors</b>"])
 
     if sector_df.empty:

@@ -474,6 +474,7 @@ def publish_dashboard_payload(
     prior_ranked_df: pd.DataFrame | None = None,
     failed_breakouts_df: pd.DataFrame | None = None,
     pattern_df: pd.DataFrame | None = None,
+    watchlist_df: pd.DataFrame | None = None,
 ) -> Dict[str, Any]:
     """Write a single compact daily sheet with sector/rank/breakout and breadth chart."""
     manager = GoogleSheetsManager()
@@ -493,6 +494,7 @@ def publish_dashboard_payload(
     )
     source_breakout = breakout_df if isinstance(breakout_df, pd.DataFrame) and not breakout_df.empty else _frame(payload.get("breakout_scan", []))
     source_sector = sector_df if isinstance(sector_df, pd.DataFrame) and not sector_df.empty else _frame(payload.get("sector_dashboard", []))
+    source_watchlist = watchlist_df if isinstance(watchlist_df, pd.DataFrame) and not watchlist_df.empty else _frame(payload.get("watchlist", []))
 
     sector_min = _minimal_sector_frame(source_sector)
     rank_min = _minimal_rank_frame(source_ranked)
@@ -502,6 +504,28 @@ def publish_dashboard_payload(
     rank_movers = _rank_mover_frame(source_ranked, prior_ranked_df)
     failed_breakouts = _failed_breakout_frame(failed_breakouts_df)
     patterns = _pattern_frame(pattern_df)
+    watchlist = _frame(source_watchlist)
+    if not watchlist.empty:
+        keep = [
+            column
+            for column in (
+                "rank",
+                "is_new_entry",
+                "rank_change",
+                "days_on_watchlist",
+                "symbol_id",
+                "sector",
+                "sector_status",
+                "stage",
+                "momentum_tags",
+                "setup_label",
+                "watchlist_score",
+                "action",
+                "watchlist_reason",
+            )
+            if column in watchlist.columns
+        ]
+        watchlist = watchlist[keep].head(15)
     events_index = _frame(payload.get("events_index", []))
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
 
@@ -517,6 +541,7 @@ def publish_dashboard_payload(
                 "VolumeShockers": int(len(volume_shockers)),
                 "FailedBreakouts": int(len(failed_breakouts)),
                 "Patterns": int(len(patterns)),
+                "Watchlist": int(len(watchlist)),
                 "Events": int(len(events_index)),
                 "BreadthRows": int(len(breadth)),
             }
@@ -530,6 +555,7 @@ def publish_dashboard_payload(
     breadth_header_row: int | None = None
     breadth_rows = 0
     sections = [
+        ("WATCHLIST CANDIDATES", watchlist),
         ("MARKET MOVES SNAPSHOT", weekly_moves),
         ("UNUSUAL VOLUME SHOCKERS", volume_shockers),
         ("RANK MOVERS", rank_movers),

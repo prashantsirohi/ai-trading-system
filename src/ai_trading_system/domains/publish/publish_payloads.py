@@ -92,6 +92,7 @@ def build_publish_datasets(
     scan_artifact = context_artifact_for("stock_scan")
     breakout_artifact = context_artifact_for("breakout_scan")
     dashboard_artifact = context_artifact_for("sector_dashboard")
+    watchlist_artifact = context_artifact_for("watchlist_candidates") or context_artifact_for("watchlist_final")
     dashboard_payload_artifact = context_artifact_for("dashboard_payload")
 
     ranked_df = read_artifact(ranked_signals_artifact)
@@ -131,12 +132,29 @@ def build_publish_datasets(
     telegram_pack = format_rows_for_channel(ranked_rows, "telegram")
     sheets_pack = format_rows_for_channel(ranked_rows, "sheets")
     dashboard_pack = format_rows_for_channel(ranked_rows, "dashboard")
+    watchlist_df = read_artifact(watchlist_artifact) if watchlist_artifact else pd.DataFrame()
+    if isinstance(watchlist_df, pd.DataFrame) and not watchlist_df.empty:
+        data_trust = dict(dashboard_payload.get("data_trust") or {"status": trust_status})
+        watchlist_rows = [
+            attach_audit_fields(
+                {
+                    **apply_trust_overlay(row, trust_status),
+                    "data_trust": data_trust,
+                },
+                run_id=run_id,
+                stage=stage_name,
+                artifact_path=watchlist_artifact.uri if watchlist_artifact else None,
+            )
+            for row in watchlist_df.head(15).to_dict(orient="records")
+        ]
+        dashboard_payload["watchlist"] = watchlist_rows
 
     return {
         "ranked_signals": ranked_df,
         "breakout_scan": read_artifact(breakout_artifact) if breakout_artifact else pd.DataFrame(),
         "stock_scan": read_artifact(scan_artifact) if scan_artifact else pd.DataFrame(),
         "sector_dashboard": read_artifact(dashboard_artifact) if dashboard_artifact else pd.DataFrame(),
+        "watchlist_candidates": watchlist_df,
         "dashboard_payload": dashboard_payload,
         "publish_rows_telegram": telegram_pack["rows"],
         "publish_rows_sheets": sheets_pack["rows"],

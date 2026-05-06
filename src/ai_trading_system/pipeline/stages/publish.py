@@ -25,6 +25,7 @@ class PublishStage:
     CHANNEL_ROLES = {
         "google_sheets_portfolio": "publish_of_record",
         "google_sheets_dashboard": "publish_of_record",
+        "google_sheets_watchlist": "publish_of_record",
         "quantstats_dashboard_tearsheet": "publish_of_record",
         "telegram_summary": "informational",
         "weekly_pdf": "informational",
@@ -254,6 +255,8 @@ class PublishStage:
         }
         if datasets.get("dashboard_payload") or not datasets.get("ranked_signals", pd.DataFrame()).empty:
             handlers["google_sheets_dashboard"] = self._publish_dashboard_payload
+        if not datasets.get("watchlist_candidates", pd.DataFrame()).empty:
+            handlers["google_sheets_watchlist"] = self._publish_watchlist
         if bool(context.params.get("publish_quantstats", True)):
             handlers["quantstats_dashboard_tearsheet"] = self._publish_quantstats_dashboard
         if bool(context.params.get("publish_weekly_pdf", False)):
@@ -273,9 +276,17 @@ class PublishStage:
         rank_artifact: StageArtifact,
         datasets: Dict[str, pd.DataFrame],
     ) -> Dict[str, Any]:
+        from ai_trading_system.domains.publish.channels.watchlist_digest import render_watchlist_markdown
+
+        watchlist_path = context.output_dir() / "watchlist_digest.md"
+        watchlist_path.write_text(
+            render_watchlist_markdown(datasets.get("watchlist_candidates", pd.DataFrame())),
+            encoding="utf-8",
+        )
         return {
             "report_id": f"local-{context.run_id}",
             "trust_status": datasets.get("publish_trust_status", "unknown"),
+            "watchlist_digest": str(watchlist_path),
         }
 
     def _publish_stock_scan(
@@ -323,6 +334,7 @@ class PublishStage:
             prior_ranked_df=prior_ranked_df,
             failed_breakouts_df=failed_breakouts_df,
             pattern_df=pattern_df,
+            watchlist_df=datasets.get("watchlist_candidates"),
         )
         return {
             "report_id": "dashboard_sheet",
@@ -340,6 +352,18 @@ class PublishStage:
         if not publish_sector_dashboard(datasets["sector_dashboard"]):
             raise RuntimeError("sector dashboard publish returned False")
         return {"report_id": "sector_dashboard_sheet"}
+
+    def _publish_watchlist(
+        self,
+        context: StageContext,
+        rank_artifact: StageArtifact,
+        datasets: Dict[str, pd.DataFrame],
+    ) -> Dict[str, Any]:
+        from ai_trading_system.domains.publish.channels.google_sheets import publish_watchlist_candidates
+
+        if not publish_watchlist_candidates(datasets["watchlist_candidates"]):
+            raise RuntimeError("watchlist publish returned False")
+        return {"report_id": "watchlist_candidates_sheet"}
 
     def _publish_portfolio(
         self,
@@ -424,7 +448,13 @@ class PublishStage:
         if not publish_rows.empty:
             telegram_datasets["ranked_signals"] = publish_rows
         message = str(datasets.get("insight_telegram_summary") or "").strip()
-        if not message:
+        if message:
+            watchlist_df = datasets.get("watchlist_candidates", pd.DataFrame())
+            if isinstance(watchlist_df, pd.DataFrame) and not watchlist_df.empty:
+                from ai_trading_system.domains.publish.channels.watchlist_digest import render_watchlist_telegram
+
+                message = message.rstrip() + "\n\n" + render_watchlist_telegram(watchlist_df, top_n=10)
+        else:
             message = self._build_telegram_tearsheet(context, telegram_datasets)
         if not reporter.send_message(message):
             detail = reporter.last_error or "unknown Telegram error"

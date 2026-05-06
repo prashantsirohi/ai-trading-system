@@ -4,6 +4,11 @@ llm_brain:
     fallback: deepseek/deepseek-v4-flash
     max_output_tokens: 500
     temperature: 0.0
+  watchlist_catalyst:
+    primary: qwen/qwen3-235b-a22b-2507
+    fallback: deepseek/deepseek-v4-flash
+    max_output_tokens: 700
+    temperature: 0.0
   event_pdf_summary:
     primary: deepseek/deepseek-v4-flash
     fallback: qwen/qwen3-235b-a22b-2507

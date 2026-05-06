@@ -30,6 +30,9 @@ TASK_FILE_MAP = {
     "pattern_scan": ("pattern_scan", "csv"),
     "stock_scan": ("stock_scan", "csv"),
     "sector_dashboard": ("sector_dashboard", "csv"),
+    "watchlist_prefilter": ("watchlist_prefilter", "csv"),
+    "watchlist_catalyst": ("watchlist_catalyst", "json"),
+    "watchlist_final": ("watchlist_candidates", "csv"),
     "dashboard_payload": ("dashboard_payload", "json"),
 }
 
@@ -369,6 +372,26 @@ class RankOrchestrationService:
                     attempt_number=context.attempt_number,
                 )
             )
+        for artifact_type, filename in (
+            ("watchlist_candidates_json", "watchlist_candidates.json"),
+            ("watchlist_digest", "watchlist_digest.md"),
+            ("watchlist_catalyst", "watchlist_catalyst.json"),
+        ):
+            sidecar_path = output_dir / filename
+            if not sidecar_path.exists():
+                continue
+            row_count = None
+            if artifact_type == "watchlist_candidates_json":
+                row_count = len(outputs.get("watchlist_candidates", pd.DataFrame()))
+            artifacts.append(
+                StageArtifact.from_file(
+                    artifact_type,
+                    sidecar_path,
+                    row_count=row_count,
+                    metadata={"source": "watchlist_sidecar"},
+                    attempt_number=context.attempt_number,
+                )
+            )
 
         ranked_signals = outputs.get("ranked_signals", pd.DataFrame())
         metadata["ranked_rows"] = len(ranked_signals)
@@ -403,7 +426,8 @@ class RankOrchestrationService:
         from ai_trading_system.analytics.patterns import PatternScanConfig, build_pattern_signals
         from ai_trading_system.analytics.patterns.data import load_pattern_frame
         from ai_trading_system.analytics.ranker import StockRanker
-        from ai_trading_system.domains.ranking import sector_dashboard, stock_scan
+        from ai_trading_system.domains.ranking import sector_dashboard, stock_scan, watchlist, watchlist_catalyst
+        from ai_trading_system.domains.publish.channels.watchlist_digest import render_watchlist_markdown
         from ai_trading_system.domains.ranking.breakout import scan_breakouts
         from ai_trading_system.domains.ranking.patterns.universe import (
             build_pattern_seed_universe,
@@ -868,6 +892,170 @@ class RankOrchestrationService:
                 f"sector_dashboard unavailable: {sector_status.get('error_message', sector_status.get('detail'))}"
             )
 
+        watchlist_enabled = bool(context.params.get("watchlist_enabled", True))
+        watchlist_blocked = trust_summary.get("status") == "blocked" and not bool(
+            context.params.get("allow_untrusted_rank", False)
+        )
+        watchlist_skip_reason = None
+        if not watchlist_enabled:
+            watchlist_skip_reason = "watchlist disabled by config"
+        elif watchlist_blocked:
+            watchlist_skip_reason = "watchlist skipped because data trust is blocked"
+
+        watchlist_prefilter_df, watchlist_prefilter_status = self.execute_rank_task(
+            context=context,
+            task_name="watchlist_prefilter",
+            label="Build watchlist_prefilter",
+            fingerprint_payload={
+                "task": "watchlist_prefilter",
+                "logic_version": "2026-05-06-sector-alias-v2",
+                "run_date": context.run_date,
+                "top_n": int(context.params.get("watchlist_prefilter_top_n", 30) or 30),
+                "ranked_fingerprint": self.dataframe_fingerprint(ranked),
+                "breakout_fingerprint": self.dataframe_fingerprint(breakout_df),
+                "pattern_fingerprint": self.dataframe_fingerprint(pattern_df),
+                "sector_dashboard_fingerprint": self.dataframe_fingerprint(sector_dashboard_df),
+                "trust_status": trust_summary.get("status"),
+            },
+            task_status=task_status,
+            previous_attempt=previous_attempt,
+            previous_statuses=previous_statuses,
+            builder=lambda: watchlist.build_watchlist_prefilter(
+                ranked,
+                breakout_df,
+                pattern_df,
+                sector_dashboard_df,
+                top_n=int(context.params.get("watchlist_prefilter_top_n", 30) or 30),
+                trust_summary=trust_summary,
+            ),
+            optional=True,
+            skip_reason=watchlist_skip_reason,
+        )
+        outputs["watchlist_prefilter"] = watchlist_prefilter_df
+        if watchlist_prefilter_status["status"] in {"failed", "timed_out", "degraded"}:
+            warnings.append(
+                "watchlist_prefilter unavailable: "
+                f"{watchlist_prefilter_status.get('error_message', watchlist_prefilter_status.get('detail'))}"
+            )
+
+        watchlist_llm_enabled = bool(context.params.get("watchlist_llm_enabled", False))
+        catalyst_skip_reason = None
+        events_enrichment_artifact = context.artifact_for("events", "events_enrichment")
+        market_intel_payload: dict[str, Any] = {}
+        if events_enrichment_artifact is not None:
+            try:
+                market_intel_payload = json.loads(Path(events_enrichment_artifact.uri).read_text(encoding="utf-8"))
+            except Exception as exc:
+                warnings.append(f"watchlist catalyst market-intel input unavailable: {exc}")
+        llm_client = None
+        if watchlist_llm_enabled and not watchlist_prefilter_df.empty and not watchlist_skip_reason:
+            llm_client = watchlist_catalyst.build_default_client(project_root=context.project_root)
+        if watchlist_skip_reason:
+            catalyst_skip_reason = watchlist_skip_reason
+        elif not watchlist_llm_enabled:
+            catalyst_skip_reason = "watchlist LLM catalyst disabled by config"
+        elif watchlist_prefilter_df.empty:
+            catalyst_skip_reason = "watchlist prefilter empty"
+        elif llm_client is None:
+            catalyst_skip_reason = "watchlist LLM catalyst skipped: missing LLM client or API key"
+        watchlist_catalyst_payload, _ = self.execute_rank_task(
+            context=context,
+            task_name="watchlist_catalyst",
+            label="Build watchlist_catalyst",
+            fingerprint_payload={
+                "task": "watchlist_catalyst",
+                "logic_version": "2026-05-06-sector-alias-v2",
+                "run_date": context.run_date,
+                "enabled": watchlist_llm_enabled,
+                "prefilter_fingerprint": self.dataframe_fingerprint(watchlist_prefilter_df),
+            },
+            task_status=task_status,
+            previous_attempt=previous_attempt,
+            previous_statuses=previous_statuses,
+            builder=lambda: watchlist_catalyst.enrich_with_catalyst(
+                watchlist_prefilter_df,
+                market_intel=market_intel_payload,
+                llm_client=llm_client,
+                run_date=context.run_date,
+                cache_dir=context.output_dir() / "watchlist_catalyst_cache",
+            ),
+            optional=True,
+            skip_reason=catalyst_skip_reason,
+        )
+        try:
+            context.write_json(
+                "watchlist_catalyst.json",
+                watchlist_catalyst_payload if isinstance(watchlist_catalyst_payload, dict) else {},
+            )
+        except Exception as exc:
+            warnings.append(f"watchlist catalyst sidecar unavailable: {exc}")
+
+        watchlist_final_df, watchlist_final_status = self.execute_rank_task(
+            context=context,
+            task_name="watchlist_final",
+            label="Build watchlist_candidates",
+            fingerprint_payload={
+                "task": "watchlist_final",
+                "logic_version": "2026-05-06-history-v3",
+                "run_date": context.run_date,
+                "top_n": int(context.params.get("watchlist_top_n", 15) or 15),
+                "prefilter_fingerprint": self.dataframe_fingerprint(watchlist_prefilter_df),
+                "catalyst_payload": watchlist_catalyst_payload,
+                "trust_status": trust_summary.get("status"),
+            },
+            task_status=task_status,
+            previous_attempt=previous_attempt,
+            previous_statuses=previous_statuses,
+            builder=lambda: watchlist.build_final_watchlist(
+                watchlist_prefilter_df,
+                catalyst_enrichment=watchlist_catalyst_payload if isinstance(watchlist_catalyst_payload, dict) else {},
+                top_n=int(context.params.get("watchlist_top_n", 15) or 15),
+                data_trust_status=str(trust_summary.get("status", "unknown")),
+            ),
+            optional=True,
+            skip_reason=watchlist_skip_reason,
+        )
+        outputs["watchlist_candidates"] = watchlist_final_df
+        if watchlist_final_status["status"] in {"failed", "timed_out", "degraded"}:
+            warnings.append(
+                f"watchlist_final unavailable: {watchlist_final_status.get('error_message', watchlist_final_status.get('detail'))}"
+            )
+        if (
+            context.registry is not None
+            and isinstance(watchlist_final_df, pd.DataFrame)
+            and not watchlist_final_df.empty
+        ):
+            try:
+                watchlist_artifact_uri = str(self.task_output_path(context, "watchlist_final"))
+                enriched_rows = context.registry.replace_watchlist_candidates(
+                    context.run_date,
+                    context.run_id,
+                    context.attempt_number,
+                    watchlist_final_df.to_dict(orient="records"),
+                    watchlist_artifact_uri,
+                )
+                if enriched_rows:
+                    watchlist_final_df = pd.DataFrame(enriched_rows)
+                    self.persist_task_output(
+                        context=context,
+                        task_name="watchlist_final",
+                        result=watchlist_final_df,
+                    )
+                    outputs["watchlist_candidates"] = watchlist_final_df
+            except Exception as exc:
+                warnings.append(f"watchlist history persistence unavailable: {exc}")
+        try:
+            context.write_json(
+                "watchlist_candidates.json",
+                watchlist_final_df.to_dict(orient="records") if isinstance(watchlist_final_df, pd.DataFrame) else [],
+            )
+            (context.output_dir() / "watchlist_digest.md").write_text(
+                render_watchlist_markdown(watchlist_final_df),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            warnings.append(f"watchlist digest unavailable: {exc}")
+
         dashboard_payload, _ = self.execute_rank_task(
             context=context,
             task_name="dashboard_payload",
@@ -898,6 +1086,12 @@ class RankOrchestrationService:
             ),
             optional=False,
         )
+        if isinstance(dashboard_payload, dict):
+            dashboard_payload["watchlist"] = (
+                watchlist_final_df.head(15).to_dict(orient="records")
+                if isinstance(watchlist_final_df, pd.DataFrame) and not watchlist_final_df.empty
+                else []
+            )
 
         top_rank_confidence = None
         if not ranked.empty and "rank_confidence" in ranked.columns:

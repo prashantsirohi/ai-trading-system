@@ -82,10 +82,38 @@ def publish_sector_dashboard(dashboard: pd.DataFrame) -> bool:
     return True
 
 
+def publish_watchlist_candidates(watchlist: pd.DataFrame) -> bool:
+    """Publish watchlist candidates to a dedicated worksheet."""
+    spreadsheet_id = _require_spreadsheet_id()
+    if not spreadsheet_id:
+        raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
+
+    manager = GoogleSheetsManager()
+    if not manager.open_spreadsheet():
+        raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
+    rows = format_rows_for_channel(watchlist.to_dict(orient="records"), "sheets")["rows"]
+    frame = pd.DataFrame(rows).head(15)
+    frame["report_date"] = pd.Timestamp.now().strftime("%Y-%m-%d")
+
+    sheet_name = "Watchlist Candidates"
+    sheet = manager.get_or_create_sheet(sheet_name)
+    if not sheet:
+        raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
+    worksheet = manager.get_worksheet(sheet_name)
+    if worksheet is None:
+        raise RuntimeError(f"Could not open '{sheet_name}' worksheet: {manager.last_error or 'unknown error'}")
+    worksheet.clear()
+    if not manager.append_rows(frame, sheet_name, include_header=True):
+        raise RuntimeError(f"Failed writing watchlist rows: {manager.last_error or 'unknown error'}")
+    logger.info("Watchlist candidates updated in Google Sheets (%s rows)", len(frame))
+    return True
+
+
 __all__ = [
     "GoogleSheetsManager",
     "PortfolioSheets",
     "SectorReportSheets",
     "publish_sector_dashboard",
     "publish_stock_scan",
+    "publish_watchlist_candidates",
 ]

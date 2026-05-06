@@ -1656,6 +1656,119 @@ class RegistryStore:
                 inserted += 1
         return inserted
 
+    def replace_watchlist_candidates(
+        self,
+        watchlist_date: str,
+        run_id: str,
+        attempt_number: int,
+        rows: List[Dict[str, Any]],
+        artifact_uri: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """Replace final watchlist rows for a run and attach history metrics."""
+        symbols = [str(row.get("symbol_id") or "").upper() for row in rows if row.get("symbol_id")]
+        symbols = sorted(set(symbols))
+        prior_by_symbol: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in symbols}
+
+        with self._writer() as conn:
+            if symbols:
+                placeholders = ", ".join(["?"] * len(symbols))
+                prior_rows = conn.execute(
+                    f"""
+                    SELECT symbol_id, watchlist_date, rank
+                    FROM watchlist_candidate_history
+                    WHERE watchlist_date < CAST(? AS DATE)
+                      AND symbol_id IN ({placeholders})
+                    ORDER BY symbol_id, watchlist_date DESC, created_at DESC
+                    """,
+                    [watchlist_date, *symbols],
+                ).fetchall()
+                for symbol_id, prior_date, prior_rank in prior_rows:
+                    prior_by_symbol.setdefault(str(symbol_id).upper(), []).append(
+                        {
+                            "watchlist_date": str(prior_date),
+                            "rank": prior_rank,
+                        }
+                    )
+
+            conn.execute(
+                """
+                DELETE FROM watchlist_candidate_history
+                WHERE watchlist_date = ?
+                  AND run_id = ?
+                """,
+                [watchlist_date, run_id],
+            )
+
+            enriched_rows: list[dict[str, Any]] = []
+            for row in rows:
+                payload = dict(row)
+                symbol_id = str(payload.get("symbol_id") or "").upper()
+                if not symbol_id:
+                    continue
+                prior_history = prior_by_symbol.get(symbol_id, [])
+                previous_rank = prior_history[0]["rank"] if prior_history else None
+                current_rank = _maybe_int(payload.get("rank"))
+                rank_change = (
+                    None
+                    if previous_rank is None or current_rank is None
+                    else int(previous_rank) - int(current_rank)
+                )
+                days_on_watchlist = len({item["watchlist_date"] for item in prior_history}) + 1
+                is_new_entry = previous_rank is None
+                payload.update(
+                    {
+                        "symbol_id": symbol_id,
+                        "previous_rank": previous_rank,
+                        "rank_change": rank_change,
+                        "days_on_watchlist": days_on_watchlist,
+                        "is_new_entry": is_new_entry,
+                    }
+                )
+                conn.execute(
+                    """
+                    INSERT INTO watchlist_candidate_history (
+                        watchlist_date, run_id, attempt_number, symbol_id, rank,
+                        previous_rank, rank_change, days_on_watchlist, is_new_entry,
+                        sector, sector_status, stage, momentum_tags, setup_label,
+                        watchlist_score, composite_score, action, technical_catalyst_summary,
+                        catalyst_tags, catalyst_confidence, bull_case, risk_flags,
+                        watchlist_reason, data_trust_status, artifact_uri, metadata_json,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    [
+                        watchlist_date,
+                        run_id,
+                        int(attempt_number),
+                        symbol_id,
+                        current_rank,
+                        _maybe_int(previous_rank),
+                        _maybe_int(rank_change),
+                        int(days_on_watchlist),
+                        bool(is_new_entry),
+                        payload.get("sector"),
+                        payload.get("sector_status"),
+                        payload.get("stage"),
+                        payload.get("momentum_tags"),
+                        payload.get("setup_label"),
+                        _maybe_float(payload.get("watchlist_score")),
+                        _maybe_float(payload.get("composite_score")),
+                        payload.get("action"),
+                        payload.get("technical_catalyst_summary"),
+                        payload.get("catalyst_tags"),
+                        payload.get("catalyst_confidence"),
+                        payload.get("bull_case"),
+                        payload.get("risk_flags"),
+                        payload.get("watchlist_reason"),
+                        payload.get("data_trust_status"),
+                        artifact_uri or payload.get("artifact_uri"),
+                        self._json(payload),
+                    ],
+                )
+                enriched_rows.append(payload)
+        return enriched_rows
+
     def get_unscored_prediction_logs(
         self,
         horizon: int,
@@ -2250,3 +2363,21 @@ class RegistryStore:
         if not payload:
             return {}
         return json.loads(payload)
+
+
+def _maybe_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _maybe_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

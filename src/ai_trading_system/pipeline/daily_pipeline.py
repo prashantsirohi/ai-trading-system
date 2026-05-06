@@ -318,6 +318,10 @@ def main(
     breakout_symbol_near_high_max_pct: float = 15.0,
     breakout_symbol_trend_gate_enabled: bool = True,
     execution_breakout_linkage: str = "off",
+    watchlist_enabled: bool = True,
+    watchlist_llm_enabled: bool = False,
+    watchlist_top_n: int = 15,
+    watchlist_prefilter_top_n: int = 30,
 ):
     if smoke:
         raise RuntimeError("Smoke mode has been removed because synthetic pipeline data is no longer allowed.")
@@ -433,6 +437,10 @@ def main(
             "breakout_symbol_near_high_max_pct": breakout_symbol_near_high_max_pct,
             "breakout_symbol_trend_gate_enabled": breakout_symbol_trend_gate_enabled,
             "execution_breakout_linkage": execution_breakout_linkage,
+            "watchlist_enabled": watchlist_enabled,
+            "watchlist_llm_enabled": watchlist_llm_enabled,
+            "watchlist_top_n": watchlist_top_n,
+            "watchlist_prefilter_top_n": watchlist_prefilter_top_n,
         },
     )
 
@@ -656,6 +664,28 @@ if __name__ == "__main__":
         help="Execution linkage mode for breakout signals.",
     )
     parser.add_argument(
+        "--disable-watchlist",
+        action="store_true",
+        help="Disable rank-stage watchlist candidate sidecar.",
+    )
+    parser.add_argument(
+        "--watchlist-llm-enabled",
+        action="store_true",
+        help="Enable LLM catalyst enrichment for watchlist candidates.",
+    )
+    parser.add_argument(
+        "--watchlist-top-n",
+        type=int,
+        default=15,
+        help="Final watchlist candidate count.",
+    )
+    parser.add_argument(
+        "--watchlist-prefilter-top-n",
+        type=int,
+        default=30,
+        help="Quant prefilter candidate count before final watchlist.",
+    )
+    parser.add_argument(
         "--data-domain",
         choices=["operational", "research"],
         default="operational",
@@ -702,4 +732,8 @@ if __name__ == "__main__":
         breakout_symbol_near_high_max_pct=args.breakout_symbol_near_high_max_pct,
         breakout_symbol_trend_gate_enabled=not args.disable_breakout_symbol_trend_gate,
         execution_breakout_linkage=args.execution_breakout_linkage,
+        watchlist_enabled=not args.disable_watchlist,
+        watchlist_llm_enabled=args.watchlist_llm_enabled,
+        watchlist_top_n=args.watchlist_top_n,
+        watchlist_prefilter_top_n=args.watchlist_prefilter_top_n,
     )
