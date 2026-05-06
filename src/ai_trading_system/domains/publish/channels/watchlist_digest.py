@@ -13,6 +13,8 @@ def _as_tags(value: object) -> str:
 
 
 def _history_badge(row: pd.Series) -> str:
+    if str(row.get("sector_escape_hatch", "")).strip().lower() in {"true", "1", "yes"}:
+        return "ESCAPE: strong breakout outside leading/improving sector"
     is_new = str(row.get("is_new_entry", "")).strip().lower() in {"true", "1", "yes"}
     if is_new:
         return "NEW"

@@ -6,6 +6,7 @@ from ai_trading_system.domains.ranking.watchlist import (
     build_final_watchlist,
     build_watchlist_prefilter,
     compute_watchlist_score,
+    validate_watchlist_candidates,
 )
 from ai_trading_system.domains.ranking.watchlist_catalyst import enrich_with_catalyst
 
@@ -33,13 +34,13 @@ class _FailingCatalystClient:
 def _ranked() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"symbol_id": "AAA", "sector": "Capital Goods", "rank": 1, "stage2_label": "stage2", "return_1": 4, "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2.0, "delivery_pct": 55, "close": 120, "sma_50": 110, "composite_score": 91},
+            {"symbol_id": "AAA", "sector": "Capital Goods", "rank": 1, "stage2_label": "stage2", "return_1": 4, "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2.0, "delivery_pct": 65, "close": 120, "sma_50": 110, "composite_score": 91},
             {"symbol_id": "BBB", "sector": "IT", "rank": 2, "stage2_label": "non_stage2", "return_1": 4, "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2.0, "delivery_pct": 50, "close": 120, "sma_50": 110, "composite_score": 90},
-            {"symbol_id": "CCC", "sector": "Metals", "rank": 3, "stage2_label": "stage1_to_stage2", "return_1": 4, "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2.0, "delivery_pct": 50, "close": 120, "sma_50": 110, "composite_score": 89},
+            {"symbol_id": "CCC", "sector": "Metals", "rank": 3, "stage2_label": "stage1_to_stage2", "return_1": 4, "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2.0, "delivery_pct": 61, "close": 120, "sma_50": 110, "composite_score": 89},
             {"symbol_id": "DDD", "sector": "FMCG", "rank": 4, "stage2_label": "stage2", "return_1": 4, "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2.0, "delivery_pct": 50, "close": 150, "sma_50": 100, "composite_score": 88},
-            {"symbol_id": "EEE", "sector": "Energy", "rank": 5, "stage2_label": "stage2", "return_1": 4, "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2.0, "delivery_pct": 50, "close": 120, "sma_50": 110, "composite_score": 87},
+            {"symbol_id": "EEE", "sector": "Energy", "rank": 5, "stage2_label": "stage2", "return_1": 4, "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2.0, "delivery_pct": 62, "close": 120, "sma_50": 110, "composite_score": 87},
             {"symbol_id": "FFF", "sector": "Energy", "rank": 6, "stage2_label": "stage2", "return_1": 4, "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2.0, "delivery_pct": 50, "close": 120, "sma_50": 110, "composite_score": 86},
-            {"symbol_id": "GGG", "sector": "Energy", "rank": 7, "stage2_label": "stage2", "return_1": 4, "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2.0, "delivery_pct": 50, "close": 120, "sma_50": 110, "composite_score": 85},
+            {"symbol_id": "GGG", "sector": "Energy", "rank": 7, "stage2_label": "stage2", "return_1": 4, "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2.0, "delivery_pct": 48, "close": 120, "sma_50": 110, "composite_score": 85},
         ]
     )
 
@@ -157,7 +158,7 @@ def test_catalyst_enrichment_falls_back_per_symbol(tmp_path) -> None:
     )
     record = enrichment["AAA"]
     assert record["catalyst_tags"] == []
-    assert record["catalyst_confidence"] == ""
+    assert record["catalyst_confidence"] == "LOW"
     assert record["watchlist_reason"]
     assert record["status"].startswith("fallback_after_error")
 
@@ -194,3 +195,64 @@ def test_prefilter_accepts_sector_name_alias() -> None:
     prefilter = build_watchlist_prefilter(ranked, _breakout(), _pattern(), _sectors(), top_n=30)
     assert "AAA" in set(prefilter["symbol_id"])
     assert prefilter.loc[prefilter["symbol_id"].eq("AAA"), "sector_status"].iloc[0] == "LEADING"
+
+
+def test_final_includes_sector_escape_hatch() -> None:
+    prefilter = build_watchlist_prefilter(_ranked(), _breakout(), _pattern(), _sectors(), top_n=30)
+    final = build_final_watchlist(prefilter, top_n=15)
+    assert "sector_escape_hatch" in final.columns
+    assert bool(final.loc[final["symbol_id"].eq("EEE"), "sector_escape_hatch"].iloc[0]) is True
+
+
+def test_escape_hatch_score_is_penalized_vs_clean_sector() -> None:
+    clean = pd.Series(
+        {
+            "sector_status": "LEADING",
+            "stage2_label": "stage2",
+            "momentum_tags": "WEEKLY_GAINER",
+            "breakout_score": 95,
+            "pattern_score": 0,
+            "technical_catalyst_score": 80,
+            "sector_escape_hatch": False,
+        }
+    )
+    escape = clean.copy()
+    escape["sector_status"] = "WEAKENING"
+    escape["sector_escape_hatch"] = True
+    assert compute_watchlist_score(escape) < compute_watchlist_score(clean)
+
+
+def test_delivery_accumulation_requires_more_than_sector_median() -> None:
+    ranked = pd.DataFrame(
+        [
+            {"symbol_id": "LOW", "sector": "Capital Goods", "rank": 1, "stage2_label": "stage2", "return_1": 0, "return_5": 6, "near_52w_high_pct": 10, "volume_ratio": 1.0, "delivery_pct": 50, "close": 120, "sma_50": 110, "composite_score": 91},
+            {"symbol_id": "MID", "sector": "Capital Goods", "rank": 2, "stage2_label": "stage2", "return_1": 0, "return_5": 6, "near_52w_high_pct": 10, "volume_ratio": 1.0, "delivery_pct": 50, "close": 120, "sma_50": 110, "composite_score": 90},
+            {"symbol_id": "HIGH", "sector": "Capital Goods", "rank": 3, "stage2_label": "stage2", "return_1": 0, "return_5": 6, "near_52w_high_pct": 10, "volume_ratio": 1.0, "delivery_pct": 65, "close": 120, "sma_50": 110, "composite_score": 89},
+        ]
+    )
+    breakout = pd.DataFrame(
+        [
+            {"symbol_id": symbol, "candidate_tier": "A", "qualified": True, "breakout_score": 85}
+            for symbol in ["LOW", "MID", "HIGH"]
+        ]
+    )
+    sectors = pd.DataFrame([{"Sector": "Capital Goods", "Quadrant": "Leading"}])
+    prefilter = build_watchlist_prefilter(ranked, breakout, pd.DataFrame(), sectors, top_n=30)
+    tags = dict(zip(prefilter["symbol_id"], prefilter["momentum_tags"], strict=False))
+    assert "DELIVERY_ACCUMULATION" not in tags["MID"]
+    assert "DELIVERY_ACCUMULATION" in tags["HIGH"]
+
+
+def test_watchlist_validation_warns_on_malformed_rows() -> None:
+    frame = pd.DataFrame(
+        [
+            {"rank": 1, "symbol_id": "AAA", "watchlist_score": 101, "data_trust_status": "trusted"},
+            {"rank": 1, "symbol_id": "AAA", "watchlist_score": 50, "data_trust_status": "blocked"},
+        ]
+    )
+    warnings = validate_watchlist_candidates(frame)
+    assert any("missing required columns" in item for item in warnings)
+    assert "watchlist contains duplicate symbol_id" in warnings
+    assert "watchlist contains duplicate rank" in warnings
+    assert "watchlist_score must be between 0 and 100" in warnings
+    assert "watchlist contains blocked data_trust_status" in warnings

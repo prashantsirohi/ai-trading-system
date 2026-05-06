@@ -95,7 +95,7 @@ def publish_watchlist_candidates(watchlist: pd.DataFrame) -> bool:
     frame = pd.DataFrame(rows).head(15)
     frame["report_date"] = pd.Timestamp.now().strftime("%Y-%m-%d")
 
-    sheet_name = "Watchlist Candidates"
+    sheet_name = "Watchlist Current"
     sheet = manager.get_or_create_sheet(sheet_name)
     if not sheet:
         raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")

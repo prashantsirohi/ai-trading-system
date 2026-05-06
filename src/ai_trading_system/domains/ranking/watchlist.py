@@ -29,6 +29,7 @@ FINAL_COLUMNS = [
     "symbol_id",
     "sector",
     "sector_status",
+    "sector_escape_hatch",
     "stage",
     "momentum_tags",
     "setup_label",
@@ -137,7 +138,16 @@ def _classify_stage(row: pd.Series) -> str:
     return "NON_STAGE2"
 
 
-def _collect_momentum_tags(row: pd.Series, *, sector_median_delivery_pct: float | None = None) -> list[str]:
+def _delivery_accumulation(row: pd.Series) -> bool:
+    delivery = _num(row, "delivery_pct", -1.0)
+    median = _num(row, "sector_median_delivery_pct", float("nan"))
+    p75 = _num(row, "sector_p75_delivery_pct", float("nan"))
+    median_ok = pd.notna(median) and delivery >= median + 10.0
+    p75_ok = pd.notna(p75) and delivery >= p75
+    return bool(delivery >= 0 and (median_ok or p75_ok))
+
+
+def _collect_momentum_tags(row: pd.Series) -> list[str]:
     tags: list[str] = []
     if _num(row, "near_52w_high_pct", 999.0) <= 5.0:
         tags.append("52W_HIGH")
@@ -148,8 +158,7 @@ def _collect_momentum_tags(row: pd.Series, *, sector_median_delivery_pct: float 
         tags.append("DAILY_GAINER")
     if _num(row, "volume_ratio") >= 1.5:
         tags.append("UNUSUAL_VOLUME")
-    delivery = _num(row, "delivery_pct", -1.0)
-    if sector_median_delivery_pct is not None and delivery >= sector_median_delivery_pct:
+    if _delivery_accumulation(row):
         tags.append("DELIVERY_ACCUMULATION")
     if _num(row, "rank", 999999.0) <= 50.0:
         tags.append("TOP_RANKED")
@@ -197,7 +206,7 @@ def build_technical_catalyst(row: pd.Series) -> dict[str, Any]:
     if _num(row, "volume_ratio") >= 1.5:
         tags.append("VOLUME_SURGE")
         parts.append(f"{_num(row, 'volume_ratio'):.1f}x volume")
-    if "DELIVERY_ACCUMULATION" in str(row.get("momentum_tags", "")) or _num(row, "delivery_pct") >= _num(row, "sector_median_delivery_pct", 10**9):
+    if "DELIVERY_ACCUMULATION" in str(row.get("momentum_tags", "")) or _delivery_accumulation(row):
         tags.append("DELIVERY_SPIKE")
         parts.append("delivery accumulation")
     if sector_status == "LEADING":
@@ -232,7 +241,15 @@ def build_technical_catalyst(row: pd.Series) -> dict[str, Any]:
 
 
 def compute_watchlist_score(row: pd.Series) -> float:
-    sector_score = 100.0 if _text(row, "sector_status") == "LEADING" else 80.0 if _text(row, "sector_status") == "IMPROVING" else 50.0
+    sector_status = _text(row, "sector_status")
+    if sector_status == "LEADING":
+        sector_score = 100.0
+    elif sector_status == "IMPROVING":
+        sector_score = 80.0
+    elif _truthy(row.get("sector_escape_hatch")):
+        sector_score = 35.0
+    else:
+        sector_score = 0.0
     stage_score = 100.0 if _classify_stage(row) == "STAGE_2" else 85.0 if _classify_stage(row) == "STAGE_1_TO_2" else 0.0
     momentum_count = len([tag for tag in str(row.get("momentum_tags", "")).split(",") if tag.strip()])
     momentum_score = min(100.0, momentum_count * 22.0)
@@ -300,12 +317,19 @@ def build_watchlist_prefilter(
     if active_quarantine:
         merged = merged.loc[~merged["symbol_id"].astype(str).isin(active_quarantine)].copy()
 
-    sector_medians = merged.groupby("sector")["delivery_pct"].median(numeric_only=True).to_dict() if "sector" in merged.columns else {}
+    if "sector" in merged.columns:
+        sector_delivery = merged.groupby("sector")["delivery_pct"]
+        sector_medians = sector_delivery.median(numeric_only=True).to_dict()
+        sector_p75 = sector_delivery.quantile(0.75).to_dict()
+    else:
+        sector_medians = {}
+        sector_p75 = {}
     merged.loc[:, "sector_status"] = merged.apply(_classify_sector_status, axis=1)
     merged.loc[:, "stage"] = merged.apply(_classify_stage, axis=1)
     merged.loc[:, "sector_median_delivery_pct"] = merged.get("sector", pd.Series("", index=merged.index)).map(sector_medians)
+    merged.loc[:, "sector_p75_delivery_pct"] = merged.get("sector", pd.Series("", index=merged.index)).map(sector_p75)
     merged.loc[:, "momentum_tags"] = merged.apply(
-        lambda row: ",".join(_collect_momentum_tags(row, sector_median_delivery_pct=_num(row, "sector_median_delivery_pct", 10**9))),
+        lambda row: ",".join(_collect_momentum_tags(row)),
         axis=1,
     )
     merged.loc[:, "setup_label"] = merged.apply(_classify_setup_label, axis=1)
@@ -394,3 +418,31 @@ def build_final_watchlist(
         if column not in rows.columns:
             rows.loc[:, column] = ""
     return rows[FINAL_COLUMNS]
+
+
+def validate_watchlist_candidates(frame: pd.DataFrame) -> list[str]:
+    warnings: list[str] = []
+    if frame is None or frame.empty:
+        return warnings
+    missing = [column for column in FINAL_COLUMNS if column not in frame.columns]
+    if missing:
+        warnings.append(f"watchlist missing required columns: {', '.join(missing)}")
+    if "symbol_id" in frame.columns and frame["symbol_id"].isna().any():
+        warnings.append("watchlist contains null symbol_id")
+    if "symbol_id" in frame.columns:
+        duplicate_symbols = frame["symbol_id"].dropna().astype(str).duplicated()
+        if duplicate_symbols.any():
+            warnings.append("watchlist contains duplicate symbol_id")
+    if "rank" in frame.columns:
+        ranks = pd.to_numeric(frame["rank"], errors="coerce")
+        if ranks.duplicated().any():
+            warnings.append("watchlist contains duplicate rank")
+    if "watchlist_score" in frame.columns:
+        scores = pd.to_numeric(frame["watchlist_score"], errors="coerce")
+        if scores.isna().any() or (~scores.between(0, 100)).any():
+            warnings.append("watchlist_score must be between 0 and 100")
+    if "data_trust_status" in frame.columns:
+        blocked = frame["data_trust_status"].astype(str).str.lower().eq("blocked")
+        if blocked.any():
+            warnings.append("watchlist contains blocked data_trust_status")
+    return warnings

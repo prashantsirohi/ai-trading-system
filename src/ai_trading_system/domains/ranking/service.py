@@ -1044,6 +1044,16 @@ class RankOrchestrationService:
                     outputs["watchlist_candidates"] = watchlist_final_df
             except Exception as exc:
                 warnings.append(f"watchlist history persistence unavailable: {exc}")
+        watchlist_validation_warnings = (
+            watchlist.validate_watchlist_candidates(watchlist_final_df)
+            if isinstance(watchlist_final_df, pd.DataFrame)
+            else ["watchlist final artifact is not a DataFrame"]
+        )
+        if watchlist_validation_warnings:
+            warnings.extend(f"watchlist validation warning: {item}" for item in watchlist_validation_warnings)
+            if "watchlist_final" in task_status:
+                task_status["watchlist_final"]["validation_warnings"] = list(watchlist_validation_warnings)
+                self.persist_task_status(context, task_status)
         try:
             context.write_json(
                 "watchlist_candidates.json",

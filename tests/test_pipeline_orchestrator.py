@@ -1077,6 +1077,80 @@ def test_rank_stage_writes_pattern_scan_artifact_and_dashboard_payload(tmp_path:
     assert '"volume_zscore_20": 2.6' in dashboard_payload
 
 
+def test_rank_stage_writes_watchlist_sidecar_artifacts(tmp_path: Path) -> None:
+    project_root = tmp_path
+    context = StageContext(
+        project_root=project_root,
+        db_path=project_root / "data" / "ohlcv.duckdb",
+        run_id="run-watchlist",
+        run_date="2026-05-06",
+        stage_name="rank",
+        attempt_number=1,
+    )
+    watchlist_df = pd.DataFrame(
+        [
+            {
+                "rank": 1,
+                "previous_rank": None,
+                "rank_change": None,
+                "days_on_watchlist": 1,
+                "is_new_entry": True,
+                "symbol_id": "AAA",
+                "sector": "Industrial",
+                "sector_status": "LEADING",
+                "sector_escape_hatch": False,
+                "stage": "STAGE_2",
+                "momentum_tags": "WEEKLY_GAINER",
+                "setup_label": "FLAG_BREAKOUT",
+                "technical_catalyst_summary": "Leading sector + Stage 2 + flag",
+                "catalyst_tags": "",
+                "catalyst_confidence": "",
+                "bull_case": "",
+                "risk_flags": "",
+                "watchlist_score": 88.0,
+                "composite_score": 91.0,
+                "action": "Study",
+                "data_trust_status": "trusted",
+                "watchlist_reason": "Leading sector + Stage 2 + flag",
+            }
+        ]
+    )
+    def rank_operation(_context: StageContext) -> dict:
+        output_dir = _context.output_dir()
+        (output_dir / "watchlist_candidates.json").write_text(
+            json.dumps(watchlist_df.to_dict(orient="records")),
+            encoding="utf-8",
+        )
+        (output_dir / "watchlist_digest.md").write_text("# Watchlist Candidates\n", encoding="utf-8")
+        return {
+            "ranked_signals": pd.DataFrame([{"symbol_id": "AAA", "composite_score": 91.0}]),
+            "watchlist_prefilter": watchlist_df.copy(),
+            "watchlist_candidates": watchlist_df.copy(),
+            "__dashboard_payload__": {
+                "summary": {"run_id": "run-watchlist", "ranked_count": 1},
+                "watchlist": watchlist_df.to_dict(orient="records"),
+                "warnings": [],
+            },
+        }
+
+    stage = RankStage(operation=rank_operation)
+
+    result = stage.run(context)
+
+    output_dir = context.output_dir()
+    assert (output_dir / "watchlist_prefilter.csv").exists()
+    assert (output_dir / "watchlist_candidates.csv").exists()
+    assert (output_dir / "watchlist_candidates.json").exists()
+    assert (output_dir / "watchlist_digest.md").exists()
+    assert any(artifact.artifact_type == "watchlist_candidates" for artifact in result.artifacts)
+    assert any(artifact.artifact_type == "watchlist_candidates_json" for artifact in result.artifacts)
+    final = pd.read_csv(output_dir / "watchlist_candidates.csv")
+    assert "sector_escape_hatch" in final.columns
+    dashboard_payload = json.loads((output_dir / "dashboard_payload.json").read_text(encoding="utf-8"))
+    assert len(dashboard_payload["watchlist"]) == 1
+    assert dashboard_payload["watchlist"][0]["sector_escape_hatch"] is False
+
+
 def test_rank_stage_incremental_pattern_scan_reuses_cached_inactive_symbols(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -516,6 +516,7 @@ def publish_dashboard_payload(
                 "symbol_id",
                 "sector",
                 "sector_status",
+                "sector_escape_hatch",
                 "stage",
                 "momentum_tags",
                 "setup_label",

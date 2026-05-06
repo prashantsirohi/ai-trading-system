@@ -114,7 +114,7 @@ def enrich_with_catalyst(
             record = CatalystRecord(
                 symbol=symbol,
                 catalyst_tags=[],
-                catalyst_confidence="",
+                catalyst_confidence="LOW",
                 bull_case="",
                 risk_flags=[],
                 watchlist_reason=str(row.get("technical_catalyst_summary") or ""),
