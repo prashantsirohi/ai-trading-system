@@ -68,6 +68,22 @@ function stageLabel(row: StockRow): string {
   return row.stageLabel;
 }
 
+function tierTone(tier?: StockRow['fundamentalTier']): string {
+  if (tier === 'A') return 'border-emerald-500/40 bg-emerald-500/15 text-emerald-200';
+  if (tier === 'B') return 'border-blue-500/40 bg-blue-500/15 text-blue-200';
+  if (tier === 'C') return 'border-amber-500/40 bg-amber-500/15 text-amber-200';
+  if (tier === 'Reject') return 'border-rose-500/40 bg-rose-500/15 text-rose-200';
+  return 'border-slate-700 bg-slate-900/60 text-slate-400';
+}
+
+function scoreText(value?: number | null): string {
+  return value == null ? '—' : value.toFixed(1);
+}
+
+function CompactScore({ value }: { value?: number | null }) {
+  return <span className="font-mono text-xs text-slate-200">{scoreText(value)}</span>;
+}
+
 export default function RankingTable({
   rows,
   expandedSymbol = null,
@@ -126,6 +142,55 @@ export default function RankingTable({
           </span>
         ),
         size: 92,
+      }),
+      columnHelper.display({
+        id: 'fundamental',
+        header: 'Fund',
+        cell: (info) => {
+          const row = info.row.original;
+          if (!row.fundamentalTier && row.fundamentalScore == null) return <span className="text-slate-500">—</span>;
+          return (
+            <div className="flex items-center gap-1.5">
+              <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider', tierTone(row.fundamentalTier))}>
+                {row.fundamentalTier ?? '—'}
+              </span>
+              <CompactScore value={row.fundamentalScore} />
+            </div>
+          );
+        },
+        size: 112,
+      }),
+      columnHelper.display({ id: 'qualityScore', header: 'Q', cell: (info) => <CompactScore value={info.row.original.qualityScore} />, size: 56 }),
+      columnHelper.display({ id: 'growthScore', header: 'G', cell: (info) => <CompactScore value={info.row.original.growthScore} />, size: 56 }),
+      columnHelper.display({ id: 'balanceSheetScore', header: 'BS', cell: (info) => <CompactScore value={info.row.original.balanceSheetScore} />, size: 56 }),
+      columnHelper.display({ id: 'valuationScore', header: 'Val', cell: (info) => <CompactScore value={info.row.original.valuationScore} />, size: 56 }),
+      columnHelper.display({ id: 'ownershipScore', header: 'Own', cell: (info) => <CompactScore value={info.row.original.ownershipScore} />, size: 62 }),
+      columnHelper.display({
+        id: 'redFlags',
+        header: 'Flags',
+        cell: (info) => {
+          const value = info.row.original.redFlags;
+          return value ? <span className="line-clamp-2 text-[11px] text-amber-200">{value}</span> : <span className="text-slate-500">—</span>;
+        },
+        size: 160,
+      }),
+      columnHelper.display({
+        id: 'watchlistBucket',
+        header: 'Bucket',
+        cell: (info) => {
+          const value = info.row.original.watchlistBucket;
+          return value ? <span className="text-[11px] font-semibold text-slate-200">{value.split('_').join(' ')}</span> : <span className="text-slate-500">—</span>;
+        },
+        size: 142,
+      }),
+      columnHelper.display({
+        id: 'nextAction',
+        header: 'Action',
+        cell: (info) => {
+          const value = info.row.original.nextAction;
+          return value ? <span className="line-clamp-2 text-[11px] text-slate-300">{value}</span> : <span className="text-slate-500">—</span>;
+        },
+        size: 180,
       }),
       columnHelper.display({
         id: 'stage',
@@ -252,7 +317,7 @@ export default function RankingTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[1220px] table-fixed text-left text-sm">
+      <table className="w-full min-w-[2040px] table-fixed text-left text-sm">
         <thead className="border-y border-slate-800 text-slate-400">
           {table.getHeaderGroups().map((headerGroup) => (
             <tr key={headerGroup.id}>

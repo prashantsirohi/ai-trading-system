@@ -33,6 +33,22 @@ const SEVERITY_PILL: Record<string, string> = {
   critical: 'border-rose-700/60 bg-rose-500/15 text-rose-300',
 };
 
+function tierTone(tier?: StockRow['fundamentalTier']): string {
+  if (tier === 'A') return 'border-emerald-500/40 bg-emerald-500/15 text-emerald-200';
+  if (tier === 'B') return 'border-blue-500/40 bg-blue-500/15 text-blue-200';
+  if (tier === 'C') return 'border-amber-500/40 bg-amber-500/15 text-amber-200';
+  if (tier === 'Reject') return 'border-rose-500/40 bg-rose-500/15 text-rose-200';
+  return 'border-slate-700 bg-slate-900/60 text-slate-400';
+}
+
+function scoreText(value?: number | null): string {
+  return value == null ? '—' : value.toFixed(1);
+}
+
+function CompactScore({ value }: { value?: number | null }) {
+  return <span className="font-mono text-xs text-slate-200">{scoreText(value)}</span>;
+}
+
 interface Props {
   entries: WatchlistEntry[];
   rankingRows: StockRow[];
@@ -69,10 +85,10 @@ export default function WatchlistTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm">
+      <table className="w-full min-w-[1520px] border-collapse text-sm">
         <thead>
           <tr className="border-b border-slate-800">
-            {['Symbol', 'Sector', 'Price', 'Δ%', 'Score', 'Rules', 'Last fired', ''].map(
+            {['Symbol', 'Sector', 'Price', 'Δ%', 'Score', 'Fund', 'Q', 'G', 'BS', 'Val', 'Own', 'Flags', 'Bucket', 'Action', 'Rules', 'Last fired', ''].map(
               (h) => (
                 <th
                   key={h}
@@ -127,6 +143,32 @@ export default function WatchlistTable({
                 </td>
                 <td className="py-3 pr-4 font-mono text-xs text-slate-200">
                   {row ? row.score.toFixed(2) : '—'}
+                </td>
+                <td className="py-3 pr-4">
+                  {row?.fundamentalTier || row?.fundamentalScore != null ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider', tierTone(row.fundamentalTier))}>
+                        {row.fundamentalTier ?? '—'}
+                      </span>
+                      <CompactScore value={row.fundamentalScore} />
+                    </div>
+                  ) : (
+                    <span className="text-slate-500">—</span>
+                  )}
+                </td>
+                <td className="py-3 pr-4"><CompactScore value={row?.qualityScore} /></td>
+                <td className="py-3 pr-4"><CompactScore value={row?.growthScore} /></td>
+                <td className="py-3 pr-4"><CompactScore value={row?.balanceSheetScore} /></td>
+                <td className="py-3 pr-4"><CompactScore value={row?.valuationScore} /></td>
+                <td className="py-3 pr-4"><CompactScore value={row?.ownershipScore} /></td>
+                <td className="max-w-[14rem] py-3 pr-4 text-[11px] text-amber-200">
+                  {row?.redFlags ? row.redFlags : <span className="text-slate-500">—</span>}
+                </td>
+                <td className="py-3 pr-4 text-[11px] font-semibold text-slate-200">
+                  {row?.watchlistBucket ? row.watchlistBucket.split('_').join(' ') : <span className="text-slate-500">—</span>}
+                </td>
+                <td className="max-w-[14rem] py-3 pr-4 text-[11px] text-slate-300">
+                  {row?.nextAction ? row.nextAction : <span className="text-slate-500">—</span>}
                 </td>
                 <td className="py-3 pr-4">
                   <button

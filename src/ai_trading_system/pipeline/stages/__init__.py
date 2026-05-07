@@ -21,6 +21,7 @@ __all__ = [
     "PublishStageError",
     "compute_file_hash",
     "FeaturesStage",
+    "FundamentalsStage",
     "IngestStage",
     "PublishStage",
     "RankStage",
@@ -33,6 +34,7 @@ __all__ = [
 _MODULE_MAP = {
     "ExecuteStage": (".execute", "ExecuteStage"),
     "FeaturesStage": (".features", "FeaturesStage"),
+    "FundamentalsStage": (".fundamentals", "FundamentalsStage"),
     "IngestStage": (".ingest", "IngestStage"),
     "PublishStage": (".publish", "PublishStage"),
     "RankStage": (".rank", "RankStage"),

@@ -28,7 +28,7 @@ from ai_trading_system.platform.logging import logger as logging_module
 from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
-from ai_trading_system.pipeline.stages import EventsStage, ExecuteStage, FeaturesStage, IngestStage, InsightStage, PublishStage, RankStage
+from ai_trading_system.pipeline.stages import EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, PublishStage, RankStage
 
 load_project_env(__file__)
 
@@ -37,8 +37,9 @@ log_context = logging_module.log_context
 logger = logging_module.logger
 
 
-PIPELINE_ORDER = ["ingest", "features", "rank", "events", "execute", "insight", "publish"]
-SUPPORTED_STAGES = ["ingest", "features", "rank", "events", "execute", "insight", "publish"]
+PIPELINE_ORDER = ["ingest", "features", "rank", "fundamentals", "events", "execute", "insight", "publish"]
+DEFAULT_PIPELINE_ORDER = ["ingest", "features", "rank", "events", "execute", "insight", "publish"]
+SUPPORTED_STAGES = ["ingest", "features", "rank", "fundamentals", "events", "execute", "insight", "publish"]
 
 
 class TerminalProgressRenderer:
@@ -122,6 +123,7 @@ class PipelineOrchestrator:
             "ingest": IngestStage(),
             "features": FeaturesStage(),
             "rank": RankStage(),
+            "fundamentals": FundamentalsStage(),
             "events": EventsStage(),
             "execute": ExecuteStage(),
             "insight": InsightStage(),
@@ -135,6 +137,7 @@ class PipelineOrchestrator:
             "ingest": "fetching OHLCV and validating source data",
             "features": "computing technical features and writing feature store",
             "rank": "scoring symbols and building ranked outputs",
+            "fundamentals": "enriching ranked candidates with Screener fundamentals",
             "events": "enriching ranked signals with corporate-action context",
             "execute": "evaluating execution actions",
             "insight": "building event-aware market insight",
@@ -255,7 +258,11 @@ class PipelineOrchestrator:
         params: Optional[Dict] = None,
     ) -> Dict:
         params = params or {}
-        stage_names = self._normalize_stage_names(stage_names)
+        stage_names = self._normalize_stage_names(
+            stage_names,
+            enable_fundamentals=bool(params.get("enable_fundamentals", False)),
+            fundamental_scores_path=params.get("fundamental_scores_path"),
+        )
         run_date = run_date or date.today().isoformat()
         run_id = run_id or self._build_run_id(run_date)
         data_domain = params.get("data_domain", "operational")
@@ -526,14 +533,34 @@ class PipelineOrchestrator:
             "run": self.registry.get_run(run_id),
         }
 
-    def _normalize_stage_names(self, stage_names: Optional[Iterable[str]]) -> List[str]:
-        if stage_names is None:
-            return list(PIPELINE_ORDER)
-        requested = list(stage_names)
+    def _normalize_stage_names(
+        self,
+        stage_names: Optional[Iterable[str]],
+        *,
+        enable_fundamentals: bool = False,
+        fundamental_scores_path: object | None = None,
+    ) -> List[str]:
+        using_default_stage_list = stage_names is None
+        if using_default_stage_list:
+            requested = list(DEFAULT_PIPELINE_ORDER)
+        else:
+            requested = list(stage_names)
         invalid = [stage for stage in requested if stage not in SUPPORTED_STAGES]
         if invalid:
             raise ValueError(f"Unknown stages requested: {invalid}")
+        should_run_fundamentals = bool(enable_fundamentals) or (
+            using_default_stage_list and self._fundamental_scores_available(fundamental_scores_path)
+        )
+        if should_run_fundamentals and "fundamentals" not in requested and requested == DEFAULT_PIPELINE_ORDER:
+            insert_at = requested.index("rank") + 1
+            requested = [*requested[:insert_at], "fundamentals", *requested[insert_at:]]
         return requested
+
+    def _fundamental_scores_available(self, fundamental_scores_path: object | None = None) -> bool:
+        configured = Path(str(fundamental_scores_path or "data/fundamentals/fundamental_scores_latest.csv"))
+        if not configured.is_absolute():
+            configured = self.project_root / configured
+        return configured.exists() and configured.is_file()
 
     def _build_run_id(self, run_date: str) -> str:
         return f"pipeline-{run_date}-{uuid.uuid4().hex[:8]}"
@@ -710,6 +737,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bulk", action="store_true")
     parser.add_argument("--top-n", type=int, default=None)
     parser.add_argument("--min-score", type=float, default=0.0)
+    parser.add_argument(
+        "--enable-fundamentals",
+        action="store_true",
+        help="Run optional fundamentals enrichment after rank and before publish.",
+    )
+    parser.add_argument(
+        "--fundamental-max-stale-days",
+        type=int,
+        default=135,
+        help="Warn when the latest fundamental snapshot is older than this many days.",
+    )
+    parser.add_argument(
+        "--fundamental-scores-path",
+        default="data/fundamentals/fundamental_scores_latest.csv",
+        help="Path to latest fundamental scores CSV.",
+    )
     parser.add_argument(
         "--data-domain",
         choices=["operational", "research"],
@@ -1092,6 +1135,9 @@ def main() -> None:
         "bulk": args.bulk,
         "top_n": args.top_n,
         "min_score": args.min_score,
+        "enable_fundamentals": bool(args.enable_fundamentals),
+        "fundamental_max_stale_days": int(args.fundamental_max_stale_days),
+        "fundamental_scores_path": args.fundamental_scores_path,
         "data_domain": args.data_domain,
         "local_publish": args.local_publish,
         "smoke": args.smoke,

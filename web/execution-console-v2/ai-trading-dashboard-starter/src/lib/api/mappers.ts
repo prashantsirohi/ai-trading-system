@@ -101,6 +101,13 @@ function normalizeTier(raw: BackendValue, score: number): 'A' | 'B' | 'C' {
   return 'C';
 }
 
+function normalizeFundamentalTier(raw: BackendValue): StockRow['fundamentalTier'] {
+  const normalized = toText(raw, '').trim().toUpperCase();
+  if (normalized === 'A' || normalized === 'B' || normalized === 'C') return normalized;
+  if (normalized === 'REJECT') return 'Reject';
+  return null;
+}
+
 export function mapBackendStockRow(row: BackendRecord): StockRow {
   const score = toNumber(row.composite_score ?? row.score, 0);
   const rs = toNumber(row.rs ?? row.rs_score ?? row.relative_strength, Math.round(score));
@@ -137,5 +144,15 @@ export function mapBackendStockRow(row: BackendRecord): StockRow {
     exhaustionPenalty: optionalNumber(row.exhaustion_penalty),
     exhaustionFlag: optionalText(row.exhaustion_flag),
     distanceFromPivotAtr: optionalNumber(row.distance_from_pivot_atr),
+    fundamentalScore: optionalNumber(row.fundamental_score),
+    fundamentalTier: normalizeFundamentalTier(row.fundamental_tier),
+    qualityScore: optionalNumber(row.quality_score),
+    growthScore: optionalNumber(row.growth_score),
+    balanceSheetScore: optionalNumber(row.balance_sheet_score),
+    valuationScore: optionalNumber(row.valuation_score),
+    ownershipScore: optionalNumber(row.ownership_score),
+    redFlags: optionalText(row.red_flags),
+    watchlistBucket: optionalText(row.watchlist_bucket),
+    nextAction: optionalText(row.next_action),
   };
 }

@@ -61,8 +61,16 @@ class PublishStage:
             return self.operation(context)
 
         rank_artifact = context.require_artifact("rank", "ranked_signals")
+        def _context_artifact_for(artifact_type: str) -> StageArtifact | None:
+            artifact = context.artifact_for("rank", artifact_type)
+            if artifact is not None:
+                return artifact
+            if artifact_type in {"watchlist_candidates", "fundamental_summary", "fundamental_scores"}:
+                return context.artifact_for("fundamentals", artifact_type)
+            return None
+
         datasets = build_publish_datasets(
-            context_artifact_for=lambda artifact_type: context.artifact_for("rank", artifact_type),
+            context_artifact_for=_context_artifact_for,
             read_artifact=self._read_artifact,
             read_json_artifact=self._read_json_artifact,
             ranked_signals_artifact=rank_artifact,
@@ -106,10 +114,31 @@ class PublishStage:
             stage2_summary=dict(datasets.get("stage2_summary") or {}),
             stage2_breakdown_symbols=list(datasets.get("stage2_breakdown_symbols") or []),
         )
+        self._attach_fundamentals_publish_summary(context, datasets, metadata)
         if failures:
             metadata["failures"] = failures
             raise PublishStageError("; ".join(failures))
         return metadata
+
+    def _attach_fundamentals_publish_summary(
+        self,
+        context: StageContext,
+        datasets: Dict[str, Any],
+        metadata: Dict[str, Any],
+    ) -> None:
+        watchlist = datasets.get("watchlist_candidates")
+        if not isinstance(watchlist, pd.DataFrame) or watchlist.empty:
+            return
+        bucket = watchlist.get("watchlist_bucket", pd.Series("", index=watchlist.index)).astype(str)
+        add_rows = watchlist.loc[bucket.eq("ADD_TO_WATCHLIST")].head(10)
+        metadata["fundamentals_top_add_to_watchlist"] = (
+            add_rows.get("symbol", pd.Series(dtype=str)).astype(str).tolist()
+            if not add_rows.empty
+            else []
+        )
+        summary_artifact = context.artifact_for("fundamentals", "fundamental_summary")
+        if summary_artifact is not None:
+            metadata["fundamental_summary_uri"] = summary_artifact.uri
 
     def _attach_event_datasets(self, context: StageContext, datasets: Dict[str, Any]) -> None:
         snapshot = self._read_json_artifact_safe(context.artifact_for("events", "market_events_snapshot"))

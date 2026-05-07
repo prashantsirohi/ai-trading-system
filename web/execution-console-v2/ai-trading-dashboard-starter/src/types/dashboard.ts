@@ -43,6 +43,16 @@ export interface StockRow {
   exhaustionPenalty?: number | null;
   exhaustionFlag?: string | null;
   distanceFromPivotAtr?: number | null;
+  fundamentalScore?: number | null;
+  fundamentalTier?: 'A' | 'B' | 'C' | 'Reject' | null;
+  qualityScore?: number | null;
+  growthScore?: number | null;
+  balanceSheetScore?: number | null;
+  valuationScore?: number | null;
+  ownershipScore?: number | null;
+  redFlags?: string | null;
+  watchlistBucket?: string | null;
+  nextAction?: string | null;
 }
 
 export interface RunStage {
