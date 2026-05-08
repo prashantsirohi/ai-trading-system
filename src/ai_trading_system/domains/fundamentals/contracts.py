@@ -24,6 +24,32 @@ FUNDAMENTAL_OUTPUT_COLUMNS = [
     "screener_snapshot_date",
 ]
 
+INDUSTRY_FUNDAMENTAL_SCORE_COLUMNS = [
+    "industry_growth_score",
+    "industry_quality_score",
+    "industry_valuation_score",
+    "industry_momentum_score",
+    "industry_fundamental_score",
+]
+
+INDUSTRY_FUNDAMENTAL_OUTPUT_COLUMNS = [
+    "snapshot_date",
+    "industry",
+    "industry_key",
+    "no_of_companies",
+    "total_market_cap",
+    "median_market_cap",
+    "median_pe",
+    "sales_growth_wavg",
+    "opm_wavg",
+    "roce_wavg",
+    "median_1y_return",
+    *INDUSTRY_FUNDAMENTAL_SCORE_COLUMNS,
+    "industry_fundamental_label",
+    "industry_warning",
+    "screener_industry_snapshot_date",
+]
+
 WATCHLIST_BUCKET_PRIORITY = {
     "ADD_TO_WATCHLIST": 0,
     "STUDY_ONLY": 1,
@@ -64,6 +90,15 @@ WATCHLIST_OUTPUT_COLUMNS = [
     "fundamental_score_delta",
     "fundamental_trend_label",
     "trend_reason",
+    "industry_fundamental_score",
+    "industry_growth_score",
+    "industry_quality_score",
+    "industry_valuation_score",
+    "industry_momentum_score",
+    "industry_fundamental_label",
+    "industry_warning",
+    "industry_score_delta",
+    "industry_trend_label",
     "catalyst_score",
     "catalyst_type",
     "catalyst_summary",

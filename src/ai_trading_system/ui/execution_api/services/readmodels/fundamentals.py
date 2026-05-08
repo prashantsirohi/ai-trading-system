@@ -23,6 +23,12 @@ def get_latest_fundamentals(project_root: Path, *, limit: int = 25) -> dict[str,
             "summary": {},
             "source_path": None,
             "generated_at": None,
+            "industry_status": None,
+            "industry_snapshot_date": None,
+            "industry_label_counts": {},
+            "industry_rows_scored": None,
+            "industry_trend_status": None,
+            "industry_trend_label_counts": {},
         }
 
     summary = _read_json(summary_path)
@@ -37,6 +43,12 @@ def get_latest_fundamentals(project_root: Path, *, limit: int = 25) -> dict[str,
         "summary": summary,
         "source_path": str(summary_path),
         "generated_at": generated_at,
+        "industry_status": summary.get("industry_status"),
+        "industry_snapshot_date": summary.get("industry_snapshot_date"),
+        "industry_label_counts": summary.get("industry_label_counts") or {},
+        "industry_rows_scored": summary.get("industry_rows_scored"),
+        "industry_trend_status": summary.get("industry_trend_status"),
+        "industry_trend_label_counts": summary.get("industry_trend_label_counts") or {},
     }
 
 

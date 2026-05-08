@@ -11,10 +11,13 @@ import pandas as pd
 
 from ai_trading_system.domains.fundamentals.enrich_rank import (
     DEFAULT_CATALYSTS_PATH,
+    DEFAULT_INDUSTRY_SCORES_PATH,
+    DEFAULT_INDUSTRY_TRENDS_PATH,
     DEFAULT_SCORES_PATH,
     DEFAULT_TRENDS_PATH,
     enrich_rank_artifacts,
 )
+from ai_trading_system.domains.fundamentals.enrich_sector_dashboard import enrich_sector_dashboard
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 
 
@@ -33,6 +36,8 @@ class FundamentalsStage:
         scores_path = self._resolve_scores_path(context)
         trends_path = self._resolve_trends_path(context)
         catalysts_path = self._resolve_catalysts_path(context)
+        industry_scores_path = self._resolve_industry_scores_path(context)
+        industry_trends_path = self._resolve_industry_trends_path(context)
         max_stale_days = int(context.params.get("fundamental_max_stale_days", 135) or 135)
         warnings: list[str] = []
 
@@ -50,6 +55,14 @@ class FundamentalsStage:
                 watchlist_bucket_counts={},
                 hard_red_flag_count=0,
                 warnings=warnings,
+                industry_status="unknown",
+                industry_snapshot_date=None,
+                industry_rows_scored=0,
+                industry_label_counts={},
+                matched_industry_rows=0,
+                missing_industry_rows=0,
+                industry_trend_status="unknown",
+                industry_trend_label_counts={},
             )
             summary_artifact = self._write_summary(context, summary)
             return StageResult(artifacts=[summary_artifact], metadata=summary)
@@ -68,10 +81,14 @@ class FundamentalsStage:
         scores_output = output_dir / "fundamental_scores.csv"
         shutil.copyfile(scores_path, scores_output)
         watchlist_output = output_dir / "watchlist_candidates.csv"
+        industry_available = industry_scores_path.exists()
+        industry_trends_available = industry_trends_path.exists()
         watchlist, metrics = enrich_rank_artifacts(
             rank_dir=rank_dir,
             fundamental_scores=scores_path,
             fundamental_trends=trends_path,
+            industry_scores=industry_scores_path if industry_available else None,
+            industry_trends=industry_trends_path if industry_trends_available else None,
             catalysts=catalysts_path if catalysts_path.exists() else None,
             output=watchlist_output,
             top_n=int(context.params.get("fundamental_top_n", 100) or 100),
@@ -93,6 +110,85 @@ class FundamentalsStage:
             .isin({"1", "true", "t", "yes", "y"})
             .sum()
         )
+        industry_artifacts: list[StageArtifact] = []
+        industry_status = "missing"
+        industry_snapshot_date: str | None = None
+        industry_rows_scored = 0
+        if industry_available:
+            try:
+                industry_scores = pd.read_csv(industry_scores_path)
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"Failed to read industry scores: {exc}")
+                industry_status = "error"
+                industry_scores = pd.DataFrame()
+            else:
+                industry_status = "available"
+                industry_rows_scored = len(industry_scores)
+                industry_snapshot_date = self._snapshot_date(industry_scores) or self._snapshot_date_column(
+                    industry_scores, "screener_industry_snapshot_date"
+                )
+                industry_output = output_dir / "industry_fundamental_scores.csv"
+                shutil.copyfile(industry_scores_path, industry_output)
+                industry_artifacts.append(
+                    StageArtifact.from_file(
+                        "industry_fundamental_scores",
+                        industry_output,
+                        row_count=industry_rows_scored,
+                        metadata={
+                            "columns": list(industry_scores.columns),
+                            "source_path": str(industry_scores_path),
+                            "snapshot_date": industry_snapshot_date,
+                        },
+                        attempt_number=context.attempt_number,
+                    )
+                )
+                if (rank_dir / "sector_dashboard.csv").exists():
+                    try:
+                        enriched = enrich_sector_dashboard(
+                            rank_dir=rank_dir,
+                            industry_scores=industry_scores_path,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        warnings.append(f"Sector dashboard enrichment failed: {exc}")
+                    else:
+                        enriched_path = rank_dir / "sector_dashboard_enriched.csv"
+                        if enriched_path.exists():
+                            industry_artifacts.append(
+                                StageArtifact.from_file(
+                                    "sector_dashboard_enriched",
+                                    enriched_path,
+                                    row_count=len(enriched),
+                                    metadata={"columns": list(enriched.columns)},
+                                    attempt_number=context.attempt_number,
+                                )
+                            )
+        else:
+            warnings.append(f"Industry fundamental scores missing: {industry_scores_path}")
+
+        industry_trend_status = "missing"
+        if industry_trends_available:
+            try:
+                industry_trends_frame = pd.read_csv(industry_trends_path)
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"Failed to read industry trends: {exc}")
+                industry_trend_status = "error"
+            else:
+                industry_trend_status = "available"
+                industry_trends_output = output_dir / "industry_fundamental_trends.csv"
+                shutil.copyfile(industry_trends_path, industry_trends_output)
+                industry_artifacts.append(
+                    StageArtifact.from_file(
+                        "industry_fundamental_trends",
+                        industry_trends_output,
+                        row_count=len(industry_trends_frame),
+                        metadata={
+                            "columns": list(industry_trends_frame.columns),
+                            "source_path": str(industry_trends_path),
+                        },
+                        attempt_number=context.attempt_number,
+                    )
+                )
+
         summary = self._summary(
             context=context,
             status="completed",
@@ -105,6 +201,14 @@ class FundamentalsStage:
             watchlist_bucket_counts=metrics.watchlist_bucket_counts,
             hard_red_flag_count=hard_red_flag_count,
             warnings=warnings,
+            industry_status=industry_status,
+            industry_snapshot_date=industry_snapshot_date,
+            industry_rows_scored=int(industry_rows_scored),
+            industry_label_counts=dict(metrics.industry_label_counts),
+            matched_industry_rows=int(metrics.matched_industry_rows),
+            missing_industry_rows=int(metrics.missing_industry_rows),
+            industry_trend_status=industry_trend_status,
+            industry_trend_label_counts=dict(metrics.industry_trend_label_counts),
         )
         summary_artifact = self._write_summary(context, summary)
         artifacts = [
@@ -122,6 +226,7 @@ class FundamentalsStage:
                 metadata={"columns": list(scores.columns), "source_path": str(scores_path)},
                 attempt_number=context.attempt_number,
             ),
+            *industry_artifacts,
             summary_artifact,
         ]
         return StageResult(artifacts=artifacts, metadata=summary)
@@ -143,6 +248,30 @@ class FundamentalsStage:
         if configured.is_absolute():
             return configured
         return context.project_root / configured
+
+    def _resolve_industry_scores_path(self, context: StageContext) -> Path:
+        configured = Path(
+            str(context.params.get("industry_fundamental_scores_path") or DEFAULT_INDUSTRY_SCORES_PATH)
+        )
+        if configured.is_absolute():
+            return configured
+        return context.project_root / configured
+
+    def _resolve_industry_trends_path(self, context: StageContext) -> Path:
+        configured = Path(
+            str(context.params.get("industry_fundamental_trends_path") or DEFAULT_INDUSTRY_TRENDS_PATH)
+        )
+        if configured.is_absolute():
+            return configured
+        return context.project_root / configured
+
+    def _snapshot_date_column(self, frame: pd.DataFrame, column: str) -> str | None:
+        if column not in frame.columns:
+            return None
+        value = frame[column].dropna()
+        if value.empty:
+            return None
+        return str(value.iloc[0])[:10]
 
     def _snapshot_date(self, scores: pd.DataFrame) -> str | None:
         for column in ("screener_snapshot_date", "snapshot_date"):
@@ -177,6 +306,14 @@ class FundamentalsStage:
         watchlist_bucket_counts: dict[str, int],
         hard_red_flag_count: int,
         warnings: list[str],
+        industry_status: str = "unknown",
+        industry_snapshot_date: str | None = None,
+        industry_rows_scored: int = 0,
+        industry_label_counts: dict[str, int] | None = None,
+        matched_industry_rows: int = 0,
+        missing_industry_rows: int = 0,
+        industry_trend_status: str = "unknown",
+        industry_trend_label_counts: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         return {
             "status": status,
@@ -190,6 +327,14 @@ class FundamentalsStage:
             "watchlist_bucket_counts": dict(watchlist_bucket_counts),
             "hard_red_flag_count": int(hard_red_flag_count),
             "warnings": list(warnings),
+            "industry_status": industry_status,
+            "industry_snapshot_date": industry_snapshot_date,
+            "industry_rows_scored": int(industry_rows_scored),
+            "industry_label_counts": dict(industry_label_counts or {}),
+            "matched_industry_rows": int(matched_industry_rows),
+            "missing_industry_rows": int(missing_industry_rows),
+            "industry_trend_status": industry_trend_status,
+            "industry_trend_label_counts": dict(industry_trend_label_counts or {}),
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +11,24 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 
 from ai_trading_system.domains.fundamentals.contracts import WATCHLIST_BUCKET_PRIORITY, WATCHLIST_OUTPUT_COLUMNS
+from ai_trading_system.domains.fundamentals.industry_schema import normalize_industry_key
 
 
 DEFAULT_SCORES_PATH = Path("data/fundamentals/fundamental_scores_latest.csv")
 DEFAULT_TRENDS_PATH = Path("data/fundamentals/fundamental_trends_latest.csv")
 DEFAULT_CATALYSTS_PATH = Path("data/fundamentals/catalyst_scores_latest.csv")
+DEFAULT_INDUSTRY_SCORES_PATH = Path("data/fundamentals/industry_fundamental_scores_latest.csv")
+DEFAULT_INDUSTRY_TRENDS_PATH = Path("data/fundamentals/industry_fundamental_trends_latest.csv")
 DEFAULT_OUTPUT_PATH = Path("data/fundamentals/watchlist_candidates_latest.csv")
+
+
+_NEUTRAL_INDUSTRY_SCORES = {
+    "industry_fundamental_score": 50.0,
+    "industry_growth_score": 50.0,
+    "industry_quality_score": 50.0,
+    "industry_valuation_score": 50.0,
+    "industry_momentum_score": 50.0,
+}
 
 
 @dataclass(frozen=True)
@@ -27,6 +39,10 @@ class EnrichmentMetrics:
     missing_fundamental_rows: int
     output_rows: int
     watchlist_bucket_counts: dict[str, int]
+    matched_industry_rows: int = 0
+    missing_industry_rows: int = 0
+    industry_label_counts: dict[str, int] = field(default_factory=dict)
+    industry_trend_label_counts: dict[str, int] = field(default_factory=dict)
 
 
 def normalize_symbol(value: Any) -> str:
@@ -47,6 +63,68 @@ def _read_csv_optional(path: Path) -> pd.DataFrame:
         return pd.read_csv(path)
     except EmptyDataError:
         return pd.DataFrame()
+
+
+def _read_industry_scores(path: str | Path | None) -> pd.DataFrame:
+    if path is None:
+        return pd.DataFrame()
+    resolved = Path(path)
+    if not resolved.exists() or resolved.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        frame = pd.read_csv(resolved)
+    except EmptyDataError:
+        return pd.DataFrame()
+    if frame.empty:
+        return frame
+    if "industry_key" not in frame.columns:
+        if "industry" not in frame.columns:
+            return pd.DataFrame()
+        frame.loc[:, "industry_key"] = frame["industry"].map(normalize_industry_key)
+    keep = [
+        "industry_key",
+        "industry_fundamental_score",
+        "industry_growth_score",
+        "industry_quality_score",
+        "industry_valuation_score",
+        "industry_momentum_score",
+        "industry_fundamental_label",
+        "industry_warning",
+    ]
+    available = [column for column in keep if column in frame.columns]
+    deduped = frame[available].drop_duplicates(subset=["industry_key"], keep="first")
+    return deduped.reset_index(drop=True)
+
+
+def _read_industry_trends(path: str | Path | None) -> pd.DataFrame:
+    if path is None:
+        return pd.DataFrame()
+    resolved = Path(path)
+    if not resolved.exists() or resolved.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        frame = pd.read_csv(resolved)
+    except EmptyDataError:
+        return pd.DataFrame()
+    if frame.empty:
+        return frame
+    if "industry_key" not in frame.columns:
+        if "industry" not in frame.columns:
+            return pd.DataFrame()
+        frame.loc[:, "industry_key"] = frame["industry"].map(normalize_industry_key)
+    keep = [
+        "industry_key",
+        "industry_fundamental_score_delta",
+        "industry_trend_label",
+        "industry_trend_reason",
+    ]
+    available = [column for column in keep if column in frame.columns]
+    if "industry_fundamental_score_delta" not in available:
+        return pd.DataFrame()
+    deduped = frame[available].drop_duplicates(subset=["industry_key"], keep="first")
+    return deduped.rename(
+        columns={"industry_fundamental_score_delta": "industry_score_delta"}
+    ).reset_index(drop=True)
 
 
 def _read_ranked(rank_dir: Path) -> pd.DataFrame:
@@ -179,6 +257,8 @@ def enrich_rank_artifacts(
     rank_dir: str | Path,
     fundamental_scores: str | Path = DEFAULT_SCORES_PATH,
     fundamental_trends: str | Path | None = DEFAULT_TRENDS_PATH,
+    industry_scores: str | Path | None = DEFAULT_INDUSTRY_SCORES_PATH,
+    industry_trends: str | Path | None = DEFAULT_INDUSTRY_TRENDS_PATH,
     catalysts: str | Path | None = None,
     output: str | Path = DEFAULT_OUTPUT_PATH,
     run_id: str | None = None,
@@ -193,6 +273,8 @@ def enrich_rank_artifacts(
     breakout = _best_by_symbol(_read_csv_optional(rank_dir / "breakout_scan.csv"), ["breakout_score"])
     pattern = _best_by_symbol(_read_csv_optional(rank_dir / "pattern_scan.csv"), ["pattern_score"])
     fundamentals = _symbol_frame(pd.read_csv(fundamental_scores))
+    if "industry" in fundamentals.columns:
+        fundamentals.loc[:, "industry_key"] = fundamentals["industry"].map(normalize_industry_key)
     trends = _symbol_frame(_read_csv_optional(Path(fundamental_trends))) if fundamental_trends else pd.DataFrame(columns=["symbol"])
     catalyst_frame = _symbol_frame(_read_csv_optional(Path(catalysts))) if catalysts else pd.DataFrame(columns=["symbol"])
 
@@ -263,7 +345,102 @@ def enrich_rank_artifacts(
     add_value_trap = value_trap & merged["watchlist_bucket"].eq("ADD_TO_WATCHLIST")
     merged.loc[add_value_trap, "watchlist_bucket"] = "STUDY_ONLY"
     merged.loc[:, "watchlist_reason"] = merged.apply(_reason, axis=1)
+
+    industry_frame = _read_industry_scores(industry_scores)
+    matched_industry_rows = 0
+    missing_industry_rows = len(merged)
+    industry_label_counts: dict[str, int] = {}
+    if not industry_frame.empty:
+        if "industry_key" not in merged.columns:
+            merged.loc[:, "industry_key"] = merged.get("industry", pd.Series("", index=merged.index)).map(
+                normalize_industry_key
+            )
+        merged.loc[:, "industry_key"] = merged["industry_key"].fillna("").astype(str)
+        merged = merged.merge(
+            industry_frame,
+            on="industry_key",
+            how="left",
+            suffixes=("", "_industry"),
+        )
+        matched_mask = merged["industry_fundamental_score"].notna()
+        matched_industry_rows = int(matched_mask.sum())
+        missing_industry_rows = int((~matched_mask).sum())
+    for column, default in _NEUTRAL_INDUSTRY_SCORES.items():
+        if column not in merged.columns:
+            merged.loc[:, column] = default
+        merged.loc[:, column] = pd.to_numeric(merged[column], errors="coerce").fillna(default)
+    if "industry_fundamental_label" not in merged.columns:
+        merged.loc[:, "industry_fundamental_label"] = "UNKNOWN"
+    merged.loc[:, "industry_fundamental_label"] = (
+        merged["industry_fundamental_label"].fillna("UNKNOWN").replace("", "UNKNOWN")
+    )
+    warning_values = (
+        merged["industry_warning"].astype("object").fillna("")
+        if "industry_warning" in merged.columns
+        else pd.Series("", index=merged.index, dtype="object")
+    )
+    merged = merged.drop(columns=["industry_warning"], errors="ignore")
+    merged.loc[:, "industry_warning"] = warning_values
+
+    industry_trend_frame = _read_industry_trends(industry_trends)
+    if not industry_trend_frame.empty and "industry_key" in merged.columns:
+        merged = merged.merge(
+            industry_trend_frame,
+            on="industry_key",
+            how="left",
+            suffixes=("", "_industry_trend"),
+        )
+    if "industry_score_delta" not in merged.columns:
+        merged.loc[:, "industry_score_delta"] = 0.0
+    merged.loc[:, "industry_score_delta"] = pd.to_numeric(
+        merged["industry_score_delta"], errors="coerce"
+    ).fillna(0.0)
+    if "industry_trend_label" not in merged.columns:
+        merged.loc[:, "industry_trend_label"] = pd.Series("", index=merged.index, dtype="object")
+    trend_label_values = merged["industry_trend_label"].astype("object").fillna("")
+    merged = merged.drop(columns=["industry_trend_label"], errors="ignore")
+    merged.loc[:, "industry_trend_label"] = trend_label_values.replace("", "UNKNOWN")
+
+    industry_label = merged["industry_fundamental_label"].astype(str)
+    industry_warning = merged["industry_warning"].astype(str)
+    industry_trend_label = merged["industry_trend_label"].astype(str)
+    bucket_series = merged["watchlist_bucket"].astype(str)
+    reason_series = merged["watchlist_reason"].astype(str)
+
+    weak_add = industry_label.eq("WEAK_FUNDAMENTALS") & bucket_series.eq("ADD_TO_WATCHLIST")
+    bucket_series = bucket_series.where(~weak_add, "STUDY_ONLY")
+
+    def _append(mask: pd.Series, suffix: str) -> pd.Series:
+        return reason_series.where(~mask, reason_series + suffix)
+
+    quality_supportive = industry_label.eq("QUALITY_GROWTH_LEADER") & bucket_series.eq("ADD_TO_WATCHLIST")
+    reason_series = _append(quality_supportive, "; industry backdrop supportive")
+    reason_series = _append(industry_label.eq("EXPENSIVE_MOMENTUM"), "; sector expensive, avoid chasing extended entries")
+    reason_series = _append(industry_label.eq("VALUE_ROTATION_CANDIDATE"), "; value rotation sector candidate")
+    reason_series = _append(weak_add, "; weak industry fundamentals")
+    reason_series = _append(industry_label.eq("DISTORTED_DATA"), "; industry data distorted, verify manually")
+    reason_series = _append(industry_warning.str.contains("low_company_count", na=False), "; low company count industry")
+    reason_series = _append(industry_trend_label.eq("IMPROVING"), "; industry trend improving")
+    reason_series = _append(industry_trend_label.eq("DETERIORATING"), "; industry trend deteriorating")
+    reason_series = _append(industry_trend_label.eq("MOMENTUM_BUILDING"), "; industry momentum building")
+    reason_series = _append(industry_trend_label.eq("MOMENTUM_FADING"), "; industry momentum fading")
+    reason_series = _append(industry_trend_label.eq("VALUE_TRAP_RISK"), "; industry value-trap risk")
+
+    merged.loc[:, "watchlist_bucket"] = bucket_series
+    merged.loc[:, "watchlist_reason"] = reason_series
     merged.loc[:, "next_action"] = merged["watchlist_bucket"].map(_next_action)
+
+    industry_trend_label_counts: dict[str, int] = {}
+    if not industry_frame.empty:
+        industry_label_counts = {
+            str(label): int(count)
+            for label, count in industry_label.value_counts(dropna=False).to_dict().items()
+        }
+    if not industry_trend_frame.empty:
+        industry_trend_label_counts = {
+            str(label): int(count)
+            for label, count in industry_trend_label.value_counts(dropna=False).to_dict().items()
+        }
 
     for column in WATCHLIST_OUTPUT_COLUMNS:
         if column not in merged.columns:
@@ -291,7 +468,11 @@ def enrich_rank_artifacts(
             watchlist_bucket_counts={
                 str(bucket): int(count)
                 for bucket, count in result["watchlist_bucket"].value_counts(dropna=False).to_dict().items()
-            }
+            },
+            matched_industry_rows=int(matched_industry_rows),
+            missing_industry_rows=int(missing_industry_rows),
+            industry_label_counts=industry_label_counts,
+            industry_trend_label_counts=industry_trend_label_counts,
         )
         return result, metrics
     return result
@@ -302,6 +483,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rank-dir", required=True, help="Rank attempt directory")
     parser.add_argument("--fundamental-scores", default=str(DEFAULT_SCORES_PATH), help="Latest fundamental scores CSV")
     parser.add_argument("--fundamental-trends", default=str(DEFAULT_TRENDS_PATH), help="Latest fundamental trends CSV")
+    parser.add_argument(
+        "--industry-scores",
+        default=str(DEFAULT_INDUSTRY_SCORES_PATH),
+        help="Latest industry fundamental scores CSV",
+    )
+    parser.add_argument(
+        "--industry-trends",
+        default=str(DEFAULT_INDUSTRY_TRENDS_PATH),
+        help="Latest industry fundamental trends CSV",
+    )
     parser.add_argument("--catalysts", default=None, help="Optional catalyst score CSV")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_PATH), help="Enriched watchlist output CSV")
     parser.add_argument("--run-id", default=None, help="Optional pipeline run id for per-run output")
@@ -316,6 +507,8 @@ def main() -> None:
         rank_dir=args.rank_dir,
         fundamental_scores=args.fundamental_scores,
         fundamental_trends=args.fundamental_trends,
+        industry_scores=args.industry_scores,
+        industry_trends=args.industry_trends,
         catalysts=args.catalysts,
         output=args.output,
         run_id=args.run_id,

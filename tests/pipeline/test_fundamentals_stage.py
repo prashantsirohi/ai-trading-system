@@ -157,6 +157,85 @@ def test_fundamentals_stage_default_stale_threshold_is_quarterly(tmp_path: Path)
     assert any("stale" in warning for warning in stale_result.metadata["warnings"])
 
 
+def _industry_scores(path: Path, *, snapshot_date: str = "2026-05-07") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "snapshot_date": snapshot_date,
+                "industry": "Industrial Products",
+                "industry_key": "INDUSTRIAL PRODUCTS",
+                "no_of_companies": 25,
+                "total_market_cap": 1000,
+                "median_market_cap": 100,
+                "median_pe": 18,
+                "sales_growth_wavg": 15,
+                "opm_wavg": 25,
+                "roce_wavg": 20,
+                "median_1y_return": 25,
+                "industry_growth_score": 80,
+                "industry_quality_score": 80,
+                "industry_valuation_score": 70,
+                "industry_momentum_score": 75,
+                "industry_fundamental_score": 76,
+                "industry_fundamental_label": "QUALITY_GROWTH_LEADER",
+                "industry_warning": "",
+                "screener_industry_snapshot_date": snapshot_date,
+            }
+        ]
+    ).to_csv(path, index=False)
+
+
+def test_fundamentals_stage_records_industry_artifact_when_present(tmp_path: Path) -> None:
+    scores_path = tmp_path / "data" / "fundamentals" / "fundamental_scores_latest.csv"
+    industry_path = tmp_path / "data" / "fundamentals" / "industry_fundamental_scores_latest.csv"
+    _scores(scores_path)
+    _industry_scores(industry_path)
+    artifacts = _rank_artifacts(tmp_path)
+    rank_dir = tmp_path / "data" / "pipeline_runs" / "run-fund" / "rank" / "attempt_1"
+    pd.DataFrame([{"industry": "Industrial Products", "rs_score": 70}]).to_csv(
+        rank_dir / "sector_dashboard.csv", index=False
+    )
+    context = _context(
+        tmp_path,
+        artifacts=artifacts,
+        params={
+            "fundamental_scores_path": str(scores_path),
+            "industry_fundamental_scores_path": str(industry_path),
+        },
+    )
+
+    result = FundamentalsStage().run(context)
+
+    artifact_types = {artifact.artifact_type for artifact in result.artifacts}
+    assert "industry_fundamental_scores" in artifact_types
+    assert "sector_dashboard_enriched" in artifact_types
+    assert result.metadata["industry_status"] == "available"
+    assert result.metadata["industry_rows_scored"] == 1
+    output_dir = tmp_path / "data" / "pipeline_runs" / "run-fund" / "fundamentals" / "attempt_1"
+    assert (output_dir / "industry_fundamental_scores.csv").exists()
+    assert (rank_dir / "sector_dashboard_enriched.csv").exists()
+
+
+def test_fundamentals_stage_warns_when_industry_scores_missing(tmp_path: Path) -> None:
+    scores_path = tmp_path / "data" / "fundamentals" / "fundamental_scores_latest.csv"
+    _scores(scores_path)
+    context = _context(
+        tmp_path,
+        artifacts=_rank_artifacts(tmp_path),
+        params={
+            "fundamental_scores_path": str(scores_path),
+            "industry_fundamental_scores_path": str(tmp_path / "missing_industry.csv"),
+        },
+    )
+
+    result = FundamentalsStage().run(context)
+
+    assert result.metadata["status"] == "completed"
+    assert result.metadata["industry_status"] == "missing"
+    assert any("Industry fundamental scores missing" in w for w in result.metadata["warnings"])
+
+
 def test_fundamentals_stage_fails_when_rank_missing(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="ranked_signals"):
         FundamentalsStage().run(_context(tmp_path, artifacts={}))
