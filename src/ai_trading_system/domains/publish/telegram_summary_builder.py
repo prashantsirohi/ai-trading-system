@@ -13,6 +13,9 @@ from ai_trading_system.domains.publish.channels.watchlist_digest import render_w
 
 def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str:
     """Build the compact Telegram market tearsheet."""
+    bundle = datasets.get("decision_bundle")
+    if bundle is not None and getattr(bundle, "telegram_digest", None):
+        return str(bundle.telegram_digest)
     dashboard = datasets.get("dashboard_payload") or {}
     summary = dashboard.get("summary", {})
     data_trust = dashboard.get("data_trust", {}) or {}

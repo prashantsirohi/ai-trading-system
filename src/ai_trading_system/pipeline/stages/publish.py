@@ -15,6 +15,7 @@ from ai_trading_system.domains.publish.publish_payloads import (
     build_publish_datasets,
     build_publish_metadata,
 )
+from ai_trading_system.domains.publish.decision_bundle import build_publish_decision_bundle
 from ai_trading_system.domains.publish.telegram_summary_builder import build_telegram_summary
 
 
@@ -26,6 +27,8 @@ class PublishStage:
         "google_sheets_portfolio": "publish_of_record",
         "google_sheets_dashboard": "publish_of_record",
         "google_sheets_watchlist": "publish_of_record",
+        "google_sheets_event_log": "publish_auxiliary",
+        "google_sheets_publish_log": "publish_auxiliary",
         "quantstats_dashboard_tearsheet": "publish_of_record",
         "telegram_summary": "informational",
         "weekly_pdf": "informational",
@@ -79,6 +82,7 @@ class PublishStage:
         )
         self._attach_event_datasets(context, datasets)
         self._attach_insight_datasets(context, datasets)
+        self._attach_decision_bundle(context, datasets)
         ranked_df = datasets.get("ranked_signals", pd.DataFrame())
         delivery_artifact = StageArtifact(
             artifact_type=rank_artifact.artifact_type,
@@ -286,6 +290,9 @@ class PublishStage:
             handlers["google_sheets_dashboard"] = self._publish_dashboard_payload
         if not datasets.get("watchlist_candidates", pd.DataFrame()).empty:
             handlers["google_sheets_watchlist"] = self._publish_watchlist
+        if datasets.get("decision_bundle") is not None:
+            handlers["google_sheets_event_log"] = self._publish_event_log
+            handlers["google_sheets_publish_log"] = self._publish_publish_log
         if bool(context.params.get("publish_quantstats", True)):
             handlers["quantstats_dashboard_tearsheet"] = self._publish_quantstats_dashboard
         if bool(context.params.get("publish_weekly_pdf", False)):
@@ -341,11 +348,12 @@ class PublishStage:
 
         weekly_data = self._load_weekly_report_data(context, datasets)
         prior_ranked_df = pd.DataFrame()
-        pattern_df = pd.DataFrame()
+        pattern_df = datasets.get("pattern_scan") if isinstance(datasets.get("pattern_scan"), pd.DataFrame) else pd.DataFrame()
         failed_breakouts_df = pd.DataFrame()
         if weekly_data is not None:
             prior_ranked_df = weekly_data.prior_ranked_signals
-            pattern_df = weekly_data.pattern_scan
+            if pattern_df.empty:
+                pattern_df = weekly_data.pattern_scan
             failed_breakouts_df = weekly_metrics.detect_failed_breakouts(
                 weekly_data.breakout_scan,
                 weekly_data.prior_breakouts_per_run,
@@ -364,6 +372,7 @@ class PublishStage:
             failed_breakouts_df=failed_breakouts_df,
             pattern_df=pattern_df,
             watchlist_df=datasets.get("watchlist_candidates"),
+            decision_bundle=datasets.get("decision_bundle"),
         )
         return {
             "report_id": "dashboard_sheet",
@@ -390,9 +399,39 @@ class PublishStage:
     ) -> Dict[str, Any]:
         from ai_trading_system.domains.publish.channels.google_sheets import publish_watchlist_candidates
 
-        if not publish_watchlist_candidates(datasets["watchlist_candidates"]):
+        if not publish_watchlist_candidates(datasets["watchlist_candidates"], decision_bundle=datasets.get("decision_bundle")):
             raise RuntimeError("watchlist publish returned False")
         return {"report_id": "watchlist_candidates_sheet"}
+
+    def _publish_event_log(
+        self,
+        context: StageContext,
+        rank_artifact: StageArtifact,
+        datasets: Dict[str, pd.DataFrame],
+    ) -> Dict[str, Any]:
+        from ai_trading_system.domains.publish.channels.google_sheets import publish_event_log_sheet
+
+        bundle = datasets.get("decision_bundle")
+        if bundle is None:
+            return {"report_id": "event_log_sheet", "status": "skipped", "reason": "decision_bundle_missing"}
+        if not publish_event_log_sheet(bundle):
+            raise RuntimeError("event log publish returned False")
+        return {"report_id": "event_log_sheet"}
+
+    def _publish_publish_log(
+        self,
+        context: StageContext,
+        rank_artifact: StageArtifact,
+        datasets: Dict[str, pd.DataFrame],
+    ) -> Dict[str, Any]:
+        from ai_trading_system.domains.publish.channels.google_sheets import publish_log_sheet
+
+        bundle = datasets.get("decision_bundle")
+        if bundle is None:
+            return {"report_id": "publish_log_sheet", "status": "skipped", "reason": "decision_bundle_missing"}
+        if not publish_log_sheet(bundle):
+            raise RuntimeError("publish log publish returned False")
+        return {"report_id": "publish_log_sheet"}
 
     def _publish_portfolio(
         self,
@@ -476,8 +515,12 @@ class PublishStage:
         publish_rows = pd.DataFrame(datasets.get("publish_rows_telegram", []))
         if not publish_rows.empty:
             telegram_datasets["ranked_signals"] = publish_rows
-        message = str(datasets.get("insight_telegram_summary") or "").strip()
-        if message:
+        bundle = datasets.get("decision_bundle")
+        if bundle is not None and getattr(bundle, "telegram_digest", None):
+            message = str(bundle.telegram_digest)
+        else:
+            message = str(datasets.get("insight_telegram_summary") or "").strip()
+        if message and bundle is None:
             watchlist_df = datasets.get("watchlist_candidates", pd.DataFrame())
             if isinstance(watchlist_df, pd.DataFrame) and not watchlist_df.empty:
                 from ai_trading_system.domains.publish.channels.watchlist_digest import render_watchlist_telegram
@@ -501,6 +544,59 @@ class PublishStage:
         datasets: Dict[str, pd.DataFrame],
     ) -> str:
         return build_telegram_summary(run_date=context.run_date, datasets=datasets)
+
+    def _attach_decision_bundle(self, context: StageContext, datasets: Dict[str, Any]) -> None:
+        from ai_trading_system.domains.publish.dashboard import _load_operational_breadth
+        from ai_trading_system.domains.publish.channels.weekly_pdf import metrics as weekly_metrics
+
+        weekly_data = self._load_weekly_report_data(context, datasets)
+        failed_breakouts_df = pd.DataFrame()
+        if weekly_data is not None:
+            failed_breakouts_df = weekly_metrics.detect_failed_breakouts(
+                weekly_data.breakout_scan,
+                weekly_data.prior_breakouts_per_run,
+                weekly_data.ranked_signals,
+                top_n=25,
+            )
+        breadth_df = _load_operational_breadth(context.project_root)
+        event_frame = self._decision_event_frame(datasets)
+        datasets["decision_bundle"] = build_publish_decision_bundle(
+            run_date=context.run_date,
+            ranked_signals=datasets.get("ranked_signals"),
+            breakout_scan=datasets.get("breakout_scan"),
+            pattern_scan=datasets.get("pattern_scan"),
+            stock_scan=datasets.get("stock_scan"),
+            sector_dashboard=datasets.get("sector_dashboard"),
+            event_frame=event_frame,
+            breadth_frame=breadth_df,
+            watchlist_frame=datasets.get("watchlist_candidates"),
+            trust_status=str(datasets.get("publish_trust_status") or "unknown"),
+            failed_breakouts=failed_breakouts_df,
+            insight_text=str(datasets.get("insight_telegram_summary") or ""),
+        )
+
+    def _decision_event_frame(self, datasets: Dict[str, Any]) -> pd.DataFrame:
+        rows: list[dict[str, Any]] = []
+        snapshot = datasets.get("market_events_snapshot") or {}
+        for row in list(snapshot.get("events") or []):
+            if isinstance(row, dict):
+                rows.append(dict(row))
+        for sig in list(datasets.get("enriched_event_signals") or []):
+            if not isinstance(sig, dict):
+                continue
+            trigger = sig.get("trigger") or {}
+            rows.append(
+                {
+                    "symbol": trigger.get("symbol"),
+                    "category": sig.get("top_category") or trigger.get("trigger_type"),
+                    "severity": sig.get("severity"),
+                    "materiality_label": sig.get("materiality_label"),
+                    "tier": sig.get("tier"),
+                    "title": sig.get("summary") or sig.get("title"),
+                    "event_hash": ",".join(str(item) for item in list(sig.get("event_hashes") or [])),
+                }
+            )
+        return pd.DataFrame(rows)
 
     def _load_weekly_report_data(
         self,

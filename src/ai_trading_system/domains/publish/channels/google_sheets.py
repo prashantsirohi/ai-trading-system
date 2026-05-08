@@ -12,6 +12,7 @@ from ai_trading_system.domains.publish.channels.google_sheets_manager import (
     PortfolioSheets,
     SectorReportSheets,
 )
+from ai_trading_system.domains.publish.decision_bundle import PublishDecisionBundle
 from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
 
@@ -82,7 +83,7 @@ def publish_sector_dashboard(dashboard: pd.DataFrame) -> bool:
     return True
 
 
-def publish_watchlist_candidates(watchlist: pd.DataFrame) -> bool:
+def publish_watchlist_candidates(watchlist: pd.DataFrame, *, decision_bundle: PublishDecisionBundle | None = None) -> bool:
     """Publish watchlist candidates to a dedicated worksheet."""
     spreadsheet_id = _require_spreadsheet_id()
     if not spreadsheet_id:
@@ -91,9 +92,13 @@ def publish_watchlist_candidates(watchlist: pd.DataFrame) -> bool:
     manager = GoogleSheetsManager()
     if not manager.open_spreadsheet():
         raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
-    rows = format_rows_for_channel(watchlist.to_dict(orient="records"), "sheets")["rows"]
-    frame = pd.DataFrame(rows).head(15)
-    frame["report_date"] = pd.Timestamp.now().strftime("%Y-%m-%d")
+    if decision_bundle is not None:
+        frame = decision_bundle.watchlist_candidates.copy()
+    else:
+        rows = format_rows_for_channel(watchlist.to_dict(orient="records"), "sheets")["rows"]
+        frame = pd.DataFrame(rows).head(15)
+        frame["report_date"] = pd.Timestamp.now().strftime("%Y-%m-%d")
+    frame = frame.fillna("")
 
     sheet_name = "Watchlist Current"
     sheet = manager.get_or_create_sheet(sheet_name)
@@ -109,6 +114,44 @@ def publish_watchlist_candidates(watchlist: pd.DataFrame) -> bool:
     return True
 
 
+def publish_event_log_sheet(decision_bundle: PublishDecisionBundle, *, sheet_name: str = "Event_Log") -> bool:
+    """Publish raw event rows to a non-user-facing event log worksheet."""
+    spreadsheet_id = _require_spreadsheet_id()
+    if not spreadsheet_id:
+        raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
+
+    manager = GoogleSheetsManager()
+    if not manager.open_spreadsheet():
+        raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
+    sheet = manager.get_or_create_sheet(sheet_name, rows=5000, cols=12)
+    if not sheet:
+        raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
+    frame = decision_bundle.event_log.fillna("")
+    if not manager.write_dataframe(frame, sheet_name, include_header=True, clear_sheet=True):
+        raise RuntimeError(f"Failed writing event log rows: {manager.last_error or 'unknown error'}")
+    logger.info("Event log updated in Google Sheets (%s rows)", len(frame))
+    return True
+
+
+def publish_log_sheet(decision_bundle: PublishDecisionBundle, *, sheet_name: str = "Publish_Log") -> bool:
+    """Publish internal publish diagnostics to a non-user-facing log worksheet."""
+    spreadsheet_id = _require_spreadsheet_id()
+    if not spreadsheet_id:
+        raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
+
+    manager = GoogleSheetsManager()
+    if not manager.open_spreadsheet():
+        raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
+    sheet = manager.get_or_create_sheet(sheet_name, rows=1000, cols=8)
+    if not sheet:
+        raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
+    frame = decision_bundle.publish_log.fillna("")
+    if not manager.write_dataframe(frame, sheet_name, include_header=True, clear_sheet=True):
+        raise RuntimeError(f"Failed writing publish log rows: {manager.last_error or 'unknown error'}")
+    logger.info("Publish log updated in Google Sheets (%s rows)", len(frame))
+    return True
+
+
 __all__ = [
     "GoogleSheetsManager",
     "PortfolioSheets",
@@ -116,4 +159,6 @@ __all__ = [
     "publish_sector_dashboard",
     "publish_stock_scan",
     "publish_watchlist_candidates",
+    "publish_event_log_sheet",
+    "publish_log_sheet",
 ]

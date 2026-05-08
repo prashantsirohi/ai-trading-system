@@ -184,19 +184,22 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert result["sheet_name"] == "2026-04-09"
     assert all(write[0] == "2026-04-09" for write in manager.writes)
 
-    move_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "Ret5", "Ret20", "Delivery", "VolZ", "Score", "Stage"]]
+    summary_frames = [write[2] for write in manager.writes if "Breadth > 200DMA" in write[2].columns]
+    assert summary_frames
+    assert float(summary_frames[0].iloc[0]["Breadth > 200DMA"]) == 54.1
+
+    shortlist_frames = [write[2] for write in manager.writes if "Watchlist Score" in write[2].columns and "Composite Score" in write[2].columns]
+    assert shortlist_frames == []
+
+    move_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "market_move_score", "Return5", "Return20", "Delivery", "VolZ"]]
     assert move_frames
     assert move_frames[0].iloc[0]["Symbol"] == "S000"
 
-    shocker_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "VolZ", "Delivery", "Ret5", "Ret20", "Score"]]
-    assert shocker_frames
-    assert shocker_frames[0].iloc[0]["VolZ"] == 3.0
-
-    failed_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "TriggerRun", "Trigger", "Close", "DropPct", "Tier"]]
+    failed_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "Trigger", "Close", "DropPct", "Tier"]]
     assert failed_frames
     assert failed_frames[0].iloc[0]["Symbol"] == "S001"
 
-    pattern_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Pattern", "State", "Tier", "Score", "Trigger", "VolRatio", "Stage"]]
+    pattern_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Pattern", "State", "Tier", "Trigger", "VolRatio", "Stage", "Sector", "pattern_score", "Use"]]
     assert pattern_frames
     assert pattern_frames[0].iloc[0]["Pattern"] == "cup_handle"
 
@@ -206,14 +209,13 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert set(breakout_frames[0]["State"]) == {"qualified", "filtered_by_regime"}
     assert breakout_frames[0]["TradingView"].str.startswith("https://www.tradingview.com/chart/?symbol=NSE:").all()
 
-    sector_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Sector", "Rank", "RS", "Momentum", "Quadrant"]]
+    sector_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Rank", "Sector", "RS", "Momentum", "Quadrant"]]
     assert sector_frames
-    assert set(sector_frames[0]["Quadrant"]) == {"Leading", "Weakening"}
+    assert set(sector_frames[0]["Quadrant"]) == {"Leading"}
 
-    rank_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Score", "RS", "Close", "TradingView"]]
+    rank_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "composite_score", "Close", "Stage"]]
     assert rank_frames
     assert len(rank_frames[0]) == 25
-    assert rank_frames[0]["TradingView"].str.startswith("https://www.tradingview.com/chart/?symbol=NSE:").all()
 
     assert manager.spreadsheet.batch_requests
     assert any("addChart" in req for call in manager.spreadsheet.batch_requests for req in call.get("requests", []))
@@ -242,5 +244,5 @@ def test_publish_dashboard_payload_keeps_existing_same_date_sheet(monkeypatch, t
     manager = _FakeManager.last_instance
     assert manager is not None
     assert result["base_sheet_name"] == "2026-04-09"
-    assert result["sheet_name"] == "2026-04-09 attempt 2"
+    assert result["sheet_name"] == "2026-04-09"
     assert manager.spreadsheet.deleted == []

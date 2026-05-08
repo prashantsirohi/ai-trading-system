@@ -91,6 +91,7 @@ def build_publish_datasets(
     """Load publish datasets from rank-stage artifacts with compatibility defaults."""
     scan_artifact = context_artifact_for("stock_scan")
     breakout_artifact = context_artifact_for("breakout_scan")
+    pattern_artifact = context_artifact_for("pattern_scan")
     dashboard_artifact = context_artifact_for("sector_dashboard")
     watchlist_artifact = context_artifact_for("watchlist_candidates") or context_artifact_for("watchlist_final")
     dashboard_payload_artifact = context_artifact_for("dashboard_payload")
@@ -152,6 +153,7 @@ def build_publish_datasets(
     return {
         "ranked_signals": ranked_df,
         "breakout_scan": read_artifact(breakout_artifact) if breakout_artifact else pd.DataFrame(),
+        "pattern_scan": read_artifact(pattern_artifact) if pattern_artifact else pd.DataFrame(),
         "stock_scan": read_artifact(scan_artifact) if scan_artifact else pd.DataFrame(),
         "sector_dashboard": read_artifact(dashboard_artifact) if dashboard_artifact else pd.DataFrame(),
         "watchlist_candidates": watchlist_df,

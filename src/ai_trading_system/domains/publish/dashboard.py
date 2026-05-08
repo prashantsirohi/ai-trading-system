@@ -10,6 +10,10 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.publish.channels.google_sheets import GoogleSheetsManager
+from ai_trading_system.domains.publish.decision_bundle import (
+    PublishDecisionBundle,
+    build_publish_decision_bundle,
+)
 from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
 from ai_trading_system.domains.publish.channels.weekly_pdf import metrics as weekly_metrics
@@ -38,6 +42,21 @@ def _resolve_unique_sheet_name(manager: GoogleSheetsManager, base_name: str) -> 
             manager.last_error = None
             return candidate[:95]
     return f"{base_name} {datetime.now().strftime('%H%M%S')}"[:95]
+
+
+def _event_summary_frame(bundle: PublishDecisionBundle) -> pd.DataFrame:
+    frame = bundle.event_summary.get("summary_frame")
+    if isinstance(frame, pd.DataFrame):
+        return frame
+    return pd.DataFrame(
+        [
+            {"Metric": "Events", "Value": int(bundle.event_summary.get("total_events", 0))},
+            {"Metric": "Material events", "Value": int(bundle.event_summary.get("material_events", 0))},
+            {"Metric": "Medium events", "Value": int(bundle.event_summary.get("medium_events", 0))},
+            {"Metric": "Low-info events", "Value": int(bundle.event_summary.get("low_info_events", 0))},
+            {"Metric": "Symbols with event + technical overlap", "Value": ", ".join(bundle.event_summary.get("overlap_symbols") or [])},
+        ]
+    )
 
 
 def _to_numeric(df: pd.DataFrame, columns: list[str], places: int) -> pd.DataFrame:
@@ -475,6 +494,7 @@ def publish_dashboard_payload(
     failed_breakouts_df: pd.DataFrame | None = None,
     pattern_df: pd.DataFrame | None = None,
     watchlist_df: pd.DataFrame | None = None,
+    decision_bundle: PublishDecisionBundle | None = None,
 ) -> Dict[str, Any]:
     """Write a single compact daily sheet with sector/rank/breakout and breadth chart."""
     manager = GoogleSheetsManager()
@@ -483,7 +503,7 @@ def publish_dashboard_payload(
         raise RuntimeError(f"Dashboard publish failed: {message}")
 
     base_sheet_name = _resolve_sheet_name(payload, run_date=run_date)
-    sheet_name = _resolve_unique_sheet_name(manager, base_sheet_name)
+    sheet_name = base_sheet_name
     worksheet = manager.get_or_create_sheet(sheet_name, rows=5000, cols=20)
     if worksheet is None:
         raise RuntimeError(f"Dashboard publish failed creating sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
@@ -496,58 +516,26 @@ def publish_dashboard_payload(
     source_sector = sector_df if isinstance(sector_df, pd.DataFrame) and not sector_df.empty else _frame(payload.get("sector_dashboard", []))
     source_watchlist = watchlist_df if isinstance(watchlist_df, pd.DataFrame) and not watchlist_df.empty else _frame(payload.get("watchlist", []))
 
-    sector_min = _minimal_sector_frame(source_sector)
     rank_min = _minimal_rank_frame(source_ranked)
     breakout_min = _minimal_breakout_frame(source_breakout)
     weekly_moves = _weekly_move_frame(source_ranked)
-    volume_shockers = _volume_shocker_frame(source_ranked)
-    rank_movers = _rank_mover_frame(source_ranked, prior_ranked_df)
     failed_breakouts = _failed_breakout_frame(failed_breakouts_df)
-    patterns = _pattern_frame(pattern_df)
-    watchlist = _frame(source_watchlist)
-    if not watchlist.empty:
-        keep = [
-            column
-            for column in (
-                "rank",
-                "is_new_entry",
-                "rank_change",
-                "days_on_watchlist",
-                "symbol_id",
-                "sector",
-                "sector_status",
-                "sector_escape_hatch",
-                "stage",
-                "momentum_tags",
-                "setup_label",
-                "watchlist_score",
-                "action",
-                "watchlist_reason",
-            )
-            if column in watchlist.columns
-        ]
-        watchlist = watchlist[keep].head(15)
     events_index = _frame(payload.get("events_index", []))
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
-
-    summary = pd.DataFrame(
-        [
-            {
-                "RunDate": run_date or payload.get("summary", {}).get("run_date"),
-                "DataTrust": payload.get("summary", {}).get("data_trust_status"),
-                "Sectors": int(len(sector_min)),
-                "Ranks": int(len(rank_min)),
-                "BreakoutsAll": int(len(breakout_min)),
-                "MarketMoves": int(len(weekly_moves)),
-                "VolumeShockers": int(len(volume_shockers)),
-                "FailedBreakouts": int(len(failed_breakouts)),
-                "Patterns": int(len(patterns)),
-                "Watchlist": int(len(watchlist)),
-                "Events": int(len(events_index)),
-                "BreadthRows": int(len(breadth)),
-            }
-        ]
+    bundle = decision_bundle or build_publish_decision_bundle(
+        run_date=run_date or payload.get("summary", {}).get("run_date") or base_sheet_name,
+        ranked_signals=source_ranked,
+        breakout_scan=source_breakout,
+        pattern_scan=pattern_df,
+        sector_dashboard=source_sector,
+        event_frame=events_index,
+        breadth_frame=breadth,
+        watchlist_frame=source_watchlist,
+        trust_status=str(payload.get("summary", {}).get("data_trust_status") or payload.get("data_trust", {}).get("status") or "unknown"),
+        failed_breakouts=failed_breakouts_df,
     )
+
+    summary = bundle.run_summary
     if not manager.write_dataframe(summary, sheet_name, clear_sheet=True, start_cell="A1", include_header=True):
         raise RuntimeError(f"Dashboard publish failed writing summary: {manager.last_error or 'unknown error'}")
 
@@ -556,15 +544,13 @@ def publish_dashboard_payload(
     breadth_header_row: int | None = None
     breadth_rows = 0
     sections = [
-        ("WATCHLIST CANDIDATES", watchlist),
-        ("MARKET MOVES SNAPSHOT", weekly_moves),
-        ("UNUSUAL VOLUME SHOCKERS", volume_shockers),
-        ("RANK MOVERS", rank_movers),
-        ("FAILED BREAKOUTS", failed_breakouts),
-        ("IMPORTANT EVENTS", events_index),
-        ("PATTERN SETUPS", patterns),
-        ("SECTOR LEADERS", sector_min),
-        ("TOP RANKED", rank_min),
+        ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
+        ("SECTOR CONTEXT", bundle.sector_leaders),
+        ("PATTERN SETUPS", bundle.pattern_setups),
+        ("EVENTS SUMMARY", _event_summary_frame(bundle)),
+        ("MARKET MOVES SNAPSHOT", bundle.market_moves if not bundle.market_moves.empty else weekly_moves),
+        ("FAILED BREAKOUTS", bundle.failed_breakouts if not bundle.failed_breakouts.empty else failed_breakouts),
+        ("TOP RANKED", bundle.top_ranked if not bundle.top_ranked.empty else rank_min),
         ("BREAKOUTS (all, unfiltered)", breakout_min),
         ("LONG-TERM BREADTH (operational)", breadth),
     ]
