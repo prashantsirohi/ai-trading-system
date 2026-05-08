@@ -52,6 +52,23 @@ export interface StockRanking {
   inPatternScan: boolean;
 }
 
+export interface StockFundamentals {
+  snapshotDate: string | null;
+  symbol: string | null;
+  name: string | null;
+  sector: string | null;
+  industry: string | null;
+  fundamentalScore: number | null;
+  qualityScore: number | null;
+  growthScore: number | null;
+  balanceSheetScore: number | null;
+  valuationScore: number | null;
+  ownershipScore: number | null;
+  fundamentalTier: string | null;
+  redFlags: string | null;
+  hardRedFlag: boolean | null;
+}
+
 export interface StockLifecycle {
   rank: string;
   breakout: string;
@@ -63,6 +80,7 @@ export interface StockDetail {
   available: boolean;
   symbol: string;
   metadata: StockMetadata | null;
+  fundamentals: StockFundamentals | null;
   latestQuote: StockQuote | null;
   ranking: StockRanking | null;
   lifecycle: StockLifecycle;
@@ -72,6 +90,7 @@ interface BackendStockDetail {
   available?: boolean;
   symbol?: string;
   metadata?: Record<string, string | number | boolean | null> | null;
+  fundamentals?: Record<string, string | number | boolean | null> | null;
   latest_quote?: Record<string, string | number | null> | null;
   ranking?: {
     rank_position?: number | null;
@@ -117,6 +136,26 @@ function mapMetadata(raw: BackendStockDetail['metadata']): StockMetadata | null 
   };
 }
 
+function mapFundamentals(raw: BackendStockDetail['fundamentals']): StockFundamentals | null {
+  if (!raw) return null;
+  return {
+    snapshotDate: asString(raw.snapshot_date),
+    symbol: asString(raw.symbol),
+    name: asString(raw.name),
+    sector: asString(raw.sector),
+    industry: asString(raw.industry),
+    fundamentalScore: asNum(raw.fundamental_score),
+    qualityScore: asNum(raw.quality_score),
+    growthScore: asNum(raw.growth_score),
+    balanceSheetScore: asNum(raw.balance_sheet_score),
+    valuationScore: asNum(raw.valuation_score),
+    ownershipScore: asNum(raw.ownership_score),
+    fundamentalTier: asString(raw.fundamental_tier),
+    redFlags: asString(raw.red_flags),
+    hardRedFlag: raw.hard_red_flag == null ? null : Boolean(raw.hard_red_flag),
+  };
+}
+
 function mapQuote(raw: BackendStockDetail['latest_quote']): StockQuote | null {
   if (!raw) return null;
   return {
@@ -148,6 +187,7 @@ export async function getStockDetail(symbol: string): Promise<StockDetail> {
     available: Boolean(raw.available),
     symbol: asString(raw.symbol) ?? symbol,
     metadata: mapMetadata(raw.metadata),
+    fundamentals: mapFundamentals(raw.fundamentals),
     latestQuote: mapQuote(raw.latest_quote),
     ranking: raw.ranking
       ? {

@@ -60,12 +60,13 @@ export default function FactorBars({ factors, fallback, variant = 'inline', clas
         const raw = pickValue(factors, bucket);
         const value = raw ?? fallback[bucket as keyof FallbackFactors] ?? 0;
         const pct = Math.max(0, Math.min(100, value));
+        const displayValue = Math.round(Math.max(0, Math.min(100, value)));
         if (variant === 'inline') {
           return (
             <div key={bucket} className="min-w-0">
               <div className="flex items-baseline justify-between gap-1 text-[9px] uppercase tracking-wider text-slate-500">
                 <span>{LABELS[bucket]}</span>
-                <span className="tabular-nums text-slate-300">{Math.round(value)}</span>
+                <span className="tabular-nums text-slate-300">{displayValue}</span>
               </div>
               <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800">
                 <div
@@ -83,7 +84,7 @@ export default function FactorBars({ factors, fallback, variant = 'inline', clas
                 {LABELS[bucket]}
               </span>
               <span className="text-base font-semibold tabular-nums text-slate-100">
-                {Math.round(value)}
+                {displayValue}
               </span>
             </div>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">

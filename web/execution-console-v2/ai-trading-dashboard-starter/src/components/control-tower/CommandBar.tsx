@@ -66,6 +66,12 @@ function score(entry: CommandEntry, query: string): number {
   return 0;
 }
 
+function normalizeSymbolQuery(query: string): string | null {
+  const symbol = query.trim().toUpperCase();
+  if (!/^[A-Z0-9&.-]{2,20}$/.test(symbol)) return null;
+  return symbol;
+}
+
 export default function CommandBar({ isOpen, onClose }: Props) {
   const navigate = useNavigate();
   const workspace = useWorkspace();
@@ -137,8 +143,26 @@ export default function CommandBar({ isOpen, onClose }: Props) {
       .map((entry) => ({ entry, s: score(entry, query) }))
       .filter((r) => r.s > 0)
       .sort((a, b) => b.s - a.s);
-    return ranked.map((r) => r.entry).slice(0, 25);
-  }, [allEntries, query]);
+    const entries = ranked.map((r) => r.entry);
+    const directSymbol = normalizeSymbolQuery(query);
+    if (
+      directSymbol &&
+      !entries.some((entry) => entry.group === 'Symbol' && entry.label.toUpperCase() === directSymbol)
+    ) {
+      entries.unshift({
+        id: `direct-symbol:${directSymbol}`,
+        label: directSymbol,
+        hint: 'open stock page',
+        group: 'Symbol',
+        keywords: [directSymbol.toLowerCase()],
+        perform: () => {
+          workspace.openWorkspace(directSymbol);
+          onClose();
+        },
+      });
+    }
+    return entries.slice(0, 25);
+  }, [allEntries, query, onClose, workspace]);
 
   // Keep the highlighted index inside the result list bounds.
   useEffect(() => {

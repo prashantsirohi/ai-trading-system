@@ -37,6 +37,7 @@ from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_s
 )
 from ai_trading_system.ui.execution_api.services.readmodels.rank_snapshot import (
     _enrich_operator_rank_fields,
+    _enrich_rank_with_fundamentals,
 )
 from ai_trading_system.ui.execution_api.services.readmodels.stock_detail import (
     _frame_row_for_symbol,
@@ -271,6 +272,11 @@ def get_ranking_detail(
     breakouts = snap.frames.get("breakout_scan", pd.DataFrame())
     patterns = snap.frames.get("pattern_scan", pd.DataFrame())
     ranked = _enrich_operator_rank_fields(ranked, patterns)
+    ranked = _enrich_rank_with_fundamentals(
+        ranked,
+        project_root=project_root,
+        watchlist_candidates=snap.frames.get("watchlist_candidates", pd.DataFrame()),
+    )
     stock_scan = snap.frames.get("stock_scan", pd.DataFrame())
     sectors = snap.frames.get("sector_dashboard", pd.DataFrame())
 

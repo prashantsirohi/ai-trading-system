@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/execution", tags=["snapshots"])
 
 @router.get("/ranking")
 def execution_ranking(
-    limit: int = Query(default=25, ge=1, le=200),
+    limit: int = Query(default=25, ge=1, le=2500),
     stage2_only: bool = Query(default=False),
     stage2_min_score: float | None = Query(default=None, ge=0.0, le=100.0),
 ) -> dict[str, Any]:

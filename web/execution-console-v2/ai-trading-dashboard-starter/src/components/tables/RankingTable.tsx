@@ -84,6 +84,64 @@ function CompactScore({ value }: { value?: number | null }) {
   return <span className="font-mono text-xs text-slate-200">{scoreText(value)}</span>;
 }
 
+function StageSummary({ row }: { row: StockRow }) {
+  if (!row.stageLabel) return <span className="text-slate-500">—</span>;
+
+  const details = [
+    row.barsInStage == null ? null : `${row.barsInStage} bars`,
+    row.momentumAccelerationScore == null ? null : `Accel ${row.momentumAccelerationScore.toFixed(1)}`,
+    row.stageTransition && row.stageTransition !== 'NONE' ? row.stageTransition : null,
+  ].filter(Boolean);
+
+  return (
+    <div className="min-w-0">
+      <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider', stageTone(row.stageFreshnessBucket))}>
+        {stageLabel(row)}
+      </span>
+      {details.length > 0 ? (
+        <div className="mt-1 truncate text-[11px] text-slate-400">
+          {details.join(' · ')}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WarningChips({ row }: { row: StockRow }) {
+  const warnings = [];
+  if ((row.exhaustionPenalty ?? 0) > 0) warnings.push('Exhaustion');
+  if ((row.distanceFromPivotAtr ?? 0) >= 2) warnings.push('Pivot extended');
+  if (warnings.length === 0) return <span className="text-slate-500">—</span>;
+
+  return (
+    <div className="flex flex-wrap gap-1">
+      {warnings.map((warning) => (
+        <span key={warning} className="rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-200">
+          {warning}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function SetupSummary({ row }: { row: StockRow }) {
+  const hasPattern = row.pattern && row.pattern !== 'N/A';
+  if (!hasPattern && !row.breakout) return <span className="text-slate-500">—</span>;
+
+  return (
+    <div className="min-w-0 space-y-1">
+      {hasPattern ? (
+        <div className="truncate text-xs font-semibold text-slate-200">{row.pattern}</div>
+      ) : null}
+      {row.breakout ? (
+        <span className="rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-200">
+          Breakout
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 export default function RankingTable({
   rows,
   expandedSymbol = null,
@@ -99,8 +157,8 @@ export default function RankingTable({
     [rows],
   );
 
-  const columns = useMemo(
-    () => [
+  const columns = useMemo(() => {
+    const decisionColumns = [
       columnHelper.accessor('rankPosition', {
         header: '#',
         cell: (info) => (
@@ -120,7 +178,7 @@ export default function RankingTable({
               <Link
                 to={`/symbol/${row.symbol}`}
                 onClick={(e) => e.stopPropagation()}
-                className="font-semibold text-slate-100 hover:text-blue-400 hover:underline transition-colors"
+                className="font-semibold text-slate-100 transition-colors hover:text-blue-400 hover:underline"
               >
                 {row.symbol}
               </Link>
@@ -132,7 +190,7 @@ export default function RankingTable({
             </div>
           );
         },
-        size: 180,
+        size: 190,
       }),
       columnHelper.accessor('score', {
         header: 'Score',
@@ -160,95 +218,16 @@ export default function RankingTable({
         },
         size: 112,
       }),
-      columnHelper.display({ id: 'qualityScore', header: 'Q', cell: (info) => <CompactScore value={info.row.original.qualityScore} />, size: 56 }),
-      columnHelper.display({ id: 'growthScore', header: 'G', cell: (info) => <CompactScore value={info.row.original.growthScore} />, size: 56 }),
-      columnHelper.display({ id: 'balanceSheetScore', header: 'BS', cell: (info) => <CompactScore value={info.row.original.balanceSheetScore} />, size: 56 }),
-      columnHelper.display({ id: 'valuationScore', header: 'Val', cell: (info) => <CompactScore value={info.row.original.valuationScore} />, size: 56 }),
-      columnHelper.display({ id: 'ownershipScore', header: 'Own', cell: (info) => <CompactScore value={info.row.original.ownershipScore} />, size: 62 }),
-      columnHelper.display({
-        id: 'redFlags',
-        header: 'Flags',
-        cell: (info) => {
-          const value = info.row.original.redFlags;
-          return value ? <span className="line-clamp-2 text-[11px] text-amber-200">{value}</span> : <span className="text-slate-500">—</span>;
-        },
-        size: 160,
-      }),
-      columnHelper.display({
-        id: 'watchlistBucket',
-        header: 'Bucket',
-        cell: (info) => {
-          const value = info.row.original.watchlistBucket;
-          return value ? <span className="text-[11px] font-semibold text-slate-200">{value.split('_').join(' ')}</span> : <span className="text-slate-500">—</span>;
-        },
-        size: 142,
-      }),
-      columnHelper.display({
-        id: 'nextAction',
-        header: 'Action',
-        cell: (info) => {
-          const value = info.row.original.nextAction;
-          return value ? <span className="line-clamp-2 text-[11px] text-slate-300">{value}</span> : <span className="text-slate-500">—</span>;
-        },
-        size: 180,
-      }),
       columnHelper.display({
         id: 'stage',
         header: 'Stage',
-        cell: (info) => {
-          const row = info.row.original;
-          if (!row.stageLabel) return <span className="text-slate-500">—</span>;
-          return (
-            <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider', stageTone(row.stageFreshnessBucket))}>
-              {stageLabel(row)}
-            </span>
-          );
-        },
-        size: 132,
-      }),
-      columnHelper.accessor('barsInStage', {
-        header: 'Age',
-        cell: (info) => {
-          const value = info.getValue();
-          return value == null ? <span className="text-slate-500">—</span> : <span className="tabular-nums text-slate-200">{value} bars</span>;
-        },
-        size: 72,
-      }),
-      columnHelper.accessor('stageTransition', {
-        header: 'Transition',
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? <span className="text-slate-200">{value}</span> : <span className="text-slate-500">—</span>;
-        },
-        size: 118,
-      }),
-      columnHelper.accessor('momentumAccelerationScore', {
-        header: 'Accel',
-        cell: (info) => {
-          const value = info.getValue();
-          return value == null ? <span className="text-slate-500">—</span> : <span className="font-semibold tabular-nums text-slate-100">{value.toFixed(1)}</span>;
-        },
-        size: 88,
+        cell: (info) => <StageSummary row={info.row.original} />,
+        size: 180,
       }),
       columnHelper.display({
         id: 'warnings',
-        header: 'Warnings',
-        cell: (info) => {
-          const row = info.row.original;
-          const warnings = [];
-          if ((row.exhaustionPenalty ?? 0) > 0) warnings.push('Exhaustion');
-          if ((row.distanceFromPivotAtr ?? 0) >= 2) warnings.push('Pivot extended');
-          if (warnings.length === 0) return <span className="text-slate-500">—</span>;
-          return (
-            <div className="flex flex-wrap gap-1">
-              {warnings.map((warning) => (
-                <span key={warning} className="rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-200">
-                  {warning}
-                </span>
-              ))}
-            </div>
-          );
-        },
+        header: 'Risk',
+        cell: (info) => <WarningChips row={info.row.original} />,
         size: 140,
       }),
       columnHelper.display({
@@ -264,28 +243,18 @@ export default function RankingTable({
         size: 190,
       }),
       columnHelper.accessor('sector', { header: 'Sector', size: 132 }),
-      columnHelper.accessor('pattern', {
-        header: 'Pattern',
-        cell: (info) => {
-          const value = info.getValue();
-          if (!value || value === 'N/A') return <span className="text-slate-500">—</span>;
-          return <span className="text-slate-200">{value}</span>;
-        },
-        size: 140,
-      }),
       columnHelper.display({
-        id: 'breakout',
-        header: 'Breakout',
-        cell: (info) =>
-          info.row.original.breakout ? (
-            <span className="rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-200">
-              Confirmed
-            </span>
-          ) : (
-            <span className="text-slate-500">—</span>
-          ),
-        size: 112,
+        id: 'setup',
+        header: 'Setup',
+        cell: (info) => <SetupSummary row={info.row.original} />,
+        size: 150,
       }),
+    ];
+
+    if (!expansionEnabled) return decisionColumns;
+
+    return [
+      ...decisionColumns,
       columnHelper.display({
         id: 'expand',
         header: '',
@@ -302,9 +271,8 @@ export default function RankingTable({
         ),
         size: 24,
       }),
-    ],
-    [comparedSymbols, expandedSymbol],
-  );
+    ];
+  }, [comparedSymbols, expandedSymbol, expansionEnabled]);
 
   const table = useReactTable({
     data: indexed,
@@ -317,7 +285,7 @@ export default function RankingTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[2040px] table-fixed text-left text-sm">
+      <table className="w-full min-w-[1200px] table-fixed text-left text-sm">
         <thead className="border-y border-slate-800 text-slate-400">
           {table.getHeaderGroups().map((headerGroup) => (
             <tr key={headerGroup.id}>

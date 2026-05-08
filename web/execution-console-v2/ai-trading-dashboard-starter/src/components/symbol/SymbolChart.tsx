@@ -1,39 +1,53 @@
 /**
- * Price chart for the Symbol page — 1Y close + 50DMA + 200DMA + breakout marker.
- * Overlay toggles below the chart control which overlays render.
+ * Professional candlestick chart for the canonical stock page.
+ *
+ * Phase 1: OHLC candles, volume histogram, SMA 50/200, responsive sizing,
+ * timeframe controls, and a compact legend. Pattern/pivot markers can layer
+ * on top of this component in the next phase.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Area,
-  ComposedChart,
-  Line,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+  ColorType,
+  CrosshairMode,
+  CandlestickSeries,
+  HistogramSeries,
+  LineSeries,
+  createChart,
+  type CandlestickData,
+  type HistogramData,
+  type IChartApi,
+  type ISeriesApi,
+  type LineData,
+  type Time,
+} from 'lightweight-charts';
 import type { StockOhlcv } from '@/lib/api/stocks';
 import { deriveMAs } from '@/lib/symbol/derive';
 import { cn } from '@/lib/utils/cn';
 
-type Period = '1D' | '5D' | '3M' | '1Y' | '5Y';
-type Overlay = '50DMA' | '200DMA' | 'EMA20' | 'Bollinger' | 'Volume' | 'RSI' | 'MACD' | 'Stoch' | 'VWAP' | 'Fib';
+type Period = '3M' | '6M' | '1Y' | 'All';
 
-const PERIODS: Period[] = ['1D', '5D', '3M', '1Y', '5Y'];
-const OVERLAY_LIST: Overlay[] = ['50DMA', '200DMA', 'EMA20', 'Bollinger', 'Volume', 'RSI', 'MACD', 'Stoch', 'VWAP', 'Fib'];
-const DEFAULT_OVERLAYS = new Set<Overlay>(['50DMA', '200DMA', 'Bollinger', 'RSI']);
-
+const PERIODS: Period[] = ['3M', '6M', '1Y', 'All'];
 const PERIOD_LIMIT: Record<Period, number> = {
-  '1D': 1, '5D': 5, '3M': 63, '1Y': 252, '5Y': 1260,
+  '3M': 63,
+  '6M': 126,
+  '1Y': 252,
+  All: Number.POSITIVE_INFINITY,
 };
 
-function shortDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: '2-digit' });
-  } catch {
-    return iso;
-  }
+function toTime(iso: string): Time {
+  return iso.slice(0, 10) as Time;
+}
+
+function fmt(value: number | null | undefined, digits = 2): string {
+  if (value == null || !Number.isFinite(value)) return '-';
+  return value.toLocaleString('en-IN', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function fmtVolume(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-';
+  if (value >= 1e7) return `${(value / 1e7).toFixed(2)}Cr`;
+  if (value >= 1e5) return `${(value / 1e5).toFixed(2)}L`;
+  return value.toLocaleString('en-IN');
 }
 
 interface Props {
@@ -42,148 +56,241 @@ interface Props {
   breakoutDate?: string | null;
 }
 
-export default function SymbolChart({ data, isLoading, breakoutDate }: Props) {
+export default function SymbolChart({ data, isLoading }: Props) {
+  const chartEl = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const ma50SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const ma200SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+
   const [period, setPeriod] = useState<Period>('1Y');
-  const [activeOverlays, setActiveOverlays] = useState<Set<Overlay>>(new Set(DEFAULT_OVERLAYS));
+  const [legend, setLegend] = useState<{
+    date: string;
+    open: number | null;
+    high: number | null;
+    low: number | null;
+    close: number | null;
+    volume: number | null;
+  } | null>(null);
 
-  function toggleOverlay(o: Overlay) {
-    setActiveOverlays((prev) => {
-      const next = new Set(prev);
-      if (next.has(o)) next.delete(o); else next.add(o);
-      return next;
-    });
-  }
-
-  const { series, ma50Arr, ma200Arr } = useMemo(() => {
-    if (!data?.available || !data.candles.length) return { series: [], ma50Arr: [], ma200Arr: [] };
+  const prepared = useMemo(() => {
+    if (!data?.available || data.candles.length === 0) {
+      return { candles: [], volumes: [], ma50: [], ma200: [] };
+    }
 
     const limit = PERIOD_LIMIT[period];
-    const candles = data.candles.slice(-limit);
-    const { ma50, ma200 } = deriveMAs(candles);
+    const sliced = Number.isFinite(limit) ? data.candles.slice(-limit) : data.candles;
+    const { ma50, ma200 } = deriveMAs(sliced);
 
-    const s = candles.map((c, i) => ({
-      date:  c.timestamp ? shortDate(c.timestamp) : '',
-      close: c.close ?? null,
-      ma50:  activeOverlays.has('50DMA')  ? (ma50[i]  ?? null) : null,
-      ma200: activeOverlays.has('200DMA') ? (ma200[i] ?? null) : null,
-    }));
-    return { series: s, ma50Arr: ma50, ma200Arr: ma200 };
-  }, [data, period, activeOverlays]);
+    const candles: CandlestickData[] = [];
+    const volumes: HistogramData[] = [];
+    const ma50Line: LineData[] = [];
+    const ma200Line: LineData[] = [];
 
-  const closes = series.map((s) => s.close).filter((v): v is number => v !== null);
-  const minVal = closes.length ? Math.min(...closes) * 0.97 : 0;
-  const maxVal = closes.length ? Math.max(...closes) * 1.03 : 1;
+    sliced.forEach((candle, index) => {
+      if (
+        !candle.timestamp ||
+        candle.open == null ||
+        candle.high == null ||
+        candle.low == null ||
+        candle.close == null
+      ) {
+        return;
+      }
+      const time = toTime(candle.timestamp);
+      const up = candle.close >= candle.open;
+      candles.push({
+        time,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      });
+      volumes.push({
+        time,
+        value: candle.volume ?? 0,
+        color: up ? 'rgba(16, 185, 129, 0.32)' : 'rgba(244, 63, 94, 0.32)',
+      });
+      if (ma50[index] != null) ma50Line.push({ time, value: ma50[index] as number });
+      if (ma200[index] != null) ma200Line.push({ time, value: ma200[index] as number });
+    });
 
-  // Find breakout candle index (findLastIndex not in ES2021 target — use reduceRight)
-  const bkIdx = breakoutDate && data?.candles
-    ? data.candles.reduce((found, c, i) => c.timestamp?.startsWith(breakoutDate) ? i : found, -1)
-    : -1;
-  const bkDate = bkIdx >= 0 ? series[bkIdx]?.date : null;
+    return { candles, volumes, ma50: ma50Line, ma200: ma200Line };
+  }, [data, period]);
+
+  useEffect(() => {
+    if (!chartEl.current) return undefined;
+
+    const chart = createChart(chartEl.current, {
+      autoSize: true,
+      height: 390,
+      layout: {
+        background: { type: ColorType.Solid, color: '#020617' },
+        textColor: '#94a3b8',
+        fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+      },
+      grid: {
+        vertLines: { color: 'rgba(30, 41, 59, 0.55)' },
+        horzLines: { color: 'rgba(30, 41, 59, 0.55)' },
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: { color: 'rgba(148, 163, 184, 0.4)', labelBackgroundColor: '#1e293b' },
+        horzLine: { color: 'rgba(148, 163, 184, 0.4)', labelBackgroundColor: '#1e293b' },
+      },
+      rightPriceScale: {
+        borderColor: 'rgba(51, 65, 85, 0.75)',
+        scaleMargins: { top: 0.08, bottom: 0.26 },
+      },
+      timeScale: {
+        borderColor: 'rgba(51, 65, 85, 0.75)',
+        timeVisible: false,
+      },
+      localization: {
+        priceFormatter: (price: number) => price.toFixed(2),
+      },
+    });
+
+    const candles = chart.addSeries(CandlestickSeries, {
+      upColor: '#10b981',
+      downColor: '#f43f5e',
+      borderUpColor: '#34d399',
+      borderDownColor: '#fb7185',
+      wickUpColor: '#34d399',
+      wickDownColor: '#fb7185',
+      priceLineColor: '#38bdf8',
+    });
+    const volume = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+    });
+    chart.priceScale('volume').applyOptions({
+      scaleMargins: { top: 0.78, bottom: 0 },
+      borderVisible: false,
+    });
+    const ma50 = chart.addSeries(LineSeries, {
+      color: '#f59e0b',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    const ma200 = chart.addSeries(LineSeries, {
+      color: '#60a5fa',
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+
+    chartRef.current = chart;
+    candleSeriesRef.current = candles;
+    volumeSeriesRef.current = volume;
+    ma50SeriesRef.current = ma50;
+    ma200SeriesRef.current = ma200;
+
+    chart.subscribeCrosshairMove((param) => {
+      const candle = param.seriesData.get(candles) as CandlestickData | undefined;
+      const vol = param.seriesData.get(volume) as HistogramData | undefined;
+      if (!candle) {
+        const last = prepared.candles[prepared.candles.length - 1];
+        const lastVol = prepared.volumes[prepared.volumes.length - 1];
+        setLegend(last ? {
+          date: String(last.time),
+          open: last.open,
+          high: last.high,
+          low: last.low,
+          close: last.close,
+          volume: lastVol?.value ?? null,
+        } : null);
+        return;
+      }
+      setLegend({
+        date: String(candle.time),
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+        volume: vol?.value ?? null,
+      });
+    });
+
+    return () => {
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      ma50SeriesRef.current = null;
+      ma200SeriesRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    candleSeriesRef.current?.setData(prepared.candles);
+    volumeSeriesRef.current?.setData(prepared.volumes);
+    ma50SeriesRef.current?.setData(prepared.ma50);
+    ma200SeriesRef.current?.setData(prepared.ma200);
+    chartRef.current?.timeScale().fitContent();
+
+    const last = prepared.candles[prepared.candles.length - 1];
+    const lastVol = prepared.volumes[prepared.volumes.length - 1];
+    setLegend(last ? {
+      date: String(last.time),
+      open: last.open,
+      high: last.high,
+      low: last.low,
+      close: last.close,
+      volume: lastVol?.value ?? null,
+    } : null);
+  }, [prepared]);
 
   if (isLoading) {
-    return <div className="flex h-56 items-center justify-center text-sm text-slate-500">Loading chart…</div>;
+    return <div className="flex h-80 items-center justify-center text-sm text-slate-500">Loading chart...</div>;
   }
-  if (!data?.available || series.length === 0) {
-    return <div className="flex h-56 items-center justify-center text-sm text-slate-500">No price history available.</div>;
+  if (!data?.available || prepared.candles.length === 0) {
+    return <div className="flex h-80 items-center justify-center text-sm text-slate-500">No price history available.</div>;
   }
 
   return (
-    <div>
-      <div className="mb-3 flex items-center justify-between">
-        <span className="text-xs font-semibold text-slate-300">Price · with overlays</span>
-        <div className="flex overflow-hidden rounded-xl border border-slate-700 bg-slate-950/60">
-          {PERIODS.map((p) => (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          <span className="font-semibold text-slate-200">Candles</span>
+          <span className="text-slate-500">{legend?.date ?? '-'}</span>
+          <LegendItem label="O" value={fmt(legend?.open)} />
+          <LegendItem label="H" value={fmt(legend?.high)} tone="text-emerald-300" />
+          <LegendItem label="L" value={fmt(legend?.low)} tone="text-rose-300" />
+          <LegendItem label="C" value={fmt(legend?.close)} />
+          <LegendItem label="Vol" value={fmtVolume(legend?.volume)} />
+          <span className="text-amber-300">SMA50</span>
+          <span className="text-blue-300">SMA200</span>
+        </div>
+        <div className="flex overflow-hidden rounded-md border border-slate-700 bg-slate-950/60">
+          {PERIODS.map((item) => (
             <button
-              key={p}
+              key={item}
               type="button"
-              onClick={() => setPeriod(p)}
+              onClick={() => setPeriod(item)}
               className={cn(
-                'px-3 py-1 text-[11px] font-semibold transition-colors',
-                period === p
-                  ? 'bg-slate-800 text-white'
-                  : 'text-slate-500 hover:text-slate-300',
+                'px-2.5 py-1 text-[11px] font-semibold transition-colors',
+                period === item ? 'bg-slate-800 text-white' : 'text-slate-500 hover:text-slate-300',
               )}
             >
-              {p}
+              {item}
             </button>
           ))}
         </div>
       </div>
-
-      <ResponsiveContainer width="100%" height={220}>
-        <ComposedChart data={series} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-          <defs>
-            <linearGradient id="sym-fill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#34d399" stopOpacity={0.18} />
-              <stop offset="100%" stopColor="#34d399" stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <XAxis
-            dataKey="date"
-            tick={{ fontSize: 9, fill: '#64748b' }}
-            tickLine={false}
-            axisLine={false}
-            interval={Math.floor(series.length / 6)}
-          />
-          <YAxis
-            domain={[minVal, maxVal]}
-            tick={{ fontSize: 9, fill: '#64748b' }}
-            tickLine={false}
-            axisLine={false}
-            tickFormatter={(v: number) => v.toFixed(0)}
-            width={48}
-          />
-          <Tooltip
-            contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 10, fontSize: 11 }}
-            labelStyle={{ color: '#94a3b8', fontSize: 10 }}
-            formatter={(val: number, name: string) => [val?.toFixed(2), name]}
-          />
-          {bkDate && (
-            <ReferenceLine
-              x={bkDate}
-              stroke="#34d399"
-              strokeDasharray="3 4"
-              strokeOpacity={0.5}
-              label={{ value: 'breakout', position: 'insideTopRight', fontSize: 9, fill: '#6ee7b7' }}
-            />
-          )}
-          <Area
-            type="monotone"
-            dataKey="close"
-            stroke="#34d399"
-            strokeWidth={1.4}
-            fill="url(#sym-fill)"
-            dot={false}
-            activeDot={{ r: 3, fill: '#34d399' }}
-            connectNulls
-          />
-          {activeOverlays.has('50DMA') && (
-            <Line type="monotone" dataKey="ma50" stroke="#fbbf24" strokeWidth={1} dot={false} connectNulls strokeOpacity={0.85} />
-          )}
-          {activeOverlays.has('200DMA') && (
-            <Line type="monotone" dataKey="ma200" stroke="#60a5fa" strokeWidth={1} dot={false} connectNulls strokeDasharray="3 3" strokeOpacity={0.7} />
-          )}
-        </ComposedChart>
-      </ResponsiveContainer>
-
-      {/* Overlay toggles */}
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {OVERLAY_LIST.map((o) => (
-          <button
-            key={o}
-            type="button"
-            onClick={() => toggleOverlay(o)}
-            className={cn(
-              'rounded-full border px-2.5 py-0.5 text-[10px] font-semibold transition-colors',
-              activeOverlays.has(o)
-                ? 'border-blue-500/50 bg-blue-500/15 text-blue-300'
-                : 'border-slate-700 bg-slate-900/60 text-slate-500 hover:border-slate-500',
-            )}
-          >
-            {o}
-          </button>
-        ))}
-      </div>
+      <div ref={chartEl} className="h-[390px] w-full overflow-hidden rounded-md border border-slate-800 bg-slate-950" />
     </div>
+  );
+}
+
+function LegendItem({ label, value, tone = 'text-slate-300' }: { label: string; value: string; tone?: string }) {
+  return (
+    <span className="font-mono">
+      <span className="text-slate-500">{label}</span>{' '}
+      <span className={tone}>{value}</span>
+    </span>
   );
 }

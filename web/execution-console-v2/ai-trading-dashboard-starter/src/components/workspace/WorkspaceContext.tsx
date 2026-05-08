@@ -13,6 +13,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 const COMPARE_LIMIT = 3;
 
@@ -40,13 +41,17 @@ interface ProviderProps {
 }
 
 export function WorkspaceProvider({ children }: ProviderProps) {
+  const navigate = useNavigate();
   const [workspaceSymbol, setWorkspaceSymbol] = useState<string | null>(null);
   const [compareSymbols, setCompareSymbols] = useState<string[]>([]);
   const [compareOpen, setCompareOpen] = useState(false);
 
   const openWorkspace = useCallback((symbol: string) => {
-    setWorkspaceSymbol(symbol);
-  }, []);
+    const normalized = symbol.trim().toUpperCase();
+    if (!normalized) return;
+    setWorkspaceSymbol(null);
+    navigate(`/symbol/${encodeURIComponent(normalized)}`);
+  }, [navigate]);
 
   const closeWorkspace = useCallback(() => {
     setWorkspaceSymbol(null);

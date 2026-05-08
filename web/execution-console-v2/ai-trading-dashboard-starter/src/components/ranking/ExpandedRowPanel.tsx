@@ -14,6 +14,7 @@
  */
 import { useRankingDetail, useRankingHistory } from '@/lib/queries';
 import { useWorkspace } from '@/components/workspace/WorkspaceContext';
+import type { ReactNode } from 'react';
 import type { StockRow } from '@/types/dashboard';
 import FactorBars from './FactorBars';
 import LifecycleVisual from './LifecycleVisual';
@@ -103,9 +104,10 @@ export default function ExpandedRowPanel({ row, isCompared, onToggleCompare }: P
   const fallback = FALLBACK_DETAIL(row);
   const detail = detailQuery.data ?? fallback;
   const lifecycle = detail.lifecycle.length > 0 ? detail.lifecycle : fallback.lifecycle;
+  const operator = detail.operatorContext;
 
   return (
-    <div className="space-y-4 px-4 py-5">
+    <div className="space-y-3 px-3 py-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold text-slate-100">
@@ -152,76 +154,84 @@ export default function ExpandedRowPanel({ row, isCompared, onToggleCompare }: P
 
       <ScoreDecomposition detail={detail} fallbackComposite={row.score} />
 
-      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-        <h4 className="text-xs font-semibold uppercase tracking-widest text-slate-400">
-          Operator Notes
-        </h4>
-        <div className="mt-3 grid gap-3 md:grid-cols-3">
-          <DetailMetric label="Stage" value={detail.operatorContext.stageLabel ?? row.stageLabel ?? '—'} />
-          <DetailMetric
-            label="Stage age"
-            value={
-              detail.operatorContext.barsInStage == null
-                ? '—'
-                : `${detail.operatorContext.barsInStage} bars`
-            }
-          />
-          <DetailMetric label="Transition" value={detail.operatorContext.stageTransition ?? row.stageTransition ?? '—'} />
-          <DetailMetric
-            label="Momentum acceleration"
-            value={
-              detail.operatorContext.momentumAccelerationScore == null
-                ? '—'
-                : detail.operatorContext.momentumAccelerationScore.toFixed(1)
-            }
-          />
-          <DetailMetric
-            label="Exhaustion"
-            value={
-              detail.operatorContext.exhaustionPenalty == null
-                ? '—'
-                : `${detail.operatorContext.exhaustionPenalty.toFixed(1)} ${detail.operatorContext.exhaustionFlag ?? ''}`.trim()
-            }
-          />
-          <DetailMetric
-            label="Pivot distance"
-            value={
-              detail.operatorContext.distanceFromPivotAtr == null
-                ? '—'
-                : `${detail.operatorContext.distanceFromPivotAtr.toFixed(1)} ATR`
-            }
-          />
-          <DetailMetric label="Top pattern" value={detail.operatorContext.topPatternFamily ?? row.pattern ?? '—'} />
-          <DetailMetric label="Pattern state" value={detail.operatorContext.topPatternState ?? row.patternState ?? '—'} />
-          <DetailMetric
-            label="Invalidation"
-            value={
-              detail.operatorContext.topPatternInvalidationPrice == null
-                ? '—'
-                : detail.operatorContext.topPatternInvalidationPrice.toFixed(2)
-            }
-          />
+      <PanelSection title="Fundamentals And Watchlist">
+        <div className="grid gap-2 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+          <div className="grid gap-2 md:grid-cols-2">
+            <MetricBar label="Fundamental" value={row.fundamentalScore} tone="amber" badge={row.fundamentalTier ?? undefined} />
+            <MetricBar label="Quality" value={row.qualityScore} tone="emerald" />
+            <MetricBar label="Growth" value={row.growthScore} tone="sky" />
+            <MetricBar label="Balance sheet" value={row.balanceSheetScore} tone="violet" />
+            <MetricBar label="Valuation" value={row.valuationScore} tone="amber" />
+            <MetricBar label="Ownership" value={row.ownershipScore} tone="emerald" />
+          </div>
+          <div className="grid gap-2">
+            <CompactInfo
+              label="Bucket"
+              value={row.watchlistBucket ? row.watchlistBucket.split('_').join(' ') : '—'}
+              tone="blue"
+            />
+            <CompactInfo label="Flags" value={row.redFlags ?? '—'} tone={row.redFlags ? 'amber' : 'slate'} />
+            <CompactInfo label="Next action" value={row.nextAction ?? '—'} tone={row.nextAction ? 'emerald' : 'slate'} />
+          </div>
+        </div>
+      </PanelSection>
+
+      <PanelSection title="Operator Notes">
+        <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="grid gap-2 md:grid-cols-3">
+            <CompactInfo label="Stage" value={operator.stageLabel ?? row.stageLabel ?? '—'} tone="emerald" />
+            <CompactInfo
+              label="Stage age"
+              value={operator.barsInStage == null ? '—' : `${operator.barsInStage} bars`}
+              tone="blue"
+            />
+            <CompactInfo label="Transition" value={operator.stageTransition ?? row.stageTransition ?? '—'} tone="slate" />
+            <CompactInfo label="Top pattern" value={operator.topPatternFamily ?? row.pattern ?? '—'} tone="violet" />
+            <CompactInfo label="Pattern state" value={operator.topPatternState ?? row.patternState ?? '—'} tone="slate" />
+            <CompactInfo
+              label="Invalidation"
+              value={operator.topPatternInvalidationPrice == null ? '—' : operator.topPatternInvalidationPrice.toFixed(2)}
+              tone="amber"
+            />
+          </div>
+          <div className="grid gap-2">
+            <MetricBar label="Momentum acceleration" value={operator.momentumAccelerationScore} tone="emerald" />
+            <MetricBar
+              label="Exhaustion"
+              value={operator.exhaustionPenalty}
+              tone="amber"
+              max={5}
+              suffix={operator.exhaustionFlag ?? undefined}
+            />
+            <MetricBar
+              label="Pivot distance"
+              value={operator.distanceFromPivotAtr}
+              tone="rose"
+              max={4}
+              suffix="ATR"
+            />
+          </div>
         </div>
         <div className="mt-3 flex flex-wrap gap-1">
-          {detail.operatorContext.stageFreshnessBucket === 'fresh_s2' ? (
+          {operator.stageFreshnessBucket === 'fresh_s2' ? (
             <WarningLabel tone="green" label="Fresh S2" />
           ) : null}
-          {detail.operatorContext.stageFreshnessBucket === 'extended_s2' ? (
+          {operator.stageFreshnessBucket === 'extended_s2' ? (
             <WarningLabel tone="amber" label="Extended S2" />
           ) : null}
-          {(detail.operatorContext.exhaustionPenalty ?? 0) > 0 ? (
+          {(operator.exhaustionPenalty ?? 0) > 0 ? (
             <WarningLabel tone="amber" label="Exhaustion risk" />
           ) : null}
-          {(detail.operatorContext.distanceFromPivotAtr ?? 0) >= 2 ? (
+          {(operator.distanceFromPivotAtr ?? 0) >= 2 ? (
             <WarningLabel tone="amber" label="Distance from pivot extended" />
           ) : null}
-          {detail.operatorContext.reclaimSignalFlag ? (
+          {operator.reclaimSignalFlag ? (
             <WarningLabel tone="green" label="Reclaim signal" />
           ) : null}
         </div>
-        {detail.operatorContext.explanation.length > 0 ? (
+        {operator.explanation.length > 0 ? (
           <ul className="mt-3 space-y-1 text-xs text-slate-400">
-            {detail.operatorContext.explanation.map((item) => (
+            {operator.explanation.map((item) => (
               <li key={item}>{item}</li>
             ))}
           </ul>
@@ -230,12 +240,9 @@ export default function ExpandedRowPanel({ row, isCompared, onToggleCompare }: P
             No additional score or penalty explanation is available for this artifact.
           </p>
         )}
-      </div>
+      </PanelSection>
 
-      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-        <h4 className="text-xs font-semibold uppercase tracking-widest text-slate-400">
-          Factor Bars
-        </h4>
+      <PanelSection title="Factor Bars">
         <FactorBars
           variant="expanded"
           factors={detail.factors}
@@ -245,29 +252,99 @@ export default function ExpandedRowPanel({ row, isCompared, onToggleCompare }: P
             trend: row.trend,
             sector: row.sectorStrength,
           }}
-          className="mt-3"
         />
-      </div>
+      </PanelSection>
 
-      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-        <h4 className="text-xs font-semibold uppercase tracking-widest text-slate-400">
-          Lifecycle
-        </h4>
-        <div className="mt-3">
-          <LifecycleVisual stages={lifecycle} />
-        </div>
-      </div>
+      <PanelSection title="Lifecycle">
+        <LifecycleVisual stages={lifecycle} />
+      </PanelSection>
 
       <MiniChart history={historyQuery.data} row={row} isLoading={historyQuery.isLoading} />
     </div>
   );
 }
 
-function DetailMetric({ label, value }: { label: string; value: string }) {
+type Tone = 'emerald' | 'sky' | 'violet' | 'amber' | 'rose' | 'blue' | 'slate';
+
+const BAR_TONES: Record<Tone, string> = {
+  emerald: 'bg-emerald-500/80',
+  sky: 'bg-sky-500/80',
+  violet: 'bg-violet-500/80',
+  amber: 'bg-amber-500/80',
+  rose: 'bg-rose-500/80',
+  blue: 'bg-blue-500/80',
+  slate: 'bg-slate-500/70',
+};
+
+const INFO_TONES: Record<Tone, string> = {
+  emerald: 'border-emerald-500/20 bg-emerald-950/20 text-emerald-100',
+  sky: 'border-sky-500/20 bg-sky-950/20 text-sky-100',
+  violet: 'border-violet-500/20 bg-violet-950/20 text-violet-100',
+  amber: 'border-amber-500/20 bg-amber-950/20 text-amber-100',
+  rose: 'border-rose-500/20 bg-rose-950/20 text-rose-100',
+  blue: 'border-blue-500/20 bg-blue-950/20 text-blue-100',
+  slate: 'border-slate-800 bg-slate-900/50 text-slate-200',
+};
+
+function PanelSection({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</div>
-      <div className="mt-1 text-sm font-semibold text-slate-100">{value}</div>
+    <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+      <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+        {title}
+      </h4>
+      {children}
+    </div>
+  );
+}
+
+function MetricBar({
+  label,
+  value,
+  tone,
+  max = 100,
+  badge,
+  suffix,
+}: {
+  label: string;
+  value?: number | null;
+  tone: Tone;
+  max?: number;
+  badge?: string;
+  suffix?: string;
+}) {
+  const safeValue = value == null || !Number.isFinite(value) ? null : value;
+  const pct = safeValue == null ? 0 : Math.max(0, Math.min(100, (safeValue / max) * 100));
+
+  return (
+    <div className="rounded-md border border-slate-800 bg-slate-900/45 px-2.5 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="truncate text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+          {label}
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {badge ? (
+            <span className={cn('rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider', INFO_TONES[tone])}>
+              {badge}
+            </span>
+          ) : null}
+          <span className="font-mono text-xs font-semibold tabular-nums text-slate-100">
+            {safeValue == null ? '—' : safeValue.toFixed(1)}
+            {safeValue != null && suffix ? ` ${suffix}` : ''}
+          </span>
+        </div>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800">
+        <div className={cn('h-full rounded-full', BAR_TONES[tone])} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function CompactInfo({ label, value, tone }: { label: string; value: string; tone: Tone }) {
+  return (
+    <div className={cn('min-w-0 rounded-md border px-2.5 py-2', INFO_TONES[tone])}>
+      <div className="text-[10px] font-semibold uppercase tracking-wider opacity-70">{label}</div>
+      <div className="mt-0.5 truncate text-xs font-semibold" title={value}>{value}</div>
     </div>
   );
 }

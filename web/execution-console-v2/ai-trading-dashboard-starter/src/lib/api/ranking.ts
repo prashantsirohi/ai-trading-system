@@ -22,7 +22,7 @@ interface BackendRankingResponse {
 
 export async function getRanking(): Promise<RankingResponse> {
   const response = await fetchDashboardJsonStrict<BackendRankingResponse>(
-    '/api/execution/ranking?limit=25',
+    '/api/execution/ranking?limit=200',
     {
       top_ranked: rankingMock.rows as unknown as Array<Record<string, string | number | boolean | null>>,
     },

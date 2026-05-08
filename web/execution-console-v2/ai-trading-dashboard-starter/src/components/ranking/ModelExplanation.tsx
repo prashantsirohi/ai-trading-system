@@ -46,34 +46,34 @@ export default function ModelExplanation({ detail, row }: Props) {
         : 'No active catalyst — momentum maintenance only.';
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-      <h4 className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+    <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+      <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
         Model Explanation
       </h4>
-      <dl className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <div className="rounded-lg border border-emerald-500/20 bg-emerald-950/20 p-3">
+      <dl className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="rounded-md border border-emerald-500/20 bg-emerald-950/20 px-2.5 py-2">
           <dt className="text-[10px] uppercase tracking-wider text-emerald-300">Strongest</dt>
           <dd className="mt-1 text-sm font-semibold text-emerald-100">
             {strongest ? BUCKET_LABEL[strongest.bucket] ?? strongest.bucket : 'Not available'}
           </dd>
           <dd className="mt-1 text-xs text-emerald-200/80">
-            {strongest ? `Value ${strongest.value.toFixed(0)}` : 'Awaiting factor payload.'}
+            {strongest ? `Value ${Math.max(0, Math.min(100, strongest.value)).toFixed(0)}` : 'Awaiting factor payload.'}
           </dd>
         </div>
-        <div className="rounded-lg border border-blue-500/20 bg-blue-950/20 p-3">
+        <div className="rounded-md border border-blue-500/20 bg-blue-950/20 px-2.5 py-2">
           <dt className="text-[10px] uppercase tracking-wider text-blue-300">Catalyst</dt>
           <dd className="mt-1 text-sm font-semibold text-blue-100">
             {detail.ranking?.inBreakoutScan ? 'Breakout' : detail.ranking?.inPatternScan ? 'Pattern' : 'None'}
           </dd>
           <dd className="mt-1 text-xs text-blue-200/80">{catalyst}</dd>
         </div>
-        <div className="rounded-lg border border-rose-500/20 bg-rose-950/20 p-3">
+        <div className="rounded-md border border-rose-500/20 bg-rose-950/20 px-2.5 py-2">
           <dt className="text-[10px] uppercase tracking-wider text-rose-300">Limiting</dt>
           <dd className="mt-1 text-sm font-semibold text-rose-100">
             {weakest ? BUCKET_LABEL[weakest.bucket] ?? weakest.bucket : 'Not available'}
           </dd>
           <dd className="mt-1 text-xs text-rose-200/80">
-            {weakest ? `Value ${weakest.value.toFixed(0)}` : 'Awaiting factor payload.'}
+            {weakest ? `Value ${Math.max(0, Math.min(100, weakest.value)).toFixed(0)}` : 'Awaiting factor payload.'}
           </dd>
         </div>
       </dl>

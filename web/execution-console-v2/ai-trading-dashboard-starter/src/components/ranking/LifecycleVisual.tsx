@@ -31,14 +31,14 @@ const STATE_TONES: Record<LifecycleStage['state'], { dot: string; ring: string; 
 
 export default function LifecycleVisual({ stages }: { stages: LifecycleStage[] }) {
   return (
-    <ol className="flex flex-wrap items-stretch gap-3">
+    <ol className="flex flex-wrap items-stretch gap-2">
       {stages.map((stage, idx) => {
         const tone = STATE_TONES[stage.state];
         return (
           <li
             key={stage.key}
             className={cn(
-              'flex min-w-[180px] flex-1 items-center gap-3 rounded-lg border p-3',
+              'flex min-w-[150px] flex-1 items-center gap-2 rounded-md border px-2.5 py-2',
               tone.ring,
             )}
           >
@@ -51,7 +51,7 @@ export default function LifecycleVisual({ stages }: { stages: LifecycleStage[] }
                 <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
                   Step {idx + 1}
                 </span>
-                <span className="text-sm font-semibold text-slate-200">{stage.label}</span>
+                <span className="text-xs font-semibold text-slate-200">{stage.label}</span>
               </div>
               <div className="mt-0.5 flex flex-col gap-0.5">
                 <span className="text-[10px] uppercase tracking-wider opacity-80">{tone.label}</span>

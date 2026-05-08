@@ -57,6 +57,23 @@ _SYMBOL_COLUMNS = (
     "last_updated",
 )
 
+_FUNDAMENTAL_COLUMNS = (
+    "snapshot_date",
+    "symbol",
+    "name",
+    "sector",
+    "industry",
+    "fundamental_score",
+    "quality_score",
+    "growth_score",
+    "balance_sheet_score",
+    "valuation_score",
+    "ownership_score",
+    "fundamental_tier",
+    "red_flags",
+    "hard_red_flag",
+)
+
 
 def _existing_symbol_columns(conn: sqlite3.Connection) -> list[str]:
     rows = conn.execute("PRAGMA table_info(symbols)").fetchall()
@@ -250,6 +267,24 @@ def _load_latest_quote(ctx: ExecutionContext, symbol: str) -> Optional[dict[str,
     }
 
 
+def _load_fundamentals(project_root: str | Path | None, symbol: str) -> Optional[dict[str, Any]]:
+    root = Path(project_root or ".")
+    path = root / "data" / "fundamentals" / "fundamental_scores_latest.csv"
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+    try:
+        frame = pd.read_csv(path)
+    except Exception:
+        return None
+    if frame.empty or "symbol" not in frame.columns:
+        return None
+    matches = frame.loc[frame["symbol"].astype(str).str.upper() == symbol.upper()]
+    if matches.empty:
+        return None
+    row = matches.iloc[0].to_dict()
+    return {column: _scalar_or_none(row.get(column)) for column in _FUNDAMENTAL_COLUMNS}
+
+
 def get_stock_detail(
     project_root: str | Path | None,
     symbol: str,
@@ -271,6 +306,7 @@ def get_stock_detail(
 
     metadata = _load_symbol_metadata(ctx, symbol)
     latest_quote = _load_latest_quote(ctx, symbol)
+    fundamentals = _load_fundamentals(project_root, symbol)
 
     ranked = snap.frames.get("ranked_signals", pd.DataFrame())
     breakouts = snap.frames.get("breakout_scan", pd.DataFrame())
@@ -310,13 +346,14 @@ def get_stock_detail(
     )
 
     available = any(
-        block is not None for block in (metadata, latest_quote, ranking_block)
+        block is not None for block in (metadata, latest_quote, ranking_block, fundamentals)
     )
 
     return {
         "available": available,
         "symbol": symbol,
         "metadata": metadata,
+        "fundamentals": fundamentals,
         "latest_quote": latest_quote,
         "ranking": ranking_block,
         "lifecycle": lifecycle,
