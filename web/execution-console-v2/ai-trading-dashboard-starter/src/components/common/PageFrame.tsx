@@ -5,9 +5,10 @@ interface Props extends PropsWithChildren {
   title: string;
   description: string;
   headerAside?: ReactNode;
+  hideHeader?: boolean;
 }
 
-export default function PageFrame({ title, description, headerAside, children }: Props) {
+export default function PageFrame({ title, description, headerAside, hideHeader = false, children }: Props) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -15,13 +16,15 @@ export default function PageFrame({ title, description, headerAside, children }:
       transition={{ duration: 0.2 }}
       className="space-y-4"
     >
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-400">{description}</p>
+      {!hideHeader ? (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-400">{description}</p>
+          </div>
+          {headerAside ? <div className="min-w-0 xl:w-[680px]">{headerAside}</div> : null}
         </div>
-        {headerAside ? <div className="min-w-0 xl:w-[680px]">{headerAside}</div> : null}
-      </div>
+      ) : null}
       {children}
     </motion.div>
   );

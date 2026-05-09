@@ -153,7 +153,7 @@ export default function RankingTable({
   const [sorting, setSorting] = useState<SortingState>([{ id: 'score', desc: true }]);
 
   const indexed: RankRow[] = useMemo(
-    () => rows.map((row, idx) => ({ ...row, rankPosition: idx + 1 })),
+    () => rows.map((row, idx) => ({ ...row, rankPosition: row.rankPosition ?? idx + 1 })),
     [rows],
   );
 

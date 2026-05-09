@@ -109,15 +109,23 @@ function normalizeFundamentalTier(raw: BackendValue): StockRow['fundamentalTier'
 }
 
 export function mapBackendStockRow(row: BackendRecord): StockRow {
-  const score = toNumber(row.composite_score ?? row.score, 0);
+  const score = toNumber(row.composite_score_adjusted ?? row.composite_score ?? row.score, 0);
   const rs = toNumber(row.rs ?? row.rs_score ?? row.relative_strength, Math.round(score));
   const price = toNumber(row.close ?? row.price, 0);
-  const sectorStrength = toNumber(row.sector_strength ?? row.sector_rs, 0);
+  const sectorStrength = toNumber(
+    row.sector_strength_score
+      ?? row.sector_strength
+      ?? row.sector_rs_value
+      ?? row.sector_rs
+      ?? row.sector_score,
+    0,
+  );
   const trend = toNumber(row.trend ?? row.trend_score, rs);
 
   return {
     symbol: toText(row.symbol_id ?? row.symbol ?? row.ticker, 'UNKNOWN'),
     score,
+    rankPosition: optionalNumber(row.current_rank_position ?? row.rank_position ?? row.rank),
     rs,
     volume: normalizeVolume(row.volume_state ?? row.volume),
     sector: toText(row.sector_name ?? row.sector, 'Unknown'),

@@ -29,7 +29,10 @@ export async function getRanking(): Promise<RankingResponse> {
   );
 
   return {
-    rows: (response.top_ranked ?? []).map(mapBackendStockRow),
+    rows: (response.top_ranked ?? []).map((row, index) => ({
+      ...mapBackendStockRow(row),
+      rankPosition: index + 1,
+    })),
   };
 }
 

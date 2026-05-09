@@ -16,7 +16,7 @@ import PageFrame from '@/components/common/PageFrame';
 import FactorBars from '@/components/ranking/FactorBars';
 import IndicatorBars from '@/components/symbol/IndicatorBars';
 import NewsAndFillsPanel from '@/components/symbol/NewsAndFillsPanel';
-import SymbolChart from '@/components/symbol/SymbolChart';
+import SymbolChart, { type ChartPatternOverlay } from '@/components/symbol/SymbolChart';
 import { useRanking, useRankingDetail, useStockDetail, useStockOhlcv } from '@/lib/queries';
 import { mapBackendStockRow } from '@/lib/api/mappers';
 import { deriveIndicators, deriveMAs } from '@/lib/symbol/derive';
@@ -79,6 +79,24 @@ function fallbackFactors(row: StockRow) {
   };
 }
 
+function rawText(raw: Record<string, string | number | boolean | null> | null | undefined, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = raw?.[key];
+    if (typeof value === 'string' && value.trim() !== '') return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return null;
+}
+
+function rawNumber(raw: Record<string, string | number | boolean | null> | null | undefined, ...keys: string[]): number | null {
+  for (const key of keys) {
+    const value = raw?.[key];
+    const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 export default function SymbolPage() {
   const { sym } = useParams<{ sym: string }>();
   const symbol = sym?.toUpperCase() ?? '';
@@ -116,6 +134,23 @@ export default function SymbolPage() {
   const ranking = detail?.ranking;
   const rankDetail = rankingDetailQuery.data;
   const operator = rankDetail?.operatorContext;
+  const chartPattern = useMemo<ChartPatternOverlay | null>(() => {
+    if (!row && !operator && !rankDetail?.rawRow) return null;
+    const raw = rankDetail?.rawRow;
+    const family = operator?.topPatternFamily ?? row?.pattern ?? rawText(raw, 'pattern_family', 'setup_family', 'pattern_type', 'pattern');
+    if (!family || family === 'N/A') return null;
+    return {
+      family,
+      state: operator?.topPatternState ?? row?.patternState ?? rawText(raw, 'pattern_state', 'pattern_lifecycle_state'),
+      setupQuality: operator?.topPatternSetupQuality ?? row?.setupQuality ?? rawNumber(raw, 'setup_quality', 'pattern_score', 'pattern_priority_score'),
+      pivotPrice: operator?.topPatternPivotPrice ?? row?.pivotPrice ?? rawNumber(raw, 'pivot_price', 'top_pattern_pivot_price'),
+      breakoutLevel: row?.pivotPrice ?? rawNumber(raw, 'breakout_level', 'watchlist_trigger_level'),
+      invalidationPrice: operator?.topPatternInvalidationPrice ?? row?.invalidationPrice ?? rawNumber(raw, 'invalidation_price', 'stop_price'),
+      signalDate: rawText(raw, 'signal_date', 'fresh_signal_date', 'last_seen_date'),
+      startDate: rawText(raw, 'pattern_start', 'first_seen_date'),
+      endDate: rawText(raw, 'pattern_end', 'last_seen_date'),
+    };
+  }, [operator, rankDetail?.rawRow, row]);
   const close = quote?.close ?? row?.price ?? null;
   const chgAbs = quote?.close != null && quote?.open != null ? quote.close - quote.open : null;
   const chgPct = chgAbs != null && quote?.open ? (chgAbs / quote.open) * 100 : null;
@@ -126,13 +161,8 @@ export default function SymbolPage() {
     <PageFrame
       title={symbol}
       description={meta?.symbolName ?? `Stock workspace - NSE - ${symbol}`}
+      hideHeader
     >
-      <div className="mb-3 flex items-center gap-2 text-xs text-slate-500">
-        <Link to="/ranking" className="transition-colors hover:text-slate-300">Ranking</Link>
-        <span>/</span>
-        <span className="text-slate-300">{symbol}</span>
-      </div>
-
       {detailQuery.isLoading || rankingQuery.isLoading ? (
         <CardSkeleton />
       ) : (
@@ -188,7 +218,7 @@ export default function SymbolPage() {
 
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
             <Panel title="Price And Delivery">
-              <SymbolChart data={ohlcvQuery.data} isLoading={ohlcvQuery.isLoading} />
+              <SymbolChart data={ohlcvQuery.data} isLoading={ohlcvQuery.isLoading} pattern={chartPattern} />
             </Panel>
 
             <div className="grid gap-3">

@@ -12,7 +12,7 @@ from ai_trading_system.domains.ranking.composite import (
     select_rank_output_columns,
 )
 from ai_trading_system.domains.ranking.contracts import DEFAULT_FACTOR_WEIGHTS
-from ai_trading_system.domains.ranking.factors import apply_sector_strength, apply_trend_persistence
+from ai_trading_system.domains.ranking.factors import apply_proximity_highs, apply_sector_strength, apply_trend_persistence
 from ai_trading_system.domains.ranking.factors import (
     apply_delivery,
     apply_momentum_acceleration,
@@ -171,6 +171,30 @@ def test_apply_trend_persistence_blends_strength_and_alignment():
     assert bbb["sma50_aligned"] == 1
     assert bbb["trend_score"] == pytest.approx(44.0)
     assert aaa["trend_score"] > bbb["trend_score"]
+
+
+def test_apply_proximity_highs_rewards_names_near_52w_high():
+    data = pd.DataFrame(
+        [
+            {"symbol_id": "NEAR", "exchange": "NSE", "close": 98.0},
+            {"symbol_id": "FAR", "exchange": "NSE", "close": 60.0},
+            {"symbol_id": "ABOVE", "exchange": "NSE", "close": 105.0},
+        ]
+    )
+    highs_frame = pd.DataFrame(
+        [
+            {"symbol_id": "NEAR", "exchange": "NSE", "high_52w": 100.0},
+            {"symbol_id": "FAR", "exchange": "NSE", "high_52w": 100.0},
+            {"symbol_id": "ABOVE", "exchange": "NSE", "high_52w": 100.0},
+        ]
+    )
+
+    scored = apply_proximity_highs(data, highs_frame=highs_frame).set_index("symbol_id")
+
+    assert scored.loc["NEAR", "prox_high"] == pytest.approx(98.0)
+    assert scored.loc["FAR", "prox_high"] == pytest.approx(60.0)
+    assert scored.loc["ABOVE", "prox_high"] == pytest.approx(100.0)
+    assert scored.loc["NEAR", "prox_high"] > scored.loc["FAR", "prox_high"]
 
 
 def test_apply_sector_strength_falls_back_when_inputs_missing():

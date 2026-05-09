@@ -320,8 +320,11 @@ class RankBacktester:
         )
 
         latest["prox_high"] = (
-            1 - (latest["close"] / latest["high_52w"].replace(0, np.nan))
-        ).fillna(0.5) * 100
+            (latest["close"] / latest["high_52w"].replace(0, np.nan))
+            .clip(lower=0.0, upper=1.0)
+            .fillna(0.5)
+            * 100
+        )
 
         return latest[
             [

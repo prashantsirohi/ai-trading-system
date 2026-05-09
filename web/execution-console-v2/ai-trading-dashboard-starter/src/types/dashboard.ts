@@ -17,6 +17,7 @@ export interface MetricCard {
 export interface StockRow {
   symbol: string;
   score: number;
+  rankPosition?: number | null;
   rs: number;
   volume: 'High' | 'Medium' | 'Low';
   sector: string;

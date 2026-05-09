@@ -163,8 +163,11 @@ def apply_proximity_highs(data: pd.DataFrame, *, highs_frame: pd.DataFrame) -> p
     if "high_52w" not in scores.columns:
         scores.loc[:, "high_52w"] = scores["close"]
     scores.loc[:, "prox_high"] = (
-        1 - (scores["close"] / scores["high_52w"].replace(0, np.nan))
-    ).fillna(0.5) * 100
+        (scores["close"] / scores["high_52w"].replace(0, np.nan))
+        .clip(lower=0.0, upper=1.0)
+        .fillna(0.5)
+        * 100
+    )
     return scores
 
 
