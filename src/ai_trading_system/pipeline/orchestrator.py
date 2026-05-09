@@ -22,13 +22,14 @@ from ai_trading_system.pipeline.contracts import (
     StageArtifact,
     StageContext,
     StageResult,
+    compute_stage_input_hash,
 )
 from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.platform.logging import logger as logging_module
 from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
-from ai_trading_system.pipeline.stages import EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, PublishStage, RankStage
+from ai_trading_system.pipeline.stages import CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, NarrativeStage, PublishStage, RankStage
 
 load_project_env(__file__)
 
@@ -37,9 +38,10 @@ log_context = logging_module.log_context
 logger = logging_module.logger
 
 
-PIPELINE_ORDER = ["ingest", "features", "rank", "fundamentals", "events", "execute", "insight", "publish"]
-DEFAULT_PIPELINE_ORDER = ["ingest", "features", "rank", "events", "execute", "insight", "publish"]
-SUPPORTED_STAGES = ["ingest", "features", "rank", "fundamentals", "events", "execute", "insight", "publish"]
+PIPELINE_ORDER = ["ingest", "features", "rank", "fundamentals", "candidates", "events", "execute", "insight", "narrative", "publish"]
+# Stages dropped from the default order unless explicitly enabled (e.g. by a flag
+# or by a detected input). They remain valid when named in an explicit stage list.
+OPTIONAL_STAGES = frozenset({"fundamentals"})
 
 
 class TerminalProgressRenderer:
@@ -124,9 +126,11 @@ class PipelineOrchestrator:
             "features": FeaturesStage(),
             "rank": RankStage(),
             "fundamentals": FundamentalsStage(),
+            "candidates": CandidatesStage(),
             "events": EventsStage(),
             "execute": ExecuteStage(),
             "insight": InsightStage(),
+            "narrative": NarrativeStage(),
             "publish": PublishStage(),
         }
         if stages:
@@ -138,9 +142,11 @@ class PipelineOrchestrator:
             "features": "computing technical features and writing feature store",
             "rank": "scoring symbols and building ranked outputs",
             "fundamentals": "enriching ranked candidates with Screener fundamentals",
+            "candidates": "selecting deterministic final candidates from rank and enrichment",
             "events": "enriching ranked signals with corporate-action context",
             "execute": "evaluating execution actions",
             "insight": "building event-aware market insight",
+            "narrative": "synthesizing the LLM market report from the insight packet",
             "publish": "publishing reports and channel payloads",
         }
 
@@ -354,6 +360,33 @@ class PipelineOrchestrator:
                     )
                     continue
 
+                artifacts = self.registry.get_artifact_map(run_id)
+                if stage_name in {"events", "execute", "insight", "publish"}:
+                    self._attach_latest_rank_artifacts(artifacts, run_id=run_id)
+
+                input_hash = compute_stage_input_hash(
+                    stage_name=stage_name,
+                    run_date=run_date,
+                    params=params,
+                    artifacts=artifacts,
+                )
+                if not bool(params.get("force_rerun", False)) and artifacts:
+                    prior_metadata = self.registry.get_latest_completed_stage_metadata(
+                        stage_name=stage_name, exclude_run_id=run_id,
+                    ) or {}
+                    if prior_metadata.get("input_hash") == input_hash:
+                        self._record_skipped_stage(
+                            run_id=run_id,
+                            stage_name=stage_name,
+                            detail="unchanged_stage_inputs",
+                            metadata={
+                                "source_stage": stage_name,
+                                "reason_code": "unchanged_stage_inputs",
+                                "input_hash": input_hash,
+                            },
+                        )
+                        continue
+
                 self.registry.update_run(run_id, status="running", current_stage=stage_name)
                 attempt_number = self.registry.next_stage_attempt(run_id, stage_name)
                 stage_run_id = self.registry.start_stage(run_id, stage_name, attempt_number)
@@ -363,9 +396,6 @@ class PipelineOrchestrator:
                         status="running",
                         detail=f"attempt {attempt_number}",
                     )
-                artifacts = self.registry.get_artifact_map(run_id)
-                if stage_name in {"events", "execute", "insight", "publish"}:
-                    self._attach_latest_rank_artifacts(artifacts, run_id=run_id)
                 context = StageContext(
                     project_root=self.project_root,
                     db_path=domain_paths.ohlcv_db_path,
@@ -431,10 +461,12 @@ class PipelineOrchestrator:
                                         "fingerprint": skip_plan.get("fingerprint"),
                                     }
 
+                        completed_metadata = dict(result.metadata or {})
+                        completed_metadata["input_hash"] = input_hash
                         self.registry.finish_stage(
                             stage_run_id,
                             status="completed",
-                            metadata=result.metadata,
+                            metadata=completed_metadata,
                         )
                         if self.progress_renderer is not None:
                             self.progress_renderer.emit_stage(stage_name=stage_name, status="done")
@@ -540,20 +572,20 @@ class PipelineOrchestrator:
         enable_fundamentals: bool = False,
         fundamental_scores_path: object | None = None,
     ) -> List[str]:
-        using_default_stage_list = stage_names is None
-        if using_default_stage_list:
-            requested = list(DEFAULT_PIPELINE_ORDER)
-        else:
-            requested = list(stage_names)
-        invalid = [stage for stage in requested if stage not in SUPPORTED_STAGES]
+        if stage_names is None:
+            fundamentals_enabled = bool(enable_fundamentals) or self._fundamental_scores_available(
+                fundamental_scores_path
+            )
+            return [
+                stage
+                for stage in PIPELINE_ORDER
+                if stage not in OPTIONAL_STAGES
+                or (stage == "fundamentals" and fundamentals_enabled)
+            ]
+        requested = list(stage_names)
+        invalid = [stage for stage in requested if stage not in PIPELINE_ORDER]
         if invalid:
             raise ValueError(f"Unknown stages requested: {invalid}")
-        should_run_fundamentals = bool(enable_fundamentals) or (
-            using_default_stage_list and self._fundamental_scores_available(fundamental_scores_path)
-        )
-        if should_run_fundamentals and "fundamentals" not in requested and requested == DEFAULT_PIPELINE_ORDER:
-            insert_at = requested.index("rank") + 1
-            requested = [*requested[:insert_at], "fundamentals", *requested[insert_at:]]
         return requested
 
     def _fundamental_scores_available(self, fundamental_scores_path: object | None = None) -> bool:

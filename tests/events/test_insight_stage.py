@@ -7,7 +7,8 @@ import pandas as pd
 
 from ai_trading_system.domains.events.event_llm_router import _build_llm_packet, _enforce_report_contract, normalize_synthesis_json
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
-from ai_trading_system.pipeline.stages.insight import InsightStage, validate_report
+from ai_trading_system.pipeline.stages.insight import InsightStage
+from ai_trading_system.pipeline.stages.narrative import NarrativeStage, validate_report
 
 
 def _context(tmp_path: Path) -> StageContext:
@@ -68,23 +69,42 @@ def _context(tmp_path: Path) -> StageContext:
     )
 
 
+def _narrative_context_from(tmp_path: Path, insight_result) -> StageContext:
+    insight_artifacts = {a.artifact_type: a for a in insight_result.artifacts}
+    return StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="r1",
+        run_date="2026-05-01",
+        stage_name="narrative",
+        attempt_number=1,
+        artifacts={"insight": insight_artifacts},
+        params={},
+    )
+
+
 def test_insight_stage_writes_event_confluence_for_top_ranked_event(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENROUTER_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    result = InsightStage().run(_context(tmp_path))
-    assert result.metadata["confluence_count"] == 1
-    confluence = next(a for a in result.artifacts if a.artifact_type == "event_confluence")
+    insight_result = InsightStage().run(_context(tmp_path))
+    assert insight_result.metadata["confluence_count"] == 1
+    confluence = next(a for a in insight_result.artifacts if a.artifact_type == "event_confluence")
     df = pd.read_csv(confluence.uri)
     assert df.iloc[0]["symbol"] == "RELIANCE"
     assert df.iloc[0]["rank_position"] == 1
-    usage = json.loads(Path(next(a for a in result.artifacts if a.artifact_type == "model_usage").uri).read_text())
+    insight_artifact_types = {a.artifact_type for a in insight_result.artifacts}
+    assert "analyst_brief" in insight_artifact_types
+    assert "combined_insight_packet" in insight_artifact_types
+    assert "event_features" in insight_artifact_types
+
+    narrative_ctx = _narrative_context_from(tmp_path, insight_result)
+    narrative_result = NarrativeStage().run(narrative_ctx)
+    usage = json.loads(Path(next(a for a in narrative_result.artifacts if a.artifact_type == "model_usage").uri).read_text())
     assert usage["status"] == "skipped_no_api_key"
-    artifact_types = {a.artifact_type for a in result.artifacts}
-    assert "analyst_brief" in artifact_types
-    assert "llm_synthesis" in artifact_types
-    assert "llm_synthesis_raw" in artifact_types
-    assert "event_features" in artifact_types
-    markdown = Path(next(a for a in result.artifacts if a.artifact_type == "daily_insight_markdown").uri).read_text()
+    narrative_artifact_types = {a.artifact_type for a in narrative_result.artifacts}
+    assert "llm_synthesis" in narrative_artifact_types
+    assert "llm_synthesis_raw" in narrative_artifact_types
+    markdown = Path(next(a for a in narrative_result.artifacts if a.artifact_type == "daily_insight_markdown").uri).read_text()
     assert "LLM synthesis: skipped, deterministic fallback used." in markdown
 
 
@@ -197,7 +217,7 @@ def test_validator_allows_client_name_tokens_inside_cited_event_lines():
     assert validation["status"] == "passed"
 
 
-def test_insight_stage_falls_back_when_llm_output_fails_validation(tmp_path, monkeypatch):
+def test_narrative_stage_falls_back_when_llm_output_fails_validation(tmp_path, monkeypatch):
     def bad_synthesis(*args, **kwargs):
         return {
             "market_read": "bad",
@@ -212,8 +232,10 @@ def test_insight_stage_falls_back_when_llm_output_fails_validation(tmp_path, mon
             "possible_truncation": True,
         }
 
-    monkeypatch.setattr("ai_trading_system.pipeline.stages.insight.build_market_synthesis", bad_synthesis)
-    result = InsightStage().run(_context(tmp_path))
+    monkeypatch.setattr("ai_trading_system.pipeline.stages.narrative.build_market_synthesis", bad_synthesis)
+    insight_result = InsightStage().run(_context(tmp_path))
+    narrative_ctx = _narrative_context_from(tmp_path, insight_result)
+    result = NarrativeStage().run(narrative_ctx)
     assert result.metadata["validation_status"] == "passed"
     assert result.metadata["model_status"] == "validation_fallback"
     usage = json.loads(Path(next(a for a in result.artifacts if a.artifact_type == "model_usage").uri).read_text())

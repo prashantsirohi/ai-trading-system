@@ -98,9 +98,9 @@ def test_stage_boundaries_and_registry_rows(tmp_path: Path) -> None:
 
     # Either pristine or relaxed completion; both indicate full pipeline success.
     assert result["status"] in ("completed", "completed_with_dq_relaxations")
-    assert [stage["stage_name"] for stage in result["stages"]] == ["ingest", "features", "rank", "events", "execute", "insight", "publish"]
+    assert [stage["stage_name"] for stage in result["stages"]] == ["ingest", "features", "rank", "candidates", "events", "execute", "insight", "narrative", "publish"]
     assert registry.count_rows("pipeline_run") == 1
-    assert registry.count_rows("pipeline_stage_run") == 7
+    assert registry.count_rows("pipeline_stage_run") == 9
     assert registry.count_rows("pipeline_artifact") >= 5
     assert registry.count_rows("dq_result") >= 8
     conn = duckdb.connect(str(registry.db_path))
@@ -120,6 +120,166 @@ def test_stage_boundaries_and_registry_rows(tmp_path: Path) -> None:
     assert artifact_row[1]
     assert breakout_row[0].endswith("breakout_scan.csv")
     assert dashboard_payload_row[0].endswith("dashboard_payload.json")
+
+
+def test_compute_stage_input_hash_is_stable_and_sensitive() -> None:
+    """The hash matches for identical inputs, changes when upstream content
+    changes, and ignores volatile operational params."""
+    from ai_trading_system.pipeline.contracts import compute_stage_input_hash
+
+    artifacts_a = {
+        "ingest": {
+            "ingest_summary": StageArtifact(
+                artifact_type="ingest_summary", uri="/x", content_hash="hash-A"
+            ),
+        },
+    }
+    artifacts_b = {
+        "ingest": {
+            "ingest_summary": StageArtifact(
+                artifact_type="ingest_summary", uri="/x", content_hash="hash-B"
+            ),
+        },
+    }
+    base = compute_stage_input_hash(
+        stage_name="features", run_date="2026-03-28",
+        params={"batch_size": 700}, artifacts=artifacts_a,
+    )
+    same = compute_stage_input_hash(
+        stage_name="features", run_date="2026-03-28",
+        params={"batch_size": 700}, artifacts=artifacts_a,
+    )
+    different_upstream = compute_stage_input_hash(
+        stage_name="features", run_date="2026-03-28",
+        params={"batch_size": 700}, artifacts=artifacts_b,
+    )
+    different_run_date = compute_stage_input_hash(
+        stage_name="features", run_date="2026-03-29",
+        params={"batch_size": 700}, artifacts=artifacts_a,
+    )
+    different_param = compute_stage_input_hash(
+        stage_name="features", run_date="2026-03-28",
+        params={"batch_size": 800}, artifacts=artifacts_a,
+    )
+    different_stage = compute_stage_input_hash(
+        stage_name="rank", run_date="2026-03-28",
+        params={"batch_size": 700}, artifacts=artifacts_a,
+    )
+    volatile_params_only = compute_stage_input_hash(
+        stage_name="features", run_date="2026-03-28",
+        params={"batch_size": 700, "force_rerun": True, "preflight": False, "terminal_heartbeat_seconds": 5},
+        artifacts=artifacts_a,
+    )
+    assert base == same
+    assert volatile_params_only == base, "volatile params must not change the hash"
+    assert different_upstream != base
+    assert different_run_date != base
+    assert different_param != base
+    assert different_stage != base
+
+
+def test_orchestrator_records_input_hash_and_skips_on_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify the orchestrator stamps input_hash into stage_run metadata and
+    skips a stage when the registry reports a matching prior input_hash."""
+    project_root = tmp_path
+    (project_root / "data").mkdir(parents=True, exist_ok=True)
+    registry = RegistryStore(project_root)
+
+    def ingest_op(context):
+        conn = duckdb.connect(str(context.db_path))
+        try:
+            try:
+                existing = conn.execute("SELECT COUNT(*) FROM _catalog").fetchone()[0]
+            except Exception:
+                existing = 0
+        finally:
+            conn.close()
+        if not existing:
+            _init_catalog(
+                context.db_path,
+                [("ABC", "NSE", f"{context.run_date} 15:30:00", 10.0, 11.0, 9.5, 10.8, 1000)],
+            )
+        return {"catalog_rows": 1, "symbol_count": 1, "latest_timestamp": f"{context.run_date} 15:30:00"}
+
+    def feature_op(context):
+        return {"snapshot_id": 42, "feature_rows": 10, "feature_registry_entries": 1}
+
+    def rank_op(context):
+        return {
+            "ranked_signals": pd.DataFrame(
+                [{"symbol_id": "ABC", "exchange": "NSE", "composite_score": 87.0}]
+            ),
+            "breakout_scan": pd.DataFrame(
+                [{"symbol_id": "ABC", "sector": "Tech", "breakout_tag": "range_breakout_volume_supertrend"}]
+            ),
+            "stock_scan": pd.DataFrame([{"Symbol": "ABC", "category": "BUY"}]),
+            "sector_dashboard": pd.DataFrame([{"Sector": "Tech", "RS": 0.9, "Momentum": 0.2}]),
+            "__dashboard_payload__": {
+                "summary": {"run_id": context.run_id, "ranked_count": 1, "breakout_count": 1, "top_symbol": "ABC", "top_sector": "Tech"},
+                "ranked_signals": [{"symbol_id": "ABC", "composite_score": 87.0}],
+                "breakout_scan": [{"symbol_id": "ABC", "breakout_tag": "range_breakout_volume_supertrend"}],
+                "stock_scan": [{"Symbol": "ABC", "category": "BUY"}],
+                "sector_dashboard": [{"Sector": "Tech", "RS": 0.9, "Momentum": 0.2}],
+                "warnings": [],
+            },
+        }
+
+    def publish_op(context):
+        return {"targets": [{"target": "local_summary", "status": "completed"}]}
+
+    orchestrator = PipelineOrchestrator(
+        project_root=project_root,
+        registry=registry,
+        stages={
+            "ingest": IngestStage(operation=ingest_op),
+            "features": FeaturesStage(operation=feature_op),
+            "rank": RankStage(operation=rank_op),
+            "publish": PublishStage(operation=publish_op),
+        },
+    )
+
+    first = orchestrator.run_pipeline(run_date="2026-03-28", params={"preflight": False})
+    assert first["status"] in ("completed", "completed_with_dq_relaxations")
+    first_run_id = first["run_id"]
+
+    # input_hash should land in stage_run metadata for completed stages
+    conn = duckdb.connect(str(registry.db_path))
+    try:
+        completed_hashes = dict(
+            conn.execute(
+                "SELECT stage_name, metadata_json FROM pipeline_stage_run WHERE run_id = ? AND status = 'completed'",
+                [first_run_id],
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+    for stage_name in ("ingest", "features", "rank", "publish"):
+        meta = json.loads(completed_hashes[stage_name])
+        assert meta.get("input_hash"), f"{stage_name} metadata missing input_hash"
+
+    # Force the registry to report a hash matching whatever the orchestrator
+    # computes for the publish stage on the next run, so the skip path fires
+    # without requiring artifact bit-equality between runs.
+    real_lookup = registry.get_latest_completed_stage_metadata
+
+    def fake_lookup(*, stage_name: str, exclude_run_id: str):
+        if stage_name == "publish":
+            return {"input_hash": "__FORCE_MATCH__"}
+        return real_lookup(stage_name=stage_name, exclude_run_id=exclude_run_id)
+
+    monkeypatch.setattr(registry, "get_latest_completed_stage_metadata", fake_lookup)
+    monkeypatch.setattr(
+        "ai_trading_system.pipeline.orchestrator.compute_stage_input_hash",
+        lambda **kwargs: "__FORCE_MATCH__" if kwargs.get("stage_name") == "publish" else "h-" + str(kwargs.get("stage_name")),
+    )
+
+    second = orchestrator.run_pipeline(run_date="2026-03-28", params={"preflight": False})
+    second_run_id = second["run_id"]
+    assert second_run_id != first_run_id
+    second_status = {row["stage_name"]: row["status"] for row in registry.get_stage_runs(second_run_id)}
+    assert second_status.get("publish") == "skipped", (
+        f"expected publish to skip via input_hash; got {second_status}"
+    )
 
 
 def test_build_integrated_stock_scan_view_preserves_discoveries_and_best_context() -> None:
@@ -1859,12 +2019,23 @@ def test_preflight_checker_detects_missing_live_credentials(tmp_path: Path, monk
     ]:
         monkeypatch.delenv(key, raising=False)
 
-    result = PreflightChecker(project_root).run(["ingest", "publish"], {"local_publish": False})
+    result = PreflightChecker(project_root).run(
+        ["ingest", "publish"],
+        {"local_publish": False, "nse_primary": False},
+    )
     assert result["status"] == "failed"
     failing_checks = {check["name"] for check in result["blocking_failures"]}
     assert "dhan_api_key" in failing_checks
     assert "telegram_bot_token" in failing_checks
     assert "google_spreadsheet_id" in failing_checks
+
+    nse_result = PreflightChecker(project_root).run(
+        ["ingest", "publish"],
+        {"local_publish": False, "nse_primary": True},
+    )
+    nse_failing = {check["name"] for check in nse_result["blocking_failures"]}
+    assert "dhan_api_key" not in nse_failing
+    assert "dhan_client_id" not in nse_failing
 
 
 def test_preflight_checker_reports_publish_dns_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

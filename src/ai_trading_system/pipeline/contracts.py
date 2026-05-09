@@ -215,6 +215,54 @@ def compute_file_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
+# Params that vary across runs without changing the deterministic output and
+# must be excluded from the stage input hash. Anything else affects the hash.
+_VOLATILE_INPUT_HASH_PARAMS = frozenset(
+    {
+        "force_rerun",
+        "preflight",
+        "preflight_publish_network_checks",
+        "terminal_heartbeat_seconds",
+    }
+)
+
+
+def compute_stage_input_hash(
+    *,
+    stage_name: str,
+    run_date: str,
+    params: Dict[str, Any],
+    artifacts: Dict[str, Dict[str, "StageArtifact"]],
+) -> str:
+    """Stable SHA256 over the inputs that determine a stage's output.
+
+    A matching hash on a prior completed attempt of the same stage means the
+    stage can be safely skipped. Hashes upstream artifact ``content_hash``
+    values (sorted for determinism), the run date, and the non-volatile
+    subset of run params.
+    """
+    upstream = sorted(
+        [stage, atype, art.content_hash or ""]
+        for stage, by_type in (artifacts or {}).items()
+        for atype, art in by_type.items()
+    )
+    param_subset = {
+        key: value
+        for key, value in (params or {}).items()
+        if key not in _VOLATILE_INPUT_HASH_PARAMS
+    }
+    payload = {
+        "stage": stage_name,
+        "run_date": run_date,
+        "upstream": upstream,
+        "params": param_subset,
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    )
+    return digest.hexdigest()
+
+
 def _maybe_float(value: Any) -> float | None:
     if value in (None, ""):
         return None

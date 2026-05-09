@@ -36,7 +36,7 @@ class PreflightChecker:
 
         if not bool(params.get("smoke", False)):
             checks.append(self._check_env_line_endings())
-            if any(stage in stage_names for stage in ("ingest", "features")):
+            if "ingest" in stage_names and not bool(params.get("nse_primary", True)):
                 checks.extend(self._check_dhan())
             if publish_requested or bool(params.get("publish_test", False)):
                 checks.extend(self._check_telegram())

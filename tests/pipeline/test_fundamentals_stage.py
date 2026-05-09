@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
-from ai_trading_system.pipeline.orchestrator import DEFAULT_PIPELINE_ORDER, PipelineOrchestrator
+from ai_trading_system.pipeline.orchestrator import PipelineOrchestrator
 from ai_trading_system.pipeline.stages.fundamentals import FundamentalsStage
 
 
@@ -245,16 +245,28 @@ def test_orchestrator_auto_injects_fundamentals_when_snapshot_exists(tmp_path: P
     orchestrator = PipelineOrchestrator(tmp_path)
     scores_path = tmp_path / "data" / "fundamentals" / "fundamental_scores_latest.csv"
 
-    assert orchestrator._normalize_stage_names(None) == DEFAULT_PIPELINE_ORDER
+    assert orchestrator._normalize_stage_names(None) == [
+        "ingest",
+        "features",
+        "rank",
+        "candidates",
+        "events",
+        "execute",
+        "insight",
+        "narrative",
+        "publish",
+    ]
     _scores(scores_path)
     assert orchestrator._normalize_stage_names(None) == [
         "ingest",
         "features",
         "rank",
         "fundamentals",
+        "candidates",
         "events",
         "execute",
         "insight",
+        "narrative",
         "publish",
     ]
     assert orchestrator._normalize_stage_names(None, enable_fundamentals=True) == [
@@ -262,9 +274,11 @@ def test_orchestrator_auto_injects_fundamentals_when_snapshot_exists(tmp_path: P
         "features",
         "rank",
         "fundamentals",
+        "candidates",
         "events",
         "execute",
         "insight",
+        "narrative",
         "publish",
     ]
     assert orchestrator._normalize_stage_names(["rank", "fundamentals"]) == ["rank", "fundamentals"]

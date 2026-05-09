@@ -20,6 +20,7 @@ __all__ = [
     "DataQualityCriticalError",
     "PublishStageError",
     "compute_file_hash",
+    "CandidatesStage",
     "FeaturesStage",
     "FundamentalsStage",
     "IngestStage",
@@ -28,10 +29,12 @@ __all__ = [
     "ExecuteStage",
     "EventsStage",
     "InsightStage",
+    "NarrativeStage",
     "classify_freshness_status",
 ]
 
 _MODULE_MAP = {
+    "CandidatesStage": (".candidates", "CandidatesStage"),
     "ExecuteStage": (".execute", "ExecuteStage"),
     "FeaturesStage": (".features", "FeaturesStage"),
     "FundamentalsStage": (".fundamentals", "FundamentalsStage"),
@@ -40,6 +43,7 @@ _MODULE_MAP = {
     "RankStage": (".rank", "RankStage"),
     "EventsStage": (".events", "EventsStage"),
     "InsightStage": (".insight", "InsightStage"),
+    "NarrativeStage": (".narrative", "NarrativeStage"),
     "classify_freshness_status": (".ingest", "classify_freshness_status"),
 }
 
