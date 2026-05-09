@@ -224,15 +224,6 @@ Role:
 - partial legacy configuration layer
 - `config/settings.py` is not the canonical runtime configuration source
 
-### `main.py`
-
-Label:
-- `legacy fallback`
-
-Role:
-- compatibility shim only
-- exits with explicit deprecation guidance to `python -m ai_trading_system.pipeline.orchestrator`
-- do not use for current operations
 
 ## Generated state directories
 

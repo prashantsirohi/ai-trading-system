@@ -175,11 +175,11 @@ class PublishStage:
             self._overlay_events_on_dashboard(dashboard_payload, signals, snapshot_events)
 
     def _attach_insight_datasets(self, context: StageContext, datasets: Dict[str, Any]) -> None:
-        telegram_artifact = context.artifact_for("insight", "telegram_summary")
+        telegram_artifact = context.artifact_for("narrative", "telegram_summary")
         confluence_artifact = context.artifact_for("insight", "event_confluence")
         daily_json = (
-            context.artifact_for("insight", "daily_insight_json")
-            or context.artifact_for("insight", "weekly_insight_json")
+            context.artifact_for("narrative", "daily_insight_json")
+            or context.artifact_for("narrative", "weekly_insight_json")
         )
         if telegram_artifact is not None:
             try:

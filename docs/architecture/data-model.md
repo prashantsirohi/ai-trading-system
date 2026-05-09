@@ -91,6 +91,21 @@ Common tables used in current code:
 - `sector_constituents`
 - `nse_holidays`
 
+## Storage engine choice
+
+Four operational stores, split by access pattern:
+
+| Store | Engine | Owns | Rationale |
+| --- | --- | --- | --- |
+| `data/ohlcv.duckdb` | DuckDB | OHLCV time-series, feature snapshots, provenance, quarantine | Columnar, analytical scans dominate; pipelines bulk-read large date ranges |
+| `data/control_plane.duckdb` | DuckDB | Pipeline runs, stage attempts, artifact registry, DQ results, model/registry tables | Same engine as the data plane keeps cross-store joins cheap; analytical access for dashboards (e.g. drift, model shadow eval) |
+| `data/execution.duckdb` | DuckDB | Orders, fills, trade notes | Separated from control plane to avoid mixing paper-trading state with run lineage; sized for append-mostly inserts |
+| `data/masterdata.db` | SQLite | Symbol master, sector mappings, holidays | Reference data: small, point-lookup heavy, read by many lightweight processes (UI read-models, validation paths). SQLite is the simplest engine for this access shape |
+
+The first three are DuckDB so that pipeline runs, market data, and execution state can be joined in a single SQL session when needed (e.g. attribution, audit). `masterdata.db` is intentionally on a different engine — its callers don't need analytical SQL and benefit from the lower process overhead of SQLite.
+
+If consolidating, the candidate is folding `masterdata.db` into a `master` schema inside `control_plane.duckdb`. The cost is non-trivial: every UI read-model and CLI tool that opens `masterdata.db` directly via `sqlite3.connect(...)` would need to switch to a DuckDB connection or go through a service layer. That's not a small refactor; do it only if cross-store joins against the master become a hot path.
+
 ## Artifact directories
 
 ### Pipeline-run artifacts

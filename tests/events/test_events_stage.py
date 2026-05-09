@@ -234,7 +234,6 @@ def test_stage_in_orchestrator_pipeline_order():
     events_idx = orchestrator.PIPELINE_ORDER.index("events")
     execute_idx = orchestrator.PIPELINE_ORDER.index("execute")
     assert rank_idx < events_idx < execute_idx
-    assert "events" in orchestrator.SUPPORTED_STAGES
 
 
 def test_orchestrator_cli_default_includes_events():

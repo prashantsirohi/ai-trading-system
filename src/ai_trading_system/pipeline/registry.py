@@ -1297,6 +1297,26 @@ class RegistryStore:
             for row in rows
         ]
 
+    def get_latest_completed_stage_metadata(
+        self, *, stage_name: str, exclude_run_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Latest ``metadata_json`` for a completed run of this stage in any
+        prior run. Used by the per-stage input-hash skip planner."""
+        with self._reader() as conn:
+            row = conn.execute(
+                """
+                SELECT metadata_json
+                FROM pipeline_stage_run
+                WHERE stage_name = ? AND status = 'completed' AND run_id != ?
+                ORDER BY ended_at DESC NULLS LAST, attempt_number DESC
+                LIMIT 1
+                """,
+                [stage_name, exclude_run_id],
+            ).fetchone()
+        if not row or row[0] is None:
+            return None
+        return self._loads(row[0]) or None
+
     def get_stage_runs(self, run_id: str, *, started_after: str | None = None) -> List[Dict[str, Any]]:
         with self._reader() as conn:
             where_sql = "WHERE run_id = ?"

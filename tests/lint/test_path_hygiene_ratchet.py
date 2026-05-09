@@ -11,7 +11,6 @@ SCAN_TARGETS = [
     REPO_ROOT / "tools",
     REPO_ROOT / "dashboard",
     REPO_ROOT / "config",
-    REPO_ROOT / "main.py",
 ]
 PATTERNS: dict[str, re.Pattern[str]] = {
     "literal_data_ohlcv_db": re.compile(r"""["']data/ohlcv\.duckdb["']"""),

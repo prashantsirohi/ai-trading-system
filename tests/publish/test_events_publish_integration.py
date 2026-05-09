@@ -122,16 +122,20 @@ def test_dedupe_key_includes_event_hashes(tmp_path):
 def test_publish_stage_loads_existing_insight_artifacts(tmp_path):
     ctx = _context(tmp_path)
     insight_dir = tmp_path / "data" / "operational" / "pipeline_runs" / "r1" / "insight" / "attempt_1"
+    narrative_dir = tmp_path / "data" / "operational" / "pipeline_runs" / "r1" / "narrative" / "attempt_1"
     insight_dir.mkdir(parents=True)
-    telegram = insight_dir / "telegram_summary.txt"
+    narrative_dir.mkdir(parents=True)
+    telegram = narrative_dir / "telegram_summary.txt"
     telegram.write_text("event-aware summary", encoding="utf-8")
     confluence = insight_dir / "event_confluence.csv"
     confluence.write_text("symbol,event_materiality_score\nRELIANCE,95\n", encoding="utf-8")
-    daily = insight_dir / "daily_insight.json"
+    daily = narrative_dir / "daily_insight.json"
     daily.write_text(json.dumps({"run_id": "r1", "status": "passed"}), encoding="utf-8")
     ctx.artifacts["insight"] = {
-        "telegram_summary": StageArtifact.from_file("telegram_summary", telegram),
         "event_confluence": StageArtifact.from_file("event_confluence", confluence),
+    }
+    ctx.artifacts["narrative"] = {
+        "telegram_summary": StageArtifact.from_file("telegram_summary", telegram),
         "daily_insight_json": StageArtifact.from_file("daily_insight_json", daily),
     }
     stage = PublishStage(operation=lambda ctx: {})
