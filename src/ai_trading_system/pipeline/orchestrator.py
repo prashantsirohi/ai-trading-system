@@ -29,7 +29,7 @@ from ai_trading_system.platform.logging import logger as logging_module
 from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
-from ai_trading_system.pipeline.stages import CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, NarrativeStage, PublishStage, RankStage
+from ai_trading_system.pipeline.stages import CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, NarrativeStage, PerfTrackerStage, PublishStage, RankStage
 
 load_project_env(__file__)
 
@@ -38,7 +38,7 @@ log_context = logging_module.log_context
 logger = logging_module.logger
 
 
-PIPELINE_ORDER = ["ingest", "features", "rank", "fundamentals", "candidates", "events", "execute", "insight", "narrative", "publish"]
+PIPELINE_ORDER = ["ingest", "features", "rank", "fundamentals", "candidates", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
 # Stages dropped from the default order unless explicitly enabled (e.g. by a flag
 # or by a detected input). They remain valid when named in an explicit stage list.
 OPTIONAL_STAGES = frozenset({"fundamentals"})
@@ -132,6 +132,7 @@ class PipelineOrchestrator:
             "insight": InsightStage(),
             "narrative": NarrativeStage(),
             "publish": PublishStage(),
+            "perf_tracker": PerfTrackerStage(),
         }
         if stages:
             default_stages.update(stages)
@@ -148,6 +149,7 @@ class PipelineOrchestrator:
             "insight": "building event-aware market insight",
             "narrative": "synthesizing the LLM market report from the insight packet",
             "publish": "publishing reports and channel payloads",
+            "perf_tracker": "appending rank cohort + forward returns to research DB",
         }
 
     def _read_json_artifact(self, artifact_uri: str) -> Dict[str, object]:

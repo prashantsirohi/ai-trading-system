@@ -30,6 +30,7 @@ __all__ = [
     "EventsStage",
     "InsightStage",
     "NarrativeStage",
+    "PerfTrackerStage",
     "classify_freshness_status",
 ]
 
@@ -44,6 +45,7 @@ _MODULE_MAP = {
     "EventsStage": (".events", "EventsStage"),
     "InsightStage": (".insight", "InsightStage"),
     "NarrativeStage": (".narrative", "NarrativeStage"),
+    "PerfTrackerStage": (".perf_tracker", "PerfTrackerStage"),
     "classify_freshness_status": (".ingest", "classify_freshness_status"),
 }
 
