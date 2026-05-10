@@ -405,19 +405,21 @@ class RankerInputLoader:
             cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
             highs = conn.execute(
                 f"""
-                SELECT symbol_id, exchange, close, high_52w, timestamp
+                SELECT symbol_id, exchange, close, high_52w, prox_lookback_days, timestamp
                 FROM (
                     SELECT
                         symbol_id, exchange, close, timestamp,
-                        MAX(high) OVER (
-                            PARTITION BY symbol_id
-                            ORDER BY timestamp
-                            ROWS BETWEEN {window - 1} PRECEDING AND CURRENT ROW
-                        ) AS high_52w
+                        MAX(high) OVER w AS high_52w,
+                        COUNT(*) OVER w AS prox_lookback_days
                     FROM _catalog
                     WHERE exchange = 'NSE'
                       AND timestamp IS NOT NULL
                       AND timestamp <= '{cutoff_ts}'
+                    WINDOW w AS (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp
+                        ROWS BETWEEN {window - 1} PRECEDING AND CURRENT ROW
+                    )
                 ) sub
                 QUALIFY ROW_NUMBER() OVER (
                     PARTITION BY symbol_id ORDER BY timestamp DESC

@@ -17,6 +17,10 @@ from ai_trading_system.domains.publish.publish_payloads import (
 )
 from ai_trading_system.domains.publish.decision_bundle import build_publish_decision_bundle
 from ai_trading_system.domains.publish.telegram_summary_builder import build_telegram_summary
+from ai_trading_system.domains.publish.watchlist_buckets import (
+    assign_watchlist_buckets,
+    summarize_buckets,
+)
 
 
 class PublishStage:
@@ -84,6 +88,24 @@ class PublishStage:
         self._attach_insight_datasets(context, datasets)
         self._attach_decision_bundle(context, datasets)
         ranked_df = datasets.get("ranked_signals", pd.DataFrame())
+
+        # Phase 5: derive 4-bucket watchlist taxonomy from ranking + breakout output.
+        # Persisted as watchlist_buckets.csv in the publish stage attempt dir and
+        # attached to datasets so downstream channel handlers (Telegram, Sheets)
+        # can consume it without recomputing.
+        buckets_df = assign_watchlist_buckets(
+            ranked_signals=ranked_df if isinstance(ranked_df, pd.DataFrame) else pd.DataFrame(),
+            breakout_scan=datasets.get("breakout_scan"),
+        )
+        bucket_counts = summarize_buckets(buckets_df)
+        try:
+            buckets_path = context.output_dir() / "watchlist_buckets.csv"
+            buckets_df.to_csv(buckets_path, index=False)
+        except Exception:  # pragma: no cover - persistence is best-effort
+            pass
+        datasets["watchlist_buckets"] = buckets_df
+        datasets["watchlist_bucket_counts"] = bucket_counts
+
         delivery_artifact = StageArtifact(
             artifact_type=rank_artifact.artifact_type,
             uri=rank_artifact.uri,
@@ -118,6 +140,7 @@ class PublishStage:
             stage2_summary=dict(datasets.get("stage2_summary") or {}),
             stage2_breakdown_symbols=list(datasets.get("stage2_breakdown_symbols") or []),
         )
+        metadata["watchlist_buckets"] = bucket_counts
         self._attach_fundamentals_publish_summary(context, datasets, metadata)
         if failures:
             metadata["failures"] = failures

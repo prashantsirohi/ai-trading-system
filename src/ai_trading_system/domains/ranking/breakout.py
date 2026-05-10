@@ -574,6 +574,23 @@ def _empty_breakout_frame() -> pd.DataFrame:
             "is_strong_volume_confirmation",
             "setup_quality",
             "breakout_tag",
+            # Phase 3 + 4 conviction-scoring columns
+            "volume_ratio_20",
+            "volume_trend_20_20",
+            "volume_dryup_10",
+            "delivery_pct_today",
+            "delivery_pct_20d_avg",
+            "delivery_surge_today",
+            "delivery_vs_sector_20d",
+            "delivery_sector_median_20d",
+            "close_position_in_range",
+            "breakout_level_confirmed",
+            "volume_ratio_confirmed",
+            "volume_ratio_strong",
+            "delivery_surge_confirmed",
+            "range_expansion_confirmed",
+            "close_near_high_confirmed",
+            "conviction_score",
         ]
     )
 
@@ -684,6 +701,21 @@ def scan_breakouts(
                         ORDER BY timestamp
                         ROWS BETWEEN 50 PRECEDING AND 1 PRECEDING
                     ) AS vol_50_std,
+                    AVG(volume) OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp
+                        ROWS BETWEEN 40 PRECEDING AND 21 PRECEDING
+                    ) AS vol_20_avg_prior,
+                    AVG(volume) OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp
+                        ROWS BETWEEN 9 PRECEDING AND CURRENT ROW
+                    ) AS vol_10_avg,
+                    AVG(volume) OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp
+                        ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                    ) AS vol_30_avg,
                     MAX(high) OVER (
                         PARTITION BY symbol_id
                         ORDER BY timestamp
@@ -756,6 +788,35 @@ def scan_breakouts(
             ).fetchdf()
         else:
             atr_df = pd.DataFrame(columns=["symbol_id", "atr_14"])
+
+        # Delivery features for conviction scoring: today + own 20-day average.
+        # Uses _delivery table directly (same DB) so no extra connection needed.
+        try:
+            delivery_df = conn.execute(
+                f"""
+                WITH d AS (
+                    SELECT
+                        symbol_id,
+                        timestamp,
+                        delivery_pct,
+                        AVG(delivery_pct) OVER (
+                            PARTITION BY symbol_id
+                            ORDER BY timestamp
+                            ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+                        ) AS delivery_pct_20d_avg
+                    FROM _delivery
+                    WHERE exchange = '{exchange}' AND timestamp <= '{date}'
+                )
+                SELECT symbol_id, delivery_pct AS delivery_pct_today, delivery_pct_20d_avg
+                FROM d
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp DESC) = 1
+                """
+            ).fetchdf()
+        except Exception as exc:
+            logger.warning("Could not load delivery features for breakout scan: %s", exc)
+            delivery_df = pd.DataFrame(
+                columns=["symbol_id", "delivery_pct_today", "delivery_pct_20d_avg"]
+            )
     finally:
         conn.close()
 
@@ -771,6 +832,12 @@ def scan_breakouts(
 
     sector_map = _load_sector_map(master_db_path)
     latest.loc[:, "sector"] = latest["symbol_id"].map(sector_map).fillna("Other")
+
+    if not delivery_df.empty:
+        latest = latest.merge(delivery_df, on="symbol_id", how="left")
+    else:
+        latest.loc[:, "delivery_pct_today"] = np.nan
+        latest.loc[:, "delivery_pct_20d_avg"] = np.nan
 
     latest.loc[:, "vol_20_avg"] = latest["vol_20_avg"].replace(0, pd.NA)
     latest.loc[:, "vol_50_avg"] = latest["vol_50_avg"].replace(0, pd.NA)
@@ -832,6 +899,68 @@ def scan_breakouts(
     latest.loc[:, "is_any_volume_confirmed"] = volume_confirmation["is_any_volume_confirmed"]
     latest.loc[:, "is_strong_volume_confirmation"] = volume_confirmation["is_strong_volume_confirmation"]
     latest.loc[:, "is_volume_confirmed_breakout"] = latest["is_volume_ratio_confirmed"]
+
+    # --- Conviction-score features (Phase 3) ---------------------------------
+    # Reusable derivatives that distinguish *event* signals (today's bar)
+    # from the state factors used by the ranking layer. Computed on every
+    # symbol in `latest` so they are available regardless of which setup
+    # family a candidate ends up matching.
+    latest.loc[:, "vol_20_avg_prior"] = latest["vol_20_avg_prior"].replace(0, pd.NA)
+    latest.loc[:, "vol_30_avg"] = latest["vol_30_avg"].replace(0, pd.NA)
+    latest.loc[:, "volume_ratio_20"] = latest["volume_ratio"]
+    latest.loc[:, "volume_trend_20_20"] = latest["vol_20_avg"] / latest["vol_20_avg_prior"]
+    latest.loc[:, "volume_dryup_10"] = latest["vol_10_avg"] / latest["vol_30_avg"]
+
+    own_20d = latest["delivery_pct_20d_avg"].replace(0, pd.NA)
+    latest.loc[:, "delivery_surge_today"] = latest["delivery_pct_today"] / own_20d
+    sector_med = latest.groupby("sector")["delivery_pct_20d_avg"].transform("median")
+    latest.loc[:, "delivery_sector_median_20d"] = sector_med
+    latest.loc[:, "delivery_vs_sector_20d"] = (
+        latest["delivery_pct_20d_avg"] / sector_med.replace(0, pd.NA)
+    )
+
+    # --- Conviction-score confirmation flags (Phase 4) -----------------------
+    # 1. Breakout level confirmed: closed above resistance / 52w high / 50d high.
+    latest.loc[:, "breakout_level_confirmed"] = (
+        latest["is_resistance_breakout_50d"].fillna(False)
+        | latest["is_high_52w_breakout"].fillna(False)
+        | latest["is_base_breakout_30"].fillna(False)
+    )
+    # 2. Volume conviction: today's volume meaningfully above own 20d avg.
+    latest.loc[:, "volume_ratio_confirmed"] = (
+        latest["volume_ratio_20"].fillna(0) >= 1.5
+    )
+    latest.loc[:, "volume_ratio_strong"] = (
+        latest["volume_ratio_20"].fillna(0) >= 2.0
+    )
+    # 3. Delivery surge: today's delivery > own 20d avg AND > sector 20d median.
+    latest.loc[:, "delivery_surge_confirmed"] = (
+        (latest["delivery_pct_today"].fillna(0) > latest["delivery_pct_20d_avg"].fillna(0))
+        & (latest["delivery_pct_today"].fillna(0) > sector_med.fillna(0))
+    )
+    # 4. Range expansion: today's range >= 1.5x ATR (wide-range trigger bar).
+    latest.loc[:, "range_expansion_confirmed"] = (
+        latest["day_range_pct"].fillna(0) >= latest["atr_pct"].fillna(0) * 1.5
+    )
+    # 5. Close near high of day: close in top 25% of the day's range.
+    day_range = (latest["high"] - latest["low"]).replace(0, pd.NA)
+    latest.loc[:, "close_position_in_range"] = (
+        (latest["close"] - latest["low"]) / day_range
+    ).clip(lower=0.0, upper=1.0)
+    latest.loc[:, "close_near_high_confirmed"] = (
+        latest["close_position_in_range"].fillna(0) >= 0.75
+    )
+
+    # Conviction score (0-100) per user spec:
+    #   35 * breakout_level + 25 * vol_ratio + 20 * delivery_surge
+    # + 10 * range_expansion + 10 * close_near_high
+    latest.loc[:, "conviction_score"] = (
+        latest["breakout_level_confirmed"].astype(float) * 35.0
+        + latest["volume_ratio_confirmed"].astype(float) * 25.0
+        + latest["delivery_surge_confirmed"].astype(float) * 20.0
+        + latest["range_expansion_confirmed"].astype(float) * 10.0
+        + latest["close_near_high_confirmed"].astype(float) * 10.0
+    )
 
     # Legacy families (kept for backward compatibility and migration continuity).
     common_filter = (
@@ -1099,6 +1228,24 @@ def scan_breakouts(
         "breadth_gate_passed",
         "sector_gate_passed",
         "regime_gate_passed",
+        # Phase 3 derived features
+        "volume_ratio_20",
+        "volume_trend_20_20",
+        "volume_dryup_10",
+        "delivery_pct_today",
+        "delivery_pct_20d_avg",
+        "delivery_surge_today",
+        "delivery_vs_sector_20d",
+        "delivery_sector_median_20d",
+        "close_position_in_range",
+        # Phase 4 conviction scoring
+        "breakout_level_confirmed",
+        "volume_ratio_confirmed",
+        "volume_ratio_strong",
+        "delivery_surge_confirmed",
+        "range_expansion_confirmed",
+        "close_near_high_confirmed",
+        "conviction_score",
     ]
     available_cols = [col for col in cols if col in candidates.columns]
     return (

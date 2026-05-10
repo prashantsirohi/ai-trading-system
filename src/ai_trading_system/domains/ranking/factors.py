@@ -152,22 +152,39 @@ def apply_trend_persistence(
     return scores
 
 
+SHORT_HISTORY_BARS_THRESHOLD = 252
+
+
 def apply_proximity_highs(data: pd.DataFrame, *, highs_frame: pd.DataFrame) -> pd.DataFrame:
     scores = data.copy()
     if highs_frame is not None and not highs_frame.empty:
+        merge_cols = ["symbol_id", "exchange", "high_52w"]
+        if "prox_lookback_days" in highs_frame.columns:
+            merge_cols.append("prox_lookback_days")
         scores = scores.merge(
-            highs_frame[["symbol_id", "exchange", "high_52w"]],
+            highs_frame[merge_cols],
             on=["symbol_id", "exchange"],
             how="left",
         )
     if "high_52w" not in scores.columns:
         scores.loc[:, "high_52w"] = scores["close"]
+    # high_52w is already MAX(high) over min(window, available_bars) thanks to
+    # DuckDB's ROWS BETWEEN N PRECEDING window — so prox is well-defined for
+    # newly listed stocks. We surface the actual lookback used so consumers
+    # can flag short-history names rather than treating them as failures.
     scores.loc[:, "prox_high"] = (
         (scores["close"] / scores["high_52w"].replace(0, np.nan))
         .clip(lower=0.0, upper=1.0)
         .fillna(0.5)
         * 100
     )
+    if "prox_lookback_days" in scores.columns:
+        lookback = pd.to_numeric(scores["prox_lookback_days"], errors="coerce")
+        scores.loc[:, "prox_lookback_days"] = lookback
+        scores.loc[:, "is_short_history"] = lookback.fillna(0) < SHORT_HISTORY_BARS_THRESHOLD
+    else:
+        scores.loc[:, "prox_lookback_days"] = pd.NA
+        scores.loc[:, "is_short_history"] = False
     return scores
 
 

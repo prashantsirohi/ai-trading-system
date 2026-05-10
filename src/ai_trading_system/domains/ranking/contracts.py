@@ -23,14 +23,18 @@ PRIMARY_FACTORS: tuple[RankFactorDefinition, ...] = (
     RankFactorDefinition("delivery_pct", "delivery_pct", "delivery_pct_score"),
 )
 
+# Composite weights are state-only: ranking answers "is this stock in a strong regime?"
+# Volume and delivery are event signals — they belong in the breakout/pattern layer
+# for confirmation, not in the daily cross-sectional rank. Kept at 0 here so the score
+# columns are still emitted for downstream consumers.
 DEFAULT_FACTOR_WEIGHTS: dict[str, float] = {
-    "relative_strength": 0.23,
-    "volume_intensity": 0.18,
-    "trend_persistence": 0.12,
-    "momentum_acceleration": 0.08,
-    "proximity_highs": 0.17,
-    "delivery_pct": 0.12,
-    "sector_strength": 0.10,
+    "relative_strength": 0.38,
+    "volume_intensity": 0.0,
+    "trend_persistence": 0.22,
+    "momentum_acceleration": 0.0,
+    "proximity_highs": 0.18,
+    "delivery_pct": 0.0,
+    "sector_strength": 0.22,
 }
 
 STAGE2_FRESH_BARS_MAX = 8
@@ -84,6 +88,8 @@ RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "stock_vs_sector_value",
     "sector_name",
     "high_52w",
+    "prox_lookback_days",
+    "is_short_history",
     "vol_20_avg",
     "adx_14",
     "sma_20",
