@@ -112,7 +112,9 @@ def _load_frames(rank_dir: Path | None) -> dict[str, pd.DataFrame]:
         "sector_dashboard": "sector_dashboard.csv",
     }
     if rank_dir is None:
-        return {key: pd.DataFrame() for key in frame_names}
+        frames = {key: pd.DataFrame() for key in frame_names}
+        frames["watchlist_candidates"] = pd.DataFrame()
+        return frames
 
     frames: dict[str, pd.DataFrame] = {}
     for key, filename in frame_names.items():
@@ -124,7 +126,26 @@ def _load_frames(rank_dir: Path | None) -> dict[str, pd.DataFrame]:
             frames[key] = pd.read_csv(path)
         except Exception:
             frames[key] = pd.DataFrame()
+    frames["watchlist_candidates"] = _load_same_run_fundamentals_watchlist(rank_dir)
     return frames
+
+
+def _load_same_run_fundamentals_watchlist(rank_dir: Path) -> pd.DataFrame:
+    try:
+        run_dir = rank_dir.parents[1]
+    except IndexError:
+        return pd.DataFrame()
+    candidates = sorted(
+        (run_dir / "fundamentals").glob("attempt_*/watchlist_candidates.csv"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for path in candidates:
+        try:
+            return pd.read_csv(path)
+        except Exception:
+            continue
+    return pd.DataFrame()
 
 
 def load_latest_operational_snapshot(project_root: str | Path | None = None) -> LatestOperationalSnapshot:

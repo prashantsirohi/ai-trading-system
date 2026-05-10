@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 
 import duckdb
+import pandas as pd
 from fastapi.testclient import TestClient
 
 from ai_trading_system.analytics.registry import RegistryStore
@@ -226,6 +227,52 @@ def test_execution_api_read_endpoints(monkeypatch, tmp_path: Path) -> None:
     assert len(logs.json()["logs"]) == 2
     assert logs.json()["task"]["run_id"] == run_id
     assert logs.json()["task"]["current_stage_label"] == "completed"
+
+
+def test_execution_ranking_includes_latest_fundamentals(monkeypatch, tmp_path: Path) -> None:
+    _seed_execution_project(tmp_path)
+    fundamentals_dir = tmp_path / "data" / "fundamentals"
+    fundamentals_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "name": "Alpha",
+                "industry_group": "Finance",
+                "quality_score": 82,
+                "growth_score": 76,
+                "balance_sheet_score": 88,
+                "valuation_score": 61,
+                "ownership_score": 79,
+                "fundamental_score": 78.4,
+                "fundamental_tier": "A",
+                "red_flags": "",
+                "hard_red_flag": False,
+            }
+        ]
+    ).to_csv(fundamentals_dir / "fundamental_scores_latest.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "fundamental_score_delta": 6.2,
+                "fundamental_trend_label": "IMPROVING",
+                "trend_reason": "Score improved",
+            }
+        ]
+    ).to_csv(fundamentals_dir / "fundamental_trends_latest.csv", index=False)
+    monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("EXECUTION_API_KEY", API_HEADERS["x-api-key"])
+
+    response = TestClient(create_app()).get("/api/execution/ranking?limit=10", headers=API_HEADERS)
+
+    assert response.status_code == 200
+    row = response.json()["top_ranked"][0]
+    assert row["symbol_id"] == "AAA"
+    assert row["fundamental_score"] == 78.4
+    assert row["fundamental_tier"] == "A"
+    assert row["quality_score"] == 82
+    assert row["fundamental_trend_label"] == "IMPROVING"
 
 
 def test_execution_api_action_endpoints(monkeypatch, tmp_path: Path) -> None:

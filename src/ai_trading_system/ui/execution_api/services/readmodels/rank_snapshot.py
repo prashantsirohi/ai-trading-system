@@ -18,6 +18,25 @@ from ai_trading_system.ui.execution_api.services.readmodels.pipeline_status impo
     get_execution_ops_health_snapshot,
 )
 
+FUNDAMENTAL_RANK_COLUMNS = [
+    "name",
+    "industry_group",
+    "quality_score",
+    "growth_score",
+    "balance_sheet_score",
+    "valuation_score",
+    "ownership_score",
+    "fundamental_score",
+    "fundamental_tier",
+    "red_flags",
+    "hard_red_flag",
+    "fundamental_score_delta",
+    "fundamental_trend_label",
+    "trend_reason",
+    "watchlist_bucket",
+    "next_action",
+]
+
 
 def _records(frame: pd.DataFrame, *, limit: Optional[int] = None) -> list[dict[str, Any]]:
     if frame is None or frame.empty:
@@ -164,6 +183,90 @@ def _enrich_operator_rank_fields(ranked: pd.DataFrame, patterns: pd.DataFrame | 
     return output
 
 
+def _normalize_symbol_series(series: pd.Series) -> pd.Series:
+    return (
+        series.fillna("")
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .str.replace(r"^NSE:", "", regex=True)
+        .str.replace(r"\.NS$", "", regex=True)
+    )
+
+
+def _load_latest_fundamental_scores(project_root: str | Path) -> pd.DataFrame:
+    path = Path(project_root) / "data" / "fundamentals" / "fundamental_scores_latest.csv"
+    if not path.exists() or path.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _load_latest_fundamental_trends(project_root: str | Path) -> pd.DataFrame:
+    path = Path(project_root) / "data" / "fundamentals" / "fundamental_trends_latest.csv"
+    if not path.exists() or path.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _fundamental_symbol_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=["symbol"])
+    output = frame.copy()
+    if "symbol" not in output.columns:
+        for candidate in ("symbol_id", "NSE Code", "ticker"):
+            if candidate in output.columns:
+                output.loc[:, "symbol"] = output[candidate]
+                break
+    if "symbol" not in output.columns:
+        return pd.DataFrame(columns=["symbol"])
+    output.loc[:, "_fund_symbol"] = _normalize_symbol_series(output["symbol"])
+    output = output.loc[output["_fund_symbol"].ne("")]
+    return output.drop_duplicates(subset=["_fund_symbol"], keep="first")
+
+
+def _enrich_rank_with_fundamentals(
+    ranked: pd.DataFrame,
+    *,
+    project_root: str | Path,
+    watchlist_candidates: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    if ranked is None or ranked.empty:
+        return ranked
+    output = ranked.copy()
+    if "symbol_id" in output.columns:
+        output.loc[:, "_fund_symbol"] = _normalize_symbol_series(output["symbol_id"])
+    elif "symbol" in output.columns:
+        output.loc[:, "_fund_symbol"] = _normalize_symbol_series(output["symbol"])
+    else:
+        return output
+
+    fundamentals = _fundamental_symbol_frame(watchlist_candidates if watchlist_candidates is not None else pd.DataFrame())
+    if fundamentals.empty:
+        fundamentals = _fundamental_symbol_frame(_load_latest_fundamental_scores(project_root))
+        trends = _fundamental_symbol_frame(_load_latest_fundamental_trends(project_root))
+        if not trends.empty:
+            trend_columns = [
+                column
+                for column in ("_fund_symbol", "fundamental_score_delta", "fundamental_trend_label", "trend_reason")
+                if column in trends.columns
+            ]
+            fundamentals = fundamentals.merge(trends[trend_columns], on="_fund_symbol", how="left", suffixes=("", "_trend"))
+
+    if fundamentals.empty:
+        return output.drop(columns=["_fund_symbol"], errors="ignore")
+
+    columns = ["_fund_symbol", *[column for column in FUNDAMENTAL_RANK_COLUMNS if column in fundamentals.columns]]
+    output = output.drop(columns=[column for column in FUNDAMENTAL_RANK_COLUMNS if column in output.columns], errors="ignore")
+    output = output.merge(fundamentals[columns], on="_fund_symbol", how="left")
+    return output.drop(columns=["_fund_symbol"], errors="ignore")
+
+
 def _as_bool_series(series: pd.Series) -> pd.Series:
     if pd.api.types.is_bool_dtype(series):
         return series.fillna(False)
@@ -304,6 +407,11 @@ def get_ranking_snapshot_read_model(
     ranked = current_snapshot.frames.get("ranked_signals", pd.DataFrame())
     patterns = current_snapshot.frames.get("pattern_scan", pd.DataFrame())
     ranked = _enrich_operator_rank_fields(ranked, patterns)
+    ranked = _enrich_rank_with_fundamentals(
+        ranked,
+        project_root=project_root,
+        watchlist_candidates=current_snapshot.frames.get("watchlist_candidates", pd.DataFrame()),
+    )
     stage2_summary = _stage2_summary(ranked)
     filtered_ranked, stage2_filter = _apply_stage2_filter(
         ranked,
@@ -355,6 +463,11 @@ def get_pipeline_workspace_snapshot_read_model(
     ranked = current_snapshot.frames.get("ranked_signals", pd.DataFrame())
     patterns = current_snapshot.frames.get("pattern_scan", pd.DataFrame())
     ranked = _enrich_operator_rank_fields(ranked, patterns)
+    ranked = _enrich_rank_with_fundamentals(
+        ranked,
+        project_root=project_root,
+        watchlist_candidates=current_snapshot.frames.get("watchlist_candidates", pd.DataFrame()),
+    )
     stage2_summary = _stage2_summary(ranked)
     filtered_ranked, stage2_filter = _apply_stage2_filter(
         ranked,
