@@ -224,7 +224,26 @@ def _load_symbol_metadata(ctx: ExecutionContext, symbol: str) -> Optional[dict[s
         ).fetchone()
         if row is None:
             return None
-        return {col: _scalar_or_none(value) for col, value in zip(cols, row)}
+        metadata = {col: _scalar_or_none(value) for col, value in zip(cols, row)}
+        try:
+            detail_row = conn.execute(
+                """
+                SELECT Sector, [Industry Group], Industry, MCAP
+                FROM stock_details
+                WHERE Symbol = ? AND exchange = 'NSE'
+                LIMIT 1
+                """,
+                (symbol,),
+            ).fetchone()
+        except sqlite3.DatabaseError:
+            detail_row = None
+        if detail_row is not None:
+            sector, industry_group, industry, mcap = detail_row
+            metadata["sector"] = _scalar_or_none(sector) or metadata.get("sector")
+            metadata["industry_group"] = _scalar_or_none(industry_group)
+            metadata["industry"] = _scalar_or_none(industry) or metadata.get("industry")
+            metadata["mcap"] = _scalar_or_none(mcap) or metadata.get("mcap")
+        return metadata
     finally:
         conn.close()
 

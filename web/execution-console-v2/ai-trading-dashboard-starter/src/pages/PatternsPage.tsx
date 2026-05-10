@@ -12,6 +12,7 @@
  *   * Execution Ready = patterns rows with breakout=true && rs > 70.
  */
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import PageFrame from '@/components/common/PageFrame';
 import SectionCard from '@/components/common/SectionCard';
@@ -20,7 +21,7 @@ import ErrorStateView from '@/components/common/ErrorState';
 import { CardSkeleton } from '@/components/common/LoadingSkeleton';
 import PipelineFunnel, { type FunnelStage } from '@/components/patterns/PipelineFunnel';
 import PatternCard from '@/components/patterns/PatternCard';
-import PatternCatalog, { CATALOG } from '@/components/patterns/PatternCatalog';
+import PatternCatalog, { patternMatchesCatalogKey } from '@/components/patterns/PatternCatalog';
 import { useRanking, usePatterns } from '@/lib/queries';
 import { useWorkspace } from '@/components/workspace/WorkspaceContext';
 import type { StockRow } from '@/types/dashboard';
@@ -30,15 +31,7 @@ type Filter = 'all' | 'imminent' | 'qualified';
 function filterRows(rows: StockRow[], filter: Filter, catalogKey: string | null): StockRow[] {
   let out = rows;
   if (catalogKey) {
-    const entry = CATALOG.find((e) => e.key === catalogKey);
-    if (entry) {
-      out = out.filter(
-        (r) =>
-          r.pattern &&
-          r.pattern !== 'N/A' &&
-          entry.matches.some((m) => r.pattern.toLowerCase().includes(m)),
-      );
-    }
+    out = out.filter((r) => patternMatchesCatalogKey(r.pattern, catalogKey));
   }
   if (filter === 'imminent') return out.filter((r) => r.breakout);
   if (filter === 'qualified') return out.filter((r) => r.rs > 70);
@@ -63,6 +56,7 @@ export default function PatternsPage() {
   const patternsQuery = usePatterns();
   const rankingQuery = useRanking();
   const { openWorkspace } = useWorkspace();
+  const navigate = useNavigate();
 
   const [filter, setFilter] = useState<Filter>('all');
   const [catalogKey, setCatalogKey] = useState<string | null>(null);
@@ -71,6 +65,7 @@ export default function PatternsPage() {
   const handleSelect = (row: StockRow) => {
     setSelected(row);
     openWorkspace(row.symbol);
+    navigate(`/symbol/${encodeURIComponent(row.symbol)}`);
   };
 
   const patternRows = patternsQuery.data?.rows ?? [];
@@ -88,22 +83,21 @@ export default function PatternsPage() {
     <PageFrame
       title="Patterns"
       description="Setups by funnel stage, quality, and urgency."
+      headerAside={
+        <section className="rounded-lg border border-slate-800 bg-slate-900 p-2 shadow-soft">
+          <div className="mb-1.5 flex items-center justify-between gap-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-300">Funnel</h2>
+          </div>
+          {isLoading ? <CardSkeleton /> : <PipelineFunnel stages={stages} compact />}
+        </section>
+      }
     >
-      <SectionCard
-        title="Funnel"
-        description="Ranked universe to execution-ready candidates."
-      >
-        {isLoading ? (
-          <CardSkeleton />
-        ) : error ? (
-          <ErrorStateView
-            error={`Failed to load patterns: ${error.message}`}
-            onRetry={() => patternsQuery.refetch()}
-          />
-        ) : (
-          <PipelineFunnel stages={stages} />
-        )}
-      </SectionCard>
+      {error ? (
+        <ErrorStateView
+          error={`Failed to load patterns: ${error.message}`}
+          onRetry={() => patternsQuery.refetch()}
+        />
+      ) : null}
 
       <SectionCard
         title="Catalog"
@@ -135,8 +129,8 @@ export default function PatternsPage() {
               <>
                 <PatternRowsTable rows={visibleRows} onSelect={handleSelect} />
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  {visibleRows.map((row) => (
-                    <PatternCard key={row.symbol} row={row} onSelect={handleSelect} />
+                  {visibleRows.map((row, idx) => (
+                    <PatternCard key={patternRowKey(row, idx)} row={row} onSelect={handleSelect} />
                   ))}
                 </div>
               </>
@@ -152,6 +146,10 @@ export default function PatternsPage() {
       </SectionCard>
     </PageFrame>
   );
+}
+
+function patternRowKey(row: StockRow, idx: number): string {
+  return `${row.symbol}-${row.pattern}-${row.patternSignalDate ?? row.patternState ?? idx}`;
 }
 
 function PatternRowsTable({
@@ -176,9 +174,9 @@ function PatternRowsTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {rows.map((row, idx) => (
             <tr
-              key={row.symbol}
+              key={patternRowKey(row, idx)}
               className="cursor-pointer border-b border-slate-800 last:border-b-0 hover:bg-slate-800/40"
               onClick={() => onSelect(row)}
             >

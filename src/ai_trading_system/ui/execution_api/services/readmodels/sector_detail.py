@@ -198,7 +198,10 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
             "stage_s2_pct": _pct(dist.get("S2", 0), total),
             "stage_s3_pct": _pct(dist.get("S3", 0), total),
             "stage_s4_pct": _pct(dist.get("S4", 0), total),
+            "stage_s1_count": dist.get("S1", 0),
             "stage_s2_count": dist.get("S2", 0),
+            "stage_s3_count": dist.get("S3", 0),
+            "stage_s4_count": dist.get("S4", 0),
             "stage_total": total,
         })
 

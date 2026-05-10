@@ -27,6 +27,9 @@ export interface StockRow {
   setupQuality?: number | null;
   pivotPrice?: number | null;
   invalidationPrice?: number | null;
+  patternSignalDate?: string | null;
+  patternStartDate?: string | null;
+  patternEndDate?: string | null;
   reclaimSignal?: boolean;
   tier: 'A' | 'B' | 'C';
   price: number;
@@ -73,6 +76,15 @@ export interface SectorScore {
   rankPct: number;
   momentumRank: number;
   quadrant: string;
+  stageS1Pct: number;
+  stageS2Pct: number;
+  stageS3Pct: number;
+  stageS4Pct: number;
+  stageS1Count: number;
+  stageS2Count: number;
+  stageS3Count: number;
+  stageS4Count: number;
+  stageTotal: number;
 }
 
 export interface ShadowModelRow {

@@ -144,6 +144,7 @@ export default function OverviewTab({ detail }: Props) {
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-xl border border-slate-800 bg-slate-950/40 p-4 text-xs lg:grid-cols-4">
           <Field label="ISIN" value={meta?.isin ?? '—'} />
           <Field label="Sector" value={meta?.sector ?? '—'} />
+          <Field label="Industry group" value={meta?.industryGroup ?? '—'} />
           <Field label="Industry" value={meta?.industry ?? '—'} />
           <Field label="Exchange" value={meta?.exchange ?? '—'} />
           <Field label="Instrument" value={meta?.instrumentType ?? '—'} />

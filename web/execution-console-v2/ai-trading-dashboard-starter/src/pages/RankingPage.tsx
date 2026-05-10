@@ -116,7 +116,7 @@ function RankingContent() {
 
   if (isLoading) {
     return (
-      <PageFrame title="Ranking" description={description}>
+      <PageFrame title="Ranking" description={description} compactHeader>
         <SectionCard title="Ranked Signals">
           <TableSkeleton rows={10} />
         </SectionCard>
@@ -126,7 +126,7 @@ function RankingContent() {
 
   if (error) {
     return (
-      <PageFrame title="Ranking" description={description}>
+      <PageFrame title="Ranking" description={description} compactHeader>
         <SectionCard title="Ranked Signals">
           <ErrorStateView
             error={`Failed to load ranking: ${error.message}`}
@@ -139,7 +139,7 @@ function RankingContent() {
 
   if (rows.length === 0) {
     return (
-      <PageFrame title="Ranking" description={description}>
+      <PageFrame title="Ranking" description={description} compactHeader>
         <SectionCard title="Ranked Signals">
           <EmptyState message="No ranked signals available" />
         </SectionCard>
@@ -148,7 +148,7 @@ function RankingContent() {
   }
 
   return (
-    <PageFrame title="Ranking" description={description}>
+    <PageFrame title="Ranking" description={description} compactHeader>
       <SectionCard title="Ranked Signals">
         <div className="grid gap-4 2xl:grid-cols-[240px_minmax(0,1fr)]">
           <div className="hidden 2xl:block">

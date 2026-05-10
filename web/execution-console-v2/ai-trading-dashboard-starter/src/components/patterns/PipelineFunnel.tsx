@@ -17,6 +17,7 @@ export interface FunnelStage {
 
 interface Props {
   stages: FunnelStage[];
+  compact?: boolean;
 }
 
 const STAGE_TONES = [
@@ -31,19 +32,35 @@ function pct(numerator: number, denominator: number): string {
   return `${Math.round((numerator / denominator) * 100)}%`;
 }
 
-export default function PipelineFunnel({ stages }: Props) {
+export default function PipelineFunnel({ stages, compact = false }: Props) {
   if (stages.length === 0) {
     return null;
   }
   const max = Math.max(...stages.map((s) => s.count), 1);
 
   return (
-    <div className="space-y-2">
+    <div className={compact ? 'grid grid-cols-4 gap-1.5' : 'space-y-2'}>
       {stages.map((stage, idx) => {
         const widthPct = Math.max(8, Math.round((stage.count / max) * 100));
         const tone = STAGE_TONES[idx] ?? STAGE_TONES[STAGE_TONES.length - 1];
         const previous = stages[idx - 1];
         const conversion = previous ? pct(stage.count, previous.count) : null;
+        if (compact) {
+          return (
+            <div key={stage.key} className={cn('rounded-md border px-2 py-1', tone)}>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="truncate text-[9px] font-semibold uppercase tracking-wider">
+                  {stage.label}
+                </span>
+                <span className="font-mono text-xs font-semibold tabular-nums">{stage.count}</span>
+              </div>
+              <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-slate-950/45">
+                <div className="h-full rounded-full bg-current/70" style={{ width: `${widthPct}%` }} />
+              </div>
+              {conversion ? <div className="mt-0.5 text-[9px] leading-none opacity-70">{conversion}</div> : null}
+            </div>
+          );
+        }
         return (
           <div key={stage.key} className="space-y-1">
             <div className="flex items-baseline justify-between text-xs">

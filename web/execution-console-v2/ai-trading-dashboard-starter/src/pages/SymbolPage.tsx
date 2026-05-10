@@ -146,9 +146,9 @@ export default function SymbolPage() {
       pivotPrice: operator?.topPatternPivotPrice ?? row?.pivotPrice ?? rawNumber(raw, 'pivot_price', 'top_pattern_pivot_price'),
       breakoutLevel: row?.pivotPrice ?? rawNumber(raw, 'breakout_level', 'watchlist_trigger_level'),
       invalidationPrice: operator?.topPatternInvalidationPrice ?? row?.invalidationPrice ?? rawNumber(raw, 'invalidation_price', 'stop_price'),
-      signalDate: rawText(raw, 'signal_date', 'fresh_signal_date', 'last_seen_date'),
-      startDate: rawText(raw, 'pattern_start', 'first_seen_date'),
-      endDate: rawText(raw, 'pattern_end', 'last_seen_date'),
+      signalDate: operator?.topPatternSignalDate ?? row?.patternSignalDate ?? rawText(raw, 'signal_date', 'fresh_signal_date', 'last_seen_date'),
+      startDate: operator?.topPatternStartDate ?? row?.patternStartDate ?? rawText(raw, 'pattern_start', 'first_seen_date'),
+      endDate: operator?.topPatternEndDate ?? row?.patternEndDate ?? rawText(raw, 'pattern_end', 'last_seen_date'),
     };
   }, [operator, rankDetail?.rawRow, row]);
   const close = quote?.close ?? row?.price ?? null;
@@ -156,6 +156,9 @@ export default function SymbolPage() {
   const chgPct = chgAbs != null && quote?.open ? (chgAbs / quote.open) * 100 : null;
   const positionPct = rankPct(ranking?.rankPosition, ranking?.universeSize);
   const rankLabel = ranking?.rankPosition ? `#${ranking.rankPosition} / ${ranking.universeSize}` : '-';
+  const sectorName = row?.sector ?? ranking?.sectorName ?? meta?.sector ?? fundamentals?.sector ?? null;
+  const industryGroup =
+    meta?.industryGroup ?? (meta?.sector && meta.sector !== sectorName ? meta.sector : null);
 
   return (
     <PageFrame
@@ -185,12 +188,13 @@ export default function SymbolPage() {
                 </div>
                 <p className="mt-0.5 truncate text-sm text-slate-400">
                   {meta?.symbolName ?? 'Name unavailable'}
-                  {(meta?.sector ?? row?.sector) ? (
+                  {sectorName ? (
                     <>
                       {' - '}
-                      <Link to={`/sectors/${encodeURIComponent(meta?.sector ?? row?.sector ?? '')}`} className="text-blue-400 hover:underline">
-                        {meta?.sector ?? row?.sector}
+                      <Link to={`/sectors/${encodeURIComponent(sectorName)}`} className="text-blue-400 hover:underline">
+                        {sectorName}
                       </Link>
+                      {industryGroup ? <span className="text-slate-500"> · {industryGroup}</span> : null}
                     </>
                   ) : null}
                 </p>

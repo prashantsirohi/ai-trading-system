@@ -108,6 +108,9 @@ export interface RankingOperatorContext {
   topPatternSetupQuality: number | null;
   topPatternPivotPrice: number | null;
   topPatternInvalidationPrice: number | null;
+  topPatternSignalDate: string | null;
+  topPatternStartDate: string | null;
+  topPatternEndDate: string | null;
   reclaimSignalFlag: boolean;
   explanation: string[];
 }
@@ -148,6 +151,9 @@ interface BackendRankingDetail {
     top_pattern_setup_quality?: number | null;
     top_pattern_pivot_price?: number | null;
     top_pattern_invalidation_price?: number | null;
+    top_pattern_signal_date?: string | null;
+    top_pattern_start_date?: string | null;
+    top_pattern_end_date?: string | null;
     reclaim_signal_flag?: boolean | null;
     explanation?: string[];
   } | null;
@@ -241,6 +247,9 @@ function mapOperatorContext(raw: BackendRankingDetail['operator_context']): Rank
     topPatternSetupQuality: asNum(raw?.top_pattern_setup_quality),
     topPatternPivotPrice: asNum(raw?.top_pattern_pivot_price),
     topPatternInvalidationPrice: asNum(raw?.top_pattern_invalidation_price),
+    topPatternSignalDate: asString(raw?.top_pattern_signal_date),
+    topPatternStartDate: asString(raw?.top_pattern_start_date),
+    topPatternEndDate: asString(raw?.top_pattern_end_date),
     reclaimSignalFlag: Boolean(raw?.reclaim_signal_flag),
     explanation: Array.isArray(raw?.explanation) ? raw.explanation.map(String) : [],
   };

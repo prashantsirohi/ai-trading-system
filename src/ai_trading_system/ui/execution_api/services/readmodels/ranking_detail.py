@@ -146,6 +146,9 @@ def _operator_context(
         "top_pattern_setup_quality": _scalar_or_none(_first_present(row, ["top_pattern_setup_quality"]) or _first_present(pattern, ["setup_quality"])),
         "top_pattern_pivot_price": _scalar_or_none(_first_present(row, ["top_pattern_pivot_price"]) or _first_present(pattern, ["pivot_price", "breakout_level"])),
         "top_pattern_invalidation_price": _scalar_or_none(_first_present(row, ["top_pattern_invalidation_price"]) or _first_present(pattern, ["invalidation_price"])),
+        "top_pattern_signal_date": _scalar_or_none(_first_present(row, ["top_pattern_signal_date"]) or _first_present(pattern, ["signal_date", "fresh_signal_date", "last_seen_date"])),
+        "top_pattern_start_date": _scalar_or_none(_first_present(row, ["top_pattern_start_date"]) or _first_present(pattern, ["pattern_start", "first_seen_date"])),
+        "top_pattern_end_date": _scalar_or_none(_first_present(row, ["top_pattern_end_date"]) or _first_present(pattern, ["pattern_end", "last_seen_date"])),
         "reclaim_signal_flag": bool(row.get("reclaim_signal_flag") or top_pattern_family == "stage2_reclaim"),
         "explanation": reasons,
     }

@@ -25,6 +25,7 @@ export interface StockMetadata {
   lotSize: number | null;
   tickSize: number | null;
   sector: string | null;
+  industryGroup: string | null;
   industry: string | null;
   nseSymbol: string | null;
   bseSymbol: string | null;
@@ -128,6 +129,7 @@ function mapMetadata(raw: BackendStockDetail['metadata']): StockMetadata | null 
     lotSize: asNum(raw.lot_size),
     tickSize: asNum(raw.tick_size),
     sector: asString(raw.sector),
+    industryGroup: asString(raw.industry_group),
     industry: asString(raw.industry),
     nseSymbol: asString(raw.nse_symbol),
     bseSymbol: asString(raw.bse_symbol),

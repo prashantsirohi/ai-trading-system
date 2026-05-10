@@ -93,7 +93,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     key: 'cup',
     name: 'Cup & Handle',
-    matches: ['cup'],
+    matches: ['cup', 'cup_handle'],
     Icon: CupHandleIcon,
     svgPath: CUP_PATH,
     hitRate90d: '62%',
@@ -102,7 +102,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     key: 'flag',
     name: 'Tight Flag',
-    matches: ['flag', 'tight flag'],
+    matches: ['flag', 'tight flag', 'three_weeks_tight'],
     Icon: TightFlagIcon,
     svgPath: FLAG_PATH,
     hitRate90d: '71%',
@@ -111,7 +111,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     key: 'round',
     name: 'Round Bottom',
-    matches: ['round'],
+    matches: ['round', 'round_bottom'],
     Icon: RoundBottomIcon,
     svgPath: ROUND_PATH,
     hitRate90d: '54%',
@@ -129,7 +129,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     key: 'breakout',
     name: '52w Breakout',
-    matches: ['breakout', '52w'],
+    matches: ['52w', 'high_52w'],
     Icon: BreakoutIcon,
     svgPath: BREAKOUT_PATH,
     hitRate90d: '66%',
@@ -144,14 +144,101 @@ export const CATALOG: CatalogEntry[] = [
     hitRate90d: '41%',
     avgR: '+1.1R avg',
   },
+  {
+    key: 'darvas',
+    name: 'Darvas Box',
+    matches: ['darvas'],
+    Icon: BreakoutIcon,
+    svgPath: BREAKOUT_PATH,
+    hitRate90d: '63%',
+    avgR: '+3.6R avg',
+  },
+  {
+    key: 'vcp',
+    name: 'VCP',
+    matches: ['vcp', 'volatility contraction'],
+    Icon: TightFlagIcon,
+    svgPath: FLAG_PATH,
+    hitRate90d: '67%',
+    avgR: '+3.4R avg',
+  },
+  {
+    key: 'double_bottom',
+    name: 'Double Bottom',
+    matches: ['double_bottom', 'double bottom'],
+    Icon: RoundBottomIcon,
+    svgPath: ROUND_PATH,
+    hitRate90d: '55%',
+    avgR: '+2.6R avg',
+  },
+  {
+    key: 'inside_week',
+    name: 'Inside Week',
+    matches: ['inside_week'],
+    Icon: BreakoutIcon,
+    svgPath: BREAKOUT_PATH,
+    hitRate90d: '52%',
+    avgR: '+1.8R avg',
+  },
+  {
+    key: 'ipo_base',
+    name: 'IPO Base',
+    matches: ['ipo_base', 'ipo base'],
+    Icon: FlatBaseIcon,
+    svgPath: FLAT_PATH,
+    hitRate90d: '49%',
+    avgR: '+2.1R avg',
+  },
+  {
+    key: 'pocket_pivot',
+    name: 'Pocket Pivot',
+    matches: ['pocket_pivot', 'pocket pivot'],
+    Icon: BreakoutIcon,
+    svgPath: BREAKOUT_PATH,
+    hitRate90d: '58%',
+    avgR: '+2.3R avg',
+  },
 ];
 
-function patternToKey(pattern: string): string {
+export function patternToKey(pattern: string): string {
   const norm = pattern.toLowerCase();
   for (const entry of CATALOG) {
     if (entry.matches.some((m) => norm.includes(m))) return entry.key;
   }
-  return '';
+  return norm.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+export function patternMatchesCatalogKey(pattern: string | null | undefined, key: string | null): boolean {
+  if (!key || !pattern || pattern === 'N/A') return false;
+  return patternToKey(pattern) === key;
+}
+
+function labelFromPattern(pattern: string): string {
+  return pattern
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function catalogWithDynamicRows(rows: StockRow[]): CatalogEntry[] {
+  const known = new Set(CATALOG.map((entry) => entry.key));
+  const extra = new Map<string, CatalogEntry>();
+  rows.forEach((row) => {
+    if (!row.pattern || row.pattern === 'N/A') return;
+    const mappedKey = patternToKey(row.pattern);
+    if (known.has(mappedKey)) return;
+    const key = row.pattern.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!key || known.has(key) || extra.has(key)) return;
+    extra.set(key, {
+      key,
+      name: labelFromPattern(row.pattern),
+      matches: [row.pattern.toLowerCase()],
+      Icon: BreakoutIcon,
+      svgPath: BREAKOUT_PATH,
+      hitRate90d: '—',
+      avgR: 'live only',
+    });
+  });
+  return [...CATALOG, ...extra.values()];
 }
 
 function deriveCatalogState(
@@ -197,9 +284,10 @@ interface Props {
 }
 
 export default function PatternCatalog({ rows, activeKey, onSelect }: Props) {
+  const entries = catalogWithDynamicRows(rows);
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-      {CATALOG.map((entry) => {
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-6">
+      {entries.map((entry) => {
         const { state, symbols, count } = deriveCatalogState(entry, rows);
         const isActive = activeKey === entry.key;
 
@@ -209,7 +297,7 @@ export default function PatternCatalog({ rows, activeKey, onSelect }: Props) {
             type="button"
             onClick={() => onSelect(isActive ? null : entry.key)}
             className={cn(
-              'flex flex-col overflow-hidden rounded-2xl border text-left transition-all',
+              'flex min-h-[104px] flex-col overflow-hidden rounded-lg border text-left transition-all',
               STATE_BORDER[state],
               isActive
                 ? 'ring-2 ring-blue-500/40 ring-offset-1 ring-offset-slate-950'
@@ -220,16 +308,16 @@ export default function PatternCatalog({ rows, activeKey, onSelect }: Props) {
             <svg
               viewBox="0 0 200 70"
               preserveAspectRatio="none"
-              className="h-[70px] w-full bg-gradient-to-b from-slate-950/0 to-slate-950/60"
+              className="h-9 w-full bg-gradient-to-b from-slate-950/0 to-slate-950/60"
               aria-hidden="true"
             >
               {entry.svgPath}
             </svg>
 
             {/* Body */}
-            <div className="bg-slate-900/60 p-3">
+            <div className="flex flex-1 flex-col bg-slate-900/60 p-2">
               <div className="flex flex-wrap items-center justify-between gap-1.5">
-                <span className="text-sm font-semibold text-slate-100">{entry.name}</span>
+                <span className="text-xs font-semibold text-slate-100">{entry.name}</span>
                 <span
                   className={cn(
                     'rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
@@ -240,18 +328,15 @@ export default function PatternCatalog({ rows, activeKey, onSelect }: Props) {
                 </span>
               </div>
 
-              {symbols.length > 0 ? (
-                <p className="mt-1 truncate text-[11px] text-slate-400">
-                  {symbols.join(' · ')}
-                </p>
-              ) : (
-                <p className="mt-1 text-[11px] text-slate-600">No active setups</p>
-              )}
+              <p className="mt-1 min-h-4 truncate text-[10px] text-slate-400">
+                {symbols.length > 0 ? symbols.slice(0, 3).join(' · ') : 'No active setups'}
+                {symbols.length > 3 ? ` +${symbols.length - 3}` : ''}
+              </p>
 
-              <div className="mt-2 flex items-center justify-between font-mono text-[10px] text-slate-500">
-                <span>90d hit rate</span>
+              <div className="mt-auto flex items-center justify-between gap-2 font-mono text-[10px] text-slate-500">
+                <span>90d</span>
                 <span className="text-slate-300">
-                  {entry.hitRate90d} / {entry.avgR}
+                  {entry.hitRate90d} · {entry.avgR}
                 </span>
               </div>
             </div>

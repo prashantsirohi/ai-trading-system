@@ -19,28 +19,45 @@ export interface SectorRow {
   stageS2Pct: number;
   stageS3Pct: number;
   stageS4Pct: number;
+  stageS1Count: number;
   stageS2Count: number;
+  stageS3Count: number;
+  stageS4Count: number;
   stageTotal: number;
+}
+
+function num(s: any, keys: string[], fallback = 0): number {
+  for (const key of keys) {
+    const value = s?.[key];
+    if (value !== undefined && value !== null && value !== '') {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    }
+  }
+  return fallback;
 }
 
 function mapSectorRow(s: any): SectorRow {
   return {
     sector:       s.Sector ?? s.sector ?? 'Unknown',
-    rs:           s.RS ?? 0,
-    rs20:         s.RS_20 ?? 0,
-    rs50:         s.RS_50 ?? 0,
-    rs100:        s.RS_100 ?? 0,
-    momentum:     s.Momentum ?? 0,
-    rank:         s.RS_rank ?? 0,
-    rankPct:      s.RS_rank_pct ?? 0,
-    momentumRank: s.Momentum_rank ?? 0,
+    rs:           num(s, ['RS', 'rs']),
+    rs20:         num(s, ['RS_20', 'rs_20', 'rs20']),
+    rs50:         num(s, ['RS_50', 'rs_50', 'rs50']),
+    rs100:        num(s, ['RS_100', 'rs_100', 'rs100']),
+    momentum:     num(s, ['Momentum', 'momentum']),
+    rank:         num(s, ['RS_rank', 'rs_rank', 'rank']),
+    rankPct:      num(s, ['RS_rank_pct', 'rs_rank_pct', 'rank_pct']),
+    momentumRank: num(s, ['Momentum_rank', 'momentum_rank']),
     quadrant:     s.Quadrant ?? 'N/A',
-    stageS1Pct:   s.stage_s1_pct ?? 0,
-    stageS2Pct:   s.stage_s2_pct ?? 0,
-    stageS3Pct:   s.stage_s3_pct ?? 0,
-    stageS4Pct:   s.stage_s4_pct ?? 0,
-    stageS2Count: s.stage_s2_count ?? 0,
-    stageTotal:   s.stage_total ?? 0,
+    stageS1Pct:   num(s, ['stage_s1_pct', 'stageS1Pct']),
+    stageS2Pct:   num(s, ['stage_s2_pct', 'stageS2Pct']),
+    stageS3Pct:   num(s, ['stage_s3_pct', 'stageS3Pct']),
+    stageS4Pct:   num(s, ['stage_s4_pct', 'stageS4Pct']),
+    stageS1Count: num(s, ['stage_s1_count', 'stageS1Count']),
+    stageS2Count: num(s, ['stage_s2_count', 'stageS2Count']),
+    stageS3Count: num(s, ['stage_s3_count', 'stageS3Count']),
+    stageS4Count: num(s, ['stage_s4_count', 'stageS4Count']),
+    stageTotal:   num(s, ['stage_total', 'stageTotal']),
   };
 }
 

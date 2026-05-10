@@ -1,11 +1,11 @@
 /**
- * Sector rotation heatmap (D-5..D-1 dot grid).
+ * Sector rotation heatmap.
  *
  * The backend doesn't expose per-day historical RS rank yet, so we
  * synthesise a 5-step series client-side from the rolling RS columns we
  * *do* have on each row: ``rs100 → rs50 → rs20 → rs → momentum-adjusted``.
- * The aim is to give the operator a directional rotation read until a
- * proper history endpoint lands.
+ * The labels intentionally use rolling windows rather than D-5..D-1 because
+ * this is not true daily history.
  */
 import { Link } from 'react-router-dom';
 import type { SectorScore } from '@/types/dashboard';
@@ -17,15 +17,23 @@ interface Props {
   onSelect: (sector: string) => void;
 }
 
-const COLUMNS = ['D-5', 'D-4', 'D-3', 'D-2', 'D-1'];
+const COLUMNS = ['RS100', 'RS50', 'RS20', 'Latest', 'Mom'];
+
+function normalizeScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const scaled = Math.abs(value) <= 1.5 ? value * 100 : value;
+  return Math.max(0, Math.min(100, scaled));
+}
 
 function dotsFor(s: SectorScore): number[] {
+  const current = normalizeScore(s.rs);
+  const momentumDelta = Math.abs(s.momentum) <= 1.5 ? s.momentum * 20 : s.momentum;
   return [
-    s.rs100,
-    s.rs50,
-    s.rs20,
-    s.rs,
-    Math.max(0, Math.min(100, s.rs + s.momentum * 20)),
+    normalizeScore(s.rs100),
+    normalizeScore(s.rs50),
+    normalizeScore(s.rs20),
+    current,
+    Math.max(0, Math.min(100, current + momentumDelta)),
   ];
 }
 
@@ -94,8 +102,9 @@ export default function SectorRotationHeatmap({ sectors, selected, onSelect }: P
         </tbody>
       </table>
       <p className="mt-2 text-[11px] text-slate-500">
-        D-5 anchors on rolling RS-100; D-1 incorporates the latest momentum delta. Until a
-        per-day history endpoint lands this is a synthetic but directional read.
+        Rolling RS view: long-term, medium-term, short-term, latest strength, and
+        momentum-adjusted strength. Colors: green &gt;=80, soft green 65-79,
+        amber 50-64, soft red 35-49, red &lt;35.
       </p>
     </div>
   );

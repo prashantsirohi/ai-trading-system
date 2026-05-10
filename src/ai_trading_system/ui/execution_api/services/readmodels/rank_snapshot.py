@@ -118,6 +118,9 @@ def _top_pattern_by_symbol(patterns: pd.DataFrame) -> pd.DataFrame:
         "top_pattern_setup_quality",
         "top_pattern_pivot_price",
         "top_pattern_invalidation_price",
+        "top_pattern_signal_date",
+        "top_pattern_start_date",
+        "top_pattern_end_date",
         "reclaim_signal_flag",
     ]
     if patterns is None or patterns.empty or "symbol_id" not in patterns.columns:
@@ -158,6 +161,9 @@ def _top_pattern_by_symbol(patterns: pd.DataFrame) -> pd.DataFrame:
                 "top_pattern_setup_quality": _safe_float(_first(row, ["setup_quality", "pattern_score", "pattern_priority_score"])),
                 "top_pattern_pivot_price": _safe_float(_first(row, ["pivot_price", "breakout_level", "pivot_level"])),
                 "top_pattern_invalidation_price": _safe_float(_first(row, ["invalidation_price", "stop_price"])),
+                "top_pattern_signal_date": _first(row, ["signal_date", "fresh_signal_date", "last_seen_date"]),
+                "top_pattern_start_date": _first(row, ["pattern_start", "first_seen_date"]),
+                "top_pattern_end_date": _first(row, ["pattern_end", "last_seen_date"]),
                 "reclaim_signal_flag": str(family or "").lower() == "stage2_reclaim",
             }
         )
