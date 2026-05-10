@@ -9,6 +9,15 @@ from ai_trading_system.platform.logging.logger import logger
 import requests
 
 
+# Severity rank used to gate telegram fan-out. Higher = more severe.
+_SEVERITY_RANK: dict[str, int] = {"info": 0, "warning": 1, "critical": 2}
+
+# Sentinel for "never fan out to telegram". Default behavior — keeps test runs
+# and noisy DQ days from spamming the chat. Set ALERT_TELEGRAM_MIN_SEVERITY
+# in env to "critical" / "warning" / "info" to opt back in.
+_DISABLED = "disabled"
+
+
 class AlertManager:
     """Persists and logs pipeline alerts for operator follow-up."""
 
@@ -56,10 +65,26 @@ class AlertManager:
             f"stage={stage_name or 'unknown'}\n"
             f"message={message}"
         )
-        self.send_telegram_alert(text)
+        self.send_telegram_alert(text, severity=severity)
 
     @staticmethod
-    def send_telegram_alert(message: str) -> None:
+    def send_telegram_alert(message: str, severity: str = "warning") -> None:
+        """Forward an alert to Telegram, gated by ALERT_TELEGRAM_MIN_SEVERITY.
+
+        Default (env unset or set to ``disabled``): no telegram is sent — the
+        alert is still logged and persisted to the registry. The publish
+        stage's success digest is a separate code path and is not affected.
+
+        To opt in: set ``ALERT_TELEGRAM_MIN_SEVERITY`` to one of
+        ``critical``, ``warning``, or ``info``. Anything below the threshold
+        is dropped silently.
+        """
+        min_severity = os.getenv("ALERT_TELEGRAM_MIN_SEVERITY", _DISABLED).lower().strip()
+        if min_severity == _DISABLED or min_severity not in _SEVERITY_RANK:
+            return
+        if _SEVERITY_RANK.get(severity.lower(), 1) < _SEVERITY_RANK[min_severity]:
+            return
+
         telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
         telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
         if not telegram_token or not telegram_chat_id:
