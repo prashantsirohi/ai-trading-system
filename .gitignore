@@ -6,6 +6,8 @@ data/ohlcv.duckdb
 data/feature_store/
 data/features/
 data/research/
+data/fundamentals/
+data/stage_store/
 data/raw/NSE_EQ/*.csv
 data/raw/NSE_MTO/*.DAT
 data/*.xlsx
@@ -18,6 +20,7 @@ src/ai_trading_system/domains/ingest/data/
 reports/
 logs/
 *.log
+.last
 
 # ============================================================
 # Environments
