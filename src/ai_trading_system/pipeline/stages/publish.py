@@ -27,8 +27,29 @@ class PublishStage:
     """Publishes already-ranked artifacts to delivery channels."""
 
     name = "publish"
+    # Channel role taxonomy:
+    #   publish_of_record  — primary outputs; failure should block the stage
+    #   publish_auxiliary  — secondary outputs; failure should block the stage
+    #   publish_optional   — best-effort outputs (live external APIs, sheet
+    #                        writes); failure is logged + recorded in metadata
+    #                        but does NOT raise PublishStageError. Use for
+    #                        channels whose flake-on-Tuesday shouldn't take
+    #                        down the telegram digest or perf_tracker stage.
+    #   informational      — non-blocking notification channels
+    #   diagnostic         — local-only artifacts
+    # Roles whose failure does NOT raise PublishStageError. Kept narrow on
+    # purpose — only channels explicitly marked publish_optional bypass the
+    # blocking gate. Other roles (including informational like telegram_summary)
+    # retain their existing blocking semantics so behavior changes are
+    # opt-in via CHANNEL_ROLES.
+    NON_BLOCKING_ROLES = frozenset({"publish_optional"})
     CHANNEL_ROLES = {
-        "google_sheets_portfolio": "publish_of_record",
+        # Portfolio handler does live YF+Google Sheets IO and rewrites the
+        # user's PORTFOLIO sheet each run. Transient failures (auth expiry,
+        # YF rate limit, network blip) shouldn't take down the rest of the
+        # publish stage — the telegram digest and perf_tracker still need
+        # to run so the operator gets *some* signal that the pipeline ran.
+        "google_sheets_portfolio": "publish_optional",
         "google_sheets_dashboard": "publish_of_record",
         "google_sheets_watchlist": "publish_of_record",
         "google_sheets_event_log": "publish_auxiliary",
@@ -120,6 +141,7 @@ class PublishStage:
         )
 
         failures = []
+        non_blocking_failures = []
         targets = []
         for channel, handler in self._build_handlers(context, datasets).items():
             delivery = self.delivery_manager.deliver(
@@ -128,10 +150,16 @@ class PublishStage:
                 artifact=delivery_artifact,
                 sender=lambda channel_handler=handler: channel_handler(context, rank_artifact, datasets),
             )
-            delivery["delivery_role"] = self.CHANNEL_ROLES.get(channel, "publish_auxiliary")
+            role = self.CHANNEL_ROLES.get(channel, "publish_auxiliary")
+            delivery["delivery_role"] = role
             targets.append(delivery)
             if delivery["status"] == "failed":
-                failures.append(f"{channel}: {delivery.get('error_message', 'delivery failed')}")
+                failure_msg = f"{channel}: {delivery.get('error_message', 'delivery failed')}"
+                if role in self.NON_BLOCKING_ROLES:
+                    # Recorded in metadata for visibility but does not raise.
+                    non_blocking_failures.append(failure_msg)
+                else:
+                    failures.append(failure_msg)
 
         metadata = build_publish_metadata(
             rank_artifact=rank_artifact,
@@ -142,6 +170,9 @@ class PublishStage:
         )
         metadata["watchlist_buckets"] = bucket_counts
         self._attach_fundamentals_publish_summary(context, datasets, metadata)
+        if non_blocking_failures:
+            # Visible in publish_summary.json but does not raise.
+            metadata["non_blocking_failures"] = non_blocking_failures
         if failures:
             metadata["failures"] = failures
             raise PublishStageError("; ".join(failures))
