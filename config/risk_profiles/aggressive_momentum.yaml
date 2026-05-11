@@ -1,0 +1,36 @@
+name: aggressive_momentum
+
+entry:
+  require_stage_2: true
+  require_price_above_sma200: true
+  require_sector_positive: true
+  min_volume_ratio: 2.0
+  require_delivery_above_sector_median: false
+
+stop:
+  method: atr
+  atr_multiple: 1.5
+  stop_pct: 0.05
+  hybrid_atr_multiple: 2.0
+
+exit:
+  emergency_exit_below_sma200: true
+  dma_exit_window: 11
+  dma_whipsaw_buffer_pct: 0.5
+  exit_on_rank_deterioration: true
+  max_hold_rank: 30
+  rank_deterioration_bars: 2
+  exit_on_score_deterioration: true
+  min_hold_score: 65.0
+  score_deterioration_bars: 2
+  time_stop_days: 30
+
+sizing:
+  method: equal_weight
+  risk_per_trade_pct: 1.0
+  max_position_pct: 12.0
+
+constraints:
+  max_concurrent_positions: 12
+  max_stock_weight_pct: 12.0
+  max_sector_exposure_pct: 35.0

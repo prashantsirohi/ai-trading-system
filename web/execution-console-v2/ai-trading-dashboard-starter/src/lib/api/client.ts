@@ -84,3 +84,20 @@ export async function fetchDashboardJsonStrict<T>(path: string, fallback: T): Pr
   }
   return requestJson<T>(path);
 }
+
+export async function postDashboardJson<T>(path: string, body: unknown): Promise<T> {
+  const url = API_BASE_URL ? `${API_BASE_URL}${path}` : path;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'x-api-key': EXECUTION_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`Request failed (${response.status}) for ${path}: ${text}`);
+  }
+  return (await response.json()) as T;
+}

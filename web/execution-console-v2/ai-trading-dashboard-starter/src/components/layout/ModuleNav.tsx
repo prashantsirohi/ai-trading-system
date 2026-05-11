@@ -3,6 +3,7 @@ import {
   BeakerIcon,
   BookmarkIcon,
   ChartBarIcon,
+  ClockIcon,
   CpuChipIcon,
   HomeIcon,
   PlayIcon,
@@ -29,6 +30,7 @@ const primaryItems = [
 const secondaryItems = [
   { to: '/shadow', label: 'Shadow', icon: CpuChipIcon, end: false, match: ['/shadow'] },
   { to: '/research', label: 'Research', icon: BeakerIcon, end: false, match: ['/research'] },
+  { to: '/backtest', label: 'Backtest', icon: ClockIcon, end: false, match: ['/backtest'] },
 ];
 
 type NavItem = (typeof primaryItems)[number];

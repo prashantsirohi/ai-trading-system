@@ -1,0 +1,36 @@
+name: positional_trend
+
+entry:
+  require_stage_2: true
+  require_price_above_sma200: true
+  require_sector_positive: true
+  min_volume_ratio: 1.2
+  require_delivery_above_sector_median: false
+
+stop:
+  method: swing_low
+  atr_multiple: 2.5
+  stop_pct: 0.08
+  hybrid_atr_multiple: 3.0
+
+exit:
+  emergency_exit_below_sma200: true
+  dma_exit_window: 50
+  dma_whipsaw_buffer_pct: 0.5
+  exit_on_rank_deterioration: true
+  max_hold_rank: 80
+  rank_deterioration_bars: 5
+  exit_on_score_deterioration: true
+  min_hold_score: 55.0
+  score_deterioration_bars: 5
+  time_stop_days: 180
+
+sizing:
+  method: equal_weight
+  risk_per_trade_pct: 1.0
+  max_position_pct: 18.0
+
+constraints:
+  max_concurrent_positions: 6
+  max_stock_weight_pct: 18.0
+  max_sector_exposure_pct: 25.0

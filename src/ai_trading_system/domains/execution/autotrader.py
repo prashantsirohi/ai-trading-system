@@ -13,6 +13,7 @@ from ai_trading_system.domains.execution.portfolio import PortfolioManager, chec
 from ai_trading_system.domains.execution.service import ExecutionService
 from ai_trading_system.domains.execution.entry_policy import select_entry_policy
 from ai_trading_system.domains.execution.exit_policy import build_exit_plan
+from ai_trading_system.domains.risk import RiskPolicyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,8 @@ class AutoTrader:
         max_single_stock_weight: float = 0.10,
         use_atr_position_sizing: bool = False,
         heat_gate_threshold: float = 0.15,
+        risk_config: RiskPolicyConfig | None = None,
+        market_extras: dict[str, dict] | None = None,
     ) -> Dict[str, Any]:
         positions_before = self.portfolio.open_positions()
         current_prices = {
@@ -91,6 +94,35 @@ class AutoTrader:
                         )
                     )
 
+        stop_records: dict[str, dict] = {}
+        if risk_config is not None:
+            ranked_lookup_pre = (
+                {str(row["symbol_id"]): row for row in ranked_df.to_dict(orient="records") if row.get("symbol_id")}
+                if ranked_df is not None and not ranked_df.empty
+                else {}
+            )
+            for pos_symbol, position in positions_before.items():
+                position_key = f"{(position.exchange or 'NSE').upper()}:{position.symbol_id.upper()}"
+                stop_row = self.service.store.get_position_stop(position_key) if hasattr(self.service, "store") else None
+                if stop_row:
+                    stop_row = _bump_streaks_in_stop_record(
+                        stop_record=stop_row,
+                        ranked_row=ranked_lookup_pre.get(pos_symbol),
+                        risk_config=risk_config,
+                    )
+                    self.service.store.upsert_position_stop(
+                        position_key=position_key,
+                        symbol_id=stop_row["symbol_id"],
+                        exchange=stop_row["exchange"],
+                        quantity=int(stop_row["quantity"]),
+                        entry_price=float(stop_row["entry_price"]),
+                        stop_price=float(stop_row["stop_price"]),
+                        atr_multiplier=float(stop_row.get("atr_multiplier") or 0.0),
+                        status=str(stop_row.get("status") or "ACTIVE"),
+                        metadata=stop_row.get("metadata"),
+                    )
+                    stop_records[pos_symbol] = stop_row
+
         actions = build_trade_actions(
             ranked_df=ranked_df,
             positions=positions_before,
@@ -99,6 +131,10 @@ class AutoTrader:
             target_position_count=target_position_count,
             ml_horizon=ml_horizon,
             ml_confirm_threshold=ml_confirm_threshold,
+            risk_config=risk_config,
+            equity=capital if risk_config is not None else None,
+            stop_records=stop_records,
+            market_extras=market_extras,
         )
         executions: list[dict] = []
         preview_payloads: list[dict] = []
@@ -195,6 +231,7 @@ class AutoTrader:
                         }
                     )
                     continue
+                action_meta = action.metadata or {}
                 signal.update(
                     {
                         "symbol_id": action.symbol_id,
@@ -210,6 +247,14 @@ class AutoTrader:
                         "risk_per_trade_pct": signal.get("risk_per_trade_pct", 0.01),
                         "atr_multiple": signal.get("atr_multiple", exit_atr_multiple),
                         "correlation_id": f"{action.strategy_mode}:{action.symbol_id}:{action.reason}",
+                        # Forward engine-emitted reasons / stops so service can persist them.
+                        "intent_kind": action_meta.get("intent_kind"),
+                        "reason": action.reason,
+                        "initial_stop": action_meta.get("initial_stop"),
+                        "stop_method": action_meta.get("stop_method"),
+                        "rank_at_entry": action_meta.get("rank_at_entry"),
+                        "score_at_entry": action_meta.get("score_at_entry"),
+                        "sector": action_meta.get("sector") or signal.get("sector_name"),
                     }
                 )
                 result = self.service.execute_signal(
@@ -250,13 +295,15 @@ class AutoTrader:
                     ),
                     market_price=float(action.requested_price or 0.0),
                 )
-                if (
-                    action.reason.startswith("stop_triggered:")
-                    and result.get("status") not in {"REJECTED", "ERROR"}
-                ):
-                    position_key = str((action.metadata or {}).get("stop_position_key") or "").strip()
-                    if position_key:
-                        self.service.store.deactivate_stop(position_key)
+                if result.get("status") not in {"REJECTED", "ERROR"}:
+                    is_engine_exit = (action.metadata or {}).get("intent_kind") == "exit"
+                    if action.reason.startswith("stop_triggered:") or is_engine_exit:
+                        position_key = (
+                            str((action.metadata or {}).get("stop_position_key") or "").strip()
+                            or f"{action.exchange.upper()}:{action.symbol_id.upper()}"
+                        )
+                        if position_key:
+                            self.service.store.deactivate_stop(position_key)
             executions.append(
                 {
                     "action": action.to_dict(),
@@ -280,6 +327,58 @@ class AutoTrader:
 
 def _serialize_positions(positions: dict[str, Any]) -> list[dict]:
     return [position.to_dict() for position in positions.values()]
+
+
+def _bump_streaks_in_stop_record(
+    *,
+    stop_record: dict,
+    ranked_row: dict | None,
+    risk_config: RiskPolicyConfig,
+) -> dict:
+    """Increment / reset rank+score streaks based on today's ranked row.
+
+    Mutates a copy of ``stop_record`` so the writer can persist it back.
+    The streaks live in ``metadata_json`` so we avoid a column migration.
+    """
+    import json
+
+    raw_meta = stop_record.get("metadata_json")
+    metadata: dict[str, Any] = {}
+    if isinstance(raw_meta, str) and raw_meta:
+        try:
+            metadata = json.loads(raw_meta)
+        except json.JSONDecodeError:
+            metadata = {}
+    elif isinstance(raw_meta, dict):
+        metadata = dict(raw_meta)
+
+    rank_threshold = int(risk_config.exit.max_hold_rank)
+    score_threshold = float(risk_config.exit.min_hold_score)
+    rank_streak = int(metadata.get("rank_above_threshold_streak") or 0)
+    score_streak = int(metadata.get("score_below_threshold_streak") or 0)
+    bars_held = int(metadata.get("bars_held") or 0) + 1
+
+    if ranked_row is None:
+        rank_streak += 1
+        score_streak += 1
+    else:
+        rank_val = int(ranked_row.get("eligible_rank") or ranked_row.get("rank") or 0)
+        score_val = float(
+            ranked_row.get("composite_score_adjusted")
+            or ranked_row.get("composite_score")
+            or 0.0
+        )
+        rank_streak = rank_streak + 1 if rank_val > rank_threshold else 0
+        score_streak = score_streak + 1 if score_val < score_threshold else 0
+
+    metadata["rank_above_threshold_streak"] = rank_streak
+    metadata["score_below_threshold_streak"] = score_streak
+    metadata["bars_held"] = bars_held
+
+    updated = dict(stop_record)
+    updated["metadata"] = metadata
+    updated["metadata_json"] = json.dumps(metadata, sort_keys=True)
+    return updated
 
 
 def _build_sector_lookup(ranked_df: pd.DataFrame | None) -> dict[str, str]:

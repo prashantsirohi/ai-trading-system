@@ -2,6 +2,7 @@
 
 from ai_trading_system.ui.execution_api.routes import (
     artifacts,
+    backtest,
     fundamentals,
     health,
     insight,
@@ -28,12 +29,14 @@ ALL_ROUTERS = (
     processes.router,
     pipeline.router,
     sectors.router,
+    backtest.router,
 )
 
 
 __all__ = [
     "ALL_ROUTERS",
     "artifacts",
+    "backtest",
     "fundamentals",
     "health",
     "insight",

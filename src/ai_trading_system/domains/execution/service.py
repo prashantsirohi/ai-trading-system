@@ -124,6 +124,13 @@ class ExecutionService:
                 "signal_strength": _maybe_float(signal.get("signal_strength")),
                 "strategy": signal.get("strategy"),
                 "regime": regime,
+                # engine-emitted fields (None when legacy path)
+                "intent_kind": signal.get("intent_kind"),
+                "reason": signal.get("reason"),
+                "initial_stop": _maybe_float(signal.get("initial_stop")),
+                "stop_method": signal.get("stop_method"),
+                "rank_at_entry": signal.get("rank_at_entry"),
+                "score_at_entry": signal.get("score_at_entry"),
             },
         )
         result = self.submit_order(intent, market_price=price)
@@ -151,11 +158,22 @@ class ExecutionService:
     ) -> None:
         if side.upper() != "BUY" or quantity <= 0:
             return
-        atr = _maybe_float(signal.get("atr_14"))
-        atr_multiple = _maybe_float(signal.get("atr_multiple")) or _maybe_float(signal.get("exit_atr_multiple")) or 2.0
-        if atr is None or atr <= 0:
-            return
-        stop_price = round(fill_price - (atr_multiple * atr), 4)
+        # Prefer the engine-emitted stop when present so backtest and paper agree.
+        engine_stop = _maybe_float(signal.get("initial_stop"))
+        engine_method = signal.get("stop_method")
+        if engine_stop is not None and engine_stop > 0:
+            stop_price = round(engine_stop, 4)
+            atr_multiple = _maybe_float(signal.get("atr_multiple")) or 0.0
+        else:
+            atr = _maybe_float(signal.get("atr_14"))
+            atr_multiple = (
+                _maybe_float(signal.get("atr_multiple"))
+                or _maybe_float(signal.get("exit_atr_multiple"))
+                or 2.0
+            )
+            if atr is None or atr <= 0:
+                return
+            stop_price = round(fill_price - (atr_multiple * atr), 4)
         position_key = f"{exchange.upper()}:{symbol_id.upper()}"
         self.store.upsert_position_stop(
             position_key=position_key,
@@ -169,6 +187,15 @@ class ExecutionService:
             metadata={
                 "signal": signal.get("strategy"),
                 "regime": signal.get("regime"),
+                "reason": signal.get("reason"),
+                "stop_method": engine_method,
+                "rank_at_entry": signal.get("rank_at_entry"),
+                "score_at_entry": signal.get("score_at_entry"),
+                "sector": signal.get("sector"),
+                # Streak counters maintained by AutoTrader between ticks.
+                "rank_above_threshold_streak": int(signal.get("rank_above_threshold_streak") or 0),
+                "score_below_threshold_streak": int(signal.get("score_below_threshold_streak") or 0),
+                "bars_held": int(signal.get("bars_held") or 0),
             },
         )
 
