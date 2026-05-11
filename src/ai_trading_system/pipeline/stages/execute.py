@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict
@@ -16,9 +18,46 @@ from ai_trading_system.domains.execution.autotrader import AutoTrader
 from ai_trading_system.domains.execution.portfolio import PortfolioManager
 from ai_trading_system.domains.execution.service import ExecutionService
 from ai_trading_system.domains.execution.store import ExecutionStore
+from ai_trading_system.domains.risk import RiskPolicyConfig, load_profile
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.domains.execution.candidate_builder import ExecutionCandidateBuilder, ExecutionRequest
+
+
+_logger = logging.getLogger(__name__)
+
+
+def _build_market_extras(ranked_df) -> dict[str, dict]:
+    """Pull ATR / SMA-200 / swing-low-20 from the ranked DF when present."""
+    if ranked_df is None or ranked_df.empty:
+        return {}
+    keys = {"atr_14", "sma_11", "sma_200", "volume_ratio_20", "swing_low_20"}
+    columns = [col for col in keys if col in ranked_df.columns]
+    if not columns:
+        return {}
+    extras: dict[str, dict] = {}
+    for row in ranked_df.to_dict(orient="records"):
+        sid = row.get("symbol_id")
+        if not sid:
+            continue
+        extras[str(sid)] = {col: row.get(col) for col in columns if pd.notna(row.get(col))}
+    return extras
+
+
+def _resolve_risk_config(context) -> RiskPolicyConfig | None:
+    """Pick a risk profile from context.params or RISK_PROFILE env var."""
+    name = None
+    try:
+        name = context.params.get("risk_profile") if context and context.params else None
+    except AttributeError:
+        name = None
+    if not name:
+        name = os.environ.get("RISK_PROFILE")
+    if not name:
+        return None
+    cfg = load_profile(str(name))
+    _logger.info("execute stage: using risk_profile=%s", cfg.name)
+    return cfg
 
 
 class ExecuteStage:
@@ -189,6 +228,8 @@ class ExecuteStage:
             max_single_stock_weight=request.max_single_stock_weight,
             use_atr_position_sizing=request.use_atr_position_sizing,
             heat_gate_threshold=context.params.get("execution_heat_gate_threshold", 0.08),
+            risk_config=_resolve_risk_config(context),
+            market_extras=_build_market_extras(candidates.ranked_df),
         )
         trailing_summary = {"updated_count": 0, "evaluated_count": 0}
         if request.execution_enabled and not request.preview_only:

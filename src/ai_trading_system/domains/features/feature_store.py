@@ -862,6 +862,55 @@ class FeatureStore:
         finally:
             conn.close()
 
+    def compute_swing_low(
+        self,
+        symbol_id: str = None,
+        exchange: str = "NSE",
+        window: int = 20,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """Rolling N-bar minimum of ``low`` — used as a trailing stop reference."""
+        date_filter = ""
+        if start_date or end_date:
+            conds: list[str] = []
+            if start_date:
+                conds.append(f"timestamp > '{start_date}'")
+            if end_date:
+                conds.append(f"timestamp <= '{end_date}'")
+            date_filter = " AND " + " AND ".join(conds)
+
+        sql = f"""
+            SELECT
+                symbol_id, exchange, timestamp,
+                MIN(low) OVER w AS swing_low_{window}
+            FROM _catalog
+            WHERE {{symbol_predicate}}
+              AND {{exchange_predicate}}
+              AND timestamp IS NOT NULL
+              {date_filter}
+            WINDOW w AS (ORDER BY timestamp ROWS BETWEEN {window - 1} PRECEDING AND CURRENT ROW)
+            ORDER BY timestamp
+        """
+
+        conn = self._get_conn()
+        try:
+            query = sql.replace(
+                "{symbol_predicate}",
+                "symbol_id = ?" if symbol_id else "TRUE",
+            ).replace(
+                "{exchange_predicate}",
+                "exchange = ?" if exchange else "TRUE",
+            )
+            bind_params: list[Any] = []
+            if symbol_id:
+                bind_params.append(symbol_id)
+            if exchange:
+                bind_params.append(exchange)
+            return conn.execute(query, bind_params).fetchdf()
+        finally:
+            conn.close()
+
     def compute_ema(
         self,
         symbol_id: str = None,
@@ -1321,11 +1370,17 @@ class FeatureStore:
         else:
             adx = pd.DataFrame()
 
-        sma = self.compute_sma(symbol_id, exchange, windows=[20, 50, 200])
+        sma = self.compute_sma(symbol_id, exchange, windows=[11, 20, 50, 200])
         if not sma.empty:
-            features.extend(["sma_20", "sma_50", "sma_200"])
+            features.extend(["sma_11", "sma_20", "sma_50", "sma_200"])
         else:
             sma = pd.DataFrame()
+
+        swing = self.compute_swing_low(symbol_id, exchange, window=20)
+        if not swing.empty:
+            features.append("swing_low_20")
+        else:
+            swing = pd.DataFrame()
 
         ema = self.compute_ema(symbol_id, exchange, windows=[12, 26])
         if not ema.empty:
@@ -1366,6 +1421,7 @@ class FeatureStore:
             (atr, ["symbol_id", "exchange", "timestamp"]),
             (bb, ["symbol_id", "exchange", "timestamp"]),
             (roc, ["symbol_id", "exchange", "timestamp"]),
+            (swing, ["symbol_id", "exchange", "timestamp"]),
         ]:
             if not other.empty:
                 other_cols = [c for c in other.columns if c not in df.columns]

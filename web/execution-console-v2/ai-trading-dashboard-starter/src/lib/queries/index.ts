@@ -35,6 +35,10 @@ import {
 import { getSectors } from '@/lib/api/sectors';
 import { getShadow } from '@/lib/api/shadow';
 import {
+  getRiskProfiles,
+  type RiskProfilesResponse,
+} from '@/lib/api/backtest';
+import {
   getStockDetail,
   getStockOhlcv,
   type StockDetail,
@@ -251,6 +255,17 @@ export function useShadow(
   return useQuery<ShadowResponse, Error>({
     queryKey: queryKeys.shadow(),
     queryFn: getShadow,
+    ...options,
+  });
+}
+
+export function useRiskProfiles(
+  options: QueryOverrides<RiskProfilesResponse> = {},
+): UseQueryResult<RiskProfilesResponse, Error> {
+  return useQuery<RiskProfilesResponse, Error>({
+    queryKey: queryKeys.riskProfiles(),
+    queryFn: getRiskProfiles,
+    staleTime: 5 * 60_000,
     ...options,
   });
 }

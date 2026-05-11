@@ -1,0 +1,40 @@
+# Permissive profile for testing the UI against ranked CSVs that were generated
+# before sma_200 / volume_ratio_20 / atr_14 / swing_low_20 columns were added.
+# Uses only columns that are guaranteed to exist on legacy data.
+# Don't use this in real paper trading — gates are deliberately loose.
+name: permissive_test
+
+entry:
+  require_stage_2: true
+  require_price_above_sma200: false      # column missing on legacy data
+  require_sector_positive: true
+  min_volume_ratio: 0.0                  # disables the volume gate
+  require_delivery_above_sector_median: false
+
+stop:
+  method: percent                        # only needs close, no atr_14
+  atr_multiple: 2.0
+  stop_pct: 0.08                         # 8% below entry
+  hybrid_atr_multiple: 2.5
+
+exit:
+  emergency_exit_below_sma200: false     # column missing
+  dma_exit_window: 20                    # sma_20 is present in legacy data
+  dma_whipsaw_buffer_pct: 0.5
+  exit_on_rank_deterioration: true
+  max_hold_rank: 100
+  rank_deterioration_bars: 3
+  exit_on_score_deterioration: true
+  min_hold_score: 50.0
+  score_deterioration_bars: 3
+  time_stop_days: 60
+
+sizing:
+  method: equal_weight
+  risk_per_trade_pct: 1.0
+  max_position_pct: 14.0
+
+constraints:
+  max_concurrent_positions: 8
+  max_stock_weight_pct: 14.0
+  max_sector_exposure_pct: 100.0         # effectively off for testing

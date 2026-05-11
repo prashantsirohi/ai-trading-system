@@ -8,6 +8,17 @@ import pandas as pd
 
 from ai_trading_system.domains.execution.models import TradeAction
 from ai_trading_system.domains.execution.portfolio import PositionSnapshot
+from ai_trading_system.domains.risk import (
+    RiskOrderIntent,
+    RiskPolicyConfig,
+    TradingRuleEngine,
+)
+from ai_trading_system.domains.risk.adapters import (
+    candidate_from_row,
+    market_from_row,
+    portfolio_snapshot,
+    position_from_execution_snapshot,
+)
 
 
 SUPPORTED_STRATEGY_MODES = {
@@ -45,8 +56,28 @@ def build_trade_actions(
     target_position_count: int = 5,
     ml_horizon: int = 5,
     ml_confirm_threshold: float = 0.55,
+    risk_config: RiskPolicyConfig | None = None,
+    equity: float | None = None,
+    stop_records: Dict[str, dict] | None = None,
+    market_extras: Dict[str, dict] | None = None,
 ) -> list[TradeAction]:
-    """Build buy/sell actions from the current ranked universe and open positions."""
+    """Build buy/sell actions from the current ranked universe and open positions.
+
+    When ``risk_config`` is supplied, the shared ``TradingRuleEngine`` produces
+    the actions (exits first, then entries) and the legacy in-target/out-of-target
+    diff is skipped. When omitted, behavior is unchanged from before.
+    """
+    if risk_config is not None:
+        return _build_trade_actions_with_engine(
+            ranked_df=ranked_df,
+            positions=positions,
+            risk_config=risk_config,
+            equity=equity,
+            stop_records=stop_records or {},
+            market_extras=market_extras or {},
+            fallback_mode=(strategy_mode or "technical").lower(),
+        )
+
     mode = (strategy_mode or "technical").lower()
     if mode not in SUPPORTED_STRATEGY_MODES:
         raise ValueError(f"Unsupported strategy_mode: {strategy_mode}")
@@ -220,3 +251,89 @@ def _symbol_list(df: pd.DataFrame) -> list[str]:
     if df is None or df.empty or "symbol_id" not in df.columns:
         return []
     return [str(value) for value in df["symbol_id"].tolist() if value not in (None, "")]
+
+
+def _build_trade_actions_with_engine(
+    *,
+    ranked_df: pd.DataFrame,
+    positions: Dict[str, PositionSnapshot],
+    risk_config: RiskPolicyConfig,
+    equity: float | None,
+    stop_records: Dict[str, dict],
+    market_extras: Dict[str, dict],
+    fallback_mode: str,
+) -> list[TradeAction]:
+    """Engine-driven action generation. Exits precede entries in the returned list."""
+    ranked = ranked_df if ranked_df is not None else pd.DataFrame()
+    rows = ranked.to_dict(orient="records") if not ranked.empty else []
+    row_by_symbol: Dict[str, dict] = {str(r.get("symbol_id")): r for r in rows if r.get("symbol_id")}
+
+    candidates = [candidate_from_row(r) for r in rows]
+    sector_lookup = {c.symbol_id: c.sector for c in candidates}
+
+    # Build market snapshots for both candidates AND held symbols (held symbols
+    # need a snapshot so their exits can be evaluated even when they fell off
+    # the ranked list).
+    market_by_symbol = {}
+    for r in rows:
+        sid = str(r.get("symbol_id") or "")
+        if not sid:
+            continue
+        market_by_symbol[sid] = market_from_row(r, extra=market_extras.get(sid))
+
+    risk_positions = []
+    for symbol_id, exec_pos in positions.items():
+        sector = sector_lookup.get(symbol_id, "")
+        stop_rec = stop_records.get(symbol_id)
+        risk_pos = position_from_execution_snapshot(
+            exec_pos,
+            sector=sector,
+            stop_record=stop_rec,
+        )
+        risk_positions.append(risk_pos)
+        if symbol_id not in market_by_symbol:
+            held_row = row_by_symbol.get(symbol_id, {"symbol_id": symbol_id, "exchange": exec_pos.exchange})
+            market_by_symbol[symbol_id] = market_from_row(
+                held_row, extra=market_extras.get(symbol_id)
+            )
+
+    equity_value = float(equity) if equity is not None else 0.0
+    if equity_value <= 0:
+        # Reasonable default so the engine can still emit relative-weight intents.
+        equity_value = sum(
+            float(p.entry_price) * int(p.shares) for p in risk_positions if p.shares > 0
+        ) or 1_000_000.0
+
+    portfolio = portfolio_snapshot(positions=risk_positions, equity=equity_value)
+
+    engine = TradingRuleEngine(risk_config)
+    intents = engine.generate_order_intents(candidates, market_by_symbol, portfolio)
+
+    return [_intent_to_action(intent, fallback_mode, positions) for intent in intents]
+
+
+def _intent_to_action(
+    intent: RiskOrderIntent,
+    strategy_mode: str,
+    positions: Dict[str, PositionSnapshot],
+) -> TradeAction:
+    """Translate engine intent → execution TradeAction."""
+    requested_price: float | None = None
+    if intent.intent_kind == "exit":
+        snapshot = positions.get(intent.symbol_id)
+        if snapshot is not None:
+            requested_price = snapshot.last_fill_price or snapshot.avg_entry_price
+    return TradeAction(
+        action=intent.side,
+        symbol_id=intent.symbol_id,
+        exchange=intent.exchange,
+        side=intent.side,
+        quantity=int(intent.quantity) if intent.quantity else None,
+        requested_price=requested_price,
+        strategy_mode=strategy_mode,
+        reason=intent.reason,
+        metadata={
+            "intent_kind": intent.intent_kind,
+            **intent.metadata,
+        },
+    )

@@ -113,7 +113,10 @@ class PaperExecutionAdapter(ExecutionAdapter):
             return replace(order, updated_at=now), []
 
         fill_price = self._resolve_fill_price(order, market_price)
-        fill_metadata = {"order_type": order.order_type}
+        # Carry forward the originating order's metadata so engine-emitted fields
+        # (reason, intent_kind, initial_stop, stop_method, rank_at_entry, ...)
+        # land on the fill row and become queryable downstream.
+        fill_metadata = {**(order.metadata or {}), "order_type": order.order_type}
         if self.include_costs and order.exchange.upper() == "NSE":
             cost_breakdown = NSETransactionCost.calculate(
                 price=fill_price,

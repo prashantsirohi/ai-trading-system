@@ -32,6 +32,9 @@ export const queryKeys = {
   patterns: () => ['execution', 'patterns'] as const,
   sectors: () => ['execution', 'sectors'] as const,
   shadow: () => ['execution', 'shadow'] as const,
+  riskProfiles: () => ['execution', 'risk-profiles'] as const,
+  backtestRun: (profile: string, fromDate: string | null, toDate: string | null, equity: number) =>
+    ['execution', 'backtest-run', profile, fromDate, toDate, equity] as const,
 } as const;
 
 export type QueryKeyFactories = typeof queryKeys;
