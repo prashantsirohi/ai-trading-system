@@ -248,6 +248,47 @@ def _load_symbol_metadata(ctx: ExecutionContext, symbol: str) -> Optional[dict[s
         conn.close()
 
 
+def _resolve_symbol_alias(ctx: ExecutionContext, symbol: str) -> str:
+    """Resolve short user-entered symbols to the canonical NSE symbol.
+
+    Some NSE names are commonly typed in abbreviated form, e.g. ``MTAR`` for
+    ``MTARTECH``. Keep resolution conservative: exact match wins, and prefix
+    aliases are accepted only when they produce one unique masterdata match.
+    """
+
+    requested = symbol.strip().upper()
+    if not requested or not ctx.master_db.exists():
+        return symbol
+    conn = sqlite3.connect(ctx.master_db.as_posix())
+    try:
+        exact_rows = conn.execute(
+            """
+            SELECT symbol_id FROM symbols WHERE UPPER(symbol_id) = ?
+            UNION
+            SELECT Symbol FROM stock_details WHERE UPPER(Symbol) = ?
+            """,
+            (requested, requested),
+        ).fetchall()
+        if exact_rows:
+            return str(exact_rows[0][0]).upper()
+
+        prefix_rows = conn.execute(
+            """
+            SELECT symbol_id FROM symbols WHERE UPPER(symbol_id) LIKE ?
+            UNION
+            SELECT Symbol FROM stock_details WHERE UPPER(Symbol) LIKE ?
+            """,
+            (f"{requested}%", f"{requested}%"),
+        ).fetchall()
+    except sqlite3.DatabaseError:
+        return symbol
+    finally:
+        conn.close()
+
+    matches = sorted({str(row[0]).upper() for row in prefix_rows if row and row[0]})
+    return matches[0] if len(matches) == 1 else symbol
+
+
 def _load_latest_quote(ctx: ExecutionContext, symbol: str) -> Optional[dict[str, Any]]:
     if not ctx.ohlcv_db.exists():
         return None
@@ -322,21 +363,22 @@ def get_stock_detail(
     sources = _load_sources(project_root, snapshot=snapshot)
     ctx = sources.ctx
     snap = sources.snapshot
+    canonical_symbol = _resolve_symbol_alias(ctx, symbol)
 
-    metadata = _load_symbol_metadata(ctx, symbol)
-    latest_quote = _load_latest_quote(ctx, symbol)
-    fundamentals = _load_fundamentals(project_root, symbol)
+    metadata = _load_symbol_metadata(ctx, canonical_symbol)
+    latest_quote = _load_latest_quote(ctx, canonical_symbol)
+    fundamentals = _load_fundamentals(project_root, canonical_symbol)
 
     ranked = snap.frames.get("ranked_signals", pd.DataFrame())
     breakouts = snap.frames.get("breakout_scan", pd.DataFrame())
     patterns = snap.frames.get("pattern_scan", pd.DataFrame())
     stock_scan = snap.frames.get("stock_scan", pd.DataFrame())
 
-    rank_pos = _rank_position(ranked, symbol)
-    rank_row = _frame_row_for_symbol(ranked, symbol)
-    breakout_row = _frame_row_for_symbol(breakouts, symbol)
-    pattern_row = _frame_row_for_symbol(patterns, symbol)
-    scan_row = _frame_row_for_symbol(stock_scan, symbol)
+    rank_pos = _rank_position(ranked, canonical_symbol)
+    rank_row = _frame_row_for_symbol(ranked, canonical_symbol)
+    breakout_row = _frame_row_for_symbol(breakouts, canonical_symbol)
+    pattern_row = _frame_row_for_symbol(patterns, canonical_symbol)
+    scan_row = _frame_row_for_symbol(stock_scan, canonical_symbol)
 
     universe_size = int(len(ranked.index)) if ranked is not None else 0
 
@@ -370,7 +412,8 @@ def get_stock_detail(
 
     return {
         "available": available,
-        "symbol": symbol,
+        "symbol": canonical_symbol,
+        "requested_symbol": symbol if canonical_symbol != symbol else None,
         "metadata": metadata,
         "fundamentals": fundamentals,
         "latest_quote": latest_quote,
@@ -408,16 +451,18 @@ def get_stock_ohlcv(
     """
 
     ctx = get_execution_context(project_root)
+    canonical_symbol = _resolve_symbol_alias(ctx, symbol)
     if not ctx.ohlcv_db.exists():
         return {
             "available": False,
-            "symbol": symbol,
+            "symbol": canonical_symbol,
+            "requested_symbol": symbol if canonical_symbol != symbol else None,
             "interval": interval,
             "candles": [],
         }
 
     where_clauses = ["c.symbol_id = ?"]
-    params: list[Any] = [symbol]
+    params: list[Any] = [canonical_symbol]
 
     def _try_parse(value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -481,7 +526,8 @@ def get_stock_ohlcv(
 
     return {
         "available": True,
-        "symbol": symbol,
+        "symbol": canonical_symbol,
+        "requested_symbol": symbol if canonical_symbol != symbol else None,
         "interval": interval,
         "from": parsed_from,
         "to": parsed_to,

@@ -434,6 +434,9 @@ def test_compute_factor_scores_sector_demeans_sector_sensitive_raw_factors():
     assert tech_b["trend_score_score"] == pytest.approx(util_b["trend_score_score"])
     assert tech_a["prox_high_score"] == pytest.approx(util_a["prox_high_score"])
     assert tech_a["delivery_pct_score"] == pytest.approx(util_a["delivery_pct_score"])
+    assert scored.loc[scored["symbol_id"] == "TECH_A", "trend_score"].iloc[0] == pytest.approx(90.0)
+    assert scored.loc[scored["symbol_id"] == "UTIL_A", "trend_score"].iloc[0] == pytest.approx(60.0)
+    assert not any(column.startswith("__rank_input_") for column in scored.columns)
 
 
 def test_apply_rank_stability_uses_previous_score_order_for_positions():

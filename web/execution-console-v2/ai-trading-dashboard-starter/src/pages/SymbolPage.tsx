@@ -101,23 +101,31 @@ export default function SymbolPage() {
   const { sym } = useParams<{ sym: string }>();
   const symbol = sym?.toUpperCase() ?? '';
 
-  const detailQuery = useStockDetail(symbol);
-  const ohlcvQuery = useStockOhlcv(symbol, 365);
   const rankingQuery = useRanking();
-  const rankingDetailQuery = useRankingDetail(symbol);
+  const resolvedSymbol = useMemo(() => {
+    if (!symbol) return '';
+    const rows = rankingQuery.data?.rows ?? [];
+    if (rows.some((r) => r.symbol === symbol)) return symbol;
+    const prefixMatches = rows.filter((r) => r.symbol.startsWith(symbol));
+    return prefixMatches.length === 1 ? prefixMatches[0].symbol : symbol;
+  }, [rankingQuery.data?.rows, symbol]);
+
+  const detailQuery = useStockDetail(resolvedSymbol);
+  const ohlcvQuery = useStockOhlcv(resolvedSymbol, 365);
+  const rankingDetailQuery = useRankingDetail(resolvedSymbol);
 
   const row = useMemo(() => {
-    const listed = rankingQuery.data?.rows.find((r) => r.symbol === symbol) ?? null;
+    const listed = rankingQuery.data?.rows.find((r) => r.symbol === resolvedSymbol) ?? null;
     if (listed) return listed;
     const raw = rankingDetailQuery.data?.rawRow;
     return raw ? mapBackendStockRow(raw) : null;
-  }, [rankingDetailQuery.data?.rawRow, rankingQuery.data, symbol]);
+  }, [rankingDetailQuery.data?.rawRow, rankingQuery.data, resolvedSymbol]);
   const indicators = useMemo(() => (row ? deriveIndicators(row) : null), [row]);
   const mas = useMemo(
     () => (ohlcvQuery.data?.candles ? deriveMAs(ohlcvQuery.data.candles) : { ma50: [], ma200: [], high52w: null, low52w: null }),
     [ohlcvQuery.data],
   );
-  const newsEntries = useMemo(() => getSymbolNews(symbol), [symbol]);
+  const newsEntries = useMemo(() => getSymbolNews(resolvedSymbol || symbol), [resolvedSymbol, symbol]);
 
   if (!symbol) {
     return (
@@ -128,6 +136,7 @@ export default function SymbolPage() {
   }
 
   const detail = detailQuery.data;
+  const displaySymbol = detail?.symbol ?? resolvedSymbol ?? symbol;
   const quote = detail?.latestQuote;
   const meta = detail?.metadata;
   const fundamentals = detail?.fundamentals;
@@ -154,16 +163,27 @@ export default function SymbolPage() {
   const close = quote?.close ?? row?.price ?? null;
   const chgAbs = quote?.close != null && quote?.open != null ? quote.close - quote.open : null;
   const chgPct = chgAbs != null && quote?.open ? (chgAbs / quote.open) * 100 : null;
-  const positionPct = rankPct(ranking?.rankPosition, ranking?.universeSize);
-  const rankLabel = ranking?.rankPosition ? `#${ranking.rankPosition} / ${ranking.universeSize}` : '-';
+  const actualRankPosition = ranking?.rankPosition ?? row?.rankPosition ?? null;
+  const actualUniverseSize = ranking?.universeSize || rankingQuery.data?.rows.length || null;
+  const positionPct = rankPct(actualRankPosition, actualUniverseSize ?? undefined);
+  const rankLabel = actualRankPosition ? `#${actualRankPosition} / ${actualUniverseSize ?? '-'}` : '-';
+  const rankBadgeLabel = actualRankPosition ? `Rank ${rankLabel}` : detail?.lifecycle.rank ?? 'OUT';
+  const rankBadgeTone: Tone =
+    actualRankPosition && actualRankPosition <= 25
+      ? 'emerald'
+      : actualRankPosition
+        ? 'blue'
+        : (detail?.lifecycle.rank ?? '').startsWith('TOP')
+          ? 'emerald'
+          : 'slate';
   const sectorName = row?.sector ?? ranking?.sectorName ?? meta?.sector ?? fundamentals?.sector ?? null;
   const industryGroup =
     meta?.industryGroup ?? (meta?.sector && meta.sector !== sectorName ? meta.sector : null);
 
   return (
     <PageFrame
-      title={symbol}
-      description={meta?.symbolName ?? `Stock workspace - NSE - ${symbol}`}
+      title={displaySymbol}
+      description={meta?.symbolName ?? `Stock workspace - NSE - ${displaySymbol}`}
       hideHeader
     >
       {detailQuery.isLoading || rankingQuery.isLoading ? (
@@ -174,7 +194,7 @@ export default function SymbolPage() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h1 className="font-mono text-2xl font-bold text-slate-100">{symbol}</h1>
+                  <h1 className="font-mono text-2xl font-bold text-slate-100">{displaySymbol}</h1>
                   {row?.tier ? (
                     <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase', TIER_BADGE[row.tier] ?? TIER_BADGE.C)}>
                       {row.tier}
@@ -188,6 +208,9 @@ export default function SymbolPage() {
                 </div>
                 <p className="mt-0.5 truncate text-sm text-slate-400">
                   {meta?.symbolName ?? 'Name unavailable'}
+                  {displaySymbol !== symbol ? (
+                    <span className="text-slate-500"> · matched from {symbol}</span>
+                  ) : null}
                   {sectorName ? (
                     <>
                       {' - '}
@@ -199,7 +222,7 @@ export default function SymbolPage() {
                   ) : null}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  <StatusPill label={detail?.lifecycle.rank ?? 'OUT'} tone={(detail?.lifecycle.rank ?? '').startsWith('TOP') ? 'emerald' : 'slate'} />
+                  <StatusPill label={rankBadgeLabel} tone={rankBadgeTone} />
                   <StatusPill label={row?.stageLabel ?? operator?.stageLabel ?? 'No stage'} tone="blue" />
                   <StatusPill label={row?.pattern && row.pattern !== 'N/A' ? row.pattern : 'No pattern'} tone={row?.pattern && row.pattern !== 'N/A' ? 'violet' : 'slate'} />
                   <StatusPill label={row?.breakout ? 'Breakout' : 'No breakout'} tone={row?.breakout ? 'emerald' : 'slate'} />
@@ -283,7 +306,7 @@ export default function SymbolPage() {
           <div className="grid gap-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <Panel title="Lifecycle">
               <div className="grid gap-2 sm:grid-cols-4">
-                <LifecycleChip label="Rank" value={detail?.lifecycle.rank ?? 'OUT'} />
+                <LifecycleChip label="Rank" value={rankBadgeLabel} />
                 <LifecycleChip label="Breakout" value={detail?.lifecycle.breakout ?? 'NONE'} />
                 <LifecycleChip label="Pattern" value={detail?.lifecycle.pattern ?? 'NONE'} />
                 <LifecycleChip label="Execution" value={detail?.lifecycle.execution ?? 'OUT'} />

@@ -26,6 +26,14 @@ def test_parse_portfolio_sheet_positions_skips_generated_summary_rows():
     ]
 
 
+def test_daily_pipeline_default_stages_include_perf_tracker():
+    assert daily_pipeline.main.__defaults__[3].endswith(",perf_tracker")
+    assert daily_pipeline._requested_stages_for_daily(
+        daily_pipeline.main.__defaults__[3],
+        canary=False,
+    )[-1] == "perf_tracker"
+
+
 class _FakeDateTime(datetime):
     @classmethod
     def now(cls, tz=None):  # type: ignore[override]

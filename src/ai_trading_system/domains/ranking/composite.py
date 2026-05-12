@@ -22,6 +22,11 @@ _LEGACY_CONFIG_DIR = Path(__file__).resolve().parents[4] / "config"
 RANK_FACTOR_WEIGHTS_PATH = _PLATFORM_CONFIG_DIR / "rank_factor_weights.json"
 LEGACY_RANK_FACTOR_WEIGHTS_PATH = _LEGACY_CONFIG_DIR / "rank_factor_weights.json"
 _SECTOR_DEMEAN_FACTORS = frozenset({"rel_strength", "volume_intensity_normalized", "trend_score"})
+_SCORE_INPUT_PREFIX = "__rank_input_"
+
+
+def _score_input_column(raw_column: str) -> str:
+    return f"{_SCORE_INPUT_PREFIX}{raw_column}"
 
 
 def load_factor_weights(config_path: Path | None = None) -> dict[str, float]:
@@ -94,7 +99,7 @@ def normalize_raw_factor_inputs(frame: pd.DataFrame) -> pd.DataFrame:
         raw_values = winsorize_series(normalized[factor.raw_column])
         if factor.raw_column in _SECTOR_DEMEAN_FACTORS:
             raw_values = demean_by_sector(raw_values, sector_names)
-        normalized.loc[:, factor.raw_column] = raw_values
+        normalized.loc[:, _score_input_column(factor.raw_column)] = raw_values
 
     return normalized
 
@@ -109,7 +114,8 @@ def compute_factor_scores(
 
     for factor in PRIMARY_FACTORS:
         rank_method = "average" if factor.raw_column == "delivery_pct" else "average"
-        scores.loc[:, factor.score_column] = scores[factor.raw_column].rank(
+        score_input_column = _score_input_column(factor.raw_column)
+        scores.loc[:, factor.score_column] = scores[score_input_column].rank(
             pct=True,
             method=rank_method,
         ) * 100
@@ -131,7 +137,10 @@ def compute_factor_scores(
         )
         scores.loc[:, "sector_total_symbols"] = scores.groupby("sector_name")["sector_name"].transform("count")
 
-    return scores
+    return scores.drop(
+        columns=[column for column in scores.columns if column.startswith(_SCORE_INPUT_PREFIX)],
+        errors="ignore",
+    )
 
 
 def filter_ranked_scores(

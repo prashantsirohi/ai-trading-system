@@ -12,9 +12,14 @@ from fastapi.testclient import TestClient
 from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.pipeline.contracts import StageArtifact
 from ai_trading_system.ui.execution_api.app import create_app
+from ai_trading_system.ui.execution_api.schemas.requests import PipelineRunRequest
 from ai_trading_system.ui.execution_api.services.execution_operator import retry_publish_action
 
 API_HEADERS = {"x-api-key": "test-api-key"}
+
+
+def test_pipeline_run_request_default_stages_include_perf_tracker() -> None:
+    assert PipelineRunRequest().stages[-1] == "perf_tracker"
 
 
 def _seed_execution_project(tmp_path: Path) -> str:

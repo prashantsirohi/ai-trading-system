@@ -86,7 +86,7 @@ def _latest_stage_statuses(stage_runs: Iterable[dict]) -> dict[str, str]:
 
 
 def _requested_stages_for_daily(stages: str, *, canary: bool) -> list[str]:
-    if canary and stages == "ingest,features,rank,candidates,events,execute,insight,narrative,publish":
+    if canary and stages == "ingest,features,rank,candidates,events,execute,insight,narrative,publish,perf_tracker":
         return ["ingest", "features", "rank"]
     return [stage.strip() for stage in stages.split(",") if stage.strip()]
 
@@ -283,7 +283,7 @@ def main(
     force: bool = False,
     local_publish: bool = False,
     smoke: bool = False,
-    stages: str = "ingest,features,rank,candidates,events,execute,insight,narrative,publish",
+    stages: str = "ingest,features,rank,candidates,events,execute,insight,narrative,publish,perf_tracker",
     canary: bool = False,
     symbol_limit: int | None = None,
     skip_preflight: bool = False,
@@ -469,7 +469,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--stages",
-        default="ingest,features,rank,candidates,events,execute,insight,narrative,publish",
+        default="ingest,features,rank,candidates,events,execute,insight,narrative,publish,perf_tracker",
         help="Comma-separated stage list. Example: publish",
     )
     parser.add_argument(

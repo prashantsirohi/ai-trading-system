@@ -22,6 +22,12 @@ from ai_trading_system.pipeline.contracts import DataQualityCriticalError, Publi
 from ai_trading_system.platform.db.paths import ensure_domain_layout, get_domain_paths, research_static_end_date
 
 
+def test_orchestrator_cli_default_stages_include_perf_tracker() -> None:
+    args = orchestrator_module.build_parser().parse_args([])
+
+    assert args.stages.split(",")[-1] == "perf_tracker"
+
+
 def _init_catalog(db_path: Path, rows: list[tuple]) -> None:
     conn = duckdb.connect(str(db_path))
     try:
@@ -98,9 +104,20 @@ def test_stage_boundaries_and_registry_rows(tmp_path: Path) -> None:
 
     # Either pristine or relaxed completion; both indicate full pipeline success.
     assert result["status"] in ("completed", "completed_with_dq_relaxations")
-    assert [stage["stage_name"] for stage in result["stages"]] == ["ingest", "features", "rank", "candidates", "events", "execute", "insight", "narrative", "publish"]
+    assert [stage["stage_name"] for stage in result["stages"]] == [
+        "ingest",
+        "features",
+        "rank",
+        "candidates",
+        "events",
+        "execute",
+        "insight",
+        "narrative",
+        "publish",
+        "perf_tracker",
+    ]
     assert registry.count_rows("pipeline_run") == 1
-    assert registry.count_rows("pipeline_stage_run") == 9
+    assert registry.count_rows("pipeline_stage_run") == 10
     assert registry.count_rows("pipeline_artifact") >= 5
     assert registry.count_rows("dq_result") >= 8
     conn = duckdb.connect(str(registry.db_path))

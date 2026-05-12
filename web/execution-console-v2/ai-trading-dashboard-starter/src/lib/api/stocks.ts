@@ -80,6 +80,7 @@ export interface StockLifecycle {
 export interface StockDetail {
   available: boolean;
   symbol: string;
+  requestedSymbol: string | null;
   metadata: StockMetadata | null;
   fundamentals: StockFundamentals | null;
   latestQuote: StockQuote | null;
@@ -90,6 +91,7 @@ export interface StockDetail {
 interface BackendStockDetail {
   available?: boolean;
   symbol?: string;
+  requested_symbol?: string | null;
   metadata?: Record<string, string | number | boolean | null> | null;
   fundamentals?: Record<string, string | number | boolean | null> | null;
   latest_quote?: Record<string, string | number | null> | null;
@@ -188,6 +190,7 @@ export async function getStockDetail(symbol: string): Promise<StockDetail> {
   return {
     available: Boolean(raw.available),
     symbol: asString(raw.symbol) ?? symbol,
+    requestedSymbol: asString(raw.requested_symbol),
     metadata: mapMetadata(raw.metadata),
     fundamentals: mapFundamentals(raw.fundamentals),
     latestQuote: mapQuote(raw.latest_quote),
