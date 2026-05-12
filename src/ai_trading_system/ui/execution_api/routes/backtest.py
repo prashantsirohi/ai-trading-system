@@ -35,10 +35,12 @@ def backtest_profiles() -> dict[str, Any]:
 
 class BacktestRunRequest(BaseModel):
     profile: str = Field(..., description="Risk profile name")
+    data_source: str = Field(default="pipeline_replay", description="pipeline_replay or research_dynamic")
     from_date: Optional[str] = Field(default=None, description="ISO date (inclusive)")
     to_date: Optional[str] = Field(default=None, description="ISO date (inclusive)")
     equity: float = Field(default=1_000_000.0, ge=0.0)
     persist: bool = Field(default=True)
+    custom_config: Optional[dict[str, Any]] = Field(default=None)
 
 
 @router.post("/run")
@@ -47,8 +49,10 @@ def backtest_run(req: BacktestRunRequest) -> dict[str, Any]:
     return run_backtest(
         project_root(),
         profile_name=req.profile,
+        data_source=req.data_source,
         from_date=_parse_iso(req.from_date),
         to_date=_parse_iso(req.to_date),
         equity=req.equity,
         persist=req.persist,
+        custom_config=req.custom_config,
     )

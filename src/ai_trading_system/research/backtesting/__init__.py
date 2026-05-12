@@ -14,6 +14,7 @@ from ai_trading_system.research.backtesting.pipeline_loader import (
     discover_runs,
     load_ranked_by_date,
 )
+from ai_trading_system.research.backtesting.research_loader import load_research_ranked_by_date
 
 __all__ = [
     "BacktestResult",
@@ -21,4 +22,5 @@ __all__ = [
     "EngineBacktestRunner",
     "discover_runs",
     "load_ranked_by_date",
+    "load_research_ranked_by_date",
 ]

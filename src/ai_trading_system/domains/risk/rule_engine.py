@@ -68,6 +68,7 @@ class TradingRuleEngine:
         latest_signal_by_symbol = {c.symbol_id: c for c in candidates}
 
         intents: list[RiskOrderIntent] = []
+        exited_symbols: set[str] = set()
 
         # ----- 1. Exits first.
         surviving_positions: list[PositionSnapshot] = []
@@ -80,6 +81,7 @@ class TradingRuleEngine:
                 position, market, latest_signal_by_symbol.get(position.symbol_id)
             )
             if decision.should_exit:
+                exited_symbols.add(position.symbol_id)
                 intents.append(
                     RiskOrderIntent(
                         symbol_id=position.symbol_id,
@@ -97,6 +99,7 @@ class TradingRuleEngine:
                             "entry_date": position.entry_date.isoformat(),
                             "rank_at_entry": position.rank_at_entry,
                             "score_at_entry": position.score_at_entry,
+                            "exit_price": market.close,
                         },
                     )
                 )
@@ -117,6 +120,8 @@ class TradingRuleEngine:
         sorted_candidates = sorted(candidates, key=lambda c: c.rank)
         running_portfolio = post_exit_portfolio
         for candidate in sorted_candidates:
+            if candidate.symbol_id in exited_symbols:
+                continue
             market = market_by_symbol.get(candidate.symbol_id)
             if market is None:
                 continue

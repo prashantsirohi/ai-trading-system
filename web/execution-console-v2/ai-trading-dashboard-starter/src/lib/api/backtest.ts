@@ -179,6 +179,7 @@ export interface BacktestEquityPoint {
 export interface BacktestRunResult {
   status: string;
   profile: string;
+  dataSource: string;
   fromDate: string | null;
   toDate: string | null;
   startingEquity: number;
@@ -224,6 +225,7 @@ interface BackendEquity {
 interface BackendBacktestResult {
   status?: string;
   profile?: string;
+  data_source?: string;
   from_date?: string | null;
   to_date?: string | null;
   starting_equity?: number;
@@ -264,10 +266,20 @@ function mapTrade(raw: BackendTrade): BacktestTrade {
 
 export interface RunBacktestParams {
   profile: string;
+  dataSource?: string;
   fromDate?: string;
   toDate?: string;
   equity?: number;
   persist?: boolean;
+  customConfig?: RiskProfileCustomConfig;
+}
+
+export interface RiskProfileCustomConfig {
+  entry?: Record<string, unknown>;
+  stop?: Record<string, unknown>;
+  exit?: Record<string, unknown>;
+  sizing?: Record<string, unknown>;
+  constraints?: Record<string, unknown>;
 }
 
 export async function runBacktest(
@@ -275,11 +287,15 @@ export async function runBacktest(
 ): Promise<BacktestRunResult> {
   const body: Record<string, unknown> = {
     profile: params.profile,
+    data_source: params.dataSource ?? 'pipeline_replay',
     from_date: params.fromDate ?? null,
     to_date: params.toDate ?? null,
     equity: params.equity ?? 1_000_000,
     persist: params.persist ?? true,
   };
+  if (params.customConfig) {
+    body.custom_config = params.customConfig;
+  }
   const raw = await postDashboardJson<BackendBacktestResult>(
     '/api/execution/backtest/run',
     body,
@@ -287,6 +303,7 @@ export async function runBacktest(
   return {
     status: raw.status ?? 'unknown',
     profile: raw.profile ?? params.profile,
+    dataSource: raw.data_source ?? params.dataSource ?? 'pipeline_replay',
     fromDate: raw.from_date ?? null,
     toDate: raw.to_date ?? null,
     startingEquity: num(raw.starting_equity, params.equity ?? 1_000_000),

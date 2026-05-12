@@ -107,3 +107,48 @@ def test_run_backtest_with_seeded_runs(client, tmp_path, monkeypatch):
     trade = payload["trades"][0]
     assert trade["entry_reason"] == "entry_confirmed"
     assert trade["stop_price"] is not None
+
+
+def test_run_backtest_accepts_custom_config_overrides(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    base = tmp_path / "data" / "pipeline_runs"
+    rank_dir = base / "pipeline-2026-04-01-aaaaaaaa" / "rank" / "attempt_1"
+    rank_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "symbol_id": "ACME",
+                "exchange": "NSE",
+                "close": 100.0,
+                "composite_score": 80.0,
+                "eligible_rank": 1,
+                "is_stage2_uptrend": True,
+                "sector_name": "TECH",
+                "sector_strength_score": 0.7,
+                "sma_11": 99.0,
+                "sma_20": 97.0,
+                "sma_50": 92.0,
+                "sma_200": 80.0,
+                "atr_14": 2.0,
+                "volume_ratio_20": 2.0,
+                "swing_low_20": 94.0,
+                "delivery_pct": 60.0,
+            }
+        ]
+    ).to_csv(rank_dir / "ranked_signals.csv", index=False)
+
+    r = client.post(
+        "/api/execution/backtest/run",
+        headers=API_HEADERS,
+        json={
+            "profile": "balanced_swing",
+            "persist": False,
+            "custom_config": {"entry": {"min_volume_ratio": 3.0}},
+        },
+    )
+
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["profile"] == "custom:balanced_swing"
+    assert payload["status"] == "ok"
+    assert payload["trade_count"] == 0

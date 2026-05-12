@@ -114,6 +114,7 @@ class EngineBacktestRunner:
         score_streak: dict[str, int] = {}
         # Track open BacktestTrade rows so we can close them on exit.
         open_trades: dict[str, BacktestTrade] = {}
+        latest_close_by_symbol: dict[str, float] = {}
 
         sorted_dates = sorted(ranked_by_date.keys())
         equity = self.starting_equity
@@ -170,6 +171,7 @@ class EngineBacktestRunner:
                 sid = str(r.get("symbol_id") or "")
                 if sid:
                     market_by_symbol[sid] = market_from_row(r, as_of=bar_date)
+                    latest_close_by_symbol[sid] = market_by_symbol[sid].close
 
             # For held symbols that fell off ranked: synthesize a minimal market.
             for symbol_id in positions:
@@ -262,12 +264,20 @@ class EngineBacktestRunner:
             if position is None:
                 continue
             trade.exit_date = sorted_dates[-1]
-            trade.exit_price = position.entry_price  # no market data; flat
+            trade.exit_price = latest_close_by_symbol.get(symbol_id, position.entry_price)
             trade.exit_reason = "backtest_end"
             trade.bars_held = position.bars_held
-            trade.pnl = 0.0
-            trade.pnl_pct = 0.0
+            trade.pnl = (trade.exit_price - trade.entry_price) * trade.shares
+            trade.pnl_pct = (
+                (trade.exit_price - trade.entry_price) / trade.entry_price
+                if trade.entry_price > 0
+                else 0.0
+            )
+            equity += trade.pnl
             result.trades.append(trade)
+
+        if result.equity_curve:
+            result.equity_curve[-1]["equity"] = equity
 
         return result
 

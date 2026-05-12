@@ -95,3 +95,20 @@ def test_no_entry_when_volume_below_threshold():
     runner = EngineBacktestRunner(risk_config=RiskPolicyConfig(name="test"), starting_equity=500_000.0)
     result = runner.run(ranked_by_date)
     assert result.trades == []
+
+
+def test_open_trade_closes_at_latest_close_on_backtest_end():
+    d0 = date(2026, 4, 1)
+    ranked_by_date = {
+        d0: pd.DataFrame([_row("ACME", 100.0)]),
+        d0 + timedelta(days=1): pd.DataFrame([_row("ACME", 120.0)]),
+    }
+    runner = EngineBacktestRunner(risk_config=RiskPolicyConfig(name="test"), starting_equity=500_000.0)
+    result = runner.run(ranked_by_date)
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.exit_reason == "backtest_end"
+    assert trade.exit_price == 120.0
+    assert trade.pnl and trade.pnl > 0
+    assert result.equity_curve[-1]["equity"] == 500_000.0 + trade.pnl

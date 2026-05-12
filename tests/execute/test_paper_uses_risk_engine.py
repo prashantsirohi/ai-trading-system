@@ -100,7 +100,33 @@ def test_engine_path_emits_close_below_20dma_exit_for_held_position():
     assert len(sells) == 1
     assert sells[0].symbol_id == "HELD"
     assert sells[0].reason == "close_below_20dma"
+    assert sells[0].requested_price == 90.0
     assert actions[0].side == "SELL"  # exits emitted before entries
+
+
+def test_engine_path_does_not_false_exit_held_symbol_without_market_price():
+    held = PositionSnapshot(
+        symbol_id="HELD",
+        exchange="NSE",
+        quantity=100,
+        avg_entry_price=110.0,
+        last_fill_price=110.0,
+    )
+    actions = build_trade_actions(
+        ranked_df=pd.DataFrame([], columns=["symbol_id"]),
+        positions={"HELD": held},
+        risk_config=_config(),
+        equity=1_000_000.0,
+        stop_records={
+            "HELD": {
+                "stop_price": 80.0,
+                "entry_price": 110.0,
+                "created_at": "2026-04-01T00:00:00",
+                "metadata": {"sector": "TECH"},
+            }
+        },
+    )
+    assert [a for a in actions if a.side == "SELL"] == []
 
 
 def test_engine_path_skips_held_symbol_for_entry():

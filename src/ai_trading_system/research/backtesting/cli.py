@@ -22,7 +22,9 @@ from ai_trading_system.domains.risk import load_profile
 from ai_trading_system.research.backtesting import (
     EngineBacktestRunner,
     load_ranked_by_date,
+    load_research_ranked_by_date,
 )
+from ai_trading_system.research.sync_operational_data import sync_operational_to_research
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -34,6 +36,11 @@ def _parse_date(value: str | None) -> date | None:
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Engine-driven historical backtest")
     p.add_argument("--risk-profile", default="balanced_swing", help="Profile name in config/risk_profiles/")
+    p.add_argument(
+        "--data-source",
+        choices=["pipeline_replay", "research_dynamic"],
+        default="pipeline_replay",
+    )
     p.add_argument(
         "--pipeline-runs-dir",
         default="data/pipeline_runs",
@@ -61,14 +68,25 @@ def main(argv: list[str] | None = None) -> int:
     profile = load_profile(args.risk_profile, strict=args.strict_profile)
     print(f"[engine-backtest] loaded profile={profile.name}", file=sys.stderr)
 
-    ranked_by_date = load_ranked_by_date(
-        args.pipeline_runs_dir,
-        from_date=_parse_date(args.from_date),
-        to_date=_parse_date(args.to_date),
-    )
+    from_date = _parse_date(args.from_date)
+    to_date = _parse_date(args.to_date)
+    if args.data_source == "research_dynamic":
+        sync_result = sync_operational_to_research(project_root=Path.cwd(), apply=True)
+        print(f"[engine-backtest] synced research DB: {sync_result}", file=sys.stderr)
+        ranked_by_date = load_research_ranked_by_date(
+            Path.cwd(),
+            from_date=from_date,
+            to_date=to_date,
+        )
+    else:
+        ranked_by_date = load_ranked_by_date(
+            args.pipeline_runs_dir,
+            from_date=from_date,
+            to_date=to_date,
+        )
     if not ranked_by_date:
         print(
-            f"[engine-backtest] no ranked_signals.csv found under {args.pipeline_runs_dir}",
+            f"[engine-backtest] no data found for source={args.data_source}",
             file=sys.stderr,
         )
         return 2
@@ -90,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
 
     summary = {
         "profile": profile.name,
+        "data_source": args.data_source,
         "from_date": args.from_date,
         "to_date": args.to_date,
         "starting_equity": args.equity,

@@ -60,6 +60,7 @@ def build_trade_actions(
     equity: float | None = None,
     stop_records: Dict[str, dict] | None = None,
     market_extras: Dict[str, dict] | None = None,
+    current_prices: Dict[str, float] | None = None,
 ) -> list[TradeAction]:
     """Build buy/sell actions from the current ranked universe and open positions.
 
@@ -75,6 +76,7 @@ def build_trade_actions(
             equity=equity,
             stop_records=stop_records or {},
             market_extras=market_extras or {},
+            current_prices=current_prices or {},
             fallback_mode=(strategy_mode or "technical").lower(),
         )
 
@@ -261,12 +263,19 @@ def _build_trade_actions_with_engine(
     equity: float | None,
     stop_records: Dict[str, dict],
     market_extras: Dict[str, dict],
+    current_prices: Dict[str, float],
     fallback_mode: str,
 ) -> list[TradeAction]:
     """Engine-driven action generation. Exits precede entries in the returned list."""
     ranked = ranked_df if ranked_df is not None else pd.DataFrame()
     rows = ranked.to_dict(orient="records") if not ranked.empty else []
-    row_by_symbol: Dict[str, dict] = {str(r.get("symbol_id")): r for r in rows if r.get("symbol_id")}
+    row_by_symbol: Dict[str, dict] = {_normalize_symbol(r.get("symbol_id")): r for r in rows if r.get("symbol_id")}
+    normalized_extras = {_normalize_symbol(k): v for k, v in market_extras.items()}
+    normalized_prices = {
+        _normalize_symbol(k): float(v)
+        for k, v in current_prices.items()
+        if k not in (None, "") and v is not None
+    }
 
     candidates = [candidate_from_row(r) for r in rows]
     sector_lookup = {c.symbol_id: c.sector for c in candidates}
@@ -276,10 +285,14 @@ def _build_trade_actions_with_engine(
     # the ranked list).
     market_by_symbol = {}
     for r in rows:
-        sid = str(r.get("symbol_id") or "")
-        if not sid:
+        actual_sid = str(r.get("symbol_id") or "")
+        normalized_sid = _normalize_symbol(actual_sid)
+        if not actual_sid:
             continue
-        market_by_symbol[sid] = market_from_row(r, extra=market_extras.get(sid))
+        row = dict(r)
+        if normalized_sid in normalized_prices:
+            row["close"] = normalized_prices[normalized_sid]
+        market_by_symbol[actual_sid] = market_from_row(row, extra=normalized_extras.get(normalized_sid))
 
     risk_positions = []
     for symbol_id, exec_pos in positions.items():
@@ -292,9 +305,19 @@ def _build_trade_actions_with_engine(
         )
         risk_positions.append(risk_pos)
         if symbol_id not in market_by_symbol:
-            held_row = row_by_symbol.get(symbol_id, {"symbol_id": symbol_id, "exchange": exec_pos.exchange})
+            normalized_symbol = _normalize_symbol(symbol_id)
+            current_price = normalized_prices.get(normalized_symbol)
+            if current_price is None:
+                continue
+            held_row = dict(
+                row_by_symbol.get(
+                    normalized_symbol,
+                    {"symbol_id": symbol_id, "exchange": exec_pos.exchange},
+                )
+            )
+            held_row["close"] = current_price
             market_by_symbol[symbol_id] = market_from_row(
-                held_row, extra=market_extras.get(symbol_id)
+                held_row, extra=normalized_extras.get(normalized_symbol)
             )
 
     equity_value = float(equity) if equity is not None else 0.0
@@ -320,9 +343,13 @@ def _intent_to_action(
     """Translate engine intent → execution TradeAction."""
     requested_price: float | None = None
     if intent.intent_kind == "exit":
-        snapshot = positions.get(intent.symbol_id)
-        if snapshot is not None:
-            requested_price = snapshot.last_fill_price or snapshot.avg_entry_price
+        exit_price = intent.metadata.get("exit_price")
+        if exit_price is not None:
+            requested_price = float(exit_price)
+        else:
+            snapshot = positions.get(intent.symbol_id)
+            if snapshot is not None:
+                requested_price = snapshot.last_fill_price or snapshot.avg_entry_price
     return TradeAction(
         action=intent.side,
         symbol_id=intent.symbol_id,
@@ -337,3 +364,7 @@ def _intent_to_action(
             **intent.metadata,
         },
     )
+
+
+def _normalize_symbol(value: object) -> str:
+    return str(value or "").strip().upper()

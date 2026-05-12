@@ -76,3 +76,30 @@ def test_no_entry_if_candidate_already_held(make_candidate, make_market, make_po
     engine = TradingRuleEngine(base_config)
     intents = engine.generate_order_intents([make_candidate()], markets, portfolio)
     assert all(i.intent_kind == "exit" or i.symbol_id != "ACME" for i in intents)
+
+
+def test_symbol_exited_this_tick_is_not_reentered_same_tick(
+    make_candidate, make_market, make_position, base_config
+):
+    held = make_position(symbol_id="ACME", sector="TECH", stop_price=99.0)
+    portfolio = PortfolioSnapshot(
+        cash=900_000.0,
+        equity=1_000_000.0,
+        positions=(held,),
+        sector_exposure={"TECH": 0.10},
+    )
+    candidates = [
+        make_candidate(symbol_id="ACME", sector="TECH", rank=1),
+        make_candidate(symbol_id="NEW", sector="HEALTH", rank=2),
+    ]
+    markets = {
+        "ACME": make_market(symbol_id="ACME", close=70.0),
+        "NEW": make_market(symbol_id="NEW"),
+    }
+
+    engine = TradingRuleEngine(base_config)
+    intents = engine.generate_order_intents(candidates, markets, portfolio)
+
+    assert any(i.intent_kind == "exit" and i.symbol_id == "ACME" for i in intents)
+    assert not any(i.intent_kind == "entry" and i.symbol_id == "ACME" for i in intents)
+    assert any(i.intent_kind == "entry" and i.symbol_id == "NEW" for i in intents)

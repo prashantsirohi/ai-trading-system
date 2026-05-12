@@ -135,6 +135,7 @@ class AutoTrader:
             equity=capital if risk_config is not None else None,
             stop_records=stop_records,
             market_extras=market_extras,
+            current_prices=current_prices,
         )
         executions: list[dict] = []
         preview_payloads: list[dict] = []
