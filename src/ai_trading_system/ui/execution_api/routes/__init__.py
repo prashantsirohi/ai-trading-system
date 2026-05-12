@@ -6,6 +6,7 @@ from ai_trading_system.ui.execution_api.routes import (
     fundamentals,
     health,
     insight,
+    perf_tracker,
     pipeline,
     processes,
     ranking_detail,
@@ -30,6 +31,7 @@ ALL_ROUTERS = (
     pipeline.router,
     sectors.router,
     backtest.router,
+    perf_tracker.router,
 )
 
 
@@ -40,6 +42,7 @@ __all__ = [
     "fundamentals",
     "health",
     "insight",
+    "perf_tracker",
     "pipeline",
     "processes",
     "ranking_detail",

@@ -35,6 +35,14 @@ export const queryKeys = {
   riskProfiles: () => ['execution', 'risk-profiles'] as const,
   backtestRun: (profile: string, fromDate: string | null, toDate: string | null, equity: number) =>
     ['execution', 'backtest-run', profile, fromDate, toDate, equity] as const,
+  perfCoverage: () => ['execution', 'perf-coverage'] as const,
+  perfCohorts: (lookbackDays: number) =>
+    ['execution', 'perf-cohorts', lookbackDays] as const,
+  perfBuckets: (lookbackDays: number) =>
+    ['execution', 'perf-buckets', lookbackDays] as const,
+  perfFactorIc: (windows: number[]) =>
+    ['execution', 'perf-factor-ic', windows.join(',')] as const,
+  perfDrift: () => ['execution', 'perf-drift'] as const,
 } as const;
 
 export type QueryKeyFactories = typeof queryKeys;
