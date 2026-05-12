@@ -33,6 +33,18 @@ import {
   type RunArtifacts,
 } from '@/lib/api/runs';
 import { getSectors } from '@/lib/api/sectors';
+import {
+  getPerfCoverage,
+  getPerfCohorts,
+  getPerfBuckets,
+  getPerfFactorIc,
+  getPerfDrift,
+  type PerfCoverage,
+  type PerfCohortsResponse,
+  type PerfBucketsResponse,
+  type PerfFactorIcResponse,
+  type PerfDriftResponse,
+} from '@/lib/api/perfTracker';
 import { getShadow } from '@/lib/api/shadow';
 import {
   getRiskProfiles,
@@ -279,6 +291,66 @@ export function useRefreshAll(): () => Promise<void> {
   return async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.all });
   };
+}
+
+export function usePerfCoverage(
+  options: QueryOverrides<PerfCoverage> = {},
+): UseQueryResult<PerfCoverage, Error> {
+  return useQuery<PerfCoverage, Error>({
+    queryKey: queryKeys.perfCoverage(),
+    queryFn: getPerfCoverage,
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+export function usePerfCohorts(
+  lookbackDays: number,
+  options: QueryOverrides<PerfCohortsResponse> = {},
+): UseQueryResult<PerfCohortsResponse, Error> {
+  return useQuery<PerfCohortsResponse, Error>({
+    queryKey: queryKeys.perfCohorts(lookbackDays),
+    queryFn: () => getPerfCohorts(lookbackDays),
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+export function usePerfBuckets(
+  lookbackDays: number,
+  options: QueryOverrides<PerfBucketsResponse> = {},
+): UseQueryResult<PerfBucketsResponse, Error> {
+  return useQuery<PerfBucketsResponse, Error>({
+    queryKey: queryKeys.perfBuckets(lookbackDays),
+    queryFn: () => getPerfBuckets(lookbackDays),
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+const DEFAULT_IC_WINDOWS = [30, 90, 180];
+
+export function usePerfFactorIc(
+  windows: number[] = DEFAULT_IC_WINDOWS,
+  options: QueryOverrides<PerfFactorIcResponse> = {},
+): UseQueryResult<PerfFactorIcResponse, Error> {
+  return useQuery<PerfFactorIcResponse, Error>({
+    queryKey: queryKeys.perfFactorIc(windows),
+    queryFn: () => getPerfFactorIc(windows),
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+export function usePerfDrift(
+  options: QueryOverrides<PerfDriftResponse> = {},
+): UseQueryResult<PerfDriftResponse, Error> {
+  return useQuery<PerfDriftResponse, Error>({
+    queryKey: queryKeys.perfDrift(),
+    queryFn: getPerfDrift,
+    staleTime: 5 * 60_000,
+    ...options,
+  });
 }
 
 export { queryKeys };
