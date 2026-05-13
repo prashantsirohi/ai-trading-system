@@ -43,6 +43,9 @@ def test_winner_capture_identifies_top_gainers_and_capture_status(tmp_path, monk
         ("BBB", "2025-12-31", 250.0),
         ("CCC", "2025-01-01", 10.0),
         ("CCC", "2025-12-31", 12.0),
+        ("JUMP", "2025-01-01", 100.0),
+        ("JUMP", "2025-01-02", 500.0),
+        ("JUMP", "2025-12-31", 600.0),
         ("BAD", "2025-01-01", 0.0),
         ("BAD", "2025-12-31", 999.0),
         ("NIFTY50", "2025-01-01", 1000.0),
@@ -102,6 +105,7 @@ def test_winner_capture_identifies_top_gainers_and_capture_status(tmp_path, monk
     assert result["summary"]["missed_count"] == 1
     assert result["summary"]["capture_rate"] == 0.5
     assert [row["symbol_id"] for row in result["winners"]] == ["BBB", "AAA"]
+    assert "JUMP" not in {row["symbol_id"] for row in result["winners"]}
     bbb, aaa = result["winners"]
     assert bbb["captured"] is False
     assert bbb["best_rank"] == 60

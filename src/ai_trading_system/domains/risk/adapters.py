@@ -57,6 +57,21 @@ def _coerce_date(value: Any) -> date:
     return date.today()
 
 
+def _coerce_optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y"}:
+        return True
+    if text in {"false", "0", "no", "n"}:
+        return False
+    return None
+
+
 def candidate_from_row(row: Mapping[str, Any]) -> CandidateSignal:
     """Build a ``CandidateSignal`` from one ranked_signals.csv row."""
     rank = _coerce_int(
@@ -114,6 +129,19 @@ def market_from_row(
         sma_20=_coerce_float(row.get("sma_20")),
         sma_50=_coerce_float(row.get("sma_50")),
         sma_200=_coerce_float(row.get("sma_200") or row.get("sma_150") or extra.get("sma_200")),
+        ema_20=_coerce_float(row.get("ema_20") or row.get("ema20") or extra.get("ema_20")),
+        high_52w=_coerce_float(row.get("high_52w") or row.get("hi_52w") or extra.get("high_52w")),
+        return_20_pct=_coerce_float(row.get("return_20") or row.get("return_20_pct")),
+        return_50_pct=_coerce_float(row.get("return_50") or row.get("return_50_pct")),
+        sma50_rising_20d=_coerce_optional_bool(row.get("sma50_rising_20d")),
+        drawdown_from_recent_high_pct=_coerce_float(
+            row.get("drawdown_from_recent_high_pct") or row.get("drawdown_recent_high_pct")
+        ),
+        below_ema20_days_20=(
+            int(v)
+            if (v := _coerce_float(row.get("below_ema20_days_20") or row.get("below_ema20_20"))) is not None
+            else None
+        ),
         volume_ratio_20=vol_ratio,
         delivery_pct=_coerce_float(row.get("delivery_pct")),
         sector_delivery_median=_coerce_float(

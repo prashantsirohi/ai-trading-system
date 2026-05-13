@@ -80,7 +80,18 @@ def test_research_loader_computes_engine_columns(tmp_path):
 
     assert ranked
     frame = ranked[start + timedelta(days=239)]
-    for column in ["sma_11", "sma_200", "atr_14", "volume_ratio_20", "swing_low_20"]:
+    for column in [
+        "sma_11",
+        "sma_200",
+        "ema_20",
+        "atr_14",
+        "volume_ratio_20",
+        "swing_low_20",
+        "return_50",
+        "drawdown_from_recent_high_pct",
+        "sma50_rising_20d",
+        "below_ema20_days_20",
+    ]:
         assert column in frame.columns
     for column in [
         "rel_strength_score",

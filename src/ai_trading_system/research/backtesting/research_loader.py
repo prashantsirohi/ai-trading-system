@@ -307,6 +307,7 @@ def _compute_ranked_frame(
     data["sma_20"] = grouped["close"].transform(lambda s: s.rolling(20, min_periods=20).mean())
     data["sma_50"] = grouped["close"].transform(lambda s: s.rolling(50, min_periods=50).mean())
     data["sma_200"] = grouped["close"].transform(lambda s: s.rolling(200, min_periods=200).mean())
+    data["ema_20"] = grouped["close"].transform(lambda s: s.ewm(span=20, adjust=False, min_periods=20).mean())
     volume_avg_20 = grouped["volume"].transform(lambda s: s.rolling(20, min_periods=20).mean())
     volume_std_20 = grouped["volume"].transform(lambda s: s.rolling(20, min_periods=20).std())
     data["vol_20_avg"] = volume_avg_20
@@ -314,6 +315,15 @@ def _compute_ranked_frame(
     data["volume_ratio_20"] = data["volume"] / volume_avg_20.replace(0, pd.NA)
     data["swing_low_20"] = grouped["low"].transform(lambda s: s.rolling(20, min_periods=20).min())
     data["high_52w"] = grouped["high"].transform(lambda s: s.rolling(252, min_periods=1).max())
+    data["recent_high_50"] = grouped["high"].transform(lambda s: s.rolling(50, min_periods=20).max())
+    data["drawdown_from_recent_high_pct"] = (
+        (data["recent_high_50"] - data["close"]) / data["recent_high_50"].replace(0, pd.NA) * 100.0
+    )
+    data["sma50_rising_20d"] = data["sma_50"] > data.groupby("symbol_id")["sma_50"].shift(20)
+    below_ema20 = data["close"] < data["ema_20"]
+    data["below_ema20_days_20"] = below_ema20.groupby(data["symbol_id"]).transform(
+        lambda s: s.rolling(20, min_periods=20).sum()
+    )
     data["prox_lookback_days"] = _cumcount_sorted_symbols(data["symbol_id"]) + 1
 
     prev_close = grouped["close"].shift(1)
@@ -333,6 +343,7 @@ def _compute_ranked_frame(
     data["return_5"] = grouped["close"].pct_change(5).fillna(0.0) * 100.0
     data["return_10"] = grouped["close"].pct_change(10).fillna(0.0) * 100.0
     data["return_20"] = grouped["close"].pct_change(20).fillna(0.0) * 100.0
+    data["return_50"] = grouped["close"].pct_change(50).fillna(0.0) * 100.0
     data["return_60"] = grouped["close"].pct_change(60).fillna(0.0) * 100.0
     data["return_120"] = grouped["close"].pct_change(120).fillna(0.0) * 100.0
     data = _blend_benchmark_relative_rs(data, benchmark_symbol=benchmark_symbol)
@@ -393,14 +404,21 @@ def _compute_ranked_frame(
             "sma_20",
             "sma_50",
             "sma_200",
+            "ema_20",
             "atr_14",
             "volume_ratio_20",
             "swing_low_20",
+            "high_52w",
+            "recent_high_50",
+            "drawdown_from_recent_high_pct",
+            "sma50_rising_20d",
+            "below_ema20_days_20",
             "volume",
             "timestamp",
             "return_5",
             "return_10",
             "return_20",
+            "return_50",
             "return_60",
             "return_120",
             "rs_vs_nifty_5",
@@ -424,7 +442,6 @@ def _compute_ranked_frame(
             "delivery_pct_score",
             "sector_rs_value",
             "stock_vs_sector_value",
-            "high_52w",
             "prox_lookback_days",
             "volume_zscore_20",
             "exhaustion_penalty",

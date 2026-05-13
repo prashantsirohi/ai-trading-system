@@ -59,6 +59,7 @@ def run_winner_capture_analysis(
             "end_date": end.isoformat(),
             "summary": _empty_summary(config),
             "winners": [],
+            "chart_series": {},
             "sync": sync_summary,
             "data_quality": data_quality,
             "run_metadata": _metadata(config),
@@ -71,7 +72,7 @@ def run_winner_capture_analysis(
         to_date=end,
         exchange=config.exchange,
     )
-    result_rows = _capture_rows(
+    result_rows, chart_series = _capture_rows(
         winners,
         ranked_by_date=ranked_by_date,
         rank_cutoff=config.rank_cutoff,
@@ -87,6 +88,7 @@ def run_winner_capture_analysis(
         "end_date": end.isoformat(),
         "summary": summary,
         "winners": result_rows,
+        "chart_series": chart_series,
         "sync": sync_summary,
         "data_quality": data_quality,
         "run_metadata": _metadata(config),
@@ -150,6 +152,38 @@ def _load_yearly_winners(
                 FROM daily
                 WHERE rn = 1
             ),
+            sequenced AS (
+                SELECT
+                    symbol_id,
+                    exchange,
+                    trade_date,
+                    close,
+                    LAG(trade_date) OVER (
+                        PARTITION BY symbol_id, exchange
+                        ORDER BY trade_date
+                    ) AS prev_trade_date,
+                    LAG(close) OVER (
+                        PARTITION BY symbol_id, exchange
+                        ORDER BY trade_date
+                    ) AS prev_close
+                FROM clean
+            ),
+            symbol_quality AS (
+                SELECT
+                    symbol_id,
+                    exchange,
+                    SUM(
+                        CASE
+                            WHEN prev_close IS NULL OR prev_close <= 0 THEN 0
+                            WHEN DATE_DIFF('day', prev_trade_date, trade_date) > 7 THEN 0
+                            WHEN close / prev_close >= 4.0 THEN 1
+                            WHEN close / prev_close <= 0.25 THEN 1
+                            ELSE 0
+                        END
+                    ) AS discontinuity_count
+                FROM sequenced
+                GROUP BY symbol_id, exchange
+            ),
             endpoints AS (
                 SELECT
                     symbol_id,
@@ -176,8 +210,12 @@ def _load_yearly_winners(
               ON n.symbol_id = e.symbol_id
              AND n.exchange = e.exchange
              AND n.trade_date = e.end_date
+            LEFT JOIN symbol_quality q
+              ON q.symbol_id = e.symbol_id
+             AND q.exchange = e.exchange
             WHERE s.close > 0
               AND n.close > 0
+              AND COALESCE(q.discontinuity_count, 0) = 0
               AND e.symbol_id NOT IN ('NIFTY50', 'NIFTY', 'NIFTY 50', 'NIFTYBANK', 'BANKNIFTY')
             ORDER BY yearly_return DESC, e.symbol_id ASC
             LIMIT ?
@@ -199,9 +237,10 @@ def _capture_rows(
     *,
     ranked_by_date: dict[date, pd.DataFrame],
     rank_cutoff: int,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     rows: list[dict[str, Any]] = []
     rank_history: dict[str, list[dict[str, Any]]] = {str(s).upper(): [] for s in winners["symbol_id"]}
+    chart_series: dict[str, list[dict[str, Any]]] = {str(s).upper(): [] for s in winners["symbol_id"]}
     for day, frame in sorted(ranked_by_date.items()):
         if frame is None or frame.empty or "symbol_id" not in frame.columns:
             continue
@@ -221,6 +260,26 @@ def _capture_rows(
                         raw.get("composite_score_adjusted", raw.get("composite_score"))
                     ),
                     "close": _optional_float(raw.get("close")),
+                }
+            )
+            chart_series.setdefault(symbol, []).append(
+                {
+                    "date": capture_day.isoformat(),
+                    "close": _optional_float(raw.get("close")),
+                    "sma_11": _optional_float(raw.get("sma_11")),
+                    "sma_20": _optional_float(raw.get("sma_20")),
+                    "sma_50": _optional_float(raw.get("sma_50")),
+                    "sma_200": _optional_float(raw.get("sma_200")),
+                    "rank": _optional_int(raw.get("eligible_rank")),
+                    "score": _optional_float(
+                        raw.get("composite_score_adjusted", raw.get("composite_score"))
+                    ),
+                    "raw_score": _optional_float(raw.get("composite_score")),
+                    "volume_ratio_20": _optional_float(raw.get("volume_ratio_20")),
+                    "atr_14": _optional_float(raw.get("atr_14")),
+                    "rel_strength_score": _optional_float(raw.get("rel_strength_score")),
+                    "sector_strength_score": _optional_float(raw.get("sector_strength_score")),
+                    "stage2": bool(raw.get("is_stage2_uptrend", False)),
                 }
             )
 
@@ -271,7 +330,7 @@ def _capture_rows(
                 "remaining_return_after_capture": remaining_return,
             }
         )
-    return rows
+    return rows, chart_series
 
 
 def _summary(rows: list[dict[str, Any]], *, config: WinnerCaptureConfig) -> dict[str, Any]:

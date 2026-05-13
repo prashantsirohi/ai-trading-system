@@ -12,6 +12,16 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import {
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
 import PageFrame from '@/components/common/PageFrame';
 import SectionCard from '@/components/common/SectionCard';
@@ -22,7 +32,9 @@ import {
   type BacktestRunResult,
   type RiskProfile,
   type RiskProfileCustomConfig,
+  type WinnerCaptureChartPoint,
   type WinnerCaptureResult,
+  type WinnerCaptureRow,
 } from '@/lib/api/backtest';
 
 const NUMERIC_FORMATTER = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
@@ -72,9 +84,17 @@ const customConfigFromProfile = (profile: RiskProfile): RiskProfileCustomConfig 
   entry: {
     require_stage_2: profile.entry.requireStage2,
     require_price_above_sma200: profile.entry.requirePriceAboveSma200,
+    require_price_above_sma50: profile.entry.requirePriceAboveSma50,
+    require_price_above_ema20: profile.entry.requirePriceAboveEma20,
+    require_sma50_above_sma200_or_rising_20d: profile.entry.requireSma50AboveSma200OrRising20d,
     require_sector_positive: profile.entry.requireSectorPositive,
     min_volume_ratio: profile.entry.minVolumeRatio,
     require_delivery_above_sector_median: profile.entry.requireDeliveryAboveSectorMedian,
+    min_close_to_52w_high: profile.entry.minCloseTo52wHigh,
+    min_return_20_pct: profile.entry.minReturn20Pct,
+    min_return_50_pct: profile.entry.minReturn50Pct,
+    max_drawdown_from_recent_high_pct: profile.entry.maxDrawdownFromRecentHighPct,
+    max_below_ema20_days_20: profile.entry.maxBelowEma20Days20,
   },
   stop: {
     method: profile.stop.method,
@@ -113,6 +133,14 @@ function ProfileInspector({ profile }: { profile: RiskProfile | null }) {
   const rows: Array<[string, string]> = [
     ['Entry — Stage 2 required', String(profile.entry.requireStage2)],
     ['Entry — above 200 DMA', String(profile.entry.requirePriceAboveSma200)],
+    ['Entry — above SMA50', String(profile.entry.requirePriceAboveSma50)],
+    ['Entry — above EMA20', String(profile.entry.requirePriceAboveEma20)],
+    ['Entry — SMA50 trend', String(profile.entry.requireSma50AboveSma200OrRising20d)],
+    ['Entry — near 52w high', profile.entry.minCloseTo52wHigh == null ? '—' : `>= ${(profile.entry.minCloseTo52wHigh * 100).toFixed(0)}%`],
+    ['Entry — 20d return', profile.entry.minReturn20Pct == null ? '—' : `> ${profile.entry.minReturn20Pct}%`],
+    ['Entry — 50d return', profile.entry.minReturn50Pct == null ? '—' : `> ${profile.entry.minReturn50Pct}%`],
+    ['Entry — max drawdown', profile.entry.maxDrawdownFromRecentHighPct == null ? '—' : `< ${profile.entry.maxDrawdownFromRecentHighPct}%`],
+    ['Entry — EMA20 weak days', profile.entry.maxBelowEma20Days20 == null ? '—' : `<= ${profile.entry.maxBelowEma20Days20}`],
     ['Entry — sector positive', String(profile.entry.requireSectorPositive)],
     ['Entry — min volume ratio', profile.entry.minVolumeRatio.toFixed(2)],
     ['Stop — method', profile.stop.method],
@@ -132,11 +160,11 @@ function ProfileInspector({ profile }: { profile: RiskProfile | null }) {
     ['Constraints — max sector exposure', `${profile.constraints.maxSectorExposurePct.toFixed(1)}%`],
   ];
   return (
-    <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
+    <dl className="grid grid-cols-2 gap-1 text-[11px] md:grid-cols-4 xl:grid-cols-6">
       {rows.map(([label, value]) => (
-        <div key={label} className="flex justify-between gap-3 border-b border-slate-800/60 py-1">
-          <dt className="text-slate-400">{label}</dt>
-          <dd className="text-right font-mono text-slate-200">{value}</dd>
+        <div key={label} className="min-w-0 rounded border border-slate-800/80 bg-slate-950/35 px-2 py-1">
+          <dt className="truncate text-slate-500">{label}</dt>
+          <dd className="truncate font-mono text-slate-200">{value}</dd>
         </div>
       ))}
     </dl>
@@ -153,13 +181,13 @@ function ToggleRow({
   onChange: (value: boolean) => void;
 }) {
   return (
-    <label className="flex items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
+    <label className="flex min-w-0 items-center justify-between gap-2 rounded border border-slate-800 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300">
       <span>{label}</span>
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="h-4 w-4 accent-emerald-500"
+        className="h-3.5 w-3.5 shrink-0 accent-emerald-500"
       />
     </label>
   );
@@ -183,14 +211,8 @@ function SliderField({
   onChange: (value: number) => void;
 }) {
   return (
-    <label className="block rounded-md border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
-      <div className="mb-1 flex items-center justify-between gap-3">
-        <span>{label}</span>
-        <span className="font-mono text-slate-100">
-          {fmt(value)}
-          {suffix}
-        </span>
-      </div>
+    <label className="grid min-w-0 grid-cols-[minmax(88px,0.8fr)_minmax(120px,1.5fr)_72px] items-center gap-2 rounded border border-slate-800 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300">
+      <span className="truncate">{label}</span>
       <input
         type="range"
         min={min}
@@ -200,15 +222,18 @@ function SliderField({
         onChange={(e) => onChange(Number(e.target.value))}
         className="w-full accent-emerald-500"
       />
-      <input
-        type="number"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
-      />
+      <div className="flex min-w-0 items-center justify-end gap-1">
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="w-14 rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-right font-mono text-[11px] text-slate-100"
+        />
+        {suffix ? <span className="w-4 shrink-0 font-mono text-slate-100">{suffix}</span> : null}
+      </div>
     </label>
   );
 }
@@ -225,12 +250,12 @@ function SelectField({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="block rounded-md border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
-      <span className="mb-1 block">{label}</span>
+    <label className="grid min-w-0 grid-cols-[minmax(88px,0.8fr)_minmax(120px,1.5fr)] items-center gap-2 rounded border border-slate-800 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300">
+      <span className="truncate">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+        className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-0.5 text-[11px] text-slate-100"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>
@@ -239,6 +264,15 @@ function SelectField({
         ))}
       </select>
     </label>
+  );
+}
+
+function CompactGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="grid gap-2 rounded-md border border-slate-800/80 bg-slate-950/25 p-2 xl:grid-cols-[96px_minmax(0,1fr)]">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{title}</div>
+      <div className="grid gap-1.5 md:grid-cols-2 xl:grid-cols-4">{children}</div>
+    </div>
   );
 }
 
@@ -254,9 +288,8 @@ function ParameterEditor({
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <div className="space-y-2">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Entry</div>
+    <div className="space-y-2">
+      <CompactGroup title="Entry">
         <ToggleRow
           label="Stage 2 required"
           checked={draft.entry.requireStage2}
@@ -291,10 +324,9 @@ function ParameterEditor({
           step={0.1}
           onChange={(value) => onChange((p) => ({ ...p, entry: { ...p.entry, minVolumeRatio: value } }))}
         />
-      </div>
+      </CompactGroup>
 
-      <div className="space-y-2">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Stops & sizing</div>
+      <CompactGroup title="Stops / sizing">
         <SelectField
           label="Stop method"
           value={draft.stop.method}
@@ -359,10 +391,9 @@ function ParameterEditor({
             onChange((p) => ({ ...p, sizing: { ...p.sizing, maxPositionPct: value } }))
           }
         />
-      </div>
+      </CompactGroup>
 
-      <div className="space-y-2">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Exits</div>
+      <CompactGroup title="Exits">
         <ToggleRow
           label="200DMA emergency exit"
           checked={draft.exit.emergencyExitBelowSma200}
@@ -457,10 +488,9 @@ function ParameterEditor({
             onChange((p) => ({ ...p, exit: { ...p.exit, timeStopDays: value <= 0 ? null : value } }))
           }
         />
-      </div>
+      </CompactGroup>
 
-      <div className="space-y-2">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Constraints</div>
+      <CompactGroup title="Constraints">
         <SliderField
           label="Max positions"
           value={draft.constraints.maxConcurrentPositions}
@@ -493,7 +523,7 @@ function ParameterEditor({
             onChange((p) => ({ ...p, constraints: { ...p.constraints, maxSectorExposurePct: value } }))
           }
         />
-      </div>
+      </CompactGroup>
     </div>
   );
 }
@@ -588,7 +618,166 @@ function ResultDiagnostics({ result }: { result: BacktestRunResult }) {
   );
 }
 
+function shortDate(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { month: 'short', day: '2-digit' });
+}
+
+function WinnerCaptureChart({
+  winner,
+  series,
+  rankCutoff,
+}: {
+  winner: WinnerCaptureRow;
+  series: WinnerCaptureChartPoint[];
+  rankCutoff: number;
+}) {
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  if (!series.length) {
+    return (
+      <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-sm text-slate-500">
+        No chart series available for {winner.symbolId}.
+      </div>
+    );
+  }
+  const startClose = winner.startClose || series.find((point) => point.close != null)?.close || 0;
+  const chartData = series.map((point) => ({
+    ...point,
+    label: shortDate(point.date),
+    captureLine: point.date === winner.firstCaptureDate ? point.close : null,
+    returnPct: point.close != null && startClose > 0 ? (point.close - startClose) / startClose : null,
+    rankInverted: point.rank == null ? null : Math.max(0, 501 - point.rank),
+    rankCutoffInverted: 501 - rankCutoff,
+  }));
+  const closes = chartData
+    .flatMap((point) => [point.close, point.sma20, point.sma50, point.sma200])
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  const minClose = closes.length ? Math.min(...closes) : 0;
+  const maxClose = closes.length ? Math.max(...closes) : 1;
+  const padding = (maxClose - minClose) * 0.08 || 1;
+  const scoreValues = chartData
+    .flatMap((point) => [point.score, point.relStrengthScore, point.sectorStrengthScore])
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  const scoreMax = Math.max(100, ...scoreValues, 100);
+  const last = chartData[chartData.length - 1];
+  const shellClass = isFullscreen
+    ? 'fixed inset-4 z-50 flex flex-col rounded-lg border border-sky-500/50 bg-slate-950 p-4 shadow-2xl shadow-black/60'
+    : 'rounded-lg border border-slate-800 bg-slate-950/50 p-3';
+  const chartHeightClass = isFullscreen ? 'min-h-0 flex-1' : 'h-[420px]';
+
+  return (
+    <div className={shellClass}>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-slate-100">{winner.symbolId}</div>
+          <div className="text-xs text-slate-500">
+            {winner.startDate} → {winner.endDate} · {fmtPct(winner.yearlyReturn)} yearly return
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 text-[11px] text-slate-300">
+          <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5">
+            first rank {winner.firstCaptureRank ?? '—'}
+          </span>
+          <span className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5">
+            best rank {winner.bestRank ?? '—'}
+          </span>
+          <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5">
+            last return {fmtPct(last?.returnPct)}
+          </span>
+          <button
+            type="button"
+            onClick={() => setIsFullscreen((value) => !value)}
+            className="rounded border border-sky-500/50 bg-sky-500/10 px-2 py-0.5 text-sky-200 hover:bg-sky-500/20"
+          >
+            {isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          </button>
+        </div>
+      </div>
+
+      <div className={`min-w-0 ${chartHeightClass}`}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={chartData} margin={{ top: 8, right: 18, left: 0, bottom: 0 }}>
+            <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
+            <XAxis dataKey="label" stroke="#64748b" fontSize={10} minTickGap={28} />
+            <YAxis
+              yAxisId="price"
+              stroke="#38bdf8"
+              fontSize={10}
+              width={56}
+              domain={[minClose - padding, maxClose + padding]}
+              tickFormatter={(v) => Number(v).toFixed(0)}
+            />
+            <YAxis
+              yAxisId="score"
+              orientation="right"
+              stroke="#f97316"
+              fontSize={10}
+              width={42}
+              domain={[0, scoreMax]}
+            />
+            <YAxis
+              yAxisId="rank"
+              orientation="right"
+              stroke="#22c55e"
+              fontSize={10}
+              width={48}
+              domain={[0, 500]}
+              tickFormatter={(v) => String(501 - Number(v))}
+            />
+            <Tooltip
+              contentStyle={{
+                background: '#020617',
+                border: '1px solid #1e293b',
+                borderRadius: 8,
+                fontSize: 12,
+              }}
+              labelStyle={{ color: '#cbd5e1' }}
+              formatter={(value, name) =>
+                name === 'Rank' ? [String(501 - Number(value)), 'Rank'] : [fmt(Number(value)), String(name)]
+              }
+            />
+            {winner.firstCaptureDate ? (
+              <ReferenceLine
+                yAxisId="price"
+                x={shortDate(winner.firstCaptureDate)}
+                stroke="#22c55e"
+                strokeDasharray="4 4"
+                label={{ value: 'capture', fill: '#86efac', fontSize: 10 }}
+              />
+            ) : null}
+            <ReferenceLine yAxisId="rank" y={501 - rankCutoff} stroke="#22c55e" strokeDasharray="4 4" />
+            <Line yAxisId="price" type="monotone" dataKey="close" name="Close" stroke="#38bdf8" strokeWidth={2.2} dot={false} isAnimationActive={false} />
+            <Line yAxisId="price" type="monotone" dataKey="sma20" name="SMA20" stroke="#f59e0b" strokeWidth={1.2} dot={false} isAnimationActive={false} />
+            <Line yAxisId="price" type="monotone" dataKey="sma50" name="SMA50" stroke="#a78bfa" strokeWidth={1.2} dot={false} isAnimationActive={false} />
+            <Line yAxisId="price" type="monotone" dataKey="sma200" name="SMA200" stroke="#94a3b8" strokeWidth={1.2} dot={false} isAnimationActive={false} />
+            <Line yAxisId="rank" type="stepAfter" dataKey="rankInverted" name="Rank" stroke="#22c55e" strokeWidth={1.7} dot={false} isAnimationActive={false} />
+            <Line yAxisId="score" type="monotone" dataKey="score" name="Score" stroke="#f97316" strokeWidth={1.7} dot={false} isAnimationActive={false} />
+            <Line yAxisId="score" type="monotone" dataKey="relStrengthScore" name="RS score" stroke="#fb7185" strokeWidth={1.1} dot={false} isAnimationActive={false} />
+            <Line yAxisId="score" type="monotone" dataKey="sectorStrengthScore" name="Sector score" stroke="#c084fc" strokeWidth={1.1} dot={false} isAnimationActive={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-slate-400">
+        <span className="text-sky-300">Close</span>
+        <span className="text-amber-300">SMA20</span>
+        <span className="text-violet-300">SMA50</span>
+        <span className="text-slate-300">SMA200</span>
+        <span className="text-emerald-300">Rank and capture cutoff</span>
+        <span className="text-orange-300">Score / RS / sector</span>
+      </div>
+    </div>
+  );
+}
+
 function WinnerCaptureResults({ result }: { result: WinnerCaptureResult }) {
+  const [selectedSymbol, setSelectedSymbol] = useState<string>(result.winners[0]?.symbolId ?? '');
+  useEffect(() => {
+    setSelectedSymbol(result.winners[0]?.symbolId ?? '');
+  }, [result]);
+  const selectedWinner = result.winners.find((row) => row.symbolId === selectedSymbol) ?? result.winners[0] ?? null;
+
   if (result.status === 'no_data') {
     return (
       <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-amber-200">
@@ -653,6 +842,31 @@ function WinnerCaptureResults({ result }: { result: WinnerCaptureResult }) {
         </div>
       ) : null}
 
+      {selectedWinner ? (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Field label="Chart symbol">
+              <select
+                value={selectedWinner.symbolId}
+                onChange={(e) => setSelectedSymbol(e.target.value)}
+                className="min-w-48 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
+              >
+                {result.winners.map((winner) => (
+                  <option key={winner.symbolId} value={winner.symbolId}>
+                    #{winner.rankInYear} {winner.symbolId} · {winner.captured ? 'captured' : 'missed'}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <WinnerCaptureChart
+            winner={selectedWinner}
+            series={result.chartSeries[selectedWinner.symbolId] ?? []}
+            rankCutoff={result.rankCutoff}
+          />
+        </div>
+      ) : null}
+
       <div className="overflow-x-auto">
         <table className="min-w-full text-xs">
           <thead className="text-left text-slate-400">
@@ -671,7 +885,13 @@ function WinnerCaptureResults({ result }: { result: WinnerCaptureResult }) {
           </thead>
           <tbody className="font-mono text-slate-200">
             {result.winners.map((row) => (
-              <tr key={`${row.rankInYear}-${row.symbolId}`} className="border-b border-slate-900/60">
+              <tr
+                key={`${row.rankInYear}-${row.symbolId}`}
+                className={`cursor-pointer border-b border-slate-900/60 hover:bg-slate-900/40 ${
+                  row.symbolId === selectedWinner?.symbolId ? 'bg-sky-500/5' : ''
+                }`}
+                onClick={() => setSelectedSymbol(row.symbolId)}
+              >
                 <td className="py-1 pr-3 text-slate-500">{row.rankInYear}</td>
                 <td className="py-1 pr-3">{row.symbolId}</td>
                 <td className="py-1 pr-3">
@@ -791,11 +1011,11 @@ export default function BacktestPage() {
       description="Run the shared TradingRuleEngine against historical pipeline_runs. Identical decisions to paper trading."
     >
       <SectionCard title="Risk profile">
-        <div className="grid gap-3 md:grid-cols-[minmax(220px,260px)_minmax(0,1fr)]">
-          <div className="space-y-2">
+        <div className="grid gap-2 md:grid-cols-[minmax(190px,240px)_minmax(0,1fr)]">
+          <div className="space-y-1">
             <label className="text-xs text-slate-400">Profile</label>
             <select
-              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
+              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs"
               value={profile?.name ?? ''}
               onChange={(e) => setSelectedProfile(e.target.value)}
               disabled={profilesQuery.isPending}
@@ -824,7 +1044,7 @@ export default function BacktestPage() {
         title="Custom parameters"
         description={isCustom ? 'Custom overrides will be sent with this backtest.' : 'Using the selected preset as-is.'}
       >
-        <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="mb-2 flex items-center justify-between gap-3">
           <div className="text-xs text-slate-400">
             Baseline: <span className="font-mono text-slate-200">{profile?.name ?? '—'}</span>
           </div>
@@ -841,59 +1061,6 @@ export default function BacktestPage() {
           draft={draftProfile}
           onChange={(updater) => setDraftProfile((current) => (current ? updater(current) : current))}
         />
-      </SectionCard>
-
-      <SectionCard
-        title="Winner Capture"
-        description="Find the year's top gainers and check whether research dynamic ranking captured them."
-      >
-        <div className="flex flex-wrap items-end gap-3">
-          <Field label="Calendar year">
-            <input
-              type="number"
-              min={1990}
-              max={new Date().getFullYear() - 1}
-              value={winnerYear}
-              onChange={(e) => setWinnerYear(Number(e.target.value) || new Date().getFullYear() - 1)}
-              className="w-28 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-            />
-          </Field>
-          <Field label="Top gainers">
-            <input
-              type="number"
-              min={1}
-              max={500}
-              value={winnerTopGainers}
-              onChange={(e) => setWinnerTopGainers(Number(e.target.value) || 50)}
-              className="w-28 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-            />
-          </Field>
-          <Field label="Capture cutoff">
-            <input
-              type="number"
-              min={1}
-              max={500}
-              value={winnerRankCutoff}
-              onChange={(e) => setWinnerRankCutoff(Number(e.target.value) || 50)}
-              className="w-28 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-            />
-          </Field>
-          <button
-            type="button"
-            disabled={winnerMutation.isPending}
-            onClick={() => winnerMutation.mutate()}
-            className="rounded-md border border-sky-500/50 bg-sky-500/10 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {winnerMutation.isPending ? 'Running…' : 'Run winner capture'}
-          </button>
-          {winnerMutation.error ? (
-            <span className="text-sm text-rose-300">{winnerMutation.error.message}</span>
-          ) : null}
-        </div>
-        <div className="mt-2 text-xs text-slate-500">
-          Uses completed calendar years only and syncs operational data into research before analysis.
-        </div>
-        {winnerMutation.data ? <WinnerCaptureResults result={winnerMutation.data} /> : null}
       </SectionCard>
 
       <SectionCard title="Run backtest" description="POST /api/execution/backtest/run">
@@ -1022,6 +1189,59 @@ export default function BacktestPage() {
           ) : null}
         </SectionCard>
       ) : null}
+
+      <SectionCard
+        title="Winner Capture"
+        description="Find the year's top gainers and check whether research dynamic ranking captured them."
+      >
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="Calendar year">
+            <input
+              type="number"
+              min={1990}
+              max={new Date().getFullYear() - 1}
+              value={winnerYear}
+              onChange={(e) => setWinnerYear(Number(e.target.value) || new Date().getFullYear() - 1)}
+              className="w-28 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
+            />
+          </Field>
+          <Field label="Top gainers">
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={winnerTopGainers}
+              onChange={(e) => setWinnerTopGainers(Number(e.target.value) || 50)}
+              className="w-28 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
+            />
+          </Field>
+          <Field label="Capture cutoff">
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={winnerRankCutoff}
+              onChange={(e) => setWinnerRankCutoff(Number(e.target.value) || 50)}
+              className="w-28 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
+            />
+          </Field>
+          <button
+            type="button"
+            disabled={winnerMutation.isPending}
+            onClick={() => winnerMutation.mutate()}
+            className="rounded-md border border-sky-500/50 bg-sky-500/10 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {winnerMutation.isPending ? 'Running…' : 'Run winner capture'}
+          </button>
+          {winnerMutation.error ? (
+            <span className="text-sm text-rose-300">{winnerMutation.error.message}</span>
+          ) : null}
+        </div>
+        <div className="mt-2 text-xs text-slate-500">
+          Uses completed calendar years only and syncs operational data into research before analysis.
+        </div>
+        {winnerMutation.data ? <WinnerCaptureResults result={winnerMutation.data} /> : null}
+      </SectionCard>
     </PageFrame>
   );
 }

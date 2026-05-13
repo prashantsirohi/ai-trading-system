@@ -21,6 +21,8 @@ const primaryItems = [
   { to: '/ranking', label: 'Ranking', icon: ChartBarIcon, end: false, match: ['/ranking', '/symbol'] },
   { to: '/sectors', label: 'Sectors', icon: Squares2X2Icon, end: false, match: ['/sectors'] },
   { to: '/patterns', label: 'Patterns', icon: PresentationChartLineIcon, end: false, match: ['/patterns'] },
+  { to: '/research', label: 'Research', icon: BeakerIcon, end: false, match: ['/research'] },
+  { to: '/backtest', label: 'Backtest', icon: ClockIcon, end: false, match: ['/backtest'] },
   { to: '/watchlist', label: 'Watchlist', icon: BookmarkIcon, end: false, match: ['/watchlist'] },
   { to: '/execution', label: 'Execution', icon: RocketLaunchIcon, end: false, match: ['/execution'] },
   { to: '/risk', label: 'Risk', icon: ShieldExclamationIcon, end: false, match: ['/risk'] },
@@ -29,8 +31,6 @@ const primaryItems = [
 
 const secondaryItems = [
   { to: '/shadow', label: 'Shadow', icon: CpuChipIcon, end: false, match: ['/shadow'] },
-  { to: '/research', label: 'Research', icon: BeakerIcon, end: false, match: ['/research'] },
-  { to: '/backtest', label: 'Backtest', icon: ClockIcon, end: false, match: ['/backtest'] },
 ];
 
 type NavItem = (typeof primaryItems)[number];

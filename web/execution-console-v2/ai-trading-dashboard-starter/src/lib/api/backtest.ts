@@ -20,9 +20,17 @@ import {
 export interface RiskProfileEntry {
   requireStage2: boolean;
   requirePriceAboveSma200: boolean;
+  requirePriceAboveSma50: boolean;
+  requirePriceAboveEma20: boolean;
+  requireSma50AboveSma200OrRising20d: boolean;
   requireSectorPositive: boolean;
   minVolumeRatio: number;
   requireDeliveryAboveSectorMedian: boolean;
+  minCloseTo52wHigh: number | null;
+  minReturn20Pct: number | null;
+  minReturn50Pct: number | null;
+  maxDrawdownFromRecentHighPct: number | null;
+  maxBelowEma20Days20: number | null;
 }
 
 export interface RiskProfileStop {
@@ -100,9 +108,18 @@ function mapProfile(raw: BackendProfile): RiskProfile {
     entry: {
       requireStage2: bool(e['require_stage_2'], true),
       requirePriceAboveSma200: bool(e['require_price_above_sma200'], true),
+      requirePriceAboveSma50: bool(e['require_price_above_sma50']),
+      requirePriceAboveEma20: bool(e['require_price_above_ema20']),
+      requireSma50AboveSma200OrRising20d: bool(e['require_sma50_above_sma200_or_rising_20d']),
       requireSectorPositive: bool(e['require_sector_positive'], true),
       minVolumeRatio: num(e['min_volume_ratio'], 1.5),
       requireDeliveryAboveSectorMedian: bool(e['require_delivery_above_sector_median']),
+      minCloseTo52wHigh: e['min_close_to_52w_high'] == null ? null : Number(e['min_close_to_52w_high']),
+      minReturn20Pct: e['min_return_20_pct'] == null ? null : Number(e['min_return_20_pct']),
+      minReturn50Pct: e['min_return_50_pct'] == null ? null : Number(e['min_return_50_pct']),
+      maxDrawdownFromRecentHighPct:
+        e['max_drawdown_from_recent_high_pct'] == null ? null : Number(e['max_drawdown_from_recent_high_pct']),
+      maxBelowEma20Days20: e['max_below_ema20_days_20'] == null ? null : Number(e['max_below_ema20_days_20']),
     },
     stop: {
       method: String(s['method'] ?? 'atr'),
@@ -407,6 +424,23 @@ export interface WinnerCaptureRow {
   remainingReturnAfterCapture: number | null;
 }
 
+export interface WinnerCaptureChartPoint {
+  date: string;
+  close: number | null;
+  sma11: number | null;
+  sma20: number | null;
+  sma50: number | null;
+  sma200: number | null;
+  rank: number | null;
+  score: number | null;
+  rawScore: number | null;
+  volumeRatio20: number | null;
+  atr14: number | null;
+  relStrengthScore: number | null;
+  sectorStrengthScore: number | null;
+  stage2: boolean;
+}
+
 export interface WinnerCaptureResult {
   status: string;
   year: number;
@@ -417,6 +451,7 @@ export interface WinnerCaptureResult {
   endDate: string;
   summary: WinnerCaptureSummary;
   winners: WinnerCaptureRow[];
+  chartSeries: Record<string, WinnerCaptureChartPoint[]>;
   artifactDir: string | null;
   sync: BacktestSyncSummary | null;
   dataQuality: BacktestDataQuality | null;
@@ -465,6 +500,23 @@ interface BackendWinnerCaptureRow {
   remaining_return_after_capture?: number | null;
 }
 
+interface BackendWinnerCaptureChartPoint {
+  date?: string;
+  close?: number | null;
+  sma_11?: number | null;
+  sma_20?: number | null;
+  sma_50?: number | null;
+  sma_200?: number | null;
+  rank?: number | null;
+  score?: number | null;
+  raw_score?: number | null;
+  volume_ratio_20?: number | null;
+  atr_14?: number | null;
+  rel_strength_score?: number | null;
+  sector_strength_score?: number | null;
+  stage2?: boolean;
+}
+
 interface BackendWinnerCaptureResult {
   status?: string;
   year?: number;
@@ -475,6 +527,7 @@ interface BackendWinnerCaptureResult {
   end_date?: string;
   summary?: BackendWinnerCaptureSummary;
   winners?: BackendWinnerCaptureRow[];
+  chart_series?: Record<string, BackendWinnerCaptureChartPoint[]>;
   artifact_dir?: string | null;
   sync?: Record<string, unknown> | null;
   data_quality?: Record<string, unknown> | null;
@@ -496,6 +549,27 @@ export async function runWinnerCapture(
     },
   );
   const summary = raw.summary ?? {};
+  const chartSeries = Object.fromEntries(
+    Object.entries(raw.chart_series ?? {}).map(([symbol, points]) => [
+      symbol,
+      (points ?? []).map((point) => ({
+        date: point.date ?? '',
+        close: point.close == null ? null : Number(point.close),
+        sma11: point.sma_11 == null ? null : Number(point.sma_11),
+        sma20: point.sma_20 == null ? null : Number(point.sma_20),
+        sma50: point.sma_50 == null ? null : Number(point.sma_50),
+        sma200: point.sma_200 == null ? null : Number(point.sma_200),
+        rank: point.rank == null ? null : Number(point.rank),
+        score: point.score == null ? null : Number(point.score),
+        rawScore: point.raw_score == null ? null : Number(point.raw_score),
+        volumeRatio20: point.volume_ratio_20 == null ? null : Number(point.volume_ratio_20),
+        atr14: point.atr_14 == null ? null : Number(point.atr_14),
+        relStrengthScore: point.rel_strength_score == null ? null : Number(point.rel_strength_score),
+        sectorStrengthScore: point.sector_strength_score == null ? null : Number(point.sector_strength_score),
+        stage2: Boolean(point.stage2),
+      })),
+    ]),
+  );
   return {
     status: raw.status ?? 'unknown',
     year: num(raw.year, params.year),
@@ -535,6 +609,7 @@ export async function runWinnerCapture(
       returnAtCapture: row.return_at_capture == null ? null : Number(row.return_at_capture),
       remainingReturnAfterCapture: row.remaining_return_after_capture == null ? null : Number(row.remaining_return_after_capture),
     })),
+    chartSeries,
     artifactDir: raw.artifact_dir ?? null,
     sync: mapSync(raw.sync),
     dataQuality: mapDataQuality(raw.data_quality),

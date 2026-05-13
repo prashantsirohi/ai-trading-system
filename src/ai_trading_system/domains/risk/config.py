@@ -17,9 +17,17 @@ DMAExitWindow = Literal[11, 20, 50]
 class EntryConfig:
     require_stage_2: bool = True
     require_price_above_sma200: bool = True
+    require_price_above_sma50: bool = False
+    require_price_above_ema20: bool = False
+    require_sma50_above_sma200_or_rising_20d: bool = False
     require_sector_positive: bool = True
     min_volume_ratio: float = 1.5
     require_delivery_above_sector_median: bool = False
+    min_close_to_52w_high: float | None = None
+    min_return_20_pct: float | None = None
+    min_return_50_pct: float | None = None
+    max_drawdown_from_recent_high_pct: float | None = None
+    max_below_ema20_days_20: int | None = None
 
 
 @dataclass(frozen=True)

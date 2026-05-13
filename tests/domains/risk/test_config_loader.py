@@ -5,7 +5,7 @@ import pytest
 from ai_trading_system.domains.risk import RiskPolicyConfig, load_profile
 
 
-@pytest.mark.parametrize("name", ["aggressive_momentum", "balanced_swing", "positional_trend"])
+@pytest.mark.parametrize("name", ["aggressive_momentum", "balanced_swing", "positional_trend", "stage1_watchlist"])
 def test_named_profiles_load(name):
     cfg = load_profile(name)
     assert isinstance(cfg, RiskPolicyConfig)
@@ -30,6 +30,20 @@ def test_positional_uses_swing_low_and_50dma():
     assert cfg.stop.method == "swing_low"
     assert cfg.exit.dma_exit_window == 50
     assert cfg.exit.time_stop_days == 180
+
+
+def test_stage1_watchlist_uses_relaxed_discovery_gates():
+    cfg = load_profile("stage1_watchlist")
+    assert cfg.entry.require_stage_2 is False
+    assert cfg.entry.require_price_above_sma50 is True
+    assert cfg.entry.require_price_above_ema20 is True
+    assert cfg.entry.require_sma50_above_sma200_or_rising_20d is True
+    assert cfg.entry.min_close_to_52w_high == 0.75
+    assert cfg.entry.min_return_20_pct == 8.0
+    assert cfg.entry.min_return_50_pct == 15.0
+    assert cfg.entry.min_volume_ratio == 1.5
+    assert cfg.entry.max_drawdown_from_recent_high_pct == 25.0
+    assert cfg.entry.max_below_ema20_days_20 == 6
 
 
 def test_unknown_profile_falls_back_to_balanced():

@@ -34,6 +34,13 @@ class MarketSnapshot:
     sma_20: float | None = None
     sma_50: float | None = None
     sma_200: float | None = None
+    ema_20: float | None = None
+    high_52w: float | None = None
+    return_20_pct: float | None = None
+    return_50_pct: float | None = None
+    sma50_rising_20d: bool | None = None
+    drawdown_from_recent_high_pct: float | None = None
+    below_ema20_days_20: int | None = None
     volume_ratio_20: float | None = None
     delivery_pct: float | None = None
     sector_delivery_median: float | None = None
