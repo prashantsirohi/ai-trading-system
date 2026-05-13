@@ -18,9 +18,11 @@ import SectionCard from '@/components/common/SectionCard';
 import { useRiskProfiles } from '@/lib/queries';
 import {
   runBacktest,
+  runWinnerCapture,
   type BacktestRunResult,
   type RiskProfile,
   type RiskProfileCustomConfig,
+  type WinnerCaptureResult,
 } from '@/lib/api/backtest';
 
 const NUMERIC_FORMATTER = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
@@ -531,6 +533,183 @@ function ResultsSummary({ result }: { result: BacktestRunResult }) {
   );
 }
 
+function ResultDiagnostics({ result }: { result: BacktestRunResult }) {
+  const sync = result.sync;
+  const dq = result.dataQuality;
+  const metadata = result.runMetadata;
+  if (!sync && !dq && !metadata) return null;
+
+  return (
+    <div className="mt-4 grid gap-3 text-xs lg:grid-cols-3">
+      {sync ? (
+        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-xs uppercase tracking-wide text-slate-500">Research sync</div>
+          <dl className="mt-2 space-y-1 text-slate-300">
+            <InfoRow label="Status" value={sync.status || '—'} />
+            <InfoRow label="Source dates" value={`${sync.sourceFromDate ?? '—'} → ${sync.sourceToDate ?? '—'}`} />
+            <InfoRow label="Rows copied" value={fmt(sync.insertedRows ?? sync.rowsToCopy ?? sync.sourceRows)} />
+            <InfoRow label="Research rows" value={fmt(sync.totalTargetRows)} />
+            <InfoRow label="Masterdata" value={`${sync.masterdata?.status ?? '—'} (${fmt(sync.masterdata?.tableCount)} tables)`} />
+          </dl>
+        </div>
+      ) : null}
+      {dq ? (
+        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-xs uppercase tracking-wide text-slate-500">Data quality</div>
+          <dl className="mt-2 space-y-1 text-slate-300">
+            <InfoRow label="Status" value={dq.status || '—'} />
+            <InfoRow label="Rows / symbols" value={`${fmt(dq.rowCount)} / ${fmt(dq.symbolCount)}`} />
+            <InfoRow label="Date range" value={`${dq.minDate ?? '—'} → ${dq.maxDate ?? '—'}`} />
+            <InfoRow label="Duplicates" value={`${fmt(dq.duplicateTimestampCount)} timestamp, ${fmt(dq.duplicateDailyCount)} daily`} />
+            <InfoRow label="SMA200 gaps" value={fmt(dq.insufficientSma200SymbolCount)} />
+          </dl>
+          {dq.warnings && dq.warnings.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {dq.warnings.map((warning) => (
+                <span key={warning} className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-amber-200">
+                  {warning}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {metadata ? (
+        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-xs uppercase tracking-wide text-slate-500">Run metadata</div>
+          <dl className="mt-2 space-y-1 text-slate-300">
+            <InfoRow label="Rank method" value={metadata.rankingMethodVersion ?? '—'} />
+            <InfoRow label="Git" value={metadata.gitCommit ? metadata.gitCommit.slice(0, 8) : '—'} />
+            <InfoRow label="Generated" value={metadata.generatedAt ?? '—'} />
+          </dl>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WinnerCaptureResults({ result }: { result: WinnerCaptureResult }) {
+  if (result.status === 'no_data') {
+    return (
+      <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-amber-200">
+        No yearly winner data found. {result.message}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-4 space-y-4">
+      <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
+        <Stat label="Capture rate" value={fmtPct(result.summary.captureRate)} />
+        <Stat label="Captured" value={`${result.summary.capturedCount}/${result.summary.winnerCount}`} />
+        <Stat label="Missed" value={String(result.summary.missedCount)} />
+        <Stat label="Median days" value={fmt(result.summary.medianDaysToCapture)} />
+        <Stat label="Median first rank" value={fmt(result.summary.medianFirstCaptureRank)} />
+        <Stat
+          label="Captured avg return"
+          value={fmtPct(result.summary.averageYearlyReturnCaptured)}
+          positive={(result.summary.averageYearlyReturnCaptured ?? 0) >= 0}
+        />
+        <Stat
+          label="Missed avg return"
+          value={fmtPct(result.summary.averageYearlyReturnMissed)}
+          positive={(result.summary.averageYearlyReturnMissed ?? 0) >= 0}
+        />
+        <Stat label="Window" value={`${result.startDate} → ${result.endDate}`} />
+        <Stat label="Rank cutoff" value={`Top ${result.rankCutoff}`} />
+        <Stat label="Saved" value={result.artifactDir ? 'Yes' : 'No'} sub={result.artifactDir ?? undefined} />
+      </div>
+
+      {result.dataQuality || result.sync || result.runMetadata ? (
+        <div className="grid gap-3 text-xs lg:grid-cols-3">
+          {result.sync ? (
+            <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Research sync</div>
+              <dl className="mt-2 space-y-1 text-slate-300">
+                <InfoRow label="Status" value={result.sync.status || '—'} />
+                <InfoRow label="Source dates" value={`${result.sync.sourceFromDate ?? '—'} → ${result.sync.sourceToDate ?? '—'}`} />
+                <InfoRow label="Rows copied" value={fmt(result.sync.insertedRows ?? result.sync.rowsToCopy ?? result.sync.sourceRows)} />
+              </dl>
+            </div>
+          ) : null}
+          {result.dataQuality ? (
+            <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Data quality</div>
+              <dl className="mt-2 space-y-1 text-slate-300">
+                <InfoRow label="Status" value={result.dataQuality.status || '—'} />
+                <InfoRow label="Rows / symbols" value={`${fmt(result.dataQuality.rowCount)} / ${fmt(result.dataQuality.symbolCount)}`} />
+                <InfoRow label="Date range" value={`${result.dataQuality.minDate ?? '—'} → ${result.dataQuality.maxDate ?? '—'}`} />
+              </dl>
+            </div>
+          ) : null}
+          {result.runMetadata ? (
+            <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Run metadata</div>
+              <dl className="mt-2 space-y-1 text-slate-300">
+                <InfoRow label="Rank method" value={result.runMetadata.rankingMethodVersion ?? '—'} />
+                <InfoRow label="Generated" value={result.runMetadata.generatedAt ?? '—'} />
+              </dl>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-xs">
+          <thead className="text-left text-slate-400">
+            <tr className="border-b border-slate-800">
+              <th className="py-1.5 pr-3">#</th>
+              <th className="py-1.5 pr-3">Symbol</th>
+              <th className="py-1.5 pr-3">Status</th>
+              <th className="py-1.5 pr-3 text-right">Year return</th>
+              <th className="py-1.5 pr-3">First capture</th>
+              <th className="py-1.5 pr-3 text-right">First rank</th>
+              <th className="py-1.5 pr-3 text-right">Best rank</th>
+              <th className="py-1.5 pr-3 text-right">Days</th>
+              <th className="py-1.5 pr-3 text-right">At capture</th>
+              <th className="py-1.5 pr-3 text-right">Remaining</th>
+            </tr>
+          </thead>
+          <tbody className="font-mono text-slate-200">
+            {result.winners.map((row) => (
+              <tr key={`${row.rankInYear}-${row.symbolId}`} className="border-b border-slate-900/60">
+                <td className="py-1 pr-3 text-slate-500">{row.rankInYear}</td>
+                <td className="py-1 pr-3">{row.symbolId}</td>
+                <td className="py-1 pr-3">
+                  <span
+                    className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${
+                      row.captured
+                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                        : 'border-rose-500/40 bg-rose-500/10 text-rose-200'
+                    }`}
+                  >
+                    {row.captured ? 'captured' : 'missed'}
+                  </span>
+                </td>
+                <td className="py-1 pr-3 text-right text-emerald-300">{fmtPct(row.yearlyReturn)}</td>
+                <td className="py-1 pr-3 text-slate-400">{row.firstCaptureDate ?? '—'}</td>
+                <td className="py-1 pr-3 text-right">{fmt(row.firstCaptureRank)}</td>
+                <td className="py-1 pr-3 text-right">{fmt(row.bestRank)}</td>
+                <td className="py-1 pr-3 text-right">{fmt(row.daysToCapture)}</td>
+                <td className="py-1 pr-3 text-right">{fmtPct(row.returnAtCapture)}</td>
+                <td className="py-1 pr-3 text-right">{fmtPct(row.remainingReturnAfterCapture)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between gap-3 border-b border-slate-800/60 py-1">
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="text-right font-mono text-slate-200">{value}</dd>
+    </div>
+  );
+}
+
 function Stat({
   label,
   value,
@@ -563,6 +742,9 @@ export default function BacktestPage() {
   const [equity, setEquity] = useState<number>(1_000_000);
   const [dataSource, setDataSource] = useState<string>('pipeline_replay');
   const [draftProfile, setDraftProfile] = useState<RiskProfile | null>(null);
+  const [winnerYear, setWinnerYear] = useState<number>(new Date().getFullYear() - 1);
+  const [winnerTopGainers, setWinnerTopGainers] = useState<number>(50);
+  const [winnerRankCutoff, setWinnerRankCutoff] = useState<number>(50);
 
   const profile = useMemo(
     () => profiles.find((p) => p.name === (selectedProfile || profiles[0]?.name)) ?? null,
@@ -587,6 +769,17 @@ export default function BacktestPage() {
         equity,
         persist: true,
         customConfig: isCustom && draftProfile ? customConfigFromProfile(draftProfile) : undefined,
+      }),
+  });
+
+  const winnerMutation = useMutation<WinnerCaptureResult, Error, void>({
+    mutationFn: () =>
+      runWinnerCapture({
+        year: winnerYear,
+        exchange: 'NSE',
+        topGainers: winnerTopGainers,
+        rankCutoff: winnerRankCutoff,
+        persist: true,
       }),
   });
 
@@ -648,6 +841,59 @@ export default function BacktestPage() {
           draft={draftProfile}
           onChange={(updater) => setDraftProfile((current) => (current ? updater(current) : current))}
         />
+      </SectionCard>
+
+      <SectionCard
+        title="Winner Capture"
+        description="Find the year's top gainers and check whether research dynamic ranking captured them."
+      >
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="Calendar year">
+            <input
+              type="number"
+              min={1990}
+              max={new Date().getFullYear() - 1}
+              value={winnerYear}
+              onChange={(e) => setWinnerYear(Number(e.target.value) || new Date().getFullYear() - 1)}
+              className="w-28 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
+            />
+          </Field>
+          <Field label="Top gainers">
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={winnerTopGainers}
+              onChange={(e) => setWinnerTopGainers(Number(e.target.value) || 50)}
+              className="w-28 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
+            />
+          </Field>
+          <Field label="Capture cutoff">
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={winnerRankCutoff}
+              onChange={(e) => setWinnerRankCutoff(Number(e.target.value) || 50)}
+              className="w-28 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
+            />
+          </Field>
+          <button
+            type="button"
+            disabled={winnerMutation.isPending}
+            onClick={() => winnerMutation.mutate()}
+            className="rounded-md border border-sky-500/50 bg-sky-500/10 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {winnerMutation.isPending ? 'Running…' : 'Run winner capture'}
+          </button>
+          {winnerMutation.error ? (
+            <span className="text-sm text-rose-300">{winnerMutation.error.message}</span>
+          ) : null}
+        </div>
+        <div className="mt-2 text-xs text-slate-500">
+          Uses completed calendar years only and syncs operational data into research before analysis.
+        </div>
+        {winnerMutation.data ? <WinnerCaptureResults result={winnerMutation.data} /> : null}
       </SectionCard>
 
       <SectionCard title="Run backtest" description="POST /api/execution/backtest/run">
@@ -717,6 +963,7 @@ export default function BacktestPage() {
           }
         >
           <ResultsSummary result={result} />
+          <ResultDiagnostics result={result} />
           {result.trades.length > 0 ? (
             <div className="mt-4 overflow-x-auto">
               <table className="min-w-full text-xs">

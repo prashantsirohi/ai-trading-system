@@ -46,9 +46,26 @@ sma_200
 atr_14
 volume_ratio_20
 swing_low_20
+canonical factor scores
 composite_score
+composite_score_adjusted
 eligible_rank
 ```
+
+Ranking method version:
+
+```text
+research_dynamic_v3_canonical_factor_scoring_stage2_benchmark
+```
+
+The dynamic loader computes historical raw factors from OHLCV, then reuses the
+canonical ranking factor/scoring helpers from `domains/ranking` for relative
+strength, volume intensity, trend persistence, momentum acceleration,
+proximity-to-highs, delivery imputation, sector strength scoring, composite
+score, and penalties. When `NIFTY50` history is present, it also blends
+benchmark-relative RS into relative strength. When `weekly_stage_snapshot`
+exists in the research DuckDB, it attaches weekly Stage 2 context and applies
+the same Stage 2 freshness/transition bonuses used by production ranking.
 
 Use this when you want to answer:
 
@@ -140,6 +157,7 @@ Sync behavior:
 2. Delete only research rows inside that operational date range.
 3. Insert deduped operational rows for that range.
 4. Preserve older research history outside the operational range.
+5. Copy operational masterdata into data/research/masterdata.db.
 ```
 
 This is important because research may have 10-15 years of history while operational may only have the latest 12-15 months.
@@ -157,6 +175,18 @@ ingestion_ts DESC
 ```
 
 The dynamic loader also dedupes per symbol/date before computing indicators.
+
+For sector metadata, research dynamic prefers:
+
+```text
+data/research/masterdata.db
+```
+
+If that file is absent, it falls back to:
+
+```text
+data/masterdata.db
+```
 
 ## Backtest Lab UI
 
@@ -176,6 +206,10 @@ Starting equity
 Custom strategy parameters
 Results table
 Exit reason summary
+Research sync summary
+Research data-quality summary
+Run metadata
+Winner Capture analysis
 ```
 
 Data source options:
@@ -220,6 +254,35 @@ Sizing and constraints:
 
 Custom UI runs do not write new YAML profiles. They send `custom_config` in the backtest API request.
 
+### Winner Capture
+
+Winner Capture answers:
+
+```text
+Did the current research_dynamic ranking capture the year's biggest winners?
+```
+
+It uses the research DuckDB directly, syncs operational data into research first, finds the top yearly gainers for a completed calendar year, then scans daily dynamic ranks from Jan 1 to Dec 31.
+
+Default interpretation:
+
+```text
+winner set = top 50 NSE gainers
+capture rule = symbol appeared in daily Top 50 at least once
+year mode = completed calendar year
+```
+
+Outputs include:
+
+```text
+capture rate
+captured / missed count
+median days to first capture
+median first capture rank
+captured vs missed average yearly return
+per-symbol first capture date, first rank, best rank, days to capture, and remaining return
+```
+
 ## API
 
 Profiles:
@@ -232,6 +295,24 @@ Run:
 
 ```http
 POST /api/execution/backtest/run
+```
+
+Winner Capture:
+
+```http
+POST /api/execution/backtest/winner-capture
+```
+
+Request:
+
+```json
+{
+  "year": 2025,
+  "exchange": "NSE",
+  "top_gainers": 50,
+  "rank_cutoff": 50,
+  "persist": true
+}
 ```
 
 Important request fields:
@@ -249,6 +330,30 @@ Important request fields:
 ```
 
 For `research_dynamic`, the backend syncs operational data into research data before running.
+The response includes:
+
+```text
+sync
+data_quality
+run_metadata
+```
+
+Persisted runs write:
+
+```text
+summary.json
+metadata.json
+trades.csv
+equity_curve.csv
+```
+
+Persisted Winner Capture runs write:
+
+```text
+data/research/winner_capture/<year>/<timestamp>/summary.json
+data/research/winner_capture/<year>/<timestamp>/metadata.json
+data/research/winner_capture/<year>/<timestamp>/winners.csv
+```
 
 ## CLI
 
@@ -314,7 +419,19 @@ Implemented fixes:
 - Same symbol cannot exit and re-enter on the same bar.
 - Research dynamic backtest source added.
 - Operational-to-research sync added.
+- Operational-to-research masterdata sync added.
 - Sync preserves old research history outside the operational source range.
+- Research dynamic data-quality summary added.
+- Backtest Lab displays sync, data-quality, and run metadata.
+- Persisted backtest runs now write metadata.json.
+- Research dynamic ranking now uses canonical factor scoring instead of the
+  earlier simple RS/trend/volume composite.
+- Research dynamic ranking now blends NIFTY-relative RS when benchmark rows
+  are present.
+- Research dynamic ranking now uses weekly Stage 2 context/freshness bonuses
+  when `weekly_stage_snapshot` exists.
+- Winner Capture analysis added for measuring whether current dynamic ranking
+  finds the top yearly gainers.
 ```
 
 ## Verification
@@ -335,7 +452,7 @@ Current focused verification:
 Expected:
 
 ```text
-73 passed
+Focused backtesting/API/paper parity suite passes.
 ```
 
 Frontend:
@@ -362,56 +479,35 @@ FastAPI/Starlette show Python 3.14 deprecation warnings in tests.
 
 ### High Priority
 
-1. Improve dynamic ranking parity.
+1. Document and monitor any remaining ranking differences.
 
-Current `research_dynamic` uses a simple composite score based on relative returns, trend, and volume. It is good enough for research iteration, but it is not identical to the production rank pipeline.
+Current `research_dynamic` now uses canonical factor scoring, benchmark-relative
+RS, and weekly Stage 2 context when available. It still does not run the full
+production `StockRanker` facade because that facade is wired to latest
+operational loaders and sidecar artifacts.
 
-Remaining:
-
-```text
-Reuse canonical ranking components from domains/ranking where practical.
-Document any intentional difference between dynamic research ranking and production ranking.
-```
-
-2. Add sync status to the UI.
-
-Backtest Lab should show:
+Remaining differences to document/monitor:
 
 ```text
-Last sync status
-Source date range
-Rows copied
-Research rows in refreshed range
+Some production sidecar fields may still be absent in pure OHLCV-only research history.
+Weekly stage hard-gating remains optional; risk profiles still control trade entry gates.
+Production rank routing/market-stage mode selection is not automatically replayed yet.
 ```
 
-Currently this is returned by the backend but not displayed prominently.
+2. Add stricter data-quality gates for research dynamic.
 
-3. Add data-quality checks for research dynamic.
-
-Before running a dynamic backtest, validate:
+Current implementation reports DQ facts but does not block a run. Add optional hard gates for:
 
 ```text
 minimum warmup coverage
-missing OHLCV count
-duplicate count
-symbols with insufficient SMA200 history
+maximum missing OHLCV rows
+maximum duplicate rows
+minimum symbol coverage
 ```
 
 ### Medium Priority
 
-4. Persist research backtest metadata.
-
-Persist:
-
-```text
-data_source
-profile/custom_config
-sync summary
-indicator/ranking method version
-code version or git hash
-```
-
-5. Add unique/index validation for research `_catalog`.
+3. Add unique/index validation for research `_catalog`.
 
 DuckDB does not enforce the desired uniqueness in all existing paths. Add a validation query/report for:
 
@@ -419,7 +515,7 @@ DuckDB does not enforce the desired uniqueness in all existing paths. Add a vali
 symbol_id, exchange, timestamp
 ```
 
-6. Add benchmark metrics to engine backtests.
+4. Add benchmark metrics to engine backtests.
 
 Existing older research backtest code has benchmark comparison helpers. Bring that into engine backtests:
 
@@ -434,11 +530,11 @@ alpha/beta
 
 ### Lower Priority
 
-7. Add strategy profile saving.
+5. Add strategy profile saving.
 
 Current custom UI settings run only as one-off `custom_config`. Later, save tuned configs as versioned research candidates.
 
-8. Add promotion workflow.
+6. Add promotion workflow.
 
 Possible lifecycle:
 
@@ -446,7 +542,7 @@ Possible lifecycle:
 draft → research_candidate → paper_shadow → active → retired
 ```
 
-9. Add charts.
+7. Add charts.
 
 Backtest Lab should eventually include:
 

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import asdict
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +13,12 @@ from ai_trading_system.domains.risk import RiskPolicyConfig, load_profile
 from ai_trading_system.domains.risk.config import profile_search_dirs
 from ai_trading_system.research.backtesting import (
     EngineBacktestRunner,
+    RANKING_METHOD_VERSION,
+    WinnerCaptureConfig,
     load_ranked_by_date,
     load_research_ranked_by_date,
+    run_winner_capture_analysis,
+    validate_research_dynamic_data,
 )
 from ai_trading_system.research.sync_operational_data import sync_operational_to_research
 
@@ -64,8 +69,14 @@ def run_backtest(
     profile = _profile_with_overrides(profile_name, custom_config)
     source = (data_source or "pipeline_replay").strip().lower()
     sync_summary: dict[str, Any] | None = None
+    data_quality: dict[str, Any] | None = None
     if source == "research_dynamic":
         sync_summary = sync_operational_to_research(project_root=project_root, apply=True)
+        data_quality = validate_research_dynamic_data(
+            project_root,
+            from_date=from_date,
+            to_date=to_date,
+        )
         ranked_by_date = load_research_ranked_by_date(
             project_root,
             from_date=from_date,
@@ -85,6 +96,7 @@ def run_backtest(
             "profile": profile.name,
             "data_source": source,
             "sync": sync_summary,
+            "data_quality": data_quality,
             "trade_count": 0,
             "message": no_data_message,
         }
@@ -99,6 +111,7 @@ def run_backtest(
         "profile": profile.name,
         "data_source": source,
         "sync": sync_summary,
+        "data_quality": data_quality,
         "from_date": str(from_date) if from_date else None,
         "to_date": str(to_date) if to_date else None,
         "starting_equity": equity,
@@ -112,6 +125,15 @@ def run_backtest(
         ),
         "trades": _trades_payload(result.trades, limit=500),
         "equity_curve": _equity_payload(equity_df),
+        "run_metadata": _run_metadata(
+            project_root=project_root,
+            data_source=source,
+            requested_profile=profile_name,
+            effective_profile=profile,
+            custom_config=custom_config,
+            sync_summary=sync_summary,
+            data_quality=data_quality,
+        ),
     }
 
     if persist:
@@ -122,15 +144,54 @@ def run_backtest(
             / "engine_backtests"
             / source
             / profile.name
-            / datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%SZ")
+            / datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
         )
         out_dir.mkdir(parents=True, exist_ok=True)
         trades_df.to_csv(out_dir / "trades.csv", index=False)
         equity_df.to_csv(out_dir / "equity_curve.csv", index=False)
         (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
+        (out_dir / "metadata.json").write_text(
+            json.dumps(summary["run_metadata"], indent=2, default=str)
+        )
         summary["artifact_dir"] = str(out_dir.relative_to(project_root))
 
     return summary
+
+
+def run_winner_capture_backtest(
+    project_root: Path,
+    *,
+    year: int,
+    exchange: str = "NSE",
+    top_gainers: int = 50,
+    rank_cutoff: int = 50,
+    persist: bool = True,
+) -> dict[str, Any]:
+    start = date(year, 1, 1)
+    end = date(year, 12, 31)
+    sync_summary = sync_operational_to_research(
+        project_root=project_root,
+        exchange=exchange,
+        apply=True,
+    )
+    data_quality = validate_research_dynamic_data(
+        project_root,
+        from_date=start,
+        to_date=end,
+        exchange=exchange,
+    )
+    return run_winner_capture_analysis(
+        project_root,
+        config=WinnerCaptureConfig(
+            year=year,
+            exchange=exchange,
+            top_gainers=top_gainers,
+            rank_cutoff=rank_cutoff,
+            persist=persist,
+        ),
+        sync_summary=sync_summary,
+        data_quality=data_quality,
+    )
 
 
 def _profile_with_overrides(
@@ -154,6 +215,56 @@ def _profile_with_overrides(
         if isinstance(override, dict):
             payload[section].update(override)
     return RiskPolicyConfig.from_dict(payload)
+
+
+def _run_metadata(
+    *,
+    project_root: Path,
+    data_source: str,
+    requested_profile: str,
+    effective_profile: RiskPolicyConfig,
+    custom_config: dict[str, Any] | None,
+    sync_summary: dict[str, Any] | None,
+    data_quality: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "data_source": data_source,
+        "requested_profile": requested_profile,
+        "effective_profile": effective_profile.name,
+        "profile_config": {
+            "entry": asdict(effective_profile.entry),
+            "stop": asdict(effective_profile.stop),
+            "exit": asdict(effective_profile.exit),
+            "sizing": asdict(effective_profile.sizing),
+            "constraints": asdict(effective_profile.constraints),
+        },
+        "custom_config": custom_config or None,
+        "sync": sync_summary,
+        "data_quality": data_quality,
+        "ranking_method_version": (
+            RANKING_METHOD_VERSION
+            if data_source == "research_dynamic"
+            else "pipeline_replay_ranked_signals"
+        ),
+        "git_commit": _git_commit(project_root),
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def _git_commit(project_root: Path) -> str | None:
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(project_root),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return None
+    value = proc.stdout.strip()
+    return value or None
 
 
 def _trades_payload(trades, *, limit: int) -> list[dict[str, Any]]:

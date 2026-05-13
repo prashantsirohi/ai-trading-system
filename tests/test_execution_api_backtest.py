@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+import sqlite3
+from datetime import date, timedelta
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
@@ -152,3 +155,137 @@ def test_run_backtest_accepts_custom_config_overrides(client, tmp_path, monkeypa
     assert payload["profile"] == "custom:balanced_swing"
     assert payload["status"] == "ok"
     assert payload["trade_count"] == 0
+
+
+def test_research_dynamic_returns_sync_quality_and_metadata(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+
+    master = sqlite3.connect(data_dir / "masterdata.db")
+    master.execute("CREATE TABLE stock_details (Symbol TEXT PRIMARY KEY, Sector TEXT)")
+    master.execute("INSERT INTO stock_details VALUES ('AAA', 'TECH')")
+    master.commit()
+    master.close()
+
+    conn = duckdb.connect(str(data_dir / "ohlcv.duckdb"))
+    conn.execute(
+        """
+        CREATE TABLE _catalog (
+            symbol_id VARCHAR,
+            security_id VARCHAR,
+            exchange VARCHAR,
+            timestamp TIMESTAMP,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
+            volume BIGINT,
+            parquet_file VARCHAR,
+            ingestion_version BIGINT,
+            ingestion_ts TIMESTAMP
+        )
+        """
+    )
+    start = date(2025, 1, 1)
+    rows = [
+        ("AAA", None, "NSE", start + timedelta(days=i), 100 + i, 101 + i, 99 + i, 100 + i, 1000 + i, None, 1, start + timedelta(days=i))
+        for i in range(240)
+    ]
+    conn.executemany("INSERT INTO _catalog VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.close()
+
+    r = client.post(
+        "/api/execution/backtest/run",
+        headers=API_HEADERS,
+        json={
+            "profile": "balanced_swing",
+            "data_source": "research_dynamic",
+            "from_date": "2025-08-10",
+            "to_date": "2025-08-28",
+            "persist": True,
+            "custom_config": {"entry": {"require_sector_positive": False}},
+        },
+    )
+
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["status"] == "ok"
+    assert payload["data_source"] == "research_dynamic"
+    assert payload["sync"]["status"] == "applied"
+    assert payload["sync"]["masterdata"]["status"] == "applied"
+    assert payload["data_quality"]["status"] == "ok"
+    assert payload["data_quality"]["masterdata_exists"] is True
+    assert payload["run_metadata"]["ranking_method_version"] == "research_dynamic_v3_canonical_factor_scoring_stage2_benchmark"
+    artifact_dir = tmp_path / payload["artifact_dir"]
+    assert (artifact_dir / "metadata.json").exists()
+
+
+def test_winner_capture_endpoint_syncs_and_returns_defaults(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+
+    conn = duckdb.connect(str(data_dir / "ohlcv.duckdb"))
+    conn.execute(
+        """
+        CREATE TABLE _catalog (
+            symbol_id VARCHAR,
+            security_id VARCHAR,
+            exchange VARCHAR,
+            timestamp TIMESTAMP,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
+            volume BIGINT,
+            parquet_file VARCHAR,
+            ingestion_version BIGINT,
+            ingestion_ts TIMESTAMP
+        )
+        """
+    )
+    rows = [
+        ("AAA", None, "NSE", date(2025, 1, 1), 100, 100, 100, 100, 1000, None, 1, date(2025, 1, 1)),
+        ("AAA", None, "NSE", date(2025, 12, 31), 200, 200, 200, 200, 1000, None, 1, date(2025, 12, 31)),
+        ("BBB", None, "NSE", date(2025, 1, 1), 100, 100, 100, 100, 1000, None, 1, date(2025, 1, 1)),
+        ("BBB", None, "NSE", date(2025, 12, 31), 150, 150, 150, 150, 1000, None, 1, date(2025, 12, 31)),
+    ]
+    conn.executemany("INSERT INTO _catalog VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.close()
+
+    def _ranked(*_, **__):
+        return {
+            date(2025, 2, 1): pd.DataFrame(
+                [
+                    {
+                        "symbol_id": "AAA",
+                        "eligible_rank": 1,
+                        "composite_score_adjusted": 95.0,
+                        "close": 120.0,
+                    }
+                ]
+            )
+        }
+
+    monkeypatch.setattr(
+        "ai_trading_system.research.backtesting.winner_capture.load_research_ranked_by_date",
+        _ranked,
+    )
+
+    r = client.post(
+        "/api/execution/backtest/winner-capture",
+        headers=API_HEADERS,
+        json={"year": 2025, "persist": False},
+    )
+
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["status"] == "ok"
+    assert payload["top_gainers"] == 50
+    assert payload["rank_cutoff"] == 50
+    assert payload["sync"]["status"] == "applied"
+    assert payload["summary"]["winner_count"] == 2
+    assert payload["summary"]["captured_count"] == 1
+    assert payload["winners"][0]["symbol_id"] == "AAA"
+    assert payload["winners"][0]["captured"] is True

@@ -7,6 +7,7 @@ separate sandbox used by research backtests and training workflows.
 from __future__ import annotations
 
 import argparse
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,23 @@ CATALOG_COLUMNS = (
     "ingestion_ts",
 )
 
+CREATE_CATALOG_SQL = """
+CREATE TABLE IF NOT EXISTS _catalog (
+    symbol_id VARCHAR,
+    security_id VARCHAR,
+    exchange VARCHAR,
+    timestamp TIMESTAMP,
+    open DOUBLE,
+    high DOUBLE,
+    low DOUBLE,
+    close DOUBLE,
+    volume BIGINT,
+    parquet_file VARCHAR,
+    ingestion_version BIGINT,
+    ingestion_ts TIMESTAMP
+)
+"""
+
 
 def sync_operational_to_research(
     *,
@@ -41,6 +59,23 @@ def sync_operational_to_research(
     root = Path(project_root).resolve() if project_root else None
     operational = ensure_domain_layout(project_root=root, data_domain="operational")
     research = ensure_domain_layout(project_root=root, data_domain="research")
+    master_summary = _sync_masterdata(
+        source=operational.master_db_path,
+        target=research.root_dir / "masterdata.db",
+        apply=apply,
+    )
+
+    if not operational.ohlcv_db_path.exists():
+        return {
+            "status": "dry_run" if not apply else "no_source_data",
+            "source": str(operational.ohlcv_db_path),
+            "target": str(research.ohlcv_db_path),
+            "exchange": exchange,
+            "source_from_date": None,
+            "source_to_date": None,
+            "rows_to_copy": 0,
+            "masterdata": master_summary,
+        }
 
     conn = duckdb.connect(str(research.ohlcv_db_path))
     try:
@@ -50,17 +85,29 @@ def sync_operational_to_research(
         params: list[Any] = [exchange]
         where_sql = " AND ".join(where)
 
-        source_stats = conn.execute(
-            f"""
-            SELECT
-                COUNT(*),
-                MIN(CAST(timestamp AS DATE)),
-                MAX(CAST(timestamp AS DATE))
-            FROM op._catalog
-            WHERE {where_sql}
-            """,
-            params,
-        ).fetchone()
+        try:
+            source_stats = conn.execute(
+                f"""
+                SELECT
+                    COUNT(*),
+                    MIN(CAST(timestamp AS DATE)),
+                    MAX(CAST(timestamp AS DATE))
+                FROM op._catalog
+                WHERE {where_sql}
+                """,
+                params,
+            ).fetchone()
+        except duckdb.Error:
+            return {
+                "status": "dry_run" if not apply else "no_source_data",
+                "source": str(operational.ohlcv_db_path),
+                "target": str(research.ohlcv_db_path),
+                "exchange": exchange,
+                "source_from_date": None,
+                "source_to_date": None,
+                "rows_to_copy": 0,
+                "masterdata": master_summary,
+            }
         source_count = int(source_stats[0] or 0)
         source_from = source_stats[1]
         source_to = source_stats[2]
@@ -74,6 +121,7 @@ def sync_operational_to_research(
                 "source_from_date": None,
                 "source_to_date": None,
                 "rows_to_copy": 0,
+                "masterdata": master_summary,
             }
 
         refresh_where = [
@@ -83,6 +131,7 @@ def sync_operational_to_research(
         ]
         refresh_params: list[Any] = [exchange, source_from, source_to]
         refresh_where_sql = " AND ".join(refresh_where)
+        conn.execute(CREATE_CATALOG_SQL)
 
         if not apply:
             return {
@@ -94,6 +143,7 @@ def sync_operational_to_research(
                 "source_to_date": str(source_to) if source_to else None,
                 "rows_to_copy": source_count,
                 "refresh_mode": "replace_research_rows_inside_operational_date_range",
+                "masterdata": master_summary,
             }
 
         conn.execute(f"DELETE FROM _catalog WHERE {refresh_where_sql}", refresh_params)
@@ -148,10 +198,50 @@ def sync_operational_to_research(
             "target_rows_in_source_range": int(target_count or 0),
             "total_target_rows": int(total_target_count or 0),
             "inserted_rows": int(inserted if inserted is not None and inserted >= 0 else target_count or 0),
+            "masterdata": master_summary,
             "synced_at": datetime.now(timezone.utc).isoformat(),
         }
     finally:
         conn.close()
+
+
+def _sync_masterdata(*, source: Path, target: Path, apply: bool) -> dict[str, Any]:
+    """Copy operational SQLite masterdata into the research sandbox."""
+    summary: dict[str, Any] = {
+        "source": str(source),
+        "target": str(target),
+        "status": "dry_run" if not apply else "missing_source",
+        "table_count": 0,
+    }
+    if not source.exists():
+        return summary
+
+    try:
+        with sqlite3.connect(str(source)) as conn:
+            table_count = conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+            ).fetchone()[0]
+    except sqlite3.DatabaseError as exc:
+        summary.update({"status": "source_error", "error": str(exc)})
+        return summary
+
+    summary["table_count"] = int(table_count or 0)
+    if not apply:
+        return summary
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with sqlite3.connect(str(source)) as src, sqlite3.connect(str(target)) as dst:
+            src.backup(dst)
+    except sqlite3.DatabaseError as exc:
+        summary.update({"status": "copy_failed", "error": str(exc)})
+        return summary
+
+    summary.update({
+        "status": "applied",
+        "synced_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return summary
 
 
 def _build_parser() -> argparse.ArgumentParser:

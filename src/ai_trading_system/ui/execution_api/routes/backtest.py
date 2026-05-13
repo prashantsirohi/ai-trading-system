@@ -12,6 +12,7 @@ from ai_trading_system.ui.execution_api.routes._deps import project_root
 from ai_trading_system.ui.execution_api.services.backtest_service import (
     list_risk_profiles,
     run_backtest,
+    run_winner_capture_backtest,
 )
 
 
@@ -43,6 +44,14 @@ class BacktestRunRequest(BaseModel):
     custom_config: Optional[dict[str, Any]] = Field(default=None)
 
 
+class WinnerCaptureRequest(BaseModel):
+    year: int = Field(..., ge=1990, le=2100)
+    exchange: str = Field(default="NSE")
+    top_gainers: int = Field(default=50, ge=1, le=500)
+    rank_cutoff: int = Field(default=50, ge=1, le=500)
+    persist: bool = Field(default=True)
+
+
 @router.post("/run")
 def backtest_run(req: BacktestRunRequest) -> dict[str, Any]:
     """Run an engine-driven backtest and return summary + trade rows inline."""
@@ -55,4 +64,17 @@ def backtest_run(req: BacktestRunRequest) -> dict[str, Any]:
         equity=req.equity,
         persist=req.persist,
         custom_config=req.custom_config,
+    )
+
+
+@router.post("/winner-capture")
+def winner_capture(req: WinnerCaptureRequest) -> dict[str, Any]:
+    """Run yearly top-gainer capture analysis against research dynamic rankings."""
+    return run_winner_capture_backtest(
+        project_root(),
+        year=req.year,
+        exchange=req.exchange,
+        top_gainers=req.top_gainers,
+        rank_cutoff=req.rank_cutoff,
+        persist=req.persist,
     )
