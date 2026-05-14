@@ -218,8 +218,12 @@ def run_backfill(
     # DuckDB's pandas registration.
     dates_to_replace = sorted(enriched["run_date"].astype(str).unique())
     with open_research_db(project_root=project_root) as con:
-        date_list = ",".join(f"'{d}'" for d in dates_to_replace)
-        con.execute(f"DELETE FROM rank_cohort_performance WHERE CAST(run_date AS VARCHAR) IN ({date_list})")
+        if dates_to_replace:
+            placeholders = ",".join("?" for _ in dates_to_replace)
+            con.execute(
+                f"DELETE FROM rank_cohort_performance WHERE CAST(run_date AS VARCHAR) IN ({placeholders})",
+                list(dates_to_replace),
+            )
         con.register("incoming_rows", enriched)
         con.execute(
             "INSERT INTO rank_cohort_performance "

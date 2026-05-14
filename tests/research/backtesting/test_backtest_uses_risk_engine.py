@@ -86,6 +86,83 @@ def test_hard_stop_wins_over_dma():
     assert closed[0].exit_reason == "hard_stop"
 
 
+def test_hard_stop_fires_intrabar_and_fills_at_stop_price():
+    """Bar pierces stop intrabar (low < stop) but closes above: stop must fire,
+    and the fill price must be the stop price, not the close."""
+    d0 = date(2026, 2, 1)
+    ranked_by_date = {
+        d0: pd.DataFrame([_row("ACME", 100.0, open=100.0, high=101.0, low=99.0)]),
+        # Day 2: bar dips to low=90 (below stop ~96) but closes at 99.
+        d0
+        + timedelta(days=1): pd.DataFrame(
+            [_row("ACME", 99.0, open=99.5, high=100.0, low=90.0)]
+        ),
+    }
+    runner = EngineBacktestRunner(
+        risk_config=RiskPolicyConfig(name="test"),
+        starting_equity=500_000.0,
+        commission_bps=0.0,
+        slippage_bps=0.0,
+    )
+    result = runner.run(ranked_by_date)
+    closed = [t for t in result.trades if t.exit_reason == "hard_stop"]
+    assert len(closed) == 1
+    trade = closed[0]
+    # Fill at stop price, not at close (99.0).
+    assert trade.stop_price is not None
+    assert trade.exit_price == trade.stop_price
+
+
+def test_hard_stop_gap_down_fills_at_open():
+    """Bar gaps down below stop at the open: fill at open, not at stop."""
+    d0 = date(2026, 2, 10)
+    ranked_by_date = {
+        d0: pd.DataFrame([_row("ACME", 100.0, open=100.0, high=101.0, low=99.0)]),
+        # Day 2: gap-down opens at 85 (well below stop ~96); low even lower.
+        d0
+        + timedelta(days=1): pd.DataFrame(
+            [_row("ACME", 86.0, open=85.0, high=88.0, low=82.0)]
+        ),
+    }
+    runner = EngineBacktestRunner(
+        risk_config=RiskPolicyConfig(name="test"),
+        starting_equity=500_000.0,
+        commission_bps=0.0,
+        slippage_bps=0.0,
+    )
+    result = runner.run(ranked_by_date)
+    closed = [t for t in result.trades if t.exit_reason == "hard_stop"]
+    assert len(closed) == 1
+    trade = closed[0]
+    assert trade.exit_price == 85.0
+
+
+def test_costs_applied_on_round_trip():
+    """Zero price move with 10 bps commission + 20 bps slippage per side must
+    produce a negative P&L. Round-trip cost ~ 2 * (commission + slippage)."""
+    d0 = date(2026, 5, 1)
+    # Many bars at same close → trade closes at backtest_end with no price move.
+    ranked_by_date = {
+        d0 + timedelta(days=i): pd.DataFrame(
+            [_row("ACME", 100.0, open=100.0, high=100.0, low=100.0)]
+        )
+        for i in range(3)
+    }
+    runner = EngineBacktestRunner(
+        risk_config=RiskPolicyConfig(name="test"),
+        starting_equity=500_000.0,
+        commission_bps=10.0,
+        slippage_bps=20.0,
+    )
+    result = runner.run(ranked_by_date)
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    # Expected drag per side: 20 bps slip + 10 bps commission = 30 bps.
+    # Round-trip ≈ 60 bps. P&L pct should be negative ~ -0.006.
+    assert trade.pnl < 0
+    assert -0.0070 < trade.pnl_pct < -0.0050
+
+
 def test_no_entry_when_volume_below_threshold():
     d0 = date(2026, 3, 1)
     ranked_by_date = {
@@ -103,7 +180,12 @@ def test_open_trade_closes_at_latest_close_on_backtest_end():
         d0: pd.DataFrame([_row("ACME", 100.0)]),
         d0 + timedelta(days=1): pd.DataFrame([_row("ACME", 120.0)]),
     }
-    runner = EngineBacktestRunner(risk_config=RiskPolicyConfig(name="test"), starting_equity=500_000.0)
+    runner = EngineBacktestRunner(
+        risk_config=RiskPolicyConfig(name="test"),
+        starting_equity=500_000.0,
+        commission_bps=0.0,
+        slippage_bps=0.0,
+    )
     result = runner.run(ranked_by_date)
 
     assert len(result.trades) == 1

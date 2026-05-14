@@ -34,16 +34,18 @@ def evaluate_exit(
     """Return the highest-priority exit (lowest priority number wins)."""
     candidates: list[ExitDecision] = []
 
-    # 0 — hard stop
-    if position.stop_price is not None and market.close < position.stop_price:
-        candidates.append(
-            ExitDecision(
-                should_exit=True,
-                reason="hard_stop",
-                priority=0,
-                stop_line=position.stop_price,
+    # 0 — hard stop. Fire on intrabar low when available, else close-only.
+    if position.stop_price is not None:
+        breach_price = market.low if market.low is not None else market.close
+        if breach_price < position.stop_price:
+            candidates.append(
+                ExitDecision(
+                    should_exit=True,
+                    reason="hard_stop",
+                    priority=0,
+                    stop_line=position.stop_price,
+                )
             )
-        )
 
     buffer = 1.0 - config.exit.dma_whipsaw_buffer_pct / 100.0
 

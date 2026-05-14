@@ -67,6 +67,39 @@ def test_freed_slot_used_by_entry_same_tick(make_candidate, make_market, make_po
     assert any(i.symbol_id == "NEW" for i in entry_intents)
 
 
+def test_sector_cap_accumulates_across_same_bar_entries(
+    make_candidate, make_market, base_config
+):
+    """Same-sector candidates evaluated in one bar must accumulate against the
+    sector cap. Locks the running_portfolio update inside generate_order_intents.
+    """
+    portfolio = PortfolioSnapshot(
+        cash=1_000_000.0,
+        equity=1_000_000.0,
+        positions=(),
+        sector_exposure={},
+    )
+    # Each candidate sized to ~12% (max_stock_weight default). Five same-sector
+    # candidates would push sector to 60% if accumulation broke; cap is 30%.
+    candidates = [
+        make_candidate(symbol_id=f"T{i}", sector="TECH", rank=i)
+        for i in range(1, 6)
+    ]
+    markets = {f"T{i}": make_market(symbol_id=f"T{i}") for i in range(1, 6)}
+
+    engine = TradingRuleEngine(base_config)
+    intents = engine.generate_order_intents(candidates, markets, portfolio)
+
+    entry_intents = [i for i in intents if i.intent_kind == "entry"]
+    # Total TECH exposure across emitted entries must respect the 30% cap.
+    total_value = sum(
+        markets[i.symbol_id].close * i.quantity for i in entry_intents
+    )
+    assert (total_value / portfolio.equity) <= (
+        base_config.constraints.max_sector_exposure_pct / 100.0
+    ) + 1e-6
+
+
 def test_no_entry_if_candidate_already_held(make_candidate, make_market, make_position, base_config):
     held = make_position(symbol_id="ACME", sector="TECH")
     portfolio = PortfolioSnapshot(

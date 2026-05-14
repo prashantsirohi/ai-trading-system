@@ -30,6 +30,9 @@ class MarketSnapshot:
     date: date
     close: float
     atr_14: float
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
     sma_11: float | None = None
     sma_20: float | None = None
     sma_50: float | None = None

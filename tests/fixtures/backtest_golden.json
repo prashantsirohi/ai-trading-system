@@ -1,0 +1,9 @@
+{
+  "exit_reasons": [
+    "backtest_end",
+    "hard_stop"
+  ],
+  "final_equity": 1020020.59,
+  "total_pnl_pct": 2.0021,
+  "trade_count": 4
+}

@@ -18,6 +18,27 @@ def test_hard_stop_wins_over_dma(make_position, make_market, base_config):
     assert decision.priority == 0
 
 
+def test_hard_stop_fires_on_intrabar_low_even_when_close_recovers(
+    make_position, make_market, base_config
+):
+    """Bar with low piercing stop must trigger hard_stop even if close > stop."""
+    pos = make_position(stop_price=95.0)
+    mk = make_market(close=98.0, low=90.0, high=99.0, open=97.0)
+    decision = evaluate_exit(pos, mk, None, base_config)
+    assert decision.should_exit is True
+    assert decision.reason == "hard_stop"
+    assert decision.priority == 0
+
+
+def test_hard_stop_does_not_fire_when_low_is_above_stop(
+    make_position, make_market, base_config
+):
+    pos = make_position(stop_price=88.0)
+    mk = make_market(close=98.0, low=95.0, high=99.0, open=97.0)
+    decision = evaluate_exit(pos, mk, None, base_config)
+    assert decision.should_exit is False or decision.reason != "hard_stop"
+
+
 def test_close_below_200dma_emergency(make_position, make_market, base_config):
     pos = make_position(stop_price=70.0)
     mk = make_market(close=80.0, sma_200=85.0, sma_50=92.0, sma_20=97.0, sma_11=98.0)

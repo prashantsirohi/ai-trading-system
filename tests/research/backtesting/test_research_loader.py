@@ -6,6 +6,7 @@ from datetime import date, timedelta
 import sqlite3
 
 import duckdb
+import pandas as pd
 
 from ai_trading_system.platform.db.paths import ensure_domain_layout
 from ai_trading_system.research.backtesting.research_loader import (
@@ -121,3 +122,85 @@ def test_research_loader_computes_engine_columns(tmp_path):
     assert quality["row_count"] == 720
     assert quality["symbol_count"] == 3
     assert quality["masterdata_exists"] is True
+
+
+def test_no_lookahead_truncation_invariance(tmp_path):
+    """Feature values for date D must be identical whether the loader sees data
+    up to D or up to D+30. Locks the no-lookahead property.
+    """
+    paths = ensure_domain_layout(project_root=tmp_path, data_domain="research")
+    conn = duckdb.connect(str(paths.ohlcv_db_path))
+    conn.execute(
+        """
+        CREATE TABLE _catalog (
+            symbol_id VARCHAR,
+            security_id VARCHAR,
+            exchange VARCHAR,
+            timestamp TIMESTAMP,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
+            volume BIGINT,
+            parquet_file VARCHAR,
+            ingestion_version BIGINT,
+            ingestion_ts TIMESTAMP
+        )
+        """
+    )
+    start = date(2025, 1, 1)
+    rows = []
+    for i in range(300):
+        d = start + timedelta(days=i)
+        rows.append(("AAA", None, "NSE", d, 100 + i * 0.5, 102 + i * 0.5, 99 + i * 0.5, 101 + i * 0.5, 1000 + i, None, 1, d))
+        rows.append(("BBB", None, "NSE", d, 200 - i * 0.1, 201 - i * 0.1, 199 - i * 0.1, 200 - i * 0.1, 900 + i, None, 1, d))
+        rows.append(("NIFTY50", None, "NSE", d, 1000 + i * 0.2, 1001 + i * 0.2, 999 + i * 0.2, 1000 + i * 0.2, 5000 + i, None, 1, d))
+    conn.executemany("INSERT INTO _catalog VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.close()
+    master = sqlite3.connect(paths.root_dir / "masterdata.db")
+    master.execute("CREATE TABLE stock_details (Symbol TEXT PRIMARY KEY, Sector TEXT)")
+    master.execute("INSERT INTO stock_details VALUES ('AAA', 'TECH')")
+    master.execute("INSERT INTO stock_details VALUES ('BBB', 'BANKS')")
+    master.commit()
+    master.close()
+
+    cutoff = start + timedelta(days=230)
+    # Loader run 1: data up to cutoff.
+    ranked_short = load_research_ranked_by_date(
+        tmp_path, from_date=cutoff, to_date=cutoff
+    )
+    # Loader run 2: data up to cutoff + 30 days.
+    ranked_long = load_research_ranked_by_date(
+        tmp_path, from_date=cutoff, to_date=cutoff + timedelta(days=30)
+    )
+
+    assert cutoff in ranked_short
+    assert cutoff in ranked_long
+    short_frame = ranked_short[cutoff].set_index("symbol_id").sort_index()
+    long_frame = ranked_long[cutoff].set_index("symbol_id").sort_index()
+
+    # Spot-check the numeric feature columns that drive ranking decisions.
+    for col in [
+        "close",
+        "sma_20",
+        "sma_50",
+        "sma_200",
+        "ema_20",
+        "atr_14",
+        "volume_ratio_20",
+        "high_52w",
+        "return_20",
+        "return_60",
+        "composite_score",
+        "composite_score_adjusted",
+        "eligible_rank",
+    ]:
+        if col not in short_frame.columns:
+            continue
+        # NaN-safe equality.
+        for sym in short_frame.index:
+            s = short_frame.at[sym, col]
+            l = long_frame.at[sym, col]
+            if pd.isna(s) and pd.isna(l):
+                continue
+            assert s == l, f"lookahead leak in column={col} symbol={sym}: short={s} long={l}"

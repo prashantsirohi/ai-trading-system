@@ -95,9 +95,13 @@ class EngineBacktestRunner:
         *,
         risk_config: RiskPolicyConfig,
         starting_equity: float = 1_000_000.0,
+        commission_bps: float = 10.0,
+        slippage_bps: float = 20.0,
     ):
         self.risk_config = risk_config
         self.starting_equity = float(starting_equity)
+        self.commission_bps = float(commission_bps)
+        self.slippage_bps = float(slippage_bps)
         self.engine = TradingRuleEngine(risk_config)
 
     def run(
@@ -193,7 +197,9 @@ class EngineBacktestRunner:
                     rank_streak.pop(intent.symbol_id, None)
                     score_streak.pop(intent.symbol_id, None)
                     market = market_by_symbol.get(intent.symbol_id)
-                    exit_price = market.close if market else position.entry_price
+                    raw_exit_price = _exit_fill_price(intent, position, market)
+                    # Sell fill suffers slippage (executes below quote).
+                    exit_price = raw_exit_price * (1.0 - self.slippage_bps / 10_000.0)
                     trade = open_trades.pop(intent.symbol_id, None)
                     if trade is not None:
                         trade.exit_date = bar_date
@@ -210,9 +216,15 @@ class EngineBacktestRunner:
                         trade.score_at_exit = (
                             float(latest.get("composite_score") or 0.0) if latest else None
                         )
-                        trade.pnl = (exit_price - trade.entry_price) * trade.shares
+                        gross_pnl = (exit_price - trade.entry_price) * trade.shares
+                        commission = (
+                            (trade.entry_price + exit_price)
+                            * trade.shares
+                            * (self.commission_bps / 10_000.0)
+                        )
+                        trade.pnl = gross_pnl - commission
                         if trade.entry_price > 0:
-                            trade.pnl_pct = (exit_price - trade.entry_price) / trade.entry_price
+                            trade.pnl_pct = trade.pnl / (trade.entry_price * trade.shares)
                         equity += trade.pnl
                         result.trades.append(trade)
                 else:  # entry
@@ -220,11 +232,13 @@ class EngineBacktestRunner:
                     if market is None:
                         continue
                     sector = str(intent.metadata.get("sector") or "")
+                    # Buy fill suffers slippage (executes above quote).
+                    fill_price = market.close * (1.0 + self.slippage_bps / 10_000.0)
                     new_pos = PositionSnapshot(
                         symbol_id=intent.symbol_id,
                         exchange=intent.exchange,
                         entry_date=bar_date,
-                        entry_price=market.close,
+                        entry_price=fill_price,
                         shares=intent.quantity,
                         sector=sector,
                         stop_price=intent.metadata.get("initial_stop"),
@@ -264,12 +278,19 @@ class EngineBacktestRunner:
             if position is None:
                 continue
             trade.exit_date = sorted_dates[-1]
-            trade.exit_price = latest_close_by_symbol.get(symbol_id, position.entry_price)
+            raw_exit = latest_close_by_symbol.get(symbol_id, position.entry_price)
+            trade.exit_price = raw_exit * (1.0 - self.slippage_bps / 10_000.0)
             trade.exit_reason = "backtest_end"
             trade.bars_held = position.bars_held
-            trade.pnl = (trade.exit_price - trade.entry_price) * trade.shares
+            gross_pnl = (trade.exit_price - trade.entry_price) * trade.shares
+            commission = (
+                (trade.entry_price + trade.exit_price)
+                * trade.shares
+                * (self.commission_bps / 10_000.0)
+            )
+            trade.pnl = gross_pnl - commission
             trade.pnl_pct = (
-                (trade.exit_price - trade.entry_price) / trade.entry_price
+                trade.pnl / (trade.entry_price * trade.shares)
                 if trade.entry_price > 0
                 else 0.0
             )
@@ -280,6 +301,18 @@ class EngineBacktestRunner:
             result.equity_curve[-1]["equity"] = equity
 
         return result
+
+
+def _exit_fill_price(intent, position: PositionSnapshot, market) -> float:
+    """Fill price for an exit. Hard-stop fills at stop, or open on gap-down."""
+    if market is None:
+        return position.entry_price
+    if intent.reason == "hard_stop" and position.stop_price is not None:
+        # Gap-down: bar opens below stop → fill at open (worse than stop).
+        if market.open is not None and market.open < position.stop_price:
+            return float(market.open)
+        return float(position.stop_price)
+    return float(market.close)
 
 
 def _build_portfolio(positions: dict[str, PositionSnapshot], equity: float) -> PortfolioSnapshot:

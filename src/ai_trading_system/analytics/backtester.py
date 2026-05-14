@@ -303,12 +303,15 @@ class EventBacktester:
                 conn2 = duckdb.connect(self.ohlcv_db_path, read_only=True)
                 try:
                     feat_select = ", ".join(feat_cols)
-                    fdf = conn2.execute(f"""
+                    fdf = conn2.execute(
+                        f"""
                         SELECT timestamp, {feat_select}
                         FROM read_parquet('{feat_path}')
-                        WHERE symbol_id = '{symbol}' AND exchange = '{exchange}'
+                        WHERE symbol_id = ? AND exchange = ?
                         ORDER BY timestamp
-                    """).fetchdf()
+                        """,
+                        [symbol, exchange],
+                    ).fetchdf()
                 finally:
                     conn2.close()
                 if not fdf.empty:

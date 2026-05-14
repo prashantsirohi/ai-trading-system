@@ -45,6 +45,7 @@ def load_research_ranked_by_date(
     warmup_days: int = 420,
     benchmark_symbol: str = "NIFTY50",
     weekly_stage_gate: bool = False,
+    weights_override: dict[str, float] | None = None,
 ) -> dict[date, pd.DataFrame]:
     """Load research OHLCV and compute engine-ready ranked frames per date.
 
@@ -84,6 +85,7 @@ def load_research_ranked_by_date(
         benchmark_symbol=benchmark_symbol,
         weekly_snapshots=weekly_snapshots,
         weekly_stage_gate=weekly_stage_gate,
+        weights_override=weights_override,
     )
     ranked = ranked[(ranked["date"] >= pd.Timestamp(start)) & (ranked["date"] <= pd.Timestamp(end))]
     if ranked.empty:
@@ -296,6 +298,7 @@ def _compute_ranked_frame(
     benchmark_symbol: str = "NIFTY50",
     weekly_snapshots: pd.DataFrame | None = None,
     weekly_stage_gate: bool = False,
+    weights_override: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     data = df.reset_index(drop=True).copy(deep=True)
     data.loc[:, "date"] = pd.to_datetime(data["date"])
@@ -372,7 +375,7 @@ def _compute_ranked_frame(
     data["stock_vs_sector_value"] = (data["return_60"] - sector_return).fillna(0.0)
 
     scored_frames = [
-        _score_dynamic_rank_day(group)
+        _score_dynamic_rank_day(group, weights_override=weights_override)
         for _, group in data.groupby("date", sort=True)
     ]
     scored = pd.concat(scored_frames, ignore_index=True) if scored_frames else pd.DataFrame()
@@ -381,6 +384,9 @@ def _compute_ranked_frame(
             "date",
             "symbol_id",
             "exchange",
+            "open",
+            "high",
+            "low",
             "close",
             "composite_score",
             "composite_score_adjusted",
@@ -455,7 +461,11 @@ def _compute_ranked_frame(
     return scored[output_columns].dropna(subset=["close"]).reset_index(drop=True)
 
 
-def _score_dynamic_rank_day(day_frame: pd.DataFrame) -> pd.DataFrame:
+def _score_dynamic_rank_day(
+    day_frame: pd.DataFrame,
+    *,
+    weights_override: dict[str, float] | None = None,
+) -> pd.DataFrame:
     """Score one historical day through canonical ranking factor functions."""
     scores = day_frame.copy(deep=True).reset_index(drop=True)
     empty = pd.DataFrame()
@@ -466,7 +476,8 @@ def _score_dynamic_rank_day(day_frame: pd.DataFrame) -> pd.DataFrame:
     scores = apply_trend_persistence(scores, adx_frame=empty, sma_frame=empty)
     scores = apply_proximity_highs(scores, highs_frame=empty)
     scores = apply_delivery(scores, delivery_frame=empty)
-    scores = compute_factor_scores(scores, weights=load_factor_weights())
+    weights = weights_override if weights_override is not None else load_factor_weights()
+    scores = compute_factor_scores(scores, weights=weights)
     scores = compute_penalty_score(scores)
     adjusted = (
         scores["composite_score"]
