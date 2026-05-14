@@ -25,6 +25,7 @@ dependencies = [
   "uvicorn==0.34.0",
   "weasyprint>=62.0",
   "market_intel @ git+https://github.com/prashantsirohi/market_intel@master",
+  "optuna>=4.0",
 ]
 
 [project.optional-dependencies]

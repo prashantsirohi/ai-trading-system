@@ -1,0 +1,22 @@
+# Initial rule pack. Encodes the current production defaults so the parity gate
+# can prove the compiler/adapter route every knob correctly. Optimizer mutates
+# from this baseline; do not edit unless you intentionally want a new baseline.
+strategy_id: momentum_breakout_v1
+version: 1
+description: >
+  Baseline strategy that reproduces the current rank-mode research backtest
+  exactly. Used as the parity reference and as Optuna's initial-pack baseline.
+ranking:
+  # Mirrors src/ai_trading_system/platform/config/rank_factor_weights.json.
+  weights:
+    relative_strength: 0.38
+    volume_intensity: 0.0
+    trend_persistence: 0.22
+    momentum_acceleration: 0.0
+    proximity_highs: 0.18
+    delivery_pct: 0.0
+    sector_strength: 0.22
+risk:
+  # Empty → RiskPolicyConfig defaults (balanced_swing). Matches today's
+  # research engine_runner behavior.
+  {}

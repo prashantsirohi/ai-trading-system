@@ -1,0 +1,40 @@
+# Sample optimisation recipe. Search the momentum_breakout strategy over a
+# four-year window using TPE with walk-forward validation. Pin the seed so
+# champions are reproducible.
+name: momentum_breakout_optuna_v1
+strategy_id: momentum_breakout
+baseline_pack_path: config/strategies/momentum_breakout_v1.yaml
+from_date: "2021-01-01"
+to_date: "2024-12-31"
+exchange: NSE
+benchmark_symbol: NIFTY50
+starting_equity: 1000000.0
+commission_bps: 10.0
+slippage_bps: 35.0
+seed: 42
+walkforward:
+  train_months: 12
+  validation_months: 3
+  step_months: 3
+fitness_weights:
+  cagr: 0.25
+  sharpe: 0.20
+  sortino: 0.10
+  win_rate: 0.05
+  drawdown_penalty: 0.30
+  turnover_penalty: 0.10
+acceptance:
+  min_fitness_improvement: 0.01
+  max_mdd_ratio_vs_champion: 1.10
+  min_trades_per_year: 40.0
+  min_fold_improvement_rate: 0.60
+  worst_fold_min_return_vs_nifty: true
+  worst_fold_max_mdd_ratio_vs_baseline: 1.10
+  require_no_zero_trade_fold: true
+stopping:
+  max_trials: 50
+  patience: 8
+  max_runtime_minutes: 120
+description: >
+  Default TPE search over ranking weights + risk knobs. Initial pack is the
+  parity-locked momentum_breakout_v1.yaml.
