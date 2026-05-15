@@ -292,10 +292,16 @@ def compute_index_bar(
 
 
 def ensure_index_catalog_tables(ohlcv_db_path: Path | str) -> None:
-    """Idempotently create ``_index_catalog`` and ``_index_metadata`` if absent.
+    """Idempotently create the four tables the universe-index build needs:
+    ``_index_catalog``, ``_index_metadata``, ``_universe_membership``, and
+    ``_universe_index_diagnostics``. Also registers the UNIV_TOP1000 row in
+    ``_index_metadata``.
 
-    Mirrors the schema created by :func:`ai_trading_system.domains.ingest.trust.ensure_data_trust_schema`
-    so this module can be used without depending on the ingest path having run.
+    The first two mirror :func:`ai_trading_system.domains.ingest.trust.ensure_data_trust_schema`
+    so the universe-index build does not depend on the ingest path having run.
+    The latter two duplicate ``pipeline/migrations/016_universe_index.sql`` so
+    the tool works when the research OHLCV DB is separate from the
+    control-plane DB (the typical setup).
     """
     con = duckdb.connect(str(ohlcv_db_path))
     try:
@@ -313,6 +319,38 @@ def ensure_index_catalog_tables(ohlcv_db_path: Path | str) -> None:
                 provider VARCHAR DEFAULT 'nseindia',
                 ingest_run_id VARCHAR,
                 validated_at TIMESTAMP,
+                PRIMARY KEY (index_code, date)
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS _universe_membership (
+                rebalance_date DATE NOT NULL,
+                symbol_id TEXT NOT NULL,
+                rank_by_turnover INTEGER NOT NULL,
+                median_turnover DOUBLE,
+                recent_days INTEGER,
+                sparse_history BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
+                PRIMARY KEY (rebalance_date, symbol_id)
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS _universe_index_diagnostics (
+                index_code TEXT NOT NULL,
+                date DATE NOT NULL,
+                rebalance_date DATE NOT NULL,
+                n_members INTEGER NOT NULL,
+                n_used INTEGER NOT NULL,
+                n_missing INTEGER NOT NULL,
+                used_ratio DOUBLE,
+                daily_return DOUBLE,
+                index_level DOUBLE NOT NULL,
+                quality_flag TEXT NOT NULL DEFAULT 'ok',
+                created_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
                 PRIMARY KEY (index_code, date)
             )
             """
