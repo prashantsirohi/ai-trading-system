@@ -7,7 +7,10 @@ baseline_pack_path: config/strategies/momentum_breakout_v1.yaml
 from_date: "2021-01-01"
 to_date: "2024-12-31"
 exchange: NSE
-benchmark_symbol: NIFTY50
+benchmark:
+  symbol: UNIV_TOP1000
+  source: index_catalog
+  blend: 0.35
 starting_equity: 1000000.0
 commission_bps: 10.0
 slippage_bps: 35.0
@@ -28,7 +31,7 @@ acceptance:
   max_mdd_ratio_vs_champion: 1.10
   min_trades_per_year: 40.0
   min_fold_improvement_rate: 0.60
-  worst_fold_min_return_vs_nifty: true
+  worst_fold_min_return_vs_benchmark: true
   worst_fold_max_mdd_ratio_vs_baseline: 1.10
   require_no_zero_trade_fold: true
 stopping:

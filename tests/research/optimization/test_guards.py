@@ -29,8 +29,8 @@ def _metrics(trade_count: int = 50, total_return: float = 10.0, mdd: float = -10
 def test_promotes_clean_champion():
     pack = StrategyRulePack(strategy_id="t")
     folds = [
-        FoldResult(0, 0.8, _metrics(), nifty_return_pct=4.0),
-        FoldResult(1, 0.9, _metrics(), nifty_return_pct=5.0),
+        FoldResult(0, 0.8, _metrics(), benchmark_return_pct=4.0),
+        FoldResult(1, 0.9, _metrics(), benchmark_return_pct=5.0),
     ]
     v = champion_guards(pack, folds)
     assert v.promote, v.reason
@@ -39,8 +39,8 @@ def test_promotes_clean_champion():
 def test_blocks_on_zero_trade_fold():
     pack = StrategyRulePack(strategy_id="t")
     folds = [
-        FoldResult(0, 0.8, _metrics(trade_count=0), nifty_return_pct=4.0),
-        FoldResult(1, 0.9, _metrics(), nifty_return_pct=5.0),
+        FoldResult(0, 0.8, _metrics(trade_count=0), benchmark_return_pct=4.0),
+        FoldResult(1, 0.9, _metrics(), benchmark_return_pct=5.0),
     ]
     v = champion_guards(pack, folds)
     assert not v.promote
@@ -50,8 +50,8 @@ def test_blocks_on_zero_trade_fold():
 def test_blocks_on_worst_fold_below_nifty():
     pack = StrategyRulePack(strategy_id="t")
     folds = [
-        FoldResult(0, 0.2, _metrics(total_return=2.0), nifty_return_pct=8.0),  # bad fold
-        FoldResult(1, 0.9, _metrics(total_return=15.0), nifty_return_pct=5.0),
+        FoldResult(0, 0.2, _metrics(total_return=2.0), benchmark_return_pct=8.0),  # bad fold
+        FoldResult(1, 0.9, _metrics(total_return=15.0), benchmark_return_pct=5.0),
     ]
     v = champion_guards(pack, folds)
     assert not v.promote
@@ -70,7 +70,7 @@ def test_blocks_when_too_many_weights_pinned():
         "sector_strength": 0.0,
     }
     pack = StrategyRulePack(strategy_id="t", ranking={"weights": pinned_weights})
-    folds = [FoldResult(0, 0.8, _metrics(), nifty_return_pct=4.0)]
+    folds = [FoldResult(0, 0.8, _metrics(), benchmark_return_pct=4.0)]
     v = champion_guards(pack, folds)
     assert not v.promote
     assert v.reason == "too_many_pinned_weights"

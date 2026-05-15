@@ -32,7 +32,14 @@ from ai_trading_system.platform.db.paths import ensure_domain_layout
 
 
 RANKING_METHOD_VERSION = "research_dynamic_v3_canonical_factor_scoring_stage2_benchmark"
-NIFTY_RS_BLEND = 0.4
+# Weight of the benchmark-relative excess-return blend in `rel_strength`.
+# Was NIFTY_RS_BLEND=0.4; renamed and tuned down when the default benchmark
+# switched to UNIV_TOP1000 (a top-1000 PIT universe index).
+RS_BENCHMARK_BLEND = 0.35
+# Backwards-compat alias for any external consumer that still imports the
+# legacy name. Remove after one release.
+NIFTY_RS_BLEND = RS_BENCHMARK_BLEND
+DEFAULT_BENCHMARK_SYMBOL = "UNIV_TOP1000"
 
 
 def load_research_ranked_by_date(
@@ -43,7 +50,8 @@ def load_research_ranked_by_date(
     exchange: str = "NSE",
     symbols: list[str] | None = None,
     warmup_days: int = 420,
-    benchmark_symbol: str = "NIFTY50",
+    benchmark_symbol: str = DEFAULT_BENCHMARK_SYMBOL,
+    benchmark_source: str = "index_catalog",
     weekly_stage_gate: bool = False,
     weights_override: dict[str, float] | None = None,
 ) -> dict[date, pd.DataFrame]:
@@ -76,6 +84,21 @@ def load_research_ranked_by_date(
     )
     if df.empty:
         return {}
+
+    # Optionally append a benchmark series so downstream RS blending sees it
+    # as a symbol_id row. ``benchmark_source='index_catalog'`` loads from
+    # ``_index_catalog`` (preferred for UNIV_TOP1000, NIFTY_*, ...). If absent
+    # or empty, the loader silently skips — RS blend then no-ops.
+    if benchmark_symbol and benchmark_source == "index_catalog":
+        bench_df = _load_benchmark_from_index_catalog(
+            paths.ohlcv_db_path,
+            index_code=benchmark_symbol,
+            from_date=load_start,
+            to_date=end,
+            exchange=exchange,
+        )
+        if not bench_df.empty:
+            df = pd.concat([df, bench_df], ignore_index=True)
 
     sectors = _load_sector_map(_research_master_db_path(paths))
     weekly_snapshots = _load_weekly_stage_history(paths.ohlcv_db_path)
@@ -272,6 +295,51 @@ def _load_ohlcv(
         conn.close()
 
 
+def _load_benchmark_from_index_catalog(
+    db_path: Path,
+    *,
+    index_code: str,
+    from_date: date,
+    to_date: date,
+    exchange: str = "NSE",
+) -> pd.DataFrame:
+    """Load a benchmark series from ``_index_catalog`` reshaped as if it were
+    a stock OHLCV row in ``_catalog``. Returns empty frame when the table is
+    absent (older DBs) or the index_code has no data in range.
+    """
+    if not db_path.exists():
+        return pd.DataFrame()
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
+        if "_index_catalog" not in tables:
+            return pd.DataFrame()
+        df = conn.execute(
+            """
+            SELECT
+                ? AS symbol_id,
+                ? AS exchange,
+                date,
+                COALESCE(open, close) AS open,
+                COALESCE(high, close) AS high,
+                COALESCE(low, close) AS low,
+                close,
+                COALESCE(volume, 0) AS volume
+              FROM _index_catalog
+             WHERE index_code = ?
+               AND date BETWEEN ? AND ?
+               AND close IS NOT NULL
+             ORDER BY date
+            """,
+            [index_code, exchange, index_code, from_date, to_date],
+        ).fetchdf()
+        return df
+    except duckdb.Error:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+
 def _research_master_db_path(paths) -> Path:
     research_master = paths.root_dir / "masterdata.db"
     return research_master if research_master.exists() else paths.master_db_path
@@ -295,7 +363,7 @@ def _compute_ranked_frame(
     df: pd.DataFrame,
     *,
     sectors: dict[str, str],
-    benchmark_symbol: str = "NIFTY50",
+    benchmark_symbol: str = DEFAULT_BENCHMARK_SYMBOL,
     weekly_snapshots: pd.DataFrame | None = None,
     weekly_stage_gate: bool = False,
     weights_override: dict[str, float] | None = None,
@@ -326,7 +394,7 @@ def _compute_ranked_frame_impl(
     df: pd.DataFrame,
     *,
     sectors: dict[str, str],
-    benchmark_symbol: str = "NIFTY50",
+    benchmark_symbol: str = DEFAULT_BENCHMARK_SYMBOL,
     weekly_snapshots: pd.DataFrame | None = None,
     weekly_stage_gate: bool = False,
     weights_override: dict[str, float] | None = None,

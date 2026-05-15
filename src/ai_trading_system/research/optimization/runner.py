@@ -55,7 +55,7 @@ def _evaluate_pack_on_folds(
     *,
     recipe: OptimizationRecipe,
     project_root: Path,
-    nifty_by_fold: dict[int, float | None],
+    benchmark_by_fold: dict[int, float | None],
     progress_label: str | None = None,
 ) -> list[FoldResult]:
     """Backtest one pack on every walk-forward validation window."""
@@ -76,7 +76,7 @@ def _evaluate_pack_on_folds(
             from_date=fold.val_start,
             to_date=fold.val_end,
             exchange=recipe.exchange,
-            benchmark_symbol=recipe.benchmark_symbol,
+            benchmark_symbol=recipe.benchmark.symbol,
             starting_equity=recipe.starting_equity,
             commission_bps=recipe.commission_bps,
             slippage_bps=recipe.slippage_bps,
@@ -88,13 +88,14 @@ def _evaluate_pack_on_folds(
                 fold_index=fold.index,
                 fitness=fit,
                 metrics=metrics,
-                nifty_return_pct=nifty_by_fold.get(fold.index),
+                benchmark_return_pct=benchmark_by_fold.get(fold.index),
+                benchmark_symbol=recipe.benchmark.symbol,
             )
         )
     return fold_results
 
 
-def _nifty_returns_per_fold(
+def _benchmark_returns_per_fold(
     folds: list[WalkForwardFold],
     *,
     recipe: OptimizationRecipe,
@@ -104,13 +105,17 @@ def _nifty_returns_per_fold(
     for fold in folds:
         bench = benchmark_buyhold_return(
             project_root,
-            symbol=recipe.benchmark_symbol,
+            benchmark=recipe.benchmark,
             from_date=fold.val_start,
             to_date=fold.val_end,
             exchange=recipe.exchange,
         )
         out[fold.index] = bench.total_return_pct if bench else None
     return out
+
+
+# Legacy alias for one release; remove once external callers migrate.
+_nifty_returns_per_fold = _benchmark_returns_per_fold
 
 
 def _persist_iteration(
@@ -133,7 +138,8 @@ def _persist_iteration(
             fold_role="val",
             fitness_value=fr.fitness,
             metrics=fr.metrics,
-            nifty_return_pct=fr.nifty_return_pct,
+            benchmark_return_pct=fr.benchmark_return_pct,
+            benchmark_symbol=fr.benchmark_symbol,
             accepted=accepted,
             rejection_reason=rejection_reason,
         )
@@ -148,7 +154,8 @@ def _persist_iteration(
             fold_role="aggregate",
             fitness_value=aggregate_fitness(fold_results),
             metrics=avg_metrics,
-            nifty_return_pct=None,
+            benchmark_return_pct=None,
+            benchmark_symbol=fold_results[0].benchmark_symbol if fold_results else None,
             accepted=accepted,
             rejection_reason=rejection_reason,
         )
@@ -209,7 +216,7 @@ def run_optimization(
             f"with train={recipe.walkforward.train_months}m val={recipe.walkforward.validation_months}m"
         )
 
-    nifty_by_fold = _nifty_returns_per_fold(
+    benchmark_by_fold = _benchmark_returns_per_fold(
         folds, recipe=recipe, project_root=project_root
     )
 
@@ -229,7 +236,7 @@ def run_optimization(
         folds,
         recipe=recipe,
         project_root=project_root,
-        nifty_by_fold=nifty_by_fold,
+        benchmark_by_fold=benchmark_by_fold,
         progress_label="baseline",
     )
     _persist_iteration(
@@ -280,7 +287,7 @@ def run_optimization(
             folds,
             recipe=recipe,
             project_root=project_root,
-            nifty_by_fold=nifty_by_fold,
+            benchmark_by_fold=benchmark_by_fold,
             progress_label=f"trial {trial.number}",
         )
         verdict = is_accepted(

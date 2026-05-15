@@ -83,7 +83,7 @@ def _run_short_study(tmp_path: Path) -> dict:
             max_mdd_ratio_vs_champion=100.0,
             min_trades_per_year=0.0,
             min_fold_improvement_rate=0.0,
-            worst_fold_min_return_vs_nifty=False,
+            worst_fold_min_return_vs_benchmark=False,
             worst_fold_max_mdd_ratio_vs_baseline=100.0,
             require_no_zero_trade_fold=False,
         ),

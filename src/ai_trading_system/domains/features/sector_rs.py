@@ -9,7 +9,7 @@ from ai_trading_system.platform.logging.logger import logger
 def add_benchmark_relative_features(
     frame: pd.DataFrame,
     benchmark_frame: pd.DataFrame,
-    benchmark_symbol: str = "NIFTY_500",
+    benchmark_symbol: str = "UNIV_TOP1000",
 ) -> pd.DataFrame:
     """Attach benchmark-relative return context without mutating core columns."""
     output = frame.copy()

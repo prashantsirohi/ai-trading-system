@@ -39,7 +39,7 @@ def _fold(idx: int, fitness: float, **overrides) -> FoldResult:
         fold_index=idx,
         fitness=fitness,
         metrics=_metrics(**overrides),
-        nifty_return_pct=overrides.pop("nifty_return_pct", 5.0) if "nifty_return_pct" in overrides else 5.0,
+        benchmark_return_pct=overrides.pop("benchmark_return_pct", 5.0) if "benchmark_return_pct" in overrides else 5.0,
     )
 
 
@@ -51,28 +51,28 @@ def test_zero_trade_fold_rejected():
     assert verdict.reason == "zero_trade_fold"
 
 
-def test_worst_fold_underperforms_nifty_rejected():
+def test_worst_fold_underperforms_benchmark_rejected():
     cand = [
-        FoldResult(0, 1.0, _metrics(total_return_pct=2.0), nifty_return_pct=8.0),  # underperforms
-        FoldResult(1, 1.2, _metrics(total_return_pct=15.0), nifty_return_pct=5.0),
+        FoldResult(0, 1.0, _metrics(total_return_pct=2.0), benchmark_return_pct=8.0),  # underperforms
+        FoldResult(1, 1.2, _metrics(total_return_pct=15.0), benchmark_return_pct=5.0),
     ]
     base = [
-        FoldResult(0, 0.5, _metrics(total_return_pct=4.0), nifty_return_pct=8.0),
-        FoldResult(1, 0.6, _metrics(total_return_pct=6.0), nifty_return_pct=5.0),
+        FoldResult(0, 0.5, _metrics(total_return_pct=4.0), benchmark_return_pct=8.0),
+        FoldResult(1, 0.6, _metrics(total_return_pct=6.0), benchmark_return_pct=5.0),
     ]
     verdict = is_accepted(cand, champion_folds=None, baseline_folds=base)
     assert not verdict.accepted
-    assert verdict.reason == "worst_fold_underperforms_nifty"
+    assert verdict.reason == "worst_fold_underperforms_benchmark"
 
 
 def test_worst_fold_mdd_too_deep_rejected():
     cand = [
-        FoldResult(0, 1.0, _metrics(mdd=-30.0), nifty_return_pct=5.0),
-        FoldResult(1, 1.2, _metrics(mdd=-5.0), nifty_return_pct=5.0),
+        FoldResult(0, 1.0, _metrics(mdd=-30.0), benchmark_return_pct=5.0),
+        FoldResult(1, 1.2, _metrics(mdd=-5.0), benchmark_return_pct=5.0),
     ]
     base = [
-        FoldResult(0, 0.5, _metrics(mdd=-15.0), nifty_return_pct=5.0),  # baseline worst-fold MDD 15%
-        FoldResult(1, 0.6, _metrics(mdd=-5.0), nifty_return_pct=5.0),
+        FoldResult(0, 0.5, _metrics(mdd=-15.0), benchmark_return_pct=5.0),  # baseline worst-fold MDD 15%
+        FoldResult(1, 0.6, _metrics(mdd=-5.0), benchmark_return_pct=5.0),
     ]
     verdict = is_accepted(cand, champion_folds=None, baseline_folds=base)
     assert not verdict.accepted

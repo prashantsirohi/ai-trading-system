@@ -73,10 +73,15 @@ def test_research_loader_computes_engine_columns(tmp_path):
     master.commit()
     master.close()
 
+    # Synthetic DB seeds NIFTY50 as a stock row in _catalog (not _index_catalog),
+    # so explicitly route the benchmark lookup to _catalog. Default is now
+    # benchmark_source='index_catalog' for production use of UNIV_TOP1000.
     ranked = load_research_ranked_by_date(
         tmp_path,
         from_date=start + timedelta(days=220),
         to_date=start + timedelta(days=239),
+        benchmark_symbol="NIFTY50",
+        benchmark_source="catalog",
     )
 
     assert ranked
