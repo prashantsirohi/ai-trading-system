@@ -4,8 +4,8 @@
 name: momentum_breakout_optuna_v1
 strategy_id: momentum_breakout
 baseline_pack_path: config/strategies/momentum_breakout_v1.yaml
-from_date: "2021-01-01"
-to_date: "2024-12-31"
+from_date: "2024-01-01"
+to_date: "2026-05-11"
 exchange: NSE
 benchmark_symbol: NIFTY50
 starting_equity: 1000000.0
@@ -32,7 +32,7 @@ acceptance:
   worst_fold_max_mdd_ratio_vs_baseline: 1.10
   require_no_zero_trade_fold: true
 stopping:
-  max_trials: 50
+  max_trials: 3
   patience: 8
   max_runtime_minutes: 120
 description: >
