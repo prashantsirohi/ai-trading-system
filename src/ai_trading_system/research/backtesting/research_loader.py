@@ -300,9 +300,40 @@ def _compute_ranked_frame(
     weekly_stage_gate: bool = False,
     weights_override: dict[str, float] | None = None,
 ) -> pd.DataFrame:
+    # Pandas 2.x emits Copy-on-Write preview warnings on column assignments
+    # in this hot path. They are cosmetic — pandas 3.0 hasn't shipped yet
+    # and behaviour is unchanged today. Silence inside this function only;
+    # callers outside the loader still see warnings if they hit them.
+    import warnings as _warnings
+
+    _ctx = _warnings.catch_warnings()
+    _ctx.__enter__()
+    _warnings.filterwarnings("ignore", category=FutureWarning)
+    try:
+        return _compute_ranked_frame_impl(
+            df,
+            sectors=sectors,
+            benchmark_symbol=benchmark_symbol,
+            weekly_snapshots=weekly_snapshots,
+            weekly_stage_gate=weekly_stage_gate,
+            weights_override=weights_override,
+        )
+    finally:
+        _ctx.__exit__(None, None, None)
+
+
+def _compute_ranked_frame_impl(
+    df: pd.DataFrame,
+    *,
+    sectors: dict[str, str],
+    benchmark_symbol: str = "NIFTY50",
+    weekly_snapshots: pd.DataFrame | None = None,
+    weekly_stage_gate: bool = False,
+    weights_override: dict[str, float] | None = None,
+) -> pd.DataFrame:
     data = df.reset_index(drop=True).copy(deep=True)
     data.loc[:, "date"] = pd.to_datetime(data["date"])
-    data = data.sort_values(["symbol_id", "date"], kind="stable")
+    data = data.sort_values(["symbol_id", "date"], kind="stable").reset_index(drop=True)
     grouped = data.groupby("symbol_id", group_keys=False)
 
     data["timestamp"] = data["date"]
@@ -509,7 +540,7 @@ def _cumcount_sorted_symbols(symbols: pd.Series) -> np.ndarray:
 def _blend_benchmark_relative_rs(data: pd.DataFrame, *, benchmark_symbol: str) -> pd.DataFrame:
     benchmark_upper = (benchmark_symbol or "").strip().upper()
     if not benchmark_upper or data.empty:
-        return data
+        return data.copy()
     output = data.copy()
     benchmark = output[output["symbol_id"].astype(str).str.upper() == benchmark_upper]
     if benchmark.empty:
@@ -528,7 +559,7 @@ def _blend_benchmark_relative_rs(data: pd.DataFrame, *, benchmark_symbol: str) -
 def _apply_benchmark_rs_blend(scores: pd.DataFrame) -> pd.DataFrame:
     rs_cols = [f"rs_vs_nifty_{period}" for period in (5, 10, 20, 60, 120) if f"rs_vs_nifty_{period}" in scores.columns]
     if not rs_cols or "rel_strength" not in scores.columns:
-        return scores
+        return scores.copy()
     output = scores.copy()
     blended = output[rs_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).mean(axis=1)
     nifty_rs_score = blended.rank(pct=True) * 100.0
@@ -607,7 +638,7 @@ def _attach_weekly_stage_context(data: pd.DataFrame, weekly_snapshots: pd.DataFr
 
 def _filter_weekly_stage_s2(data: pd.DataFrame) -> pd.DataFrame:
     if "weekly_stage_label" not in data.columns:
-        return data
+        return data.copy()
     label = data["weekly_stage_label"]
     confidence = pd.to_numeric(data.get("weekly_stage_confidence", pd.Series(1.0, index=data.index)), errors="coerce").fillna(0.0)
     has_snapshot = label.notna()

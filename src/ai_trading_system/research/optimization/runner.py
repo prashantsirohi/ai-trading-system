@@ -17,6 +17,7 @@ from pathlib import Path
 
 import optuna
 from optuna.samplers import TPESampler
+from tqdm.auto import tqdm
 
 from ai_trading_system.domains.strategy import (
     StrategyRulePack,
@@ -55,10 +56,20 @@ def _evaluate_pack_on_folds(
     recipe: OptimizationRecipe,
     project_root: Path,
     nifty_by_fold: dict[int, float | None],
+    progress_label: str | None = None,
 ) -> list[FoldResult]:
     """Backtest one pack on every walk-forward validation window."""
     fold_results: list[FoldResult] = []
-    for fold in folds:
+    fold_iter = folds
+    if progress_label is not None:
+        fold_iter = tqdm(
+            folds,
+            desc=progress_label,
+            leave=False,
+            unit="fold",
+            ncols=80,
+        )
+    for fold in fold_iter:
         result = run_backtest(
             pack,
             project_root=project_root,
@@ -202,9 +213,24 @@ def run_optimization(
         folds, recipe=recipe, project_root=project_root
     )
 
+    logger.info(
+        "optimizer start | run_id=%s strategy=%s folds=%d trials=%d window=%s..%s",
+        optimization_run_id,
+        recipe.strategy_id,
+        len(folds),
+        recipe.stopping.max_trials,
+        recipe.from_date,
+        recipe.to_date,
+    )
+
     # Baseline on the same folds.
     baseline_folds = _evaluate_pack_on_folds(
-        baseline_pack, folds, recipe=recipe, project_root=project_root, nifty_by_fold=nifty_by_fold
+        baseline_pack,
+        folds,
+        recipe=recipe,
+        project_root=project_root,
+        nifty_by_fold=nifty_by_fold,
+        progress_label="baseline",
     )
     _persist_iteration(
         store,
@@ -240,6 +266,13 @@ def run_optimization(
     }
     started_at = datetime.utcnow()
 
+    progress = tqdm(
+        total=recipe.stopping.max_trials,
+        desc="optuna",
+        unit="trial",
+        ncols=100,
+    )
+
     def objective(trial: optuna.Trial) -> float:
         pack = build_search_space(trial, strategy_id=recipe.strategy_id)
         fold_results = _evaluate_pack_on_folds(
@@ -248,6 +281,7 @@ def run_optimization(
             recipe=recipe,
             project_root=project_root,
             nifty_by_fold=nifty_by_fold,
+            progress_label=f"trial {trial.number}",
         )
         verdict = is_accepted(
             fold_results,
@@ -274,6 +308,14 @@ def run_optimization(
         return aggregate_fitness(fold_results)
 
     def early_stop_callback(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+        # Progress line: trial number, fitness, accepted/rejected, champion status.
+        champion_marker = "👑" if state["champion_pack_id"] else " "
+        progress.set_postfix_str(
+            f"value={trial.value:.4f} no_improve={state['iterations_without_improvement']} {champion_marker}"
+            if trial.value is not None
+            else f"value=none no_improve={state['iterations_without_improvement']}"
+        )
+        progress.update(1)
         if state["iterations_without_improvement"] >= recipe.stopping.patience:
             study.stop()
         elapsed_min = (datetime.utcnow() - started_at).total_seconds() / 60.0
@@ -281,6 +323,7 @@ def run_optimization(
             study.stop()
 
     sampler = TPESampler(seed=recipe.seed)
+    optuna.logging.set_verbosity(optuna.logging.WARNING)  # don't double up with tqdm
     study = optuna.create_study(direction="maximize", sampler=sampler)
     try:
         study.optimize(
@@ -316,6 +359,15 @@ def run_optimization(
             error=str(exc),
         )
         raise
+    finally:
+        progress.close()
+
+    logger.info(
+        "optimizer done | run_id=%s trials=%d champion=%s",
+        optimization_run_id,
+        len(study.trials),
+        state["champion_pack_id"],
+    )
 
     return {
         "optimization_run_id": optimization_run_id,
