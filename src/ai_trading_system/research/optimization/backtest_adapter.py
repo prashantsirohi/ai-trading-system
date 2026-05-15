@@ -13,6 +13,7 @@ from ai_trading_system.domains.strategy import (
 from ai_trading_system.research.backtesting import EngineBacktestRunner
 from ai_trading_system.research.backtesting.engine_runner import BacktestResult
 from ai_trading_system.research.backtesting.research_loader import (
+    DEFAULT_BENCHMARK_SYMBOL,
     load_research_ranked_by_date,
 )
 
@@ -24,7 +25,8 @@ def run_backtest(
     from_date: date,
     to_date: date,
     exchange: str = "NSE",
-    benchmark_symbol: str = "NIFTY50",
+    benchmark_symbol: str = DEFAULT_BENCHMARK_SYMBOL,
+    benchmark_source: str = "index_catalog",
     starting_equity: float = 1_000_000.0,
     commission_bps: float = 10.0,
     slippage_bps: float = 20.0,
@@ -36,6 +38,7 @@ def run_backtest(
         to_date=to_date,
         exchange=exchange,
         benchmark_symbol=benchmark_symbol,
+        benchmark_source=benchmark_source,
         weights_override=to_ranking_weights(pack),
     )
     runner = EngineBacktestRunner(

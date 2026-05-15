@@ -7,15 +7,36 @@ YAML file.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
 from ai_trading_system.research.optimization.acceptance import AcceptanceThresholds
 from ai_trading_system.research.optimization.evaluator import FitnessWeights
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Benchmark:
+    """Generic benchmark config. Replaces a flat ``benchmark_symbol`` string.
+
+    ``source`` decides where the symbol's price series is loaded from:
+    - ``"index_catalog"`` (default): ``_index_catalog WHERE index_code = symbol``.
+    - ``"catalog"``: ``_catalog WHERE symbol_id = symbol`` (legacy stock-as-benchmark).
+
+    ``blend`` is the weight applied to the benchmark-relative excess-return
+    signal inside ranking RS blending. 0.0 disables the blend.
+    """
+
+    symbol: str = "UNIV_TOP1000"
+    source: Literal["index_catalog", "catalog"] = "index_catalog"
+    blend: float = 0.35
 
 
 @dataclass(frozen=True)
@@ -40,7 +61,7 @@ class OptimizationRecipe:
     from_date: date
     to_date: date
     exchange: str = "NSE"
-    benchmark_symbol: str = "NIFTY50"
+    benchmark: Benchmark = field(default_factory=Benchmark)
     starting_equity: float = 1_000_000.0
     commission_bps: float = 10.0
     slippage_bps: float = 35.0  # plan recommends 35 for Indian mid-caps
@@ -65,6 +86,21 @@ class OptimizationRecipe:
             allowed = {f.name for f in _fields(section_cls)}
             return section_cls(**{k: v for k, v in raw.items() if k in allowed})
 
+        def _parse_benchmark(raw: Any) -> Benchmark:
+            # Structured form: benchmark: {symbol, source, blend}
+            if isinstance(raw, dict):
+                return _section(Benchmark, raw)
+            # Legacy flat form: benchmark_symbol: NAME — accepted for one release.
+            legacy = payload.get("benchmark_symbol")
+            if legacy:
+                logger.warning(
+                    "OptimizationRecipe: 'benchmark_symbol: %s' is deprecated; "
+                    "use structured 'benchmark: {symbol, source, blend}'",
+                    legacy,
+                )
+                return Benchmark(symbol=str(legacy))
+            return Benchmark()
+
         return cls(
             name=str(payload["name"]),
             strategy_id=str(payload["strategy_id"]),
@@ -72,7 +108,7 @@ class OptimizationRecipe:
             from_date=_coerce_date(payload["from_date"]),
             to_date=_coerce_date(payload["to_date"]),
             exchange=str(payload.get("exchange", "NSE")),
-            benchmark_symbol=str(payload.get("benchmark_symbol", "NIFTY50")),
+            benchmark=_parse_benchmark(payload.get("benchmark")),
             starting_equity=float(payload.get("starting_equity", 1_000_000.0)),
             commission_bps=float(payload.get("commission_bps", 10.0)),
             slippage_bps=float(payload.get("slippage_bps", 35.0)),

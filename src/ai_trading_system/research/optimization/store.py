@@ -192,7 +192,8 @@ class OptimizationStore:
         fold_role: str,
         fitness_value: float | None,
         metrics: Metrics | None,
-        nifty_return_pct: float | None,
+        benchmark_return_pct: float | None,
+        benchmark_symbol: str | None = None,
         accepted: bool,
         rejection_reason: str | None,
     ) -> None:
@@ -203,8 +204,9 @@ class OptimizationStore:
                     optimization_run_id, iteration, rule_pack_id, fold_index,
                     fold_role, fitness, cagr, sharpe, sortino, max_drawdown_pct,
                     win_rate, profit_factor, trade_count, trades_per_year,
-                    total_return_pct, nifty_return_pct, accepted, rejection_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    total_return_pct, benchmark_return_pct, benchmark_symbol,
+                    accepted, rejection_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     optimization_run_id,
@@ -222,7 +224,8 @@ class OptimizationStore:
                     metrics.trade_count if metrics else None,
                     metrics.trades_per_year if metrics else None,
                     metrics.total_return_pct if metrics else None,
-                    nifty_return_pct,
+                    benchmark_return_pct,
+                    benchmark_symbol,
                     accepted,
                     rejection_reason,
                 ],

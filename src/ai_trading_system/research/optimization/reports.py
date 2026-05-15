@@ -65,7 +65,8 @@ def _fold_metrics(
     return con.execute(
         """
         SELECT fold_index, fitness, cagr, sharpe, max_drawdown_pct,
-               win_rate, trade_count, total_return_pct, nifty_return_pct
+               win_rate, trade_count, total_return_pct,
+               COALESCE(benchmark_return_pct, nifty_return_pct) AS benchmark_return_pct
         FROM strategy_iteration_result
         WHERE optimization_run_id = ?
           AND rule_pack_id = ?
@@ -98,7 +99,7 @@ def _format_fold_table(rows: list[tuple]) -> str:
     if not rows:
         return "_(no folds)_\n"
     out = [
-        "| fold | fitness | CAGR | Sharpe | MDD% | win% | trades | total% | NIFTY% |",
+        "| fold | fitness | CAGR | Sharpe | MDD% | win% | trades | total% | benchmark% |",
         "|----:|--------:|-----:|------:|-----:|-----:|------:|------:|------:|",
     ]
     for r in rows:

@@ -18,9 +18,19 @@ class AcceptanceThresholds:
     min_trades_per_year: float = 40.0
     min_fold_improvement_rate: float = 0.60  # ≥ 60% folds must beat baseline
     # Worst-fold hard rejects.
-    worst_fold_min_return_vs_nifty: bool = True
+    worst_fold_min_return_vs_benchmark: bool = True
     worst_fold_max_mdd_ratio_vs_baseline: float = 1.10
     require_no_zero_trade_fold: bool = True
+
+    # ------ Backwards-compat aliases ------
+    # The legacy field name still parses from YAML and constructor calls.
+    # Resolved to the canonical field in ``__post_init__``-style helper below.
+    @classmethod
+    def from_legacy(cls, **kwargs):
+        legacy = kwargs.pop("worst_fold_min_return_vs_nifty", None)
+        if legacy is not None and "worst_fold_min_return_vs_benchmark" not in kwargs:
+            kwargs["worst_fold_min_return_vs_benchmark"] = bool(legacy)
+        return cls(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -28,7 +38,14 @@ class FoldResult:
     fold_index: int
     fitness: float
     metrics: Metrics
-    nifty_return_pct: float | None = None
+    benchmark_return_pct: float | None = None
+    benchmark_symbol: str | None = None
+
+    # Backwards-compat alias for one release. Code paths should use
+    # ``benchmark_return_pct`` going forward.
+    @property
+    def nifty_return_pct(self) -> float | None:
+        return self.benchmark_return_pct
 
 
 @dataclass(frozen=True)
@@ -68,17 +85,18 @@ def is_accepted(
 
     worst = min(candidate_folds, key=lambda f: f.fitness)
     if (
-        thresholds.worst_fold_min_return_vs_nifty
-        and worst.nifty_return_pct is not None
-        and worst.metrics.total_return_pct < worst.nifty_return_pct
+        thresholds.worst_fold_min_return_vs_benchmark
+        and worst.benchmark_return_pct is not None
+        and worst.metrics.total_return_pct < worst.benchmark_return_pct
     ):
         return AcceptanceVerdict(
             False,
-            "worst_fold_underperforms_nifty",
+            "worst_fold_underperforms_benchmark",
             {
                 "fold_index": worst.fold_index,
+                "benchmark_symbol": worst.benchmark_symbol,
                 "return_pct": worst.metrics.total_return_pct,
-                "nifty_pct": worst.nifty_return_pct,
+                "benchmark_pct": worst.benchmark_return_pct,
             },
         )
 
