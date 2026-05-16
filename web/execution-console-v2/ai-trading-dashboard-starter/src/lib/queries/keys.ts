@@ -40,8 +40,14 @@ export const queryKeys = {
     ['execution', 'perf-cohorts', lookbackDays] as const,
   perfBuckets: (lookbackDays: number) =>
     ['execution', 'perf-buckets', lookbackDays] as const,
+  perfBucketCoverage: () => ['execution', 'perf-bucket-coverage'] as const,
+  perfSameDateBuckets: (lookbackDays: number) =>
+    ['execution', 'perf-same-date-buckets', lookbackDays] as const,
   perfFactorIc: (windows: number[]) =>
     ['execution', 'perf-factor-ic', windows.join(',')] as const,
+  perfConditionalFactorIc: (windows: number[]) =>
+    ['execution', 'perf-conditional-factor-ic', windows.join(',')] as const,
+  perfFactorCoverage: () => ['execution', 'perf-factor-coverage'] as const,
   perfDrift: () => ['execution', 'perf-drift'] as const,
 } as const;
 

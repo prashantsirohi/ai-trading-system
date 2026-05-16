@@ -24,7 +24,11 @@ import {
   usePerfCoverage,
   usePerfCohorts,
   usePerfBuckets,
+  usePerfBucketCoverage,
+  usePerfSameDateBuckets,
   usePerfFactorIc,
+  usePerfConditionalFactorIc,
+  usePerfFactorCoverage,
   usePerfDrift,
 } from '@/lib/queries';
 
@@ -54,6 +58,15 @@ function fmtPct(value: number | null | undefined): string {
 function fmtInt(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—';
   return value.toLocaleString();
+}
+
+function fmtStatus(value: string | null | undefined): string {
+  if (value === 'insufficient_sample') return 'Insufficient sample';
+  if (value === 'no_baseline') return 'No baseline';
+  if (value === 'warning') return 'Warning';
+  if (value === 'critical') return 'Critical';
+  if (value === 'ok') return 'OK';
+  return '—';
 }
 
 interface LookbackPickerProps {
@@ -89,10 +102,15 @@ export default function ResearchPage() {
   const coverageQ = usePerfCoverage();
   const cohortsQ = usePerfCohorts(lookback);
   const bucketsQ = usePerfBuckets(lookback);
+  const bucketCoverageQ = usePerfBucketCoverage();
+  const sameDateBucketsQ = usePerfSameDateBuckets(lookback);
   const factorIcQ = usePerfFactorIc(IC_WINDOWS);
+  const conditionalIcQ = usePerfConditionalFactorIc([90]);
+  const factorCoverageQ = usePerfFactorCoverage();
   const driftQ = usePerfDrift();
 
   const flagged = driftQ.data?.flagged ?? [];
+  const insufficient = (driftQ.data?.factors ?? []).filter((f) => f.status === 'insufficient_sample');
 
   return (
     <PageFrame
@@ -126,12 +144,46 @@ export default function ResearchPage() {
       {flagged.length > 0 ? (
         <div className="rounded-lg border border-amber-700 bg-amber-950/60 px-4 py-3 text-sm text-amber-200">
           <strong>Drift watch:</strong> {flagged.length} factor
-          {flagged.length === 1 ? '' : 's'} with 30-day IC down &gt;30% vs 180-day baseline
+          {flagged.length === 1 ? '' : 's'} with active drift status
           {' ('}
-          {flagged.map((f) => f.factor).join(', ')}
+          {flagged.map((f) => `${f.factor}: ${fmtStatus(f.status)}`).join(', ')}
           {').'}
         </div>
       ) : null}
+
+      {flagged.length === 0 && insufficient.length > 0 ? (
+        <div className="rounded-lg border border-slate-700 bg-slate-950/60 px-4 py-3 text-sm text-slate-300">
+          <strong>Drift watch:</strong> Insufficient sample for {insufficient.length} factor
+          {insufficient.length === 1 ? '' : 's'}.
+        </div>
+      ) : null}
+
+      <SectionCard
+        title="Bucket coverage"
+        description="Date coverage by watchlist bucket."
+      >
+        {bucketCoverageQ.isLoading ? (
+          <CardSkeleton />
+        ) : bucketCoverageQ.error ? (
+          <ErrorStateView
+            error={`Failed to load bucket coverage: ${bucketCoverageQ.error.message}`}
+            onRetry={() => bucketCoverageQ.refetch()}
+          />
+        ) : (bucketCoverageQ.data?.buckets ?? []).length === 0 ? (
+          <EmptyState message="No bucket coverage rows yet." />
+        ) : (
+          <DataTable
+            headers={['Bucket', 'First date', 'Last date', 'Rows', 'Dates']}
+            rows={(bucketCoverageQ.data?.buckets ?? []).map((r) => [
+              r.bucket,
+              r.first_date ?? '—',
+              r.last_date ?? '—',
+              fmtInt(r.rows),
+              fmtInt(r.dates),
+            ])}
+          />
+        )}
+      </SectionCard>
 
       <SectionCard
         title="Cohort forward returns"
@@ -198,6 +250,45 @@ export default function ResearchPage() {
       </SectionCard>
 
       <SectionCard
+        title="Same-date bucket attribution"
+        description="Bucket returns compared against rows from dates where any bucket was assigned."
+      >
+        {sameDateBucketsQ.isLoading ? (
+          <CardSkeleton />
+        ) : sameDateBucketsQ.error ? (
+          <ErrorStateView
+            error={`Failed to load same-date buckets: ${sameDateBucketsQ.error.message}`}
+            onRetry={() => sameDateBucketsQ.refetch()}
+          />
+        ) : (sameDateBucketsQ.data?.buckets ?? []).length === 0 ? (
+          <EmptyState message="No same-date bucket rows in window." />
+        ) : (
+          <>
+            <div className="mb-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+              <CoverageStat label="Control rows" value={fmtInt(sameDateBucketsQ.data?.control.n)} />
+              <CoverageStat label="Control n_20d" value={fmtInt(sameDateBucketsQ.data?.control.n_20d)} />
+              <CoverageStat label="Control avg_5d" value={fmtNum(sameDateBucketsQ.data?.control.avg_5d, '%')} />
+              <CoverageStat label="Control avg_20d" value={fmtNum(sameDateBucketsQ.data?.control.avg_20d, '%')} />
+            </div>
+            <DataTable
+              headers={['Bucket', 'n', 'n_20d', 'avg_5d', 'avg_20d', 'ctrl_20d', 'excess_5d', 'excess_20d', 'hit_20d']}
+              rows={(sameDateBucketsQ.data?.buckets ?? []).map((r) => [
+                r.bucket,
+                fmtInt(r.n),
+                fmtInt(r.n_20d),
+                fmtNum(r.avg_5d, '%'),
+                fmtNum(r.avg_20d, '%'),
+                fmtNum(r.control_avg_20d, '%'),
+                fmtNum(r.excess_5d, '%'),
+                fmtNum(r.excess_20d, '%'),
+                fmtPct(r.hitrate_20d),
+              ])}
+            />
+          </>
+        )}
+      </SectionCard>
+
+      <SectionCard
         title="Factor information coefficient (Spearman vs fwd-20d)"
         description="Higher IC = factor doing real predictive work. Drops between windows indicate decay."
       >
@@ -218,7 +309,7 @@ export default function ResearchPage() {
               const isFlagged = driftRow?.alert ?? false;
               const cells: (string | { text: string; className: string })[] = [
                 isFlagged
-                  ? { text: `${r.factor} ⚠`, className: 'text-amber-400 font-semibold' }
+                  ? { text: `${r.factor} DRIFT`, className: 'text-amber-400 font-semibold' }
                   : r.factor,
               ];
               const bag = r as unknown as Record<string, number | null>;
@@ -229,6 +320,113 @@ export default function ResearchPage() {
                 cells.push(fmtInt(bag[`n_${w}d`]));
               }
               return cells;
+            })}
+          />
+        )}
+      </SectionCard>
+
+      <SectionCard
+        title="Conditional factor IC"
+        description="90-day IC split across the full universe, top-200, and rank-201+ cohorts."
+      >
+        {conditionalIcQ.isLoading ? (
+          <CardSkeleton />
+        ) : conditionalIcQ.error ? (
+          <ErrorStateView
+            error={`Failed to load conditional IC: ${conditionalIcQ.error.message}`}
+            onRetry={() => conditionalIcQ.refetch()}
+          />
+        ) : (conditionalIcQ.data?.factors ?? []).length === 0 ? (
+          <EmptyState message="No conditional IC rows yet." />
+        ) : (
+          <DataTable
+            headers={[
+              'Factor',
+              'full ic_90d',
+              'full n',
+              'top200 ic_90d',
+              'top200 n',
+              '201+ ic_90d',
+              '201+ n',
+            ]}
+            rows={(conditionalIcQ.data?.factors ?? []).map((r) => {
+              const bag = r as Record<string, string | number | null>;
+              return [
+                String(r.factor),
+                fmtNum(bag.ic_90d_full_universe as number | null),
+                fmtInt(bag.n_90d_full_universe as number | null),
+                fmtNum(bag.ic_90d_top_200_only as number | null),
+                fmtInt(bag.n_90d_top_200_only as number | null),
+                fmtNum(bag.ic_90d_rank_201_plus_only as number | null),
+                fmtInt(bag.n_90d_rank_201_plus_only as number | null),
+              ];
+            })}
+          />
+        )}
+      </SectionCard>
+
+      <SectionCard
+        title="Factor coverage"
+        description="Null-rate diagnostics for tracked factor columns."
+      >
+        {factorCoverageQ.isLoading ? (
+          <CardSkeleton />
+        ) : factorCoverageQ.error ? (
+          <ErrorStateView
+            error={`Failed to load factor coverage: ${factorCoverageQ.error.message}`}
+            onRetry={() => factorCoverageQ.refetch()}
+          />
+        ) : (factorCoverageQ.data?.factors ?? []).length === 0 ? (
+          <EmptyState message="No factor coverage rows yet." />
+        ) : (
+          <DataTable
+            headers={['Factor', 'Non-null', 'Null %', 'First available', 'Last available']}
+            rows={(factorCoverageQ.data?.factors ?? []).map((r) => [
+              r.factor,
+              fmtInt(r.non_null_count),
+              fmtPct(r.null_pct),
+              r.first_available_date ?? '—',
+              r.last_available_date ?? '—',
+            ])}
+          />
+        )}
+      </SectionCard>
+
+      <SectionCard
+        title="Drift watch"
+        description="Sample-aware drift status for recent IC versus baseline IC."
+      >
+        {driftQ.isLoading ? (
+          <CardSkeleton />
+        ) : driftQ.error ? (
+          <ErrorStateView
+            error={`Failed to load drift watch: ${driftQ.error.message}`}
+            onRetry={() => driftQ.refetch()}
+          />
+        ) : (driftQ.data?.factors ?? []).length === 0 ? (
+          <EmptyState message="No drift rows yet." />
+        ) : (
+          <DataTable
+            headers={['Factor', 'Status', 'recent n', 'baseline n', 'ic recent', 'ic baseline', 'delta ic', 'delta %']}
+            rows={(driftQ.data?.factors ?? []).map((r) => {
+              const className =
+                r.status === 'critical'
+                  ? 'text-red-300 font-semibold'
+                  : r.status === 'warning'
+                    ? 'text-amber-300 font-semibold'
+                    : r.status === 'insufficient_sample'
+                      ? 'text-slate-400'
+                      : 'text-slate-200';
+              return [
+                r.factor,
+                { text: fmtStatus(r.status), className },
+                fmtInt(r.recent_n),
+                fmtInt(r.baseline_n),
+                fmtNum(r.ic_recent),
+                fmtNum(r.ic_baseline),
+                fmtNum(r.delta_ic),
+                fmtPct(r.delta_pct),
+              ];
             })}
           />
         )}
