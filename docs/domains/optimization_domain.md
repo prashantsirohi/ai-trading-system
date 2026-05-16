@@ -1,7 +1,7 @@
 # Optimization Domain
 
-- **Purpose:** Research-only strategy rule-pack tuning via Optuna. Walk-forward validation, overfitting controls, mutation rules. Not part of the operational pipeline.
-- **Audience:** Researcher, developer.
+- **Purpose:** Research-only strategy rule-pack tuning via Optuna. Walk-forward validation, overfitting controls, acceptance gates, champion guards. Not part of the operational pipeline.
+- **Audience:** Researcher, developer, operator.
 - **Last verified:** 2026-05-16
 - **Source of truth:** [`src/ai_trading_system/research/optimization/`](../../src/ai_trading_system/research/optimization/)
 
@@ -9,47 +9,93 @@
 
 ## Responsibility
 
-Search the space of strategy rule packs for improved baseline performance, without contaminating production with overfit results. Output is a candidate rule pack + diagnostics; promotion is a manual decision.
+Search the space of strategy rule packs for improved baseline performance, without contaminating production with overfit results. Output is a candidate rule pack + diagnostics; promotion is a manual decision (see [`docs/runbooks/optimization.md`](../runbooks/optimization.md)).
 
 ## Package / module ownership
 
 | Module | Role |
 |---|---|
-| `optimization/store.py` | DuckDB-backed Optuna trial storage. |
-| `optimization/` (others) | TPE search, walk-forward, mutation rules, reports. **Verify exact module list when writing this doc deeper.** |
+| `cli.py` | `ai-trading-optimize` console alias; recipe resolution; report auto-write toggle. |
+| `__main__.py` | `python -m ai_trading_system.research.optimization` entry. |
+| `recipe.py` | `OptimizationRecipe` (Pydantic), `load_recipe()`. |
+| `runner.py` | `run_optimization()` — Optuna study orchestration, walk-forward, acceptance, champion guards, auto-report. |
+| `bounds.py` | `build_search_space()` — hardcoded Optuna `suggest_*` dimensions (ranking weights + risk knobs). |
+| `evaluator.py` | `Metrics`, `compute_metrics`, `fitness`. |
+| `acceptance.py` | Per-trial acceptance gate (worst-fold-vs-benchmark, MDD ratio, fold-rate, etc.). |
+| `guards.py` | End-of-study champion guards (weight pinning, zero-trade folds). |
+| `walkforward.py` | `build_folds()` — train/val/step window builder. |
+| `backtest_adapter.py` | Engine wiring (compile pack → run backtest → return Metrics). |
+| `baselines.py` | Baseline backtest + benchmark buy-and-hold per fold. |
+| `store.py` | DuckDB persistence (`strategy_rule_pack`, `strategy_optimization_run`, `strategy_iteration_result`, `strategy_backtest_trade`); lifecycle status writes; champion lookup helpers. |
+| `reports.py` | `build_markdown_report()`, `write_report()`. |
+| `promote.py` | `ai-trading-optimize-promote` console alias; lifecycle ladder enforcement; `promote-latest` recipe shortcut. |
 
 ## Public contracts
 
-- Trial store in DuckDB (path: verify — may be `data/research.duckdb` or a dedicated file).
-- Optimization reports under `data/research/` (verify exact subdir).
+### CLI (added in Wave 1 of the optimizer convenience plan)
+
+| Command | Purpose |
+|---|---|
+| `ai-trading-optimize --recipe <name-or-path>` | Run a study end-to-end. Bare name resolves to `config/strategies/recipes/<name>.yaml`. |
+| `ai-trading-optimize-promote --rule-pack-id <hash> --to <status>` | Promote a specific rule pack along the lifecycle ladder. |
+| `ai-trading-optimize-promote promote-latest --recipe-name <name> [--to <status>]` | Promote the champion of the latest completed run for the named recipe. Defaults to `--to shadow`. |
+
+See [`docs/runbooks/optimization.md`](../runbooks/optimization.md) for the end-to-end operator flow.
+
+### Auto-written reports
+
+After every successful run, the markdown report is written to:
+
+- `reports/optimization/<recipe>/<optimization_run_id>.md` — immutable per run
+- `reports/optimization/<recipe>/latest.md` — overwritten each run
+
+Pass `--no-report` to skip (CI/scripted callers).
+
+### DuckDB tables
+
+In `data/control.duckdb` (resolved via `RegistryStore`):
+
+| Table | Purpose |
+|---|---|
+| `strategy_rule_pack` | All rule packs (id, parent, strategy_id, version, rule_yaml, rule_json, lifecycle_status, description, created_at). |
+| `strategy_optimization_run` | One row per run: recipe_name, strategy_id, baseline pack id, dates, seed, max_trials, status, champion pack id, recipe_json, error, started_at, completed_at. |
+| `strategy_iteration_result` | Per-trial per-fold rows: run_id, iteration, fold_index, fitness, metrics, accepted, rejection_reason. Iteration `-1` is the baseline marker. |
+| `strategy_backtest_trade` | Optional per-trial per-fold trade log. |
 
 ## Storage ownership
 
-- Optuna trial tables in research DuckDB.
+- All four tables above in `data/control.duckdb` — sole writer.
+- Per-run markdown reports under `reports/optimization/`.
+- Stage artifacts: none — optimizer is not a pipeline stage.
 
 ## Dependencies
 
-- External: Optuna.
-- Internal: `research/backtesting/` for evaluating candidate rule packs.
-- Reads `config/strategies/` rule packs as starting points.
+- External: Optuna 4.x, tqdm.
+- Internal: `domains/strategy/` (rule pack schema + compiler), `research/backtesting/` (via `backtest_adapter`).
+- Reads: `config/strategies/*.yaml` (baselines), `config/strategies/recipes/*.yaml` (recipes), `data/ohlcv.duckdb` (price data via the backtester).
 
 ## Extension points
 
-- New objective: extend the TPE objective in `optimization/`.
-- New mutation: add to mutation rule set.
-- New validation split: extend walk-forward driver.
+- **New baseline strategy** — add `config/strategies/<name>_v1.yaml` matching the `StrategyRulePack` schema; reference it from a new recipe in `config/strategies/recipes/`.
+- **New objective** — extend `evaluator.py::fitness` and (if exposing new weights) `FitnessWeights` in the recipe.
+- **New acceptance rule** — add to `acceptance.py::AcceptanceThresholds` and the `is_accepted` predicate.
+- **New search dimension** — currently requires editing `bounds.py` (whitelist + `suggest_*` call). Wave 4 of the convenience plan will move this into recipe YAML.
+
+## Known gaps
+
+- **Search space is hardcoded in `bounds.py`.** Recipe YAML can't override bounds today; a planned Wave 4 of the optimizer convenience plan addresses this.
+- **No FastAPI / React surface.** Operator must use CLI + DuckDB queries to inspect past runs. A planned Wave 2 (API) + Wave 5b (React page) address this.
+- **No study resumability.** Killing a run mid-flight forces a restart from trial 0. A planned Wave 5a addresses this with a persistent Optuna RDB backend.
+- **No recipe scaffolding (`init`) or dry-run (`validate`).** A planned Wave 3 adds these.
 
 ## When not to use
 
 - Small backtest windows where overfitting risk dominates Sharpe gain.
 - Without walk-forward validation enabled.
-- Before defining a baseline you want to beat.
-
-## Known gaps
-
-- Existing doc `docs/architecture/strategy-optimizer.md` covers more detail (Phases 0–4 implemented, 5–6 planned). Migrate into this file then archive.
+- Before defining a baseline you want to beat — the acceptance gate is comparative.
 
 ## See also
 
-- [`docs/architecture/strategy-optimizer.md`](../_legacy/archived_2026-05-16/architecture_strategy-optimizer.md) (to be migrated then archived)
+- [`docs/runbooks/optimization.md`](../runbooks/optimization.md) — end-to-end operator flow
 - [`docs/domains/research_domain.md`](research_domain.md)
+- [`docs/_legacy/archived_2026-05-16/architecture_strategy-optimizer.md`](../_legacy/archived_2026-05-16/architecture_strategy-optimizer.md) — historical design context

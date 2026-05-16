@@ -98,6 +98,29 @@ class OptimizationStore:
                 [rule_pack_id, *row[:5], status, row[5], row[6]],
             )
 
+    def get_latest_champion_rule_pack(self, recipe_name: str) -> str | None:
+        """Return the champion rule_pack_id for the most-recent completed run of ``recipe_name``.
+
+        Returns ``None`` if no completed run exists for that recipe, or if the
+        most recent run has no champion (e.g. all trials were rejected).
+        Designed for the ``promote-latest`` operator shortcut so the operator
+        does not need to copy-paste a 40-char hash.
+        """
+        with self._conn() as con:
+            row = con.execute(
+                """
+                SELECT champion_rule_pack_id
+                FROM strategy_optimization_run
+                WHERE recipe_name = ? AND status = 'completed'
+                ORDER BY completed_at DESC NULLS LAST, started_at DESC
+                LIMIT 1
+                """,
+                [recipe_name],
+            ).fetchone()
+        if row is None:
+            return None
+        return row[0]
+
     # ---- runs --------------------------------------------------------
 
     def create_run(

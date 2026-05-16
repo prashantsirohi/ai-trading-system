@@ -1,4 +1,4 @@
-"""Optimizer CLI: ``python -m ai_trading_system.research.optimization``."""
+"""Optimizer CLI: ``ai-trading-optimize`` (or ``python -m ai_trading_system.research.optimization``)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,21 @@ from pathlib import Path
 
 from ai_trading_system.research.optimization.recipe import load_recipe
 from ai_trading_system.research.optimization.runner import run_optimization
+
+
+def _resolve_recipe_path(value: str, project_root: Path) -> Path:
+    """Resolve a recipe argument that may be a bare name or a literal path.
+
+    - If ``value`` contains a path separator or ends in ``.yaml``/``.yml``, treat
+      as a literal path (current behaviour).
+    - Otherwise look up ``<project_root>/config/strategies/recipes/<value>.yaml``.
+
+    The literal-path form is preserved for backwards compatibility and scripts.
+    The bare-name form is the operator-friendly default.
+    """
+    if "/" in value or value.endswith((".yaml", ".yml")):
+        return Path(value)
+    return project_root / "config" / "strategies" / "recipes" / f"{value}.yaml"
 
 
 def _silence_pandas_future_warnings() -> None:
@@ -30,8 +45,18 @@ def _silence_pandas_future_warnings() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run a strategy optimisation study.")
-    parser.add_argument("--recipe", required=True, help="Path to OptimizationRecipe YAML")
+    parser = argparse.ArgumentParser(
+        description="Run a strategy optimisation study.",
+        epilog=(
+            "RECIPE may be a bare recipe name (e.g. 'momentum_breakout_optuna_v1'), "
+            "which resolves to config/strategies/recipes/<name>.yaml, or a literal path."
+        ),
+    )
+    parser.add_argument(
+        "--recipe",
+        required=True,
+        help="Recipe name or path to OptimizationRecipe YAML",
+    )
     parser.add_argument(
         "--project-root",
         default=".",
@@ -50,6 +75,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_false",
         help="Show pandas FutureWarnings (useful for debugging)",
     )
+    parser.add_argument(
+        "--no-report",
+        action="store_true",
+        help=(
+            "Skip auto-writing the markdown report at run end. "
+            "Default behaviour writes to reports/optimization/<recipe>/{<run_id>,latest}.md."
+        ),
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -59,14 +92,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.quiet_pandas_warnings:
         _silence_pandas_future_warnings()
 
-    recipe = load_recipe(args.recipe)
-    result = run_optimization(recipe, project_root=Path(args.project_root))
+    project_root = Path(args.project_root)
+    recipe_path = _resolve_recipe_path(args.recipe, project_root)
+    if not recipe_path.exists():
+        parser.error(f"recipe not found: {recipe_path}")
+    recipe = load_recipe(recipe_path)
+    result = run_optimization(
+        recipe,
+        project_root=project_root,
+        write_report=not args.no_report,
+    )
     print(
         f"optimization_run_id={result['optimization_run_id']} "
         f"trials={result['trials']} "
         f"champion={result['champion_rule_pack_id']} "
         f"best_value={result['best_value']}"
     )
+    if result.get("report_path"):
+        # Last line on stdout — easy for scripts to capture.
+        print(f"report={result['report_path']}")
     return 0
 
 

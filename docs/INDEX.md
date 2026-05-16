@@ -66,6 +66,7 @@
 - [publish_retry](runbooks/publish_retry.md)
 - [backup_and_restore](runbooks/backup_and_restore.md)
 - [deployment_mac_mini](runbooks/deployment_mac_mini.md)
+- [optimization](runbooks/optimization.md)
 
 ## Development
 - [contributing](development/contributing.md)

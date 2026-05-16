@@ -39,6 +39,7 @@ from ai_trading_system.research.optimization.evaluator import (
 )
 from ai_trading_system.research.optimization.guards import champion_guards
 from ai_trading_system.research.optimization.recipe import OptimizationRecipe
+from ai_trading_system.research.optimization.reports import write_report
 from ai_trading_system.research.optimization.store import OptimizationStore
 from ai_trading_system.research.optimization.walkforward import (
     WalkForwardFold,
@@ -187,14 +188,52 @@ def _mean_metrics(folds: list[FoldResult]) -> Metrics:
     )
 
 
+def _safe_sanitize_recipe_name(name: str) -> str:
+    """Make a recipe name safe to use as a directory component."""
+    keep = "-_."
+    return "".join(c if (c.isalnum() or c in keep) else "_" for c in name) or "unnamed"
+
+
+def _write_run_report(
+    *,
+    project_root: Path,
+    recipe_name: str,
+    optimization_run_id: str,
+) -> Path | None:
+    """Auto-write the markdown report for a completed run.
+
+    Writes two files under ``reports/optimization/<recipe>/``:
+      - ``<run_id>.md``  — immutable per run
+      - ``latest.md``    — overwritten each run (operator-friendly bookmark)
+
+    Returns the path to ``<run_id>.md`` (the canonical artifact), or ``None``
+    if writing failed. Report failure does NOT propagate — observability never
+    blocks the pipeline (same principle as the perf_tracker stage).
+    """
+    try:
+        target_dir = project_root / "reports" / "optimization" / _safe_sanitize_recipe_name(recipe_name)
+        run_path = target_dir / f"{optimization_run_id}.md"
+        latest_path = target_dir / "latest.md"
+        write_report(project_root, optimization_run_id, run_path)
+        # Copy run report content to latest.md so both share an identical file.
+        latest_path.write_text(run_path.read_text())
+        return run_path
+    except Exception as exc:  # noqa: BLE001 — never fail a run on report write
+        logger.warning("auto-report write failed for run_id=%s: %s", optimization_run_id, exc)
+        return None
+
+
 def run_optimization(
     recipe: OptimizationRecipe,
     *,
     project_root: Path | str,
+    write_report: bool = True,
 ) -> dict:
     """Execute one Optuna study end-to-end.
 
-    Returns a dict with run_id, champion pack_id (if any), and trial count.
+    Returns a dict with run_id, champion pack_id (if any), trial count, best
+    value, and (when ``write_report=True`` and writing succeeded) the
+    auto-written report path.
     """
     project_root = Path(project_root)
     optimization_run_id = uuid.uuid4().hex
@@ -376,9 +415,18 @@ def run_optimization(
         state["champion_pack_id"],
     )
 
+    report_path: Path | None = None
+    if write_report:
+        report_path = _write_run_report(
+            project_root=project_root,
+            recipe_name=recipe.name,
+            optimization_run_id=optimization_run_id,
+        )
+
     return {
         "optimization_run_id": optimization_run_id,
         "champion_rule_pack_id": state["champion_pack_id"],
         "trials": len(study.trials),
         "best_value": study.best_value if study.best_trial else None,
+        "report_path": str(report_path) if report_path else None,
     }
