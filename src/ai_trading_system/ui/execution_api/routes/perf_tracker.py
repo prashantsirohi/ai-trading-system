@@ -51,6 +51,21 @@ FACTOR_COLUMNS: tuple[str, ...] = (
 
 DRIFT_THRESHOLD_PCT = 30.0
 DEFAULT_IC_WINDOWS: tuple[int, ...] = (30, 90, 180)
+DRIFT_WARNING_MIN_RECENT_N = 1500
+DRIFT_CRITICAL_MIN_RECENT_N = 3000
+DRIFT_CRITICAL_MIN_DELTA_IC = 0.03
+DRIFT_CRITICAL_MIN_BASELINE_IC = 0.05
+
+BUCKET_ORDER_SQL = """
+    CASE bucket
+        WHEN 'TRIGGERED_TODAY' THEN 1
+        WHEN 'CORE_MOMENTUM'   THEN 2
+        WHEN 'EARLY_STAGE2'    THEN 3
+        WHEN 'AVOID_WEAK_CONFIRMATION' THEN 4
+        WHEN 'unassigned' THEN 98
+        ELSE 99
+    END
+"""
 
 
 def _round(value, ndigits: int = 2):
@@ -72,6 +87,19 @@ def _lookback_clause(lookback_days: int | None) -> str:
         "  FROM rank_cohort_performance"
         ")"
     )
+
+
+def _rank_ic(valid) -> float | None:
+    if len(valid) < 30:
+        return None
+    x_rank = valid.iloc[:, 0].rank()
+    y_rank = valid["fwd_20d_return"].rank()
+    corr = float(x_rank.corr(y_rank))
+    return corr if corr == corr else None  # noqa: PLR0124
+
+
+def _factor_name(column: str) -> str:
+    return column.replace("factor_", "")
 
 
 @router.get("/coverage")
@@ -167,13 +195,7 @@ def buckets(
             {lb}
             GROUP BY bucket
             ORDER BY
-                CASE bucket
-                    WHEN 'TRIGGERED_TODAY' THEN 1
-                    WHEN 'CORE_MOMENTUM'   THEN 2
-                    WHEN 'EARLY_STAGE2'    THEN 3
-                    WHEN 'AVOID_WEAK_CONFIRMATION' THEN 4
-                    ELSE 5
-                END
+                {BUCKET_ORDER_SQL}
             """
         ).fetchall()
     rows = [
@@ -191,6 +213,131 @@ def buckets(
         for r in result
     ]
     return {"lookback_days": lookback_days, "buckets": rows}
+
+
+@router.get("/bucket-coverage")
+def bucket_coverage():
+    """Date coverage by watchlist bucket, including unassigned historical rows."""
+    with open_research_db(project_root=project_root(), read_only=True) as con:
+        result = con.execute(
+            f"""
+            SELECT
+                COALESCE(watchlist_bucket, 'unassigned') AS bucket,
+                MIN(run_date) AS first_date,
+                MAX(run_date) AS last_date,
+                COUNT(*) AS rows,
+                COUNT(DISTINCT run_date) AS dates
+            FROM rank_cohort_performance
+            GROUP BY bucket
+            ORDER BY {BUCKET_ORDER_SQL}
+            """
+        ).fetchall()
+    return {
+        "buckets": [
+            {
+                "bucket": r[0],
+                "first_date": r[1].isoformat() if r[1] else None,
+                "last_date": r[2].isoformat() if r[2] else None,
+                "rows": int(r[3] or 0),
+                "dates": int(r[4] or 0),
+            }
+            for r in result
+        ],
+    }
+
+
+@router.get("/buckets/same-date")
+def same_date_buckets(
+    lookback_days: int = Query(
+        90, ge=0, le=10_000,
+        description="Window for the aggregate (0 = use all rows).",
+    ),
+):
+    """Bucket attribution against controls from the same bucket-aware dates."""
+    lb = _lookback_clause(lookback_days)
+    with open_research_db(project_root=project_root(), read_only=True) as con:
+        control = con.execute(
+            f"""
+            WITH bucket_dates AS (
+                SELECT DISTINCT run_date
+                FROM rank_cohort_performance
+                WHERE watchlist_bucket IS NOT NULL
+                {lb}
+            )
+            SELECT
+                COUNT(*) AS n,
+                COUNT(fwd_5d_return) AS n_5d,
+                COUNT(fwd_20d_return) AS n_20d,
+                AVG(fwd_5d_return) AS avg_5d,
+                AVG(fwd_10d_return) AS avg_10d,
+                AVG(fwd_20d_return) AS avg_20d
+            FROM rank_cohort_performance
+            WHERE run_date IN (SELECT run_date FROM bucket_dates)
+            """
+        ).fetchone()
+        result = con.execute(
+            f"""
+            WITH bucket_dates AS (
+                SELECT DISTINCT run_date
+                FROM rank_cohort_performance
+                WHERE watchlist_bucket IS NOT NULL
+                {lb}
+            )
+            SELECT
+                COALESCE(watchlist_bucket, 'unassigned') AS bucket,
+                COUNT(*) AS n,
+                COUNT(fwd_5d_return) AS n_5d,
+                COUNT(fwd_20d_return) AS n_20d,
+                AVG(fwd_5d_return) AS avg_5d,
+                AVG(fwd_10d_return) AS avg_10d,
+                AVG(fwd_20d_return) AS avg_20d,
+                100.0 * SUM(CASE WHEN fwd_5d_return  > 0 THEN 1 ELSE 0 END)
+                      / NULLIF(COUNT(fwd_5d_return),  0) AS hitrate_5d,
+                100.0 * SUM(CASE WHEN fwd_20d_return > 0 THEN 1 ELSE 0 END)
+                      / NULLIF(COUNT(fwd_20d_return), 0) AS hitrate_20d
+            FROM rank_cohort_performance
+            WHERE run_date IN (SELECT run_date FROM bucket_dates)
+            GROUP BY bucket
+            ORDER BY {BUCKET_ORDER_SQL}
+            """
+        ).fetchall()
+    control_avg_5d = _round(control[3])
+    control_avg_10d = _round(control[4])
+    control_avg_20d = _round(control[5])
+    rows = []
+    for r in result:
+        avg_5d = _round(r[4])
+        avg_10d = _round(r[5])
+        avg_20d = _round(r[6])
+        rows.append({
+            "bucket": r[0],
+            "n": int(r[1] or 0),
+            "n_5d": int(r[2] or 0),
+            "n_20d": int(r[3] or 0),
+            "avg_5d": avg_5d,
+            "avg_10d": avg_10d,
+            "avg_20d": avg_20d,
+            "hitrate_5d": _round(r[7], 1),
+            "hitrate_20d": _round(r[8], 1),
+            "control_avg_5d": control_avg_5d,
+            "control_avg_10d": control_avg_10d,
+            "control_avg_20d": control_avg_20d,
+            "excess_5d": _round(avg_5d - control_avg_5d) if avg_5d is not None and control_avg_5d is not None else None,
+            "excess_10d": _round(avg_10d - control_avg_10d) if avg_10d is not None and control_avg_10d is not None else None,
+            "excess_20d": _round(avg_20d - control_avg_20d) if avg_20d is not None and control_avg_20d is not None else None,
+        })
+    return {
+        "lookback_days": lookback_days,
+        "control": {
+            "n": int(control[0] or 0),
+            "n_5d": int(control[1] or 0),
+            "n_20d": int(control[2] or 0),
+            "avg_5d": control_avg_5d,
+            "avg_10d": control_avg_10d,
+            "avg_20d": control_avg_20d,
+        },
+        "buckets": rows,
+    }
 
 
 def _parse_windows(raw: str | None) -> tuple[int, ...]:
@@ -225,14 +372,7 @@ def _factor_ic_for_window(con, window_days: int, available: Iterable[str]) -> di
         return out
     for factor in available:
         valid = df[[factor, "fwd_20d_return"]].dropna()
-        if len(valid) < 30:
-            ic = None
-        else:
-            x_rank = valid[factor].rank()
-            y_rank = valid["fwd_20d_return"].rank()
-            corr = float(x_rank.corr(y_rank))
-            # NaN-safe: corr can be NaN when one column is constant.
-            ic = corr if corr == corr else None  # noqa: PLR0124
+        ic = _rank_ic(valid)
         out[factor] = {"n": int(len(valid)), "ic": _round(ic, 3)}
     return out
 
@@ -244,6 +384,30 @@ def _available_factors(con) -> list[str]:
             f"SELECT COUNT(*) FROM rank_cohort_performance WHERE {col} IS NOT NULL"
         ).fetchone()[0] > 0
     ]
+
+
+def _all_factor_ic_for_window(con, window_days: int, cohort_clause: str = "1=1") -> dict[str, dict]:
+    cols = ", ".join(FACTOR_COLUMNS)
+    df = con.execute(
+        f"""
+        SELECT {cols}, fwd_20d_return
+        FROM rank_cohort_performance
+        WHERE fwd_20d_return IS NOT NULL
+          AND {cohort_clause}
+          AND run_date >= (
+              SELECT MAX(run_date) - INTERVAL '{int(window_days)} days'
+              FROM rank_cohort_performance
+          )
+        """
+    ).fetchdf()
+    out: dict[str, dict] = {}
+    for factor in FACTOR_COLUMNS:
+        if df.empty:
+            out[factor] = {"n": 0, "ic": None}
+            continue
+        valid = df[[factor, "fwd_20d_return"]].dropna()
+        out[factor] = {"n": int(len(valid)), "ic": _round(_rank_ic(valid), 3)}
+    return out
 
 
 @router.get("/factor-ic")
@@ -269,6 +433,66 @@ def factor_ic(
     return {"windows": list(wins), "factors": rows}
 
 
+@router.get("/factor-ic/conditional")
+def conditional_factor_ic(
+    windows: str | None = Query(
+        None,
+        description="Comma-separated lookbacks in days (default: 30,90,180).",
+    ),
+):
+    """Spearman IC for every factor within rank cohorts."""
+    wins = _parse_windows(windows)
+    cohorts = {
+        "full_universe": "1=1",
+        "top_200_only": "rank_position BETWEEN 1 AND 200",
+        "rank_201_plus_only": "rank_position >= 201",
+    }
+    with open_research_db(project_root=project_root(), read_only=True) as con:
+        per_window = {
+            (w, cohort): _all_factor_ic_for_window(con, w, clause)
+            for w in wins
+            for cohort, clause in cohorts.items()
+        }
+    rows = []
+    for factor in FACTOR_COLUMNS:
+        entry: dict = {"factor": _factor_name(factor)}
+        for w in wins:
+            for cohort in cohorts:
+                cell = per_window[(w, cohort)][factor]
+                entry[f"ic_{w}d_{cohort}"] = cell["ic"]
+                entry[f"n_{w}d_{cohort}"] = cell["n"]
+        rows.append(entry)
+    return {"windows": list(wins), "cohorts": list(cohorts), "factors": rows}
+
+
+@router.get("/factor-coverage")
+def factor_coverage():
+    """Null-rate diagnostics for every tracked factor column."""
+    with open_research_db(project_root=project_root(), read_only=True) as con:
+        total = con.execute("SELECT COUNT(*) FROM rank_cohort_performance").fetchone()[0] or 0
+        rows = []
+        for factor in FACTOR_COLUMNS:
+            non_null, first_date, last_date = con.execute(
+                f"""
+                SELECT
+                    COUNT({factor}),
+                    MIN(CASE WHEN {factor} IS NOT NULL THEN run_date END),
+                    MAX(CASE WHEN {factor} IS NOT NULL THEN run_date END)
+                FROM rank_cohort_performance
+                """
+            ).fetchone()
+            non_null_count = int(non_null or 0)
+            null_pct = 100.0 if total == 0 else 100.0 * (int(total) - non_null_count) / int(total)
+            rows.append({
+                "factor": _factor_name(factor),
+                "non_null_count": non_null_count,
+                "null_pct": _round(null_pct, 1),
+                "first_available_date": first_date.isoformat() if first_date else None,
+                "last_available_date": last_date.isoformat() if last_date else None,
+            })
+    return {"rows": int(total), "factors": rows}
+
+
 @router.get("/drift")
 def drift(
     recent_window: int = Query(30, ge=1, le=10_000),
@@ -282,19 +506,41 @@ def drift(
         baseline = _factor_ic_for_window(con, baseline_window, available)
     rows = []
     for factor in available:
-        r = recent.get(factor, {}).get("ic")
-        b = baseline.get(factor, {}).get("ic")
+        recent_cell = recent.get(factor, {})
+        baseline_cell = baseline.get(factor, {})
+        r = recent_cell.get("ic")
+        b = baseline_cell.get("ic")
+        recent_n = int(recent_cell.get("n", 0) or 0)
+        baseline_n = int(baseline_cell.get("n", 0) or 0)
         if r is None or b is None or abs(b) < 1e-6:
             delta_pct = None
-            alert = False
+            delta_ic = None
+            status = "insufficient_sample" if recent_n < DRIFT_WARNING_MIN_RECENT_N else "no_baseline"
         else:
+            delta_ic = r - b
             delta_pct = (r - b) / abs(b) * 100.0
-            alert = delta_pct < -threshold_pct
+            if recent_n < DRIFT_WARNING_MIN_RECENT_N:
+                status = "insufficient_sample"
+            elif (
+                recent_n >= DRIFT_CRITICAL_MIN_RECENT_N
+                and delta_ic <= -DRIFT_CRITICAL_MIN_DELTA_IC
+                and b >= DRIFT_CRITICAL_MIN_BASELINE_IC
+            ):
+                status = "critical"
+            elif delta_pct < -threshold_pct:
+                status = "warning"
+            else:
+                status = "ok"
+        alert = status in {"warning", "critical"}
         rows.append({
-            "factor":      factor.replace("factor_", ""),
+            "factor":      _factor_name(factor),
             "ic_recent":   r,
             "ic_baseline": b,
+            "recent_n":    recent_n,
+            "baseline_n":  baseline_n,
+            "delta_ic":    _round(delta_ic, 3),
             "delta_pct":   _round(delta_pct, 1),
+            "status":      status,
             "alert":       bool(alert),
         })
     flagged = [r for r in rows if r["alert"]]

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -47,6 +47,21 @@ FACTOR_COLUMNS: tuple[str, ...] = (
 )
 
 DRIFT_THRESHOLD_PCT = 30.0  # flag if rolling-90d IC drops > 30% vs 180d baseline
+DRIFT_WARNING_MIN_RECENT_N = 1500
+DRIFT_CRITICAL_MIN_RECENT_N = 3000
+DRIFT_CRITICAL_MIN_DELTA_IC = 0.03
+DRIFT_CRITICAL_MIN_BASELINE_IC = 0.05
+
+BUCKET_ORDER_SQL = """
+    CASE bucket
+        WHEN 'TRIGGERED_TODAY' THEN 1
+        WHEN 'CORE_MOMENTUM'   THEN 2
+        WHEN 'EARLY_STAGE2'    THEN 3
+        WHEN 'AVOID_WEAK_CONFIRMATION' THEN 4
+        WHEN 'unassigned' THEN 98
+        ELSE 99
+    END
+"""
 
 
 @dataclass
@@ -111,16 +126,91 @@ def _bucket_attribution(con) -> pd.DataFrame:
                         / NULLIF(COUNT(fwd_20d_return), 0), 1) AS hitrate_20d
         FROM rank_cohort_performance
         GROUP BY bucket
-        ORDER BY
-            CASE bucket
-                WHEN 'TRIGGERED_TODAY' THEN 1
-                WHEN 'CORE_MOMENTUM'   THEN 2
-                WHEN 'EARLY_STAGE2'    THEN 3
-                WHEN 'AVOID_WEAK_CONFIRMATION' THEN 4
-                ELSE 5
-            END
+        ORDER BY {BUCKET_ORDER_SQL}
         """
     ).fetchdf()
+    return df
+
+
+def _bucket_coverage(con) -> pd.DataFrame:
+    return con.execute(
+        f"""
+        SELECT
+            COALESCE(watchlist_bucket, 'unassigned') AS bucket,
+            MIN(run_date) AS first_date,
+            MAX(run_date) AS last_date,
+            COUNT(*) AS rows,
+            COUNT(DISTINCT run_date) AS dates
+        FROM rank_cohort_performance
+        GROUP BY bucket
+        ORDER BY {BUCKET_ORDER_SQL}
+        """
+    ).fetchdf()
+
+
+def _same_date_bucket_attribution(con) -> pd.DataFrame:
+    control = con.execute(
+        """
+        WITH bucket_dates AS (
+            SELECT DISTINCT run_date
+            FROM rank_cohort_performance
+            WHERE watchlist_bucket IS NOT NULL
+        )
+        SELECT
+            AVG(fwd_5d_return),
+            AVG(fwd_10d_return),
+            AVG(fwd_20d_return)
+        FROM rank_cohort_performance
+        WHERE run_date IN (SELECT run_date FROM bucket_dates)
+        """
+    ).fetchone()
+    control_5d = _round(control[0])
+    control_10d = _round(control[1])
+    control_20d = _round(control[2])
+    df = con.execute(
+        f"""
+        WITH bucket_dates AS (
+            SELECT DISTINCT run_date
+            FROM rank_cohort_performance
+            WHERE watchlist_bucket IS NOT NULL
+        )
+        SELECT
+            COALESCE(watchlist_bucket, 'unassigned') AS bucket,
+            COUNT(*) AS n,
+            COUNT(fwd_5d_return) AS n_5d,
+            COUNT(fwd_20d_return) AS n_20d,
+            AVG(fwd_5d_return) AS avg_5d,
+            AVG(fwd_10d_return) AS avg_10d,
+            AVG(fwd_20d_return) AS avg_20d,
+            100.0 * SUM(CASE WHEN fwd_5d_return  > 0 THEN 1 ELSE 0 END)
+                  / NULLIF(COUNT(fwd_5d_return),  0) AS hitrate_5d,
+            100.0 * SUM(CASE WHEN fwd_20d_return > 0 THEN 1 ELSE 0 END)
+                  / NULLIF(COUNT(fwd_20d_return), 0) AS hitrate_20d
+        FROM rank_cohort_performance
+        WHERE run_date IN (SELECT run_date FROM bucket_dates)
+        GROUP BY bucket
+        ORDER BY {BUCKET_ORDER_SQL}
+        """
+    ).fetchdf()
+    if df.empty:
+        return df
+    df["avg_5d"] = df["avg_5d"].map(_round)
+    df["avg_10d"] = df["avg_10d"].map(_round)
+    df["avg_20d"] = df["avg_20d"].map(_round)
+    df["hitrate_5d"] = df["hitrate_5d"].map(lambda v: _round(v, 1))
+    df["hitrate_20d"] = df["hitrate_20d"].map(lambda v: _round(v, 1))
+    df["control_avg_5d"] = control_5d
+    df["control_avg_10d"] = control_10d
+    df["control_avg_20d"] = control_20d
+    df["excess_5d"] = df["avg_5d"].map(
+        lambda v: _round(v - control_5d) if v is not None and control_5d is not None else None
+    )
+    df["excess_10d"] = df["avg_10d"].map(
+        lambda v: _round(v - control_10d) if v is not None and control_10d is not None else None
+    )
+    df["excess_20d"] = df["avg_20d"].map(
+        lambda v: _round(v - control_20d) if v is not None and control_20d is not None else None
+    )
     return df
 
 
@@ -157,17 +247,9 @@ def _factor_ic(con, *, window_days: int) -> pd.DataFrame:
         return pd.DataFrame(columns=["factor", "n", f"ic_20d_{window_days}d"])
 
     rows = []
-    fwd = df["fwd_20d_return"]
     for factor in available:
         valid = df[[factor, "fwd_20d_return"]].dropna()
-        if len(valid) < 30:
-            ic = None
-        else:
-            # Spearman = Pearson on the ranks. Done by hand to avoid the
-            # scipy dependency that pandas.corr(method='spearman') would pull in.
-            x_rank = valid[factor].rank()
-            y_rank = valid["fwd_20d_return"].rank()
-            ic = float(x_rank.corr(y_rank))
+        ic = _rank_ic(valid)
         rows.append({
             "factor": factor.replace("factor_", ""),
             "n": int(len(valid)),
@@ -176,28 +258,120 @@ def _factor_ic(con, *, window_days: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _rank_ic(valid: pd.DataFrame) -> float | None:
+    if len(valid) < 30:
+        return None
+    # Spearman = Pearson on the ranks. Done by hand to avoid the scipy dependency.
+    x_rank = valid.iloc[:, 0].rank()
+    y_rank = valid["fwd_20d_return"].rank()
+    corr = float(x_rank.corr(y_rank))
+    return corr if corr == corr else None  # noqa: PLR0124
+
+
+def _conditional_factor_ic(con, *, window_days: int) -> pd.DataFrame:
+    cohorts = {
+        "full_universe": "1=1",
+        "top_200_only": "rank_position BETWEEN 1 AND 200",
+        "rank_201_plus_only": "rank_position >= 201",
+    }
+    rows = [{"factor": factor.replace("factor_", "")} for factor in FACTOR_COLUMNS]
+    by_factor = {row["factor"]: row for row in rows}
+    cols = ", ".join(FACTOR_COLUMNS)
+    for cohort, clause in cohorts.items():
+        df = con.execute(
+            f"""
+            SELECT {cols}, fwd_20d_return
+            FROM rank_cohort_performance
+            WHERE fwd_20d_return IS NOT NULL
+              AND {clause}
+              AND run_date >= (
+                  SELECT MAX(run_date) - INTERVAL '{window_days} days'
+                  FROM rank_cohort_performance
+              )
+            """
+        ).fetchdf()
+        for factor in FACTOR_COLUMNS:
+            valid = df[[factor, "fwd_20d_return"]].dropna() if not df.empty else pd.DataFrame()
+            row = by_factor[factor.replace("factor_", "")]
+            row[f"ic_20d_{window_days}d_{cohort}"] = _round(_rank_ic(valid))
+            row[f"n_{window_days}d_{cohort}"] = int(len(valid))
+    return pd.DataFrame(rows)
+
+
+def _factor_coverage(con) -> pd.DataFrame:
+    total = con.execute("SELECT COUNT(*) FROM rank_cohort_performance").fetchone()[0] or 0
+    rows = []
+    for factor in FACTOR_COLUMNS:
+        non_null, first_date, last_date = con.execute(
+            f"""
+            SELECT
+                COUNT({factor}),
+                MIN(CASE WHEN {factor} IS NOT NULL THEN run_date END),
+                MAX(CASE WHEN {factor} IS NOT NULL THEN run_date END)
+            FROM rank_cohort_performance
+            """
+        ).fetchone()
+        non_null_count = int(non_null or 0)
+        null_pct = 100.0 if total == 0 else 100.0 * (int(total) - non_null_count) / int(total)
+        rows.append({
+            "factor": factor.replace("factor_", ""),
+            "non_null_count": non_null_count,
+            "null_pct": _round(null_pct, 1),
+            "first_available_date": first_date,
+            "last_available_date": last_date,
+        })
+    return pd.DataFrame(rows)
+
+
 def _drift_watch(ic_30d: pd.DataFrame, ic_180d: pd.DataFrame) -> pd.DataFrame:
     """Flag factors whose recent IC dropped > DRIFT_THRESHOLD_PCT vs baseline."""
     if ic_30d.empty or ic_180d.empty:
-        return pd.DataFrame(columns=["factor", "ic_recent", "ic_baseline", "delta_pct", "alert"])
-    merged = ic_30d.merge(ic_180d, on="factor", how="outer")
+        return pd.DataFrame(columns=[
+            "factor", "ic_recent", "ic_baseline", "recent_n", "baseline_n",
+            "delta_ic", "delta_pct", "status", "alert",
+        ])
     recent_col = next(c for c in ic_30d.columns if c.startswith("ic_"))
     base_col = next(c for c in ic_180d.columns if c.startswith("ic_"))
+    recent_n_col = next(c for c in ic_30d.columns if c == "n" or c.startswith("n_"))
+    base_n_col = next(c for c in ic_180d.columns if c == "n" or c.startswith("n_"))
+    recent_frame = ic_30d.rename(columns={recent_col: "ic_recent_raw", recent_n_col: "recent_n_raw"})
+    baseline_frame = ic_180d.rename(columns={base_col: "ic_baseline_raw", base_n_col: "baseline_n_raw"})
+    merged = recent_frame.merge(baseline_frame, on="factor", how="outer")
     rows = []
     for _, row in merged.iterrows():
-        recent = row[recent_col]
-        base = row[base_col]
+        recent = row["ic_recent_raw"]
+        base = row["ic_baseline_raw"]
+        recent_n = int(row["recent_n_raw"]) if not pd.isna(row["recent_n_raw"]) else 0
+        baseline_n = int(row["baseline_n_raw"]) if not pd.isna(row["baseline_n_raw"]) else 0
         if pd.isna(recent) or pd.isna(base) or abs(base) < 1e-6:
             delta_pct = None
-            alert = ""
+            delta_ic = None
+            status = "insufficient_sample" if recent_n < DRIFT_WARNING_MIN_RECENT_N else "no_baseline"
         else:
-            delta_pct = (recent - base) / abs(base) * 100.0
-            alert = "⚠ DRIFT" if delta_pct < -DRIFT_THRESHOLD_PCT else ""
+            delta_ic = recent - base
+            delta_pct = delta_ic / abs(base) * 100.0
+            if recent_n < DRIFT_WARNING_MIN_RECENT_N:
+                status = "insufficient_sample"
+            elif (
+                recent_n >= DRIFT_CRITICAL_MIN_RECENT_N
+                and delta_ic <= -DRIFT_CRITICAL_MIN_DELTA_IC
+                and base >= DRIFT_CRITICAL_MIN_BASELINE_IC
+            ):
+                status = "critical"
+            elif delta_pct < -DRIFT_THRESHOLD_PCT:
+                status = "warning"
+            else:
+                status = "ok"
+        alert = status.upper() if status in {"warning", "critical"} else ""
         rows.append({
             "factor":      row["factor"],
             "ic_recent":   _round(recent),
             "ic_baseline": _round(base),
+            "recent_n":    recent_n,
+            "baseline_n":  baseline_n,
+            "delta_ic":    _round(delta_ic, 3),
             "delta_pct":   _round(delta_pct),
+            "status":      status,
             "alert":       alert,
         })
     return pd.DataFrame(rows)
@@ -245,9 +419,13 @@ def build_digest(
         first_date, last_date, n_dates, n_rows = meta
         sections["cohorts"] = _cohort_returns(con)
         sections["buckets"] = _bucket_attribution(con)
+        sections["bucket_coverage"] = _bucket_coverage(con)
+        sections["same_date_buckets"] = _same_date_bucket_attribution(con)
         sections["ic_30d"]  = _factor_ic(con, window_days=30)
         sections["ic_90d"]  = _factor_ic(con, window_days=90)
         sections["ic_180d"] = _factor_ic(con, window_days=180)
+        sections["conditional_ic_90d"] = _conditional_factor_ic(con, window_days=90)
+        sections["factor_coverage"] = _factor_coverage(con)
         sections["drift"]   = _drift_watch(sections["ic_30d"], sections["ic_180d"])
 
     md = _render_markdown(
@@ -291,6 +469,14 @@ def _render_markdown(
                  "label is honest. Empty until Phase 5-aware runs accumulate.\n")
     parts.append(_df_to_md(sections["buckets"]))
 
+    parts.append("\n### Bucket coverage by date")
+    parts.append("Use this to separate true bucket underperformance from sparse or partial date coverage.\n")
+    parts.append(_df_to_md(sections["bucket_coverage"]))
+
+    parts.append("\n### Same-date bucket attribution")
+    parts.append("Bucket returns compared only against rows from dates where any watchlist bucket was assigned.\n")
+    parts.append(_df_to_md(sections["same_date_buckets"]))
+
     parts.append("\n## 3. Factor information coefficient (Spearman vs fwd_20d)")
     parts.append("Higher IC = factor is doing real predictive work. Compare 30d "
                  "vs 90d vs 180d to spot drift.\n")
@@ -299,9 +485,20 @@ def _render_markdown(
     ).merge(sections["ic_180d"], on="factor", how="outer")
     parts.append(_df_to_md(combined))
 
+    parts.append("\n### Conditional factor IC (90d)")
+    parts.append("IC split by full universe, top-200, and rank-201+ cohorts.\n")
+    parts.append(_df_to_md(sections["conditional_ic_90d"]))
+
+    parts.append("\n### Factor coverage")
+    parts.append("Null-rate diagnostics for every tracked factor column.\n")
+    parts.append(_df_to_md(sections["factor_coverage"]))
+
     parts.append("\n## 4. Drift watch")
-    parts.append(f"Flags any factor whose 30-day IC dropped > {DRIFT_THRESHOLD_PCT:.0f}% "
-                 "vs the 180-day baseline.\n")
+    parts.append(
+        f"Flags any factor whose 30-day IC dropped > {DRIFT_THRESHOLD_PCT:.0f}% "
+        f"vs the 180-day baseline, with alerts suppressed below {DRIFT_WARNING_MIN_RECENT_N:,} "
+        "recent samples.\n"
+    )
     parts.append(_df_to_md(sections["drift"]))
 
     return "\n".join(parts) + "\n"

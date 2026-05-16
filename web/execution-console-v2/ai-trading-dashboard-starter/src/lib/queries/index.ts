@@ -37,12 +37,20 @@ import {
   getPerfCoverage,
   getPerfCohorts,
   getPerfBuckets,
+  getPerfBucketCoverage,
+  getPerfSameDateBuckets,
   getPerfFactorIc,
+  getPerfConditionalFactorIc,
+  getPerfFactorCoverage,
   getPerfDrift,
   type PerfCoverage,
   type PerfCohortsResponse,
   type PerfBucketsResponse,
+  type PerfBucketCoverageResponse,
+  type PerfSameDateBucketsResponse,
   type PerfFactorIcResponse,
+  type PerfConditionalFactorIcResponse,
+  type PerfFactorCoverageResponse,
   type PerfDriftResponse,
 } from '@/lib/api/perfTracker';
 import { getShadow } from '@/lib/api/shadow';
@@ -328,6 +336,29 @@ export function usePerfBuckets(
   });
 }
 
+export function usePerfBucketCoverage(
+  options: QueryOverrides<PerfBucketCoverageResponse> = {},
+): UseQueryResult<PerfBucketCoverageResponse, Error> {
+  return useQuery<PerfBucketCoverageResponse, Error>({
+    queryKey: queryKeys.perfBucketCoverage(),
+    queryFn: getPerfBucketCoverage,
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+export function usePerfSameDateBuckets(
+  lookbackDays: number,
+  options: QueryOverrides<PerfSameDateBucketsResponse> = {},
+): UseQueryResult<PerfSameDateBucketsResponse, Error> {
+  return useQuery<PerfSameDateBucketsResponse, Error>({
+    queryKey: queryKeys.perfSameDateBuckets(lookbackDays),
+    queryFn: () => getPerfSameDateBuckets(lookbackDays),
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
 const DEFAULT_IC_WINDOWS = [30, 90, 180];
 
 export function usePerfFactorIc(
@@ -337,6 +368,29 @@ export function usePerfFactorIc(
   return useQuery<PerfFactorIcResponse, Error>({
     queryKey: queryKeys.perfFactorIc(windows),
     queryFn: () => getPerfFactorIc(windows),
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+export function usePerfConditionalFactorIc(
+  windows: number[] = DEFAULT_IC_WINDOWS,
+  options: QueryOverrides<PerfConditionalFactorIcResponse> = {},
+): UseQueryResult<PerfConditionalFactorIcResponse, Error> {
+  return useQuery<PerfConditionalFactorIcResponse, Error>({
+    queryKey: queryKeys.perfConditionalFactorIc(windows),
+    queryFn: () => getPerfConditionalFactorIc(windows),
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+export function usePerfFactorCoverage(
+  options: QueryOverrides<PerfFactorCoverageResponse> = {},
+): UseQueryResult<PerfFactorCoverageResponse, Error> {
+  return useQuery<PerfFactorCoverageResponse, Error>({
+    queryKey: queryKeys.perfFactorCoverage(),
+    queryFn: getPerfFactorCoverage,
     staleTime: 5 * 60_000,
     ...options,
   });
