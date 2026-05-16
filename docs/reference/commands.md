@@ -1,5 +1,12 @@
 # Commands
 
+- **Purpose:** Authoritative list of runnable commands. Both `python -m ...` and the installed `ai-trading-*` console aliases work.
+- **Audience:** Operator, developer.
+- **Last verified:** 2026-05-16
+- **Source of truth:** `pyproject.toml [project.scripts]` and the underlying module entrypoints.
+
+---
+
 This file lists the current runnable commands used by the codebase. Examples use the `python -m ...` form because it works without relying on installed console-script aliases.
 
 ## Setup
@@ -143,11 +150,13 @@ python -m ai_trading_system.research.shadow_monitor --backfill-days 30
 
 ## Installed console-script aliases
 
-After `pip install -e .`, current aliases include:
-- `ai-trading-pipeline`
-- `ai-trading-publish-test`
-- `ai-trading-daily`
-- `ai-trading-execution-api`
-- `ai-trading-research-recipe`
-- `ai-trading-bootstrap-data`
-- `ai-trading-repair-ingest-schema`
+After `pip install -e .`, the full alias list from `pyproject.toml [project.scripts]`:
+- `ai-trading-pipeline` — full 11-stage orchestrator
+- `ai-trading-daily` — legacy 5-stage wrapper (ingest→features→rank→execute→publish only)
+- `ai-trading-publish-test` — publish-channel healthcheck
+- `ai-trading-execution-api` — FastAPI backend (default port 8090)
+- `ai-trading-healthcheck` — operator health probe
+- `ai-trading-bootstrap-data` — masterdata bootstrap
+- `ai-trading-repair-ingest-schema` — schema repair
+- `ai-trading-daily-gainers-report` — daily gainers HTML
+- `ai-trading-research-recipe` — research recipe runner

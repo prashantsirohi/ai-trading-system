@@ -1,5 +1,12 @@
 # Artifacts
 
+- **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
+- **Audience:** Operator, developer, debugging.
+- **Last verified:** 2026-05-16
+- **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
+
+---
+
 ## Authoritative artifact root
 
 Per-run stage artifacts are written under:
@@ -60,6 +67,39 @@ Authority split:
 - `task_status.json`: authoritative per-task bookkeeping for retry and operator diagnostics
 - `rank_summary.json`: convenience summary, not the sole source of truth when the CSVs exist
 
+### `fundamentals` (optional)
+
+Writes (under `data/pipeline_runs/<run_id>/fundamentals/attempt_<n>/`):
+- `fundamental_scores.csv`
+- `fundamental_summary.csv`
+
+Authority:
+- authoritative for the fundamentals enrichment of that attempt
+- stage is skipped if Screener credentials are missing — absence is not an error
+
+See [`docs/stages/fundamentals.md`](../stages/fundamentals.md).
+
+### `candidates`
+
+Writes (under `data/pipeline_runs/<run_id>/candidates/attempt_<n>/`):
+- `candidates.json` — deterministic candidate list with entry/exit logic
+
+Authority:
+- authoritative input to the execute stage for that attempt
+
+See [`docs/stages/candidates.md`](../stages/candidates.md).
+
+### `events`
+
+Writes (under `data/pipeline_runs/<run_id>/events/attempt_<n>/`):
+- `event_packet.json`
+- `event_enriched_rank.csv`
+
+Authority:
+- authoritative event context for the attempt; consumed by insight + publish
+
+See [`docs/stages/events.md`](../stages/events.md).
+
 ### `execute`
 
 Writes:
@@ -74,6 +114,20 @@ Authority split:
 - persistent execution rows in `data/execution.duckdb` are authoritative across attempts
 - `execute_summary.json` is a convenience summary of the attempt
 
+### `insight`
+
+Writes (under `data/pipeline_runs/<run_id>/insight/attempt_<n>/`):
+- `market_insight.json` — analyst brief packet for the narrative stage
+
+See [`docs/stages/insight.md`](../stages/insight.md).
+
+### `narrative`
+
+Writes (under `data/pipeline_runs/<run_id>/narrative/attempt_<n>/`):
+- `market_report.json` — LLM-generated trading narrative
+
+See [`docs/stages/narrative.md`](../stages/narrative.md).
+
 ### `publish`
 
 Writes:
@@ -82,6 +136,16 @@ Writes:
 Authority:
 - authoritative summary for publish-stage assembly and channel outcomes for that attempt
 - per-channel delivery lineage is also authoritative in `publisher_delivery_log`
+
+### `perf_tracker`
+
+Writes (under `data/pipeline_runs/<run_id>/perf_tracker/attempt_<n>/`):
+- `perf_tracker_summary.json` — status + `dates_processed` + `rows_upserted`. On failure: `status: failed` (pipeline continues — perf_tracker is non-blocking).
+
+DuckDB writes:
+- `rank_cohort_performance` table in `data/research.duckdb` (primary key `(run_date, symbol_id, exchange)`)
+
+See [`docs/stages/perf_tracker.md`](../stages/perf_tracker.md).
 
 ## Non-stage report outputs
 

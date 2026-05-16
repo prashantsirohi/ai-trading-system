@@ -1,5 +1,13 @@
 # Glossary
 
+- **Purpose:** Definitions of key operational terms.
+- **Audience:** Operator, developer.
+- **Last verified:** 2026-05-16
+- **Source of truth:** Code paths cited per term; this file aggregates.
+
+---
+
+
 ## `artifact`
 
 A materialized output recorded for a pipeline stage attempt and stored under `data[/research]/pipeline_runs/<run_id>/<stage>/attempt_<n>/`.

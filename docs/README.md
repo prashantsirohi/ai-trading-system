@@ -1,56 +1,58 @@
 # Documentation
 
-This repository runs a staged NSE trading workflow with four distinct areas:
-- operational data ingest, feature computation, ranking, paper execution, and publish delivery
-- control-plane tracking, DQ, trust, quarantine, and operator tasks
-- research and ML recipe workflows under the research data domain
-- multiple UI surfaces for operators, analysts, and ML work
+- **Purpose:** Landing page for the AI trading system documentation.
+- **Audience:** Operator, developer, future agents.
+- **Last verified:** 2026-05-16
+- **Source of truth:** This file and [`INDEX.md`](INDEX.md).
 
-Code is the source of truth. These docs describe current behavior only.
+---
 
-## Start here
+The full doc map is in [INDEX.md](INDEX.md). Start there if you want everything in one list.
 
-Operators:
-- [operations/runbook.md](operations/runbook.md)
-- [operations/troubleshooting.md](operations/troubleshooting.md)
+## Quick paths
 
-Developers new to the repo:
-- [architecture/system-overview.md](architecture/system-overview.md)
-- [architecture/module-map.md](architecture/module-map.md)
-- [architecture/pipeline.md](architecture/pipeline.md)
+### Operator
+1. [runbooks/daily_operations.md](runbooks/daily_operations.md) — daily run + verify
+2. [runbooks/troubleshooting.md](runbooks/troubleshooting.md) — symptom → fix
+3. [runbooks/data_repair.md](runbooks/data_repair.md), [dq_failure_response.md](runbooks/dq_failure_response.md), [publish_retry.md](runbooks/publish_retry.md)
+4. [reference/commands.md](reference/commands.md) — all CLI commands
 
-UI and API work:
-- [interfaces/ui.md](interfaces/ui.md)
-- [interfaces/api.md](interfaces/api.md)
+### New developer
+1. [architecture/overview.md](architecture/overview.md)
+2. [architecture/operational_data_flow.md](architecture/operational_data_flow.md)
+3. [architecture/target_architecture.md](architecture/target_architecture.md)
+4. [stages/](stages/) — per-stage contracts
+5. [domains/](domains/) — domain-level ownership
+6. [development/contributing.md](development/contributing.md)
 
-## Doc layout
+### Debugging a pipeline run
+1. [architecture/storage_and_lineage.md](architecture/storage_and_lineage.md) — where artifacts live
+2. [architecture/data_trust_and_dq.md](architecture/data_trust_and_dq.md) — trust + DQ gating
+3. [reference/artifacts.md](reference/artifacts.md) — per-stage artifact reference
+4. [runbooks/troubleshooting.md](runbooks/troubleshooting.md)
 
-Architecture:
-- [architecture/system-overview.md](architecture/system-overview.md): repo purpose, runtime split, storage, UI status
-- [architecture/pipeline.md](architecture/pipeline.md): stage order, stage contracts, block conditions, retries, trust and DQ gates
-- [architecture/pattern-scan.md](architecture/pattern-scan.md): end-to-end operational pattern scan flow, seed universe, lifecycle, artifacts, and operator commands
-- [architecture/data-model.md](architecture/data-model.md): DuckDB and SQLite stores, key tables, artifact layout, lineage model
-- [architecture/module-map.md](architecture/module-map.md): directory ownership and operational vs research vs legacy scope
+### Extending the system
+1. [development/adding_new_stage.md](development/adding_new_stage.md)
+2. [development/adding_new_factor.md](development/adding_new_factor.md)
+3. [development/adding_new_publisher.md](development/adding_new_publisher.md)
+4. [development/adding_new_api_endpoint.md](development/adding_new_api_endpoint.md)
 
-Operations:
-- [operations/installation.md](operations/installation.md): prerequisites, setup, first-run bootstrap, local startup
-- [operations/configuration.md](operations/configuration.md): env vars, flags, mode selection, execution and publish controls
-- [operations/runbook.md](operations/runbook.md): common operator workflows and recovery flows
-- [operations/troubleshooting.md](operations/troubleshooting.md): issue-driven checks and exact recovery steps
+### Decisions
+[decisions/](decisions/) — ADRs explaining major architectural choices.
 
-Interfaces:
-- [interfaces/api.md](interfaces/api.md): current FastAPI operator endpoints
-- [interfaces/ui.md](interfaces/ui.md): current React V2 and FastAPI surfaces
+## Conventions
 
-Reference:
-- [reference/commands.md](reference/commands.md): authoritative runnable commands
-- [reference/artifacts.md](reference/artifacts.md): per-stage artifacts and reports
-- [reference/glossary.md](reference/glossary.md): project-specific terms
+- Every doc starts with frontmatter (title, purpose, audience, last verified, source of truth).
+- All commands are copy-pasteable from repo root.
+- All paths are relative to repo root.
+- Old docs live under [`_legacy/`](_legacy/README.md) — do not link from current docs.
+- See [`DOCS_STANDARD.md`](DOCS_STANDARD.md) for the doc writing standard.
+- Run `python scripts/check_docs.py` before merging a docs PR.
 
-Governance:
-- [DOCS_STANDARD.md](DOCS_STANDARD.md): required standards for future doc changes
-- [../.docs-pr-checklist.md](../.docs-pr-checklist.md): short PR checklist for doc drift
-- [refactor/final_architecture.md](refactor/final_architecture.md): implemented post-refactor architecture and migration notes
+## Audit trail
 
-Historical material:
-- [archive/README.md](archive/README.md): archived superseded docs
+The current doc set was rebuilt on 2026-05-16. See:
+- [`_audit/documentation_inventory.md`](_audit/documentation_inventory.md)
+- [`_audit/stale_reference_report.md`](_audit/stale_reference_report.md)
+- [`_audit/current_code_truth_map.md`](_audit/current_code_truth_map.md)
+- [`_audit/documentation_cleanup_report.md`](_audit/documentation_cleanup_report.md) — final report

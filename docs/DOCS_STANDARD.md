@@ -1,5 +1,13 @@
 # Documentation Standard
 
+- **Purpose:** Rules for writing documentation in this repo.
+- **Audience:** Developer, anyone updating docs.
+- **Last verified:** 2026-05-16
+- **Source of truth:** This file.
+
+---
+
+
 ## Rules
 
 1. Code is the source of truth.
