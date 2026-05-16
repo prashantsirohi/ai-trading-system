@@ -15,6 +15,9 @@ from ai_trading_system.ui.execution_api.services.readmodels.rank_snapshot import
     get_pipeline_workspace_snapshot_read_model,
     get_ranking_snapshot_read_model,
 )
+from ai_trading_system.ui.execution_api.services.readmodels.sector_detail import (
+    get_sectors_with_stage,
+)
 
 
 def _write_snapshot_artifacts(base: Path, run_id: str, *, score: float, smoke: bool) -> Path:
@@ -166,6 +169,43 @@ def test_load_latest_operational_snapshot_prefers_live_payload(tmp_path: Path) -
     assert snapshot.payload["_artifact_path"] == str(live_payload)
     assert float(snapshot.frames["ranked_signals"].iloc[0]["composite_score"]) == 99.0
     assert snapshot.frames["breakout_scan"].iloc[0]["symbol_id"] == "AAA"
+
+
+def test_sector_endpoint_uses_latest_operational_snapshot_not_lexicographic_path(
+    tmp_path: Path,
+) -> None:
+    stale_run = "ui-2026-04-10-stale111"
+    live_run = "pipeline-2026-05-15-live222"
+    stale_payload = _write_snapshot_artifacts(tmp_path, stale_run, score=10.0, smoke=False)
+    live_payload = _write_snapshot_artifacts(tmp_path, live_run, score=99.0, smoke=False)
+    stale_sector = stale_payload.parent / "sector_dashboard.csv"
+    live_sector = live_payload.parent / "sector_dashboard.csv"
+    stale_sector.write_text(
+        "Sector,RS,RS_20,Momentum,RS_rank,RS_rank_pct,Quadrant\n"
+        "Power,0.68,0.52,0.16,1,0.04,Leading\n"
+        "Pharma,0.53,0.64,-0.11,10,0.43,Weakening\n",
+        encoding="utf-8",
+    )
+    live_sector.write_text(
+        "Sector,RS,RS_20,Momentum,RS_rank,RS_rank_pct,Quadrant\n"
+        "Aerospace,0.71,0.71,0.03,1,0.04,Leading\n"
+        "Mining,0.67,0.69,-0.01,2,0.09,Weakening\n"
+        "Pharma,0.66,0.52,0.14,3,0.13,Leading\n",
+        encoding="utf-8",
+    )
+    _seed_control_plane(
+        tmp_path,
+        [
+            (stale_run, {"params": {}}),
+            (live_run, {"params": {}}),
+        ],
+    )
+
+    sectors = get_sectors_with_stage(tmp_path)["sectors"]
+    pharma = next(row for row in sectors if row["Sector"] == "Pharma")
+
+    assert pharma["RS_rank"] == 3
+    assert pharma["Quadrant"] == "Leading"
 
 
 def test_records_serializes_datetime_columns() -> None:

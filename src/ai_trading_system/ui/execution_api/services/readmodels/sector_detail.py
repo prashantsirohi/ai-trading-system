@@ -21,6 +21,9 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_snapshot import (
+    load_latest_operational_snapshot,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -111,16 +114,11 @@ def _load_feature_technicals(root: Path, symbols: list[str]) -> pd.DataFrame:
     if not symbols:
         return pd.DataFrame()
     try:
-        paths = ensure_domain_layout(project_root=str(root), data_domain="operational")
-        feature_dir = paths.feature_store_dir
-        # Try the ranked_signals CSV from the latest run for richer technicals
-        import glob, os
-        pattern = str(feature_dir.parent / "pipeline_runs" / "*" / "rank" / "attempt_*" / "ranked_signals.csv")
-        files = sorted(glob.glob(pattern))
-        if not files:
+        # Use the same latest-run resolver as the rest of the execution UI.
+        # Alphabetic path sorting can accidentally select old ``ui-*`` runs.
+        df = load_latest_operational_snapshot(root).frames.get("ranked_signals", pd.DataFrame())
+        if df.empty:
             return pd.DataFrame()
-        latest = files[-1]
-        df = pd.read_csv(latest)
         cols = ["symbol_id"]
         for c in ["sma_20", "sma_50", "sma_150", "adx_14", "high_52w",
                   "vol_20_avg", "return_20", "composite_score",
@@ -145,12 +143,11 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
     # 1. Sector RS dashboard (from latest pipeline run)
     sector_rs: list[dict] = []
     try:
-        paths = ensure_domain_layout(project_root=str(root), data_domain="operational")
-        import glob
-        pattern = str(paths.ohlcv_db_path.parent / "pipeline_runs" / "*" / "rank" / "attempt_*" / "sector_dashboard.csv")
-        files = sorted(glob.glob(pattern))
-        if files:
-            df = pd.read_csv(files[-1])
+        # Keep this endpoint aligned with /api/execution/market and workspace
+        # snapshots: pick the newest live operational payload by mtime/control
+        # plane metadata, not the lexicographically last artifact path.
+        df = load_latest_operational_snapshot(root).frames.get("sector_dashboard", pd.DataFrame())
+        if not df.empty:
             sector_rs = df.to_dict(orient="records")
     except Exception as exc:
         LOG.warning("sector_dashboard CSV load failed: %s", exc)
@@ -173,7 +170,8 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
 
     # 4. Join stage labels onto sector map
     if not snap.empty and sector_map:
-        snap["sector"] = snap["symbol"].map(sector_map)
+        snap = snap.copy()
+        snap.loc[:, "sector"] = snap["symbol"].map(sector_map)
         stage_by_sector: dict[str, dict[str, int]] = {}
         for _, row in snap.dropna(subset=["sector"]).iterrows():
             sec = row["sector"]
