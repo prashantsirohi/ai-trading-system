@@ -220,11 +220,29 @@ Cohort bands (`perf_tracker.py:34-40`): `top-10` (1–10), `top-50` (1–50), `t
 
 Factor columns scanned (`perf_tracker.py:42-50`): `factor_rs`, `factor_vol`, `factor_trend`, `factor_prox`, `factor_deliv`, `factor_sector`, `factor_momentum_accel`.
 
+## Router: optimization
+
+- **Source:** `src/ai_trading_system/ui/execution_api/routes/optimization.py`
+- **Prefix:** `/api/execution/optimization` (tags `["optimization"]`)
+- **Backing store:** `data/control_plane.duckdb` — tables `strategy_optimization_run`, `strategy_iteration_result`, `strategy_rule_pack` (created by `pipeline/migrations/015_strategy_optimizer.sql`).
+- **Readmodel:** `services/readmodels/optimization_runs.py`.
+- **Response schemas:** Pydantic models in `schemas/optimization.py` (`OptimizationRunListItem`, `OptimizationRunDetail`, `FoldMetrics`, `OptimizationTrial`, `LeaderboardRow`, `ReportContentResponse`). Route handlers still return `dict[str, Any]`; the schema module documents the contract for the React client.
+
+| Method | Path | Purpose | Notes |
+|---|---|---|---|
+| GET | `/api/execution/optimization/runs` | List runs (latest first). Query: `recipe`, `status`, `limit=50` (1–500). | Returns `{"available": <bool>, "runs": [...]}`. `available=false` if `control_plane.duckdb` is absent. |
+| GET | `/api/execution/optimization/runs/{run_id}` | Run header + baseline/champion per-fold metrics + report path. 404 if unknown. | Includes `champion_lifecycle_status` (looked up in `strategy_rule_pack`) and `report_exists` (filesystem check on `reports/optimization/<recipe>/<run_id>.md`). |
+| GET | `/api/execution/optimization/runs/{run_id}/trials` | Per-trial aggregate rows (rows where `fold_index = -1`, `iteration >= 0`). Query: `limit=200` (1–2000), `sort=iteration` (others: `fitness`, `cagr`, `sharpe`, `max_drawdown_pct`, `win_rate`, `trade_count`, `total_return_pct`; unknown values fall back to `iteration`). | Baseline marker (`iteration = -1`) is excluded. |
+| GET | `/api/execution/optimization/leaderboard` | Latest completed champion per recipe, ranked by `metric` (default `sharpe`; allowed: `fitness`, `cagr`, `sharpe`, `win_rate`, `total_return_pct`, `trade_count`; unknown values fall back to `sharpe`). Query: `top=20` (1–200). | Picks one row per recipe via `MAX(completed_at)` filter. |
+| GET | `/api/execution/optimization/runs/{run_id}/report` | Auto-written markdown content of `reports/optimization/<recipe>/<run_id>.md`. 404 if run unknown or report file missing. | Path layout is owned by `research/optimization/reports.py::report_path`. |
+
+Auth header: `x-api-key` (same as every `/api/*` route). Missing/blank `EXECUTION_API_KEY` on the server still returns 500.
+
 ---
 
 ## Response schemas
 
-Response bodies are typed as `dict[str, Any]` (or `FileResponse`/`StreamingResponse`) in the route signatures — there are no Pydantic response models. Shapes are determined by the service-layer functions imported from `ui/execution_api/services/**`. Treat the JSON returned by each handler as the contract; consumers should pin to the React console’s usage rather than infer from type hints.
+Response bodies are typed as `dict[str, Any]` (or `FileResponse`/`StreamingResponse`) in the route signatures — most routers have no Pydantic response models. Shapes are determined by the service-layer functions imported from `ui/execution_api/services/**`. The optimization router is the exception: documented response shapes live in `schemas/optimization.py` for the React client / openapi codegen. For other routers, treat the JSON returned by each handler as the contract.
 
 ## Error responses
 

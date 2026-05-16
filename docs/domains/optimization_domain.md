@@ -51,9 +51,23 @@ After every successful run, the markdown report is written to:
 
 Pass `--no-report` to skip (CI/scripted callers).
 
+### HTTP API (added in Wave 2 of the optimizer convenience plan)
+
+The execution console exposes read endpoints under `/api/execution/optimization/*`. All require the `x-api-key` header. Backed by [`services/readmodels/optimization_runs.py`](../../src/ai_trading_system/ui/execution_api/services/readmodels/optimization_runs.py).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/execution/optimization/runs?recipe=&status=&limit=` | List runs (latest first). |
+| `GET` | `/api/execution/optimization/runs/{run_id}` | Run header + baseline/champion per-fold metrics + report path. |
+| `GET` | `/api/execution/optimization/runs/{run_id}/trials?limit=&sort=` | Per-trial aggregate rows (sort columns whitelisted in the readmodel). |
+| `GET` | `/api/execution/optimization/leaderboard?metric=sharpe&top=20` | Latest champion per recipe, ranked by metric. |
+| `GET` | `/api/execution/optimization/runs/{run_id}/report` | Auto-written markdown report content (404 if missing). |
+
+See [`docs/reference/api_reference.md`](../reference/api_reference.md) for response schemas (Pydantic models in [`schemas/optimization.py`](../../src/ai_trading_system/ui/execution_api/schemas/optimization.py)).
+
 ### DuckDB tables
 
-In `data/control.duckdb` (resolved via `RegistryStore`):
+In `data/control_plane.duckdb` (resolved via `RegistryStore`):
 
 | Table | Purpose |
 |---|---|
@@ -64,7 +78,7 @@ In `data/control.duckdb` (resolved via `RegistryStore`):
 
 ## Storage ownership
 
-- All four tables above in `data/control.duckdb` — sole writer.
+- All four tables above in `data/control_plane.duckdb` — sole writer.
 - Per-run markdown reports under `reports/optimization/`.
 - Stage artifacts: none — optimizer is not a pipeline stage.
 
@@ -84,7 +98,7 @@ In `data/control.duckdb` (resolved via `RegistryStore`):
 ## Known gaps
 
 - **Search space is hardcoded in `bounds.py`.** Recipe YAML can't override bounds today; a planned Wave 4 of the optimizer convenience plan addresses this.
-- **No FastAPI / React surface.** Operator must use CLI + DuckDB queries to inspect past runs. A planned Wave 2 (API) + Wave 5b (React page) address this.
+- **No React surface yet.** The FastAPI router landed in Wave 2 (see HTTP API table above), but there is no React Optimization page; operators still inspect via the CLI / direct HTTP / DuckDB. A planned Wave 5b adds the page.
 - **No study resumability.** Killing a run mid-flight forces a restart from trial 0. A planned Wave 5a addresses this with a persistent Optuna RDB backend.
 - **No recipe scaffolding (`init`) or dry-run (`validate`).** A planned Wave 3 adds these.
 

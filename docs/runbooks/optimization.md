@@ -90,7 +90,7 @@ ai-trading-optimize-promote --rule-pack-id <hash> --to shadow
 ### 5. Verify the lifecycle change
 
 ```bash
-duckdb data/control.duckdb \
+duckdb data/control_plane.duckdb \
   -c "SELECT rule_pack_id, lifecycle_status FROM strategy_rule_pack ORDER BY created_at DESC LIMIT 5;"
 ```
 
@@ -121,7 +121,7 @@ The latest run for that recipe either:
 Re-inspect the report and the `strategy_optimization_run` row:
 
 ```bash
-duckdb data/control.duckdb \
+duckdb data/control_plane.duckdb \
   -c "SELECT optimization_run_id, status, champion_rule_pack_id, error
       FROM strategy_optimization_run
       WHERE recipe_name = 'momentum_breakout_optuna_v1'

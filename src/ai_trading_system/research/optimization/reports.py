@@ -179,6 +179,30 @@ def build_markdown_report(
     return "\n".join(lines)
 
 
+def sanitize_recipe_name(name: str) -> str:
+    """Make a recipe name safe to use as a directory component.
+
+    Used by ``runner.py`` (to write the auto-report) and by the execution-API
+    readmodel (to resolve an existing report path for a run). Keeping both
+    callers on the same helper guarantees they agree on the on-disk layout.
+    """
+    keep = "-_."
+    return "".join(c if (c.isalnum() or c in keep) else "_" for c in name) or "unnamed"
+
+
+def report_dir(project_root: Path | str, recipe_name: str) -> Path:
+    """Return the canonical report directory for a recipe.
+
+    Layout: ``<project_root>/reports/optimization/<sanitized-recipe>/``
+    """
+    return Path(project_root) / "reports" / "optimization" / sanitize_recipe_name(recipe_name)
+
+
+def report_path(project_root: Path | str, recipe_name: str, optimization_run_id: str) -> Path:
+    """Return the canonical per-run report path for a recipe + run id."""
+    return report_dir(project_root, recipe_name) / f"{optimization_run_id}.md"
+
+
 def write_report(
     project_root: Path | str,
     optimization_run_id: str,

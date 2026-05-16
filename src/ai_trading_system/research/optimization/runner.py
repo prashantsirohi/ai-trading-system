@@ -39,7 +39,11 @@ from ai_trading_system.research.optimization.evaluator import (
 )
 from ai_trading_system.research.optimization.guards import champion_guards
 from ai_trading_system.research.optimization.recipe import OptimizationRecipe
-from ai_trading_system.research.optimization.reports import write_report
+from ai_trading_system.research.optimization.reports import (
+    report_dir,
+    report_path,
+    write_report,
+)
 from ai_trading_system.research.optimization.store import OptimizationStore
 from ai_trading_system.research.optimization.walkforward import (
     WalkForwardFold,
@@ -188,12 +192,6 @@ def _mean_metrics(folds: list[FoldResult]) -> Metrics:
     )
 
 
-def _safe_sanitize_recipe_name(name: str) -> str:
-    """Make a recipe name safe to use as a directory component."""
-    keep = "-_."
-    return "".join(c if (c.isalnum() or c in keep) else "_" for c in name) or "unnamed"
-
-
 def _write_run_report(
     *,
     project_root: Path,
@@ -202,7 +200,9 @@ def _write_run_report(
 ) -> Path | None:
     """Auto-write the markdown report for a completed run.
 
-    Writes two files under ``reports/optimization/<recipe>/``:
+    Writes two files under ``reports/optimization/<recipe>/`` (path layout is
+    owned by ``reports.report_dir`` / ``reports.report_path`` so the execution
+    API readmodel resolves the same paths):
       - ``<run_id>.md``  — immutable per run
       - ``latest.md``    — overwritten each run (operator-friendly bookmark)
 
@@ -211,9 +211,8 @@ def _write_run_report(
     blocks the pipeline (same principle as the perf_tracker stage).
     """
     try:
-        target_dir = project_root / "reports" / "optimization" / _safe_sanitize_recipe_name(recipe_name)
-        run_path = target_dir / f"{optimization_run_id}.md"
-        latest_path = target_dir / "latest.md"
+        run_path = report_path(project_root, recipe_name, optimization_run_id)
+        latest_path = report_dir(project_root, recipe_name) / "latest.md"
         write_report(project_root, optimization_run_id, run_path)
         # Copy run report content to latest.md so both share an identical file.
         latest_path.write_text(run_path.read_text())
