@@ -73,6 +73,7 @@ ai_trading_system = [
   "domains/publish/channels/weekly_pdf/static/*.css",
   "domains/publish/channels/daily_gainers/templates/*.html",
   "domains/publish/channels/daily_gainers/static/*.css",
+  "research/optimization/templates/*.tmpl",
 ]
 
 [tool.pytest.ini_options]

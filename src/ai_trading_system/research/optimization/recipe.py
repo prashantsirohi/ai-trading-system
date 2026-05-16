@@ -124,3 +124,27 @@ class OptimizationRecipe:
 def load_recipe(path: Path | str) -> OptimizationRecipe:
     payload = yaml.safe_load(Path(path).read_text()) or {}
     return OptimizationRecipe.from_dict(payload)
+
+
+def resolve_baseline_path(
+    baseline_pack_path: str,
+    *,
+    project_root: Path | str | None = None,
+) -> Path:
+    """Resolve a recipe's ``baseline_pack_path`` to an absolute Path.
+
+    - If the value contains a path separator or ends in ``.yaml``/``.yml``,
+      treat as a literal path (current behaviour). Absolute paths pass through;
+      relative paths are resolved against ``project_root`` (or cwd).
+    - Otherwise look up ``<project_root>/config/strategies/<value>.yaml``.
+
+    This keeps the recipe YAML operator-friendly (``baseline_pack_path: momentum_breakout_v1``)
+    while preserving the literal-path form used by existing recipes (which pass
+    e.g. ``config/strategies/momentum_breakout_v1.yaml``).
+    """
+    root = Path(project_root) if project_root is not None else Path(".")
+    value = baseline_pack_path
+    if "/" in value or value.endswith((".yaml", ".yml")):
+        p = Path(value)
+        return p if p.is_absolute() else (root / p)
+    return root / "config" / "strategies" / f"{value}.yaml"

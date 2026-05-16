@@ -1,0 +1,25 @@
+# Strategy rule pack scaffolded by `ai-trading-optimize init $name`.
+#
+# This is the *baseline* the optimizer searches around. Edit weights/risk
+# knobs to encode the strategy you want to tune. The factor weights must
+# sum to 1.0 (validated by StrategyRulePack).
+#
+# Defaults below mirror momentum_breakout_v1 (the only proven baseline today).
+strategy_id: $strategy_id
+version: 1
+description: >
+  Scaffolded baseline for $name. Replace this description and tune the
+  weights / risk block before running the optimizer.
+ranking:
+  weights:
+    relative_strength: 0.38
+    volume_intensity: 0.0
+    trend_persistence: 0.22
+    momentum_acceleration: 0.0
+    proximity_highs: 0.18
+    delivery_pct: 0.0
+    sector_strength: 0.22
+risk:
+  # Empty → RiskPolicyConfig defaults (balanced_swing). Override here to encode
+  # a different stop / sizing / exposure profile for this baseline.
+  {}

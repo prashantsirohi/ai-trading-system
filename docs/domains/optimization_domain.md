@@ -17,7 +17,8 @@ Search the space of strategy rule packs for improved baseline performance, witho
 |---|---|
 | `cli.py` | `ai-trading-optimize` console alias; recipe resolution; report auto-write toggle. |
 | `__main__.py` | `python -m ai_trading_system.research.optimization` entry. |
-| `recipe.py` | `OptimizationRecipe` (Pydantic), `load_recipe()`. |
+| `recipe.py` | `OptimizationRecipe` (Pydantic), `load_recipe()`, `resolve_baseline_path()` (bare-name → file). |
+| `templates/` | YAML templates shipped with the package; rendered by `cli init`. |
 | `runner.py` | `run_optimization()` — Optuna study orchestration, walk-forward, acceptance, champion guards, auto-report. |
 | `bounds.py` | `build_search_space()` — hardcoded Optuna `suggest_*` dimensions (ranking weights + risk knobs). |
 | `evaluator.py` | `Metrics`, `compute_metrics`, `fitness`. |
@@ -32,13 +33,16 @@ Search the space of strategy rule packs for improved baseline performance, witho
 
 ## Public contracts
 
-### CLI (added in Wave 1 of the optimizer convenience plan)
+### CLI
 
-| Command | Purpose |
-|---|---|
-| `ai-trading-optimize --recipe <name-or-path>` | Run a study end-to-end. Bare name resolves to `config/strategies/recipes/<name>.yaml`. |
-| `ai-trading-optimize-promote --rule-pack-id <hash> --to <status>` | Promote a specific rule pack along the lifecycle ladder. |
-| `ai-trading-optimize-promote promote-latest --recipe-name <name> [--to <status>]` | Promote the champion of the latest completed run for the named recipe. Defaults to `--to shadow`. |
+| Command | Purpose | Added |
+|---|---|---|
+| `ai-trading-optimize init <name> [--force]` | Scaffold `config/strategies/<name>_v1.yaml` + `config/strategies/recipes/<name>.yaml` from templates. | Wave 3 |
+| `ai-trading-optimize validate <recipe> [--with-backtest]` | Dry-run a recipe (schema + path + pack load; `--with-backtest` adds a one-fold baseline backtest). | Wave 3 |
+| `ai-trading-optimize run --recipe <name-or-path>` | Run a study end-to-end. Bare name resolves to `config/strategies/recipes/<name>.yaml`. | Wave 3 form |
+| `ai-trading-optimize --recipe <name-or-path>` | Legacy flat form — equivalent to `run --recipe ...`. Kept for backwards compatibility. | Wave 1 |
+| `ai-trading-optimize-promote --rule-pack-id <hash> --to <status>` | Promote a specific rule pack along the lifecycle ladder. | (pre-existing, kept) |
+| `ai-trading-optimize-promote promote-latest --recipe-name <name> [--to <status>]` | Promote the champion of the latest completed run for the named recipe. Defaults to `--to shadow`. | Wave 1 |
 
 See [`docs/runbooks/optimization.md`](../runbooks/optimization.md) for the end-to-end operator flow.
 
@@ -100,7 +104,7 @@ In `data/control_plane.duckdb` (resolved via `RegistryStore`):
 - **Search space is hardcoded in `bounds.py`.** Recipe YAML can't override bounds today; a planned Wave 4 of the optimizer convenience plan addresses this.
 - **No React surface yet.** The FastAPI router landed in Wave 2 (see HTTP API table above), but there is no React Optimization page; operators still inspect via the CLI / direct HTTP / DuckDB. A planned Wave 5b adds the page.
 - **No study resumability.** Killing a run mid-flight forces a restart from trial 0. A planned Wave 5a addresses this with a persistent Optuna RDB backend.
-- **No recipe scaffolding (`init`) or dry-run (`validate`).** A planned Wave 3 adds these.
+- _(Wave 3 added `init` + `validate` subcommands and name-based `baseline_pack_path` resolution.)_
 
 ## When not to use
 

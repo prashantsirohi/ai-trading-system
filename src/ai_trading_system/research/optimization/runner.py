@@ -38,7 +38,10 @@ from ai_trading_system.research.optimization.evaluator import (
     fitness as compute_fitness,
 )
 from ai_trading_system.research.optimization.guards import champion_guards
-from ai_trading_system.research.optimization.recipe import OptimizationRecipe
+from ai_trading_system.research.optimization.recipe import (
+    OptimizationRecipe,
+    resolve_baseline_path,
+)
 from ai_trading_system.research.optimization.reports import (
     report_dir,
     report_path,
@@ -238,7 +241,9 @@ def run_optimization(
     optimization_run_id = uuid.uuid4().hex
     store = OptimizationStore(project_root=project_root)
 
-    baseline_pack = load_rule_pack(recipe.baseline_pack_path)
+    baseline_pack = load_rule_pack(
+        resolve_baseline_path(recipe.baseline_pack_path, project_root=project_root)
+    )
     baseline_id = store.upsert_rule_pack(baseline_pack, lifecycle_status="backtested")
 
     folds = build_folds(
