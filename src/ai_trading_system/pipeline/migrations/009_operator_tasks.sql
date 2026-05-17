@@ -8,15 +8,15 @@ CREATE TABLE IF NOT EXISTS operator_task (
     result_json VARCHAR,
     error VARCHAR,
     metadata_json VARCHAR,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
+    updated_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC')
 );
 
 CREATE TABLE IF NOT EXISTS operator_task_log (
     task_id VARCHAR NOT NULL,
     log_order BIGINT NOT NULL,
     message VARCHAR NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     PRIMARY KEY (task_id, log_order)
 );
 

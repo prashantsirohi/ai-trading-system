@@ -5,5 +5,5 @@ CREATE TABLE IF NOT EXISTS pipeline_alert (
     severity VARCHAR NOT NULL,
     stage_name VARCHAR,
     message VARCHAR NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC')
 );

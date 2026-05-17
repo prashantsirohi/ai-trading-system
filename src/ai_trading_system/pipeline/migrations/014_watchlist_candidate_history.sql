@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS watchlist_candidate_history (
     data_trust_status TEXT,
     artifact_uri TEXT,
     metadata_json TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
+    created_at TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     PRIMARY KEY (watchlist_date, run_id, symbol_id)
 );
 

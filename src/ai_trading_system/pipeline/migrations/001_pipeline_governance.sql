@@ -73,14 +73,14 @@ CREATE TABLE IF NOT EXISTS model_registry (
     feature_schema_hash VARCHAR NOT NULL,
     training_snapshot_ref VARCHAR NOT NULL,
     status VARCHAR DEFAULT 'registered',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     metadata_json VARCHAR
 );
 
 CREATE TABLE IF NOT EXISTS model_eval (
     eval_id VARCHAR PRIMARY KEY,
     model_id VARCHAR NOT NULL,
-    evaluated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    evaluated_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     metric_name VARCHAR NOT NULL,
     metric_value DOUBLE NOT NULL,
     dataset_ref VARCHAR,

@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS _universe_membership (
     median_turnover DOUBLE,
     recent_days INTEGER,
     sparse_history BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
+    created_at TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     PRIMARY KEY (rebalance_date, symbol_id)
 );
 
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS _universe_index_diagnostics (
     daily_return DOUBLE,
     index_level DOUBLE NOT NULL,
     quality_flag TEXT NOT NULL DEFAULT 'ok',  -- 'ok' | 'low_coverage' | 'sparse_membership' | 'gap'
-    created_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
+    created_at TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     PRIMARY KEY (index_code, date)
 );
 

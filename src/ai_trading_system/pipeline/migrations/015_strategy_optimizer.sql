@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS strategy_rule_pack (
                                              -- -> shadow -> paper_approved
                                              -- -> production_candidate -> active
     description TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+    created_at TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_strategy_rule_pack_id
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS strategy_optimization_run (
     champion_rule_pack_id TEXT,
     recipe_json TEXT NOT NULL,               -- full recipe snapshot
     error TEXT,
-    started_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
+    started_at TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     completed_at TIMESTAMP
 );
 
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS strategy_iteration_result (
     nifty_return_pct DOUBLE,
     accepted BOOLEAN,
     rejection_reason TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+    created_at TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_strategy_iteration_result

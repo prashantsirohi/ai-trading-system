@@ -11,13 +11,13 @@ import threading
 import traceback
 import uuid
 import importlib
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import duckdb
 
 from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.platform.db.timestamps import utc_naive_now_string
 from ai_trading_system.platform.logging.logger import logger
 
 
@@ -44,7 +44,7 @@ def _load_pipeline_orchestrator_class():
 
 
 def _now() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return utc_naive_now_string()
 
 
 def _registry(project_root: str | Path | None = None) -> RegistryStore:
@@ -330,7 +330,7 @@ def launch_pipeline_task(
 
     def _runner() -> None:
         try:
-            resolved_run_id = run_id or f"ui-{datetime.now().date().isoformat()}-{uuid.uuid4().hex[:8]}"
+            resolved_run_id = run_id or f"ui-{utc_naive_now_string()[:10]}-{uuid.uuid4().hex[:8]}"
             _set_task(
                 task_id,
                 project_root=root,

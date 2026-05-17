@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS drift_metric (
     drift_metric_id VARCHAR PRIMARY KEY,
-    measured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    measured_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     prediction_date DATE,
     model_id VARCHAR,
     deployment_mode VARCHAR,
@@ -18,7 +18,7 @@ ON drift_metric (model_id, deployment_mode, horizon, prediction_date, metric_nam
 CREATE TABLE IF NOT EXISTS promotion_gate_result (
     gate_result_id VARCHAR PRIMARY KEY,
     model_id VARCHAR NOT NULL,
-    evaluated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    evaluated_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     gate_name VARCHAR NOT NULL,
     status VARCHAR NOT NULL,
     metric_value DOUBLE,

@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS publisher_delivery_log (
     external_message_id VARCHAR,
     external_report_id VARCHAR,
     error_message VARCHAR,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     metadata_json VARCHAR
 );
 

@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS dataset_registry (
     horizon INTEGER,
     row_count BIGINT,
     symbol_count BIGINT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     metadata_json VARCHAR
 );
 

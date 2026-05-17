@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS prediction_log (
     prediction INTEGER,
     rank INTEGER,
     artifact_uri VARCHAR,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     metadata_json VARCHAR
 );
 
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS shadow_eval (
     future_date DATE,
     realized_return DOUBLE,
     hit BOOLEAN,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     metadata_json VARCHAR
 );
 

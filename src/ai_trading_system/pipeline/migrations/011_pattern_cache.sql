@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS pattern_cache (
     pattern_score DOUBLE,
     setup_quality DOUBLE,
     width_bars INTEGER,
-    scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    scanned_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     scan_run_id VARCHAR,
     payload_json VARCHAR,
     PRIMARY KEY (symbol_id, exchange, pattern_family, pattern_state, signal_date)

@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS events_enrichment_log (
     suppressed BOOLEAN NOT NULL DEFAULT FALSE,
     suppress_reason TEXT,
     severity TEXT,                    -- low-info | medium | high
-    created_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
+    created_at TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     PRIMARY KEY (run_id, symbol, trigger_type)
 );
 

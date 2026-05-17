@@ -14,7 +14,7 @@ IST on the operator box) while ``completed_at`` came from Python's
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import duckdb
@@ -26,6 +26,7 @@ from ai_trading_system.domains.strategy import (
     save_rule_pack,
 )
 from ai_trading_system.pipeline.registry import RegistryStore
+from ai_trading_system.platform.db.timestamps import utc_naive_now
 from ai_trading_system.research.backtesting.engine_runner import BacktestResult
 from ai_trading_system.research.optimization.evaluator import Metrics
 
@@ -37,7 +38,7 @@ def _utc_naive_now() -> datetime:
     is tz-aware which DuckDB can't bind into a naive ``TIMESTAMP`` column on
     every codepath. Stripping ``tzinfo`` gives us the same value safely.
     """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return utc_naive_now()
 
 
 def _ensure_migrations(project_root: Path | str) -> Path:

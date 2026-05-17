@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS model_shadow_prediction (
     blend_20d_rank INTEGER,
     blend_20d_top_decile BOOLEAN,
     artifact_uri VARCHAR,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     metadata_json VARCHAR
 );
 
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS model_shadow_outcome (
     future_date DATE,
     realized_return DOUBLE,
     hit BOOLEAN,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC')
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_shadow_outcome_prediction_horizon

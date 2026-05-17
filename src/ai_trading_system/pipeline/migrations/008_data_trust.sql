@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS data_repair_run (
     repair_run_id VARCHAR PRIMARY KEY,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
     from_date DATE,
     to_date DATE,
     exchange VARCHAR,

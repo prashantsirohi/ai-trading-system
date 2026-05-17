@@ -49,7 +49,7 @@ def _seed_control_plane(cp_path: Path) -> None:
                 rule_json TEXT NOT NULL,
                 lifecycle_status TEXT NOT NULL DEFAULT 'draft',
                 description TEXT,
-                created_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+                created_at TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
             )
             """
         )
@@ -68,7 +68,7 @@ def _seed_control_plane(cp_path: Path) -> None:
                 champion_rule_pack_id TEXT,
                 recipe_json TEXT NOT NULL,
                 error TEXT,
-                started_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
+                started_at TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
                 completed_at TIMESTAMP
             )
             """
@@ -94,7 +94,7 @@ def _seed_control_plane(cp_path: Path) -> None:
                 nifty_return_pct DOUBLE,
                 accepted BOOLEAN,
                 rejection_reason TEXT,
-                created_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+                created_at TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')
             )
             """
         )

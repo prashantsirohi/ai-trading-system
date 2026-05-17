@@ -7,7 +7,6 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -15,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import duckdb
 
 from ai_trading_system.platform.db.paths import canonicalize_project_root
+from ai_trading_system.platform.db.timestamps import utc_naive_now_string
 from ai_trading_system.pipeline.contracts import StageArtifact
 
 
@@ -430,7 +430,7 @@ class RegistryStore:
                 """
                 INSERT OR IGNORE INTO pipeline_run
                 (run_id, pipeline_name, run_date, trigger, status, started_at, metadata_json)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                VALUES (?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?)
                 """,
                 [run_id, pipeline_name, run_date, trigger, status, self._json(metadata)],
             )
@@ -640,7 +640,7 @@ class RegistryStore:
             assignments.append("metadata_json = ?")
             params.append(self._json(metadata))
         if finished:
-            assignments.append("ended_at = CURRENT_TIMESTAMP")
+            assignments.append("ended_at = (current_timestamp AT TIME ZONE 'UTC')")
         params.append(run_id)
 
         with self._writer() as conn:
@@ -678,7 +678,7 @@ class RegistryStore:
                 """
                 INSERT INTO pipeline_stage_run
                 (stage_run_id, run_id, stage_name, attempt_number, status, started_at)
-                VALUES (?, ?, ?, ?, 'running', CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, 'running', (current_timestamp AT TIME ZONE 'UTC'))
                 """,
                 [stage_run_id, run_id, stage_name, attempt_number],
             )
@@ -696,7 +696,7 @@ class RegistryStore:
             conn.execute(
                 """
                 UPDATE pipeline_stage_run
-                SET status = ?, ended_at = CURRENT_TIMESTAMP,
+                SET status = ?, ended_at = (current_timestamp AT TIME ZONE 'UTC'),
                     error_class = ?, error_message = ?, metadata_json = ?
                 WHERE stage_run_id = ?
                 """,
@@ -716,7 +716,7 @@ class RegistryStore:
                 """
                 INSERT INTO pipeline_artifact
                 (artifact_id, run_id, stage_name, attempt_number, artifact_type, uri, content_hash, row_count, created_at, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?)
                 """,
                 [
                     artifact_id,
@@ -847,7 +847,7 @@ class RegistryStore:
                 INSERT INTO dq_result
                 (result_id, run_id, stage_name, rule_id, severity, status, failed_count,
                  message, sample_uri, band, relaxed_from, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'))
                 """,
                 [result_id, run_id, stage_name, rule_id, severity, status, failed_count,
                  message, sample_uri, band, relaxed_from],
@@ -909,7 +909,7 @@ class RegistryStore:
                 INSERT INTO publisher_delivery_log
                 (delivery_log_id, run_id, stage_name, channel, artifact_uri, artifact_hash, dedupe_key, attempt_number,
                  status, external_message_id, external_report_id, error_message, created_at, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?)
                 """,
                 [
                     f"delivery-{uuid.uuid4().hex[:12]}",
@@ -965,7 +965,7 @@ class RegistryStore:
                 """
                 INSERT INTO pipeline_alert
                 (alert_id, run_id, alert_type, severity, stage_name, message, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'))
                 """,
                 [f"alert-{uuid.uuid4().hex[:12]}", run_id, alert_type, severity, stage_name, message],
             )
@@ -1008,7 +1008,7 @@ class RegistryStore:
                 INSERT INTO model_registry
                 (model_id, model_name, model_version, artifact_uri, feature_schema_hash, training_snapshot_ref,
                  approval_status, created_at, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?)
                 """,
                 [
                     model_id,
@@ -1038,7 +1038,7 @@ class RegistryStore:
                     """
                     INSERT INTO model_eval
                     (eval_id, model_id, evaluated_at, metric_name, metric_value, dataset_ref, notes)
-                    VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
+                    VALUES (?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?, ?, ?, ?)
                     """,
                     [eval_id, model_id, metric_name, float(metric_value), dataset_ref, notes],
                 )
@@ -1089,14 +1089,14 @@ class RegistryStore:
                 """
                 INSERT INTO model_deployment
                 (deployment_id, model_id, environment, status, approved_by, approved_at, deployed_at, rollback_model_id, notes)
-                VALUES (?, ?, ?, 'active', ?, CURRENT_TIMESTAMP, ?, ?, ?)
+                VALUES (?, ?, ?, 'active', ?, (current_timestamp AT TIME ZONE 'UTC'), ?, ?, ?)
                 """,
                 [
                     deployment_id,
                     model_id,
                     environment,
                     approved_by,
-                    deployed_at or datetime.now(timezone.utc).isoformat(),
+                    deployed_at or utc_naive_now_string(),
                     active[1] if active else None,
                     notes,
                 ],
@@ -1386,7 +1386,13 @@ class RegistryStore:
                 """
                 INSERT OR REPLACE INTO operator_task
                 (task_id, task_type, label, status, started_at, finished_at, result_json, error, metadata_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, COALESCE(CAST(? AS TIMESTAMP), CURRENT_TIMESTAMP), NULL, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (
+                    ?, ?, ?, ?,
+                    COALESCE(CAST(? AS TIMESTAMP), (current_timestamp AT TIME ZONE 'UTC')),
+                    NULL, ?, ?, ?,
+                    (current_timestamp AT TIME ZONE 'UTC'),
+                    (current_timestamp AT TIME ZONE 'UTC')
+                )
                 """,
                 [
                     task_id,
@@ -1433,7 +1439,7 @@ class RegistryStore:
                 """
                 INSERT INTO operator_task
                 (task_id, task_type, label, status, started_at, finished_at, result_json, error, metadata_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'))
                 """,
                 [
                     existing[0],
@@ -1462,12 +1468,12 @@ class RegistryStore:
             conn.execute(
                 """
                 INSERT INTO operator_task_log (task_id, log_order, message, created_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'))
                 """,
                 [task_id, int(next_order), message],
             )
             conn.execute(
-                "UPDATE operator_task SET updated_at = CURRENT_TIMESTAMP WHERE task_id = ?",
+                "UPDATE operator_task SET updated_at = (current_timestamp AT TIME ZONE 'UTC') WHERE task_id = ?",
                 [task_id],
             )
             return int(next_order)
@@ -1579,7 +1585,7 @@ class RegistryStore:
                         blend_20d_score, blend_20d_rank, blend_20d_top_decile,
                         artifact_uri, created_at, metadata_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?)
                     """,
                     [
                         prediction_id,
@@ -1653,7 +1659,7 @@ class RegistryStore:
                         deployment_mode, horizon, symbol_id, exchange,
                         score, probability, prediction, rank, artifact_uri, created_at, metadata_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?)
                     """,
                     [
                         prediction_log_id,
@@ -1755,7 +1761,7 @@ class RegistryStore:
                         watchlist_reason, data_trust_status, artifact_uri, metadata_json,
                         created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'))
                     """,
                     [
                         watchlist_date,
@@ -1858,7 +1864,7 @@ class RegistryStore:
                         horizon, symbol_id, exchange, future_date, realized_return, hit,
                         created_at, metadata_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?)
                     """,
                     [
                         row.get("shadow_eval_id") or f"seval-{uuid.uuid4().hex[:12]}",
@@ -1889,7 +1895,7 @@ class RegistryStore:
                         drift_metric_id, measured_at, prediction_date, model_id, deployment_mode,
                         horizon, metric_name, metric_value, threshold_value, status, metadata_json
                     )
-                    VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, (current_timestamp AT TIME ZONE 'UTC'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         drift_metric_id,
@@ -1968,7 +1974,7 @@ class RegistryStore:
                         gate_result_id, model_id, evaluated_at, gate_name, status,
                         metric_value, threshold_value, metadata_json
                     )
-                    VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?, ?, ?, ?, ?)
                     """,
                     [
                         gate_result_id,
@@ -2187,7 +2193,7 @@ class RegistryStore:
                         outcome_id, prediction_id, prediction_date, symbol_id, exchange,
                         horizon, future_date, realized_return, hit, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'))
                     """,
                     [
                         row.get("outcome_id") or f"out-{uuid.uuid4().hex[:12]}",
