@@ -60,6 +60,16 @@ def _resolve_risk_config(context) -> RiskPolicyConfig | None:
     return cfg
 
 
+def _extract_regime_overlay(dashboard_payload: dict) -> tuple[dict, dict]:
+    """Return rank-stage regime snapshot/profile dictionaries when present."""
+    market_regime = dashboard_payload.get("market_regime") or {}
+    regime_profile = dashboard_payload.get("regime_profile") or {}
+    return (
+        market_regime if isinstance(market_regime, dict) else {},
+        regime_profile if isinstance(regime_profile, dict) else {},
+    )
+
+
 class ExecuteStage:
     """Convert ranked signals into paper orders and fills."""
 
@@ -160,6 +170,7 @@ class ExecuteStage:
         context.require_artifact("rank", "ranked_signals")
         request = ExecutionRequest.from_context(context)
         candidates = ExecutionCandidateBuilder().build(context, request=request)
+        rank_regime, rank_profile = _extract_regime_overlay(candidates.dashboard_payload)
 
         paths = ensure_domain_layout(
             project_root=context.project_root,
@@ -176,10 +187,35 @@ class ExecuteStage:
         )
         try:
             detected_regime = regime_detector.get_market_regime()
-            current_regime = detected_regime.get("market_regime", request.regime or "TREND")
+            current_regime = str(rank_regime.get("regime") or detected_regime.get("market_regime", request.regime or "TREND"))
         except Exception:
-            current_regime = request.regime or "TREND"
+            current_regime = str(rank_regime.get("regime") or request.regime or "TREND")
             detected_regime = {"market_regime": current_regime}
+        if rank_regime:
+            detected_regime = {**detected_regime, "breadth_regime": rank_regime}
+
+        effective_capital = request.capital
+        effective_top_n = request.target_position_count
+        effective_max_positions = request.max_positions
+        effective_max_sector_exposure = request.max_sector_exposure
+        effective_max_single_stock_weight = request.max_single_stock_weight
+        effective_exit_atr_multiple = request.exit_atr_multiple
+        effective_use_portfolio_constraints = request.use_portfolio_constraints
+        if rank_profile:
+            max_exposure = float(rank_profile.get("max_exposure", 1.0) or 1.0)
+            effective_capital = request.capital * max_exposure
+            effective_max_positions = int(rank_profile.get("max_positions") or request.max_positions)
+            effective_top_n = (
+                min(request.target_position_count, effective_max_positions)
+                if "execution_top_n" in context.params
+                else effective_max_positions
+            )
+            effective_max_sector_exposure = float(rank_profile.get("max_sector_exposure") or request.max_sector_exposure)
+            effective_max_single_stock_weight = float(
+                rank_profile.get("max_single_stock_weight") or request.max_single_stock_weight
+            )
+            effective_exit_atr_multiple = float(rank_profile.get("atr_stop_mult") or request.exit_atr_multiple)
+            effective_use_portfolio_constraints = True
         store = ExecutionStore(context.project_root)
         portfolio_manager = PortfolioManager(store)
         service = ExecutionService(
@@ -210,22 +246,22 @@ class ExecuteStage:
             ml_overlay_df=candidates.ml_overlay_df,
             current_prices=current_prices,
             strategy_mode=request.strategy_mode,
-            target_position_count=request.target_position_count,
+            target_position_count=effective_top_n,
             ml_horizon=request.ml_horizon,
             ml_confirm_threshold=request.ml_confirm_threshold,
             buy_quantity=request.buy_quantity,
-            capital=request.capital,
+            capital=effective_capital,
             regime=current_regime,
             regime_multiplier=request.regime_multiplier,
             preview_only=request.preview_only,
             execution_enabled=request.execution_enabled,
             entry_policy_name=request.entry_policy_name,
-            exit_atr_multiple=request.exit_atr_multiple,
+            exit_atr_multiple=effective_exit_atr_multiple,
             exit_max_holding_days=request.exit_max_holding_days,
-            use_portfolio_constraints=request.use_portfolio_constraints,
-            max_positions=request.max_positions,
-            max_sector_exposure=request.max_sector_exposure,
-            max_single_stock_weight=request.max_single_stock_weight,
+            use_portfolio_constraints=effective_use_portfolio_constraints,
+            max_positions=effective_max_positions,
+            max_sector_exposure=effective_max_sector_exposure,
+            max_single_stock_weight=effective_max_single_stock_weight,
             use_atr_position_sizing=request.use_atr_position_sizing,
             heat_gate_threshold=context.params.get("execution_heat_gate_threshold", 0.08),
             risk_config=_resolve_risk_config(context),
@@ -280,6 +316,14 @@ class ExecuteStage:
             "open_position_count": int(len(positions_df)),
             "detected_regime": current_regime,
             "regime_details": detected_regime,
+            "market_regime": rank_regime,
+            "regime_profile": rank_profile,
+            "effective_execution_capital": effective_capital,
+            "effective_execution_top_n": effective_top_n,
+            "effective_max_positions": effective_max_positions,
+            "effective_max_sector_exposure": effective_max_sector_exposure,
+            "effective_max_single_stock_weight": effective_max_single_stock_weight,
+            "effective_exit_atr_multiple": effective_exit_atr_multiple,
             "canary_blocked": bool(context.params.get("canary")) and context.params.get("canary_blocked", False),
             "trailing_stops_updated": int(trailing_summary.get("updated_count", 0) or 0),
             "trailing_stops_evaluated": int(trailing_summary.get("evaluated_count", 0) or 0),
@@ -289,7 +333,7 @@ class ExecuteStage:
             pos.get("quantity", 0) * pos.get("avg_entry_price", 0)
             for pos in result.get("positions_after", [])
         )
-        portfolio_value = request.capital - total_position_value + total_position_value
+        portfolio_value = effective_capital - total_position_value + total_position_value
         try:
             import duckdb
             conn = duckdb.connect(str(context.db_path), read_only=True)
@@ -306,14 +350,14 @@ class ExecuteStage:
                     p.get("quantity", 0) * latest_close_map.get(p.get("symbol_id"), p.get("avg_entry_price", 0))
                     for p in result.get("positions_after", [])
                 )
-                portfolio_value = request.capital - total_position_value + total_position_value_mtm
+                portfolio_value = effective_capital - total_position_value + total_position_value_mtm
             conn.close()
         except Exception:
             pass
 
         peak_value = store.get_latest_drawdown(context.run_id)
         current_peak = peak_value["peak_value"] if peak_value and peak_value.get("peak_value") else portfolio_value
-        current_heat = total_position_value / request.capital if request.capital > 0 else 0.0
+        current_heat = total_position_value / effective_capital if effective_capital > 0 else 0.0
 
         store.record_drawdown_snapshot(
             run_id=context.run_id,

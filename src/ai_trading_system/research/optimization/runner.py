@@ -95,9 +95,12 @@ def _evaluate_pack_on_folds(
             to_date=fold.val_end,
             exchange=recipe.exchange,
             benchmark_symbol=recipe.benchmark.symbol,
+            benchmark_source=recipe.benchmark.source,
             starting_equity=recipe.starting_equity,
             commission_bps=recipe.commission_bps,
             slippage_bps=recipe.slippage_bps,
+            regime_rules_path=recipe.regime_rules_path,
+            regime_profile_path=recipe.regime_profile_path,
         )
         metrics = compute_metrics(result, starting_equity=recipe.starting_equity)
         fit = compute_fitness(metrics, recipe.fitness_weights)

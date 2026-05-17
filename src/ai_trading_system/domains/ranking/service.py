@@ -22,6 +22,12 @@ from ai_trading_system.domains.ranking.payloads import (
     build_dashboard_payload,
     summarize_task_statuses,
 )
+from ai_trading_system.analytics.regime import (
+    MarketRegimeSnapshot,
+    RegimeProfile,
+    compute_market_regime_snapshot,
+    load_regime_profile,
+)
 
 
 TASK_FILE_MAP = {
@@ -78,6 +84,19 @@ def _coerce_numeric_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataF
         if column not in output.columns:
             output.loc[:, column] = pd.Series([pd.NA] * len(output), index=output.index)
         output.loc[:, column] = pd.to_numeric(output[column], errors="coerce")
+    return output
+
+
+def apply_regime_profile_to_rank_params(
+    params: dict[str, Any],
+    profile: RegimeProfile | None,
+) -> dict[str, Any]:
+    """Return rank params with regime min_score/top_n applied."""
+    output = dict(params)
+    if profile is not None:
+        output["min_score"] = profile.min_score
+        output["top_n"] = profile.rank_top_n
+        output["regime_profile"] = profile.to_dict()
     return output
 
 
@@ -492,6 +511,37 @@ class RankOrchestrationService:
         effective_params["__market_stage_info__"] = stage_info
         # ─────────────────────────────────────────────────────────────────────
 
+        regime_snapshot: MarketRegimeSnapshot | None = None
+        regime_profile: RegimeProfile | None = None
+        try:
+            regime_snapshot = compute_market_regime_snapshot(
+                context.db_path,
+                as_of=context.run_date,
+                project_root=context.project_root,
+                rules_path=effective_params.get("regime_rules_path"),
+                exchange=str(effective_params.get("exchange", "NSE")),
+            )
+            regime_profile = load_regime_profile(
+                regime_snapshot.regime,
+                project_root=context.project_root,
+                profile_path=effective_params.get("regime_profile_path"),
+            )
+            if regime_profile is not None:
+                effective_params = apply_regime_profile_to_rank_params(effective_params, regime_profile)
+                effective_params["market_regime"] = regime_snapshot.to_dict()
+                effective_params.setdefault("execution_regime", regime_snapshot.regime)
+                effective_params.setdefault("execution_regime_multiplier", regime_profile.max_exposure)
+                logger.info(
+                    "regime=%s raw=%s profile=%s min_score=%.2f top_n=%s",
+                    regime_snapshot.regime,
+                    regime_snapshot.raw_regime,
+                    regime_profile.name,
+                    regime_profile.min_score,
+                    regime_profile.rank_top_n,
+                )
+        except Exception as exc:
+            warnings.append(f"regime overlay unavailable: {exc}")
+
         ranked, _ = self.execute_rank_task(
             context=context,
             task_name="rank_core",
@@ -504,6 +554,8 @@ class RankOrchestrationService:
                 "top_n": effective_params.get("top_n"),
                 "symbol_limit": effective_params.get("symbol_limit"),
                 "market_stage": stage_info["market_stage"],
+                "market_regime": regime_snapshot.to_dict() if regime_snapshot is not None else None,
+                "regime_profile": regime_profile.to_dict() if regime_profile is not None else None,
             },
             task_status=task_status,
             previous_attempt=previous_attempt,
@@ -1079,6 +1131,8 @@ class RankOrchestrationService:
                 "stock_scan_fingerprint": self.dataframe_fingerprint(stock_scan_df),
                 "sector_dashboard_fingerprint": self.dataframe_fingerprint(sector_dashboard_df),
                 "warnings": list(warnings),
+                "market_regime": regime_snapshot.to_dict() if regime_snapshot is not None else None,
+                "regime_profile": regime_profile.to_dict() if regime_profile is not None else None,
             },
             task_status=task_status,
             previous_attempt=previous_attempt,
@@ -1097,6 +1151,15 @@ class RankOrchestrationService:
             optional=False,
         )
         if isinstance(dashboard_payload, dict):
+            if regime_snapshot is not None:
+                dashboard_payload["market_regime"] = regime_snapshot.to_dict()
+                dashboard_payload.setdefault("summary", {})["market_regime"] = regime_snapshot.regime
+                dashboard_payload.setdefault("summary", {})["market_regime_raw"] = regime_snapshot.raw_regime
+            if regime_profile is not None:
+                dashboard_payload["regime_profile"] = regime_profile.to_dict()
+                dashboard_payload.setdefault("summary", {})["regime_profile"] = regime_profile.name
+                dashboard_payload.setdefault("summary", {})["effective_min_score"] = regime_profile.min_score
+                dashboard_payload.setdefault("summary", {})["effective_rank_top_n"] = regime_profile.rank_top_n
             dashboard_payload["watchlist"] = (
                 watchlist_final_df.head(15).to_dict(orient="records")
                 if isinstance(watchlist_final_df, pd.DataFrame) and not watchlist_final_df.empty
@@ -1119,6 +1182,10 @@ class RankOrchestrationService:
             "degraded_output_count": len(warnings),
             "data_trust_status": trust_summary.get("status"),
             "rank_mode": str(context.params.get("rank_mode", "default")),
+            "market_regime": regime_snapshot.to_dict() if regime_snapshot is not None else None,
+            "regime_profile": regime_profile.to_dict() if regime_profile is not None else None,
+            "effective_min_score": float(effective_params.get("min_score", 0.0)),
+            "effective_top_n": effective_params.get("top_n"),
             "trust_confidence": trust_confidence.to_dict(),
             "task_status": task_status,
             "task_status_counts": summarize_task_statuses(task_status),

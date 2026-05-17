@@ -1,0 +1,43 @@
+name: momentum_full_v1_regime_C
+strategy_id: momentum_breakout
+baseline_pack_path: momentum_breakout_v1
+from_date: "2020-01-01"
+to_date:   "2026-05-13"
+exchange: NSE
+benchmark: { symbol: UNIV_TOP1000, source: index_catalog, blend: 0.35 }
+starting_equity: 1000000.0
+commission_bps: 10.0
+slippage_bps:   35.0
+seed: 42
+walkforward:    { train_months: 12, validation_months: 3, step_months: 3 }
+fitness_weights:
+  cagr: 0.25
+  sharpe: 0.20
+  sortino: 0.10
+  win_rate: 0.05
+  drawdown_penalty: 0.30
+  turnover_penalty: 0.10
+acceptance:
+  min_fitness_improvement:           0.01
+  max_mdd_ratio_vs_champion:         1.10
+  min_trades_per_year:               40.0
+  min_fold_improvement_rate:         0.55
+  worst_fold_min_return_vs_benchmark: false
+  worst_fold_max_mdd_ratio_vs_baseline: 1.10
+  require_no_zero_trade_fold:        true
+stopping:
+  max_trials:          100
+  patience:            35
+  max_runtime_minutes: 480
+search_space:
+  stop_pct:           { low: 0.05, high: 0.08 }
+  stop_atr_multiple:  { low: 2.0,  high: 3.0 }
+  max_hold_rank:      { low: 40,   high: 60 }
+  risk_per_trade_pct: { low: 0.5,  high: 1.0 }
+  max_position_pct:   { low: 8.0,  high: 12.0 }
+regime_rules_path: config/strategies/regime/rules_univ_top1000.yaml
+regime_profile_path: config/strategies/regime/profile_C_cash_only.yaml
+description: >
+  Regime C cash-only study using UNIV_TOP1000 breadth confirmation. Applies
+  regime-specific min_score, rank_top_n, position count, exposure constraints,
+  and ATR stop width while keeping max_exposure <= 1.00.

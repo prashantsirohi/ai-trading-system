@@ -97,12 +97,14 @@ class EngineBacktestRunner:
         starting_equity: float = 1_000_000.0,
         commission_bps: float = 10.0,
         slippage_bps: float = 20.0,
+        risk_config_by_date: Mapping[date, RiskPolicyConfig] | None = None,
     ):
         self.risk_config = risk_config
         self.starting_equity = float(starting_equity)
         self.commission_bps = float(commission_bps)
         self.slippage_bps = float(slippage_bps)
         self.engine = TradingRuleEngine(risk_config)
+        self.risk_config_by_date = dict(risk_config_by_date or {})
 
     def run(
         self,
@@ -124,6 +126,9 @@ class EngineBacktestRunner:
         equity = self.starting_equity
 
         for bar_date in sorted_dates:
+            active_config = self.risk_config_by_date.get(bar_date, self.risk_config)
+            if active_config is not self.engine.config:
+                self.engine = TradingRuleEngine(active_config)
             ranked = ranked_by_date[bar_date]
             rows = ranked.to_dict(orient="records") if ranked is not None and not ranked.empty else []
             row_by_symbol = {str(r.get("symbol_id")): r for r in rows if r.get("symbol_id")}
@@ -141,12 +146,12 @@ class EngineBacktestRunner:
                     )
                     rank_streak[symbol_id] = (
                         rank_streak.get(symbol_id, 0) + 1
-                        if rank_val > self.risk_config.exit.max_hold_rank
+                        if rank_val > active_config.exit.max_hold_rank
                         else 0
                     )
                     score_streak[symbol_id] = (
                         score_streak.get(symbol_id, 0) + 1
-                        if score_val < self.risk_config.exit.min_hold_score
+                        if score_val < active_config.exit.min_hold_score
                         else 0
                     )
 

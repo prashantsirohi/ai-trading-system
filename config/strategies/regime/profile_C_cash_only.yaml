@@ -1,0 +1,5 @@
+name: profile_C_cash_only
+risk_off: { min_score: 82, rank_top_n: 10, max_exposure: 0.25, max_positions: 4, max_sector_exposure: 0.20, max_single_stock_weight: 0.07, atr_stop_mult: 2.0, breakout_mode: strict, allow_pyramiding: false }
+neutral: { min_score: 72, rank_top_n: 20, max_exposure: 0.50, max_positions: 6, max_sector_exposure: 0.25, max_single_stock_weight: 0.08, atr_stop_mult: 2.3, breakout_mode: normal, allow_pyramiding: false }
+bull: { min_score: 64, rank_top_n: 40, max_exposure: 0.85, max_positions: 10, max_sector_exposure: 0.32, max_single_stock_weight: 0.10, atr_stop_mult: 2.6, breakout_mode: normal, allow_pyramiding: true }
+strong_bull: { min_score: 58, rank_top_n: 60, max_exposure: 1.00, max_positions: 14, max_sector_exposure: 0.38, max_single_stock_weight: 0.12, atr_stop_mult: 3.0, breakout_mode: aggressive, allow_pyramiding: true }

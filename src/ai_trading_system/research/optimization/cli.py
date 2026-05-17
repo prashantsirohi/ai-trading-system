@@ -241,9 +241,20 @@ def _cmd_validate(argv: Sequence[str]) -> int:
             project_root, benchmark=recipe.benchmark,
             from_date=fold.val_start, to_date=fold.val_end, exchange=recipe.exchange,
         )
-        bench_pct = bench.return_pct if bench is not None else None
+        bench_pct = bench.total_return_pct if bench is not None else None
         backtest_result = run_backtest(
-            baseline_pack, fold=fold, recipe=recipe, project_root=project_root,
+            baseline_pack,
+            project_root=project_root,
+            from_date=fold.val_start,
+            to_date=fold.val_end,
+            exchange=recipe.exchange,
+            benchmark_symbol=recipe.benchmark.symbol,
+            benchmark_source=recipe.benchmark.source,
+            starting_equity=recipe.starting_equity,
+            commission_bps=recipe.commission_bps,
+            slippage_bps=recipe.slippage_bps,
+            regime_rules_path=recipe.regime_rules_path,
+            regime_profile_path=recipe.regime_profile_path,
             benchmark_return_pct=bench_pct,
         )
     except Exception as exc:  # noqa: BLE001 — surface engine wiring issues clearly

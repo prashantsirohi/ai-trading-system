@@ -177,6 +177,8 @@ class OptimizationRecipe:
     # Wave 4: optional recipe-level search-space overrides. ``None`` = use
     # the hardcoded defaults from ``bounds.KNOWN_PARAMS``.
     search_space: SearchSpaceOverride | None = None
+    regime_rules_path: str | None = None
+    regime_profile_path: str | None = None
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "OptimizationRecipe":
@@ -225,6 +227,16 @@ class OptimizationRecipe:
             stopping=_section(StoppingConfig, payload.get("stopping")),
             description=str(payload.get("description", "")),
             search_space=SearchSpaceOverride.from_dict(payload.get("search_space")),
+            regime_rules_path=(
+                str(payload["regime_rules_path"])
+                if payload.get("regime_rules_path") not in (None, "")
+                else None
+            ),
+            regime_profile_path=(
+                str(payload["regime_profile_path"])
+                if payload.get("regime_profile_path") not in (None, "")
+                else None
+            ),
         )
 
 

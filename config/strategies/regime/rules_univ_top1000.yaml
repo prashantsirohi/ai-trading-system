@@ -1,0 +1,21 @@
+regime_source:
+  index_code: UNIV_TOP1000
+  source: index_catalog
+  confirmation_days: 3
+
+rules:
+  risk_off:
+    pct_above_200dma_lt: 0.40
+  neutral:
+    pct_above_200dma_gte: 0.40
+    pct_above_200dma_lt: 0.55
+  bull:
+    pct_above_200dma_gte: 0.55
+    top1000_pct_above_200dma_gte: 0.55
+  strong_bull:
+    pct_above_200dma_gte: 0.70
+    pct_above_50dma_gte: 0.65
+    top1000_pct_above_200dma_gte: 0.65
+    top1000_pct_above_50dma_gte: 0.65
+
+priority: [strong_bull, bull, neutral, risk_off]
