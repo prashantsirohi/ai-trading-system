@@ -22,7 +22,7 @@ import logging
 import sys
 import uuid
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import optuna
@@ -391,7 +391,7 @@ def run_optimization(
         "champion_pack_id": None,
         "iterations_without_improvement": 0,
     }
-    started_at = datetime.utcnow()
+    started_at = datetime.now(timezone.utc)
 
     progress = tqdm(
         total=recipe.stopping.max_trials,
@@ -449,7 +449,7 @@ def run_optimization(
         progress.update(1)
         if state["iterations_without_improvement"] >= recipe.stopping.patience:
             study.stop()
-        elapsed_min = (datetime.utcnow() - started_at).total_seconds() / 60.0
+        elapsed_min = (datetime.now(timezone.utc) - started_at).total_seconds() / 60.0
         if elapsed_min >= recipe.stopping.max_runtime_minutes:
             study.stop()
 
@@ -648,7 +648,7 @@ def resume_optimization(
         "champion_pack_id": None,
         "iterations_without_improvement": 0,
     }
-    started_at = datetime.utcnow()
+    started_at = datetime.now(timezone.utc)
     progress = tqdm(total=remaining, desc="optuna(resume)", unit="trial", ncols=100)
 
     def objective(trial: optuna.Trial) -> float:
@@ -689,7 +689,7 @@ def resume_optimization(
         progress.update(1)
         if state["iterations_without_improvement"] >= recipe.stopping.patience:
             study.stop()
-        elapsed_min = (datetime.utcnow() - started_at).total_seconds() / 60.0
+        elapsed_min = (datetime.now(timezone.utc) - started_at).total_seconds() / 60.0
         if elapsed_min >= recipe.stopping.max_runtime_minutes:
             study.stop()
 

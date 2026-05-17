@@ -221,3 +221,62 @@ def test_resume_completed_run_is_noop(
 def test_resume_is_a_known_subcommand() -> None:
     from ai_trading_system.research.optimization.cli import _SUBCOMMANDS
     assert "resume" in _SUBCOMMANDS
+
+
+# ---------------------------------------------------------------------------
+# Timestamp consistency (regression: pre-fix, started_at came from DuckDB's
+# local-time DEFAULT and completed_at from Python's datetime.utcnow() — that
+# produced a 5h30m phantom gap in IST. Both sides now route through
+# _utc_naive_now() in store.py.)
+# ---------------------------------------------------------------------------
+
+
+def test_started_and_completed_at_are_consistent_utc(tmp_path: Path) -> None:
+    """started_at must come from Python (UTC-naive), NOT the DDL local-time default.
+
+    The fastest signal: create a run row + complete it back-to-back. completed_at
+    should be within a few seconds of started_at — definitely not hours apart.
+    Pre-fix this would fail by ~19_800 seconds (IST offset).
+    """
+    store = _bootstrap_store(tmp_path)
+    baseline_id = _seed_baseline_pack(store)
+    from datetime import date
+    store.create_run(
+        optimization_run_id="run-clock",
+        recipe_name="rClock",
+        strategy_id="t",
+        baseline_rule_pack_id=baseline_id,
+        from_date=date(2024, 1, 1),
+        to_date=date(2024, 6, 1),
+        seed=42,
+        max_trials=10,
+        recipe_json="{}",
+        study_storage_uri="data/optuna/run-clock.log",
+    )
+    store.complete_run(
+        optimization_run_id="run-clock",
+        status="completed",
+        champion_rule_pack_id=None,
+        error=None,
+    )
+    # Read the timestamps directly from DuckDB so we test the actual storage.
+    import duckdb
+    cp_path = tmp_path / "data" / "control_plane.duckdb"
+    conn = duckdb.connect(str(cp_path), read_only=True)
+    try:
+        row = conn.execute(
+            "SELECT started_at, completed_at FROM strategy_optimization_run "
+            "WHERE optimization_run_id = 'run-clock'"
+        ).fetchone()
+    finally:
+        conn.close()
+    started_at, completed_at = row
+    assert started_at is not None
+    assert completed_at is not None
+    # A back-to-back create+complete should be at most a couple of seconds apart.
+    # The regression we're guarding against would produce 19_800s (5h30m, IST).
+    delta = abs((completed_at - started_at).total_seconds())
+    assert delta < 60, (
+        f"started_at {started_at} and completed_at {completed_at} differ by {delta}s — "
+        "expected < 60s. Did the fix in store.py revert? See _utc_naive_now()."
+    )

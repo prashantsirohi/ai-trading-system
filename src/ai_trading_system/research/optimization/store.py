@@ -2,12 +2,19 @@
 
 Uses the same DuckDB control-plane DB as the rest of the pipeline. Migration
 015 creates the required tables; ``RegistryStore`` applies it on first use.
+
+All timestamps written from this module are **naive UTC** — the column type
+is ``TIMESTAMP`` (timezone-unaware in DuckDB), and every site below routes
+through ``_utc_naive_now()``. This avoids the historical pitfall where
+``started_at`` came from DuckDB's ``DEFAULT current_timestamp`` (local time,
+IST on the operator box) while ``completed_at`` came from Python's
+``datetime.utcnow()`` — producing a 5h30m phantom gap on every run.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import duckdb
@@ -21,6 +28,16 @@ from ai_trading_system.domains.strategy import (
 from ai_trading_system.pipeline.registry import RegistryStore
 from ai_trading_system.research.backtesting.engine_runner import BacktestResult
 from ai_trading_system.research.optimization.evaluator import Metrics
+
+
+def _utc_naive_now() -> datetime:
+    """Current UTC time as a naive ``datetime`` for DuckDB ``TIMESTAMP`` columns.
+
+    ``datetime.utcnow()`` is deprecated in 3.12+; ``datetime.now(timezone.utc)``
+    is tz-aware which DuckDB can't bind into a naive ``TIMESTAMP`` column on
+    every codepath. Stripping ``tzinfo`` gives us the same value safely.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _ensure_migrations(project_root: Path | str) -> Path:
@@ -137,14 +154,18 @@ class OptimizationStore:
         recipe_json: str,
         study_storage_uri: str | None = None,
     ) -> None:
+        # Set started_at explicitly (UTC-naive) so the DuckDB DDL's
+        # ``DEFAULT current_timestamp`` (local time) is never consulted —
+        # this is the fix for the started_at/completed_at timezone mismatch.
         with self._conn() as con:
             con.execute(
                 """
                 INSERT INTO strategy_optimization_run (
                     optimization_run_id, recipe_name, strategy_id,
                     baseline_rule_pack_id, from_date, to_date, seed,
-                    max_trials, status, recipe_json, study_storage_uri
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
+                    max_trials, status, recipe_json, study_storage_uri,
+                    started_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)
                 """,
                 [
                     optimization_run_id,
@@ -157,6 +178,7 @@ class OptimizationStore:
                     max_trials,
                     recipe_json,
                     study_storage_uri,
+                    _utc_naive_now(),
                 ],
             )
 
@@ -202,7 +224,7 @@ class OptimizationStore:
                     row[7],
                     error,
                     row[8],
-                    datetime.utcnow(),
+                    _utc_naive_now(),
                     row[9],
                 ],
             )
