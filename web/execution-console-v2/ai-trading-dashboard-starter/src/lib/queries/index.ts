@@ -43,6 +43,11 @@ import {
   getPerfConditionalFactorIc,
   getPerfFactorCoverage,
   getPerfDrift,
+  getPerfBucketComposition,
+  getPerfBucketDaily,
+  getPerfConcentration,
+  getPerfDigestList,
+  getPerfDigestDoc,
   type PerfCoverage,
   type PerfCohortsResponse,
   type PerfBucketsResponse,
@@ -52,6 +57,11 @@ import {
   type PerfConditionalFactorIcResponse,
   type PerfFactorCoverageResponse,
   type PerfDriftResponse,
+  type PerfBucketCompositionResponse,
+  type PerfBucketDailyResponse,
+  type PerfConcentrationResponse,
+  type PerfDigestListResponse,
+  type PerfDigestDocResponse,
 } from '@/lib/api/perfTracker';
 import {
   getOptimizationRuns,
@@ -414,6 +424,65 @@ export function usePerfDrift(
   return useQuery<PerfDriftResponse, Error>({
     queryKey: queryKeys.perfDrift(),
     queryFn: getPerfDrift,
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+export function usePerfBucketComposition(
+  options: QueryOverrides<PerfBucketCompositionResponse> = {},
+): UseQueryResult<PerfBucketCompositionResponse, Error> {
+  return useQuery<PerfBucketCompositionResponse, Error>({
+    queryKey: queryKeys.perfBucketComposition(),
+    queryFn: getPerfBucketComposition,
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+export function usePerfBucketDaily(
+  lookbackDays: number,
+  options: QueryOverrides<PerfBucketDailyResponse> = {},
+): UseQueryResult<PerfBucketDailyResponse, Error> {
+  return useQuery<PerfBucketDailyResponse, Error>({
+    queryKey: queryKeys.perfBucketDaily(lookbackDays),
+    queryFn: () => getPerfBucketDaily(lookbackDays),
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+export function usePerfConcentration(
+  lookbackDays: number,
+  options: QueryOverrides<PerfConcentrationResponse> = {},
+): UseQueryResult<PerfConcentrationResponse, Error> {
+  return useQuery<PerfConcentrationResponse, Error>({
+    queryKey: queryKeys.perfConcentration(lookbackDays),
+    queryFn: () => getPerfConcentration(lookbackDays),
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+export function usePerfDigestList(
+  options: QueryOverrides<PerfDigestListResponse> = {},
+): UseQueryResult<PerfDigestListResponse, Error> {
+  return useQuery<PerfDigestListResponse, Error>({
+    queryKey: queryKeys.perfDigestList(),
+    queryFn: getPerfDigestList,
+    staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+export function usePerfDigestDoc(
+  filename: string | null,
+  options: QueryOverrides<PerfDigestDocResponse> = {},
+): UseQueryResult<PerfDigestDocResponse, Error> {
+  return useQuery<PerfDigestDocResponse, Error>({
+    queryKey: queryKeys.perfDigestDoc(filename),
+    queryFn: () => getPerfDigestDoc(filename as string),
+    enabled: Boolean(filename),
     staleTime: 5 * 60_000,
     ...options,
   });

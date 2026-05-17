@@ -49,6 +49,14 @@ export const queryKeys = {
     ['execution', 'perf-conditional-factor-ic', windows.join(',')] as const,
   perfFactorCoverage: () => ['execution', 'perf-factor-coverage'] as const,
   perfDrift: () => ['execution', 'perf-drift'] as const,
+  perfBucketComposition: () => ['execution', 'perf-bucket-composition'] as const,
+  perfBucketDaily: (lookbackDays: number) =>
+    ['execution', 'perf-bucket-daily', lookbackDays] as const,
+  perfConcentration: (lookbackDays: number) =>
+    ['execution', 'perf-concentration', lookbackDays] as const,
+  perfDigestList: () => ['execution', 'perf-digest-list'] as const,
+  perfDigestDoc: (filename: string | null) =>
+    ['execution', 'perf-digest-doc', filename ?? ''] as const,
   // --- optimization (Wave 5b) -----------------------------------------
   optimizationRuns: (recipe: string | undefined, status: string | undefined, limit: number) =>
     ['execution', 'optimization-runs', recipe ?? '', status ?? '', limit] as const,
