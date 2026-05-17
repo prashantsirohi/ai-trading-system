@@ -250,18 +250,39 @@ export default function ResearchPage() {
     return parts.length ? parts.join(', ') : 'No drift alerts';
   })();
 
+  // Verdict on bucket health uses same-date EXCESS (vs control), not raw
+  // returns — raw returns swing with the market regime and would mislead
+  // when every bucket is negative on a red day. excess_5d is the
+  // apples-to-apples signal of "did this bucket beat its own-date control".
   const eligibleBuckets = (sameDate?.buckets ?? []).filter(
     (b) => b.bucket !== 'unassigned' && !b.small_sample,
   );
-  const negativeBuckets = eligibleBuckets.filter(
-    (b) => (b.avg_5d ?? 0) < 0 && (b.hitrate_5d ?? 0) < 40,
+  const weakBuckets = eligibleBuckets.filter(
+    (b) => (b.excess_5d ?? 0) < 0 && (b.hitrate_5d ?? 0) < 40,
   );
+  const smallSampleEligibleCount = (sameDate?.buckets ?? []).filter(
+    (b) => b.bucket !== 'unassigned' && b.small_sample,
+  ).length;
   const bucketTone: StatusTone =
-    negativeBuckets.length >= 2 ? 'bad' : negativeBuckets.length === 1 ? 'warn' : 'good';
-  const bucketValue = `${negativeBuckets.length} / ${eligibleBuckets.length}`;
-  const bucketSubtitle = negativeBuckets.length
-    ? `Weak: ${negativeBuckets.map((b) => b.bucket).join(', ')}`
-    : 'All eligible buckets non-negative';
+    eligibleBuckets.length === 0
+      ? 'neutral'
+      : weakBuckets.length >= 2
+        ? 'bad'
+        : weakBuckets.length === 1
+          ? 'warn'
+          : 'good';
+  const bucketValue =
+    eligibleBuckets.length === 0
+      ? '—'
+      : `${weakBuckets.length} / ${eligibleBuckets.length}`;
+  const bucketSubtitle =
+    eligibleBuckets.length === 0
+      ? smallSampleEligibleCount
+        ? `${smallSampleEligibleCount} bucket${smallSampleEligibleCount === 1 ? '' : 's'} below sample threshold`
+        : 'No labelled buckets yet'
+      : weakBuckets.length
+        ? `Negative excess: ${weakBuckets.map((b) => b.bucket).join(', ')}`
+        : 'All eligible buckets beat same-date control';
 
   // ---- Chart data -----------------------------------------------------------
 
