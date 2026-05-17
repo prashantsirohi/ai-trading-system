@@ -17,10 +17,11 @@ Search the space of strategy rule packs for improved baseline performance, witho
 |---|---|
 | `cli.py` | `ai-trading-optimize` console alias; recipe resolution; report auto-write toggle. |
 | `__main__.py` | `python -m ai_trading_system.research.optimization` entry. |
-| `recipe.py` | `OptimizationRecipe` (Pydantic), `load_recipe()`, `resolve_baseline_path()` (bare-name → file). |
+| `recipe.py` | `OptimizationRecipe` (frozen dataclass), `load_recipe()`, `resolve_baseline_path()` (bare-name → file), `SearchSpaceOverride` (Wave 4 recipe-level search-space overrides). |
+| `domains/strategy/bounds.py` | `KNOWN_PARAMS` (single source of truth for search-space parameter surface) + `build_search_space(trial, *, strategy_id, overrides=None)`. |
 | `templates/` | YAML templates shipped with the package; rendered by `cli init`. |
 | `runner.py` | `run_optimization()` — Optuna study orchestration, walk-forward, acceptance, champion guards, auto-report. |
-| `bounds.py` | `build_search_space()` — hardcoded Optuna `suggest_*` dimensions (ranking weights + risk knobs). |
+| `bounds.py` | `build_search_space()` + `KNOWN_PARAMS` — parameter surface for ranking weights + risk knobs. Defaults may be narrowed per-run via the recipe's `search_space:` block (Wave 4). |
 | `evaluator.py` | `Metrics`, `compute_metrics`, `fitness`. |
 | `acceptance.py` | Per-trial acceptance gate (worst-fold-vs-benchmark, MDD ratio, fold-rate, etc.). |
 | `guards.py` | End-of-study champion guards (weight pinning, zero-trade folds). |
@@ -97,11 +98,12 @@ In `data/control_plane.duckdb` (resolved via `RegistryStore`):
 - **New baseline strategy** — add `config/strategies/<name>_v1.yaml` matching the `StrategyRulePack` schema; reference it from a new recipe in `config/strategies/recipes/`.
 - **New objective** — extend `evaluator.py::fitness` and (if exposing new weights) `FitnessWeights` in the recipe.
 - **New acceptance rule** — add to `acceptance.py::AcceptanceThresholds` and the `is_accepted` predicate.
-- **New search dimension** — currently requires editing `bounds.py` (whitelist + `suggest_*` call). Wave 4 of the convenience plan will move this into recipe YAML.
+- **Narrow an existing dimension per-run** — add a `search_space:` block to the recipe YAML (no code change). See [`docs/runbooks/optimization.md`](../runbooks/optimization.md).
+- **Add a brand-new dimension** — extend `KNOWN_PARAMS` in `bounds.py` with a new `ParamSpec` and wire a matching `_suggest_*` call into `build_search_space`. New categorical values for an existing dimension also require this — recipes can only narrow categoricals to a subset of the defaults.
 
 ## Known gaps
 
-- **Search space is hardcoded in `bounds.py`.** Recipe YAML can't override bounds today; a planned Wave 4 of the optimizer convenience plan addresses this.
+- _(Wave 4 added recipe-level `search_space:` overrides. Default bounds still live in `bounds.KNOWN_PARAMS`; recipes may narrow any parameter and the validator rejects unknown names or out-of-default categorical choices.)_
 - **No React surface yet.** The FastAPI router landed in Wave 2 (see HTTP API table above), but there is no React Optimization page; operators still inspect via the CLI / direct HTTP / DuckDB. A planned Wave 5b adds the page.
 - **No study resumability.** Killing a run mid-flight forces a restart from trial 0. A planned Wave 5a addresses this with a persistent Optuna RDB backend.
 - _(Wave 3 added `init` + `validate` subcommands and name-based `baseline_pack_path` resolution.)_

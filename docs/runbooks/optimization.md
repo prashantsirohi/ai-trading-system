@@ -65,6 +65,30 @@ Or with a literal path (backwards compatible):
 ai-trading-optimize run --recipe config/strategies/recipes/momentum_breakout_optuna_v1.yaml
 ```
 
+### Narrow the search space from the recipe (no Python edit)
+
+`config/strategies/recipes/<name>.yaml` can carry an optional `search_space:` block to narrow any of the parameters defined in [`bounds.KNOWN_PARAMS`](../../src/ai_trading_system/domains/strategy/bounds.py). Missing block → all parameters use the hardcoded defaults; missing per-parameter entry → that parameter uses its default.
+
+```yaml
+# config/strategies/recipes/my_strategy.yaml — partial
+search_space:
+  # Numeric float (low/high required).
+  stop_pct: { low: 0.02, high: 0.05 }
+  # Numeric int (low/high required).
+  max_hold_rank: { low: 40, high: 60 }
+  # Categorical (choices required, must be a subset of the defaults).
+  stop_method: { choices: ["atr", "percent"] }
+  dma_exit_window: { choices: [11, 20] }
+```
+
+Rules enforced at recipe load:
+
+- **Unknown parameter names fail fast.** A typo like `stop_method_x` raises `ValueError` from `SearchSpaceOverride.from_dict` before any Optuna trial runs. This is the whole point — silent widening of the search space was the historical footgun.
+- **`low < high`** for numeric params; lists must be **non-empty** for categoricals.
+- **Categoricals can only narrow.** `choices` must be a subset of the defaults (`stop_method` defaults: `["atr", "percent", "swing_low"]`). To add a brand-new categorical value, edit `bounds.KNOWN_PARAMS` — that's a code change, not a config change.
+
+Full parameter inventory (kind / default range / categorical choices) lives in [`bounds.KNOWN_PARAMS`](../../src/ai_trading_system/domains/strategy/bounds.py) — single source of truth.
+
 ### Bare-name lookups
 
 Two places accept bare names instead of literal paths:

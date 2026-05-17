@@ -324,7 +324,11 @@ def run_optimization(
     )
 
     def objective(trial: optuna.Trial) -> float:
-        pack = build_search_space(trial, strategy_id=recipe.strategy_id)
+        pack = build_search_space(
+            trial,
+            strategy_id=recipe.strategy_id,
+            overrides=recipe.search_space,
+        )
         fold_results = _evaluate_pack_on_folds(
             pack,
             folds,
