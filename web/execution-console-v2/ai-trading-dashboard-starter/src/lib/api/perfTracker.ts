@@ -45,6 +45,10 @@ export interface BucketCoverageRow {
   last_date: string | null;
   rows: number;
   dates: number;
+  symbols_count?: number;
+  pct_of_all_rows?: number | null;
+  pct_with_fwd_5d?: number | null;
+  pct_with_fwd_20d?: number | null;
 }
 
 export interface SameDateBucketRow extends BucketRow {
@@ -54,6 +58,72 @@ export interface SameDateBucketRow extends BucketRow {
   excess_5d: number | null;
   excess_10d: number | null;
   excess_20d: number | null;
+  trading_days?: number;
+  small_sample?: boolean;
+}
+
+export interface BucketCompositionRow {
+  bucket: string;
+  n: number;
+  avg_rank_position: number | null;
+  [key: `avg_${string}`]: number | null | string;
+}
+
+export interface PerfBucketCompositionResponse {
+  available_columns: string[];
+  missing_columns: string[];
+  composition: BucketCompositionRow[];
+}
+
+export interface BucketDailyRow {
+  run_date: string | null;
+  bucket: string;
+  n: number;
+  avg_5d: number | null;
+  hitrate_5d: number | null;
+}
+
+export interface PerfBucketDailyResponse {
+  lookback_days: number;
+  rows: BucketDailyRow[];
+}
+
+export interface ConcentrationCohortRow {
+  cohort: string;
+  n: number;
+  avg_5d: number | null;
+  avg_10d: number | null;
+  avg_20d: number | null;
+  hitrate_20d: number | null;
+  delta_vs_top_200: number | null;
+  delta_vs_201_plus: number | null;
+}
+
+export type ConcentrationSignal = 'weak' | 'mixed' | 'strong' | 'unknown';
+
+export interface PerfConcentrationResponse {
+  lookback_days: number;
+  cohorts: ConcentrationCohortRow[];
+  signal: ConcentrationSignal;
+  message: string;
+  top10_avg_20d: number | null;
+  top200_avg_20d: number | null;
+  top200_minus_201_plus_avg_20d: number | null;
+}
+
+export interface DigestListEntry {
+  filename: string;
+  mtime: number;
+  size_bytes: number;
+}
+
+export interface PerfDigestListResponse {
+  digests: DigestListEntry[];
+}
+
+export interface PerfDigestDocResponse {
+  filename: string;
+  markdown: string;
 }
 
 export interface FactorIcRow {
@@ -67,15 +137,29 @@ export interface ConditionalFactorIcRow {
   [key: string]: string | number | null;
 }
 
+export type FactorCoverageStatus = 'not_wired' | 'poor_coverage' | 'partial_coverage' | 'ok';
+
 export interface FactorCoverageRow {
   factor: string;
   non_null_count: number;
   null_pct: number | null;
   first_available_date: string | null;
   last_available_date: string | null;
+  total_rows?: number;
+  non_null_rows?: number;
+  null_rows?: number;
+  coverage_pct?: number | null;
+  status?: FactorCoverageStatus;
 }
 
-export type DriftStatus = 'insufficient_sample' | 'no_baseline' | 'ok' | 'warning' | 'critical';
+export type DriftStatus =
+  | 'insufficient_sample'
+  | 'no_baseline'
+  | 'ok'
+  | 'watch'
+  | 'warning'
+  | 'critical'
+  | 'unreliable_coverage';
 
 export interface DriftRow {
   factor: string;
@@ -87,6 +171,8 @@ export interface DriftRow {
   delta_pct: number | null;
   status: DriftStatus;
   alert: boolean;
+  coverage_pct?: number | null;
+  coverage_status?: FactorCoverageStatus;
 }
 
 export interface PerfCohortsResponse {
@@ -211,5 +297,48 @@ export function getPerfDrift(): Promise<PerfDriftResponse> {
   return fetchDashboardJson(
     '/api/execution/perf-tracker/drift',
     { recent_window: 30, baseline_window: 180, threshold_pct: 30, factors: [], flagged: [] },
+  );
+}
+
+export function getPerfBucketComposition(): Promise<PerfBucketCompositionResponse> {
+  return fetchDashboardJson(
+    '/api/execution/perf-tracker/buckets/composition',
+    { available_columns: [], missing_columns: [], composition: [] },
+  );
+}
+
+export function getPerfBucketDaily(lookbackDays: number): Promise<PerfBucketDailyResponse> {
+  return fetchDashboardJson(
+    `/api/execution/perf-tracker/buckets/daily?lookback_days=${lookbackDays}`,
+    { lookback_days: lookbackDays, rows: [] },
+  );
+}
+
+export function getPerfConcentration(lookbackDays: number): Promise<PerfConcentrationResponse> {
+  return fetchDashboardJson(
+    `/api/execution/perf-tracker/concentration?lookback_days=${lookbackDays}`,
+    {
+      lookback_days: lookbackDays,
+      cohorts: [],
+      signal: 'unknown',
+      message: '',
+      top10_avg_20d: null,
+      top200_avg_20d: null,
+      top200_minus_201_plus_avg_20d: null,
+    },
+  );
+}
+
+export function getPerfDigestList(): Promise<PerfDigestListResponse> {
+  return fetchDashboardJson(
+    '/api/execution/perf-tracker/digests',
+    { digests: [] },
+  );
+}
+
+export function getPerfDigestDoc(filename: string): Promise<PerfDigestDocResponse> {
+  return fetchDashboardJson(
+    `/api/execution/perf-tracker/digests/${encodeURIComponent(filename)}`,
+    { filename, markdown: '' },
   );
 }

@@ -374,6 +374,30 @@ def test_drift_can_emit_critical_with_large_decaying_sample(
     assert rs["alert"] is True
 
 
+def test_new_endpoints_smoke(client: TestClient) -> None:
+    """Quick shape checks for the diagnostics-sprint endpoints."""
+    for url in (
+        "/api/execution/perf-tracker/buckets/composition",
+        "/api/execution/perf-tracker/buckets/daily?lookback_days=0",
+        "/api/execution/perf-tracker/concentration?lookback_days=0",
+        "/api/execution/perf-tracker/digests",
+    ):
+        resp = client.get(url, headers=API_HEADERS)
+        assert resp.status_code == 200, (url, resp.text)
+    # Extended bucket-coverage fields
+    bc = client.get("/api/execution/perf-tracker/bucket-coverage", headers=API_HEADERS).json()
+    assert bc["buckets"], "expected at least one bucket"
+    sample = bc["buckets"][0]
+    assert "symbols_count" in sample
+    assert "pct_of_all_rows" in sample
+    assert "pct_with_fwd_5d" in sample
+    # Extended factor-coverage fields
+    fc = client.get("/api/execution/perf-tracker/factor-coverage", headers=API_HEADERS).json()
+    assert fc["factors"]
+    assert "status" in fc["factors"][0]
+    assert "coverage_pct" in fc["factors"][0]
+
+
 def test_endpoints_require_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
     monkeypatch.setenv("EXECUTION_API_KEY", "the-real-key")
