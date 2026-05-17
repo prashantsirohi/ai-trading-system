@@ -12,7 +12,14 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
+from ai_trading_system.research.optimization.promote import (
+    LIFECYCLE_ORDER,
+    _allowed_transition,
+    _current_status,
+)
+from ai_trading_system.research.optimization.store import OptimizationStore
 from ai_trading_system.ui.execution_api.routes._deps import project_root
 from ai_trading_system.ui.execution_api.services.readmodels.optimization_runs import (
     get_leaderboard,
@@ -69,6 +76,76 @@ def optimization_leaderboard(
     top: int = Query(default=20, ge=1, le=200),
 ) -> dict[str, Any]:
     return get_leaderboard(project_root(), metric=metric, top=top)
+
+
+class PromoteRequest(BaseModel):
+    """Body for ``POST /runs/{run_id}/promote``."""
+
+    to: str = Field(
+        default="shadow",
+        description=f"Target lifecycle status. Must be one of: {list(LIFECYCLE_ORDER)}.",
+    )
+
+
+@router.post("/runs/{optimization_run_id}/promote")
+def optimization_run_promote(
+    optimization_run_id: str,
+    body: PromoteRequest,
+) -> dict[str, Any]:
+    """Promote the champion of a completed run to a later lifecycle status.
+
+    Thin wrapper over ``research.optimization.promote`` (the same logic the
+    ``ai-trading-optimize-promote promote-latest`` CLI uses). Lifecycle
+    transitions are one-way; attempting to move backwards returns 422.
+
+    Errors:
+      - 404 if the run is unknown OR has no champion (e.g. all trials were
+        rejected).
+      - 422 if ``body.to`` is not a known lifecycle status, or the
+        transition would move the champion backwards on the ladder.
+    """
+    if body.to not in LIFECYCLE_ORDER:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown lifecycle status {body.to!r}; expected one of {list(LIFECYCLE_ORDER)}",
+        )
+
+    root = project_root()
+    store = OptimizationStore(project_root=root)
+
+    detail = get_run_detail(root, optimization_run_id)
+    if detail is None or not detail.get("available", True):
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown optimization_run_id: {optimization_run_id}",
+        )
+    rule_pack_id = detail.get("champion_rule_pack_id")
+    if not rule_pack_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"run {optimization_run_id} has no champion to promote",
+        )
+
+    current = _current_status(root, rule_pack_id)
+    if current is None:
+        # Race: champion vanished between detail lookup and status fetch.
+        raise HTTPException(
+            status_code=404,
+            detail=f"champion rule_pack_id {rule_pack_id} not found",
+        )
+    if not _allowed_transition(current, body.to):
+        raise HTTPException(
+            status_code=422,
+            detail=f"cannot move backwards in lifecycle ({current} -> {body.to})",
+        )
+
+    store.set_lifecycle_status(rule_pack_id, body.to)
+    return {
+        "optimization_run_id": optimization_run_id,
+        "rule_pack_id": rule_pack_id,
+        "previous_status": current,
+        "new_status": body.to,
+    }
 
 
 @router.get("/runs/{optimization_run_id}/report")

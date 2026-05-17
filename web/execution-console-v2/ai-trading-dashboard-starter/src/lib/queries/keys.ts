@@ -49,6 +49,17 @@ export const queryKeys = {
     ['execution', 'perf-conditional-factor-ic', windows.join(',')] as const,
   perfFactorCoverage: () => ['execution', 'perf-factor-coverage'] as const,
   perfDrift: () => ['execution', 'perf-drift'] as const,
+  // --- optimization (Wave 5b) -----------------------------------------
+  optimizationRuns: (recipe: string | undefined, status: string | undefined, limit: number) =>
+    ['execution', 'optimization-runs', recipe ?? '', status ?? '', limit] as const,
+  optimizationRunDetail: (runId: string) =>
+    ['execution', 'optimization-run-detail', runId] as const,
+  optimizationRunTrials: (runId: string, sort: string, limit: number) =>
+    ['execution', 'optimization-run-trials', runId, sort, limit] as const,
+  optimizationLeaderboard: (metric: string, top: number) =>
+    ['execution', 'optimization-leaderboard', metric, top] as const,
+  optimizationReport: (runId: string) =>
+    ['execution', 'optimization-report', runId] as const,
 } as const;
 
 export type QueryKeyFactories = typeof queryKeys;

@@ -54,6 +54,9 @@ node_modules/
 web/**/dist/
 web/**/playwright-report/
 web/**/test-results/
+# Auto-emitted by `tsc -b` next to vite.config.ts — never tracked.
+web/**/vite.config.js
+web/**/vite.config.d.ts
 *.tsbuildinfo
 
 # ============================================================

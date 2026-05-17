@@ -68,6 +68,7 @@ The execution console exposes read endpoints under `/api/execution/optimization/
 | `GET` | `/api/execution/optimization/runs/{run_id}/trials?limit=&sort=` | Per-trial aggregate rows (sort columns whitelisted in the readmodel). |
 | `GET` | `/api/execution/optimization/leaderboard?metric=sharpe&top=20` | Latest champion per recipe, ranked by metric. |
 | `GET` | `/api/execution/optimization/runs/{run_id}/report` | Auto-written markdown report content (404 if missing). |
+| `POST` | `/api/execution/optimization/runs/{run_id}/promote` | One-click promote (Wave 5b). Body: `{"to": "shadow"}`; defaults to shadow; 422 on backwards moves. |
 
 See [`docs/reference/api_reference.md`](../reference/api_reference.md) for response schemas (Pydantic models in [`schemas/optimization.py`](../../src/ai_trading_system/ui/execution_api/schemas/optimization.py)).
 
@@ -105,7 +106,7 @@ In `data/control_plane.duckdb` (resolved via `RegistryStore`):
 ## Known gaps
 
 - _(Wave 4 added recipe-level `search_space:` overrides. Default bounds still live in `bounds.KNOWN_PARAMS`; recipes may narrow any parameter and the validator rejects unknown names or out-of-default categorical choices.)_
-- **No React surface yet.** The FastAPI router landed in Wave 2 (see HTTP API table above), but there is no React Optimization page; operators still inspect via the CLI / direct HTTP / DuckDB. A planned Wave 5b adds the page.
+- _(Wave 5b added the React Optimization page at `/optimization` in `web/execution-console-v2/`. Runs table, run detail with baseline/champion folds, top-trials by fitness, leaderboard tab, embedded markdown report, and one-click promote via the new `POST .../promote` endpoint. Auto-refetches every 5s while a selected run is `status='running'`.)_
 - _(Wave 5a added resumability via `JournalStorage` + `ai-trading-optimize resume <run_id>`. Per-run journals at `data/optuna/<run_id>.log`; URI persisted in `strategy_optimization_run.study_storage_uri`.)_
 - _(Wave 3 added `init` + `validate` subcommands and name-based `baseline_pack_path` resolution.)_
 

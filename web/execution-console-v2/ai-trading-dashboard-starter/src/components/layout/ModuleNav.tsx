@@ -1,5 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import {
+  AdjustmentsHorizontalIcon,
   BeakerIcon,
   BookmarkIcon,
   ChartBarIcon,
@@ -23,6 +24,7 @@ const primaryItems = [
   { to: '/patterns', label: 'Patterns', icon: PresentationChartLineIcon, end: false, match: ['/patterns'] },
   { to: '/research', label: 'Research', icon: BeakerIcon, end: false, match: ['/research'] },
   { to: '/backtest', label: 'Backtest', icon: ClockIcon, end: false, match: ['/backtest'] },
+  { to: '/optimization', label: 'Optimize', icon: AdjustmentsHorizontalIcon, end: false, match: ['/optimization'] },
   { to: '/watchlist', label: 'Watchlist', icon: BookmarkIcon, end: false, match: ['/watchlist'] },
   { to: '/execution', label: 'Execution', icon: RocketLaunchIcon, end: false, match: ['/execution'] },
   { to: '/risk', label: 'Risk', icon: ShieldExclamationIcon, end: false, match: ['/risk'] },

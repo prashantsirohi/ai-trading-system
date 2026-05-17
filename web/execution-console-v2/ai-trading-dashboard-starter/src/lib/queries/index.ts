@@ -53,6 +53,18 @@ import {
   type PerfFactorCoverageResponse,
   type PerfDriftResponse,
 } from '@/lib/api/perfTracker';
+import {
+  getOptimizationRuns,
+  getOptimizationRunDetail,
+  getOptimizationTrials,
+  getOptimizationLeaderboard,
+  getOptimizationReport,
+  type OptimizationRunsResponse,
+  type OptimizationRunDetail,
+  type OptimizationTrialsResponse,
+  type LeaderboardResponse,
+  type ReportContent,
+} from '@/lib/api/optimization';
 import { getShadow } from '@/lib/api/shadow';
 import {
   getRiskProfiles,
@@ -403,6 +415,81 @@ export function usePerfDrift(
     queryKey: queryKeys.perfDrift(),
     queryFn: getPerfDrift,
     staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Optimization (Wave 5b)
+// ---------------------------------------------------------------------------
+
+export function useOptimizationRuns(
+  params: { recipe?: string; status?: string; limit?: number } = {},
+  options: QueryOverrides<OptimizationRunsResponse> = {},
+): UseQueryResult<OptimizationRunsResponse, Error> {
+  const limit = params.limit ?? 50;
+  return useQuery<OptimizationRunsResponse, Error>({
+    queryKey: queryKeys.optimizationRuns(params.recipe, params.status, limit),
+    queryFn: () => getOptimizationRuns(params),
+    staleTime: 30_000,
+    ...options,
+  });
+}
+
+export function useOptimizationRunDetail(
+  runId: string | null,
+  options: QueryOverrides<OptimizationRunDetail | null> = {},
+): UseQueryResult<OptimizationRunDetail | null, Error> {
+  return useQuery<OptimizationRunDetail | null, Error>({
+    queryKey: queryKeys.optimizationRunDetail(runId ?? ''),
+    queryFn: () => getOptimizationRunDetail(runId!),
+    enabled: !!runId,
+    // Refetch every 5s while we know the run is still running. Callers can
+    // override via options.refetchInterval — see OptimizationPage.
+    staleTime: 5_000,
+    ...options,
+  });
+}
+
+export function useOptimizationTrials(
+  runId: string | null,
+  params: { sort?: string; limit?: number } = {},
+  options: QueryOverrides<OptimizationTrialsResponse> = {},
+): UseQueryResult<OptimizationTrialsResponse, Error> {
+  const sort = params.sort ?? 'iteration';
+  const limit = params.limit ?? 200;
+  return useQuery<OptimizationTrialsResponse, Error>({
+    queryKey: queryKeys.optimizationRunTrials(runId ?? '', sort, limit),
+    queryFn: () => getOptimizationTrials(runId!, { sort, limit }),
+    enabled: !!runId,
+    staleTime: 10_000,
+    ...options,
+  });
+}
+
+export function useOptimizationLeaderboard(
+  params: { metric?: string; top?: number } = {},
+  options: QueryOverrides<LeaderboardResponse> = {},
+): UseQueryResult<LeaderboardResponse, Error> {
+  const metric = params.metric ?? 'sharpe';
+  const top = params.top ?? 20;
+  return useQuery<LeaderboardResponse, Error>({
+    queryKey: queryKeys.optimizationLeaderboard(metric, top),
+    queryFn: () => getOptimizationLeaderboard({ metric, top }),
+    staleTime: 60_000,
+    ...options,
+  });
+}
+
+export function useOptimizationReport(
+  runId: string | null,
+  options: QueryOverrides<ReportContent | null> = {},
+): UseQueryResult<ReportContent | null, Error> {
+  return useQuery<ReportContent | null, Error>({
+    queryKey: queryKeys.optimizationReport(runId ?? ''),
+    queryFn: () => getOptimizationReport(runId!),
+    enabled: !!runId,
+    staleTime: 60_000,
     ...options,
   });
 }

@@ -368,3 +368,82 @@ def test_report_unknown_run_returns_404(client: TestClient) -> None:
         headers=API_HEADERS,
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /runs/{id}/promote (Wave 5b)
+# ---------------------------------------------------------------------------
+
+
+def _lifecycle_for(tmp_path: Path, rule_pack_id: str) -> str:
+    """Read the current lifecycle status of a pack directly from DuckDB."""
+    import duckdb
+    cp_path = tmp_path / "data" / "control_plane.duckdb"
+    conn = duckdb.connect(str(cp_path), read_only=True)
+    try:
+        row = conn.execute(
+            "SELECT lifecycle_status FROM strategy_rule_pack WHERE rule_pack_id = ?",
+            [rule_pack_id],
+        ).fetchone()
+    finally:
+        conn.close()
+    return row[0] if row else ""
+
+
+def test_promote_happy_path_advances_lifecycle(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """RUN_A_NEW champion starts at 'walkforward_passed' (seeded). Promote to shadow."""
+    resp = client.post(
+        f"/api/execution/optimization/runs/{RUN_A_NEW}/promote",
+        headers=API_HEADERS,
+        json={"to": "shadow"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["rule_pack_id"] == PACK_CHAMPION_A_NEW
+    assert body["previous_status"] == "walkforward_passed"
+    assert body["new_status"] == "shadow"
+    # Verify the lifecycle actually moved in the DB.
+    assert _lifecycle_for(tmp_path, PACK_CHAMPION_A_NEW) == "shadow"
+
+
+def test_promote_default_to_is_shadow(client: TestClient) -> None:
+    """Empty body should default to {to: shadow}."""
+    resp = client.post(
+        f"/api/execution/optimization/runs/{RUN_A_NEW}/promote",
+        headers=API_HEADERS,
+        json={},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["new_status"] == "shadow"
+
+
+def test_promote_backwards_returns_422(client: TestClient) -> None:
+    """RUN_A_OLD champion is at 'shadow' (seeded). Asking for 'walkforward_passed' is backwards."""
+    resp = client.post(
+        f"/api/execution/optimization/runs/{RUN_A_OLD}/promote",
+        headers=API_HEADERS,
+        json={"to": "walkforward_passed"},
+    )
+    assert resp.status_code == 422
+    assert "backwards" in resp.json()["detail"]
+
+
+def test_promote_unknown_status_returns_422(client: TestClient) -> None:
+    resp = client.post(
+        f"/api/execution/optimization/runs/{RUN_A_NEW}/promote",
+        headers=API_HEADERS,
+        json={"to": "not_a_real_status"},
+    )
+    assert resp.status_code == 422
+    assert "unknown lifecycle status" in resp.json()["detail"]
+
+
+def test_promote_unknown_run_returns_404(client: TestClient) -> None:
+    resp = client.post(
+        "/api/execution/optimization/runs/does-not-exist/promote",
+        headers=API_HEADERS,
+        json={"to": "shadow"},
+    )
+    assert resp.status_code == 404
