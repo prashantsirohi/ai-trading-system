@@ -89,6 +89,36 @@ Rules enforced at recipe load:
 
 Full parameter inventory (kind / default range / categorical choices) lives in [`bounds.KNOWN_PARAMS`](../../src/ai_trading_system/domains/strategy/bounds.py) — single source of truth.
 
+### Resume a killed study
+
+Every run now writes its Optuna trial state to a per-run journal file at `data/optuna/<run_id>.log`. If a run is interrupted (Ctrl-C, OOM, host reboot) you can pick up where it left off:
+
+```bash
+# Copy the run_id printed in the start banner of the original run.
+ai-trading-optimize resume <run_id>
+```
+
+Mechanics:
+
+- Looks up `strategy_optimization_run` for the run, recovers `study_storage_uri`, and re-opens the journal with `load_if_exists=True`.
+- Re-runs the baseline backtest in memory only (the baseline rows from the original run stay in `strategy_iteration_result` — no duplicates).
+- Continues from `trial_count` to `max_trials`. If `max_trials` was already reached the row is marked `completed` and no new trials run.
+- Stops with a clear error (exit code 2) when:
+  - the `run_id` is unknown,
+  - the row has no `study_storage_uri` (pre-Wave-5a rows), or
+  - the journal file at `data/optuna/<run_id>.log` is missing (e.g. `data/optuna/` was pruned).
+
+The start of every run (fresh or resume) prints a banner to stderr that includes the resume command for that run, so you don't have to remember the shape:
+
+```
+==============================================================================
+  optimizer start
+  run_id:        d3a9...                # 32-char hex
+  study journal: data/optuna/d3a9....log
+  resume with:   ai-trading-optimize resume d3a9...
+==============================================================================
+```
+
 ### Bare-name lookups
 
 Two places accept bare names instead of literal paths:

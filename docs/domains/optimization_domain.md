@@ -20,7 +20,7 @@ Search the space of strategy rule packs for improved baseline performance, witho
 | `recipe.py` | `OptimizationRecipe` (frozen dataclass), `load_recipe()`, `resolve_baseline_path()` (bare-name → file), `SearchSpaceOverride` (Wave 4 recipe-level search-space overrides). |
 | `domains/strategy/bounds.py` | `KNOWN_PARAMS` (single source of truth for search-space parameter surface) + `build_search_space(trial, *, strategy_id, overrides=None)`. |
 | `templates/` | YAML templates shipped with the package; rendered by `cli init`. |
-| `runner.py` | `run_optimization()` — Optuna study orchestration, walk-forward, acceptance, champion guards, auto-report. |
+| `runner.py` | `run_optimization()` — fresh study (Optuna study orchestration, walk-forward, acceptance, champion guards, auto-report). `resume_optimization()` — reopens an existing journal and continues. Persistent storage via Optuna `JournalStorage` at `data/optuna/<run_id>.log`. |
 | `bounds.py` | `build_search_space()` + `KNOWN_PARAMS` — parameter surface for ranking weights + risk knobs. Defaults may be narrowed per-run via the recipe's `search_space:` block (Wave 4). |
 | `evaluator.py` | `Metrics`, `compute_metrics`, `fitness`. |
 | `acceptance.py` | Per-trial acceptance gate (worst-fold-vs-benchmark, MDD ratio, fold-rate, etc.). |
@@ -42,6 +42,7 @@ Search the space of strategy rule packs for improved baseline performance, witho
 | `ai-trading-optimize validate <recipe> [--with-backtest]` | Dry-run a recipe (schema + path + pack load; `--with-backtest` adds a one-fold baseline backtest). | Wave 3 |
 | `ai-trading-optimize run --recipe <name-or-path>` | Run a study end-to-end. Bare name resolves to `config/strategies/recipes/<name>.yaml`. | Wave 3 form |
 | `ai-trading-optimize --recipe <name-or-path>` | Legacy flat form — equivalent to `run --recipe ...`. Kept for backwards compatibility. | Wave 1 |
+| `ai-trading-optimize resume <optimization_run_id>` | Re-open the Optuna journal at `data/optuna/<run_id>.log` and continue until `max_trials` is hit. | Wave 5a |
 | `ai-trading-optimize-promote --rule-pack-id <hash> --to <status>` | Promote a specific rule pack along the lifecycle ladder. | (pre-existing, kept) |
 | `ai-trading-optimize-promote promote-latest --recipe-name <name> [--to <status>]` | Promote the champion of the latest completed run for the named recipe. Defaults to `--to shadow`. | Wave 1 |
 
@@ -105,7 +106,7 @@ In `data/control_plane.duckdb` (resolved via `RegistryStore`):
 
 - _(Wave 4 added recipe-level `search_space:` overrides. Default bounds still live in `bounds.KNOWN_PARAMS`; recipes may narrow any parameter and the validator rejects unknown names or out-of-default categorical choices.)_
 - **No React surface yet.** The FastAPI router landed in Wave 2 (see HTTP API table above), but there is no React Optimization page; operators still inspect via the CLI / direct HTTP / DuckDB. A planned Wave 5b adds the page.
-- **No study resumability.** Killing a run mid-flight forces a restart from trial 0. A planned Wave 5a addresses this with a persistent Optuna RDB backend.
+- _(Wave 5a added resumability via `JournalStorage` + `ai-trading-optimize resume <run_id>`. Per-run journals at `data/optuna/<run_id>.log`; URI persisted in `strategy_optimization_run.study_storage_uri`.)_
 - _(Wave 3 added `init` + `validate` subcommands and name-based `baseline_pack_path` resolution.)_
 
 ## When not to use

@@ -135,6 +135,7 @@ class OptimizationStore:
         seed: int,
         max_trials: int,
         recipe_json: str,
+        study_storage_uri: str | None = None,
     ) -> None:
         with self._conn() as con:
             con.execute(
@@ -142,8 +143,8 @@ class OptimizationStore:
                 INSERT INTO strategy_optimization_run (
                     optimization_run_id, recipe_name, strategy_id,
                     baseline_rule_pack_id, from_date, to_date, seed,
-                    max_trials, status, recipe_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
+                    max_trials, status, recipe_json, study_storage_uri
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
                 """,
                 [
                     optimization_run_id,
@@ -155,6 +156,7 @@ class OptimizationStore:
                     seed,
                     max_trials,
                     recipe_json,
+                    study_storage_uri,
                 ],
             )
 
@@ -171,7 +173,8 @@ class OptimizationStore:
             row = con.execute(
                 """
                 SELECT recipe_name, strategy_id, baseline_rule_pack_id,
-                       from_date, to_date, seed, max_trials, recipe_json, started_at
+                       from_date, to_date, seed, max_trials, recipe_json, started_at,
+                       study_storage_uri
                 FROM strategy_optimization_run WHERE optimization_run_id = ?
                 """,
                 [optimization_run_id],
@@ -188,8 +191,8 @@ class OptimizationStore:
                     optimization_run_id, recipe_name, strategy_id,
                     baseline_rule_pack_id, from_date, to_date, seed,
                     max_trials, status, champion_rule_pack_id, recipe_json,
-                    error, started_at, completed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    error, started_at, completed_at, study_storage_uri
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     optimization_run_id,
@@ -200,8 +203,44 @@ class OptimizationStore:
                     error,
                     row[8],
                     datetime.utcnow(),
+                    row[9],
                 ],
             )
+
+    def get_run_for_resume(self, optimization_run_id: str) -> dict | None:
+        """Return the row needed to resume a study, or ``None`` if not found.
+
+        Wave 5a: the resume CLI looks up the existing row, rehydrates the
+        recipe from ``recipe_json``, opens the Optuna journal at
+        ``study_storage_uri``, and continues with ``load_if_exists=True``.
+
+        Returns a dict with keys:
+          optimization_run_id, recipe_name, strategy_id, baseline_rule_pack_id,
+          status, max_trials, recipe_json, study_storage_uri.
+        """
+        with self._conn() as con:
+            row = con.execute(
+                """
+                SELECT optimization_run_id, recipe_name, strategy_id,
+                       baseline_rule_pack_id, status, max_trials, recipe_json,
+                       study_storage_uri
+                FROM strategy_optimization_run
+                WHERE optimization_run_id = ?
+                """,
+                [optimization_run_id],
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "optimization_run_id": row[0],
+            "recipe_name": row[1],
+            "strategy_id": row[2],
+            "baseline_rule_pack_id": row[3],
+            "status": row[4],
+            "max_trials": row[5],
+            "recipe_json": row[6],
+            "study_storage_uri": row[7],
+        }
 
     # ---- per-trial / per-fold ---------------------------------------
 

@@ -17,6 +17,10 @@ working unchanged):
     ai-trading-optimize --recipe <name-or-path> [flags]            (legacy form)
         Execute one Optuna study end-to-end. Both forms are equivalent.
 
+    ai-trading-optimize resume <optimization_run_id> [flags]
+        Re-open an interrupted study (whose journal file lives under
+        data/optuna/<run_id>.log) and continue until max_trials is hit.
+
 Bare recipe names (no ``/`` or ``.yaml`` suffix) are resolved to
 ``<project_root>/config/strategies/recipes/<name>.yaml``.
 """
@@ -337,10 +341,69 @@ def _cmd_run(argv: Sequence[str]) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _cmd_resume(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="ai-trading-optimize resume",
+        description=(
+            "Resume an interrupted study by optimization_run_id. Re-opens the "
+            "Optuna journal at data/optuna/<run_id>.log and continues until "
+            "the recipe's max_trials is hit."
+        ),
+    )
+    parser.add_argument(
+        "run_id",
+        help="The optimization_run_id printed at the top of the original run (hex string).",
+    )
+    parser.add_argument("--project-root", default=".", help="Project root (default: cwd).")
+    parser.add_argument("--log-level", default="INFO")
+    parser.add_argument(
+        "--quiet-pandas-warnings", action="store_true", default=True,
+    )
+    parser.add_argument(
+        "--show-pandas-warnings", dest="quiet_pandas_warnings", action="store_false",
+    )
+    parser.add_argument(
+        "--no-report", action="store_true",
+        help="Skip auto-writing the markdown report at completion.",
+    )
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    if args.quiet_pandas_warnings:
+        _silence_pandas_future_warnings()
+
+    project_root = Path(args.project_root)
+    # Lazy import so init/validate stay engine-free.
+    from ai_trading_system.research.optimization.runner import resume_optimization
+    try:
+        result = resume_optimization(
+            args.run_id,
+            project_root=project_root,
+            write_report=not args.no_report,
+        )
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"error: {exc}")
+        return 2
+    print(
+        f"optimization_run_id={result['optimization_run_id']} "
+        f"trials={result['trials']} "
+        f"champion={result['champion_rule_pack_id']} "
+        f"best_value={result['best_value']} "
+        f"resumed={result.get('resumed', False)}"
+    )
+    if result.get("report_path"):
+        print(f"report={result['report_path']}")
+    return 0
+
+
 _SUBCOMMANDS = {
     "init": _cmd_init,
     "validate": _cmd_validate,
     "run": _cmd_run,
+    "resume": _cmd_resume,
 }
 
 

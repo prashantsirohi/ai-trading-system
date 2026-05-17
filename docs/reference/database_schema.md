@@ -480,7 +480,7 @@ Indexes: `idx_watchlist_candidate_history_symbol`, `..._date`, `..._score`.
 Indexes: `uq_strategy_rule_pack_id(rule_pack_id)` UNIQUE, `idx_strategy_rule_pack_strategy(strategy_id)`, `idx_strategy_rule_pack_status(lifecycle_status)`.
 
 ### Table: `strategy_optimization_run`
-- **DDL source:** `migrations/015_strategy_optimizer.sql`
+- **DDL source:** `migrations/015_strategy_optimizer.sql` (+ `018_optimizer_study_storage_uri.sql` adds `study_storage_uri` for resumable studies)
 
 | Column | Type | Notes |
 |---|---|---|
@@ -494,6 +494,7 @@ Indexes: `uq_strategy_rule_pack_id(rule_pack_id)` UNIQUE, `idx_strategy_rule_pac
 | error | TEXT | |
 | started_at | TIMESTAMP | Default `current_timestamp`. |
 | completed_at | TIMESTAMP | |
+| study_storage_uri | TEXT | Path to the per-run Optuna `JournalStorage` file (added by 018; e.g. `data/optuna/<run_id>.log`). `NULL` for pre-Wave-5a rows. Consumed by `ai-trading-optimize resume <run_id>`. |
 
 Indexes: `uq_strategy_optimization_run_id` UNIQUE, `idx_strategy_optimization_run_strategy`, `idx_strategy_optimization_run_status`.
 
