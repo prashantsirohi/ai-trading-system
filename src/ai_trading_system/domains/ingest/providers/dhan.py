@@ -551,7 +551,7 @@ class DhanCollector:
 
             # Get last candle of each day (close)
             df["date"] = df.index.date
-            df = df.groupby("date").last().reset_index()
+            df = df.groupby("date").last().reset_index().copy()
             df["timestamp"] = pd.to_datetime(df["date"]) + pd.Timedelta(
                 hours=18, minutes=30
             )
@@ -638,7 +638,7 @@ class DhanCollector:
                 security_id = info.get("security_id", "")
                 exchange = info.get("exchange", "NSE")
 
-                df = df.reset_index()
+                df = df.reset_index().copy()
                 df.rename(columns={"timestamp": "timestamp"}, inplace=True)
                 df["symbol_id"] = symbol_id
                 df["security_id"] = security_id
@@ -1927,7 +1927,7 @@ class DhanCollector:
                 security_id = info.get("security_id", "")
                 exchange = info.get("exchange", "NSE")
 
-                df = df.reset_index()
+                df = df.reset_index().copy()
                 df["symbol_id"] = symbol_id
                 df["security_id"] = security_id
                 df["exchange"] = exchange

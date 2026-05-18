@@ -522,7 +522,7 @@ def _normalize_bhavcopy_frame(
 
     for field in ["open", "high", "low", "close", "volume"]:
         df.loc[:, field] = pd.to_numeric(df.get(field), errors="coerce")
-    df = df.dropna(subset=["open", "high", "low", "close"])
+    df = df.dropna(subset=["open", "high", "low", "close"]).copy()
     if df.empty:
         return pd.DataFrame(
             columns=["symbol_id", "security_id", "exchange", "timestamp", "open", "high", "low", "close", "volume", "series", "trading_segment"]

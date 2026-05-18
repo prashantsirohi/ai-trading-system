@@ -115,14 +115,14 @@ def scan_stocks(
         }
     )
 
-    df = df.dropna(subset=["rs"])
+    df = df.dropna(subset=["rs"]).copy()
 
     df.loc[:, "sector"] = df.index.map(lambda s: sector_map.get(s, "Other"))
 
     sector_avg = df.groupby("sector")["rs"].transform("mean")
     df.loc[:, "rs_vs_sector"] = df["rs"] - sector_avg
 
-    df = df[df["sector"].isin(selected_sectors)]
+    df = df[df["sector"].isin(selected_sectors)].copy()
 
     if df.empty:
         logger.warning("No stocks after sector filter - returning empty result")

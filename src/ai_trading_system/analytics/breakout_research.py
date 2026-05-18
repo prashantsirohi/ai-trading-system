@@ -29,7 +29,7 @@ def build_breakout_dataset(
         horizons=[5, 20],
     )
     df = builder._add_price_structure_features(raw.copy())
-    df = df.sort_values(["symbol_id", "timestamp"]).reset_index(drop=True)
+    df = df.sort_values(["symbol_id", "timestamp"]).reset_index(drop=True).copy()
     by_symbol = df.groupby("symbol_id", group_keys=False)
 
     df["prior_base_high_30"] = by_symbol["high"].transform(

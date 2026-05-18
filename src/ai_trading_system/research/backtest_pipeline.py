@@ -78,7 +78,7 @@ def build_strategy_returns_from_equity_curve(equity_curve: pd.DataFrame) -> pd.D
     curve = equity_curve[[date_col, capital_col]].copy()
     curve.loc[:, date_col] = pd.to_datetime(curve[date_col], errors="coerce")
     curve.loc[:, capital_col] = pd.to_numeric(curve[capital_col], errors="coerce")
-    curve = curve.dropna(subset=[date_col, capital_col]).sort_values(date_col, kind="stable")
+    curve = curve.dropna(subset=[date_col, capital_col]).sort_values(date_col, kind="stable").copy()
     if curve.empty:
         return pd.DataFrame(columns=["date", "strategy_return"])
 

@@ -402,7 +402,7 @@ def _compute_ranked_frame_impl(
 ) -> pd.DataFrame:
     data = df.reset_index(drop=True).copy(deep=True)
     data.loc[:, "date"] = pd.to_datetime(data["date"])
-    data = data.sort_values(["symbol_id", "date"], kind="stable").reset_index(drop=True)
+    data = data.sort_values(["symbol_id", "date"], kind="stable").reset_index(drop=True).copy()
     grouped = data.groupby("symbol_id", group_keys=False)
 
     data["timestamp"] = data["date"]
