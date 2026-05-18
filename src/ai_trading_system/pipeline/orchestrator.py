@@ -100,7 +100,7 @@ class TerminalProgressRenderer:
             total=len(stages),
             desc="pipeline",
             unit="stage",
-            ncols=100,
+            dynamic_ncols=True,
             leave=True,
             file=sys.stderr,
             disable=not self._is_tty,
@@ -354,7 +354,8 @@ class PipelineOrchestrator:
         def _heartbeat() -> None:
             while not stop_event.wait(interval_seconds):
                 elapsed = int(time.time() - start_ts)
-                detail = f"attempt {attempt_number} · {hint} · elapsed {elapsed}s"
+                attempt_prefix = "" if attempt_number == 1 else f"attempt {attempt_number} · "
+                detail = f"{attempt_prefix}{hint} · elapsed {elapsed}s"
                 update_running = getattr(self.progress_renderer, "update_running", None)
                 if callable(update_running):
                     update_running(stage_name=stage_name, detail=detail)
@@ -505,10 +506,13 @@ class PipelineOrchestrator:
                 attempt_number = self.registry.next_stage_attempt(run_id, stage_name)
                 stage_run_id = self.registry.start_stage(run_id, stage_name, attempt_number)
                 if self.progress_renderer is not None:
+                    initial_detail = self._stage_hints.get(stage_name, "starting")
+                    if attempt_number != 1:
+                        initial_detail = f"attempt {attempt_number} · {initial_detail}"
                     self.progress_renderer.emit_stage(
                         stage_name=stage_name,
                         status="running",
-                        detail=f"attempt {attempt_number}",
+                        detail=initial_detail,
                     )
                 context = StageContext(
                     project_root=self.project_root,
