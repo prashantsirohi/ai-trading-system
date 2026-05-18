@@ -28,6 +28,7 @@ def compute_forward_returns(
     *,
     project_root: str | Path | None = None,
     horizons: tuple[int, ...] = FORWARD_HORIZONS,
+    ohlcv_db_path: str | Path | None = None,
 ) -> pd.DataFrame:
     """Attach forward-return columns to (run_date, symbol_id, exchange) rows.
 
@@ -38,6 +39,12 @@ def compute_forward_returns(
         ``run_date`` may be ``date`` / ``datetime`` / ISO string.
     horizons
         Forward windows in trading-day count (default 5/10/20/60).
+    ohlcv_db_path
+        Optional explicit path to the OHLCV DuckDB whose ``_catalog`` is read.
+        Defaults to the operational-domain OHLCV DB (current behaviour). The
+        historical backfill passes ``data/research/research_ohlcv.duckdb`` so
+        forward returns can be computed for pre-2025 dates that aren't in the
+        operational store.
 
     Returns
     -------
@@ -56,8 +63,12 @@ def compute_forward_returns(
     # when the input column is a string and we want to overwrite with date objects.
     work = work.assign(run_date=pd.to_datetime(work["run_date"]).dt.date)
 
-    paths = get_domain_paths(project_root=project_root, data_domain="operational")
-    con = duckdb.connect(str(paths.ohlcv_db_path), read_only=True)
+    if ohlcv_db_path is not None:
+        resolved_db = Path(ohlcv_db_path)
+    else:
+        paths = get_domain_paths(project_root=project_root, data_domain="operational")
+        resolved_db = paths.ohlcv_db_path
+    con = duckdb.connect(str(resolved_db), read_only=True)
     try:
         # Pull every (symbol, date, close) for symbols we care about, ordered,
         # then assign each row a per-symbol trading-day index. Forward returns

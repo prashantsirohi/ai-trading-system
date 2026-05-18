@@ -154,6 +154,42 @@ def apply_trend_persistence(
 
 SHORT_HISTORY_BARS_THRESHOLD = 252
 
+# Minimum bars before above_200dma is meaningful. Newly-listed stocks with
+# fewer than this many trading days get a neutral 0.0 so the percentile rank
+# does not place them at either extreme.
+ABOVE_200DMA_MIN_BARS = 200
+
+
+def apply_above_200dma(data: pd.DataFrame, *, sma_frame: pd.DataFrame | None) -> pd.DataFrame:
+    """Compute the percent distance of close above the 200-day SMA.
+
+    A trend-strength factor: positive values indicate price above long-term
+    trend, negative values below. In single-year cross-section tests over
+    2022-2024 this was the most regime-robust of the price-only factors
+    (IC 0.20 in bull years, modestly negative in 2022).
+    """
+    scores = data.copy()
+    if sma_frame is not None and not sma_frame.empty and "sma_200" in sma_frame.columns:
+        merge_cols = ["symbol_id", "exchange", "sma_200"]
+        if "sma_200_bars" in sma_frame.columns:
+            merge_cols.append("sma_200_bars")
+        scores = scores.merge(
+            sma_frame[merge_cols],
+            on=["symbol_id", "exchange"],
+            how="left",
+            suffixes=("", "_from_sma_frame"),
+        )
+    if "sma_200" not in scores.columns:
+        scores.loc[:, "sma_200"] = pd.NA
+    close = pd.to_numeric(scores["close"], errors="coerce")
+    sma200 = pd.to_numeric(scores["sma_200"], errors="coerce")
+    pct = ((close - sma200) / sma200.replace(0, np.nan)) * 100.0
+    if "sma_200_bars" in scores.columns:
+        insufficient = pd.to_numeric(scores["sma_200_bars"], errors="coerce").fillna(0) < ABOVE_200DMA_MIN_BARS
+        pct = pct.mask(insufficient, 0.0)
+    scores.loc[:, "above_200dma_pct"] = pct.fillna(0.0)
+    return scores
+
 
 def apply_proximity_highs(data: pd.DataFrame, *, highs_frame: pd.DataFrame) -> pd.DataFrame:
     scores = data.copy()

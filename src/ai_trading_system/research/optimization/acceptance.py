@@ -5,8 +5,12 @@ a champion is recorded. Worst-fold guards live here, not in reports.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ai_trading_system.research.optimization.evaluator import Metrics
+
+if TYPE_CHECKING:
+    from ai_trading_system.research.backtesting.engine_runner import BacktestResult
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,7 @@ class FoldResult:
     metrics: Metrics
     benchmark_return_pct: float | None = None
     benchmark_symbol: str | None = None
+    backtest_result: "BacktestResult | None" = None
 
     # Backwards-compat alias for one release. Code paths should use
     # ``benchmark_return_pct`` going forward.

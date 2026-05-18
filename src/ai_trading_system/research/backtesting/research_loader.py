@@ -12,6 +12,7 @@ import pandas as pd
 
 from ai_trading_system.domains.ranking.composite import compute_factor_scores, load_factor_weights
 from ai_trading_system.domains.ranking.factors import (
+    apply_above_200dma,
     apply_delivery,
     apply_momentum_acceleration,
     apply_proximity_highs,
@@ -545,6 +546,8 @@ def _compute_ranked_frame_impl(
             "prox_high_score",
             "delivery_pct",
             "delivery_pct_score",
+            "above_200dma_pct",
+            "above_200dma_score",
             "sector_rs_value",
             "stock_vs_sector_value",
             "prox_lookback_days",
@@ -575,6 +578,7 @@ def _score_dynamic_rank_day(
     scores = apply_trend_persistence(scores, adx_frame=empty, sma_frame=empty)
     scores = apply_proximity_highs(scores, highs_frame=empty)
     scores = apply_delivery(scores, delivery_frame=empty)
+    scores = apply_above_200dma(scores, sma_frame=None)
     weights = weights_override if weights_override is not None else load_factor_weights()
     scores = compute_factor_scores(scores, weights=weights)
     scores = compute_penalty_score(scores)

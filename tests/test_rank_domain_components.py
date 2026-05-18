@@ -12,7 +12,12 @@ from ai_trading_system.domains.ranking.composite import (
     select_rank_output_columns,
 )
 from ai_trading_system.domains.ranking.contracts import DEFAULT_FACTOR_WEIGHTS
-from ai_trading_system.domains.ranking.factors import apply_proximity_highs, apply_sector_strength, apply_trend_persistence
+from ai_trading_system.domains.ranking.factors import (
+    apply_above_200dma,
+    apply_proximity_highs,
+    apply_sector_strength,
+    apply_trend_persistence,
+)
 from ai_trading_system.domains.ranking.factors import (
     apply_delivery,
     apply_momentum_acceleration,
@@ -195,6 +200,41 @@ def test_apply_proximity_highs_rewards_names_near_52w_high():
     assert scored.loc["FAR", "prox_high"] == pytest.approx(60.0)
     assert scored.loc["ABOVE", "prox_high"] == pytest.approx(100.0)
     assert scored.loc["NEAR", "prox_high"] > scored.loc["FAR", "prox_high"]
+
+
+def test_apply_above_200dma_scores_distance_from_sma200():
+    data = pd.DataFrame(
+        [
+            {"symbol_id": "ABOVE", "exchange": "NSE", "close": 120.0},
+            {"symbol_id": "AT", "exchange": "NSE", "close": 100.0},
+            {"symbol_id": "BELOW", "exchange": "NSE", "close": 80.0},
+            {"symbol_id": "YOUNG", "exchange": "NSE", "close": 105.0},
+        ]
+    )
+    sma_frame = pd.DataFrame(
+        [
+            {"symbol_id": "ABOVE", "exchange": "NSE", "sma_200": 100.0, "sma_200_bars": 200},
+            {"symbol_id": "AT", "exchange": "NSE", "sma_200": 100.0, "sma_200_bars": 200},
+            {"symbol_id": "BELOW", "exchange": "NSE", "sma_200": 100.0, "sma_200_bars": 200},
+            {"symbol_id": "YOUNG", "exchange": "NSE", "sma_200": 100.0, "sma_200_bars": 50},
+        ]
+    )
+
+    scored = apply_above_200dma(data, sma_frame=sma_frame).set_index("symbol_id")
+
+    assert scored.loc["ABOVE", "above_200dma_pct"] == pytest.approx(20.0)
+    assert scored.loc["AT", "above_200dma_pct"] == pytest.approx(0.0)
+    assert scored.loc["BELOW", "above_200dma_pct"] == pytest.approx(-20.0)
+    # Short-history names get a neutral 0.0 even if their price is above sma_200.
+    assert scored.loc["YOUNG", "above_200dma_pct"] == pytest.approx(0.0)
+
+
+def test_apply_above_200dma_returns_zero_when_sma_frame_missing():
+    data = pd.DataFrame(
+        [{"symbol_id": "AAA", "exchange": "NSE", "close": 100.0}]
+    )
+    scored = apply_above_200dma(data, sma_frame=None).set_index("symbol_id")
+    assert scored.loc["AAA", "above_200dma_pct"] == pytest.approx(0.0)
 
 
 def test_apply_sector_strength_falls_back_when_inputs_missing():

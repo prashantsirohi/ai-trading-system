@@ -29,6 +29,7 @@ from ai_trading_system.domains.ranking.contracts import (
 from ai_trading_system.domains.ranking.eligibility import apply_rank_eligibility
 from ai_trading_system.domains.ranking.factors import (
     add_signal_freshness,
+    apply_above_200dma,
     apply_delivery,
     apply_momentum_acceleration,
     apply_proximity_highs,
@@ -134,6 +135,7 @@ class StockRanker:
         scores = self._compute_proximity_highs(scores, date)
         scores = self._compute_delivery(scores, date)
         scores = self._compute_sector_strength(scores, date)
+        scores = self._compute_above_200dma(scores, date)
         scores = compute_factor_scores(scores, weights=weights)
         scores = self._compute_stage2(scores, date, exchanges)
         scores = self._attach_weekly_stage_context(scores, date)
@@ -414,6 +416,18 @@ class StockRanker:
             sma_frame = pd.DataFrame(columns=["symbol_id", "exchange", "sma_20", "sma_50"])
 
         return apply_trend_persistence(data, adx_frame=adx_frame, sma_frame=sma_frame)
+
+    def _compute_above_200dma(
+        self,
+        data: pd.DataFrame,
+        date: str,
+    ) -> pd.DataFrame:
+        try:
+            sma_frame = self.input_loader.load_latest_sma(date=date)
+        except Exception as exc:
+            logger.warning("Could not load sma_200 for above_200dma factor: %s", exc)
+            sma_frame = pd.DataFrame(columns=["symbol_id", "exchange", "sma_200", "sma_200_bars"])
+        return apply_above_200dma(data, sma_frame=sma_frame)
 
     def _compute_proximity_highs(
         self,

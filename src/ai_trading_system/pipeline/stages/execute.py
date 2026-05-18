@@ -202,9 +202,13 @@ class ExecuteStage:
         effective_exit_atr_multiple = request.exit_atr_multiple
         effective_use_portfolio_constraints = request.use_portfolio_constraints
         if rank_profile:
-            max_exposure = float(rank_profile.get("max_exposure", 1.0) or 1.0)
+            max_exposure_val = rank_profile.get("max_exposure")
+            max_exposure = float(max_exposure_val) if max_exposure_val is not None else 1.0
             effective_capital = request.capital * max_exposure
-            effective_max_positions = int(rank_profile.get("max_positions") or request.max_positions)
+            max_positions_val = rank_profile.get("max_positions")
+            effective_max_positions = (
+                int(max_positions_val) if max_positions_val is not None else request.max_positions
+            )
             effective_top_n = (
                 min(request.target_position_count, effective_max_positions)
                 if "execution_top_n" in context.params

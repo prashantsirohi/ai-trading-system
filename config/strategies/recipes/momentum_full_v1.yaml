@@ -1,0 +1,33 @@
+name: momentum_full_v1
+strategy_id: momentum_breakout
+baseline_pack_path: momentum_breakout_v1   # bare-name lookup (Wave 3)
+from_date: "2020-01-01"          # 6+ years of data
+to_date:   "2026-05-13"          # research_ohlcv max
+exchange: NSE
+benchmark: { symbol: UNIV_TOP1000, source: index_catalog, blend: 0.35 }
+starting_equity: 1000000.0
+commission_bps: 10.0
+slippage_bps:   35.0
+seed: 42
+walkforward:    { train_months: 12, validation_months: 3, step_months: 3 }
+fitness_weights:
+  cagr: 0.25
+  sharpe: 0.20
+  sortino: 0.10
+  win_rate: 0.05
+  drawdown_penalty: 0.30
+  turnover_penalty: 0.10
+acceptance:
+  min_fitness_improvement:           0.01
+  max_mdd_ratio_vs_champion:         1.10
+  min_trades_per_year:               40.0
+  min_fold_improvement_rate:         0.60
+  worst_fold_min_return_vs_benchmark: true
+  worst_fold_max_mdd_ratio_vs_baseline: 1.10
+  require_no_zero_trade_fold:        true
+stopping:
+  max_trials:          100        # the budget
+  patience:            20         # tolerate longer rejection streaks
+  max_runtime_minutes: 480        # 8h cap — overnight
+description: >
+  Full study against momentum_breakout_v1 over 6+ years.

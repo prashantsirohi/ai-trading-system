@@ -127,9 +127,9 @@ def compute_factor_scores(
     )
 
     scores.loc[:, "composite_score"] = sum(
-        scores[factor.score_column] * float(weights[factor.weight_key])
+        scores[factor.score_column] * float(weights.get(factor.weight_key, 0.0))
         for factor in PRIMARY_FACTORS
-    ) + scores["sector_strength_score"] * float(weights["sector_strength"])
+    ) + scores["sector_strength_score"] * float(weights.get("sector_strength", 0.0))
 
     if "sector_name" in scores.columns:
         scores.loc[:, "sector_rank_within_sector"] = scores.groupby("sector_name")["composite_score"].rank(

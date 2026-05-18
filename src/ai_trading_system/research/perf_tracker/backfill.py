@@ -79,17 +79,20 @@ def _read_ranked(path: Path) -> pd.DataFrame | None:
     return df
 
 
-def _build_rows_for_date(
+def build_rows_from_ranked_frame(
     run_date: str,
-    ranked_path: Path,
-    buckets_path: Path | None,
-) -> pd.DataFrame | None:
-    ranked = _read_ranked(ranked_path)
-    if ranked is None:
-        return None
+    ranked: pd.DataFrame,
+    *,
+    buckets: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Convert a ranked-signals DataFrame into rank_cohort_performance row form.
 
+    Pure transform — no I/O. Shared by both backfill paths (operational CSVs
+    via _build_rows_for_date, and historical research-loader frames via
+    historical_backfill).
+    """
     # Re-rank by composite_score_adjusted if present, else composite_score.
-    # Don't trust file order — different rank_modes sort differently.
+    # Don't trust input order — different rank_modes sort differently.
     score_col = (
         "composite_score_adjusted"
         if "composite_score_adjusted" in ranked.columns
@@ -105,18 +108,12 @@ def _build_rows_for_date(
     if "exchange" not in out.columns:
         out["exchange"] = "NSE"
 
-    # Attach watchlist_bucket if a publish-stage CSV exists for this date.
-    if buckets_path is not None and buckets_path.exists():
-        try:
-            buckets = pd.read_csv(buckets_path)
-            if not buckets.empty and "symbol_id" in buckets.columns:
-                bucket_col = (
-                    buckets[["symbol_id", "watchlist_bucket"]]
-                    .drop_duplicates("symbol_id", keep="first")
-                )
-                out = out.merge(bucket_col, on="symbol_id", how="left")
-        except (pd.errors.EmptyDataError, FileNotFoundError):
-            pass
+    if buckets is not None and not buckets.empty and "symbol_id" in buckets.columns:
+        bucket_col = (
+            buckets[["symbol_id", "watchlist_bucket"]]
+            .drop_duplicates("symbol_id", keep="first")
+        )
+        out = out.merge(bucket_col, on="symbol_id", how="left")
     if "watchlist_bucket" not in out.columns:
         out["watchlist_bucket"] = pd.NA
 
@@ -126,6 +123,23 @@ def _build_rows_for_date(
             out[col] = pd.NA
     out["config_id"] = pd.NA  # populated post-Phase-1
     return out
+
+
+def _build_rows_for_date(
+    run_date: str,
+    ranked_path: Path,
+    buckets_path: Path | None,
+) -> pd.DataFrame | None:
+    ranked = _read_ranked(ranked_path)
+    if ranked is None:
+        return None
+    buckets_df: pd.DataFrame | None = None
+    if buckets_path is not None and buckets_path.exists():
+        try:
+            buckets_df = pd.read_csv(buckets_path)
+        except (pd.errors.EmptyDataError, FileNotFoundError):
+            buckets_df = None
+    return build_rows_from_ranked_frame(run_date, ranked, buckets=buckets_df)
 
 
 def run_backfill(

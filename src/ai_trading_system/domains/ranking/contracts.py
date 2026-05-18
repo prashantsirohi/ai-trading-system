@@ -21,6 +21,7 @@ PRIMARY_FACTORS: tuple[RankFactorDefinition, ...] = (
     RankFactorDefinition("momentum_acceleration", "momentum_acceleration", "momentum_acceleration_score"),
     RankFactorDefinition("proximity_highs", "prox_high", "prox_high_score"),
     RankFactorDefinition("delivery_pct", "delivery_pct", "delivery_pct_score"),
+    RankFactorDefinition("above_200dma", "above_200dma_pct", "above_200dma_score"),
 )
 
 # Composite weights are state-only: ranking answers "is this stock in a strong regime?"
@@ -35,6 +36,11 @@ DEFAULT_FACTOR_WEIGHTS: dict[str, float] = {
     "proximity_highs": 0.18,
     "delivery_pct": 0.0,
     "sector_strength": 0.22,
+    # above_200dma starts at 0.0 (registered but inactive) — matches the
+    # dormant-factor pattern. Cross-section IC over 2022-2024 was the most
+    # regime-robust of price-only factors; the ranking-weight optimiser
+    # (planned) will set the live weight.
+    "above_200dma": 0.0,
 }
 
 STAGE2_FRESH_BARS_MAX = 8
@@ -77,6 +83,7 @@ RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "prox_high_score",
     "delivery_pct_score",
     "sector_strength_score",
+    "above_200dma_score",
     "rel_strength",
     "vol_intensity",
     "volume_intensity_normalized",
@@ -84,6 +91,7 @@ RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "trend_score",
     "prox_high",
     "delivery_pct",
+    "above_200dma_pct",
     "sector_rs_value",
     "stock_vs_sector_value",
     "sector_name",

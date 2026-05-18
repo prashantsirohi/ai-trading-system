@@ -13,6 +13,8 @@ data/raw/NSE_MTO/*.DAT
 data/*.xlsx
 data/*.db
 data/*.duckdb
+data/*.duckdb.wal
+data/*.duckdb.tmp
 data/*.parquet
 data/pipeline_runs/
 !data/masterdata.db

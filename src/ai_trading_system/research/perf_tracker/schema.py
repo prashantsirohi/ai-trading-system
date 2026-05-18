@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS rank_cohort_performance (
     factor_deliv              DOUBLE,
     factor_sector             DOUBLE,
     factor_momentum_accel     DOUBLE,
+    factor_above_200dma       DOUBLE,
     sector_name               VARCHAR,
     inserted_at               TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (run_date, symbol_id, exchange)
@@ -50,6 +51,13 @@ CREATE TABLE IF NOT EXISTS rank_cohort_performance (
 RANK_COHORT_INDEX_DDL = """
 CREATE INDEX IF NOT EXISTS idx_rank_cohort_date ON rank_cohort_performance(run_date);
 """
+
+# Additive migrations applied after table creation. Each entry is an idempotent
+# DDL statement (ADD COLUMN IF NOT EXISTS). Append-only: existing rows get NULL
+# for new columns, then get populated by the next ingest.
+RANK_COHORT_ALTER_DDLS: tuple[str, ...] = (
+    "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS factor_above_200dma DOUBLE",
+)
 
 
 def research_db_path(project_root: str | Path | None = None) -> Path:
@@ -64,6 +72,8 @@ def ensure_schema(con: duckdb.DuckDBPyConnection) -> None:
     """Create rank_cohort_performance + index if missing. Idempotent."""
     con.execute(RANK_COHORT_DDL)
     con.execute(RANK_COHORT_INDEX_DDL)
+    for stmt in RANK_COHORT_ALTER_DDLS:
+        con.execute(stmt)
 
 
 @contextmanager

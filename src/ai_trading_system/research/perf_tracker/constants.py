@@ -23,6 +23,7 @@ RANKED_TO_TRACKER: dict[str, str] = {
     "delivery_pct_score": "factor_deliv",
     "sector_strength_score": "factor_sector",
     "momentum_acceleration_score": "factor_momentum_accel",
+    "above_200dma_score": "factor_above_200dma",
 }
 
 # Tracker-side factor columns used by digest aggregations / IC computation.
@@ -35,6 +36,7 @@ FACTOR_COLUMNS: tuple[str, ...] = (
     "factor_deliv",
     "factor_sector",
     "factor_momentum_accel",
+    "factor_above_200dma",
 )
 
 # Drift detection thresholds.
@@ -75,6 +77,7 @@ COMPOSITION_OPTIONAL_COLUMNS: tuple[str, ...] = (
     "factor_conviction",
     "factor_vol",
     "factor_deliv",
+    "factor_above_200dma",
     "volume_ratio_20",
     "delivery_pct",
     "prior_5d_return",

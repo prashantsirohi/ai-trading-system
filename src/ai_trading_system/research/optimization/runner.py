@@ -111,6 +111,7 @@ def _evaluate_pack_on_folds(
                 metrics=metrics,
                 benchmark_return_pct=benchmark_by_fold.get(fold.index),
                 benchmark_symbol=recipe.benchmark.symbol,
+                backtest_result=result,
             )
         )
     return fold_results
@@ -164,6 +165,14 @@ def _persist_iteration(
             accepted=accepted,
             rejection_reason=rejection_reason,
         )
+        if fr.backtest_result is not None:
+            store.insert_trades(
+                optimization_run_id=optimization_run_id,
+                iteration=iteration,
+                fold_index=fr.fold_index,
+                rule_pack_id=pack_id,
+                result=fr.backtest_result,
+            )
     # Aggregate row at fold_index=-1.
     if fold_results:
         avg_metrics = _mean_metrics(fold_results)

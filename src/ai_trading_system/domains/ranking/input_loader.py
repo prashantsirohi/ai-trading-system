@@ -371,7 +371,7 @@ class RankerInputLoader:
             cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
             sma_latest = conn.execute(
                 f"""
-                SELECT symbol_id, exchange, close, sma_20, sma_50, timestamp
+                SELECT symbol_id, exchange, close, sma_20, sma_50, sma_200, sma_200_bars, timestamp
                 FROM (
                     SELECT
                         symbol_id, exchange, close, timestamp,
@@ -384,7 +384,17 @@ class RankerInputLoader:
                             PARTITION BY symbol_id
                             ORDER BY timestamp
                             ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
-                        ) AS sma_50
+                        ) AS sma_50,
+                        AVG(close) OVER (
+                            PARTITION BY symbol_id
+                            ORDER BY timestamp
+                            ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
+                        ) AS sma_200,
+                        COUNT(close) OVER (
+                            PARTITION BY symbol_id
+                            ORDER BY timestamp
+                            ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
+                        ) AS sma_200_bars
                     FROM _catalog
                     WHERE exchange = 'NSE'
                       AND timestamp IS NOT NULL
