@@ -26,7 +26,7 @@ def _seed_scheduler_state(db_path: str, *, age_minutes: float, error_count: int 
     naive UTC. To match what the production collector writes, we strip
     tzinfo before INSERT and let _ensure_aware tag it UTC on read.
     """
-    from market_intel.storage.db import Database
+    from storage.db import Database
 
     Database(db_path=db_path)  # creates schema
     conn = duckdb.connect(db_path)
@@ -55,7 +55,7 @@ def test_db_missing_returns_down(tmp_path):
 def test_no_heartbeat_row_returns_down(tmp_path):
     db_path = str(tmp_path / "mi.duckdb")
     # Init schema but write no scheduler_state row
-    from market_intel.storage.db import Database
+    from storage.db import Database
     Database(db_path=db_path)
 
     verdict = healthcheck.check_market_intel(db_path=db_path)

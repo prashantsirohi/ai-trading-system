@@ -34,7 +34,7 @@ def _reset_client_cache():
 
 def _seed_market_intel_db(db_path: str) -> None:
     """Initialize schema and write one capex event + one bulk deal for RELIANCE."""
-    from market_intel.storage.db import Database
+    from storage.db import Database
 
     Database(db_path=db_path)  # creates schema
 

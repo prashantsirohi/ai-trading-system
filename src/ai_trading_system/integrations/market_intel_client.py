@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Optional
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
-    from market_intel.services.event_query_service import EventQueryService
+    from services.event_query_service import EventQueryService
 
 
 _DEFAULT_DB_PATH = "data/market_intel.duckdb"
@@ -71,8 +71,8 @@ def get_event_query_service(
             return _cached_service
 
         try:
-            from market_intel.services.event_query_service import EventQueryService
-            from market_intel.storage.db import Database
+            from services.event_query_service import EventQueryService
+            from storage.db import Database
         except ImportError as exc:  # pragma: no cover
             raise ImportError(
                 "market_intel is not installed. Add it to your environment via "

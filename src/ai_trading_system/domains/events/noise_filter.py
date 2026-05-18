@@ -148,7 +148,7 @@ class MaterialityFilter:
 
     def apply(self, *, trigger, events):
         try:
-            from market_intel.processing.materiality import (
+            from processing.materiality import (
                 extract_deal_value_inr,
                 score as materiality_score,
             )
@@ -219,7 +219,7 @@ class TimeDecayFilter:
 
     def apply(self, *, trigger, events):
         try:
-            from market_intel.processing.time_decay import is_within_lookback
+            from processing.time_decay import is_within_lookback
         except ImportError:  # pragma: no cover
             logger.debug("TimeDecayFilter: market_intel not installed; skipping")
             return events, None

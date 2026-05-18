@@ -35,7 +35,7 @@ def test_resolve_db_path_default(monkeypatch):
 
 
 def test_get_event_query_service_caches(monkeypatch, tmp_path):
-    from market_intel.storage.db import Database
+    from storage.db import Database
 
     db_path = str(tmp_path / "mi.duckdb")
     Database(db_path=db_path).close()
@@ -45,7 +45,7 @@ def test_get_event_query_service_caches(monkeypatch, tmp_path):
 
 
 def test_service_returns_empty_for_unseeded_db(tmp_path):
-    from market_intel.storage.db import Database
+    from storage.db import Database
 
     db_path = str(tmp_path / "mi.duckdb")
     Database(db_path=db_path).close()
