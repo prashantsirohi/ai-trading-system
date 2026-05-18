@@ -23,6 +23,22 @@ from pathlib import Path
 import pandas as pd
 
 from ai_trading_system.platform.db.paths import get_domain_paths
+from ai_trading_system.research.perf_tracker.constants import (
+    COMPOSITION_OPTIONAL_COLUMNS,
+    CONCENTRATION_STRONG_DELTA,
+    CONCENTRATION_WEAK_DELTA,
+    COVERAGE_OK_PCT,
+    DRIFT_CRITICAL_MIN_BASELINE_IC,
+    DRIFT_CRITICAL_MIN_DELTA_IC,
+    DRIFT_CRITICAL_MIN_RECENT_N,
+    DRIFT_THRESHOLD_PCT,
+    DRIFT_WARNING_MIN_RECENT_N,
+    FACTOR_COLUMNS,
+    FORWARD_RETURN_ANOMALY_5D_PCT,
+    MATURATION_WARNING_RATIO,
+    SAME_DATE_SMALL_SAMPLE_DAYS,
+    SAME_DATE_SMALL_SAMPLE_ROWS,
+)
 from ai_trading_system.research.perf_tracker.schema import open_research_db
 
 logger = logging.getLogger(__name__)
@@ -35,45 +51,6 @@ COHORT_BANDS: tuple[tuple[str, int, int], ...] = (
     ("51-200",   51,   200),
     ("201+",     201,  10_000_000),
 )
-
-FACTOR_COLUMNS: tuple[str, ...] = (
-    "factor_rs",
-    "factor_vol",
-    "factor_trend",
-    "factor_prox",
-    "factor_deliv",
-    "factor_sector",
-    "factor_momentum_accel",
-)
-
-DRIFT_THRESHOLD_PCT = 30.0  # flag if rolling-90d IC drops > 30% vs 180d baseline
-DRIFT_WARNING_MIN_RECENT_N = 1500
-DRIFT_CRITICAL_MIN_RECENT_N = 3000
-DRIFT_CRITICAL_MIN_DELTA_IC = 0.03
-DRIFT_CRITICAL_MIN_BASELINE_IC = 0.05
-
-# Diagnostics sprint additions.
-COMPOSITION_OPTIONAL_COLUMNS: tuple[str, ...] = (
-    "composite_score",
-    "composite_score_adjusted",
-    "factor_rs",
-    "factor_sector",
-    "factor_trend",
-    "factor_prox",
-    "factor_stage",
-    "factor_conviction",
-    "factor_vol",
-    "factor_deliv",
-    "volume_ratio_20",
-    "delivery_pct",
-    "prior_5d_return",
-    "prior_20d_return",
-)
-SAME_DATE_SMALL_SAMPLE_DAYS = 10
-SAME_DATE_SMALL_SAMPLE_ROWS = 500
-CONCENTRATION_WEAK_DELTA = 0.50
-CONCENTRATION_STRONG_DELTA = 1.50
-COVERAGE_OK_PCT = 80.0
 
 BUCKET_ORDER_SQL = """
     CASE bucket
@@ -120,16 +97,23 @@ def _cohort_returns(con) -> pd.DataFrame:
             WHERE rank_position BETWEEN {lo} AND {hi}
             """
         ).fetchone()
+        n_total = int(result[0] or 0)
+        n_20d = int(result[2] or 0)
+        maturation_20d = (n_20d / n_total) if n_total else None
         rows.append({
             "cohort":      label,
-            "n_total":     int(result[0] or 0),
-            "n_20d":       int(result[2] or 0),
+            "n_total":     n_total,
+            "n_20d":       n_20d,
             "avg_5d":      _round(result[3]),
             "avg_10d":     _round(result[4]),
             "avg_20d":     _round(result[5]),
             "avg_60d":     _round(result[6]),
             "hitrate_5d":  _round(result[7]),
             "hitrate_20d": _round(result[8]),
+            "matured_20d_pct": _round((maturation_20d or 0) * 100.0, 1),
+            "low_maturation": bool(
+                maturation_20d is not None and maturation_20d < MATURATION_WARNING_RATIO
+            ),
         })
     return pd.DataFrame(rows)
 
@@ -439,6 +423,35 @@ def _drift_watch(
     return pd.DataFrame(rows)
 
 
+def _anomaly_summary(con) -> dict:
+    """Count fwd-return rows whose magnitude is likely a corporate action.
+
+    Forward returns are computed from raw OHLCV close — splits and bonuses
+    cause spurious ±50%+ swings that distort cohort aggregations. This
+    surfaces the count so users can investigate before relying on a digest
+    that includes them.
+    """
+    threshold = FORWARD_RETURN_ANOMALY_5D_PCT
+    row = con.execute(
+        f"""
+        SELECT
+            COUNT(*) FILTER (WHERE fwd_5d_return IS NOT NULL) AS n_matured,
+            COUNT(*) FILTER (
+                WHERE fwd_5d_return IS NOT NULL AND ABS(fwd_5d_return) > {threshold}
+            ) AS n_anomaly
+        FROM rank_cohort_performance
+        """
+    ).fetchone()
+    n_matured = int(row[0] or 0)
+    n_anomaly = int(row[1] or 0)
+    return {
+        "threshold_pct": threshold,
+        "n_matured": n_matured,
+        "n_anomaly": n_anomaly,
+        "pct": (100.0 * n_anomaly / n_matured) if n_matured else None,
+    }
+
+
 def _round(value, ndigits: int = 2):
     if value is None or pd.isna(value):
         return None
@@ -622,6 +635,7 @@ def build_digest(
         sections["bucket_daily"] = _bucket_daily(con, lookback_days=90)
         concentration = _concentration(con, lookback_days=90)
         sections["concentration"] = pd.DataFrame(concentration["cohorts"])
+        anomaly_meta = _anomaly_summary(con)
         concentration_meta = {
             "signal": concentration["signal"],
             "message": concentration["message"],
@@ -637,6 +651,7 @@ def build_digest(
         n_rows=n_rows,
         sections=sections,
         concentration_meta=concentration_meta,
+        anomaly_meta=anomaly_meta,
     )
     output_path.write_text(md, encoding="utf-8")
     logger.info("perf_tracker digest written to %s", output_path)
@@ -652,6 +667,7 @@ def _render_markdown(
     n_rows: int,
     sections: dict[str, pd.DataFrame],
     concentration_meta: dict | None = None,
+    anomaly_meta: dict | None = None,
 ) -> str:
     parts: list[str] = []
     parts.append(f"# Performance Tracker Digest — {as_of.isoformat()}\n")
@@ -680,6 +696,36 @@ def _render_markdown(
             "unknown": "Top-10 concentration: unknown.",
         }.get(sig, "")
         parts.append(f"\n> {edge_line} {conc_line}\n> _{concentration_meta.get('message', '')}_\n")
+
+    # Pending-row maturation warning. When the 20d horizon is unmatured for a
+    # large fraction of a cohort, average returns / hit rates are dominated by
+    # rows that have only had 20d of price action recorded — readings will
+    # swing as more rows mature, so flag them up-front.
+    cohorts_df = sections.get("cohorts")
+    if cohorts_df is not None and "low_maturation" in getattr(cohorts_df, "columns", []):
+        low = cohorts_df[cohorts_df["low_maturation"]]
+        if len(low) > 0:
+            names = ", ".join(
+                f"{r.cohort} ({r.matured_20d_pct or 0:.0f}%)"
+                for r in low.itertuples()
+            )
+            parts.append(
+                f"> **Pending-row warning**: cohort(s) with <{int(MATURATION_WARNING_RATIO * 100)}% "
+                f"of rows matured at 20d — readings unstable: {names}.\n"
+            )
+
+    # Corporate-action anomaly indicator: raw close means split/bonus days
+    # produce spurious ±50%+ 5-day returns. We don't drop them silently —
+    # surface a count so the user can decide.
+    if anomaly_meta and anomaly_meta.get("n_anomaly", 0) > 0:
+        pct = anomaly_meta.get("pct")
+        pct_str = f"{pct:.2f}%" if pct is not None else "n/a"
+        parts.append(
+            f"> **Forward-return anomalies**: {anomaly_meta['n_anomaly']:,} rows "
+            f"(of {anomaly_meta['n_matured']:,} matured at 5d, {pct_str}) have "
+            f"|fwd_5d_return| > {anomaly_meta['threshold_pct']:.0f}% — likely "
+            f"corporate actions in the raw-close OHLCV feed.\n"
+        )
 
     # Same-date bias indicator.
     same_date = sections.get("same_date_buckets")

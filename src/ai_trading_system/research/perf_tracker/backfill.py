@@ -20,30 +20,16 @@ from pathlib import Path
 import pandas as pd
 
 from ai_trading_system.platform.db.paths import get_domain_paths
+from ai_trading_system.research.perf_tracker.constants import (
+    FACTOR_COLUMNS,
+    RANKED_TO_TRACKER,
+)
 from ai_trading_system.research.perf_tracker.forward_returns import compute_forward_returns
 from ai_trading_system.research.perf_tracker.schema import open_research_db
 
 logger = logging.getLogger(__name__)
 
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
-
-# Map ranked_signals columns -> rank_cohort_performance columns. The tracker
-# table holds a stable subset; everything else stays in the CSVs.
-RANKED_TO_TRACKER = {
-    "symbol_id": "symbol_id",
-    "exchange": "exchange",
-    "composite_score": "composite_score",
-    "composite_score_adjusted": "composite_score_adjusted",
-    "rank_mode": "rank_mode",
-    "sector_name": "sector_name",
-    "rel_strength_score": "factor_rs",
-    "vol_intensity_score": "factor_vol",
-    "trend_score_score": "factor_trend",
-    "prox_high_score": "factor_prox",
-    "delivery_pct_score": "factor_deliv",
-    "sector_strength_score": "factor_sector",
-    "momentum_acceleration_score": "factor_momentum_accel",
-}
 
 
 def _latest_attempt_per_date(
@@ -135,18 +121,7 @@ def _build_rows_for_date(
         out["watchlist_bucket"] = pd.NA
 
     # Ensure all schema columns exist before insert; missing ones become NULL.
-    for col in (
-        "composite_score_adjusted",
-        "rank_mode",
-        "sector_name",
-        "factor_rs",
-        "factor_vol",
-        "factor_trend",
-        "factor_prox",
-        "factor_deliv",
-        "factor_sector",
-        "factor_momentum_accel",
-    ):
+    for col in ("composite_score_adjusted", "rank_mode", "sector_name", *FACTOR_COLUMNS):
         if col not in out.columns:
             out[col] = pd.NA
     out["config_id"] = pd.NA  # populated post-Phase-1
@@ -205,8 +180,7 @@ def run_backfill(
         "config_id",
         "fwd_5d_return", "fwd_10d_return", "fwd_20d_return", "fwd_60d_return",
         "fwd_5d_matured_at", "fwd_10d_matured_at", "fwd_20d_matured_at", "fwd_60d_matured_at",
-        "factor_rs", "factor_vol", "factor_trend", "factor_prox", "factor_deliv",
-        "factor_sector", "factor_momentum_accel",
+        *FACTOR_COLUMNS,
         "sector_name",
     ]
     for col in schema_cols:

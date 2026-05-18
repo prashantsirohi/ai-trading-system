@@ -1,5 +1,6 @@
 import os
 import logging
+import math
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
 
@@ -22,6 +23,24 @@ except ImportError:
     Spreadsheet = Worksheet = object
 
 logger = logging.getLogger(__name__)
+
+
+def _to_cell(value: Any) -> Any:
+    """Coerce a DataFrame cell into a value Google Sheets will treat correctly.
+
+    Numerics stay numeric so number/percentage/date formats applied to the
+    column actually render. NaN / None become empty strings so they show
+    blank instead of "nan". Everything else is stringified.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    if isinstance(value, (int, float)):
+        return value
+    if pd.isna(value):
+        return ""
+    return str(value)
 
 
 class GoogleSheetsManager:
@@ -225,11 +244,11 @@ class GoogleSheetsManager:
 
             if include_index:
                 data.extend(
-                    [str(idx)] + [str(v) for v in row.tolist()]
+                    [str(idx)] + [_to_cell(v) for v in row.tolist()]
                     for idx, row in df.iterrows()
                 )
             else:
-                data.extend([str(v) for v in row.tolist()] for _, row in df.iterrows())
+                data.extend([_to_cell(v) for v in row.tolist()] for _, row in df.iterrows())
 
             if data:
                 worksheet.update(data, range_name=start_cell)
@@ -257,7 +276,7 @@ class GoogleSheetsManager:
             data = []
             if include_header:
                 data.append(df.columns.tolist())
-            data.extend([str(v) for v in row.tolist()] for _, row in df.iterrows())
+            data.extend([_to_cell(v) for v in row.tolist()] for _, row in df.iterrows())
 
             worksheet.append_rows(data)
             logger.info(f"Appended {len(df)} rows to '{sheet_name}'")
@@ -293,6 +312,65 @@ class GoogleSheetsManager:
             return []
 
         return [ws.title for ws in self.spreadsheet.worksheets()]
+
+    # Number-format pattern strings used by ``apply_number_formats``. These
+    # match Google Sheets' format mini-language so callers can stay agnostic
+    # of the underlying API.
+    FORMAT_DATE = {"type": "DATE", "pattern": "yyyy-mm-dd"}
+    FORMAT_INT = {"type": "NUMBER", "pattern": "0"}
+    FORMAT_DECIMAL_2 = {"type": "NUMBER", "pattern": "0.00"}
+    FORMAT_DECIMAL_4 = {"type": "NUMBER", "pattern": "0.0000"}
+    FORMAT_PERCENT_1 = {"type": "PERCENT", "pattern": "0.0%"}
+
+    def apply_number_formats(
+        self,
+        sheet_name: str,
+        column_formats: Dict[str, Dict[str, str]],
+        *,
+        header_row: int = 1,
+    ) -> bool:
+        """Apply per-column number formats to a worksheet.
+
+        ``column_formats`` maps header name → format spec (see ``FORMAT_*``
+        class constants). Columns missing from the sheet are skipped silently
+        so callers don't need to gate by schema.
+        """
+        worksheet = self.get_worksheet(sheet_name)
+        if worksheet is None:
+            return False
+        try:
+            header_values = worksheet.row_values(header_row)
+        except Exception as e:
+            self._set_error(f"Failed reading header row: {e}")
+            logger.warning(self.last_error)
+            return False
+        if not header_values:
+            return True
+
+        def _col_letter(idx_zero: int) -> str:
+            n = idx_zero
+            letters = ""
+            while True:
+                letters = chr(ord("A") + (n % 26)) + letters
+                n = n // 26 - 1
+                if n < 0:
+                    return letters
+
+        try:
+            for header_name, fmt in column_formats.items():
+                if header_name not in header_values:
+                    continue
+                col_idx = header_values.index(header_name)
+                letter = _col_letter(col_idx)
+                range_ref = f"{letter}{header_row + 1}:{letter}"
+                worksheet.format(range_ref, {"numberFormat": fmt})
+            self.last_error = None
+            return True
+        except Exception as e:
+            message = f"Failed applying number formats to '{sheet_name}': {e}"
+            self._set_error(message)
+            logger.warning(message)
+            return False
 
     def get_or_create_sheet(
         self, title: str, rows: int = 1000, cols: int = 26

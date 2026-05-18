@@ -16,6 +16,9 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.platform.db.paths import get_domain_paths
+from ai_trading_system.research.perf_tracker.constants import (
+    FORWARD_RETURN_ANOMALY_5D_PCT,
+)
 
 FORWARD_HORIZONS: tuple[int, ...] = (5, 10, 20, 60)
 
@@ -108,4 +111,15 @@ def compute_forward_returns(
         work = work.drop(columns=[f"close_fwd_{n}d"])
 
     work = work.drop(columns=["idx_at_run", "close_at_run"], errors="ignore")
+
+    # Anomaly flag: a |5-day return| above the threshold is almost certainly
+    # a corporate action (split/bonus) showing up in raw close, not real
+    # alpha. We don't drop these (callers may want to inspect them) but we
+    # surface a boolean column so digest/cohort aggregations can exclude them.
+    if "fwd_5d_return" in work.columns:
+        r5 = pd.to_numeric(work["fwd_5d_return"], errors="coerce")
+        work["fwd_5d_anomaly"] = (r5.abs() > FORWARD_RETURN_ANOMALY_5D_PCT).fillna(False)
+    else:
+        work["fwd_5d_anomaly"] = False
+
     return work

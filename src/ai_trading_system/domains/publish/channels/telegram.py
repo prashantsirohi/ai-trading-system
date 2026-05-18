@@ -153,15 +153,54 @@ class TelegramReporter:
                     return False
         return False
 
-    async def _send_message_async(self, text: str, parse_mode: str = "HTML") -> bool:
-        async def _sender() -> None:
-            await self.bot.send_message(
-                chat_id=self.chat_id,
-                text=text,
-                parse_mode=parse_mode,
-            )
+    # Telegram hard limit is 4096 chars per message. Keep some headroom for
+    # the (very rare) case where a single line is borderline so we don't
+    # truncate mid-tag.
+    MAX_MESSAGE_CHARS = 3800
 
-        return await self._send_with_retry(_sender)
+    @classmethod
+    def _split_for_length(cls, text: str, limit: int = MAX_MESSAGE_CHARS) -> List[str]:
+        """Split ``text`` into <=limit chunks on line boundaries.
+
+        Daily tearsheet messages can grow past Telegram's 4096-char limit on
+        busy days (many events / large watchlist). Without this, long messages
+        are rejected by the API. Splits prefer paragraph breaks ("\\n\\n"),
+        then single newlines; falls back to a hard slice only if a single
+        line itself exceeds the limit.
+        """
+        if len(text) <= limit:
+            return [text]
+        chunks: List[str] = []
+        remaining = text
+        while len(remaining) > limit:
+            window = remaining[:limit]
+            cut = window.rfind("\n\n")
+            if cut < limit // 2:
+                cut = window.rfind("\n")
+            if cut <= 0:
+                cut = limit  # pathological: one giant line
+            chunks.append(remaining[:cut].rstrip())
+            remaining = remaining[cut:].lstrip("\n")
+        if remaining:
+            chunks.append(remaining)
+        return chunks
+
+    async def _send_message_async(self, text: str, parse_mode: str = "HTML") -> bool:
+        async def _sender_factory(chunk: str) -> Callable[[], Awaitable[None]]:
+            async def _sender() -> None:
+                await self.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=chunk,
+                    parse_mode=parse_mode,
+                )
+            return _sender
+
+        chunks = self._split_for_length(text)
+        for chunk in chunks:
+            ok = await self._send_with_retry(await _sender_factory(chunk))
+            if not ok:
+                return False
+        return True
 
     def send_message(self, text: str, parse_mode: str = "HTML") -> bool:
         loop = self._get_or_create_loop()

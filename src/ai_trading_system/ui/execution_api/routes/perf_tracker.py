@@ -15,6 +15,20 @@ from typing import Iterable
 from fastapi import APIRouter, HTTPException, Query
 
 from ai_trading_system.platform.db.paths import get_domain_paths
+from ai_trading_system.research.perf_tracker.constants import (
+    COMPOSITION_OPTIONAL_COLUMNS,
+    CONCENTRATION_STRONG_DELTA,
+    CONCENTRATION_WEAK_DELTA,
+    COVERAGE_OK_PCT,
+    DRIFT_CRITICAL_MIN_BASELINE_IC,
+    DRIFT_CRITICAL_MIN_DELTA_IC,
+    DRIFT_CRITICAL_MIN_RECENT_N,
+    DRIFT_THRESHOLD_PCT,
+    DRIFT_WARNING_MIN_RECENT_N,
+    FACTOR_COLUMNS,
+    SAME_DATE_SMALL_SAMPLE_DAYS,
+    SAME_DATE_SMALL_SAMPLE_ROWS,
+)
 from ai_trading_system.research.perf_tracker.schema import open_research_db
 from ai_trading_system.ui.execution_api.routes._deps import project_root
 
@@ -31,56 +45,11 @@ COHORT_BANDS: tuple[tuple[str, int, int], ...] = (
     ("201+",    201, 10_000_000),
 )
 
-FACTOR_COLUMNS: tuple[str, ...] = (
-    "factor_rs",
-    "factor_vol",
-    "factor_trend",
-    "factor_prox",
-    "factor_deliv",
-    "factor_sector",
-    "factor_momentum_accel",
-)
-
-# Optional composition factor columns. Composition queries introspect the
-# table at runtime and emit AVG() only for columns that exist; missing
-# columns appear in the response as ``null``.
-COMPOSITION_OPTIONAL_COLUMNS: tuple[str, ...] = (
-    "composite_score",
-    "composite_score_adjusted",
-    "factor_rs",
-    "factor_sector",
-    "factor_trend",
-    "factor_prox",
-    "factor_stage",
-    "factor_conviction",
-    "factor_vol",
-    "factor_deliv",
-    "volume_ratio_20",
-    "delivery_pct",
-    "prior_5d_return",
-    "prior_20d_return",
-)
-
-DRIFT_THRESHOLD_PCT = 30.0
 DEFAULT_IC_WINDOWS: tuple[int, ...] = (30, 90, 180)
 DEFAULT_IC_HORIZONS: tuple[int, ...] = (5, 10, 20)
-DRIFT_WARNING_MIN_RECENT_N = 1500
-DRIFT_CRITICAL_MIN_RECENT_N = 3000
-DRIFT_CRITICAL_MIN_DELTA_IC = 0.03
-DRIFT_CRITICAL_MIN_BASELINE_IC = 0.05
 
-# Factor coverage thresholds (per spec, Part 6).
-COVERAGE_OK_PCT = 80.0
+# Partial-coverage threshold is route-local (not shared with the digest yet).
 COVERAGE_PARTIAL_PCT = 50.0
-
-# Same-date small-sample thresholds (per spec, Part 2).
-SAME_DATE_SMALL_SAMPLE_DAYS = 10
-SAME_DATE_SMALL_SAMPLE_ROWS = 500
-
-# Concentration signal thresholds (per spec, Part 8). Comparing top-10
-# avg_20d vs top-200 avg_20d, both expressed in percentage points.
-CONCENTRATION_WEAK_DELTA = 0.50
-CONCENTRATION_STRONG_DELTA = 1.50
 
 BUCKET_ORDER_SQL = """
     CASE bucket

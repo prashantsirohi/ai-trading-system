@@ -17,6 +17,32 @@ from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
 
 
+# Per-sheet column → number-format spec. Applied after every successful
+# write so the sheet renders numerics/dates correctly even if the sheet was
+# recreated. Columns not present in the actual data are skipped silently.
+_STOCK_SCAN_FORMATS: dict[str, dict[str, str]] = {
+    "report_date": GoogleSheetsManager.FORMAT_DATE,
+    "close": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "composite_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "rel_strength": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "rel_strength_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "momentum_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+}
+_SECTOR_DASHBOARD_FORMATS: dict[str, dict[str, str]] = {
+    "RS": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "rel_strength": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "Momentum": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "momentum": GoogleSheetsManager.FORMAT_DECIMAL_2,
+}
+_WATCHLIST_FORMATS: dict[str, dict[str, str]] = {
+    "report_date": GoogleSheetsManager.FORMAT_DATE,
+    "score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "composite_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "rank": GoogleSheetsManager.FORMAT_INT,
+    "rank_change": GoogleSheetsManager.FORMAT_INT,
+}
+
+
 def _require_spreadsheet_id() -> Optional[str]:
     spreadsheet_id = os.getenv("GOOGLE_SPREADSHEET_ID")
     if not spreadsheet_id:
@@ -49,6 +75,7 @@ def publish_stock_scan(stocks: pd.DataFrame) -> bool:
     worksheet.clear()
     if not manager.append_rows(stocks_with_index, "Stock Scan", include_header=True):
         raise RuntimeError(f"Failed writing stock scan rows: {manager.last_error or 'unknown error'}")
+    manager.apply_number_formats("Stock Scan", _STOCK_SCAN_FORMATS)
     logger.info("Stock scan updated in Google Sheets (%s stocks)", len(stocks))
     return True
 
@@ -79,6 +106,7 @@ def publish_sector_dashboard(dashboard: pd.DataFrame) -> bool:
     )
     if not ok:
         raise RuntimeError(f"Failed writing sector dashboard rows: {manager.last_error or 'unknown error'}")
+    manager.apply_number_formats("Sector Dashboard", _SECTOR_DASHBOARD_FORMATS)
     logger.info("Dashboard appended to Google Sheets (%s sectors)", len(dashboard))
     return True
 
@@ -110,6 +138,7 @@ def publish_watchlist_candidates(watchlist: pd.DataFrame, *, decision_bundle: Pu
     worksheet.clear()
     if not manager.append_rows(frame, sheet_name, include_header=True):
         raise RuntimeError(f"Failed writing watchlist rows: {manager.last_error or 'unknown error'}")
+    manager.apply_number_formats(sheet_name, _WATCHLIST_FORMATS)
     logger.info("Watchlist candidates updated in Google Sheets (%s rows)", len(frame))
     return True
 
