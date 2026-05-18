@@ -367,7 +367,7 @@ class DeliveryCollector:
 
         df["timestamp"] = pd.to_datetime(df["timestamp"])
 
-        df = df.sort_values(["symbol_id", "timestamp"])
+        df = df.sort_values(["symbol_id", "timestamp"]).copy()
 
         for w, col in [(5, "delivery_5d_avg"), (20, "delivery_20d_avg")]:
             df[col] = df.groupby("symbol_id")["delivery_pct"].transform(
@@ -378,7 +378,7 @@ class DeliveryCollector:
             df.groupby("timestamp")["delivery_pct"].rank(pct=True) * 100
         )
 
-        df = df.dropna(subset=["delivery_pct"])
+        df = df.dropna(subset=["delivery_pct"]).copy()
 
         out_dir = os.path.join(self.feature_store_dir, "delivery", exchange)
         os.makedirs(out_dir, exist_ok=True)

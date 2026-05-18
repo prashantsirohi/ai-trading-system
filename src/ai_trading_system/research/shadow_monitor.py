@@ -104,7 +104,7 @@ def compute_rolling_spearman_ic(
             columns=["prediction_date", "horizon", "observations", "ic_spearman", "rolling_ic_spearman", "window"]
         )
 
-    result = result.sort_values(["horizon", "prediction_date"], kind="stable").reset_index(drop=True)
+    result = result.sort_values(["horizon", "prediction_date"], kind="stable").reset_index(drop=True).copy()
     result.loc[:, "rolling_ic_spearman"] = (
         result.groupby("horizon", dropna=False)["ic_spearman"]
         .transform(lambda series: series.rolling(window=int(window), min_periods=1).mean())
