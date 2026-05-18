@@ -14,22 +14,24 @@ from ai_trading_system.domains.publish.channels.daily_gainers.events import (
 from ai_trading_system.domains.publish.channels.daily_gainers.gainers import compute_gainers
 from ai_trading_system.domains.publish.channels.daily_gainers.llm import generate_insight
 from ai_trading_system.domains.publish.channels.daily_gainers.renderer import render
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.utils.env import load_project_env
 
 
 def main() -> None:
     load_project_env(Path.cwd())
 
+    paths = get_domain_paths()
     parser = argparse.ArgumentParser(description="Build a daily NSE gainers PDF report.")
     parser.add_argument("--as-of", type=_parse_date, default=None, help="Trading date as YYYY-MM-DD.")
     parser.add_argument("--threshold", type=float, default=5.0, help="Minimum close-to-close gain in percent.")
     parser.add_argument("--lookback-days", type=int, default=7, help="Corporate event lookback window.")
-    parser.add_argument("--output-dir", type=Path, default=Path("reports/daily_gainers"))
+    parser.add_argument("--output-dir", type=Path, default=paths.reports_dir / "daily_gainers")
     parser.add_argument("--model", default=None, help="OpenRouter model override.")
     parser.add_argument("--no-llm", action="store_true", help="Skip OpenRouter and use deterministic text.")
     args = parser.parse_args()
 
-    gainers = compute_gainers(Path("data/ohlcv.duckdb"), args.as_of, threshold_pct=args.threshold)
+    gainers = compute_gainers(paths.ohlcv_db_path, args.as_of, threshold_pct=args.threshold)
     report_date = gainers.attrs.get("as_of") or args.as_of or date.today()
     symbols = [str(symbol) for symbol in gainers.get("symbol_id", []).tolist()]
     events_by_symbol = attach_events(symbols, as_of=report_date, lookback_days=args.lookback_days)

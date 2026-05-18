@@ -29,6 +29,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.domains.ingest.series_policy import (
     is_supported,
     normalize_series,
@@ -146,7 +147,7 @@ def main() -> int:
     parser.add_argument(
         "--bhavcopy-dir",
         type=Path,
-        default=Path("data/raw/NSE_EQ"),
+        default=get_domain_paths().raw_dir / "NSE_EQ",
         help="Directory containing cached daily bhavcopy CSVs (nse_DDMMMYYYY.csv).",
     )
     parser.add_argument("--dry-run", action="store_true", help="Report counts without writing.")

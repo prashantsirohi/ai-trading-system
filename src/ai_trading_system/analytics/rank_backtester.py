@@ -10,7 +10,7 @@ from typing import Tuple, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import duckdb
-from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.db.paths import ensure_domain_layout, get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
 
 warnings.filterwarnings("ignore")
@@ -1022,7 +1022,10 @@ def main():
     parser.add_argument("--test-months", type=int, default=3)
     parser.add_argument("--transaction-cost", type=float, default=0.001)
     parser.add_argument("--slippage-bps", type=float, default=0.0)
-    parser.add_argument("--output-dir", default="reports/research/rank_validation")
+    parser.add_argument(
+        "--output-dir",
+        default=str(get_domain_paths().reports_dir / "research" / "rank_validation"),
+    )
     args = parser.parse_args()
 
     bt = RankBacktester(top_n=args.top_n, rebalance_days=args.rebalance_days)

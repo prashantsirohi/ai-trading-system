@@ -29,7 +29,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from market_intel.services.event_query_service import EventQueryService
 
 
-_DEFAULT_DB_PATH = "data/market_intel.duckdb"
+from ai_trading_system.platform.db.paths import get_domain_paths
+
+_DEFAULT_DB_PATH = str(get_domain_paths().root_dir / "market_intel.duckdb")
 _ENV_DB_PATH = "AI_TRADING_MARKET_INTEL_DB"
 
 _lock = threading.Lock()
@@ -43,7 +45,7 @@ def resolve_db_path(explicit: str | None = None) -> str:
     Order of precedence:
       1. ``explicit`` argument
       2. ``AI_TRADING_MARKET_INTEL_DB`` env var
-      3. Default ``data/market_intel.duckdb`` relative to cwd
+      3. ``DATA_ROOT/market_intel.duckdb`` (or in-repo ``data/market_intel.duckdb``)
     """
     return explicit or os.environ.get(_ENV_DB_PATH) or _DEFAULT_DB_PATH
 

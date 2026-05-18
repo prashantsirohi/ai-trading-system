@@ -11,8 +11,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-LOG_DIR="$REPO_DIR/logs"
-mkdir -p "$LOG_DIR"
 
 # Pull PATH additions like ~/.local/bin where uv typically lives.
 # shellcheck disable=SC1090
@@ -22,6 +20,17 @@ mkdir -p "$LOG_DIR"
 export PATH="$HOME/.local/bin:$PATH"
 
 cd "$REPO_DIR"
+
+# Pick up DATA_ROOT / LOGS_ROOT etc. from .env if present.
+if [ -f "$REPO_DIR/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO_DIR/.env"
+    set +a
+fi
+
+LOG_DIR="${LOGS_ROOT:-$REPO_DIR/logs}"
+mkdir -p "$LOG_DIR"
 
 RUN_ID="weekly-stage-$(date -u +%Y%m%dT%H%M%SZ)"
 echo "=== $RUN_ID start: $(date -u +%FT%TZ) ===" >> "$LOG_DIR/weekly_stage.log"

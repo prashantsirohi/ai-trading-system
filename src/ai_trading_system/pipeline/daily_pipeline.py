@@ -210,7 +210,9 @@ def run_portfolio_analysis():
         price_map = {}
 
         # Load sector map from stock_details (Sector column)
-        conn = sqlite3.connect("data/masterdata.db")
+        from ai_trading_system.platform.db.paths import get_domain_paths
+
+        conn = sqlite3.connect(str(get_domain_paths().master_db_path))
         rows = conn.execute("SELECT Symbol, Sector FROM stock_details").fetchall()
         sector_map = {sym: sector for sym, sector in rows if sector}
         conn.close()

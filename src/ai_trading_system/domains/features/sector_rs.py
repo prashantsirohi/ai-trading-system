@@ -3,7 +3,14 @@ import numpy as np
 import duckdb
 import sqlite3
 from pathlib import Path
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
+
+
+_PATHS = get_domain_paths()
+_DEFAULT_MASTERDB = str(_PATHS.master_db_path)
+_DEFAULT_OHLCV = str(_PATHS.ohlcv_db_path)
+_DEFAULT_FEATURE_STORE = str(_PATHS.feature_store_dir)
 
 
 def add_benchmark_relative_features(
@@ -56,7 +63,7 @@ def add_benchmark_relative_features(
     return output
 
 
-def load_all_symbols_with_sector(masterdb_path: str = "data/masterdata.db"):
+def load_all_symbols_with_sector(masterdb_path: str = _DEFAULT_MASTERDB):
     """Load all symbols from symbols table with sector mapping via sector_mapping"""
     conn = sqlite3.connect(masterdb_path)
 
@@ -206,9 +213,9 @@ def _build_close_matrix(ohlcv: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_all_symbols_rs(
-    db_path: str = "data/ohlcv.duckdb",
-    feature_store_dir: str = "data/feature_store",
-    masterdb_path: str = "data/masterdata.db",
+    db_path: str = _DEFAULT_OHLCV,
+    feature_store_dir: str = _DEFAULT_FEATURE_STORE,
+    masterdb_path: str = _DEFAULT_MASTERDB,
     universe_top_n: int = 800,
     min_recent_days: int = 180,
     lookback_days: int = 365,
@@ -419,7 +426,7 @@ def compute_all_symbols_rs(
 
     return result_df
 
-def _write_empty_outputs(feature_store_dir: str = "data/feature_store"):
+def _write_empty_outputs(feature_store_dir: str = _DEFAULT_FEATURE_STORE):
     """Persist empty but schema-valid outputs so downstream consumers can degrade safely."""
     output_dir = Path(feature_store_dir) / "all_symbols"
     output_dir.mkdir(parents=True, exist_ok=True)

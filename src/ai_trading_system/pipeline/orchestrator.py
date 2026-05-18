@@ -5,12 +5,15 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 import threading
 import time
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
+
+from tqdm.auto import tqdm
 
 from ai_trading_system.analytics.dq import DataQualityEngine
 from ai_trading_system.analytics.registry import RegistryStore
@@ -26,7 +29,7 @@ from ai_trading_system.pipeline.contracts import (
 )
 from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.platform.logging import logger as logging_module
-from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout
+from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout, get_domain_paths
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
 from ai_trading_system.pipeline.stages import CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, NarrativeStage, PerfTrackerStage, PublishStage, RankStage
@@ -44,8 +47,20 @@ PIPELINE_ORDER = ["ingest", "features", "rank", "fundamentals", "candidates", "e
 OPTIONAL_STAGES = frozenset({"fundamentals"})
 
 
+_BANNER_WIDTH = 78
+
+
 class TerminalProgressRenderer:
-    """Compact terminal renderer for stage/task execution."""
+    """Stage/task renderer with an optimizer-style tqdm bar.
+
+    Shows a single outer progress bar (`[i/N] <stage>`) on stderr that
+    advances as stages complete. Per-task events (`degraded`/`failed`) and
+    stage heartbeats print above the bar via ``tqdm.write`` so the bar
+    isn't disrupted.
+
+    When stderr is not a TTY (cron, redirected logs), the bar is disabled
+    automatically and lines fall back to plain prints.
+    """
 
     def __init__(self, mode: str = "compact"):
         self.mode = str(mode or "compact").strip().lower()
@@ -53,24 +68,99 @@ class TerminalProgressRenderer:
         self.task_states: dict[str, str] = {}
         self.degraded: list[str] = []
         self.failed: list[str] = []
+        self._bar: Optional[tqdm] = None
+        self._stage_order: list[str] = []
+        self._current_stage: Optional[str] = None
+        self._run_started_at: Optional[float] = None
+        self._is_tty = bool(getattr(sys.stderr, "isatty", lambda: False)())
 
     def _stamp(self) -> str:
         return datetime.now().strftime("%H:%M:%S")
 
+    def _write(self, line: str) -> None:
+        """Print a line that coexists with the bar (uses tqdm.write when active)."""
+        if self._bar is not None:
+            tqdm.write(line, file=sys.stderr)
+        else:
+            print(line, flush=True)
+
     def emit_run_header(self, *, run_id: str, run_date: str, data_domain: str, stages: list[str]) -> None:
+        self._stage_order = list(stages)
+        self._run_started_at = time.time()
         if self.mode == "verbose":
             return
-        print(f"{self._stamp()} | Run: {run_id} | Date: {run_date} | Domain: {data_domain}", flush=True)
-        print(f"{self._stamp()} | Stages: {', '.join(stages)}", flush=True)
+        sep = "=" * _BANNER_WIDTH
+        print(sep, file=sys.stderr, flush=True)
+        print(f"  run_id : {run_id}", file=sys.stderr, flush=True)
+        print(f"  date   : {run_date}", file=sys.stderr, flush=True)
+        print(f"  domain : {data_domain}", file=sys.stderr, flush=True)
+        print(f"  stages : {', '.join(stages)}", file=sys.stderr, flush=True)
+        print(sep, file=sys.stderr, flush=True)
+        self._bar = tqdm(
+            total=len(stages),
+            desc="pipeline",
+            unit="stage",
+            ncols=100,
+            leave=True,
+            file=sys.stderr,
+            disable=not self._is_tty,
+        )
+
+    def _advance(self, *, stage_name: str, status: str) -> None:
+        if self._bar is None:
+            return
+        self._bar.set_postfix_str(f"{stage_name}={status}")
+        self._bar.update(1)
+
+    def update_running(self, *, stage_name: str, detail: str) -> None:
+        """Update the bar in place while a stage is running (heartbeat hook)."""
+        if self._bar is None or self.mode == "verbose":
+            return
+        self._bar.set_description_str(stage_name)
+        self._bar.set_postfix_str(detail)
 
     def emit_stage(self, *, stage_name: str, status: str, detail: str | None = None) -> None:
         if self.mode == "verbose":
             return
+        prior = self.stage_states.get(stage_name)
         self.stage_states[stage_name] = status
-        label = f"{stage_name}"
-        if detail:
-            label = f"{label} - {detail}"
-        print(f"{self._stamp()} | [{status[:4]:<4}] {label}", flush=True)
+
+        if status == "running":
+            self._current_stage = stage_name
+            if self._bar is not None:
+                self._bar.set_description_str(stage_name)
+                self._bar.set_postfix_str(detail or "running")
+            else:
+                label = f"{stage_name}" + (f" - {detail}" if detail else "")
+                self._write(f"{self._stamp()} | [runn] {label}")
+            return
+
+        if status == "done":
+            # Avoid double-advancing if a prior status (e.g. skip) already advanced.
+            if prior in {"skip", "fail"}:
+                return
+            self._advance(stage_name=stage_name, status="done")
+            if self._bar is None:
+                self._write(f"{self._stamp()} | [done] {stage_name}")
+            return
+
+        if status == "skip":
+            self._advance(stage_name=stage_name, status="skip")
+            label = f"{stage_name}" + (f" - {detail}" if detail else "")
+            self._write(f"{self._stamp()} | [skip] {label}")
+            return
+
+        if status == "fail":
+            # Leave the bar position alone; record failure in the postfix.
+            if self._bar is not None:
+                self._bar.set_postfix_str(f"{stage_name}=FAILED")
+            label = f"{stage_name}" + (f" - {detail}" if detail else "")
+            self._write(f"{self._stamp()} | [fail] {label}")
+            return
+
+        # Fallback: any unrecognized status.
+        label = f"{stage_name}" + (f" - {detail}" if detail else "")
+        self._write(f"{self._stamp()} | [{status[:4]:<4}] {label}")
 
     def emit_task(self, payload: dict[str, object]) -> None:
         if self.mode == "verbose":
@@ -83,25 +173,42 @@ class TerminalProgressRenderer:
         self.task_states[key] = status
         if status in {"failed", "timed_out"}:
             self.failed.append(key)
-        elif status in {"degraded"}:
+        elif status == "degraded":
             self.degraded.append(key)
+        # Only surface task lines that the operator actually needs to see —
+        # ok/running for every sub-task would drown the bar.
+        if status in {"running", "ok", "success", "completed"}:
+            return
         suffix = f" - {detail}" if detail else ""
-        print(f"{self._stamp()} | [{status[:4]:<4}] {key}{suffix}", flush=True)
+        self._write(f"{self._stamp()} | [{status[:4]:<4}] {key}{suffix}")
 
     def emit_final(self, *, run_id: str, status: str, stages: list[dict[str, object]], error: str | None = None) -> None:
+        if self._bar is not None:
+            self._bar.close()
+            self._bar = None
         if self.mode == "verbose":
             return
-        print("", flush=True)
-        print(f"{self._stamp()} | Run Complete: {run_id} -> {status}", flush=True)
+        elapsed = (
+            int(time.time() - self._run_started_at) if self._run_started_at else None
+        )
         completed = [stage["stage_name"] for stage in stages if str(stage.get("status")) == "completed"]
-        if completed:
-            print(f"{self._stamp()} | Completed stages: {', '.join(completed)}", flush=True)
+        n_done = len(completed)
+        n_total = len(self._stage_order) or len(stages)
+        summary_bits = [f"run_id={run_id}", f"status={status}", f"stages={n_done}/{n_total}"]
         if self.degraded:
-            print(f"{self._stamp()} | Degraded tasks: {', '.join(sorted(set(self.degraded)))}", flush=True)
+            summary_bits.append(f"degraded={len(set(self.degraded))}")
         if self.failed:
-            print(f"{self._stamp()} | Failed tasks: {', '.join(sorted(set(self.failed)))}", flush=True)
+            summary_bits.append(f"failed={len(set(self.failed))}")
+        if elapsed is not None:
+            summary_bits.append(f"elapsed={elapsed}s")
+        print("", flush=True)
+        print("  ".join(summary_bits), flush=True)
+        if self.degraded:
+            print(f"  degraded tasks: {', '.join(sorted(set(self.degraded)))}", flush=True)
+        if self.failed:
+            print(f"  failed tasks: {', '.join(sorted(set(self.failed)))}", flush=True)
         if error:
-            print(f"{self._stamp()} | Final status detail: {error}", flush=True)
+            print(f"  error: {error}", flush=True)
 
 
 class PipelineOrchestrator:
@@ -247,11 +354,16 @@ class PipelineOrchestrator:
         def _heartbeat() -> None:
             while not stop_event.wait(interval_seconds):
                 elapsed = int(time.time() - start_ts)
-                self.progress_renderer.emit_stage(
-                    stage_name=stage_name,
-                    status="running",
-                    detail=f"attempt {attempt_number} · {hint} · elapsed {elapsed}s",
-                )
+                detail = f"attempt {attempt_number} · {hint} · elapsed {elapsed}s"
+                update_running = getattr(self.progress_renderer, "update_running", None)
+                if callable(update_running):
+                    update_running(stage_name=stage_name, detail=detail)
+                else:
+                    self.progress_renderer.emit_stage(
+                        stage_name=stage_name,
+                        status="running",
+                        detail=detail,
+                    )
 
         worker = threading.Thread(target=_heartbeat, name=f"stage-heartbeat-{stage_name}", daemon=True)
         worker.start()
@@ -591,7 +703,7 @@ class PipelineOrchestrator:
         return requested
 
     def _fundamental_scores_available(self, fundamental_scores_path: object | None = None) -> bool:
-        configured = Path(str(fundamental_scores_path or "data/fundamentals/fundamental_scores_latest.csv"))
+        configured = Path(str(fundamental_scores_path or get_domain_paths().fundamentals_dir / "fundamental_scores_latest.csv"))
         if not configured.is_absolute():
             configured = self.project_root / configured
         return configured.exists() and configured.is_file()
@@ -784,7 +896,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--fundamental-scores-path",
-        default="data/fundamentals/fundamental_scores_latest.csv",
+        default=str(get_domain_paths().fundamentals_dir / "fundamental_scores_latest.csv"),
         help="Path to latest fundamental scores CSV.",
     )
     parser.add_argument(

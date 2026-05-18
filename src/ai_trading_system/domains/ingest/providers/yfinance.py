@@ -34,7 +34,9 @@ class YFinanceCollector:
         """Get symbols from master DB."""
         import sqlite3
 
-        conn = sqlite3.connect("data/masterdata.db")
+        from ai_trading_system.platform.db.paths import get_domain_paths
+
+        conn = sqlite3.connect(str(get_domain_paths().master_db_path))
         symbols = conn.execute(
             "SELECT symbol_id FROM symbols WHERE exchange = 'NSE'"
         ).fetchall()

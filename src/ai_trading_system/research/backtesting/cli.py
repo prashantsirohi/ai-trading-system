@@ -19,6 +19,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from ai_trading_system.domains.risk import load_profile
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.research.backtesting import (
     EngineBacktestRunner,
     load_ranked_by_date,
@@ -43,7 +44,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--pipeline-runs-dir",
-        default="data/pipeline_runs",
+        default=str(get_domain_paths().pipeline_runs_dir),
         help="Directory holding pipeline-YYYY-MM-DD-* run folders",
     )
     p.add_argument("--from", dest="from_date", help="ISO date inclusive (e.g. 2026-01-01)")
@@ -51,7 +52,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--equity", type=float, default=1_000_000.0, help="Starting equity")
     p.add_argument(
         "--out",
-        default="data/research/engine_backtests",
+        default=str(get_domain_paths().root_dir / "research" / "engine_backtests"),
         help="Output directory for trades.csv + summary.json",
     )
     p.add_argument(

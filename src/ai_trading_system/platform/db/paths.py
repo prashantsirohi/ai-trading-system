@@ -24,6 +24,13 @@ class DataDomainPaths:
     dataset_dir: Path
     model_dir: Path
     reports_dir: Path
+    logs_dir: Path
+    optuna_dir: Path
+    fundamentals_dir: Path
+    stage_store_dir: Path
+    raw_dir: Path
+    cache_dir: Path
+    exports_dir: Path
 
 
 def _looks_like_repo_root(path: Path) -> bool:
@@ -78,18 +85,52 @@ def _default_project_root() -> Path:
     return here.parents[4]
 
 
+def _resolve_root(env_var: str, default: Path) -> Path:
+    """Return the env-var override (expanded/resolved) or the default."""
+    raw = os.getenv(env_var)
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return default
+
+
+def require_data_root_available(paths: DataDomainPaths | None = None) -> None:
+    """Raise if DATA_ROOT is set to a missing path (e.g. SSD unmounted).
+
+    When DATA_ROOT is unset the in-repo fallback is always valid, so this is a
+    no-op. When set, the directory must exist — otherwise pipelines would
+    silently recreate the layout in the wrong place.
+    """
+    if not os.getenv("DATA_ROOT"):
+        return
+    target = paths.root_dir if paths is not None else Path(os.environ["DATA_ROOT"]).expanduser().resolve()
+    if not target.exists():
+        raise RuntimeError(
+            f"DATA_ROOT is set to {target} but the directory does not exist. "
+            "Is the external storage mounted?"
+        )
+
+
 def get_domain_paths(
     project_root: Path | str | None = None,
     data_domain: str | None = None,
 ) -> DataDomainPaths:
     """Resolve filesystem paths for the requested data domain.
 
-    Operational paths fall back to the legacy flat `data/` layout when it already
-    exists, which keeps this refactor incremental and low risk.
+    Honors `DATA_ROOT`, `REPORTS_ROOT`, `LOGS_ROOT`, and `MODELS_ROOT` env vars
+    to relocate large trees outside the repo. Falls back to repo-relative paths
+    when the env vars are unset, preserving the legacy in-repo layout.
+
+    `master_db_path` is always anchored to the in-repo `data/masterdata.db`
+    because that file is git-tracked and must not move with the data root.
     """
     root = canonicalize_project_root(project_root)
     domain = resolve_data_domain(data_domain)
-    data_root = root / "data"
+
+    data_root = _resolve_root("DATA_ROOT", root / "data")
+    reports_root = _resolve_root("REPORTS_ROOT", root / "reports")
+    logs_root = _resolve_root("LOGS_ROOT", root / "logs")
+    models_root = _resolve_root("MODELS_ROOT", root / "models")
+    master_db_path = root / "data" / "masterdata.db"
 
     if domain == "operational":
         return DataDomainPaths(
@@ -97,24 +138,38 @@ def get_domain_paths(
             root_dir=data_root,
             ohlcv_db_path=data_root / "ohlcv.duckdb",
             feature_store_dir=data_root / "feature_store",
-            master_db_path=data_root / "masterdata.db",
+            master_db_path=master_db_path,
             pipeline_runs_dir=data_root / "pipeline_runs",
             dataset_dir=data_root / "training_datasets",
-            model_dir=root / "models",
-            reports_dir=root / "reports",
+            model_dir=models_root,
+            reports_dir=reports_root,
+            logs_dir=logs_root,
+            optuna_dir=data_root / "optuna",
+            fundamentals_dir=data_root / "fundamentals",
+            stage_store_dir=data_root / "stage_store",
+            raw_dir=data_root / "raw",
+            cache_dir=data_root / "cache",
+            exports_dir=data_root / "exports",
         )
 
     domain_root = data_root / domain
     return DataDomainPaths(
         domain=domain,
         root_dir=domain_root,
-        ohlcv_db_path=domain_root / ("ohlcv.duckdb" if domain == "operational" else "research_ohlcv.duckdb"),
+        ohlcv_db_path=domain_root / "research_ohlcv.duckdb",
         feature_store_dir=domain_root / "feature_store",
-        master_db_path=data_root / "masterdata.db",
+        master_db_path=master_db_path,
         pipeline_runs_dir=domain_root / "pipeline_runs",
         dataset_dir=domain_root / "training_datasets",
-        model_dir=root / "models" / domain,
-        reports_dir=root / "reports" / domain,
+        model_dir=models_root / domain,
+        reports_dir=reports_root / domain,
+        logs_dir=logs_root / domain,
+        optuna_dir=domain_root / "optuna",
+        fundamentals_dir=domain_root / "fundamentals",
+        stage_store_dir=domain_root / "stage_store",
+        raw_dir=domain_root / "raw",
+        cache_dir=domain_root / "cache",
+        exports_dir=domain_root / "exports",
     )
 
 
@@ -130,6 +185,7 @@ def ensure_domain_layout(
     paths.dataset_dir.mkdir(parents=True, exist_ok=True)
     paths.model_dir.mkdir(parents=True, exist_ok=True)
     paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    paths.logs_dir.mkdir(parents=True, exist_ok=True)
     return paths
 
 
@@ -146,5 +202,6 @@ __all__ = [
     "resolve_data_domain",
     "get_domain_paths",
     "ensure_domain_layout",
+    "require_data_root_available",
     "research_static_end_date",
 ]
