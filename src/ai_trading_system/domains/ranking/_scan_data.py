@@ -7,10 +7,17 @@ import sqlite3
 import pandas as pd
 import pyarrow.parquet as pq
 
+from ai_trading_system.platform.db.paths import get_domain_paths
+
+
+_PATHS = get_domain_paths()
+_ALL_SYMBOLS_DIR = _PATHS.feature_store_dir / "all_symbols"
+_MASTERDB = str(_PATHS.master_db_path)
+
 
 def load_sector_rs() -> pd.DataFrame:
     """Load sector RS from parquet, normalize dates."""
-    df = pq.read_table("data/feature_store/all_symbols/sector_rs.parquet").to_pandas()
+    df = pq.read_table(str(_ALL_SYMBOLS_DIR / "sector_rs.parquet")).to_pandas()
     df.index = pd.to_datetime(df.index).normalize()
     df = df[~df.index.duplicated(keep="last")]
     return df
@@ -19,7 +26,7 @@ def load_sector_rs() -> pd.DataFrame:
 def load_stock_vs_sector() -> pd.DataFrame:
     """Load stock vs sector RS from parquet, normalize dates."""
     df = pq.read_table(
-        "data/feature_store/all_symbols/stock_vs_sector.parquet"
+        str(_ALL_SYMBOLS_DIR / "stock_vs_sector.parquet")
     ).to_pandas()
     df.index = pd.to_datetime(df.index).normalize()
     df = df[~df.index.duplicated(keep="last")]
@@ -28,7 +35,7 @@ def load_stock_vs_sector() -> pd.DataFrame:
 
 def load_sector_mapping() -> pd.DataFrame:
     """Load symbol to sector mapping from SQLite using sector_mapping table."""
-    conn = sqlite3.connect("data/masterdata.db")
+    conn = sqlite3.connect(_MASTERDB)
     df = pd.read_sql("""
         SELECT s.symbol_id as symbol, COALESCE(sm.system_sector, 'Other') as sector
         FROM symbols s
@@ -41,7 +48,7 @@ def load_sector_mapping() -> pd.DataFrame:
 
 def load_sector_map() -> dict:
     """Load symbol to sector mapping as dictionary using sector_mapping table."""
-    conn = sqlite3.connect("data/masterdata.db")
+    conn = sqlite3.connect(_MASTERDB)
     rows = conn.execute("""
         SELECT s.symbol_id, COALESCE(sm.system_sector, 'Other')
         FROM symbols s

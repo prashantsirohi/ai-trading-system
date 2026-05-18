@@ -123,10 +123,10 @@ class SWOTAnalysis:
 def load_sector_map() -> Dict[str, str]:
     try:
         import sqlite3
-        from pathlib import Path
 
-        base_dir = Path(__file__).resolve().parents[4]
-        conn = sqlite3.connect(base_dir / "data/masterdata.db")
+        from ai_trading_system.platform.db.paths import get_domain_paths
+
+        conn = sqlite3.connect(str(get_domain_paths().master_db_path))
 
         rows = conn.execute("""
             SELECT s.symbol_id, COALESCE(sm.system_sector, 'Other')
@@ -153,16 +153,17 @@ class Portfolio:
         self._sector_rs: Optional[pd.DataFrame] = None
         self._stock_rs: Optional[pd.DataFrame] = None
         self._sector_map: Dict[str, str] = {}
-        self._base_dir = Path(__file__).resolve().parents[4]
+        from ai_trading_system.platform.db.paths import get_domain_paths
+
+        self._feature_store_dir = get_domain_paths().feature_store_dir
 
     def load_rs_data(self) -> bool:
         try:
             self._sector_rs = pd.read_parquet(
-                self._base_dir / "data/feature_store/all_symbols/sector_rs.parquet"
+                self._feature_store_dir / "all_symbols" / "sector_rs.parquet"
             )
             self._stock_rs = pd.read_parquet(
-                self._base_dir
-                / "data/feature_store/all_symbols/stock_vs_sector.parquet"
+                self._feature_store_dir / "all_symbols" / "stock_vs_sector.parquet"
             )
             self._sector_map = load_sector_map()
             logger.info("RS data loaded successfully")

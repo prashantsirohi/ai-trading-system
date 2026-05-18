@@ -32,3 +32,19 @@ Recommended starting points:
   - `python -m pip install -r requirements.txt`
   - `python -m pip install -e .`
 - Execution API requires `EXECUTION_API_KEY` to be set; `/api/*` requests return `500` when the key is missing.
+
+## Relocating data to external storage
+
+Large artifacts (DuckDB files, parquet feature store, pipeline runs, optuna
+journals, reports, logs, models) can live outside the repo. Set any of the
+following in `.env` (see `.env.example`):
+
+- `DATA_ROOT` — replaces `data/` (everything except `masterdata.db` and
+  `NSE_Companies.xlsx`, which stay in the repo because they're git-tracked).
+- `REPORTS_ROOT` — replaces `reports/`.
+- `LOGS_ROOT` — replaces `logs/`.
+- `MODELS_ROOT` — replaces `models/`.
+
+If `DATA_ROOT` is set but the path is missing (e.g. external drive unmounted),
+`require_data_root_available()` raises a clear error rather than silently
+writing into the repo. Unset the variables to fall back to the in-repo layout.

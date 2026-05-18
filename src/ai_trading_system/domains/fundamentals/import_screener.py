@@ -11,11 +11,13 @@ import pandas as pd
 from ai_trading_system.domains.fundamentals.schema import normalize_columns
 from ai_trading_system.domains.fundamentals.scoring import compute_fundamental_scores
 from ai_trading_system.domains.fundamentals.trends import compute_fundamental_trends
+from ai_trading_system.platform.db.paths import get_domain_paths
 
 
-DEFAULT_DB_PATH = Path("data/fundamentals.duckdb")
-DEFAULT_LATEST_OUTPUT = Path("data/fundamentals/fundamental_scores_latest.csv")
-DEFAULT_TRENDS_OUTPUT = Path("data/fundamentals/fundamental_trends_latest.csv")
+_PATHS = get_domain_paths()
+DEFAULT_DB_PATH = _PATHS.root_dir / "fundamentals.duckdb"
+DEFAULT_LATEST_OUTPUT = _PATHS.fundamentals_dir / "fundamental_scores_latest.csv"
+DEFAULT_TRENDS_OUTPUT = _PATHS.fundamentals_dir / "fundamental_trends_latest.csv"
 
 
 def _replace_snapshot_table(conn: duckdb.DuckDBPyConnection, table_name: str, frame: pd.DataFrame, snapshot_date: str) -> None:

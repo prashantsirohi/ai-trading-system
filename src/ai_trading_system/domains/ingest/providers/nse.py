@@ -5,7 +5,11 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 import pandas as pd
 import requests
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
+
+
+_DEFAULT_NSE_EQ_DIR = str(get_domain_paths().raw_dir / "NSE_EQ")
 
 
 class NSECollector:
@@ -13,7 +17,7 @@ class NSECollector:
     NSE Data Collector for fetching bhavcopy and equity data.
     """
 
-    def __init__(self, data_dir: str = "data/raw/NSE_EQ"):
+    def __init__(self, data_dir: str = _DEFAULT_NSE_EQ_DIR):
         self.data_dir = data_dir
         self.base_url = "https://www.nseindia.com"
         self.bhavcopy_url = "https://www.nseindia.com/api/reports?archives=cm"

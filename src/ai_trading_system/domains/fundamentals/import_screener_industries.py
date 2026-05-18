@@ -15,11 +15,13 @@ from ai_trading_system.domains.fundamentals.import_screener import (
 from ai_trading_system.domains.fundamentals.industry_schema import normalize_industry_columns
 from ai_trading_system.domains.fundamentals.industry_scoring import compute_industry_fundamental_scores
 from ai_trading_system.domains.fundamentals.industry_trends import compute_industry_fundamental_trends
+from ai_trading_system.platform.db.paths import get_domain_paths
 
 
-DEFAULT_INDUSTRY_DB_PATH = Path("data/fundamentals.duckdb")
-DEFAULT_INDUSTRY_LATEST_OUTPUT = Path("data/fundamentals/industry_fundamental_scores_latest.csv")
-DEFAULT_INDUSTRY_TRENDS_OUTPUT = Path("data/fundamentals/industry_fundamental_trends_latest.csv")
+_PATHS = get_domain_paths()
+DEFAULT_INDUSTRY_DB_PATH = _PATHS.root_dir / "fundamentals.duckdb"
+DEFAULT_INDUSTRY_LATEST_OUTPUT = _PATHS.fundamentals_dir / "industry_fundamental_scores_latest.csv"
+DEFAULT_INDUSTRY_TRENDS_OUTPUT = _PATHS.fundamentals_dir / "industry_fundamental_trends_latest.csv"
 
 
 def _previous_industry_snapshot_date(conn: duckdb.DuckDBPyConnection, snapshot_date: str) -> str | None:

@@ -12,8 +12,13 @@ from pandas.errors import EmptyDataError
 
 from ai_trading_system.domains.fundamentals.contracts import WATCHLIST_BUCKET_PRIORITY, WATCHLIST_OUTPUT_COLUMNS
 from ai_trading_system.domains.fundamentals.industry_schema import normalize_industry_key
+from ai_trading_system.platform.db.paths import get_domain_paths
 
 
+# Kept relative because callers (e.g. FundamentalsStage._resolve_*_path) treat
+# relative defaults as project-root-relative and absolute paths as overrides.
+# CLI argparse below converts these to absolute paths via the path resolver,
+# which honors DATA_ROOT.
 DEFAULT_SCORES_PATH = Path("data/fundamentals/fundamental_scores_latest.csv")
 DEFAULT_TRENDS_PATH = Path("data/fundamentals/fundamental_trends_latest.csv")
 DEFAULT_CATALYSTS_PATH = Path("data/fundamentals/catalyst_scores_latest.csv")
@@ -455,7 +460,7 @@ def enrich_rank_artifacts(
     output.parent.mkdir(parents=True, exist_ok=True)
     result.to_csv(output, index=False)
     if run_id:
-        run_output = Path("data/pipeline_runs") / run_id / "fundamentals" / "watchlist_candidates.csv"
+        run_output = get_domain_paths().pipeline_runs_dir / run_id / "fundamentals" / "watchlist_candidates.csv"
         run_output.parent.mkdir(parents=True, exist_ok=True)
         result.to_csv(run_output, index=False)
     if return_metrics:
@@ -479,22 +484,35 @@ def enrich_rank_artifacts(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    fundamentals_dir = get_domain_paths().fundamentals_dir
     parser = argparse.ArgumentParser(description="Enrich rank artifacts with latest fundamental scores.")
     parser.add_argument("--rank-dir", required=True, help="Rank attempt directory")
-    parser.add_argument("--fundamental-scores", default=str(DEFAULT_SCORES_PATH), help="Latest fundamental scores CSV")
-    parser.add_argument("--fundamental-trends", default=str(DEFAULT_TRENDS_PATH), help="Latest fundamental trends CSV")
+    parser.add_argument(
+        "--fundamental-scores",
+        default=str(fundamentals_dir / "fundamental_scores_latest.csv"),
+        help="Latest fundamental scores CSV",
+    )
+    parser.add_argument(
+        "--fundamental-trends",
+        default=str(fundamentals_dir / "fundamental_trends_latest.csv"),
+        help="Latest fundamental trends CSV",
+    )
     parser.add_argument(
         "--industry-scores",
-        default=str(DEFAULT_INDUSTRY_SCORES_PATH),
+        default=str(fundamentals_dir / "industry_fundamental_scores_latest.csv"),
         help="Latest industry fundamental scores CSV",
     )
     parser.add_argument(
         "--industry-trends",
-        default=str(DEFAULT_INDUSTRY_TRENDS_PATH),
+        default=str(fundamentals_dir / "industry_fundamental_trends_latest.csv"),
         help="Latest industry fundamental trends CSV",
     )
     parser.add_argument("--catalysts", default=None, help="Optional catalyst score CSV")
-    parser.add_argument("--output", default=str(DEFAULT_OUTPUT_PATH), help="Enriched watchlist output CSV")
+    parser.add_argument(
+        "--output",
+        default=str(fundamentals_dir / "watchlist_candidates_latest.csv"),
+        help="Enriched watchlist output CSV",
+    )
     parser.add_argument("--run-id", default=None, help="Optional pipeline run id for per-run output")
     parser.add_argument("--top-n", type=int, default=100)
     parser.add_argument("--min-technical-score", type=float, default=50.0)

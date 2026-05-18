@@ -31,7 +31,7 @@ def test_resolve_db_path_env(monkeypatch):
 
 def test_resolve_db_path_default(monkeypatch):
     monkeypatch.delenv("AI_TRADING_MARKET_INTEL_DB", raising=False)
-    assert market_intel_client.resolve_db_path() == "data/market_intel.duckdb"
+    assert market_intel_client.resolve_db_path().endswith("data/market_intel.duckdb")
 
 
 def test_get_event_query_service_caches(monkeypatch, tmp_path):

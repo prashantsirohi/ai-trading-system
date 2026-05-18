@@ -26,7 +26,7 @@ from ai_trading_system.pipeline.contracts import (
 )
 from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.platform.logging import logger as logging_module
-from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout
+from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout, get_domain_paths
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
 from ai_trading_system.pipeline.stages import CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, NarrativeStage, PerfTrackerStage, PublishStage, RankStage
@@ -591,7 +591,7 @@ class PipelineOrchestrator:
         return requested
 
     def _fundamental_scores_available(self, fundamental_scores_path: object | None = None) -> bool:
-        configured = Path(str(fundamental_scores_path or "data/fundamentals/fundamental_scores_latest.csv"))
+        configured = Path(str(fundamental_scores_path or get_domain_paths().fundamentals_dir / "fundamental_scores_latest.csv"))
         if not configured.is_absolute():
             configured = self.project_root / configured
         return configured.exists() and configured.is_file()
@@ -784,7 +784,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--fundamental-scores-path",
-        default="data/fundamentals/fundamental_scores_latest.csv",
+        default=str(get_domain_paths().fundamentals_dir / "fundamental_scores_latest.csv"),
         help="Path to latest fundamental scores CSV.",
     )
     parser.add_argument(

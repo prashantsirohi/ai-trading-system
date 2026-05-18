@@ -209,13 +209,17 @@ def _mean_metrics(folds: list[FoldResult]) -> Metrics:
 
 
 def _study_storage_uri(project_root: Path, run_id: str) -> str:
-    """Canonical journal-file path for a study, relative to project root.
+    """Canonical journal-file path for a study.
 
-    The path is stored on the run row and is resolved against the
-    ``--project-root`` passed at resume time (so a study created on one
-    machine can be resumed in a clone with the same data layout).
+    Returns an absolute path under the resolved ``optuna_dir`` (which honors
+    ``DATA_ROOT``). Stored on the run row; resume-time code uses
+    ``project_root / storage_uri`` — and Path arithmetic with an absolute
+    right-hand operand simply returns the absolute path, so this stays
+    compatible with legacy relative entries already in the registry.
     """
-    return str(Path("data") / "optuna" / f"{run_id}.log")
+    from ai_trading_system.platform.db.paths import get_domain_paths
+
+    return str(get_domain_paths(project_root=project_root).optuna_dir / f"{run_id}.log")
 
 
 def _open_journal_study(
