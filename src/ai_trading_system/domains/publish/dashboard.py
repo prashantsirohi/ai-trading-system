@@ -545,7 +545,7 @@ def publish_dashboard_payload(
     breadth_rows = 0
     sections = [
         ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
-        ("SECTOR CONTEXT", bundle.sector_leaders),
+        ("SECTOR CONTEXT — Leading/Improving only; Rank = absolute RS rank across all sectors", bundle.sector_leaders),
         ("PATTERN SETUPS", bundle.pattern_setups),
         ("EVENTS SUMMARY", _event_summary_frame(bundle)),
         ("MARKET MOVES SNAPSHOT", bundle.market_moves if not bundle.market_moves.empty else weekly_moves),

@@ -707,7 +707,7 @@ class PipelineOrchestrator:
         return requested
 
     def _fundamental_scores_available(self, fundamental_scores_path: object | None = None) -> bool:
-        configured = Path(str(fundamental_scores_path or get_domain_paths().fundamentals_dir / "fundamental_scores_latest.csv"))
+        configured = Path(str(fundamental_scores_path or get_domain_paths(self.project_root).fundamentals_dir / "fundamental_scores_latest.csv"))
         if not configured.is_absolute():
             configured = self.project_root / configured
         return configured.exists() and configured.is_file()

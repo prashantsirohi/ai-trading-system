@@ -208,8 +208,8 @@ def _load_panel_from_table(
 
     # Rename factor_* columns to PRODUCTION_FACTOR_COLUMNS, drop rows without
     # matured forward returns.
-    rows = rows.rename(columns={**_TABLE_COLUMN_TO_SCORE, fwd_col: "forward_return"})
-    rows["forward_return"] = pd.to_numeric(rows["forward_return"], errors="coerce") / 100.0
+    rows = rows.rename(columns={**_TABLE_COLUMN_TO_SCORE, fwd_col: "forward_return"}).copy()
+    rows.loc[:, "forward_return"] = pd.to_numeric(rows["forward_return"], errors="coerce") / 100.0
     rows = rows.loc[rows["forward_return"].notna()].reset_index(drop=True)
     if len(rows) < _MIN_FAST_PATH_ROWS:
         return None

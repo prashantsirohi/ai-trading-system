@@ -255,6 +255,7 @@ def test_orchestrator_auto_injects_fundamentals_when_snapshot_exists(tmp_path: P
         "insight",
         "narrative",
         "publish",
+        "perf_tracker",
     ]
     _scores(scores_path)
     assert orchestrator._normalize_stage_names(None) == [
@@ -268,6 +269,7 @@ def test_orchestrator_auto_injects_fundamentals_when_snapshot_exists(tmp_path: P
         "insight",
         "narrative",
         "publish",
+        "perf_tracker",
     ]
     assert orchestrator._normalize_stage_names(None, enable_fundamentals=True) == [
         "ingest",
@@ -280,6 +282,7 @@ def test_orchestrator_auto_injects_fundamentals_when_snapshot_exists(tmp_path: P
         "insight",
         "narrative",
         "publish",
+        "perf_tracker",
     ]
     assert orchestrator._normalize_stage_names(["rank", "fundamentals"]) == ["rank", "fundamentals"]
     assert orchestrator._normalize_stage_names(["rank", "publish"]) == ["rank", "publish"]

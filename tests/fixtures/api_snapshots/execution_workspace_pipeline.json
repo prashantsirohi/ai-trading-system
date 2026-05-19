@@ -84,6 +84,10 @@
       "unexpected_symbol_count": 0
     }
   },
+  "latest_insight": {
+    "detail": "no insight artifacts found",
+    "status": "missing"
+  },
   "ops_health": {
     "available": true,
     "dq_summary": {
@@ -209,10 +213,13 @@
       "stage_label": null,
       "stage_transition": null,
       "symbol_id": "AAA",
+      "top_pattern_end_date": null,
       "top_pattern_family": "cup_handle",
       "top_pattern_invalidation_price": null,
       "top_pattern_pivot_price": null,
       "top_pattern_setup_quality": 91.0,
+      "top_pattern_signal_date": null,
+      "top_pattern_start_date": null,
       "top_pattern_state": "confirmed"
     },
     {
@@ -225,10 +232,13 @@
       "stage_label": null,
       "stage_transition": null,
       "symbol_id": "BBB",
+      "top_pattern_end_date": null,
       "top_pattern_family": null,
       "top_pattern_invalidation_price": null,
       "top_pattern_pivot_price": null,
       "top_pattern_setup_quality": null,
+      "top_pattern_signal_date": null,
+      "top_pattern_start_date": null,
       "top_pattern_state": null
     }
   ],

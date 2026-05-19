@@ -98,7 +98,7 @@ def compute_forward_returns(
             work[f"fwd_{n}d_matured_at"] = pd.NaT
         return work
 
-    ohlcv["d"] = pd.to_datetime(ohlcv["d"]).dt.date
+    ohlcv = ohlcv.assign(d=pd.to_datetime(ohlcv["d"]).dt.date)
 
     # Map (symbol, exchange, run_date) -> idx_at_run_date
     base_idx = ohlcv.rename(columns={"d": "run_date", "idx": "idx_at_run", "close": "close_at_run"})
@@ -118,7 +118,7 @@ def compute_forward_returns(
         work = work.merge(target, on=["symbol_id", "exchange", "idx_at_run"], how="left")
         close_run = pd.to_numeric(work["close_at_run"], errors="coerce")
         close_fwd = pd.to_numeric(work[f"close_fwd_{n}d"], errors="coerce")
-        work[f"fwd_{n}d_return"] = (close_fwd - close_run) / close_run.replace(0, pd.NA) * 100.0
+        work.loc[:, f"fwd_{n}d_return"] = (close_fwd - close_run) / close_run.replace(0, pd.NA) * 100.0
         work = work.drop(columns=[f"close_fwd_{n}d"])
 
     work = work.drop(columns=["idx_at_run", "close_at_run"], errors="ignore")
@@ -129,8 +129,8 @@ def compute_forward_returns(
     # surface a boolean column so digest/cohort aggregations can exclude them.
     if "fwd_5d_return" in work.columns:
         r5 = pd.to_numeric(work["fwd_5d_return"], errors="coerce")
-        work["fwd_5d_anomaly"] = (r5.abs() > FORWARD_RETURN_ANOMALY_5D_PCT).fillna(False)
+        work.loc[:, "fwd_5d_anomaly"] = (r5.abs() > FORWARD_RETURN_ANOMALY_5D_PCT).fillna(False)
     else:
-        work["fwd_5d_anomaly"] = False
+        work.loc[:, "fwd_5d_anomaly"] = False
 
     return work

@@ -34,6 +34,9 @@ class _FakeSheetManager:
         self.sheet_name = sheet_name
         return True
 
+    def apply_number_formats(self, sheet_name, formats):
+        return True
+
 
 class _FakeWorksheet:
     def clear(self):

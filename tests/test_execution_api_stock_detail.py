@@ -305,6 +305,7 @@ def test_stock_ohlcv_missing_db_returns_unavailable(
     assert body == {
         "available": False,
         "symbol": "AAA",
+        "requested_symbol": None,
         "interval": "daily",
         "candles": [],
     }
