@@ -222,7 +222,7 @@ class MasterDataCollector:
             "Engineering": "NIFTY INFRA",
         }
         
-        df["mapped_sector"] = df["Industry"].map(sector_mapping)
+        df.loc[:, "mapped_sector"] = df["Industry"].map(sector_mapping)
         
         return df
 

@@ -277,7 +277,7 @@ class FeatureEngine:
         if os.path.exists(filepath):
             df = pd.read_parquet(filepath)
             if "timestamp" in df.columns:
-                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                df.loc[:, "timestamp"] = pd.to_datetime(df["timestamp"])
                 df = df.set_index("timestamp")
             return df
         return pd.DataFrame()
@@ -312,13 +312,13 @@ class FeatureEngine:
 
         df["ATR"] = self._calculate_atr(high, low, close, 14)
 
-        df["EMA_20"] = close.ewm(span=20, adjust=False).mean()
-        df["EMA_50"] = close.ewm(span=50, adjust=False).mean()
-        df["EMA_200"] = close.ewm(span=200, adjust=False).mean()
+        df.loc[:, "EMA_20"] = close.ewm(span=20, adjust=False).mean()
+        df.loc[:, "EMA_50"] = close.ewm(span=50, adjust=False).mean()
+        df.loc[:, "EMA_200"] = close.ewm(span=200, adjust=False).mean()
 
-        df["SMA_20"] = close.rolling(20).mean()
-        df["SMA_50"] = close.rolling(50).mean()
-        df["SMA_200"] = close.rolling(200).mean()
+        df.loc[:, "SMA_20"] = close.rolling(20).mean()
+        df.loc[:, "SMA_50"] = close.rolling(50).mean()
+        df.loc[:, "SMA_200"] = close.rolling(200).mean()
 
         supert, supert_d = self._calculate_supertrend(high, low, close, 10, 3)
         df["SUPERT_10_3"] = supert
@@ -407,20 +407,20 @@ class FeatureEngine:
         if "close" not in df.columns:
             return df
 
-        df["returns"] = df["close"].pct_change()
-        df["log_returns"] = np.log(df["close"] / df["close"].shift(1))
+        df.loc[:, "returns"] = df["close"].pct_change()
+        df.loc[:, "log_returns"] = np.log(df["close"] / df["close"].shift(1))
 
-        df["volatility_20"] = df["returns"].rolling(20).std()
-        df["volatility_60"] = df["returns"].rolling(60).std()
+        df.loc[:, "volatility_20"] = df["returns"].rolling(20).std()
+        df.loc[:, "volatility_60"] = df["returns"].rolling(60).std()
 
-        df["price_change_1d"] = df["close"].pct_change(1)
-        df["price_change_5d"] = df["close"].pct_change(5)
-        df["price_change_20d"] = df["close"].pct_change(20)
+        df.loc[:, "price_change_1d"] = df["close"].pct_change(1)
+        df.loc[:, "price_change_5d"] = df["close"].pct_change(5)
+        df.loc[:, "price_change_20d"] = df["close"].pct_change(20)
 
         if "volume" in df.columns:
-            df["volume_sma_20"] = df["volume"].rolling(20).mean()
+            df.loc[:, "volume_sma_20"] = df["volume"].rolling(20).mean()
             df["volume_ratio"] = df["volume"] / df["volume_sma_20"]
-            df["volume_spike"] = (df["volume"] > df["volume_sma_20"] * 2).astype(int)
+            df.loc[:, "volume_spike"] = (df["volume"] > df["volume_sma_20"] * 2).astype(int)
 
         if "high" in df.columns and "low" in df.columns:
             df["range"] = df["high"] - df["low"]
@@ -464,8 +464,8 @@ class FeatureEngine:
         if "close" not in df.columns:
             return df
 
-        df["momentum_10"] = df["close"] / df["close"].shift(10) - 1
-        df["momentum_20"] = df["close"] / df["close"].shift(20) - 1
+        df.loc[:, "momentum_10"] = df["close"] / df["close"].shift(10) - 1
+        df.loc[:, "momentum_20"] = df["close"] / df["close"].shift(20) - 1
 
         for period in [12, 26]:
             df[f"roc_{period}"] = (df["close"] - df["close"].shift(period)) / df[
@@ -479,7 +479,7 @@ class FeatureEngine:
         if "volume" not in df.columns:
             return df
 
-        df["obv"] = (np.sign(df["close"].diff()) * df["volume"]).fillna(0).cumsum()
+        df.loc[:, "obv"] = (np.sign(df["close"].diff()) * df["volume"]).fillna(0).cumsum()
 
         if "high" in df.columns and "low" in df.columns and "close" in df.columns:
             typical_price = (df["high"] + df["low"] + df["close"]) / 3

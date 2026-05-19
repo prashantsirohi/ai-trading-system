@@ -270,8 +270,8 @@ def compute_factor_turnover(
 
     if "eligible_rank" not in prev.columns or "eligible_rank" not in curr.columns:
         if "composite_score" in prev.columns and "composite_score" in curr.columns:
-            prev["rank_by_score"] = prev["composite_score"].rank(ascending=False, method="min")
-            curr["rank_by_score"] = curr["composite_score"].rank(ascending=False, method="min")
+            prev.loc[:, "rank_by_score"] = prev["composite_score"].rank(ascending=False, method="min")
+            curr.loc[:, "rank_by_score"] = curr["composite_score"].rank(ascending=False, method="min")
             compare_col = "rank_by_score"
         else:
             return {

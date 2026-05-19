@@ -726,7 +726,7 @@ def _fetch_yfinance_rows(
             frame = _extract_yfinance_symbol_frame(data, row["symbol_id"])
             if frame.empty:
                 continue
-            frame["trade_date"] = frame["timestamp"].dt.date.astype(str)
+            frame.loc[:, "trade_date"] = frame["timestamp"].dt.date.astype(str)
             frame = frame[frame["trade_date"].isin(target_dates)].drop(columns=["trade_date"])
             if frame.empty:
                 continue
@@ -1237,17 +1237,17 @@ def _run_dhan_primary_daily_update(
     mismatch_sample: list[dict[str, object]] = []
     if not catalog_rows.empty and not reference_rows.empty:
         left = catalog_rows.copy()
-        left["trade_date"] = pd.to_datetime(left["timestamp"]).dt.date.astype(str)
+        left.loc[:, "trade_date"] = pd.to_datetime(left["timestamp"]).dt.date.astype(str)
         left = left[["symbol_id", "trade_date", "close"]].rename(columns={"close": "close_dhan"})
         right = reference_rows.copy()
-        right["trade_date"] = pd.to_datetime(right["timestamp"]).dt.date.astype(str)
+        right.loc[:, "trade_date"] = pd.to_datetime(right["timestamp"]).dt.date.astype(str)
         right = right[["symbol_id", "trade_date", "close", "validator_source"]].rename(columns={"close": "close_ref"})
         merged = left.merge(right, on=["symbol_id", "trade_date"], how="inner")
         compared_rows = int(len(merged))
         if not merged.empty:
             ref_abs = merged["close_ref"].abs().replace(0, pd.NA)
             merged["abs_pct_diff"] = (merged["close_dhan"] - merged["close_ref"]).abs() / ref_abs
-            merged["abs_pct_diff"] = merged["abs_pct_diff"].fillna(0.0)
+            merged.loc[:, "abs_pct_diff"] = merged["abs_pct_diff"].fillna(0.0)
             mismatch_mask = (
                 merged["close_dhan"].round(4) != merged["close_ref"].round(4)
             ) & (merged["abs_pct_diff"] >= float(validator_pct_threshold))

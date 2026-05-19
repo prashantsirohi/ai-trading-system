@@ -715,7 +715,7 @@ def _render_quantstats_tearsheet_subprocess(
             os.environ["MPLCONFIGDIR"] = str(mpl_dir)
 
         frame = pd.read_csv(returns_csv)
-        frame["date"] = pd.to_datetime(frame["date"])
+        frame.loc[:, "date"] = pd.to_datetime(frame["date"])
         series = pd.Series(frame["return"].astype(float).values, index=frame["date"])
         series = series.dropna()
         if series.empty:

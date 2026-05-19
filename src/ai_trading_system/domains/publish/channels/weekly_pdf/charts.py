@@ -50,7 +50,7 @@ def breadth_chart(breadth: pd.DataFrame, output_path: Path) -> Optional[Path]:
         return None
     try:
         df = breadth.copy()
-        df["trade_date"] = pd.to_datetime(df["trade_date"])
+        df.loc[:, "trade_date"] = pd.to_datetime(df["trade_date"])
         df = df.sort_values("trade_date")
         fig, ax = plt.subplots(figsize=_BREADTH_FIG_SIZE)
         ax.plot(df["trade_date"], df["pct_above_sma20"], label="% > SMA20", color="#1f77b4", linewidth=1.4)
@@ -168,7 +168,7 @@ def _load_symbol_ohlcv(
         return pd.DataFrame()
     if df.empty:
         return df
-    df["dt"] = pd.to_datetime(df["dt"])
+    df.loc[:, "dt"] = pd.to_datetime(df["dt"])
     df = df.set_index("dt")
     df.columns = [c.capitalize() for c in df.columns]  # mplfinance expects Open/High/Low/Close/Volume
     return df

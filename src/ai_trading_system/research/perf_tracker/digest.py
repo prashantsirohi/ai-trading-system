@@ -201,21 +201,21 @@ def _same_date_bucket_attribution(con) -> pd.DataFrame:
     ).fetchdf()
     if df.empty:
         return df
-    df["avg_5d"] = df["avg_5d"].map(_round)
-    df["avg_10d"] = df["avg_10d"].map(_round)
-    df["avg_20d"] = df["avg_20d"].map(_round)
-    df["hitrate_5d"] = df["hitrate_5d"].map(lambda v: _round(v, 1))
-    df["hitrate_20d"] = df["hitrate_20d"].map(lambda v: _round(v, 1))
+    df.loc[:, "avg_5d"] = df["avg_5d"].map(_round)
+    df.loc[:, "avg_10d"] = df["avg_10d"].map(_round)
+    df.loc[:, "avg_20d"] = df["avg_20d"].map(_round)
+    df.loc[:, "hitrate_5d"] = df["hitrate_5d"].map(lambda v: _round(v, 1))
+    df.loc[:, "hitrate_20d"] = df["hitrate_20d"].map(lambda v: _round(v, 1))
     df["control_avg_5d"] = control_5d
     df["control_avg_10d"] = control_10d
     df["control_avg_20d"] = control_20d
-    df["excess_5d"] = df["avg_5d"].map(
+    df.loc[:, "excess_5d"] = df["avg_5d"].map(
         lambda v: _round(v - control_5d) if v is not None and control_5d is not None else None
     )
-    df["excess_10d"] = df["avg_10d"].map(
+    df.loc[:, "excess_10d"] = df["avg_10d"].map(
         lambda v: _round(v - control_10d) if v is not None and control_10d is not None else None
     )
-    df["excess_20d"] = df["avg_20d"].map(
+    df.loc[:, "excess_20d"] = df["avg_20d"].map(
         lambda v: _round(v - control_20d) if v is not None and control_20d is not None else None
     )
     return df

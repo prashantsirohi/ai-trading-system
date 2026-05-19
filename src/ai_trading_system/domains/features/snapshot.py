@@ -35,14 +35,14 @@ def store_partitioned(
 
     # Add date column if missing
     if "date" not in df.columns:
-        df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+        df.loc[:, "date"] = pd.to_datetime(df["timestamp"]).dt.date
 
     rows_written = 0
     conn = get_conn()
 
     # Group by partition
-    df["year"] = pd.to_datetime(df["date"]).dt.year
-    df["month"] = pd.to_datetime(df["date"]).dt.month
+    df.loc[:, "year"] = pd.to_datetime(df["date"]).dt.year
+    df.loc[:, "month"] = pd.to_datetime(df["date"]).dt.month
 
     for (year, month), partition_df in df.groupby(["year", "month"]):
         partition_path = get_partition_path(feature_store_dir, table_name, year, month)

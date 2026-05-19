@@ -413,7 +413,7 @@ class FeatureStore:
 
         # Add date column if not present
         if "date" not in df.columns:
-            df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+            df.loc[:, "date"] = pd.to_datetime(df["timestamp"]).dt.date
 
         # Filter to only new rows (after last_date) if incremental
         if last_date:
@@ -1785,7 +1785,7 @@ class FeatureStore:
                 try:
                     df = pd.read_parquet(os.path.join(dir_path, pf))
                     if "date" not in df.columns:
-                        df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+                        df.loc[:, "date"] = pd.to_datetime(df["timestamp"]).dt.date
                     if max_ts:
                         df = df[df["timestamp"] > max_ts]
                     if df.empty:
@@ -2282,7 +2282,7 @@ class FeatureStore:
             else:
                 return "Nano Cap"
 
-        df["mcap_category"] = df["mcap"].apply(mcap_category)
+        df.loc[:, "mcap_category"] = df["mcap"].apply(mcap_category)
 
         return df
 

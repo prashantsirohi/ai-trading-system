@@ -154,7 +154,7 @@ class NSECollector:
 
             if "data" in data:
                 df = pd.DataFrame(data["data"])
-                df["timestamp"] = pd.to_datetime(df["CH_TIMESTAMP"])
+                df.loc[:, "timestamp"] = pd.to_datetime(df["CH_TIMESTAMP"])
                 df = df.rename(columns={
                     "CH_OPEN": "open",
                     "CH_HIGH": "high",

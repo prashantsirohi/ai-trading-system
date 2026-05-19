@@ -66,7 +66,7 @@ class YFinanceCollector:
                 close = close.melt(
                     id_vars="Date", var_name="symbol", value_name="close"
                 )
-                close["symbol"] = close["symbol"].str.replace(".NS", "", regex=False)
+                close.loc[:, "symbol"] = close["symbol"].str.replace(".NS", "", regex=False)
 
                 # Add other columns from original data
                 for col in ["Open", "High", "Low", "Volume"]:
@@ -74,13 +74,13 @@ class YFinanceCollector:
                     df_col = df_col.melt(
                         id_vars="Date", var_name="symbol", value_name=col.lower()
                     )
-                    df_col["symbol"] = df_col["symbol"].str.replace(
+                    df_col.loc[:, "symbol"] = df_col["symbol"].str.replace(
                         ".NS", "", regex=False
                     )
                     close = close.merge(df_col, on=["Date", "symbol"])
 
                 close = close.rename(columns={"Date": "timestamp"})
-                close["timestamp"] = pd.to_datetime(close["timestamp"]).dt.tz_localize(
+                close.loc[:, "timestamp"] = pd.to_datetime(close["timestamp"]).dt.tz_localize(
                     None
                 )
 

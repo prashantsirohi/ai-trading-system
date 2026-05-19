@@ -189,7 +189,7 @@ class RegimeDetector:
         if os.path.exists(adx_path):
             df = pd.read_parquet(adx_path)
             if "timestamp" in df.columns:
-                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                df.loc[:, "timestamp"] = pd.to_datetime(df["timestamp"])
                 if date:
                     cutoff = pd.to_datetime(date)
                     df = df[df["timestamp"] <= cutoff]
@@ -220,7 +220,7 @@ class RegimeDetector:
 
         if os.path.exists(adx_path):
             df = pd.read_parquet(adx_path)
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            df.loc[:, "timestamp"] = pd.to_datetime(df["timestamp"])
             if date:
                 cutoff = pd.to_datetime(date)
                 df = df[df["timestamp"] <= cutoff]

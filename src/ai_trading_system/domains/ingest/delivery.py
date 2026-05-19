@@ -201,7 +201,7 @@ class DeliveryCollector:
             data_lines, columns=["symbol_id", "volume", "delivery_qty", "delivery_pct"]
         )
         df["exchange"] = "NSE"
-        df["timestamp"] = pd.to_datetime(date.date())
+        df.loc[:, "timestamp"] = pd.to_datetime(date.date())
 
         ts_str = date.strftime("%d%b%Y").upper()
         valid = df[df["delivery_pct"].notna()]
@@ -365,16 +365,16 @@ class DeliveryCollector:
         finally:
             conn.close()
 
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df.loc[:, "timestamp"] = pd.to_datetime(df["timestamp"])
 
         df = df.sort_values(["symbol_id", "timestamp"]).copy()
 
         for w, col in [(5, "delivery_5d_avg"), (20, "delivery_20d_avg")]:
-            df[col] = df.groupby("symbol_id")["delivery_pct"].transform(
+            df.loc[:, col] = df.groupby("symbol_id")["delivery_pct"].transform(
                 lambda x: x.rolling(w, min_periods=1).mean()
             )
 
-        df["delivery_pctile"] = (
+        df.loc[:, "delivery_pctile"] = (
             df.groupby("timestamp")["delivery_pct"].rank(pct=True) * 100
         )
 

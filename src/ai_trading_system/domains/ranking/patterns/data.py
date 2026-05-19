@@ -75,14 +75,14 @@ def load_pattern_frame(
     if "atr_value" not in frame.columns or frame["atr_value"].fillna(0).eq(0).all():
         frame["atr_value"] = fallback_atr
     else:
-        frame["atr_value"] = frame["atr_value"].fillna(fallback_atr)
+        frame.loc[:, "atr_value"] = frame["atr_value"].fillna(fallback_atr)
 
     if "volume_ratio_20" not in frame.columns or frame["volume_ratio_20"].isna().all():
         volume_avg_20 = by_symbol["volume"].transform(
             lambda series: series.shift(1).rolling(20, min_periods=5).mean()
         )
-        frame["volume_ratio_20"] = frame["volume"] / volume_avg_20.replace(0, np.nan)
-    frame["volume_ratio_20"] = frame["volume_ratio_20"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        frame.loc[:, "volume_ratio_20"] = frame["volume"] / volume_avg_20.replace(0, np.nan)
+    frame.loc[:, "volume_ratio_20"] = frame["volume_ratio_20"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     if (
         "volume_zscore_20" not in frame.columns
         or frame["volume_zscore_20"].isna().all()

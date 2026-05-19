@@ -430,7 +430,7 @@ class DhanCollector:
                 )
                 df["timestamp"] = normalize_dhan_timestamps_ist(inner["timestamp"])
             elif "date" in inner and inner["date"]:
-                df["timestamp"] = pd.to_datetime(inner["date"])
+                df.loc[:, "timestamp"] = pd.to_datetime(inner["date"])
             else:
                 logger.warning(f"No timestamp or date field for {security_id}")
                 return None
@@ -541,9 +541,9 @@ class DhanCollector:
 
             # Handle timestamp - epoch format
             if "timestamp" in inner and inner["timestamp"]:
-                df["timestamp"] = pd.to_datetime(inner["timestamp"], unit="s")
+                df.loc[:, "timestamp"] = pd.to_datetime(inner["timestamp"], unit="s")
             elif "date" in inner and inner["date"]:
-                df["timestamp"] = pd.to_datetime(inner["date"])
+                df.loc[:, "timestamp"] = pd.to_datetime(inner["date"])
             else:
                 return None
 
@@ -552,7 +552,7 @@ class DhanCollector:
             # Get last candle of each day (close)
             df["date"] = df.index.date
             df = df.groupby("date").last().reset_index().copy()
-            df["timestamp"] = pd.to_datetime(df["date"]) + pd.Timedelta(
+            df.loc[:, "timestamp"] = pd.to_datetime(df["date"]) + pd.Timedelta(
                 hours=18, minutes=30
             )
             df = df.set_index("timestamp").drop(columns=["date"])
@@ -1547,7 +1547,7 @@ class DhanCollector:
             }
 
         symbol_map = {s["security_id"]: s for s in symbols}
-        df["symbol_id"] = df["security_id"].map(
+        df.loc[:, "symbol_id"] = df["security_id"].map(
             lambda x: symbol_map.get(str(x), {}).get("symbol_id", "")
         )
         df["exchange"] = "NSE"
@@ -1563,7 +1563,7 @@ class DhanCollector:
                   AND timestamp::date = CURRENT_DATE
             """)
 
-            df["security_id"] = df["security_id"].astype(str)
+            df.loc[:, "security_id"] = df["security_id"].astype(str)
             conn.execute(
                 self._build_insert_select_sql(
                     "_catalog",
