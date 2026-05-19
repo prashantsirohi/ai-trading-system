@@ -52,7 +52,15 @@ class AutoTrader:
         heat_gate_threshold: float = 0.15,
         risk_config: RiskPolicyConfig | None = None,
         market_extras: dict[str, dict] | None = None,
+        risk_per_trade_pct: float | None = None,
     ) -> Dict[str, Any]:
+        # Phase 6: when the caller supplies risk_per_trade_pct (typically
+        # from a regime profile), it overrides anything carried on the
+        # individual signal. None means "no profile override — use the
+        # signal's value or the autotrader default" (legacy behavior).
+        profile_risk_per_trade = (
+            float(risk_per_trade_pct) if risk_per_trade_pct is not None else None
+        )
         positions_before = self.portfolio.open_positions()
         current_prices = {
             str(symbol_id).strip().upper(): float(price)
@@ -245,7 +253,14 @@ class AutoTrader:
                         "execution_weight": signal.get("execution_weight", 1.0),
                         "use_atr_position_sizing": bool(use_atr_position_sizing),
                         "atr_14": signal.get("atr_14"),
-                        "risk_per_trade_pct": signal.get("risk_per_trade_pct", 0.01),
+                        # Profile-driven risk wins when present; otherwise
+                        # fall through to the signal-level value, then the
+                        # historic 0.01 default.
+                        "risk_per_trade_pct": (
+                            profile_risk_per_trade
+                            if profile_risk_per_trade is not None
+                            else signal.get("risk_per_trade_pct", 0.01)
+                        ),
                         "atr_multiple": signal.get("atr_multiple", exit_atr_multiple),
                         "correlation_id": f"{action.strategy_mode}:{action.symbol_id}:{action.reason}",
                         # Forward engine-emitted reasons / stops so service can persist them.

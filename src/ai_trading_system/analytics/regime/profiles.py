@@ -27,10 +27,23 @@ class RegimeProfile:
     atr_stop_mult: float
     breakout_mode: str
     allow_pyramiding: bool
+    # Phase 6: per-regime per-trade risk cap. None means "no profile-driven
+    # value — fall back to whatever the signal payload / execution caller
+    # specifies." Existing profiles without this field stay backward-compat.
+    risk_per_trade_pct: float | None = None
     name: str = "unnamed"
 
     @classmethod
     def from_mapping(cls, regime: str, payload: dict[str, Any], *, name: str = "unnamed") -> "RegimeProfile":
+        risk_raw = payload.get("risk_per_trade_pct")
+        risk_value: float | None
+        if risk_raw is None:
+            risk_value = None
+        else:
+            try:
+                risk_value = float(risk_raw)
+            except (TypeError, ValueError):
+                risk_value = None
         return cls(
             name=name,
             regime=regime,
@@ -43,6 +56,7 @@ class RegimeProfile:
             atr_stop_mult=float(payload["atr_stop_mult"]),
             breakout_mode=str(payload.get("breakout_mode", "normal")),
             allow_pyramiding=bool(payload.get("allow_pyramiding", False)),
+            risk_per_trade_pct=risk_value,
         )
 
     def to_dict(self) -> dict[str, Any]:

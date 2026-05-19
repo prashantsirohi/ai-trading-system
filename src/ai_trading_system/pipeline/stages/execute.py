@@ -229,6 +229,18 @@ class ExecuteStage:
             )
             effective_exit_atr_multiple = float(rank_profile.get("atr_stop_mult") or request.exit_atr_multiple)
             effective_use_portfolio_constraints = True
+        # Phase 6: per-regime risk_per_trade_pct override. None means the
+        # profile didn't declare one (or rank_profile itself is absent) —
+        # autotrader falls through to the signal-level value, then the
+        # historic 0.01 default.
+        effective_risk_per_trade_pct: float | None = None
+        if rank_profile:
+            raw_val = rank_profile.get("risk_per_trade_pct")
+            if raw_val is not None:
+                try:
+                    effective_risk_per_trade_pct = float(raw_val)
+                except (TypeError, ValueError):
+                    effective_risk_per_trade_pct = None
 
         # Raw-regime early-warning override. Opt-in via param. When the raw
         # breadth signal is risk_off while confirmed is still bull/strong_bull,
@@ -300,6 +312,9 @@ class ExecuteStage:
             heat_gate_threshold=context.params.get("execution_heat_gate_threshold", 0.08),
             risk_config=_resolve_risk_config(context),
             market_extras=_build_market_extras(candidates.ranked_df),
+            # Phase 6: profile-driven risk_per_trade_pct override. None
+            # preserves the legacy "signal payload sets it" behavior.
+            risk_per_trade_pct=effective_risk_per_trade_pct,
         )
         trailing_summary = {"updated_count": 0, "evaluated_count": 0}
         if request.execution_enabled and not request.preview_only:
@@ -354,6 +369,7 @@ class ExecuteStage:
             "market_regime_disagreement": regime_disagree,
             "raw_regime_override_active": raw_override_active,
             "regime_profile": rank_profile,
+            "effective_risk_per_trade_pct": effective_risk_per_trade_pct,
             "effective_execution_capital": effective_capital,
             "effective_execution_top_n": effective_top_n,
             "effective_max_positions": effective_max_positions,
