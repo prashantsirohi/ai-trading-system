@@ -213,8 +213,11 @@ def run_backfill(
                 list(dates_to_replace),
             )
         con.register("incoming_rows", enriched)
+        # Match by column name, not position — protects against on-disk column
+        # order drift when ADD COLUMN appends to the end (e.g. factor_above_200dma
+        # is at position 26 on older DBs but appears mid-list in schema_cols).
         con.execute(
-            "INSERT INTO rank_cohort_performance "
+            "INSERT INTO rank_cohort_performance BY NAME "
             "SELECT *, CURRENT_TIMESTAMP AS inserted_at FROM incoming_rows"
         )
         con.unregister("incoming_rows")
