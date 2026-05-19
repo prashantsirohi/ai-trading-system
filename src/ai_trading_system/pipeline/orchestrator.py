@@ -73,6 +73,11 @@ class TerminalProgressRenderer:
         self._current_stage: Optional[str] = None
         self._run_started_at: Optional[float] = None
         self._is_tty = bool(getattr(sys.stderr, "isatty", lambda: False)())
+        # Within-stage fractional progress: bar position = _stages_completed +
+        # _current_stage_fraction (0.0..1.0). Driven by task metadata that
+        # carries total_steps/completed_steps (e.g. features stage).
+        self._stages_completed: int = 0
+        self._current_stage_fraction: float = 0.0
 
     def _stamp(self) -> str:
         return datetime.now().strftime("%H:%M:%S")
@@ -106,11 +111,23 @@ class TerminalProgressRenderer:
             disable=not self._is_tty,
         )
 
+    def _refresh_bar_position(self) -> None:
+        """Re-render bar at fractional position: stages_done + within-stage fraction."""
+        if self._bar is None:
+            return
+        target = float(self._stages_completed) + max(0.0, min(1.0, self._current_stage_fraction))
+        # Clamp to total so tqdm doesn't extrapolate past 100%.
+        target = min(target, float(self._bar.total or target))
+        self._bar.n = target
+        self._bar.refresh()
+
     def _advance(self, *, stage_name: str, status: str) -> None:
         if self._bar is None:
             return
         self._bar.set_postfix_str(f"{stage_name}={status}")
-        self._bar.update(1)
+        self._stages_completed += 1
+        self._current_stage_fraction = 0.0
+        self._refresh_bar_position()
 
     def update_running(self, *, stage_name: str, detail: str) -> None:
         """Update the bar in place while a stage is running (heartbeat hook)."""
@@ -127,9 +144,11 @@ class TerminalProgressRenderer:
 
         if status == "running":
             self._current_stage = stage_name
+            self._current_stage_fraction = 0.0
             if self._bar is not None:
                 self._bar.set_description_str(stage_name)
                 self._bar.set_postfix_str(detail or "running")
+                self._refresh_bar_position()
             else:
                 label = f"{stage_name}" + (f" - {detail}" if detail else "")
                 self._write(f"{self._stamp()} | [runn] {label}")
@@ -175,6 +194,19 @@ class TerminalProgressRenderer:
             self.failed.append(key)
         elif status == "degraded":
             self.degraded.append(key)
+        # Drive within-stage fractional progress from task metadata when the
+        # stage publishes total_steps/completed_steps (features does this).
+        metadata = payload.get("metadata") or {}
+        if isinstance(metadata, dict) and stage_name == self._current_stage:
+            total_steps = metadata.get("total_steps")
+            completed_steps = metadata.get("completed_steps")
+            if isinstance(total_steps, (int, float)) and total_steps and isinstance(completed_steps, (int, float)):
+                fraction = max(0.0, min(1.0, float(completed_steps) / float(total_steps)))
+                # Never let the fraction regress within a single stage —
+                # avoids visual flicker if events arrive out of order.
+                if fraction > self._current_stage_fraction:
+                    self._current_stage_fraction = fraction
+                    self._refresh_bar_position()
         # Only surface task lines that the operator actually needs to see —
         # ok/running for every sub-task would drown the bar.
         if status in {"running", "ok", "success", "completed"}:
