@@ -136,7 +136,7 @@ def test_orchestrator_smoke_runs_all_stages_and_registers_artifacts(tmp_path: Pa
     # pipeline produced all stage artifacts. Hard-floor failures still surface
     # as raised exceptions; reaching this assertion means none of those fired.
     assert result["status"] in ("completed", "completed_with_dq_relaxations")
-    assert [row["stage_name"] for row in result["stages"]] == ["ingest", "features", "rank", "candidates", "events", "execute", "insight", "narrative", "publish"]
+    assert [row["stage_name"] for row in result["stages"]] == ["ingest", "features", "rank", "candidates", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
     assert all(row["status"] == "completed" for row in result["stages"])
 
     run_id = result["run_id"]
