@@ -6,6 +6,7 @@ from ai_trading_system.analytics.regime.breadth import (
     confirmed_regime,
     compute_market_regime_snapshot,
     regime_disagreement,
+    resolve_previous_regime,
 )
 from ai_trading_system.analytics.regime.profiles import RegimeProfile, load_regime_profile
 
@@ -17,4 +18,5 @@ __all__ = [
     "compute_market_regime_snapshot",
     "load_regime_profile",
     "regime_disagreement",
+    "resolve_previous_regime",
 ]

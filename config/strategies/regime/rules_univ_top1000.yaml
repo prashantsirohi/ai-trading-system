@@ -4,25 +4,61 @@ regime_source:
   confirmation_days: 3
 
 rules:
+  # Hysteresis (Phase 4): each regime defines both an `enter` predicate set
+  # (strict — what's required to move INTO this regime from a lower one)
+  # and an `exit` predicate set (looser — what's required to STAY once
+  # you're already here). The classifier first checks the previous-day
+  # regime's `exit`; if satisfied, today stays put. Otherwise it walks the
+  # priority list applying each regime's `enter`. This suppresses
+  # 54%↔56% jitter without resorting to a single global hysteresis margin.
   strong_bull:
-    pct_above_200dma_gte: 0.75
-    pct_above_50dma_gte:  0.60
-    pct_at_52w_high_gte:  0.15
-    top1000_above_200dma: true
-    top1000_above_50dma:  true
+    enter:
+      pct_above_200dma_gte: 0.75
+      pct_above_50dma_gte:  0.60
+      pct_at_52w_high_gte:  0.15
+      top1000_above_200dma: true
+      top1000_above_50dma:  true
+    exit:
+      pct_above_200dma_gte: 0.70
+      pct_above_50dma_gte:  0.55
+      pct_at_52w_high_gte:  0.13
+      top1000_above_200dma: true
   bull:
-    pct_above_200dma_gte: 0.55
-    pct_at_52w_high_gte:  0.12
-    top1000_above_200dma: true
+    enter:
+      pct_above_200dma_gte: 0.55
+      pct_at_52w_high_gte:  0.12
+      top1000_above_200dma: true
+    exit:
+      pct_above_200dma_gte: 0.50
+      pct_at_52w_high_gte:  0.10
+      top1000_above_200dma: true
   cautious_bull:
-    pct_above_200dma_gte: 0.55
-    pct_at_52w_high_lt:   0.12
-    top1000_above_200dma: true
+    enter:
+      pct_above_200dma_gte: 0.55
+      pct_at_52w_high_lt:   0.12
+      top1000_above_200dma: true
+    exit:
+      # Stay in cautious_bull until 200DMA breadth drops below 50% — only
+      # then fall back to neutral. The at-high cap is not checked on exit
+      # because rising leadership simply promotes us to bull (re-enter).
+      pct_above_200dma_gte: 0.50
+      top1000_above_200dma: true
   neutral:
-    pct_above_200dma_gte: 0.30
+    enter:
+      pct_above_200dma_gte: 0.30
+    exit:
+      # Drift back into risk_off only if 200DMA falls below 28% — gives 2 pp
+      # of stickiness around the 30% threshold.
+      pct_above_200dma_gte: 0.28
   risk_off:
-    pct_above_200dma_lt:  0.30
-    pct_at_52w_high_lt:   0.05
+    enter:
+      pct_above_200dma_lt:  0.30
+      pct_at_52w_high_lt:   0.05
+    exit:
+      # Stay in risk_off until 200DMA recovers past 32% — extra 2 pp above
+      # the entry threshold to avoid bouncing between risk_off and neutral
+      # on a single weak day.
+      pct_above_200dma_lt:  0.32
 
 # Walk order for classify_regime when rules are present. The first block
 # whose predicates all match wins, so list highest-aggression regimes first

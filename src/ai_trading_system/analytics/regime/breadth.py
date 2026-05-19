@@ -191,7 +191,8 @@ def validate_regime_rules(rules: dict[str, Any]) -> None:
     """Walk every regime block and raise on unknown keys / type mismatches.
 
     Called from ``load_regime_rules`` so a bad config fails the pipeline at
-    boot rather than silently mis-classifying days.
+    boot rather than silently mis-classifying days. Recurses into nested
+    ``enter:`` and ``exit:`` sub-blocks (Phase 4 hysteresis).
     """
     blocks = rules.get("rules") if isinstance(rules, dict) else None
     if not isinstance(blocks, dict):
@@ -203,7 +204,66 @@ def validate_regime_rules(rules: dict[str, Any]) -> None:
                 f"{type(spec).__name__}"
             )
         for key, value in spec.items():
+            if key in ("enter", "exit"):
+                # Hysteresis sub-block. Recurse so nested keys are validated
+                # under the same metric whitelist.
+                if not isinstance(value, dict):
+                    raise TypeError(
+                        f"regime rule '{regime}.{key}': expected mapping, got "
+                        f"{type(value).__name__}"
+                    )
+                for nested_key, nested_value in value.items():
+                    _validate_rule_key(
+                        f"{regime}.{key}", str(nested_key), nested_value
+                    )
+                continue
             _validate_rule_key(str(regime), str(key), value)
+
+
+def resolve_previous_regime(
+    registry: Any,
+    *,
+    exclude_run_id: str | None = None,
+) -> str | None:
+    """Look up the most recent rank-stage regime classification for hysteresis seeding.
+
+    Reads the last completed rank-stage ``dashboard_payload`` artifact from
+    ``registry`` and returns the persisted regime label. Returns None on
+    any miss (no prior runs, file missing, JSON malformed, regime field
+    absent) — caller should treat None as cold-start.
+
+    Pass the current run's ``run_id`` as ``exclude_run_id`` to avoid
+    re-reading the in-progress run's own artifact.
+    """
+    if registry is None:
+        return None
+    try:
+        artifacts = registry.get_latest_artifact(
+            stage_name="rank",
+            artifact_type="dashboard_payload",
+            limit=1,
+            exclude_run_id=exclude_run_id,
+        )
+    except Exception:
+        return None
+    if not artifacts:
+        return None
+    uri = getattr(artifacts[0], "uri", None)
+    if not uri:
+        return None
+    try:
+        import json
+        with open(uri, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        return None
+    market_regime = payload.get("market_regime") if isinstance(payload, dict) else None
+    if not isinstance(market_regime, dict):
+        return None
+    regime = market_regime.get("regime")
+    if not isinstance(regime, str) or not regime:
+        return None
+    return regime
 
 
 def resolve_regime_rules_path(project_root: Path | str, value: str | Path | None = None) -> Path:
@@ -231,11 +291,19 @@ def compute_market_regime_snapshot(
     rules_path: str | Path | None = None,
     index_code: str | None = None,
     exchange: str = "NSE",
+    previous_regime: str | None = None,
 ) -> MarketRegimeSnapshot:
     """Compute the confirmed breadth regime as of ``as_of``.
 
     Rolling SMA and 52-week-high windows end at the current row, so the query
     uses current and past observations only.
+
+    ``previous_regime`` is the optional hysteresis seed — the classified
+    regime of the day immediately preceding the in-window history. When
+    provided AND the rules define nested ``exit:`` sub-blocks, the
+    classifier prefers staying in the seed regime as long as its exit
+    predicates hold (see ``classify_regime``). Cold-start (None) means
+    every day in the window classifies under enter-only rules.
     """
     rules_payload = load_regime_rules(project_root or Path("."), rules_path) if project_root is not None else {}
     source_cfg = dict(rules_payload.get("regime_source") or {})
@@ -255,6 +323,7 @@ def compute_market_regime_snapshot(
         index_code=code,
         limit=max(confirmation_days, 1),
         rules=raw_rules,
+        previous_regime=previous_regime,
     )
     if not snapshots and project_root is not None:
         research_db = Path(project_root) / "data" / "research" / "research_ohlcv.duckdb"
@@ -266,6 +335,7 @@ def compute_market_regime_snapshot(
                 index_code=code,
                 limit=max(confirmation_days, 1),
                 rules=raw_rules,
+                previous_regime=previous_regime,
             )
     if not snapshots:
         raise RuntimeError(f"No regime breadth data available at or before {as_of}")
@@ -274,7 +344,37 @@ def compute_market_regime_snapshot(
     return replace(latest, raw_regime=latest.regime, regime=confirmed, confirmation_days=confirmation_days)
 
 
-def classify_regime(metrics: dict[str, float | bool], rules: dict[str, Any] | None = None) -> str:
+def _enter_spec(regime_spec: dict[str, Any]) -> dict[str, Any]:
+    """Return the predicates that must hold to ENTER a regime from below.
+
+    Flat blocks (no nested enter/exit) act as both — backward compat.
+    Nested ``enter:`` block, when present, wins.
+    """
+    nested = regime_spec.get("enter")
+    if isinstance(nested, dict):
+        return nested
+    # Drop nested sub-blocks from the flat view so they aren't treated as
+    # metric predicates.
+    return {k: v for k, v in regime_spec.items() if k not in ("enter", "exit")}
+
+
+def _exit_spec(regime_spec: dict[str, Any]) -> dict[str, Any]:
+    """Return the (looser) predicates that allow STAYING in a regime.
+
+    Nested ``exit:`` block wins; flat blocks act as both (hysteresis off,
+    enter == exit) for backward compat.
+    """
+    nested = regime_spec.get("exit")
+    if isinstance(nested, dict):
+        return nested
+    return {k: v for k, v in regime_spec.items() if k not in ("enter", "exit")}
+
+
+def classify_regime(
+    metrics: dict[str, float | bool],
+    rules: dict[str, Any] | None = None,
+    previous_regime: str | None = None,
+) -> str:
     """Classify one raw day using configured rules, defaulting to the 5-tier ladder.
 
     Configured rules win when supplied — the priority list in the YAML
@@ -282,19 +382,53 @@ def classify_regime(metrics: dict[str, float | bool], rules: dict[str, Any] | No
     determines walk order. ``cautious_bull`` is opt-in: a legacy 4-tier
     config without that block still classifies correctly (bull takes
     precedence at ≥55% 200DMA regardless of new-high leadership).
+
+    Hysteresis (Phase 4): when ``previous_regime`` is provided AND the
+    current regime block has a nested ``exit:`` sub-block, the stay-put
+    decision is made first — if the looser exit predicates still hold
+    for the previous regime, return it unchanged. Otherwise walk the
+    priority list applying each regime's ``enter:`` predicates
+    (typically stricter). This avoids 54%↔56% pct_above_200dma flip-flop
+    between adjacent bands.
     """
     if rules:
-        # Honour an explicit priority list if present; otherwise fall back to
-        # the new 5-tier order. Legacy 4-tier rule sets that only define
-        # {strong_bull, bull, neutral, risk_off} still classify correctly
-        # because cautious_bull is just absent from the walk.
+        # Step 1: walk priority list using enter predicates to find the
+        # highest-aggression regime that today qualifies for. This is
+        # where we'd land without hysteresis.
         priority = rules.get("__priority__") if isinstance(rules, dict) else None
         if not isinstance(priority, (list, tuple)):
             priority = ("strong_bull", "bull", "cautious_bull", "neutral", "risk_off")
+        enter_target: str | None = None
         for name in priority:
             spec = rules.get(name)
-            if isinstance(spec, dict) and _matches_rule(metrics, spec):
-                return name
+            if isinstance(spec, dict) and _matches_rule(metrics, _enter_spec(spec)):
+                enter_target = name
+                break
+
+        # Step 2: hysteresis stay-put. Only fires when we'd be moving DOWN
+        # (target_rank < prev_rank) AND the previous regime defines a
+        # nested exit block AND that exit predicate still holds. Moving
+        # up or staying at a higher band is always allowed because enter
+        # is the strict path — hysteresis is about lagging the descent,
+        # not blocking the ascent.
+        if (
+            previous_regime
+            and enter_target
+            and isinstance(rules.get(previous_regime), dict)
+            and isinstance(rules[previous_regime].get("exit"), dict)
+        ):
+            prev_rank = _REGIME_RANK.get(previous_regime, -1)
+            target_rank = _REGIME_RANK.get(enter_target, -1)
+            if (
+                prev_rank >= 0
+                and target_rank >= 0
+                and target_rank < prev_rank
+                and _matches_rule(metrics, _exit_spec(rules[previous_regime]))
+            ):
+                return previous_regime
+
+        if enter_target is not None:
+            return enter_target
     # Default 5-tier path (no rules YAML). Matches the post-Phase-4b
     # philosophy: 200DMA controls whether risk is allowed; at-new-high
     # leadership controls how aggressive to be within an allowed band.
@@ -486,6 +620,7 @@ def _load_recent_raw_snapshots(
     index_code: str,
     limit: int,
     rules: dict[str, Any],
+    previous_regime: str | None = None,
 ) -> list[MarketRegimeSnapshot]:
     db = Path(db_path)
     conn = duckdb.connect(str(db), read_only=True)
@@ -587,6 +722,11 @@ def _load_recent_raw_snapshots(
         conn.close()
 
     snapshots: list[MarketRegimeSnapshot] = []
+    # Chain the previous-day regime through the loop so each day's
+    # classification can read it as its hysteresis seed. The function's
+    # `previous_regime` kwarg seeds the FIRST iteration; subsequent days
+    # inherit yesterday's classification.
+    rolling_prev = previous_regime
     for row in reversed(rows):
         eligible_50 = int(row[7] or 0)
         eligible_200 = int(row[8] or 0)
@@ -606,7 +746,7 @@ def _load_recent_raw_snapshots(
             "total_symbols_count": total_syms,
             "breadth_confidence": breadth_conf,
         }
-        regime_label = classify_regime(metrics, rules)
+        regime_label = classify_regime(metrics, rules, previous_regime=rolling_prev)
         snapshots.append(
             MarketRegimeSnapshot(
                 date=str(row[0]),
@@ -628,4 +768,5 @@ def _load_recent_raw_snapshots(
                 source=index_code,
             )
         )
+        rolling_prev = regime_label
     return snapshots

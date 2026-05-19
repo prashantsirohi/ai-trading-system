@@ -28,6 +28,7 @@ from ai_trading_system.analytics.regime import (
     compute_market_regime_snapshot,
     load_regime_profile,
     regime_disagreement,
+    resolve_previous_regime,
 )
 
 
@@ -515,12 +516,19 @@ class RankOrchestrationService:
         regime_snapshot: MarketRegimeSnapshot | None = None
         regime_profile: RegimeProfile | None = None
         try:
+            # Seed hysteresis from the last completed rank run (Phase 4).
+            # Excluding the current run prevents reading our own in-progress
+            # artifact if this stage is being retried.
+            previous_regime_seed = resolve_previous_regime(
+                context.registry, exclude_run_id=context.run_id
+            )
             regime_snapshot = compute_market_regime_snapshot(
                 context.db_path,
                 as_of=context.run_date,
                 project_root=context.project_root,
                 rules_path=effective_params.get("regime_rules_path"),
                 exchange=str(effective_params.get("exchange", "NSE")),
+                previous_regime=previous_regime_seed,
             )
             regime_profile = load_regime_profile(
                 regime_snapshot.regime,
