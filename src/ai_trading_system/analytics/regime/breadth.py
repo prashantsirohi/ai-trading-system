@@ -22,13 +22,93 @@ class MarketRegimeSnapshot:
     universe_count: int
     top1000_above_50dma: bool
     top1000_above_200dma: bool
-    top1000_pct_above_50dma: float
-    top1000_pct_above_200dma: float
     confirmation_days: int = 3
     source: str = "UNIV_TOP1000"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+# ── Rule-schema validation ─────────────────────────────────────────────────
+#
+# Every key inside a regime rule block must reference a real metric on the
+# snapshot. Numeric metrics support the comparison suffixes _lt/_lte/_gt/_gte;
+# boolean metrics accept only the bare key with a literal true/false value.
+# Validation runs at load time (load_regime_rules) so rule typos fail fast
+# at boot rather than silently classifying every day as the default regime.
+_NUMERIC_METRICS: frozenset[str] = frozenset({
+    "pct_above_50dma",
+    "pct_above_200dma",
+    "pct_near_52w_high",
+    "universe_count",
+})
+_BOOLEAN_METRICS: frozenset[str] = frozenset({
+    "top1000_above_50dma",
+    "top1000_above_200dma",
+})
+_COMPARISON_SUFFIXES: tuple[str, ...] = ("_lt", "_lte", "_gt", "_gte")
+
+
+def _split_rule_key(key: str) -> tuple[str, str | None]:
+    """Return ``(metric_name, suffix)`` for a rule key. Suffix is None for bare keys."""
+    for suffix in _COMPARISON_SUFFIXES:
+        if key.endswith(suffix):
+            return key[: -len(suffix)], suffix
+    return key, None
+
+
+def _validate_rule_key(regime: str, key: str, value: Any) -> None:
+    """Raise ValueError/TypeError if a rule key/value is malformed."""
+    metric, suffix = _split_rule_key(key)
+    if metric in _NUMERIC_METRICS:
+        if suffix is None:
+            raise ValueError(
+                f"regime rule '{regime}.{key}': numeric metric '{metric}' "
+                f"requires a comparison suffix (one of {_COMPARISON_SUFFIXES})"
+            )
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise TypeError(
+                f"regime rule '{regime}.{key}': expected numeric value, got "
+                f"{type(value).__name__}={value!r}"
+            )
+        return
+    if metric in _BOOLEAN_METRICS:
+        if suffix is not None:
+            raise TypeError(
+                f"regime rule '{regime}.{key}': boolean metric '{metric}' "
+                f"cannot be compared with '{suffix}'; use the bare key with "
+                f"a true/false value"
+            )
+        if not isinstance(value, bool):
+            raise TypeError(
+                f"regime rule '{regime}.{key}': expected bool value, got "
+                f"{type(value).__name__}={value!r}"
+            )
+        return
+    raise ValueError(
+        f"regime rule '{regime}.{key}': unknown metric '{metric}'. "
+        f"Valid numeric metrics: {sorted(_NUMERIC_METRICS)}; "
+        f"valid boolean metrics: {sorted(_BOOLEAN_METRICS)}"
+    )
+
+
+def validate_regime_rules(rules: dict[str, Any]) -> None:
+    """Walk every regime block and raise on unknown keys / type mismatches.
+
+    Called from ``load_regime_rules`` so a bad config fails the pipeline at
+    boot rather than silently mis-classifying days.
+    """
+    blocks = rules.get("rules") if isinstance(rules, dict) else None
+    if not isinstance(blocks, dict):
+        return
+    for regime, spec in blocks.items():
+        if not isinstance(spec, dict):
+            raise TypeError(
+                f"regime rule '{regime}': expected mapping, got "
+                f"{type(spec).__name__}"
+            )
+        for key, value in spec.items():
+            _validate_rule_key(str(regime), str(key), value)
 
 
 def resolve_regime_rules_path(project_root: Path | str, value: str | Path | None = None) -> Path:
@@ -43,7 +123,9 @@ def load_regime_rules(project_root: Path | str, rules_path: str | Path | None = 
     path = resolve_regime_rules_path(project_root, rules_path)
     if not path.exists():
         return {}
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    rules = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    validate_regime_rules(rules)
+    return rules
 
 
 def compute_market_regime_snapshot(
@@ -128,17 +210,28 @@ def confirmed_regime(raw_regimes: list[str], *, confirmation_days: int = 3) -> s
 
 
 def _matches_rule(metrics: dict[str, float | bool], spec: dict[str, Any]) -> bool:
+    """Evaluate one regime block's predicates against a metrics dict.
+
+    Keys are assumed to have already passed ``validate_regime_rules`` —
+    unknown keys / type mismatches are caught at load time, not here.
+    """
     for key, threshold in spec.items():
-        if key.endswith("_lt"):
-            metric_key = key[:-3]
+        metric_key, suffix = _split_rule_key(key)
+        if suffix == "_lt":
             if not float(metrics.get(metric_key) or 0.0) < float(threshold):
                 return False
-        elif key.endswith("_gte"):
-            metric_key = key[:-4]
+        elif suffix == "_lte":
+            if not float(metrics.get(metric_key) or 0.0) <= float(threshold):
+                return False
+        elif suffix == "_gt":
+            if not float(metrics.get(metric_key) or 0.0) > float(threshold):
+                return False
+        elif suffix == "_gte":
             if not float(metrics.get(metric_key) or 0.0) >= float(threshold):
                 return False
         else:
-            if metrics.get(key) != threshold:
+            # Bare key — boolean equality check.
+            if bool(metrics.get(metric_key)) != bool(threshold):
                 return False
     return True
 
@@ -248,12 +341,9 @@ def _load_recent_raw_snapshots(
             "pct_above_50dma": float(row[1] or 0.0),
             "pct_above_200dma": float(row[2] or 0.0),
             "pct_near_52w_high": float(row[3] or 0.0),
+            "universe_count": int(row[4] or 0),
             "top1000_above_50dma": bool(row[5]),
             "top1000_above_200dma": bool(row[6]),
-            # The YAML uses *_pct_* thresholds; for the index confirmation that
-            # acts as a 0/1 score so >= 0.55 means "index above its SMA".
-            "top1000_pct_above_50dma": 1.0 if bool(row[5]) else 0.0,
-            "top1000_pct_above_200dma": 1.0 if bool(row[6]) else 0.0,
         }
         snapshots.append(
             MarketRegimeSnapshot(
@@ -263,11 +353,9 @@ def _load_recent_raw_snapshots(
                 pct_above_50dma=float(metrics["pct_above_50dma"]),
                 pct_above_200dma=float(metrics["pct_above_200dma"]),
                 pct_near_52w_high=float(metrics["pct_near_52w_high"]),
-                universe_count=int(row[4] or 0),
-                top1000_above_50dma=bool(row[5]),
-                top1000_above_200dma=bool(row[6]),
-                top1000_pct_above_50dma=float(metrics["top1000_pct_above_50dma"]),
-                top1000_pct_above_200dma=float(metrics["top1000_pct_above_200dma"]),
+                universe_count=int(metrics["universe_count"]),
+                top1000_above_50dma=bool(metrics["top1000_above_50dma"]),
+                top1000_above_200dma=bool(metrics["top1000_above_200dma"]),
                 source=index_code,
             )
         )
