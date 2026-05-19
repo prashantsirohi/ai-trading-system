@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 import pandas as pd
+import yaml
 import ai_trading_system.platform.config as platform_config
 
 from ai_trading_system.platform.logging.logger import logger
@@ -19,6 +20,10 @@ from ai_trading_system.domains.ranking.contracts import (
 
 _PLATFORM_CONFIG_DIR = Path(platform_config.__file__).resolve().parent
 _LEGACY_CONFIG_DIR = Path(__file__).resolve().parents[4] / "config"
+# YAML is the preferred Phase-5 format with per-regime overlay sections.
+# JSON remains supported (flat keys, no regime variants) for one release
+# so callers that pinned the legacy path keep working.
+RANK_FACTOR_WEIGHTS_YAML_PATH = _PLATFORM_CONFIG_DIR / "rank_factor_weights.yaml"
 RANK_FACTOR_WEIGHTS_PATH = _PLATFORM_CONFIG_DIR / "rank_factor_weights.json"
 LEGACY_RANK_FACTOR_WEIGHTS_PATH = _LEGACY_CONFIG_DIR / "rank_factor_weights.json"
 _SECTOR_DEMEAN_FACTORS = frozenset({"rel_strength", "volume_intensity_normalized", "trend_score"})
@@ -29,15 +34,69 @@ def _score_input_column(raw_column: str) -> str:
     return f"{_SCORE_INPUT_PREFIX}{raw_column}"
 
 
-def load_factor_weights(config_path: Path | None = None) -> dict[str, float]:
-    """Load rank factor weights using configured defaults when needed."""
-    weights = dict(DEFAULT_FACTOR_WEIGHTS)
-    path = config_path or (RANK_FACTOR_WEIGHTS_PATH if RANK_FACTOR_WEIGHTS_PATH.exists() else LEGACY_RANK_FACTOR_WEIGHTS_PATH)
-    if not path.exists():
-        return weights
+def _apply_weight_overrides(weights: dict[str, float], overrides: Mapping[str, object], *, source: str) -> None:
+    """In-place overlay: copy any DEFAULT_FACTOR_WEIGHTS key from overrides into weights."""
+    for key in DEFAULT_FACTOR_WEIGHTS:
+        if key in overrides:
+            try:
+                weights[key] = float(overrides[key])  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                logger.warning("Ignoring invalid rank factor weight for %s in %s", key, source)
 
+
+def load_factor_weights(
+    config_path: Path | None = None,
+    *,
+    regime: str | None = None,
+) -> dict[str, float]:
+    """Load rank factor weights with optional per-regime overlay.
+
+    Resolution order (highest priority wins):
+      1. Explicit ``config_path`` (file used as-is — YAML or JSON).
+      2. The shipped YAML at ``rank_factor_weights.yaml`` with
+         ``default`` overlay and optional ``{regime}`` overlay.
+      3. The legacy JSON at ``rank_factor_weights.json`` (flat keys,
+         no regime support — kept for one release).
+      4. Built-in DEFAULT_FACTOR_WEIGHTS.
+
+    Per-regime overlay semantics: the regime block is merged on top of
+    ``default``, so a regime can override just one or two keys without
+    re-specifying the whole weight table. A missing regime block falls
+    back to default (no warning — keeps adding new regimes safe).
+    """
+    weights = dict(DEFAULT_FACTOR_WEIGHTS)
+
+    # 1. Explicit override path
+    if config_path is not None:
+        return _load_from_path(weights, config_path, regime=regime)
+
+    # 2. YAML (preferred — supports regimes)
+    if RANK_FACTOR_WEIGHTS_YAML_PATH.exists():
+        return _load_from_path(weights, RANK_FACTOR_WEIGHTS_YAML_PATH, regime=regime)
+
+    # 3. JSON fallback (flat keys, no regime support)
+    json_path = (
+        RANK_FACTOR_WEIGHTS_PATH
+        if RANK_FACTOR_WEIGHTS_PATH.exists()
+        else LEGACY_RANK_FACTOR_WEIGHTS_PATH
+    )
+    if json_path.exists():
+        return _load_from_path(weights, json_path, regime=regime)
+
+    # 4. Built-in defaults
+    return weights
+
+
+def _load_from_path(
+    weights: dict[str, float], path: Path, *, regime: str | None
+) -> dict[str, float]:
+    """Parse a YAML or JSON weights file in-place, applying default then regime overlay."""
+    suffix = path.suffix.lower()
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        if suffix in (".yaml", ".yml"):
+            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        else:
+            payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.warning("Could not load rank factor weights from %s: %s", path, exc)
         return weights
@@ -46,12 +105,21 @@ def load_factor_weights(config_path: Path | None = None) -> dict[str, float]:
         logger.warning("Rank factor weight config at %s is not an object; using defaults", path)
         return weights
 
-    for key in DEFAULT_FACTOR_WEIGHTS:
-        if key in payload:
-            try:
-                weights[key] = float(payload[key])
-            except (TypeError, ValueError):
-                logger.warning("Ignoring invalid rank factor weight for %s in %s", key, path)
+    # YAML schema: top-level keys are regime names plus 'default'. JSON
+    # schema (legacy): flat keys are factor weights — treat whole payload
+    # as the default block.
+    if suffix in (".yaml", ".yml") and (
+        "default" in payload or any(k in payload for k in ("risk_off", "neutral", "cautious_bull", "bull", "strong_bull"))
+    ):
+        default_block = payload.get("default") or {}
+        if isinstance(default_block, Mapping):
+            _apply_weight_overrides(weights, default_block, source=f"{path}:default")
+        if regime and isinstance(payload.get(regime), Mapping):
+            _apply_weight_overrides(weights, payload[regime], source=f"{path}:{regime}")
+        return weights
+
+    # Flat-format file (legacy JSON or YAML without per-regime sections).
+    _apply_weight_overrides(weights, payload, source=str(path))
     return weights
 
 

@@ -1,0 +1,68 @@
+# Regime-aware composite-rank factor weights.
+#
+# The `default` section is the baseline; each per-regime section overlays
+# values on top of `default`. Keys not specified in a regime block inherit
+# from default. All per-regime overlay sections should sum to 1.0 (the
+# loader doesn't enforce this — it's a maintenance discipline).
+#
+# When no regime is supplied to `load_factor_weights`, only the `default`
+# section is used. When a regime is supplied but no matching section
+# exists, the loader falls back to default — keeps adding new regimes
+# safe and forward-compatible.
+
+default:
+  # Cross-sectional momentum/quality blend. Matches the historical
+  # rank_factor_weights.json contents — used pre-Phase-5 and remains
+  # the no-regime baseline.
+  relative_strength:     0.38
+  volume_intensity:      0.0
+  trend_persistence:     0.22
+  momentum_acceleration: 0.0
+  proximity_highs:       0.18
+  delivery_pct:          0.0
+  sector_strength:       0.22
+  above_200dma:          0.0
+
+risk_off:
+  # Defensive bias: trend persistence + proximity to highs dominate so
+  # we surface stocks holding their structure while breadth is broken.
+  # Volume and delivery come back from zero as low-weight confirmations.
+  relative_strength: 0.30
+  trend_persistence: 0.25
+  proximity_highs:   0.20
+  sector_strength:   0.15
+  volume_intensity:  0.05
+  delivery_pct:      0.05
+
+# neutral inherits default — selective buys, no aggressive tilt.
+
+cautious_bull:
+  # 200DMA breadth healthy but leadership thin. Lean toward stocks
+  # already showing leadership (proximity_highs ↑, RS ↑) since the
+  # broader breadth provides cover but actual breakouts are scarce.
+  relative_strength: 0.32
+  trend_persistence: 0.20
+  proximity_highs:   0.22
+  sector_strength:   0.18
+  volume_intensity:  0.04
+  delivery_pct:      0.04
+
+bull:
+  # Balanced momentum + confirmation. Volume and delivery activate as
+  # real event signals when broad participation is in play.
+  relative_strength: 0.25
+  volume_intensity:  0.18
+  trend_persistence: 0.15
+  proximity_highs:   0.17
+  delivery_pct:      0.10
+  sector_strength:   0.15
+
+strong_bull:
+  # Aggressive: ride leadership and confirmation. RS and volume top
+  # the chart so high-beta breakouts get the highest scores.
+  relative_strength: 0.30
+  volume_intensity:  0.22
+  sector_strength:   0.18
+  proximity_highs:   0.12
+  trend_persistence: 0.12
+  delivery_pct:      0.06

@@ -578,6 +578,11 @@ class RankOrchestrationService:
                     effective_params.get("rank_apply_penalty_adjustment", False)
                 ),
                 weekly_stage_gate=bool(effective_params.get("weekly_stage_gate", False)),
+                # Phase 5: regime-aware factor weights. Pass the
+                # confirmed regime so the ranker overlays per-regime
+                # weights (risk_off → quality bias, strong_bull →
+                # leadership bias, etc.). None on cold start.
+                regime=regime_snapshot.regime if regime_snapshot is not None else None,
             ),
             optional=False,
         )
@@ -1196,6 +1201,17 @@ class RankOrchestrationService:
             if regime_snapshot is not None
             else None
         )
+        # Snapshot the active per-regime factor weights so backtests and
+        # audits can reproduce which weight table drove this rank run.
+        active_factor_weights: dict[str, float] | None = None
+        try:
+            from ai_trading_system.domains.ranking.composite import load_factor_weights
+
+            active_factor_weights = load_factor_weights(
+                regime=regime_snapshot.regime if regime_snapshot is not None else None
+            )
+        except Exception as exc:
+            logger.warning("active_factor_weights snapshot failed: %s", exc)
         outputs["__stage_metadata__"] = {
             "degraded_outputs": warnings,
             "degraded_output_count": len(warnings),
@@ -1204,6 +1220,7 @@ class RankOrchestrationService:
             "market_regime": regime_snapshot.to_dict() if regime_snapshot is not None else None,
             "market_regime_disagreement": regime_disagreement_payload,
             "regime_profile": regime_profile.to_dict() if regime_profile is not None else None,
+            "active_factor_weights": active_factor_weights,
             "effective_min_score": float(effective_params.get("min_score", 0.0)),
             "effective_top_n": effective_params.get("top_n"),
             "trust_confidence": trust_confidence.to_dict(),

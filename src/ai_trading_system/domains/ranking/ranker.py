@@ -105,11 +105,22 @@ class StockRanker:
         previous_ranked: pd.DataFrame | None = None,
         apply_penalty_adjustment: bool = False,
         weekly_stage_gate: bool = False,
+        regime: str | None = None,
     ) -> pd.DataFrame:
         """
         Rank all symbols for a given date while preserving the current artifact contract.
+
+        ``regime``: optional 5-tier ladder label
+        (risk_off / neutral / cautious_bull / bull / strong_bull). When
+        provided AND the caller did not pass an explicit ``weights`` dict,
+        load_factor_weights overlays the regime-specific block on top of
+        the default block. Cold-callers (regime=None) get the default
+        block — Phase-pre-5 behavior, unchanged.
         """
-        weights = dict(weights or self.WEIGHTS)
+        if weights is None:
+            weights = load_factor_weights(regime=regime)
+        else:
+            weights = dict(weights)
         exchanges = exchanges or ["NSE"]
 
         if date is None:
