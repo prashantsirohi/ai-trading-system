@@ -536,7 +536,7 @@ def get_recent_runs(project_root: str | Path, limit: int = 12) -> List[Dict[str,
     """Return recent pipeline runs for the execution console."""
     root = Path(project_root)
     db_path = root / "data" / "control_plane.duckdb"
-    conn = duckdb.connect(str(db_path), read_only=True)
+    conn = duckdb.connect(str(db_path))
     try:
         rows = conn.execute(
             """
@@ -568,7 +568,7 @@ def find_latest_publishable_run(project_root: str | Path, limit: int = 50) -> Di
     """Return the most recent run that still has a usable rank artifact for publish retry."""
     root = Path(project_root)
     db_path = root / "data" / "control_plane.duckdb"
-    conn = duckdb.connect(str(db_path), read_only=True)
+    conn = duckdb.connect(str(db_path))
     try:
         rows = conn.execute(
             """

@@ -56,7 +56,7 @@ def _latest_summary_from_registry(project_root: Path) -> Path | None:
     db_path = project_root / "data" / "control_plane.duckdb"
     if not db_path.exists():
         return None
-    conn = duckdb.connect(str(db_path), read_only=True)
+    conn = duckdb.connect(str(db_path))
     try:
         row = conn.execute(
             """

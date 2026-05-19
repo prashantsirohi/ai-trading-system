@@ -56,7 +56,10 @@ def _load_latest_payload_path(ctx: ExecutionContext) -> Optional[Path]:
     control_plane_db = ctx.project_root / "data" / "control_plane.duckdb"
     run_metadata: dict[str, dict] = {}
     if control_plane_db.exists():
-        conn = duckdb.connect(str(control_plane_db), read_only=True)
+        # Keep the connection mode aligned with RegistryStore, which opens the
+        # same DuckDB file in the API process. DuckDB rejects mixing read-only
+        # and read-write handles to one file under concurrent dashboard loads.
+        conn = duckdb.connect(str(control_plane_db))
         try:
             rows = conn.execute(
                 """

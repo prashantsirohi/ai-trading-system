@@ -172,6 +172,23 @@ def test_load_latest_operational_snapshot_prefers_live_payload(tmp_path: Path) -
     assert snapshot.frames["breakout_scan"].iloc[0]["symbol_id"] == "AAA"
 
 
+def test_latest_operational_snapshot_tolerates_existing_control_plane_connection(
+    tmp_path: Path,
+) -> None:
+    live_run = "pipeline-2026-04-21-live3333"
+    live_payload = _write_snapshot_artifacts(tmp_path, live_run, score=77.0, smoke=False)
+    _seed_control_plane(tmp_path, [(live_run, {"params": {}})])
+
+    conn = duckdb.connect(str(tmp_path / "data" / "control_plane.duckdb"))
+    try:
+        snapshot = load_latest_operational_snapshot(tmp_path)
+    finally:
+        conn.close()
+
+    assert snapshot.payload_path == live_payload
+    assert float(snapshot.frames["ranked_signals"].iloc[0]["composite_score"]) == 77.0
+
+
 def test_sector_endpoint_uses_latest_operational_snapshot_not_lexicographic_path(
     tmp_path: Path,
 ) -> None:

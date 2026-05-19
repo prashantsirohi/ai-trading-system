@@ -40,7 +40,14 @@ def load_shadow_summary_frame(
     project_root: str | Path | None = None,
 ) -> pd.DataFrame:
     registry = RegistryStore(Path(project_root) if project_root else Path(__file__).resolve().parents[5])
-    rows = registry.get_shadow_period_summary(grain=grain, horizon=horizon, periods=periods)
+    grain_aliases = {
+        "weekly": "week",
+        "week": "week",
+        "monthly": "month",
+        "month": "month",
+    }
+    normalized_grain = grain_aliases.get(grain, grain)
+    rows = registry.get_shadow_period_summary(grain=normalized_grain, horizon=horizon, periods=periods)
     if not rows:
         return pd.DataFrame()
     frame = pd.DataFrame(rows)

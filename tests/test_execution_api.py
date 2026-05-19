@@ -187,6 +187,17 @@ def test_execution_api_read_endpoints(monkeypatch, tmp_path: Path) -> None:
     assert market.json()["breakouts"][0]["symbol_id"] == "AAA"
     assert market.json()["breakouts"][0]["volume_zscore_20"] == 2.7
 
+    shadow = client.get("/api/execution/shadow", headers=API_HEADERS)
+    assert shadow.status_code == 200
+    shadow_payload = shadow.json()
+    assert set(shadow_payload) == {
+        "overlay",
+        "weekly_5d",
+        "weekly_20d",
+        "monthly_5d",
+        "monthly_20d",
+    }
+
     pipeline = client.get(
         "/api/execution/workspace/pipeline?limit=10&stage2_only=true&stage2_min_score=70",
         headers=API_HEADERS,
