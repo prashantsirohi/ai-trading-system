@@ -9,7 +9,10 @@ from typing import Any
 import yaml
 
 
-REGIMES = ("risk_off", "neutral", "bull", "strong_bull")
+# 5-tier ladder. cautious_bull sits between neutral and bull: 200DMA breadth
+# is healthy but new-high leadership is thin — allow entries on top-ranked
+# breakouts only, smaller exposure than full bull.
+REGIMES = ("risk_off", "neutral", "cautious_bull", "bull", "strong_bull")
 
 
 @dataclass(frozen=True)

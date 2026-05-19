@@ -4,18 +4,27 @@ regime_source:
   confirmation_days: 3
 
 rules:
-  risk_off:
-    pct_above_200dma_lt: 0.40
-  neutral:
-    pct_above_200dma_gte: 0.40
-    pct_above_200dma_lt: 0.55
+  strong_bull:
+    pct_above_200dma_gte: 0.75
+    pct_above_50dma_gte:  0.60
+    pct_at_52w_high_gte:  0.15
+    top1000_above_200dma: true
+    top1000_above_50dma:  true
   bull:
     pct_above_200dma_gte: 0.55
+    pct_at_52w_high_gte:  0.12
     top1000_above_200dma: true
-  strong_bull:
-    pct_above_200dma_gte: 0.70
-    pct_above_50dma_gte: 0.65
+  cautious_bull:
+    pct_above_200dma_gte: 0.55
+    pct_at_52w_high_lt:   0.12
     top1000_above_200dma: true
-    top1000_above_50dma: true
+  neutral:
+    pct_above_200dma_gte: 0.30
+  risk_off:
+    pct_above_200dma_lt:  0.30
+    pct_at_52w_high_lt:   0.05
 
-priority: [strong_bull, bull, neutral, risk_off]
+# Walk order for classify_regime when rules are present. The first block
+# whose predicates all match wins, so list highest-aggression regimes first
+# and the catch-all (risk_off) last.
+priority: [strong_bull, bull, cautious_bull, neutral, risk_off]

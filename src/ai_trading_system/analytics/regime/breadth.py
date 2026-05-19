@@ -18,7 +18,8 @@ class MarketRegimeSnapshot:
     raw_regime: str
     pct_above_50dma: float
     pct_above_200dma: float
-    pct_near_52w_high: float
+    pct_near_52w_high: float  # within 10% of 252-day high
+    pct_at_52w_high: float    # at the 252-day high (close >= high252) — leadership signal
     universe_count: int  # alias for eligible_200dma_count (kept for backwards compat)
     top1000_above_50dma: bool
     top1000_above_200dma: bool
@@ -34,6 +35,16 @@ class MarketRegimeSnapshot:
     eligible_200dma_count: int = 0
     total_symbols_count: int = 0
     breadth_confidence: float = 0.0
+    # ── Derived metrics (Phase 4b) ───────────────────────────────────────
+    # regime_score: continuous 0..100 blend of the three breadth metrics so
+    # downstream code can read a numeric signal independent of the
+    # categorical label. Weights: 200DMA=0.5, at-new-high=0.3, 50DMA=0.2.
+    # regime_confidence: 0..1, how far inside the classified band we are
+    # relative to the nearest threshold edge. 1.0 = solidly inside,
+    # 0.0 = on the boundary (about to flip). Computed by classify_regime
+    # itself since it knows the active rule set; default 0 if unset.
+    regime_score: float = 0.0
+    regime_confidence: float = 0.0
     confirmation_days: int = 3
     source: str = "UNIV_TOP1000"
 
@@ -52,11 +63,14 @@ _NUMERIC_METRICS: frozenset[str] = frozenset({
     "pct_above_50dma",
     "pct_above_200dma",
     "pct_near_52w_high",
+    "pct_at_52w_high",
     "universe_count",
     "eligible_50dma_count",
     "eligible_200dma_count",
     "total_symbols_count",
     "breadth_confidence",
+    "regime_score",
+    "regime_confidence",
 })
 _BOOLEAN_METRICS: frozenset[str] = frozenset({
     "top1000_above_50dma",
@@ -119,14 +133,19 @@ def _validate_rule_key(regime: str, key: str, value: Any) -> None:
 _REGIME_RANK: dict[str, int] = {
     "risk_off": 0,
     "neutral": 1,
-    "bull": 2,
-    "strong_bull": 3,
+    "cautious_bull": 2,
+    "bull": 3,
+    "strong_bull": 4,
 }
 
 # Confirmed-regime values that should NOT have been opening fresh positions
 # when raw collapsed to risk_off. This is the "dangerous disagreement" set
 # used by alert emission and the optional execute-stage override.
-_DANGEROUS_DISAGREEMENT_CONFIRMED: frozenset[str] = frozenset({"bull", "strong_bull"})
+# cautious_bull is included: by design it allows entries (top breakouts only),
+# so a raw=risk_off collapse should warn there too.
+_DANGEROUS_DISAGREEMENT_CONFIRMED: frozenset[str] = frozenset(
+    {"cautious_bull", "bull", "strong_bull"}
+)
 
 
 def regime_disagreement(
@@ -223,6 +242,11 @@ def compute_market_regime_snapshot(
     confirmation_days = int(source_cfg.get("confirmation_days") or 3)
     code = str(index_code or source_cfg.get("index_code") or "UNIV_TOP1000")
     raw_rules = dict(rules_payload.get("rules") or {})
+    # Stash priority list (top-level YAML key) into the rules dict under a
+    # sentinel so classify_regime can pick it up without an extra param.
+    priority = rules_payload.get("priority")
+    if isinstance(priority, (list, tuple)):
+        raw_rules["__priority__"] = list(priority)
 
     snapshots = _load_recent_raw_snapshots(
         db_path,
@@ -251,28 +275,161 @@ def compute_market_regime_snapshot(
 
 
 def classify_regime(metrics: dict[str, float | bool], rules: dict[str, Any] | None = None) -> str:
-    """Classify one raw day using configured rules, defaulting to the requested thresholds."""
+    """Classify one raw day using configured rules, defaulting to the 5-tier ladder.
+
+    Configured rules win when supplied — the priority list in the YAML
+    (e.g. ``[strong_bull, bull, cautious_bull, neutral, risk_off]``)
+    determines walk order. ``cautious_bull`` is opt-in: a legacy 4-tier
+    config without that block still classifies correctly (bull takes
+    precedence at ≥55% 200DMA regardless of new-high leadership).
+    """
     if rules:
-        for name in ("strong_bull", "bull", "neutral", "risk_off"):
+        # Honour an explicit priority list if present; otherwise fall back to
+        # the new 5-tier order. Legacy 4-tier rule sets that only define
+        # {strong_bull, bull, neutral, risk_off} still classify correctly
+        # because cautious_bull is just absent from the walk.
+        priority = rules.get("__priority__") if isinstance(rules, dict) else None
+        if not isinstance(priority, (list, tuple)):
+            priority = ("strong_bull", "bull", "cautious_bull", "neutral", "risk_off")
+        for name in priority:
             spec = rules.get(name)
             if isinstance(spec, dict) and _matches_rule(metrics, spec):
                 return name
+    # Default 5-tier path (no rules YAML). Matches the post-Phase-4b
+    # philosophy: 200DMA controls whether risk is allowed; at-new-high
+    # leadership controls how aggressive to be within an allowed band.
     pct200 = float(metrics.get("pct_above_200dma") or 0.0)
     pct50 = float(metrics.get("pct_above_50dma") or 0.0)
+    pct_at_high = float(metrics.get("pct_at_52w_high") or 0.0)
     top50 = bool(metrics.get("top1000_above_50dma"))
     top200 = bool(metrics.get("top1000_above_200dma"))
-    if pct200 < 0.40:
+    # Risk-off: weak 200DMA AND weak leadership. Recovery periods with
+    # improving 200DMA but lagging highs land in neutral, not risk_off.
+    if pct200 < 0.30 and pct_at_high < 0.05:
         return "risk_off"
     if pct200 < 0.55:
         return "neutral"
-    if pct200 >= 0.70 and pct50 >= 0.65 and top50 and top200:
+    if (
+        pct200 >= 0.75
+        and pct50 >= 0.60
+        and pct_at_high >= 0.15
+        and top50
+        and top200
+    ):
         return "strong_bull"
-    if pct200 >= 0.55 and top200:
+    if pct200 >= 0.55 and pct_at_high >= 0.12 and top200:
         return "bull"
+    if pct200 >= 0.55 and top200:
+        return "cautious_bull"
     return "neutral"
 
 
+# ── Derived metrics (Phase 4b) ─────────────────────────────────────────────
+
+
+def compute_regime_score(metrics: dict[str, float | bool]) -> float:
+    """0..100 continuous blend of the three breadth signals.
+
+    Weighting: 200DMA participation 50%, at-new-high leadership 30%,
+    50DMA short-term tape 20%. Inputs are 0..1 fractions; output is a
+    0..100 score. Designed so risk_off territory lands roughly <30,
+    neutral around 30–55, cautious_bull/bull around 55–75, strong_bull >75.
+    """
+    pct200 = float(metrics.get("pct_above_200dma") or 0.0)
+    pct50 = float(metrics.get("pct_above_50dma") or 0.0)
+    pct_at_high = float(metrics.get("pct_at_52w_high") or 0.0)
+    # Clamp to [0, 1] before weighting so a future bug or stale snapshot
+    # can't push the score out of the [0, 100] band.
+    pct200 = max(0.0, min(1.0, pct200))
+    pct50 = max(0.0, min(1.0, pct50))
+    pct_at_high = max(0.0, min(1.0, pct_at_high))
+    return round(100.0 * (0.50 * pct200 + 0.30 * pct_at_high + 0.20 * pct50), 2)
+
+
+# Default 5-tier ladder thresholds, mirrors the shipped rules YAML. Used by
+# compute_regime_confidence when no rule set is supplied.
+_DEFAULT_BAND_EDGES_PCT200: tuple[tuple[str, float, float], ...] = (
+    # (regime, lower_edge, upper_edge)
+    ("risk_off", 0.0, 0.30),
+    ("neutral", 0.30, 0.55),
+    ("cautious_bull", 0.55, 0.75),
+    ("bull", 0.55, 0.75),
+    ("strong_bull", 0.75, 1.00),
+)
+
+
+def compute_regime_confidence(
+    metrics: dict[str, float | bool],
+    regime_label: str,
+    rules: dict[str, Any] | None = None,
+) -> float:
+    """0..1 distance from the nearest 200DMA threshold edge of the active band.
+
+    Pure function of the snapshot. 1.0 = solidly inside the regime's
+    band; 0.0 = right on a boundary (about to flip). We use the 200DMA
+    band because it's the dominant gate in every rule set we ship.
+
+    For configured rules: scans the rule set for the lowest and highest
+    pct_above_200dma thresholds that constrain this regime and measures
+    relative position within that band. Falls back to the default 5-tier
+    band edges when the rules don't constrain pct_above_200dma for the
+    classified regime (e.g. legacy YAML).
+    """
+    pct200 = float(metrics.get("pct_above_200dma") or 0.0)
+    lower, upper = _resolve_pct200_band(regime_label, rules)
+    if lower is None or upper is None or upper <= lower:
+        return 0.0
+    width = upper - lower
+    # Distance to the nearer edge, normalized by half-width so confidence is
+    # 1.0 at the band center and 0.0 at either edge.
+    inner = min(pct200 - lower, upper - pct200)
+    return round(max(0.0, min(1.0, inner / (width / 2.0))), 3)
+
+
+def _resolve_pct200_band(
+    regime_label: str, rules: dict[str, Any] | None
+) -> tuple[float | None, float | None]:
+    """Return (lower, upper) pct_above_200dma edges for a regime.
+
+    Looks at the regime's own rule block for `_gte` (lower) and `_lt` (upper)
+    constraints. When the rules don't constrain pct_above_200dma directly
+    for this regime, returns the default ladder edges.
+    """
+    if rules and isinstance(rules.get(regime_label), dict):
+        spec = rules[regime_label]
+        lower = spec.get("pct_above_200dma_gte")
+        upper = spec.get("pct_above_200dma_lt")
+        if isinstance(lower, (int, float)) or isinstance(upper, (int, float)):
+            # If only one edge is specified, infer the other from neighbouring
+            # bands. Simpler: fall back to the default band edges where one
+            # side is missing.
+            for default in _DEFAULT_BAND_EDGES_PCT200:
+                if default[0] == regime_label:
+                    return (
+                        float(lower) if isinstance(lower, (int, float)) else default[1],
+                        float(upper) if isinstance(upper, (int, float)) else default[2],
+                    )
+            return (
+                float(lower) if isinstance(lower, (int, float)) else 0.0,
+                float(upper) if isinstance(upper, (int, float)) else 1.0,
+            )
+    # No rule-based info — use the default ladder.
+    for default in _DEFAULT_BAND_EDGES_PCT200:
+        if default[0] == regime_label:
+            return (default[1], default[2])
+    return (None, None)
+
+
 def confirmed_regime(raw_regimes: list[str], *, confirmation_days: int = 3) -> str:
+    """Apply the 3-day-of-N confirmation filter across the 5-tier ladder.
+
+    Higher-risk regimes need ≥2 raw days to confirm; lower-risk regimes
+    cascade so a bull→cautious_bull→bull window still confirms as bull
+    (positions stay sized as the broader band warrants). cautious_bull
+    confirms when 2 of N are *at or above* cautious_bull (i.e. cautious_bull,
+    bull, or strong_bull). risk_off requires 2 explicit risk_off days —
+    it's the only sticky-down state because de-risking is conservative.
+    """
     last = list(raw_regimes)[-max(int(confirmation_days), 1):]
     if not last:
         return "neutral"
@@ -280,6 +437,15 @@ def confirmed_regime(raw_regimes: list[str], *, confirmation_days: int = 3) -> s
         return "strong_bull"
     if last.count("bull") + last.count("strong_bull") >= 2:
         return "bull"
+    # cautious_bull confirms when ≥2 days are cautious_bull-or-better (bull
+    # / strong_bull don't have to confirm separately to keep cautious_bull
+    # — they're a superset). This prevents bull→cautious_bull jitter.
+    if (
+        last.count("cautious_bull")
+        + last.count("bull")
+        + last.count("strong_bull")
+    ) >= 2:
+        return "cautious_bull"
     if last.count("risk_off") >= 2:
         return "risk_off"
     return "neutral"
@@ -377,7 +543,9 @@ def _load_recent_raw_snapshots(
                     SUM(CASE WHEN n200 = 200 AND close > sma200 THEN 1 ELSE 0 END)::DOUBLE
                         / NULLIF(COUNT(*) FILTER (WHERE n200 = 200), 0) AS pct_above_200dma,
                     SUM(CASE WHEN n200 = 200 AND high252 > 0 AND close >= high252 * 0.90 THEN 1 ELSE 0 END)::DOUBLE
-                        / NULLIF(COUNT(*) FILTER (WHERE n200 = 200), 0) AS pct_near_52w_high
+                        / NULLIF(COUNT(*) FILTER (WHERE n200 = 200), 0) AS pct_near_52w_high,
+                    SUM(CASE WHEN n200 = 200 AND high252 > 0 AND close >= high252 THEN 1 ELSE 0 END)::DOUBLE
+                        / NULLIF(COUNT(*) FILTER (WHERE n200 = 200), 0) AS pct_at_52w_high
                 FROM symbol_roll
                 GROUP BY d
             ),
@@ -405,7 +573,8 @@ def _load_recent_raw_snapshots(
                 COALESCE(i.n200 = 200 AND i.close > i.sma200, FALSE) AS top1000_above_200dma,
                 COALESCE(b.eligible_50dma_count, 0) AS eligible_50dma_count,
                 COALESCE(b.eligible_200dma_count, 0) AS eligible_200dma_count,
-                COALESCE(b.total_symbols_count, 0) AS total_symbols_count
+                COALESCE(b.total_symbols_count, 0) AS total_symbols_count,
+                COALESCE(b.pct_at_52w_high, 0.0) AS pct_at_52w_high
             FROM breadth b
             JOIN idx i USING (d)
             WHERE b.universe_count > 0
@@ -422,11 +591,13 @@ def _load_recent_raw_snapshots(
         eligible_50 = int(row[7] or 0)
         eligible_200 = int(row[8] or 0)
         total_syms = int(row[9] or 0)
+        pct_at_high = float(row[10] or 0.0)
         breadth_conf = (eligible_200 / total_syms) if total_syms > 0 else 0.0
         metrics = {
             "pct_above_50dma": float(row[1] or 0.0),
             "pct_above_200dma": float(row[2] or 0.0),
             "pct_near_52w_high": float(row[3] or 0.0),
+            "pct_at_52w_high": pct_at_high,
             "universe_count": int(row[4] or 0),
             "top1000_above_50dma": bool(row[5]),
             "top1000_above_200dma": bool(row[6]),
@@ -435,14 +606,16 @@ def _load_recent_raw_snapshots(
             "total_symbols_count": total_syms,
             "breadth_confidence": breadth_conf,
         }
+        regime_label = classify_regime(metrics, rules)
         snapshots.append(
             MarketRegimeSnapshot(
                 date=str(row[0]),
-                regime=classify_regime(metrics, rules),
-                raw_regime=classify_regime(metrics, rules),
+                regime=regime_label,
+                raw_regime=regime_label,
                 pct_above_50dma=float(metrics["pct_above_50dma"]),
                 pct_above_200dma=float(metrics["pct_above_200dma"]),
                 pct_near_52w_high=float(metrics["pct_near_52w_high"]),
+                pct_at_52w_high=pct_at_high,
                 universe_count=int(metrics["universe_count"]),
                 top1000_above_50dma=bool(metrics["top1000_above_50dma"]),
                 top1000_above_200dma=bool(metrics["top1000_above_200dma"]),
@@ -450,6 +623,8 @@ def _load_recent_raw_snapshots(
                 eligible_200dma_count=eligible_200,
                 total_symbols_count=total_syms,
                 breadth_confidence=breadth_conf,
+                regime_score=compute_regime_score(metrics),
+                regime_confidence=compute_regime_confidence(metrics, regime_label, rules),
                 source=index_code,
             )
         )
