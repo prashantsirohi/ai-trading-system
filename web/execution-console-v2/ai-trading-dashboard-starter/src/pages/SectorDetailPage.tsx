@@ -20,8 +20,7 @@ import { CardSkeleton } from '@/components/common/LoadingSkeleton';
 import TechFilterRail, { INDICATOR_GROUPS, type IndicatorKey } from '@/components/sectors/TechFilterRail';
 import ConstituentTable from '@/components/sectors/ConstituentTable';
 import { useSectors } from '@/lib/queries';
-import type { Constituent } from '@/lib/mock/sectorConstituents';
-import { getSectorConstituents, type SectorConstituentsResponse } from '@/lib/api/sectors';
+import { getSectorConstituents, type SectorConstituentRow, type SectorConstituentsResponse } from '@/lib/api/sectors';
 import { cn } from '@/lib/utils/cn';
 
 function quadrantPill(quadrant: string) {
@@ -46,7 +45,7 @@ export default function SectorDetailPage() {
   // ── Live constituent data from dedicated sector endpoint ─────────────────
   const [sectorRes, setSectorRes] = useState<SectorConstituentsResponse | null>(null);
   const [constituentsLoading, setConstituentsLoading] = useState(true);
-  const allConstituents: Constituent[] = sectorRes?.constituents ?? [];
+  const allConstituents: SectorConstituentRow[] = sectorRes?.constituents ?? [];
   const stageSummary = sectorRes?.stageSummary;
 
   useEffect(() => {
@@ -90,8 +89,9 @@ export default function SectorDetailPage() {
   const aboveMa50Pct = allConstituents.length
     ? Math.round((allConstituents.filter((r) => r.aboveMa50).length / allConstituents.length) * 100)
     : 0;
-  const avg5dChg = allConstituents.length
-    ? +(allConstituents.reduce((s, r) => s + r.chgPct, 0) / allConstituents.length).toFixed(2)
+  const rowsWithChg = allConstituents.filter((r) => r.chgPct != null);
+  const avg5dChg = rowsWithChg.length
+    ? +(rowsWithChg.reduce((s, r) => s + (r.chgPct ?? 0), 0) / rowsWithChg.length).toFixed(2)
     : 0;
 
   if (sectorsQuery.isLoading || constituentsLoading) {

@@ -37,6 +37,12 @@ function num(s: any, keys: string[], fallback = 0): number {
   return fallback;
 }
 
+function nullableNum(value: any): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function mapSectorRow(s: any): SectorRow {
   return {
     sector:       s.Sector ?? s.sector ?? 'Unknown',
@@ -138,42 +144,41 @@ export async function getSectorConstituents(sectorName: string): Promise<SectorC
 
     const rows: any[] = res.constituents ?? [];
     const constituents: SectorConstituentRow[] = rows.map((r): SectorConstituentRow => {
-      const price   = Number(r.close ?? 0);
-      const sma50   = Number(r.sma_50 ?? 0);
-      const sma20   = Number(r.sma_20 ?? 0);
+      const price   = nullableNum(r.close);
+      const sma50   = nullableNum(r.sma_50);
+      const sma20   = nullableNum(r.sma_20);
       // Backend now sends sma_200 (feature store has it); old payloads
       // shipped sma_150 from ranked_signals. Accept either.
-      const sma200  = Number(r.sma_200 ?? r.sma_150 ?? 0);
-      const high52w = Number(r.high_52w ?? 0);
-      const adx     = Number(r.adx_14 ?? 0);
-      const volMult = Number(r.vol_mult ?? 1);
-      const rsScore = Number(r.rs_score ?? 50);
+      const sma200  = nullableNum(r.sma_200 ?? r.sma_150);
+      const volMult = nullableNum(r.vol_mult);
+      const rsScore = nullableNum(r.rs_score);
       // True RSI(14) from feature store. rs_score is a ranking-percentile
       // metric (also 0..100) and was being mislabeled as RSI for ranked
       // stocks; unranked stocks fell back to the default 50. Prefer rsi_14
       // when present so all sector rows show the real indicator.
-      const rsi14   = Number(r.rsi_14 ?? NaN);
-      const rsiDisplay = Number.isFinite(rsi14) ? rsi14 : rsScore;
+      const rsi14 = nullableNum(r.rsi_14);
+      const rsiDisplay = rsi14 ?? rsScore;
+      const macd = nullableNum(r.macd_histogram);
 
       return {
         // Constituent base fields
         symbol:       String(r.symbol ?? ''),
         price,
-        chgPct:       Number(r.return_20 ?? 0),
-        rsi:          Math.round(rsiDisplay),
-        ma50Pct:      sma50 > 0 ? ((price - sma50) / sma50) * 100 : 0,
-        macd:         0,
-        volMult:      Math.round(volMult * 10) / 10,
-        score:        Number(r.composite_score ?? 0),
+        chgPct:       nullableNum(r.return_20),
+        rsi:          rsiDisplay == null ? null : Math.round(rsiDisplay),
+        ma50Pct:      price != null && sma50 && sma50 > 0 ? ((price - sma50) / sma50) * 100 : null,
+        macd,
+        volMult:      volMult == null ? null : Math.round(volMult * 10) / 10,
+        score:        nullableNum(r.composite_score),
         // Booleans (pre-computed by backend)
         aboveMa50:    Boolean(r.above_ma50),
         aboveMa200:   Boolean(r.above_ma200),
         goldenCross:  Boolean(r.golden_cross),
-        rsiInRange:   rsiDisplay >= 40 && rsiDisplay <= 70,
-        macdBullish:  false,
+        rsiInRange:   rsiDisplay != null && rsiDisplay >= 40 && rsiDisplay <= 70,
+        macdBullish:  Boolean(r.macd_bullish),
         adxAbove20:   Boolean(r.adx_above_20),
-        bbSqueeze:    false,
-        atrRising:    false,
+        bbSqueeze:    Boolean(r.bb_squeeze),
+        atrRising:    Boolean(r.atr_rising),
         volExpand:    Boolean(r.vol_expand),
         obvRising:    false,
         near52wHigh:  Boolean(r.near_52w_high),

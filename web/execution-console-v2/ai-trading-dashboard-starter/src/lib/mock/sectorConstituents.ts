@@ -9,13 +9,13 @@
 
 export interface Constituent {
   symbol: string;
-  price: number;
-  chgPct: number;   // e.g. +2.45 means +2.45%
-  rsi: number;
-  ma50Pct: number;  // (px - ma50) / ma50 * 100 — positive = above
-  macd: number;     // MACD histogram value
-  volMult: number;  // volume / 5d ADV
-  score: number;
+  price: number | null;
+  chgPct: number | null;   // e.g. +2.45 means +2.45%
+  rsi: number | null;
+  ma50Pct: number | null;  // (px - ma50) / ma50 * 100 — positive = above
+  macd: number | null;     // MACD histogram value
+  volMult: number | null;  // volume / 20d ADV
+  score: number | null;
   // Pre-computed indicator booleans
   aboveMa50: boolean;
   aboveMa200: boolean;

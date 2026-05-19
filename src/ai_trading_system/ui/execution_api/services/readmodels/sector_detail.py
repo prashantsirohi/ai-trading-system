@@ -81,9 +81,10 @@ def _load_stage_snapshot(ohlcv_db: str) -> pd.DataFrame:
 # ── latest technicals from _catalog ──────────────────────────────────────────
 
 def _load_latest_technicals(ohlcv_db: str, symbols: list[str]) -> pd.DataFrame:
-    """Latest close, volume, 20-day avg volume, and 52-week high per symbol.
+    """Latest close, 20-day return, volume context, and 52-week high per symbol.
 
-    Returns columns: symbol_id, date, close, volume, vol_20_avg, high_52w.
+    Returns columns: symbol_id, date, close, close_20d_ago, volume,
+    vol_20_avg, high_52w.
     Covers ALL requested symbols (no ranked-list dependency).
     """
     if not symbols:
@@ -112,6 +113,7 @@ def _load_latest_technicals(ohlcv_db: str, symbols: list[str]) -> pd.DataFrame:
                 agg AS (
                     SELECT
                         symbol_id,
+                        MAX(close) FILTER (WHERE rn = 21) AS close_20d_ago,
                         AVG(volume) FILTER (WHERE rn <= 20) AS vol_20_avg,
                         MAX(high)   FILTER (WHERE rn <= 252) AS high_52w
                     FROM ranked
@@ -121,6 +123,7 @@ def _load_latest_technicals(ohlcv_db: str, symbols: list[str]) -> pd.DataFrame:
                     r.symbol_id,
                     CAST(r.timestamp AS DATE) AS date,
                     r.close,
+                    a.close_20d_ago,
                     r.volume,
                     a.vol_20_avg,
                     a.high_52w
@@ -137,7 +140,7 @@ def _load_latest_technicals(ohlcv_db: str, symbols: list[str]) -> pd.DataFrame:
 
 
 def _load_indicators_for_symbols(root: Path, symbols: list[str]) -> pd.DataFrame:
-    """Latest sma_20/50/200, rsi_14, adx_14 per symbol from the feature store.
+    """Latest technical indicators per symbol from the feature store.
 
     Reads the per-symbol parquet shards via DuckDB glob (three reads instead
     of N×3). Returns one row per symbol with the indicator columns.
@@ -164,9 +167,41 @@ def _load_indicators_for_symbols(root: Path, symbols: list[str]) -> pd.DataFrame
             sma = _latest(f"{fs_root}/sma/NSE/*.parquet", ["sma_20", "sma_50", "sma_200"])
             rsi = _latest(f"{fs_root}/rsi/NSE/*.parquet", ["rsi_14"])
             adx = _latest(f"{fs_root}/adx/NSE/*.parquet", ["adx_14"])
+            macd = _latest(
+                f"{fs_root}/macd/NSE/*.parquet",
+                ["macd_line", "macd_signal_9", "macd_histogram"],
+            )
+            bb = _latest(
+                f"{fs_root}/bb/NSE/*.parquet",
+                ["bb_middle_20", "bb_upper_20_2sd", "bb_lower_20_2sd"],
+            )
+            atr = conn.execute(f"""
+                WITH ranked AS (
+                    SELECT
+                        symbol_id,
+                        atr_14,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY symbol_id ORDER BY timestamp DESC
+                        ) AS rn
+                    FROM read_parquet('{fs_root}/atr/NSE/*.parquet', union_by_name = true)
+                    WHERE symbol_id IN ({sym_list})
+                )
+                SELECT
+                    symbol_id,
+                    MAX(atr_14) FILTER (WHERE rn = 1) AS atr_14,
+                    AVG(atr_14) FILTER (WHERE rn BETWEEN 2 AND 21) AS atr_20_prev_avg
+                FROM ranked
+                GROUP BY symbol_id
+            """).fetchdf()
         finally:
             conn.close()
-        out = sma.merge(rsi, on="symbol_id", how="outer").merge(adx, on="symbol_id", how="outer")
+        out = (
+            sma.merge(rsi, on="symbol_id", how="outer")
+            .merge(adx, on="symbol_id", how="outer")
+            .merge(macd, on="symbol_id", how="outer")
+            .merge(bb, on="symbol_id", how="outer")
+            .merge(atr, on="symbol_id", how="outer")
+        )
         return out
     except Exception as exc:
         LOG.warning("_load_indicators_for_symbols failed: %s", exc)
@@ -219,8 +254,11 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
     # 2. Stage snapshot
     snap = _load_stage_snapshot(ohlcv_db)
 
-    # 3. Stock→sector mapping from master DB (SQLite)
+    # 3. Stock→sector mapping from master DB (SQLite). The sector list API is
+    #    led by sector_dashboard, but masterdata is the catalog of record; use
+    #    it to keep sectors visible even if an RS artifact is incomplete.
     sector_map: dict[str, str] = {}
+    sector_counts: dict[str, int] = {}
     try:
         import sqlite3
         con = sqlite3.connect(master_db)
@@ -228,7 +266,10 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
             "SELECT Symbol, Sector FROM stock_details WHERE exchange = 'NSE'", con
         )
         con.close()
+        rows = rows.dropna(subset=["Sector"])
+        rows = rows[rows["Sector"].astype(str).str.strip() != ""]
         sector_map = dict(zip(rows["Symbol"], rows["Sector"]))
+        sector_counts = rows.groupby("Sector")["Symbol"].nunique().astype(int).to_dict()
     except Exception as exc:
         LOG.warning("sector_map load failed: %s", exc)
 
@@ -250,8 +291,11 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
 
     # 5. Merge stage distribution into each sector row
     enriched = []
+    seen_sectors: set[str] = set()
     for s in sector_rs:
         sec_name = s.get("Sector") or s.get("sector") or ""
+        if sec_name:
+            seen_sectors.add(sec_name)
         dist = stage_by_sector.get(sec_name, {})
         total = dist.get("total", 0)
         enriched.append({
@@ -265,6 +309,37 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
             "stage_s3_count": dist.get("S3", 0),
             "stage_s4_count": dist.get("S4", 0),
             "stage_total": total,
+        })
+
+    max_rank = max(
+        (_safe_float(row.get("RS_rank")) or 0 for row in enriched),
+        default=0,
+    )
+    for offset, sec_name in enumerate(sorted(set(sector_counts) - seen_sectors), start=1):
+        dist = stage_by_sector.get(sec_name, {})
+        total = dist.get("total", 0)
+        enriched.append({
+            "Sector": sec_name,
+            "RS": None,
+            "RS_20": None,
+            "RS_50": None,
+            "RS_100": None,
+            "Momentum": 0.0,
+            "RS_rank": int(max_rank) + offset,
+            "RS_rank_pct": 1.0,
+            "Momentum_rank": int(max_rank) + offset,
+            "Momentum_rank_pct": 1.0,
+            "Quadrant": "Unranked",
+            "stage_s1_pct": _pct(dist.get("S1", 0), total),
+            "stage_s2_pct": _pct(dist.get("S2", 0), total),
+            "stage_s3_pct": _pct(dist.get("S3", 0), total),
+            "stage_s4_pct": _pct(dist.get("S4", 0), total),
+            "stage_s1_count": dist.get("S1", 0),
+            "stage_s2_count": dist.get("S2", 0),
+            "stage_s3_count": dist.get("S3", 0),
+            "stage_s4_count": dist.get("S4", 0),
+            "stage_total": total,
+            "master_count": sector_counts[sec_name],
         })
 
     return {"sectors": enriched}
@@ -327,6 +402,7 @@ def get_sector_constituents(root: Path, sector: str) -> dict[str, Any]:
         for _, r in price_df.iterrows():
             price_map[r["symbol_id"]] = {
                 "close": _safe_float(r.get("close")),
+                "close_20d_ago": _safe_float(r.get("close_20d_ago")),
                 "volume": _safe_float(r.get("volume")),
                 "vol_20_avg": _safe_float(r.get("vol_20_avg")),
                 "high_52w": _safe_float(r.get("high_52w")),
@@ -359,12 +435,26 @@ def get_sector_constituents(root: Path, sector: str) -> dict[str, Any]:
         sma200 = _safe_float(ind_info.get("sma_200")) or _safe_float(feat_info.get("sma_150"))
         adx    = _safe_float(ind_info.get("adx_14"))  or _safe_float(feat_info.get("adx_14"))
         rsi    = _safe_float(ind_info.get("rsi_14"))
+        macd_hist = _safe_float(ind_info.get("macd_histogram"))
+        bb_middle = _safe_float(ind_info.get("bb_middle_20"))
+        bb_upper = _safe_float(ind_info.get("bb_upper_20_2sd"))
+        bb_lower = _safe_float(ind_info.get("bb_lower_20_2sd"))
+        atr = _safe_float(ind_info.get("atr_14"))
+        atr_prev_avg = _safe_float(ind_info.get("atr_20_prev_avg"))
         high52w = price_info.get("high_52w") or _safe_float(feat_info.get("high_52w"))
         vol = price_info.get("volume")
         vol_avg = price_info.get("vol_20_avg") or _safe_float(feat_info.get("vol_20_avg"))
         rs_score = _safe_float(feat_info.get("rel_strength_score"))
         ret20 = _safe_float(feat_info.get("return_20"))
         composite = _safe_float(feat_info.get("composite_score"))
+        close_20d_ago = price_info.get("close_20d_ago")
+        if ret20 is None and close is not None and close_20d_ago and close_20d_ago > 0:
+            ret20 = (close / close_20d_ago) - 1
+        bb_width = (
+            (bb_upper - bb_lower) / bb_middle
+            if bb_middle and bb_upper is not None and bb_lower is not None
+            else None
+        )
 
         constituents.append({
             "symbol": sym,
@@ -382,6 +472,9 @@ def get_sector_constituents(root: Path, sector: str) -> dict[str, Any]:
             "high_52w": high52w,
             "adx_14": adx,
             "rsi_14": rsi,
+            "macd_histogram": macd_hist,
+            "bb_width": _safe_float(bb_width),
+            "atr_14": atr,
             "vol_mult": round(vol / vol_avg, 2) if (vol and vol_avg and vol_avg > 0) else None,
             # Derived booleans
             "above_ma50": bool(close and sma50 and close > sma50),
@@ -390,6 +483,9 @@ def get_sector_constituents(root: Path, sector: str) -> dict[str, Any]:
             "near_52w_high": bool(close and high52w and high52w > 0 and (high52w - close) / high52w <= 0.05),
             "adx_above_20": bool(adx and adx > 20),
             "vol_expand": bool(vol and vol_avg and vol_avg > 0 and vol / vol_avg > 1.5),
+            "macd_bullish": bool(macd_hist is not None and macd_hist > 0),
+            "bb_squeeze": bool(bb_width is not None and bb_width <= 0.08),
+            "atr_rising": bool(atr and atr_prev_avg and atr > atr_prev_avg),
             # Ranking score (None if not in ranked list)
             "composite_score": composite,
             "rs_score": rs_score,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import duckdb
@@ -206,6 +207,46 @@ def test_sector_endpoint_uses_latest_operational_snapshot_not_lexicographic_path
 
     assert pharma["RS_rank"] == 3
     assert pharma["Quadrant"] == "Leading"
+
+
+def test_sector_endpoint_keeps_masterdata_sector_when_rs_artifact_omits_it(
+    tmp_path: Path,
+) -> None:
+    run_id = "pipeline-2026-05-19-live333"
+    payload = _write_snapshot_artifacts(tmp_path, run_id, score=99.0, smoke=False)
+    (payload.parent / "sector_dashboard.csv").write_text(
+        "Sector,RS,RS_20,Momentum,RS_rank,RS_rank_pct,Quadrant\n"
+        "Aerospace,0.71,0.70,0.01,1,0.04,Leading\n",
+        encoding="utf-8",
+    )
+    _seed_control_plane(tmp_path, [(run_id, {"params": {}})])
+
+    master_db = tmp_path / "data" / "masterdata.db"
+    master_db.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(master_db)
+    try:
+        con.execute(
+            "CREATE TABLE stock_details (Symbol TEXT, Sector TEXT, exchange TEXT)"
+        )
+        con.executemany(
+            "INSERT INTO stock_details (Symbol, Sector, exchange) VALUES (?, ?, 'NSE')",
+            [
+                ("HAL", "Aerospace"),
+                ("SUNPHARMA", "Pharma"),
+                ("CIPLA", "Pharma"),
+            ],
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    sectors = get_sectors_with_stage(tmp_path)["sectors"]
+    by_sector = {row["Sector"]: row for row in sectors}
+
+    assert set(by_sector) == {"Aerospace", "Pharma"}
+    assert by_sector["Aerospace"]["Quadrant"] == "Leading"
+    assert by_sector["Pharma"]["Quadrant"] == "Unranked"
+    assert by_sector["Pharma"]["master_count"] == 2
 
 
 def test_records_serializes_datetime_columns() -> None:

@@ -12,9 +12,9 @@ interface IndChip {
 function chips(row: Constituent): IndChip[] {
   return [
     { label: row.aboveMa50 ? '50↑' : '50↓', tone: row.aboveMa50 ? 'bull' : 'bear' },
-    { label: 'RSI', tone: row.rsiInRange ? 'bull' : 'bear' },
-    { label: 'VOL', tone: row.volExpand ? 'bull' : 'bear' },
-    { label: 'MACD', tone: row.macdBullish ? 'bull' : row.macd === 0 ? 'neutral' : 'bear' },
+    { label: 'RSI', tone: row.rsi == null ? 'neutral' : row.rsiInRange ? 'bull' : 'bear' },
+    { label: 'VOL', tone: row.volMult == null ? 'neutral' : row.volExpand ? 'bull' : 'bear' },
+    { label: 'MACD', tone: row.macd == null ? 'neutral' : row.macdBullish ? 'bull' : 'bear' },
   ];
 }
 
@@ -30,6 +30,11 @@ const STAGE_CLASS: Record<string, string> = {
   S3: 'border-amber-600/50  bg-amber-500/15   text-amber-300',
   S4: 'border-rose-600/50   bg-rose-500/15    text-rose-300',
 };
+
+function formatSigned(value: number | null, digits = 2, suffix = '') {
+  if (value == null) return '—';
+  return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}${suffix}`;
+}
 
 interface Props {
   rows: (Constituent & { stageLabel?: string | null; compositeScore?: number | null; name?: string })[];
@@ -88,16 +93,18 @@ export default function ConstituentTable({ rows, hiddenCount, activeFilters, onS
                     </Link>
                   </td>
                   <td className="py-2 pr-4 text-right font-mono text-slate-200">
-                    {row.price ? row.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                    {row.price != null ? row.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
                   </td>
-                  <td className={cn('py-2 pr-4 text-right font-mono', row.chgPct >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
-                    {row.chgPct >= 0 ? '+' : ''}{row.chgPct.toFixed(2)}
+                  <td className={cn('py-2 pr-4 text-right font-mono', row.chgPct == null ? 'text-slate-500' : row.chgPct >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
+                    {formatSigned(row.chgPct)}
                   </td>
-                  <td className="py-2 pr-4 text-right font-mono text-slate-300">{row.rsi}</td>
-                  <td className={cn('py-2 pr-4 text-right font-mono', row.ma50Pct >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
-                    {row.ma50Pct >= 0 ? '+' : ''}{row.ma50Pct.toFixed(1)}%
+                  <td className="py-2 pr-4 text-right font-mono text-slate-300">{row.rsi ?? '—'}</td>
+                  <td className={cn('py-2 pr-4 text-right font-mono', row.ma50Pct == null ? 'text-slate-500' : row.ma50Pct >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
+                    {formatSigned(row.ma50Pct, 1, '%')}
                   </td>
-                  <td className="py-2 pr-4 text-right font-mono text-slate-300">{row.volMult.toFixed(1)}×</td>
+                  <td className="py-2 pr-4 text-right font-mono text-slate-300">
+                    {row.volMult != null ? `${row.volMult.toFixed(1)}×` : '—'}
+                  </td>
                   <td className="py-2 pr-4 text-right font-mono text-slate-200">
                     {score != null ? Number(score).toFixed(1) : '—'}
                   </td>
