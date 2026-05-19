@@ -238,6 +238,23 @@ DEFAULT_RULES = [
         "owner": "pipeline",
     },
     {
+        # Breadth-confidence floor: regime classification compares
+        # pct_above_200dma across eras, but old days where only 300/1500
+        # symbols had 200-day history produce numbers that aren't
+        # comparable with modern 1500-symbol breadth. Fire when the ratio
+        # eligible_200dma_count / total_symbols_count drops below 0.60 so
+        # the operator knows the regime signal for that run is structurally
+        # noisy. red_repairable (relaxable in dq_mode=relaxed) — does not
+        # block downstream stages.
+        "rule_id": "regime_breadth_confidence",
+        "stage_name": "rank",
+        "dataset_name": "market_regime",
+        "severity": "critical",
+        "rule_sql": None,
+        "description": "Regime breadth_confidence (eligible_200dma / total_symbols) should be at least 0.60.",
+        "owner": "pipeline",
+    },
+    {
         "rule_id": "rank_symbol_coverage_low",
         "stage_name": "rank",
         "dataset_name": "ranked_signals",

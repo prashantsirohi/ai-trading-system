@@ -19,9 +19,21 @@ class MarketRegimeSnapshot:
     pct_above_50dma: float
     pct_above_200dma: float
     pct_near_52w_high: float
-    universe_count: int
+    universe_count: int  # alias for eligible_200dma_count (kept for backwards compat)
     top1000_above_50dma: bool
     top1000_above_200dma: bool
+    # ── Breadth-quality fields ────────────────────────────────────────────
+    # eligible_*dma_count = number of symbols with at least N trading days of
+    # history on this date. total_symbols_count is every symbol with a close
+    # on this date (no history requirement). breadth_confidence is the ratio
+    # eligible_200dma_count / total_symbols_count — when this falls (e.g.
+    # early years where only 300/1500 symbols have 200 days history) the
+    # pct_above_200dma signal becomes structurally noisy and shouldn't be
+    # compared with modern-era values.
+    eligible_50dma_count: int = 0
+    eligible_200dma_count: int = 0
+    total_symbols_count: int = 0
+    breadth_confidence: float = 0.0
     confirmation_days: int = 3
     source: str = "UNIV_TOP1000"
 
@@ -41,6 +53,10 @@ _NUMERIC_METRICS: frozenset[str] = frozenset({
     "pct_above_200dma",
     "pct_near_52w_high",
     "universe_count",
+    "eligible_50dma_count",
+    "eligible_200dma_count",
+    "total_symbols_count",
+    "breadth_confidence",
 })
 _BOOLEAN_METRICS: frozenset[str] = frozenset({
     "top1000_above_50dma",
@@ -292,6 +308,9 @@ def _load_recent_raw_snapshots(
             breadth AS (
                 SELECT
                     d,
+                    COUNT(*) AS total_symbols_count,
+                    COUNT(*) FILTER (WHERE n50 = 50) AS eligible_50dma_count,
+                    COUNT(*) FILTER (WHERE n200 = 200) AS eligible_200dma_count,
                     COUNT(*) FILTER (WHERE n200 = 200) AS universe_count,
                     SUM(CASE WHEN n50 = 50 AND close > sma50 THEN 1 ELSE 0 END)::DOUBLE
                         / NULLIF(COUNT(*) FILTER (WHERE n50 = 50), 0) AS pct_above_50dma,
@@ -323,7 +342,10 @@ def _load_recent_raw_snapshots(
                 COALESCE(b.pct_near_52w_high, 0.0) AS pct_near_52w_high,
                 COALESCE(b.universe_count, 0) AS universe_count,
                 COALESCE(i.n50 = 50 AND i.close > i.sma50, FALSE) AS top1000_above_50dma,
-                COALESCE(i.n200 = 200 AND i.close > i.sma200, FALSE) AS top1000_above_200dma
+                COALESCE(i.n200 = 200 AND i.close > i.sma200, FALSE) AS top1000_above_200dma,
+                COALESCE(b.eligible_50dma_count, 0) AS eligible_50dma_count,
+                COALESCE(b.eligible_200dma_count, 0) AS eligible_200dma_count,
+                COALESCE(b.total_symbols_count, 0) AS total_symbols_count
             FROM breadth b
             JOIN idx i USING (d)
             WHERE b.universe_count > 0
@@ -337,6 +359,10 @@ def _load_recent_raw_snapshots(
 
     snapshots: list[MarketRegimeSnapshot] = []
     for row in reversed(rows):
+        eligible_50 = int(row[7] or 0)
+        eligible_200 = int(row[8] or 0)
+        total_syms = int(row[9] or 0)
+        breadth_conf = (eligible_200 / total_syms) if total_syms > 0 else 0.0
         metrics = {
             "pct_above_50dma": float(row[1] or 0.0),
             "pct_above_200dma": float(row[2] or 0.0),
@@ -344,6 +370,10 @@ def _load_recent_raw_snapshots(
             "universe_count": int(row[4] or 0),
             "top1000_above_50dma": bool(row[5]),
             "top1000_above_200dma": bool(row[6]),
+            "eligible_50dma_count": eligible_50,
+            "eligible_200dma_count": eligible_200,
+            "total_symbols_count": total_syms,
+            "breadth_confidence": breadth_conf,
         }
         snapshots.append(
             MarketRegimeSnapshot(
@@ -356,6 +386,10 @@ def _load_recent_raw_snapshots(
                 universe_count=int(metrics["universe_count"]),
                 top1000_above_50dma=bool(metrics["top1000_above_50dma"]),
                 top1000_above_200dma=bool(metrics["top1000_above_200dma"]),
+                eligible_50dma_count=eligible_50,
+                eligible_200dma_count=eligible_200,
+                total_symbols_count=total_syms,
+                breadth_confidence=breadth_conf,
                 source=index_code,
             )
         )

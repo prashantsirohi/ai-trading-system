@@ -685,6 +685,68 @@ class DataQualityEngine:
             sample_uri=artifact.uri,
         )
 
+    def _rule_regime_breadth_confidence(
+        self, context: StageContext, result: StageResult, severity: str
+    ) -> DQRuleFailure:
+        """Fail when the regime snapshot for this run has low breadth coverage.
+
+        breadth_confidence = eligible_200dma_count / total_symbols_count.
+        Below the threshold (default 0.60), the regime classification is
+        based on too few symbols to be comparable with modern breadth and
+        the signal should be treated as low-confidence (not blocking).
+
+        If the rank stage didn't compute a regime (e.g. configured off or
+        a degraded run), this rule passes — it can't fail what wasn't run.
+        """
+        threshold = float(
+            context.params.get("regime_breadth_confidence_min", 0.60) or 0.60
+        )
+        regime = result.metadata.get("market_regime") if result.metadata else None
+        if not isinstance(regime, dict):
+            return self._make_result(
+                "regime_breadth_confidence",
+                severity,
+                0,
+                "regime_breadth_confidence: skipped (no regime snapshot in stage metadata).",
+            )
+        breadth_confidence = regime.get("breadth_confidence")
+        if breadth_confidence is None:
+            # Older snapshots predate this field — treat as N/A, not a failure.
+            return self._make_result(
+                "regime_breadth_confidence",
+                severity,
+                0,
+                "regime_breadth_confidence: skipped (snapshot has no breadth_confidence field).",
+            )
+        try:
+            value = float(breadth_confidence)
+        except (TypeError, ValueError):
+            return self._make_result(
+                "regime_breadth_confidence",
+                severity,
+                1,
+                f"regime_breadth_confidence: non-numeric value {breadth_confidence!r}",
+            )
+        eligible = int(regime.get("eligible_200dma_count") or 0)
+        total = int(regime.get("total_symbols_count") or 0)
+        passed = value >= threshold
+        message = (
+            f"regime_breadth_confidence={value:.3f} >= {threshold} "
+            f"(eligible_200dma={eligible}/total={total})"
+            if passed
+            else (
+                f"regime_breadth_confidence={value:.3f} below floor {threshold} "
+                f"(eligible_200dma={eligible}/total={total}); "
+                f"regime classification is structurally noisy for this date"
+            )
+        )
+        return self._make_result(
+            "regime_breadth_confidence",
+            severity,
+            0 if passed else 1,
+            message,
+        )
+
     def _render_rule_sql(self, template: str, context: StageContext, result: StageResult) -> str:
         """Render a DQ SQL template with stage-aware placeholders."""
         rank_artifact = context.artifact_for("rank", "ranked_signals")
