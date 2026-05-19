@@ -141,18 +141,26 @@ export async function getSectorConstituents(sectorName: string): Promise<SectorC
       const price   = Number(r.close ?? 0);
       const sma50   = Number(r.sma_50 ?? 0);
       const sma20   = Number(r.sma_20 ?? 0);
-      const sma150  = Number(r.sma_150 ?? 0);
+      // Backend now sends sma_200 (feature store has it); old payloads
+      // shipped sma_150 from ranked_signals. Accept either.
+      const sma200  = Number(r.sma_200 ?? r.sma_150 ?? 0);
       const high52w = Number(r.high_52w ?? 0);
       const adx     = Number(r.adx_14 ?? 0);
       const volMult = Number(r.vol_mult ?? 1);
       const rsScore = Number(r.rs_score ?? 50);
+      // True RSI(14) from feature store. rs_score is a ranking-percentile
+      // metric (also 0..100) and was being mislabeled as RSI for ranked
+      // stocks; unranked stocks fell back to the default 50. Prefer rsi_14
+      // when present so all sector rows show the real indicator.
+      const rsi14   = Number(r.rsi_14 ?? NaN);
+      const rsiDisplay = Number.isFinite(rsi14) ? rsi14 : rsScore;
 
       return {
         // Constituent base fields
         symbol:       String(r.symbol ?? ''),
         price,
         chgPct:       Number(r.return_20 ?? 0),
-        rsi:          Math.round(rsScore),
+        rsi:          Math.round(rsiDisplay),
         ma50Pct:      sma50 > 0 ? ((price - sma50) / sma50) * 100 : 0,
         macd:         0,
         volMult:      Math.round(volMult * 10) / 10,
@@ -161,7 +169,7 @@ export async function getSectorConstituents(sectorName: string): Promise<SectorC
         aboveMa50:    Boolean(r.above_ma50),
         aboveMa200:   Boolean(r.above_ma200),
         goldenCross:  Boolean(r.golden_cross),
-        rsiInRange:   rsScore >= 40 && rsScore <= 70,
+        rsiInRange:   rsiDisplay >= 40 && rsiDisplay <= 70,
         macdBullish:  false,
         adxAbove20:   Boolean(r.adx_above_20),
         bbSqueeze:    false,

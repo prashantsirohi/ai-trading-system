@@ -81,31 +81,95 @@ def _load_stage_snapshot(ohlcv_db: str) -> pd.DataFrame:
 # ── latest technicals from _catalog ──────────────────────────────────────────
 
 def _load_latest_technicals(ohlcv_db: str, symbols: list[str]) -> pd.DataFrame:
-    """Latest close, volume, sma_20/50/150, adx_14, high_52w for given symbols."""
+    """Latest close, volume, 20-day avg volume, and 52-week high per symbol.
+
+    Returns columns: symbol_id, date, close, volume, vol_20_avg, high_52w.
+    Covers ALL requested symbols (no ranked-list dependency).
+    """
     if not symbols:
         return pd.DataFrame()
     try:
         conn = duckdb.connect(ohlcv_db, read_only=True)
         try:
             sym_list = ", ".join(f"'{s}'" for s in symbols)
+            # One scan, window functions for both the latest snapshot and
+            # the trailing aggregates. rn=1 row carries the per-symbol totals.
             df = conn.execute(f"""
+                WITH ranked AS (
+                    SELECT
+                        symbol_id,
+                        timestamp,
+                        close,
+                        volume,
+                        high,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY symbol_id ORDER BY timestamp DESC
+                        ) AS rn
+                    FROM _catalog
+                    WHERE symbol_id IN ({sym_list})
+                      AND exchange = 'NSE'
+                ),
+                agg AS (
+                    SELECT
+                        symbol_id,
+                        AVG(volume) FILTER (WHERE rn <= 20) AS vol_20_avg,
+                        MAX(high)   FILTER (WHERE rn <= 252) AS high_52w
+                    FROM ranked
+                    GROUP BY symbol_id
+                )
                 SELECT
-                    symbol_id,
-                    CAST(timestamp AS DATE) AS date,
-                    close,
-                    volume
-                FROM _catalog
-                WHERE symbol_id IN ({sym_list})
-                  AND exchange = 'NSE'
-                QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY symbol_id ORDER BY timestamp DESC
-                ) = 1
+                    r.symbol_id,
+                    CAST(r.timestamp AS DATE) AS date,
+                    r.close,
+                    r.volume,
+                    a.vol_20_avg,
+                    a.high_52w
+                FROM ranked r
+                JOIN agg a USING (symbol_id)
+                WHERE r.rn = 1
             """).fetchdf()
         finally:
             conn.close()
         return df
     except Exception as exc:
         LOG.warning("_load_latest_technicals failed: %s", exc)
+        return pd.DataFrame()
+
+
+def _load_indicators_for_symbols(root: Path, symbols: list[str]) -> pd.DataFrame:
+    """Latest sma_20/50/200, rsi_14, adx_14 per symbol from the feature store.
+
+    Reads the per-symbol parquet shards via DuckDB glob (three reads instead
+    of N×3). Returns one row per symbol with the indicator columns.
+    """
+    if not symbols:
+        return pd.DataFrame()
+    paths = ensure_domain_layout(project_root=str(root), data_domain="operational")
+    fs_root = paths.feature_store_dir
+    sym_list = ", ".join(f"'{s}'" for s in symbols)
+    try:
+        conn = duckdb.connect(":memory:")
+        try:
+            def _latest(table_glob: str, cols: list[str]) -> pd.DataFrame:
+                col_select = ", ".join(cols)
+                return conn.execute(f"""
+                    SELECT symbol_id, {col_select}
+                    FROM read_parquet('{table_glob}', union_by_name = true)
+                    WHERE symbol_id IN ({sym_list})
+                    QUALIFY ROW_NUMBER() OVER (
+                        PARTITION BY symbol_id ORDER BY timestamp DESC
+                    ) = 1
+                """).fetchdf()
+
+            sma = _latest(f"{fs_root}/sma/NSE/*.parquet", ["sma_20", "sma_50", "sma_200"])
+            rsi = _latest(f"{fs_root}/rsi/NSE/*.parquet", ["rsi_14"])
+            adx = _latest(f"{fs_root}/adx/NSE/*.parquet", ["adx_14"])
+        finally:
+            conn.close()
+        out = sma.merge(rsi, on="symbol_id", how="outer").merge(adx, on="symbol_id", how="outer")
+        return out
+    except Exception as exc:
+        LOG.warning("_load_indicators_for_symbols failed: %s", exc)
         return pd.DataFrame()
 
 
@@ -234,10 +298,16 @@ def get_sector_constituents(root: Path, sector: str) -> dict[str, Any]:
 
     symbols = rows["Symbol"].tolist()
 
-    # 2. Latest price + volume from _catalog
+    # 2. Latest price + volume + 20d-avg volume + 52w high (from _catalog)
     price_df = _load_latest_technicals(ohlcv_db, symbols)
 
-    # 3. Feature-store technicals (sma, adx, rs, etc.) from ranked_signals CSV
+    # 3. Indicators from the feature store parquets — covers ALL symbols, not
+    #    just the ranked subset (the prior version read only ranked_signals
+    #    which left unranked sector stocks with stub indicators).
+    ind_df = _load_indicators_for_symbols(root, symbols)
+
+    # 4. Ranked-only scores (composite_score, rel_strength_score, return_20)
+    #    from ranked_signals — populated only for stocks that made the rank cut.
     feat_df = _load_feature_technicals(root, symbols)
 
     # 4. Stage labels from snapshot
@@ -258,8 +328,15 @@ def get_sector_constituents(root: Path, sector: str) -> dict[str, Any]:
             price_map[r["symbol_id"]] = {
                 "close": _safe_float(r.get("close")),
                 "volume": _safe_float(r.get("volume")),
+                "vol_20_avg": _safe_float(r.get("vol_20_avg")),
+                "high_52w": _safe_float(r.get("high_52w")),
                 "date": str(r.get("date", "")),
             }
+
+    ind_map: dict[str, dict] = {}
+    if not ind_df.empty:
+        for _, r in ind_df.iterrows():
+            ind_map[r["symbol_id"]] = r.to_dict()
 
     feat_map: dict[str, dict] = {}
     if not feat_df.empty:
@@ -270,17 +347,21 @@ def get_sector_constituents(root: Path, sector: str) -> dict[str, Any]:
     for _, stock in rows.iterrows():
         sym = stock["Symbol"]
         price_info = price_map.get(sym, {})
+        ind_info = ind_map.get(sym, {})
         feat_info = feat_map.get(sym, {})
         stage_info = snap_map.get(sym, {"stage_label": None, "stage_confidence": None, "stage_week": None})
 
         close = price_info.get("close") or _safe_float(feat_info.get("close"))
-        sma50 = _safe_float(feat_info.get("sma_50"))
-        sma20 = _safe_float(feat_info.get("sma_20"))
-        sma150 = _safe_float(feat_info.get("sma_150"))
-        high52w = _safe_float(feat_info.get("high_52w"))
-        adx = _safe_float(feat_info.get("adx_14"))
+        # Indicators: prefer feature-store values (cover all symbols); fall
+        # back to ranked_signals only for ranked stocks (legacy behavior).
+        sma20  = _safe_float(ind_info.get("sma_20"))  or _safe_float(feat_info.get("sma_20"))
+        sma50  = _safe_float(ind_info.get("sma_50"))  or _safe_float(feat_info.get("sma_50"))
+        sma200 = _safe_float(ind_info.get("sma_200")) or _safe_float(feat_info.get("sma_150"))
+        adx    = _safe_float(ind_info.get("adx_14"))  or _safe_float(feat_info.get("adx_14"))
+        rsi    = _safe_float(ind_info.get("rsi_14"))
+        high52w = price_info.get("high_52w") or _safe_float(feat_info.get("high_52w"))
         vol = price_info.get("volume")
-        vol_avg = _safe_float(feat_info.get("vol_20_avg"))
+        vol_avg = price_info.get("vol_20_avg") or _safe_float(feat_info.get("vol_20_avg"))
         rs_score = _safe_float(feat_info.get("rel_strength_score"))
         ret20 = _safe_float(feat_info.get("return_20"))
         composite = _safe_float(feat_info.get("composite_score"))
@@ -297,13 +378,14 @@ def get_sector_constituents(root: Path, sector: str) -> dict[str, Any]:
             # Moving averages
             "sma_20": sma20,
             "sma_50": sma50,
-            "sma_150": sma150,
+            "sma_200": sma200,
             "high_52w": high52w,
             "adx_14": adx,
+            "rsi_14": rsi,
             "vol_mult": round(vol / vol_avg, 2) if (vol and vol_avg and vol_avg > 0) else None,
             # Derived booleans
             "above_ma50": bool(close and sma50 and close > sma50),
-            "above_ma200": bool(close and sma150 and close > sma150),
+            "above_ma200": bool(close and sma200 and close > sma200),
             "golden_cross": bool(sma20 and sma50 and sma20 > sma50),
             "near_52w_high": bool(close and high52w and high52w > 0 and (high52w - close) / high52w <= 0.05),
             "adx_above_20": bool(adx and adx > 20),
