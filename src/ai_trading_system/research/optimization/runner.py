@@ -251,9 +251,12 @@ def _open_journal_study(
     try:
         from optuna.storages import JournalStorage  # type: ignore[attr-defined]
         try:
-            from optuna.storages import JournalFileBackend as _Backend  # type: ignore[attr-defined]
-        except ImportError:  # pragma: no cover — optuna < 4.1
-            from optuna.storages import JournalFileStorage as _Backend  # type: ignore[attr-defined]
+            from optuna.storages.journal import JournalFileBackend as _Backend  # type: ignore[attr-defined]
+        except ImportError:
+            try:
+                from optuna.storages import JournalFileBackend as _Backend  # type: ignore[attr-defined]
+            except ImportError:  # pragma: no cover — optuna < 4.1
+                from optuna.storages import JournalFileStorage as _Backend  # type: ignore[attr-defined]
     except ImportError as exc:  # pragma: no cover — should not happen with optuna>=4
         raise RuntimeError(
             "Optuna JournalStorage is unavailable. Install optuna>=4.0."
