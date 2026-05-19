@@ -108,6 +108,66 @@ def _validate_rule_key(regime: str, key: str, value: Any) -> None:
     )
 
 
+# ── Disagreement helpers ──────────────────────────────────────────────────
+#
+# raw_regime captures "what today's breadth alone implies"; regime (confirmed)
+# requires the 3-day-of-the-last-3 hysteresis to flip. The two diverge during
+# transitions. We treat a divergence where the raw signal worsened (e.g.
+# raw=risk_off while confirmed=bull/strong_bull) as an early warning worth
+# surfacing to UI/alerts/execute — the confirmed regime is lagging and
+# fresh positions opened today carry that lag risk.
+_REGIME_RANK: dict[str, int] = {
+    "risk_off": 0,
+    "neutral": 1,
+    "bull": 2,
+    "strong_bull": 3,
+}
+
+# Confirmed-regime values that should NOT have been opening fresh positions
+# when raw collapsed to risk_off. This is the "dangerous disagreement" set
+# used by alert emission and the optional execute-stage override.
+_DANGEROUS_DISAGREEMENT_CONFIRMED: frozenset[str] = frozenset({"bull", "strong_bull"})
+
+
+def regime_disagreement(
+    confirmed: str | None, raw: str | None
+) -> dict[str, Any]:
+    """Return a structured disagreement payload for a (confirmed, raw) pair.
+
+    Keys:
+        present:   true when confirmed != raw
+        dangerous: true when raw is risk_off and confirmed is bull/strong_bull
+                   — i.e. the lagging confirmed signal is opening positions
+                   the raw breadth says are unsafe
+        direction: "raw_worse" | "raw_better" | "same"
+        confirmed, raw: echoed for downstream convenience
+    """
+    confirmed_s = str(confirmed) if confirmed else ""
+    raw_s = str(raw) if raw else ""
+    if not confirmed_s or not raw_s or confirmed_s == raw_s:
+        return {
+            "present": False,
+            "dangerous": False,
+            "direction": "same",
+            "confirmed": confirmed_s,
+            "raw": raw_s,
+        }
+    raw_rank = _REGIME_RANK.get(raw_s)
+    confirmed_rank = _REGIME_RANK.get(confirmed_s)
+    direction = "same"
+    if raw_rank is not None and confirmed_rank is not None:
+        direction = "raw_worse" if raw_rank < confirmed_rank else "raw_better"
+    return {
+        "present": True,
+        "dangerous": (
+            raw_s == "risk_off" and confirmed_s in _DANGEROUS_DISAGREEMENT_CONFIRMED
+        ),
+        "direction": direction,
+        "confirmed": confirmed_s,
+        "raw": raw_s,
+    }
+
+
 def validate_regime_rules(rules: dict[str, Any]) -> None:
     """Walk every regime block and raise on unknown keys / type mismatches.
 

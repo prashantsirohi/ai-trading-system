@@ -60,13 +60,20 @@ def _resolve_risk_config(context) -> RiskPolicyConfig | None:
     return cfg
 
 
-def _extract_regime_overlay(dashboard_payload: dict) -> tuple[dict, dict]:
-    """Return rank-stage regime snapshot/profile dictionaries when present."""
+def _extract_regime_overlay(dashboard_payload: dict) -> tuple[dict, dict, dict]:
+    """Return rank-stage regime snapshot/profile/disagreement dictionaries.
+
+    The third element is a structured disagreement payload (see
+    ``regime_disagreement``) — present even when there's no divergence, with
+    ``present=False`` / ``dangerous=False``.
+    """
     market_regime = dashboard_payload.get("market_regime") or {}
     regime_profile = dashboard_payload.get("regime_profile") or {}
+    disagreement = dashboard_payload.get("market_regime_disagreement") or {}
     return (
         market_regime if isinstance(market_regime, dict) else {},
         regime_profile if isinstance(regime_profile, dict) else {},
+        disagreement if isinstance(disagreement, dict) else {},
     )
 
 
@@ -170,7 +177,9 @@ class ExecuteStage:
         context.require_artifact("rank", "ranked_signals")
         request = ExecutionRequest.from_context(context)
         candidates = ExecutionCandidateBuilder().build(context, request=request)
-        rank_regime, rank_profile = _extract_regime_overlay(candidates.dashboard_payload)
+        rank_regime, rank_profile, regime_disagree = _extract_regime_overlay(
+            candidates.dashboard_payload
+        )
 
         paths = ensure_domain_layout(
             project_root=context.project_root,
@@ -220,6 +229,27 @@ class ExecuteStage:
             )
             effective_exit_atr_multiple = float(rank_profile.get("atr_stop_mult") or request.exit_atr_multiple)
             effective_use_portfolio_constraints = True
+
+        # Raw-regime early-warning override. Opt-in via param. When the raw
+        # breadth signal is risk_off while confirmed is still bull/strong_bull,
+        # the operator may want to behave as if today is risk_off (block fresh
+        # entries, no new capital deployment) without waiting for the 3-day
+        # hysteresis to flip the confirmed regime. Existing positions are
+        # untouched — only entry-side caps are zeroed.
+        raw_override_enabled = bool(
+            context.params.get("execution_raw_regime_overrides_on_disagreement", False)
+        )
+        raw_override_active = False
+        if raw_override_enabled and regime_disagree.get("dangerous"):
+            raw_override_active = True
+            _logger.warning(
+                "execute stage: raw_regime override active (raw=risk_off, "
+                "confirmed=%s) — zeroing entry capital and max_positions",
+                regime_disagree.get("confirmed", "unknown"),
+            )
+            effective_capital = 0.0
+            effective_max_positions = 0
+            effective_top_n = 0
         store = ExecutionStore(context.project_root)
         portfolio_manager = PortfolioManager(store)
         service = ExecutionService(
@@ -321,6 +351,8 @@ class ExecuteStage:
             "detected_regime": current_regime,
             "regime_details": detected_regime,
             "market_regime": rank_regime,
+            "market_regime_disagreement": regime_disagree,
+            "raw_regime_override_active": raw_override_active,
             "regime_profile": rank_profile,
             "effective_execution_capital": effective_capital,
             "effective_execution_top_n": effective_top_n,

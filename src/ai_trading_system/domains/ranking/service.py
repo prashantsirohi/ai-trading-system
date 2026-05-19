@@ -27,6 +27,7 @@ from ai_trading_system.analytics.regime import (
     RegimeProfile,
     compute_market_regime_snapshot,
     load_regime_profile,
+    regime_disagreement,
 )
 
 
@@ -1152,9 +1153,14 @@ class RankOrchestrationService:
         )
         if isinstance(dashboard_payload, dict):
             if regime_snapshot is not None:
+                disagreement = regime_disagreement(
+                    regime_snapshot.regime, regime_snapshot.raw_regime
+                )
                 dashboard_payload["market_regime"] = regime_snapshot.to_dict()
+                dashboard_payload["market_regime_disagreement"] = disagreement
                 dashboard_payload.setdefault("summary", {})["market_regime"] = regime_snapshot.regime
                 dashboard_payload.setdefault("summary", {})["market_regime_raw"] = regime_snapshot.raw_regime
+                dashboard_payload["summary"]["market_regime_disagreement"] = disagreement
             if regime_profile is not None:
                 dashboard_payload["regime_profile"] = regime_profile.to_dict()
                 dashboard_payload.setdefault("summary", {})["regime_profile"] = regime_profile.name
@@ -1177,12 +1183,18 @@ class RankOrchestrationService:
             rank_confidence=top_rank_confidence,
         )
 
+        regime_disagreement_payload = (
+            regime_disagreement(regime_snapshot.regime, regime_snapshot.raw_regime)
+            if regime_snapshot is not None
+            else None
+        )
         outputs["__stage_metadata__"] = {
             "degraded_outputs": warnings,
             "degraded_output_count": len(warnings),
             "data_trust_status": trust_summary.get("status"),
             "rank_mode": str(context.params.get("rank_mode", "default")),
             "market_regime": regime_snapshot.to_dict() if regime_snapshot is not None else None,
+            "market_regime_disagreement": regime_disagreement_payload,
             "regime_profile": regime_profile.to_dict() if regime_profile is not None else None,
             "effective_min_score": float(effective_params.get("min_score", 0.0)),
             "effective_top_n": effective_params.get("top_n"),

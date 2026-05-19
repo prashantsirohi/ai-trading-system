@@ -611,6 +611,34 @@ class PipelineOrchestrator:
                                         "fingerprint": skip_plan.get("fingerprint"),
                                     }
 
+                        if stage_name == "rank":
+                            disagreement = (
+                                result.metadata.get("market_regime_disagreement")
+                                if result.metadata
+                                else None
+                            )
+                            if (
+                                isinstance(disagreement, dict)
+                                and disagreement.get("dangerous")
+                            ):
+                                # Raw breadth collapsed to risk_off while the
+                                # 3-day-confirmed regime still says bull/strong_bull.
+                                # Operator should consider tightening stops and
+                                # not opening fresh aggressive entries.
+                                self.alert_manager.emit(
+                                    run_id=run_id,
+                                    alert_type="regime_warning",
+                                    severity="warning",
+                                    stage_name="rank",
+                                    message=(
+                                        f"raw regime collapsed to risk_off while "
+                                        f"confirmed regime remains "
+                                        f"{disagreement.get('confirmed', 'unknown')}. "
+                                        f"Consider tightening stops and blocking "
+                                        f"fresh aggressive entries until confirmation."
+                                    ),
+                                )
+
                         completed_metadata = dict(result.metadata or {})
                         completed_metadata["input_hash"] = input_hash
                         self.registry.finish_stage(
