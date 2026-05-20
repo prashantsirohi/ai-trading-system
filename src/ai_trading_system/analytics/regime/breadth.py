@@ -353,6 +353,7 @@ def compute_market_regime_snapshot(
         limit=max(confirmation_days, 1),
         rules=raw_rules,
         previous_regime=previous_regime,
+        confirmation_days=confirmation_days,
     )
     if not snapshots and project_root is not None:
         research_db = Path(project_root) / "data" / "research" / "research_ohlcv.duckdb"
@@ -365,12 +366,12 @@ def compute_market_regime_snapshot(
                 limit=max(confirmation_days, 1),
                 rules=raw_rules,
                 previous_regime=previous_regime,
+                confirmation_days=confirmation_days,
             )
     if not snapshots:
         raise RuntimeError(f"No regime breadth data available at or before {as_of}")
-    confirmed = confirmed_regime([item.regime for item in snapshots], confirmation_days=confirmation_days)
     latest = snapshots[-1]
-    return replace(latest, raw_regime=latest.regime, regime=confirmed, confirmation_days=confirmation_days)
+    return replace(latest, confirmation_days=confirmation_days)
 
 
 def _enter_spec(regime_spec: dict[str, Any]) -> dict[str, Any]:
@@ -614,6 +615,36 @@ def confirmed_regime(raw_regimes: list[str], *, confirmation_days: int = 3) -> s
     return "neutral"
 
 
+def _confirmed_regime_series(
+    raw_regimes: list[str],
+    *,
+    confirmation_days: int = 3,
+) -> list[str]:
+    """Return point-in-time confirmed labels for a chronological raw series."""
+    n = max(int(confirmation_days), 1)
+    if n <= 1:
+        return list(raw_regimes)
+    return [
+        confirmed_regime(raw_regimes[max(0, i - n + 1): i + 1], confirmation_days=n)
+        for i in range(len(raw_regimes))
+    ]
+
+
+def _regime_age_series(regimes: list[str]) -> list[int]:
+    """Return consecutive prior-row age for each label in a regime series."""
+    ages: list[int] = []
+    prev: str | None = None
+    age = 0
+    for label in regimes:
+        if prev is None or label != prev:
+            age = 0
+        else:
+            age += 1
+        ages.append(age)
+        prev = label
+    return ages
+
+
 def _matches_rule(metrics: dict[str, float | bool], spec: dict[str, Any]) -> bool:
     """Evaluate one regime block's predicates against a metrics dict.
 
@@ -677,6 +708,7 @@ def _load_recent_raw_snapshots(
     limit: int,
     rules: dict[str, Any],
     previous_regime: str | None = None,
+    confirmation_days: int = 1,
 ) -> list[MarketRegimeSnapshot]:
     db = Path(db_path)
     conn = duckdb.connect(str(db), read_only=True)
@@ -779,7 +811,13 @@ def _load_recent_raw_snapshots(
 
     # Pass 1: build chronologically-ordered intermediates so we can compute
     # Phase 8 point-in-time chg fields and quintile cutoffs in pass 2.
-    rolling_prev = previous_regime
+    #
+    # The previous-run hysteresis seed describes the day immediately before
+    # the current live run. Phase 8 widened this fetch to ~5 years for velocity
+    # history, so applying that seed to the oldest fetched row would rewrite
+    # years of historical classification. Replay the long history cold; if a
+    # seed exists, reapply it only to the final confirmation tail below.
+    rolling_prev: str | None = None
     intermediates: list[dict[str, Any]] = []
     for row in reversed(rows):
         eligible_50 = int(row[7] or 0)
@@ -819,6 +857,20 @@ def _load_recent_raw_snapshots(
         )
         rolling_prev = regime_label
 
+    if previous_regime and intermediates:
+        tail_len = max(int(confirmation_days), 1)
+        tail_start = max(0, len(intermediates) - tail_len)
+        rolling_prev = previous_regime
+        for item in intermediates[tail_start:]:
+            regime_label = classify_regime(
+                item["metrics"], rules, previous_regime=rolling_prev
+            )
+            item["regime"] = regime_label
+            item["regime_confidence"] = compute_regime_confidence(
+                item["metrics"], regime_label, rules
+            )
+            rolling_prev = regime_label
+
     # Pass 2: compute Phase 8 velocity / age / capped-confidence fields.
     # Imported lazily to keep breadth.py importable independent of profiles
     # — the multiplier is a pure function with no side effects.
@@ -828,22 +880,23 @@ def _load_recent_raw_snapshots(
     pct200_arr = [it["metrics"]["pct_above_200dma"] for it in intermediates]
     pcthigh_arr = [it["pct_at_high"] for it in intermediates]
     score_arr = [it["regime_score"] for it in intermediates]
+    raw_regime_arr = [str(it["regime"]) for it in intermediates]
+    confirmed_regime_arr = _confirmed_regime_series(
+        raw_regime_arr, confirmation_days=confirmation_days
+    )
+    regime_age_arr = _regime_age_series(confirmed_regime_arr)
     chg5_score_arr = [
         (score_arr[i] - score_arr[i - 5]) if i >= 5 else 0.0 for i in range(n)
     ]
 
     snapshots: list[MarketRegimeSnapshot] = []
-    age = 0
-    prev_label: str | None = previous_regime
     for i, item in enumerate(intermediates):
-        regime_label = item["regime"]
-        # Regime age: consecutive prior rows with the same hysteresis-smoothed
-        # regime label. Transition day = 0; first day with a matching prior = 1.
-        if prev_label is None or regime_label != prev_label:
-            age = 0
-        else:
-            age += 1
-        prev_label = regime_label
+        raw_regime_label = str(item["regime"])
+        confirmed_label = confirmed_regime_arr[i]
+        # Regime age follows the same confirmed-regime chain used by execute
+        # for matrix lookup. A one-day raw wobble that does not confirm should
+        # not reset the dry-run age decay.
+        age = regime_age_arr[i]
 
         chg_5d_pct200 = (
             pct200_arr[i] - pct200_arr[i - 5] if i >= 5 else 0.0
@@ -877,11 +930,12 @@ def _load_recent_raw_snapshots(
             bucket_conf = ""
 
         age_mult = regime_age_multiplier(age)
+        regime_conf = compute_regime_confidence(item["metrics"], confirmed_label, rules)
         snapshots.append(
             MarketRegimeSnapshot(
                 date=str(item["row"][0]),
-                regime=regime_label,
-                raw_regime=regime_label,
+                regime=confirmed_label,
+                raw_regime=raw_regime_label,
                 pct_above_50dma=float(item["metrics"]["pct_above_50dma"]),
                 pct_above_200dma=float(item["metrics"]["pct_above_200dma"]),
                 pct_near_52w_high=float(item["metrics"]["pct_near_52w_high"]),
@@ -894,7 +948,7 @@ def _load_recent_raw_snapshots(
                 total_symbols_count=item["total_syms"],
                 breadth_confidence=item["breadth_conf"],
                 regime_score=item["regime_score"],
-                regime_confidence=item["regime_confidence"],
+                regime_confidence=regime_conf,
                 pct_above_200dma_chg_5d=round(chg_5d_pct200, 6),
                 pct_above_200dma_chg_10d=round(chg_10d_pct200, 6),
                 pct_at_52w_high_chg_20d=round(chg_20d_pcthigh, 6),
@@ -905,7 +959,7 @@ def _load_recent_raw_snapshots(
                 breadth_velocity_bucket=bucket_label,
                 leadership_velocity_confirmed=(chg_20d_pcthigh > 0),
                 bucket_confidence=bucket_conf,
-                regime_confidence_capped=round(item["regime_confidence"] * age_mult, 4),
+                regime_confidence_capped=round(regime_conf * age_mult, 4),
                 source=index_code,
             )
         )
