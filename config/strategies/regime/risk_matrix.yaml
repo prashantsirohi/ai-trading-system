@@ -1,0 +1,53 @@
+name: risk_matrix_v1
+#
+# Phase 8 — Breadth Impulse Risk Profile (DRY-RUN).
+#
+# 2-D matrix indexed by (confirmed_regime, breadth_velocity_bucket).
+# This file is read by execute.py only when symlinked at
+# `config/active_risk_matrix.yaml`. In dry-run mode the proposed cell is
+# recorded in execute_summary.json under `breadth_impulse_dry_run`; live
+# sizing is NOT touched.
+#
+# Invariants encoded here (test-asserted):
+#   - For each regime row, gross_exposure is monotonically non-decreasing
+#     as bucket goes very_negative → very_positive.
+#   - For each bucket column, gross_exposure is monotonically non-decreasing
+#     as regime goes risk_off → strong_bull.
+#   - strong_bull × very_negative gross_exposure < bull × positive
+#     gross_exposure (the headline "never trust regime level alone" rule).
+#   - risk_off row is 0.0 across all buckets with allow_new_buys=false.
+
+risk_off:
+  very_negative: { gross_exposure: 0.00, allow_new_buys: false, min_score: 90, require_breakout_tier: strict, require_setup_quality_gte: 0.90, allow_pyramiding: false, action: flat }
+  negative:      { gross_exposure: 0.00, allow_new_buys: false, min_score: 90, require_breakout_tier: strict, require_setup_quality_gte: 0.90, allow_pyramiding: false, action: flat }
+  neutral:       { gross_exposure: 0.00, allow_new_buys: false, min_score: 88, require_breakout_tier: strict, require_setup_quality_gte: 0.85, allow_pyramiding: false, action: flat }
+  positive:      { gross_exposure: 0.00, allow_new_buys: false, min_score: 85, require_breakout_tier: strict, require_setup_quality_gte: 0.80, allow_pyramiding: false, action: flat }
+  very_positive: { gross_exposure: 0.00, allow_new_buys: false, min_score: 82, require_breakout_tier: strict, require_setup_quality_gte: 0.80, allow_pyramiding: false, action: flat }
+
+neutral:
+  very_negative: { gross_exposure: 0.15, allow_new_buys: false, min_score: 80, require_breakout_tier: strict, require_setup_quality_gte: 0.80, allow_pyramiding: false, action: defensive_trim }
+  negative:      { gross_exposure: 0.25, allow_new_buys: false, min_score: 78, require_breakout_tier: strict, require_setup_quality_gte: 0.75, allow_pyramiding: false, action: trim }
+  neutral:       { gross_exposure: 0.40, allow_new_buys: true,  min_score: 74, require_breakout_tier: strict, require_setup_quality_gte: 0.70, allow_pyramiding: false, action: hold }
+  positive:      { gross_exposure: 0.50, allow_new_buys: true,  min_score: 72, require_breakout_tier: normal, require_setup_quality_gte: 0.65, allow_pyramiding: false, action: hold }
+  very_positive: { gross_exposure: 0.55, allow_new_buys: true,  min_score: 70, require_breakout_tier: normal, require_setup_quality_gte: 0.65, allow_pyramiding: false, action: scale_in }
+
+cautious_bull:
+  very_negative: { gross_exposure: 0.20, allow_new_buys: false, min_score: 78, require_breakout_tier: strict, require_setup_quality_gte: 0.78, allow_pyramiding: false, action: defensive_trim }
+  negative:      { gross_exposure: 0.35, allow_new_buys: false, min_score: 74, require_breakout_tier: strict, require_setup_quality_gte: 0.72, allow_pyramiding: false, action: trim }
+  neutral:       { gross_exposure: 0.50, allow_new_buys: true,  min_score: 70, require_breakout_tier: strict, require_setup_quality_gte: 0.68, allow_pyramiding: false, action: hold }
+  positive:      { gross_exposure: 0.60, allow_new_buys: true,  min_score: 68, require_breakout_tier: normal, require_setup_quality_gte: 0.65, allow_pyramiding: false, action: hold }
+  very_positive: { gross_exposure: 0.65, allow_new_buys: true,  min_score: 66, require_breakout_tier: normal, require_setup_quality_gte: 0.65, allow_pyramiding: false, action: scale_in }
+
+bull:
+  very_negative: { gross_exposure: 0.30, allow_new_buys: false, min_score: 75, require_breakout_tier: strict, require_setup_quality_gte: 0.75, allow_pyramiding: false, action: defensive_trim }
+  negative:      { gross_exposure: 0.50, allow_new_buys: false, min_score: 70, require_breakout_tier: strict, require_setup_quality_gte: 0.70, allow_pyramiding: false, action: trim }
+  neutral:       { gross_exposure: 0.70, allow_new_buys: true,  min_score: 66, require_breakout_tier: normal, require_setup_quality_gte: 0.65, allow_pyramiding: false, action: hold }
+  positive:      { gross_exposure: 0.80, allow_new_buys: true,  min_score: 64, require_breakout_tier: normal, require_setup_quality_gte: 0.65, allow_pyramiding: true,  action: hold }
+  very_positive: { gross_exposure: 0.85, allow_new_buys: true,  min_score: 62, require_breakout_tier: aggressive, require_setup_quality_gte: 0.62, allow_pyramiding: true,  action: scale_in }
+
+strong_bull:
+  very_negative: { gross_exposure: 0.35, allow_new_buys: false, min_score: 75, require_breakout_tier: strict, require_setup_quality_gte: 0.75, allow_pyramiding: false, action: defensive_trim }
+  negative:      { gross_exposure: 0.55, allow_new_buys: false, min_score: 70, require_breakout_tier: strict, require_setup_quality_gte: 0.70, allow_pyramiding: false, action: trim }
+  neutral:       { gross_exposure: 0.75, allow_new_buys: true,  min_score: 66, require_breakout_tier: strict, require_setup_quality_gte: 0.65, allow_pyramiding: false, action: hold }
+  positive:      { gross_exposure: 0.90, allow_new_buys: true,  min_score: 62, require_breakout_tier: normal, require_setup_quality_gte: 0.65, allow_pyramiding: true,  action: hold }
+  very_positive: { gross_exposure: 1.00, allow_new_buys: true,  min_score: 58, require_breakout_tier: aggressive, require_setup_quality_gte: 0.70, allow_pyramiding: true,  action: scale_in }

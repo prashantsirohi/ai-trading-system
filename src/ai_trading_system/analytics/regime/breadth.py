@@ -45,6 +45,27 @@ class MarketRegimeSnapshot:
     # itself since it knows the active rule set; default 0 if unset.
     regime_score: float = 0.0
     regime_confidence: float = 0.0
+    # ── Breadth-impulse fields (Phase 8) ─────────────────────────────────
+    # Point-in-time rate-of-change in breadth (no lookahead). The 5d/10d/20d
+    # diffs are read by the 2-D risk matrix loader; the *bucket* itself is
+    # a quintile label of regime_score_chg_5d against its prior 1260-day
+    # distribution. leadership_velocity_confirmed gates aggressive cells.
+    # regime_age_days counts consecutive prior rows with the same regime
+    # (hysteresis-smoothed); regime_confidence_capped folds the age-decay
+    # multiplier into regime_confidence so downstream consumers can read a
+    # single number. bucket_confidence is "low_history" when there are
+    # fewer than 252 prior days of regime_score history.
+    pct_above_200dma_chg_5d: float = 0.0
+    pct_above_200dma_chg_10d: float = 0.0
+    pct_at_52w_high_chg_20d: float = 0.0
+    regime_score_chg_5d: float = 0.0
+    regime_age_days: int = 0
+    regime_transition_day: bool = False
+    breadth_velocity_quantile: str = ""
+    breadth_velocity_bucket: str = ""
+    leadership_velocity_confirmed: bool = False
+    bucket_confidence: str = ""
+    regime_confidence_capped: float = 0.0
     confirmation_days: int = 3
     source: str = "UNIV_TOP1000"
 
@@ -71,10 +92,18 @@ _NUMERIC_METRICS: frozenset[str] = frozenset({
     "breadth_confidence",
     "regime_score",
     "regime_confidence",
+    "pct_above_200dma_chg_5d",
+    "pct_above_200dma_chg_10d",
+    "pct_at_52w_high_chg_20d",
+    "regime_score_chg_5d",
+    "regime_age_days",
+    "regime_confidence_capped",
 })
 _BOOLEAN_METRICS: frozenset[str] = frozenset({
     "top1000_above_50dma",
     "top1000_above_200dma",
+    "regime_transition_day",
+    "leadership_velocity_confirmed",
 })
 _COMPARISON_SUFFIXES: tuple[str, ...] = ("_lt", "_lte", "_gt", "_gte")
 
@@ -612,6 +641,33 @@ def _matches_rule(metrics: dict[str, float | bool], spec: dict[str, Any]) -> boo
     return True
 
 
+# Phase 8: breadth-velocity quintiles need at least 1260 trading days of
+# prior regime_score_chg_5d history before they're considered stable; below
+# 252 prior days the bucket is forced to "neutral" with bucket_confidence
+# = "low_history". We expand the SQL fetch window when the caller asks for
+# less so the most recent rows in the returned tail still have populated
+# velocity fields. Returned snapshots are sliced back to the requested
+# ``limit`` to preserve the function's pre-Phase-8 return contract.
+_PHASE8_VELOCITY_LOOKBACK: int = 1260
+_PHASE8_MIN_HISTORY: int = 252
+_PHASE8_FETCH_PAD: int = _PHASE8_VELOCITY_LOOKBACK + 30  # +30 for the 20-day diff warmup
+
+
+def _assign_breadth_velocity_bucket(
+    value: float, q20: float, q40: float, q60: float, q80: float
+) -> tuple[str, str]:
+    """Map a regime_score_chg_5d value to (quintile_label, bucket_label)."""
+    if value <= q20:
+        return "Q1_lowest", "very_negative"
+    if value <= q40:
+        return "Q2_low", "negative"
+    if value <= q60:
+        return "Q3_middle", "neutral"
+    if value <= q80:
+        return "Q4_high", "positive"
+    return "Q5_highest", "very_positive"
+
+
 def _load_recent_raw_snapshots(
     db_path: Path | str,
     *,
@@ -716,17 +772,15 @@ def _load_recent_raw_snapshots(
             ORDER BY b.d DESC
             LIMIT ?
             """,
-            [exchange, as_of, index_code, as_of, int(limit)],
+            [exchange, as_of, index_code, as_of, max(int(limit), _PHASE8_FETCH_PAD)],
         ).fetchall()
     finally:
         conn.close()
 
-    snapshots: list[MarketRegimeSnapshot] = []
-    # Chain the previous-day regime through the loop so each day's
-    # classification can read it as its hysteresis seed. The function's
-    # `previous_regime` kwarg seeds the FIRST iteration; subsequent days
-    # inherit yesterday's classification.
+    # Pass 1: build chronologically-ordered intermediates so we can compute
+    # Phase 8 point-in-time chg fields and quintile cutoffs in pass 2.
     rolling_prev = previous_regime
+    intermediates: list[dict[str, Any]] = []
     for row in reversed(rows):
         eligible_50 = int(row[7] or 0)
         eligible_200 = int(row[8] or 0)
@@ -747,26 +801,117 @@ def _load_recent_raw_snapshots(
             "breadth_confidence": breadth_conf,
         }
         regime_label = classify_regime(metrics, rules, previous_regime=rolling_prev)
+        regime_score = compute_regime_score(metrics)
+        regime_conf = compute_regime_confidence(metrics, regime_label, rules)
+        intermediates.append(
+            {
+                "row": row,
+                "metrics": metrics,
+                "regime": regime_label,
+                "regime_score": regime_score,
+                "regime_confidence": regime_conf,
+                "pct_at_high": pct_at_high,
+                "breadth_conf": breadth_conf,
+                "eligible_50": eligible_50,
+                "eligible_200": eligible_200,
+                "total_syms": total_syms,
+            }
+        )
+        rolling_prev = regime_label
+
+    # Pass 2: compute Phase 8 velocity / age / capped-confidence fields.
+    # Imported lazily to keep breadth.py importable independent of profiles
+    # — the multiplier is a pure function with no side effects.
+    from ai_trading_system.analytics.regime.profiles import regime_age_multiplier
+
+    n = len(intermediates)
+    pct200_arr = [it["metrics"]["pct_above_200dma"] for it in intermediates]
+    pcthigh_arr = [it["pct_at_high"] for it in intermediates]
+    score_arr = [it["regime_score"] for it in intermediates]
+    chg5_score_arr = [
+        (score_arr[i] - score_arr[i - 5]) if i >= 5 else 0.0 for i in range(n)
+    ]
+
+    snapshots: list[MarketRegimeSnapshot] = []
+    age = 0
+    prev_label: str | None = previous_regime
+    for i, item in enumerate(intermediates):
+        regime_label = item["regime"]
+        # Regime age: consecutive prior rows with the same hysteresis-smoothed
+        # regime label. Transition day = 0; first day with a matching prior = 1.
+        if prev_label is None or regime_label != prev_label:
+            age = 0
+        else:
+            age += 1
+        prev_label = regime_label
+
+        chg_5d_pct200 = (
+            pct200_arr[i] - pct200_arr[i - 5] if i >= 5 else 0.0
+        )
+        chg_10d_pct200 = (
+            pct200_arr[i] - pct200_arr[i - 10] if i >= 10 else 0.0
+        )
+        chg_20d_pcthigh = (
+            pcthigh_arr[i] - pcthigh_arr[i - 20] if i >= 20 else 0.0
+        )
+        chg_5d_score = chg5_score_arr[i]
+
+        # Quintile bucket from PRIOR rows only (strict `< i`). Pre-warmup
+        # rows (i < 5) contribute 0.0 chg values; we skip them by starting
+        # from index 5 so the distribution isn't biased toward zero.
+        history = chg5_score_arr[max(5, i - _PHASE8_VELOCITY_LOOKBACK):i]
+        if len(history) < _PHASE8_MIN_HISTORY:
+            quantile_label, bucket_label = "Q3_middle", "neutral"
+            bucket_conf = "low_history"
+        else:
+            sorted_hist = sorted(history)
+            m = len(sorted_hist)
+            # 20/40/60/80 percentile cutpoints (inclusive, lower-of-pair).
+            q20 = sorted_hist[int(m * 0.20)]
+            q40 = sorted_hist[int(m * 0.40)]
+            q60 = sorted_hist[int(m * 0.60)]
+            q80 = sorted_hist[int(m * 0.80)]
+            quantile_label, bucket_label = _assign_breadth_velocity_bucket(
+                chg_5d_score, q20, q40, q60, q80
+            )
+            bucket_conf = ""
+
+        age_mult = regime_age_multiplier(age)
         snapshots.append(
             MarketRegimeSnapshot(
-                date=str(row[0]),
+                date=str(item["row"][0]),
                 regime=regime_label,
                 raw_regime=regime_label,
-                pct_above_50dma=float(metrics["pct_above_50dma"]),
-                pct_above_200dma=float(metrics["pct_above_200dma"]),
-                pct_near_52w_high=float(metrics["pct_near_52w_high"]),
-                pct_at_52w_high=pct_at_high,
-                universe_count=int(metrics["universe_count"]),
-                top1000_above_50dma=bool(metrics["top1000_above_50dma"]),
-                top1000_above_200dma=bool(metrics["top1000_above_200dma"]),
-                eligible_50dma_count=eligible_50,
-                eligible_200dma_count=eligible_200,
-                total_symbols_count=total_syms,
-                breadth_confidence=breadth_conf,
-                regime_score=compute_regime_score(metrics),
-                regime_confidence=compute_regime_confidence(metrics, regime_label, rules),
+                pct_above_50dma=float(item["metrics"]["pct_above_50dma"]),
+                pct_above_200dma=float(item["metrics"]["pct_above_200dma"]),
+                pct_near_52w_high=float(item["metrics"]["pct_near_52w_high"]),
+                pct_at_52w_high=item["pct_at_high"],
+                universe_count=int(item["metrics"]["universe_count"]),
+                top1000_above_50dma=bool(item["metrics"]["top1000_above_50dma"]),
+                top1000_above_200dma=bool(item["metrics"]["top1000_above_200dma"]),
+                eligible_50dma_count=item["eligible_50"],
+                eligible_200dma_count=item["eligible_200"],
+                total_symbols_count=item["total_syms"],
+                breadth_confidence=item["breadth_conf"],
+                regime_score=item["regime_score"],
+                regime_confidence=item["regime_confidence"],
+                pct_above_200dma_chg_5d=round(chg_5d_pct200, 6),
+                pct_above_200dma_chg_10d=round(chg_10d_pct200, 6),
+                pct_at_52w_high_chg_20d=round(chg_20d_pcthigh, 6),
+                regime_score_chg_5d=round(chg_5d_score, 4),
+                regime_age_days=age,
+                regime_transition_day=(age == 0),
+                breadth_velocity_quantile=quantile_label,
+                breadth_velocity_bucket=bucket_label,
+                leadership_velocity_confirmed=(chg_20d_pcthigh > 0),
+                bucket_confidence=bucket_conf,
+                regime_confidence_capped=round(item["regime_confidence"] * age_mult, 4),
                 source=index_code,
             )
         )
-        rolling_prev = regime_label
+
+    # Honour the caller's requested ``limit`` — we may have fetched extra
+    # rows for velocity warmup but only return the requested tail.
+    if int(limit) > 0 and len(snapshots) > int(limit):
+        return snapshots[-int(limit):]
     return snapshots

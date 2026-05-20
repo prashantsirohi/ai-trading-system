@@ -11,8 +11,15 @@ from typing import Dict
 
 import pandas as pd
 
+from dataclasses import asdict
+
 from ai_trading_system.analytics.risk_manager import RiskManager
 from ai_trading_system.analytics.regime_detector import RegimeDetector
+from ai_trading_system.analytics.regime.profiles import (
+    BreadthImpulseRiskMatrix,
+    load_risk_matrix,
+    regime_age_multiplier,
+)
 from ai_trading_system.domains.execution.adapters import PaperExecutionAdapter
 from ai_trading_system.domains.execution.autotrader import AutoTrader
 from ai_trading_system.domains.execution.portfolio import PortfolioManager
@@ -336,6 +343,57 @@ class ExecuteStage:
         fills_df = pd.DataFrame(cycle_fills)
         positions_df = pd.DataFrame(result["positions_after"])
 
+        # Phase 8: Breadth-impulse 2-D risk matrix DRY-RUN. Active only when
+        # `config/active_risk_matrix.yaml` symlink exists. Records the
+        # proposed (regime, velocity_bucket) cell, age-decayed gross
+        # exposure, and delta vs the legacy 1-D max_exposure into the
+        # execute summary. Live sizing is NOT touched — we want several
+        # weeks of side-by-side audit data before flipping the switch and
+        # the research gate in cross_sectional_alpha.py must pass first.
+        breadth_impulse_dry_run: dict | None = None
+        try:
+            matrix: BreadthImpulseRiskMatrix | None = load_risk_matrix(
+                project_root=context.project_root
+            )
+        except Exception as exc:
+            matrix = None
+            _logger.warning("breadth-impulse dry-run: matrix load failed: %s", exc)
+        if matrix is not None:
+            regime_label = str(rank_regime.get("regime") or "neutral")
+            bucket = str(rank_regime.get("breadth_velocity_bucket") or "neutral")
+            try:
+                cell = matrix.lookup(regime_label, bucket)
+            except KeyError:
+                _logger.warning(
+                    "breadth-impulse dry-run: no cell for (%s, %s); skipping",
+                    regime_label, bucket,
+                )
+                cell = None
+            if cell is not None:
+                age_days = int(rank_regime.get("regime_age_days") or 0)
+                age_mult = regime_age_multiplier(age_days)
+                proposed_exposure = cell.gross_exposure * age_mult
+                legacy_exposure = float(rank_profile.get("max_exposure") or 0.0) if rank_profile else 0.0
+                breadth_impulse_dry_run = {
+                    "matrix_name": matrix.name,
+                    "regime": regime_label,
+                    "velocity_bucket": bucket,
+                    "regime_age_days": age_days,
+                    "age_multiplier": age_mult,
+                    "cell": asdict(cell),
+                    "proposed_gross_exposure": round(proposed_exposure, 6),
+                    "legacy_gross_exposure": round(legacy_exposure, 6),
+                    "delta": round(proposed_exposure - legacy_exposure, 6),
+                    "applied_live": False,
+                }
+                _logger.info(
+                    "breadth-impulse dry-run: regime=%s bucket=%s age=%d "
+                    "proposed=%.3f legacy=%.3f delta=%+.3f",
+                    regime_label, bucket, age_days,
+                    proposed_exposure, legacy_exposure,
+                    proposed_exposure - legacy_exposure,
+                )
+
         output_dir = context.output_dir()
         artifacts = []
         artifact_frames: Dict[str, pd.DataFrame] = {
@@ -379,6 +437,7 @@ class ExecuteStage:
             "canary_blocked": bool(context.params.get("canary")) and context.params.get("canary_blocked", False),
             "trailing_stops_updated": int(trailing_summary.get("updated_count", 0) or 0),
             "trailing_stops_evaluated": int(trailing_summary.get("evaluated_count", 0) or 0),
+            "breadth_impulse_dry_run": breadth_impulse_dry_run,
         }
 
         total_position_value = sum(
