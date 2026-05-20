@@ -62,6 +62,24 @@ def build_rejection_reasons(row: dict) -> list[str]:
     return reasons
 
 
+def attach_market_direction_to_payload(payload: Dict[str, object], market_direction: Dict[str, object]) -> Dict[str, object]:
+    """Attach the advisory market-direction block plus compact summary keys."""
+    payload["market_direction"] = market_direction
+    summary = payload.setdefault("summary", {})
+    if isinstance(summary, dict):
+        summary["direction_bias"] = market_direction.get("direction_bias")
+        summary["direction_action"] = market_direction.get("action")
+        summary["allowed_exposure"] = market_direction.get("allowed_exposure")
+        summary["new_buys_allowed"] = market_direction.get("new_buys_allowed")
+        summary["required_min_score"] = market_direction.get("required_min_score")
+        summary["required_breakout_tier"] = market_direction.get("required_breakout_tier")
+        summary["required_setup_quality_gte"] = market_direction.get("required_setup_quality_gte")
+        summary["breadth_velocity_bucket"] = market_direction.get("breadth_velocity")
+        summary["regime_age_days"] = market_direction.get("regime_age_days")
+        summary["regime_confidence_capped"] = market_direction.get("confidence_capped")
+    return payload
+
+
 def _first_present(row: dict, names: list[str]):
     for name in names:
         value = row.get(name)

@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from ai_trading_system.domains.ranking.payloads import build_dashboard_payload
+from ai_trading_system.domains.ranking.payloads import (
+    attach_market_direction_to_payload,
+    build_dashboard_payload,
+)
 from ai_trading_system.pipeline.contracts import StageArtifact
 from ai_trading_system.pipeline.contracts import StageContext
 from ai_trading_system.domains.publish.publish_payloads import (
@@ -113,6 +116,55 @@ def test_build_publish_datasets_adds_stage2_breakdown_and_telegram_summary_line(
     message = build_telegram_summary(run_date="2026-04-21", datasets=datasets)
     assert "Stage2:" in message
     assert "strong_stage2:1" in message
+
+
+def test_telegram_summary_includes_market_direction_line() -> None:
+    datasets = {
+        "dashboard_payload": {
+            "summary": {
+                "run_date": "2026-04-21",
+                "data_trust_status": "trusted",
+            },
+            "market_direction": {
+                "market_state": "bull",
+                "breadth_velocity": "positive",
+                "direction_bias": "Confirmed uptrend",
+                "action": "hold",
+                "allowed_exposure": 0.80,
+            },
+        },
+        "ranked_signals": pd.DataFrame([{"symbol_id": "AAA", "composite_score": 90.0}]),
+    }
+    message = build_telegram_summary(run_date="2026-04-21", datasets=datasets)
+
+    assert "Market Direction:" in message
+    assert "Confirmed uptrend" in message
+    assert "Exposure: <b>80%</b>" in message
+
+
+def test_attach_market_direction_to_payload_flattens_summary_fields() -> None:
+    payload = {"summary": {"run_date": "2026-04-21"}}
+    direction = {
+        "direction_bias": "Recovery attempt",
+        "action": "scale_in",
+        "allowed_exposure": 0.35,
+        "new_buys_allowed": True,
+        "required_min_score": 75,
+        "required_breakout_tier": "strict",
+        "required_setup_quality_gte": 0.70,
+        "breadth_velocity": "very_positive",
+        "regime_age_days": 18,
+        "confidence_capped": 0.92,
+    }
+
+    out = attach_market_direction_to_payload(payload, direction)
+
+    assert out["market_direction"] == direction
+    assert out["summary"]["direction_bias"] == "Recovery attempt"
+    assert out["summary"]["direction_action"] == "scale_in"
+    assert out["summary"]["allowed_exposure"] == 0.35
+    assert out["summary"]["breadth_velocity_bucket"] == "very_positive"
+    assert out["summary"]["regime_confidence_capped"] == 0.92
 
 
 def test_build_dashboard_payload_explains_empty_discoveries_when_ranked_covers_stock_scan(tmp_path: Path) -> None:

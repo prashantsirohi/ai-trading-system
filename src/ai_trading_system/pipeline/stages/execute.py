@@ -20,6 +20,7 @@ from ai_trading_system.analytics.regime.profiles import (
     load_risk_matrix,
     regime_age_multiplier,
 )
+from ai_trading_system.analytics.regime.direction import build_market_direction
 from ai_trading_system.domains.execution.adapters import PaperExecutionAdapter
 from ai_trading_system.domains.execution.autotrader import AutoTrader
 from ai_trading_system.domains.execution.portfolio import PortfolioManager
@@ -393,6 +394,13 @@ class ExecuteStage:
                     proposed_exposure, legacy_exposure,
                     proposed_exposure - legacy_exposure,
                 )
+        market_direction = build_market_direction(
+            market_regime=rank_regime,
+            regime_profile=rank_profile,
+            risk_matrix=matrix,
+        )
+        if breadth_impulse_dry_run is not None:
+            breadth_impulse_dry_run["market_direction"] = market_direction
 
         output_dir = context.output_dir()
         artifacts = []
@@ -438,6 +446,7 @@ class ExecuteStage:
             "trailing_stops_updated": int(trailing_summary.get("updated_count", 0) or 0),
             "trailing_stops_evaluated": int(trailing_summary.get("evaluated_count", 0) or 0),
             "breadth_impulse_dry_run": breadth_impulse_dry_run,
+            "market_direction": market_direction,
         }
 
         total_position_value = sum(

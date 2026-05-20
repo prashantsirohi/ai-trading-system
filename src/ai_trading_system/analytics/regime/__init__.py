@@ -8,11 +8,13 @@ from ai_trading_system.analytics.regime.breadth import (
     regime_disagreement,
     resolve_previous_regime,
 )
+from ai_trading_system.analytics.regime.direction import build_market_direction
 from ai_trading_system.analytics.regime.profiles import RegimeProfile, load_regime_profile
 
 __all__ = [
     "MarketRegimeSnapshot",
     "RegimeProfile",
+    "build_market_direction",
     "classify_regime",
     "confirmed_regime",
     "compute_market_regime_snapshot",

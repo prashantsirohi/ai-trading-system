@@ -38,6 +38,7 @@ def build_publish_decision_bundle(
     trust_status: str = "unknown",
     failed_breakouts: pd.DataFrame | None = None,
     insight_text: str | None = None,
+    market_direction: dict[str, Any] | None = None,
 ) -> PublishDecisionBundle:
     ranked = _frame(ranked_signals)
     breakout = _frame(breakout_scan)
@@ -63,6 +64,7 @@ def build_publish_decision_bundle(
         watchlist=watchlist,
         events=events,
         event_summary=event_summary,
+        market_direction=market_direction or {},
     )
     event_log = _shape_event_log(events)
     publish_log = _shape_publish_log(
@@ -80,6 +82,7 @@ def build_publish_decision_bundle(
         watchlist=watchlist,
         event_summary=event_summary,
         qualified_breakouts=_qualified_breakout_count(breakout),
+        market_direction=market_direction or {},
     )
     return PublishDecisionBundle(
         run_summary=run_summary,
@@ -535,13 +538,20 @@ def _shape_run_summary(
     watchlist: pd.DataFrame,
     events: pd.DataFrame,
     event_summary: dict[str, Any],
+    market_direction: dict[str, Any],
 ) -> pd.DataFrame:
+    direction = market_direction or {}
     return pd.DataFrame(
         [
             {
                 "Daily Market Insight": run_date,
                 "Trust": trust_status,
                 "Breadth > 200DMA": _latest_breadth_value(breadth),
+                "Market State": direction.get("market_state", ""),
+                "Breadth Velocity": direction.get("breadth_velocity", ""),
+                "Direction Bias": direction.get("direction_bias", ""),
+                "Action": direction.get("action", ""),
+                "Allowed Exposure": direction.get("allowed_exposure", ""),
                 "Sectors scanned": int(len(sectors)),
                 "Top ranked": int(min(len(ranked), 25)),
                 "Qualified breakouts": _qualified_breakout_count(breakout),
@@ -563,6 +573,7 @@ def _render_telegram_digest(
     watchlist: pd.DataFrame,
     event_summary: dict[str, Any],
     qualified_breakouts: int,
+    market_direction: dict[str, Any],
 ) -> str:
     row = run_summary.iloc[0].to_dict() if not run_summary.empty else {}
     breadth = row.get("Breadth > 200DMA") or "n/a"
@@ -571,6 +582,7 @@ def _render_telegram_digest(
     lines = [
         f"<b>Daily Market Insight</b> | {escape(str(run_date))}",
         f"Trust: <b>{escape(str(trust_status))}</b> | Breadth &gt;200DMA: <b>{escape(str(breadth))}%</b>",
+        _market_direction_digest_line(market_direction),
         f"Breakouts: <b>{qualified_breakouts}</b> qualified | Patterns: <b>{len(pattern_setups)}</b> | Watchlist: <b>{len(watchlist)}</b>",
         "",
         "<b>Leading / Improving Sectors</b>",
@@ -608,6 +620,23 @@ def _render_telegram_digest(
             ]
         )
     return "\n".join(lines).strip()
+
+
+def _market_direction_digest_line(direction: dict[str, Any]) -> str:
+    if not direction:
+        return "Market Direction: <b>n/a</b>"
+    try:
+        exposure = f"{float(direction.get('allowed_exposure')) * 100:.0f}%"
+    except (TypeError, ValueError):
+        exposure = "n/a"
+    return (
+        "Market Direction: "
+        f"<b>{escape(str(direction.get('direction_bias') or 'n/a'))}</b>"
+        f" | State: <b>{escape(str(direction.get('market_state') or 'n/a'))}</b>"
+        f" | Velocity: <b>{escape(str(direction.get('breadth_velocity') or 'n/a'))}</b>"
+        f" | Action: <b>{escape(str(direction.get('action') or 'n/a'))}</b>"
+        f" | Exposure: <b>{escape(exposure)}</b>"
+    )
 
 
 __all__ = ["PublishDecisionBundle", "build_publish_decision_bundle"]

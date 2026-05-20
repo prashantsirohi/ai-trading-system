@@ -18,6 +18,7 @@ from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.pipeline.contracts import TrustConfidenceEnvelope
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 from ai_trading_system.domains.ranking.payloads import (
+    attach_market_direction_to_payload,
     augment_dashboard_payload_with_ml,
     build_dashboard_payload,
     summarize_task_statuses,
@@ -25,11 +26,13 @@ from ai_trading_system.domains.ranking.payloads import (
 from ai_trading_system.analytics.regime import (
     MarketRegimeSnapshot,
     RegimeProfile,
+    build_market_direction,
     compute_market_regime_snapshot,
     load_regime_profile,
     regime_disagreement,
     resolve_previous_regime,
 )
+from ai_trading_system.analytics.regime.profiles import load_risk_matrix
 
 
 TASK_FILE_MAP = {
@@ -1174,6 +1177,17 @@ class RankOrchestrationService:
                 dashboard_payload.setdefault("summary", {})["market_regime"] = regime_snapshot.regime
                 dashboard_payload.setdefault("summary", {})["market_regime_raw"] = regime_snapshot.raw_regime
                 dashboard_payload["summary"]["market_regime_disagreement"] = disagreement
+                try:
+                    risk_matrix = load_risk_matrix(project_root=context.project_root)
+                except Exception as exc:
+                    risk_matrix = None
+                    warnings.append(f"risk matrix unavailable for market direction: {exc}")
+                market_direction = build_market_direction(
+                    market_regime=regime_snapshot,
+                    regime_profile=regime_profile,
+                    risk_matrix=risk_matrix,
+                )
+                attach_market_direction_to_payload(dashboard_payload, market_direction)
             if regime_profile is not None:
                 dashboard_payload["regime_profile"] = regime_profile.to_dict()
                 dashboard_payload.setdefault("summary", {})["regime_profile"] = regime_profile.name

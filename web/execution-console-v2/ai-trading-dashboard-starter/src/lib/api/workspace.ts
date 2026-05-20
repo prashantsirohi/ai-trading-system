@@ -41,6 +41,17 @@ export interface WorkspaceSummary {
   breakoutCount: number | null;
   patternCount: number | null;
   dataTrustStatus: string | null;
+  marketRegime: string | null;
+  breadthVelocityBucket: string | null;
+  directionBias: string | null;
+  directionAction: string | null;
+  allowedExposure: number | null;
+  newBuysAllowed: boolean | null;
+  requiredMinScore: number | null;
+  requiredBreakoutTier: string | null;
+  requiredSetupQualityGte: number | null;
+  regimeAgeDays: number | null;
+  regimeConfidenceCapped: number | null;
   raw: Record<string, string | number | boolean | null>;
 }
 
@@ -91,6 +102,18 @@ function asString(value: unknown): string | null {
   return str === '' ? null : str;
 }
 
+function asBoolean(value: unknown): boolean | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', 'yes', '1', 'y'].includes(normalized)) return true;
+    if (['false', 'no', '0', 'n'].includes(normalized)) return false;
+  }
+  return null;
+}
+
 function mapTopActions(rows: BackendWorkspaceSnapshot['top_actions']): WorkspaceTopAction[] {
   if (!Array.isArray(rows)) return [];
   return rows.map((row) => ({
@@ -125,6 +148,17 @@ function mapSummary(
     breakoutCount: asNumber(safe.breakout_count),
     patternCount: asNumber(safe.pattern_count),
     dataTrustStatus: asString(safe.data_trust_status),
+    marketRegime: asString(safe.market_regime),
+    breadthVelocityBucket: asString(safe.breadth_velocity_bucket),
+    directionBias: asString(safe.direction_bias),
+    directionAction: asString(safe.direction_action),
+    allowedExposure: asNumber(safe.allowed_exposure),
+    newBuysAllowed: asBoolean(safe.new_buys_allowed),
+    requiredMinScore: asNumber(safe.required_min_score),
+    requiredBreakoutTier: asString(safe.required_breakout_tier),
+    requiredSetupQualityGte: asNumber(safe.required_setup_quality_gte),
+    regimeAgeDays: asNumber(safe.regime_age_days),
+    regimeConfidenceCapped: asNumber(safe.regime_confidence_capped),
     raw: safe,
   };
 }

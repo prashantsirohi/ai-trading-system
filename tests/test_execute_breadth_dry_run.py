@@ -112,6 +112,9 @@ def test_execute_dry_run_present_when_matrix_active(monkeypatch, tmp_path: Path)
     assert dry["legacy_gross_exposure"] == 1.00
     assert dry["delta"] == round(0.2975 - 1.00, 6)
     assert dry["applied_live"] is False
+    assert dry["market_direction"]["applied_live"] is False
+    assert dry["market_direction"]["direction_bias"] == "Late-cycle warning"
+    assert result.metadata["market_direction"]["allowed_exposure"] == dry["proposed_gross_exposure"]
     # Cell payload is fully populated for downstream audit.
     assert dry["cell"]["allow_new_buys"] is False
     assert dry["cell"]["action"] == "defensive_trim"
@@ -125,3 +128,5 @@ def test_execute_dry_run_absent_when_no_symlink(monkeypatch, tmp_path: Path) -> 
     # No symlink created.
     result = ExecuteStage().run(_make_context(tmp_path))
     assert result.metadata["breadth_impulse_dry_run"] is None
+    assert result.metadata["market_direction"]["matrix_active"] is False
+    assert result.metadata["market_direction"]["action"] == "legacy_profile"

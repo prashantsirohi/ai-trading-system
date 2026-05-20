@@ -21,6 +21,7 @@ import DecisionSummaryBanner from '@/components/control-tower/DecisionSummaryBan
 import TrustBanner from '@/components/control-tower/TrustBanner';
 import OutputSummaryCards from '@/components/control-tower/OutputSummaryCards';
 import MovingAverageBreadthChart from '@/components/control-tower/MovingAverageBreadthChart';
+import MarketDirectionCard from '@/components/control-tower/MarketDirectionCard';
 import { useMarketBreadth, useWorkspaceSnapshot } from '@/lib/queries';
 
 export default function ControlTowerPage() {
@@ -51,6 +52,7 @@ export default function ControlTowerPage() {
       ) : (
         <div className="space-y-4">
           <DecisionSummaryBanner actions={data.topActions} />
+          <MarketDirectionCard snapshot={data} />
           <MovingAverageBreadthChart rows={breadthQuery.data ?? []} />
           <OutputSummaryCards snapshot={data} />
         </div>

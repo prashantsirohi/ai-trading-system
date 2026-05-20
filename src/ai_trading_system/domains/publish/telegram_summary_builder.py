@@ -55,6 +55,9 @@ def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str
         f" | Latest trade: <b>{escape(str(summary.get('latest_trade_date', data_trust.get('latest_trade_date', 'n/a'))))}</b>"
         f" | Latest validated: <b>{escape(str(summary.get('latest_validated_date', data_trust.get('latest_validated_date', 'n/a'))))}</b>"
     )
+    market_direction_line = _format_market_direction_line(dashboard)
+    if market_direction_line:
+        lines.append(market_direction_line)
     trust_notes: list[str] = []
     quarantined_dates = list(data_trust.get("active_quarantined_dates") or [])
     if quarantined_dates:
@@ -110,6 +113,34 @@ def _as_frame(value: Any) -> pd.DataFrame:
     if isinstance(value, pd.DataFrame):
         return value
     return pd.DataFrame()
+
+
+def _format_market_direction_line(dashboard: Mapping[str, Any]) -> str:
+    summary = dashboard.get("summary", {}) if isinstance(dashboard, Mapping) else {}
+    direction = dashboard.get("market_direction", {}) if isinstance(dashboard, Mapping) else {}
+    if not isinstance(direction, Mapping):
+        direction = {}
+    if not isinstance(summary, Mapping):
+        summary = {}
+    state = direction.get("market_state") or summary.get("market_regime")
+    velocity = direction.get("breadth_velocity") or summary.get("breadth_velocity_bucket")
+    bias = direction.get("direction_bias") or summary.get("direction_bias")
+    action = direction.get("action") or summary.get("direction_action")
+    exposure = direction.get("allowed_exposure", summary.get("allowed_exposure"))
+    if not any([state, velocity, bias, action, exposure is not None]):
+        return ""
+    try:
+        exposure_text = f"{float(exposure) * 100:.0f}%"
+    except (TypeError, ValueError):
+        exposure_text = "n/a"
+    return (
+        "Market Direction: "
+        f"<b>{escape(str(bias or 'n/a'))}</b>"
+        f" | State: <b>{escape(str(state or 'n/a'))}</b>"
+        f" | Velocity: <b>{escape(str(velocity or 'n/a'))}</b>"
+        f" | Action: <b>{escape(str(action or 'n/a'))}</b>"
+        f" | Exposure: <b>{escape(exposure_text)}</b>"
+    )
 
 
 def _sorted_sector_dashboard(sector_df: Optional[pd.DataFrame]) -> pd.DataFrame:
