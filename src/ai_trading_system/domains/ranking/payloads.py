@@ -80,6 +80,28 @@ def attach_market_direction_to_payload(payload: Dict[str, object], market_direct
     return payload
 
 
+def attach_market_regime_phase_to_payload(
+    payload: Dict[str, object],
+    phase_payload: Dict[str, object],
+) -> Dict[str, object]:
+    """Attach derived human-readable market regime phase to dashboard payload."""
+    payload["market_regime_phase"] = phase_payload
+
+    summary = payload.setdefault("summary", {})
+    if isinstance(summary, dict):
+        summary["regime_phase"] = phase_payload.get("regime_phase")
+        summary["regime_phase_label"] = phase_payload.get("phase_label")
+        summary["regime_phase_emoji"] = phase_payload.get("phase_emoji")
+
+        driven_by = phase_payload.get("driven_by")
+        if isinstance(driven_by, dict):
+            summary["regime_phase_s2_pct"] = driven_by.get("s2_pct")
+            summary["regime_phase_market_stage"] = driven_by.get("market_stage")
+            summary["regime_phase_velocity"] = driven_by.get("breadth_velocity_bucket")
+
+    return payload
+
+
 def _first_present(row: dict, names: list[str]):
     for name in names:
         value = row.get(name)

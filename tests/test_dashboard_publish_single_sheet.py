@@ -166,7 +166,19 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         ]
     )
 
-    payload = {"summary": {"run_date": "2026-04-09", "data_trust_status": "trusted"}}
+    payload = {
+        "summary": {"run_date": "2026-04-09", "data_trust_status": "trusted"},
+        "market_regime_phase": {
+            "regime_phase": "base_forming_stage1",
+            "phase_label": "Base forming (S1)",
+            "phase_emoji": "🟡",
+            "driven_by": {
+                "market_stage": "MIXED",
+                "breadth_velocity_bucket": "positive",
+                "s2_pct": 0.20,
+            },
+        },
+    }
     result = publish_dashboard_payload(
         payload,
         project_root=tmp_path,
@@ -187,6 +199,11 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     summary_frames = [write[2] for write in manager.writes if "Breadth > 200DMA" in write[2].columns]
     assert summary_frames
     assert float(summary_frames[0].iloc[0]["Breadth > 200DMA"]) == 54.1
+    assert summary_frames[0].iloc[0]["Regime Phase"] == "Base forming (S1)"
+    assert summary_frames[0].iloc[0]["Regime Phase Emoji"] == "🟡"
+    assert summary_frames[0].iloc[0]["Regime Phase S2 Breadth"] == "20%"
+    assert summary_frames[0].iloc[0]["Regime Phase Market Stage"] == "MIXED"
+    assert summary_frames[0].iloc[0]["Regime Phase Velocity"] == "positive"
 
     shortlist_frames = [write[2] for write in manager.writes if "Watchlist Score" in write[2].columns and "Composite Score" in write[2].columns]
     assert shortlist_frames == []

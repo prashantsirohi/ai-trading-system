@@ -628,6 +628,7 @@ class PublishStage:
             failed_breakouts=failed_breakouts_df,
             insight_text=str(datasets.get("insight_telegram_summary") or ""),
             market_direction=(datasets.get("dashboard_payload") or {}).get("market_direction", {}),
+            market_regime_phase=(datasets.get("dashboard_payload") or {}).get("market_regime_phase", {}),
         )
 
     def _decision_event_frame(self, datasets: Dict[str, Any]) -> pd.DataFrame:

@@ -58,6 +58,9 @@ def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str
     market_direction_line = _format_market_direction_line(dashboard)
     if market_direction_line:
         lines.append(market_direction_line)
+    regime_phase_line = _format_market_regime_phase(dashboard if isinstance(dashboard, Mapping) else {})
+    if regime_phase_line:
+        lines.append(regime_phase_line)
     trust_notes: list[str] = []
     quarantined_dates = list(data_trust.get("active_quarantined_dates") or [])
     if quarantined_dates:
@@ -140,6 +143,32 @@ def _format_market_direction_line(dashboard: Mapping[str, Any]) -> str:
         f" | Velocity: <b>{escape(str(velocity or 'n/a'))}</b>"
         f" | Action: <b>{escape(str(action or 'n/a'))}</b>"
         f" | Exposure: <b>{escape(exposure_text)}</b>"
+    )
+
+
+def _format_market_regime_phase(payload: Mapping[str, Any]) -> str | None:
+    phase = payload.get("market_regime_phase")
+    if not isinstance(phase, Mapping):
+        return None
+
+    emoji = str(phase.get("phase_emoji") or "⚪")
+    label = str(phase.get("phase_label") or "Unknown")
+    driven_by = phase.get("driven_by") if isinstance(phase.get("driven_by"), Mapping) else {}
+
+    raw_regime = driven_by.get("regime")
+    velocity = driven_by.get("breadth_velocity_bucket")
+    s2_pct = driven_by.get("s2_pct")
+
+    try:
+        s2_text = f"{float(s2_pct):.0%}"
+    except (TypeError, ValueError):
+        s2_text = "—"
+
+    return (
+        f"{escape(emoji)} <b>{escape(label)}</b>\n"
+        f"  raw regime: <code>{escape(str(raw_regime or '—'))}</code> | "
+        f"velocity: <code>{escape(str(velocity or '—'))}</code> | "
+        f"S2 breadth: <code>{escape(s2_text)}</code>"
     )
 
 

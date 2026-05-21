@@ -14,6 +14,11 @@ def test_workspace_mapper_and_control_tower_surface_market_direction() -> None:
     assert "directionBias: asString(safe.direction_bias)" in workspace
     assert "allowedExposure: asNumber(safe.allowed_exposure)" in workspace
     assert "breadthVelocityBucket: asString(safe.breadth_velocity_bucket)" in workspace
+    assert "regimePhaseLabel: asString(safe.regime_phase_label)" in workspace
+    assert "regimePhaseS2Pct: asNumber(safe.regime_phase_s2_pct)" in workspace
     assert "MarketDirectionCard" in page
     assert "Market Direction" in card
+    assert "phaseText" in card
+    assert "S2 Breadth" in card
+    assert "Phase Velocity" in card
     assert "Required Setup" in card

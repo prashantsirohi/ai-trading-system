@@ -16,6 +16,8 @@ function value(value: string | number | null | undefined): string {
 
 export default function MarketDirectionCard({ snapshot }: Props) {
   const summary = snapshot.summary;
+  const phaseLabel = value(summary.regimePhaseLabel);
+  const phaseText = phaseLabel === '—' ? '—' : `${summary.regimePhaseEmoji ?? ''} ${phaseLabel}`.trim();
   const setupBits = [
     summary.requiredMinScore === null ? null : `Score >= ${summary.requiredMinScore}`,
     summary.requiredBreakoutTier ? `${summary.requiredBreakoutTier} breakout` : null,
@@ -31,6 +33,7 @@ export default function MarketDirectionCard({ snapshot }: Props) {
           <p className="mt-1 text-sm text-slate-400">
             {value(summary.marketRegime)} / {value(summary.breadthVelocityBucket)}
           </p>
+          <p className="mt-2 text-sm font-semibold text-slate-200">{phaseText}</p>
         </div>
         <div className="grid grid-cols-2 gap-2 text-sm md:min-w-[280px]">
           <Metric label="Action" value={value(summary.directionAction)} />
@@ -42,6 +45,11 @@ export default function MarketDirectionCard({ snapshot }: Props) {
       <div className="mt-3 grid grid-cols-1 gap-2 border-t border-slate-800/80 pt-3 text-sm md:grid-cols-2">
         <Metric label="Confidence" value={pct(summary.regimeConfidenceCapped)} />
         <Metric label="Required Setup" value={setupBits.length ? setupBits.join(' | ') : '—'} />
+      </div>
+      <div className="mt-2 grid grid-cols-1 gap-2 text-sm md:grid-cols-3">
+        <Metric label="S2 Breadth" value={pct(summary.regimePhaseS2Pct)} />
+        <Metric label="Phase Stage" value={value(summary.regimePhaseMarketStage)} />
+        <Metric label="Phase Velocity" value={value(summary.regimePhaseVelocity)} />
       </div>
     </section>
   );

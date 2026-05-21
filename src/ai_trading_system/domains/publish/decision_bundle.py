@@ -39,6 +39,7 @@ def build_publish_decision_bundle(
     failed_breakouts: pd.DataFrame | None = None,
     insight_text: str | None = None,
     market_direction: dict[str, Any] | None = None,
+    market_regime_phase: dict[str, Any] | None = None,
 ) -> PublishDecisionBundle:
     ranked = _frame(ranked_signals)
     breakout = _frame(breakout_scan)
@@ -65,6 +66,7 @@ def build_publish_decision_bundle(
         events=events,
         event_summary=event_summary,
         market_direction=market_direction or {},
+        market_regime_phase=market_regime_phase or {},
     )
     event_log = _shape_event_log(events)
     publish_log = _shape_publish_log(
@@ -539,8 +541,10 @@ def _shape_run_summary(
     events: pd.DataFrame,
     event_summary: dict[str, Any],
     market_direction: dict[str, Any],
+    market_regime_phase: dict[str, Any],
 ) -> pd.DataFrame:
     direction = market_direction or {}
+    phase_fields = _phase_summary_fields(market_regime_phase)
     return pd.DataFrame(
         [
             {
@@ -552,6 +556,7 @@ def _shape_run_summary(
                 "Direction Bias": direction.get("direction_bias", ""),
                 "Action": direction.get("action", ""),
                 "Allowed Exposure": direction.get("allowed_exposure", ""),
+                **phase_fields,
                 "Sectors scanned": int(len(sectors)),
                 "Top ranked": int(min(len(ranked), 25)),
                 "Qualified breakouts": _qualified_breakout_count(breakout),
@@ -561,6 +566,23 @@ def _shape_run_summary(
             }
         ]
     )
+
+
+def _phase_summary_fields(market_regime_phase: dict[str, Any] | None) -> dict[str, Any]:
+    phase = market_regime_phase if isinstance(market_regime_phase, dict) else {}
+    driven_by = phase.get("driven_by") if isinstance(phase.get("driven_by"), dict) else {}
+    s2_pct = driven_by.get("s2_pct")
+    try:
+        s2_text = f"{float(s2_pct):.0%}"
+    except (TypeError, ValueError):
+        s2_text = ""
+    return {
+        "Regime Phase": phase.get("phase_label", ""),
+        "Regime Phase Emoji": phase.get("phase_emoji", ""),
+        "Regime Phase S2 Breadth": s2_text,
+        "Regime Phase Market Stage": driven_by.get("market_stage", ""),
+        "Regime Phase Velocity": driven_by.get("breadth_velocity_bucket", ""),
+    }
 
 
 def _render_telegram_digest(

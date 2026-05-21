@@ -19,6 +19,7 @@ from ai_trading_system.pipeline.contracts import TrustConfidenceEnvelope
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 from ai_trading_system.domains.ranking.payloads import (
     attach_market_direction_to_payload,
+    attach_market_regime_phase_to_payload,
     augment_dashboard_payload_with_ml,
     build_dashboard_payload,
     summarize_task_statuses,
@@ -28,6 +29,7 @@ from ai_trading_system.analytics.regime import (
     RegimeProfile,
     build_market_direction,
     compute_market_regime_snapshot,
+    compute_regime_phase,
     load_regime_profile,
     regime_disagreement,
     resolve_previous_regime,
@@ -518,6 +520,7 @@ class RankOrchestrationService:
 
         regime_snapshot: MarketRegimeSnapshot | None = None
         regime_profile: RegimeProfile | None = None
+        regime_phase_result = None
         try:
             # Seed hysteresis from the last completed rank run (Phase 4).
             # Excluding the current run prevents reading our own in-progress
@@ -533,6 +536,24 @@ class RankOrchestrationService:
                 exchange=str(effective_params.get("exchange", "NSE")),
                 previous_regime=previous_regime_seed,
             )
+            try:
+                regime_phase_result = compute_regime_phase(
+                    market_stage=stage_info.get("market_stage"),
+                    regime=regime_snapshot.regime if regime_snapshot is not None else None,
+                    breadth_velocity_bucket=(
+                        regime_snapshot.breadth_velocity_bucket
+                        if regime_snapshot is not None
+                        else None
+                    ),
+                    s2_pct=float(stage_info.get("s2_pct") or 0.0),
+                    transition_s2_threshold=float(
+                        effective_params.get("regime_phase_transition_s2_threshold", 0.30)
+                    ),
+                )
+                effective_params["market_regime_phase"] = regime_phase_result.to_dict()
+            except Exception as exc:
+                regime_phase_result = None
+                warnings.append(f"regime phase unavailable: {exc}")
             regime_profile = load_regime_profile(
                 regime_snapshot.regime,
                 project_root=context.project_root,
@@ -1148,7 +1169,12 @@ class RankOrchestrationService:
                 "stock_scan_fingerprint": self.dataframe_fingerprint(stock_scan_df),
                 "sector_dashboard_fingerprint": self.dataframe_fingerprint(sector_dashboard_df),
                 "warnings": list(warnings),
+                "market_stage": stage_info,
+                "market_stage_info": stage_info,
                 "market_regime": regime_snapshot.to_dict() if regime_snapshot is not None else None,
+                "market_regime_phase": (
+                    regime_phase_result.to_dict() if regime_phase_result is not None else None
+                ),
                 "regime_profile": regime_profile.to_dict() if regime_profile is not None else None,
             },
             task_status=task_status,
@@ -1188,6 +1214,11 @@ class RankOrchestrationService:
                     risk_matrix=risk_matrix,
                 )
                 attach_market_direction_to_payload(dashboard_payload, market_direction)
+            if regime_phase_result is not None:
+                attach_market_regime_phase_to_payload(
+                    dashboard_payload,
+                    regime_phase_result.to_dict(),
+                )
             if regime_profile is not None:
                 dashboard_payload["regime_profile"] = regime_profile.to_dict()
                 dashboard_payload.setdefault("summary", {})["regime_profile"] = regime_profile.name
@@ -1233,6 +1264,10 @@ class RankOrchestrationService:
             "rank_mode": str(context.params.get("rank_mode", "default")),
             "market_regime": regime_snapshot.to_dict() if regime_snapshot is not None else None,
             "market_regime_disagreement": regime_disagreement_payload,
+            "market_regime_phase": (
+                regime_phase_result.to_dict() if regime_phase_result is not None else None
+            ),
+            "market_stage_info": stage_info,
             "regime_profile": regime_profile.to_dict() if regime_profile is not None else None,
             "active_factor_weights": active_factor_weights,
             "effective_min_score": float(effective_params.get("min_score", 0.0)),

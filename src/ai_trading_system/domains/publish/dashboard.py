@@ -533,6 +533,7 @@ def publish_dashboard_payload(
         watchlist_frame=source_watchlist,
         trust_status=str(payload.get("summary", {}).get("data_trust_status") or payload.get("data_trust", {}).get("status") or "unknown"),
         failed_breakouts=failed_breakouts_df,
+        market_regime_phase=payload.get("market_regime_phase", {}),
     )
 
     summary = bundle.run_summary

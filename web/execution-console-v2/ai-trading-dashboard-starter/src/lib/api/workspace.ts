@@ -43,6 +43,12 @@ export interface WorkspaceSummary {
   dataTrustStatus: string | null;
   marketRegime: string | null;
   breadthVelocityBucket: string | null;
+  regimePhase: string | null;
+  regimePhaseLabel: string | null;
+  regimePhaseEmoji: string | null;
+  regimePhaseS2Pct: number | null;
+  regimePhaseMarketStage: string | null;
+  regimePhaseVelocity: string | null;
   directionBias: string | null;
   directionAction: string | null;
   allowedExposure: number | null;
@@ -150,6 +156,12 @@ function mapSummary(
     dataTrustStatus: asString(safe.data_trust_status),
     marketRegime: asString(safe.market_regime),
     breadthVelocityBucket: asString(safe.breadth_velocity_bucket),
+    regimePhase: asString(safe.regime_phase),
+    regimePhaseLabel: asString(safe.regime_phase_label),
+    regimePhaseEmoji: asString(safe.regime_phase_emoji),
+    regimePhaseS2Pct: asNumber(safe.regime_phase_s2_pct),
+    regimePhaseMarketStage: asString(safe.regime_phase_market_stage),
+    regimePhaseVelocity: asString(safe.regime_phase_velocity),
     directionBias: asString(safe.direction_bias),
     directionAction: asString(safe.direction_action),
     allowedExposure: asNumber(safe.allowed_exposure),

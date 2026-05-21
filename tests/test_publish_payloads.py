@@ -6,6 +6,7 @@ import pandas as pd
 
 from ai_trading_system.domains.ranking.payloads import (
     attach_market_direction_to_payload,
+    attach_market_regime_phase_to_payload,
     build_dashboard_payload,
 )
 from ai_trading_system.pipeline.contracts import StageArtifact
@@ -142,6 +143,37 @@ def test_telegram_summary_includes_market_direction_line() -> None:
     assert "Exposure: <b>80%</b>" in message
 
 
+def test_telegram_summary_includes_market_regime_phase() -> None:
+    datasets = {
+        "dashboard_payload": {
+            "summary": {
+                "run_date": "2026-04-21",
+            },
+            "market_direction": {
+                "market_state": "bull",
+                "breadth_velocity": "positive",
+                "direction_bias": "Confirmed uptrend",
+                "action": "hold",
+                "allowed_exposure": 0.80,
+            },
+            "market_regime_phase": {
+                "regime_phase": "base_forming_stage1",
+                "phase_label": "Base forming (S1)",
+                "phase_emoji": "🟡",
+                "driven_by": {
+                    "regime": "neutral",
+                    "breadth_velocity_bucket": "positive",
+                    "s2_pct": 0.20,
+                },
+            },
+        },
+        "ranked_signals": pd.DataFrame([{"symbol_id": "AAA", "composite_score": 90.0}]),
+    }
+    message = build_telegram_summary(run_date="2026-04-21", datasets=datasets)
+
+    assert "Base forming (S1)" in message
+
+
 def test_attach_market_direction_to_payload_flattens_summary_fields() -> None:
     payload = {"summary": {"run_date": "2026-04-21"}}
     direction = {
@@ -165,6 +197,32 @@ def test_attach_market_direction_to_payload_flattens_summary_fields() -> None:
     assert out["summary"]["allowed_exposure"] == 0.35
     assert out["summary"]["breadth_velocity_bucket"] == "very_positive"
     assert out["summary"]["regime_confidence_capped"] == 0.92
+
+
+def test_attach_market_regime_phase_to_payload_flattens_summary_fields() -> None:
+    payload = {"summary": {"run_date": "2026-04-21"}}
+    phase = {
+        "regime_phase": "transition_stage1_to_stage2",
+        "phase_label": "Transition S1 → S2",
+        "phase_emoji": "🟢",
+        "driven_by": {
+            "market_stage": "S1",
+            "regime": "neutral",
+            "breadth_velocity_bucket": "positive",
+            "s2_pct": 0.31,
+            "transition_s2_threshold": 0.30,
+        },
+    }
+
+    out = attach_market_regime_phase_to_payload(payload, phase)
+
+    assert out["market_regime_phase"] == phase
+    assert out["summary"]["regime_phase"] == "transition_stage1_to_stage2"
+    assert out["summary"]["regime_phase_label"] == "Transition S1 → S2"
+    assert out["summary"]["regime_phase_emoji"] == "🟢"
+    assert out["summary"]["regime_phase_s2_pct"] == 0.31
+    assert out["summary"]["regime_phase_market_stage"] == "S1"
+    assert out["summary"]["regime_phase_velocity"] == "positive"
 
 
 def test_build_dashboard_payload_explains_empty_discoveries_when_ranked_covers_stock_scan(tmp_path: Path) -> None:

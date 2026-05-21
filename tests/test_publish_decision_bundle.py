@@ -82,6 +82,37 @@ def test_decision_bundle_uses_watchlist_for_daily_and_telegram() -> None:
     assert "trigger:" not in bundle.telegram_digest
 
 
+def test_decision_bundle_run_summary_includes_regime_phase() -> None:
+    bundle = build_publish_decision_bundle(
+        run_date="2026-05-07",
+        ranked_signals=pd.DataFrame([{"symbol_id": "AAA", "composite_score": 80.0}]),
+        breakout_scan=pd.DataFrame(),
+        pattern_scan=pd.DataFrame(),
+        sector_dashboard=pd.DataFrame(),
+        event_frame=pd.DataFrame(),
+        breadth_frame=pd.DataFrame(),
+        watchlist_frame=pd.DataFrame(),
+        trust_status="trusted",
+        market_regime_phase={
+            "regime_phase": "base_forming_stage1",
+            "phase_label": "Base forming (S1)",
+            "phase_emoji": "🟡",
+            "driven_by": {
+                "market_stage": "MIXED",
+                "breadth_velocity_bucket": "positive",
+                "s2_pct": 0.20,
+            },
+        },
+    )
+
+    row = bundle.run_summary.iloc[0]
+    assert row["Regime Phase"] == "Base forming (S1)"
+    assert row["Regime Phase Emoji"] == "🟡"
+    assert row["Regime Phase S2 Breadth"] == "20%"
+    assert row["Regime Phase Market Stage"] == "MIXED"
+    assert row["Regime Phase Velocity"] == "positive"
+
+
 def test_decision_bundle_pattern_sort_and_event_summary_hide_hashes_from_telegram() -> None:
     patterns = pd.DataFrame(
         [
