@@ -24,6 +24,18 @@ export interface SectorRow {
   stageS3Count: number;
   stageS4Count: number;
   stageTotal: number;
+  valuationUniverseId?: string | null;
+  valuationDate?: string | null;
+  valuationConstituentCount?: number | null;
+  sectorPeTtm?: number | null;
+  sectorEarningsYield?: number | null;
+  sectorLossMcapPct?: number | null;
+  sectorPePctile3y?: number | null;
+  sectorPePctile5y?: number | null;
+  sectorPePctile10y?: number | null;
+  valuationZone?: string | null;
+  cycleSignal?: string | null;
+  valuationInterpretation?: string | null;
 }
 
 function num(s: any, keys: string[], fallback = 0): number {
@@ -64,6 +76,18 @@ function mapSectorRow(s: any): SectorRow {
     stageS3Count: num(s, ['stage_s3_count', 'stageS3Count']),
     stageS4Count: num(s, ['stage_s4_count', 'stageS4Count']),
     stageTotal:   num(s, ['stage_total', 'stageTotal']),
+    valuationUniverseId: s.valuation_universe_id ?? s.valuationUniverseId ?? null,
+    valuationDate: s.valuation_date ?? s.valuationDate ?? null,
+    valuationConstituentCount: nullableNum(s.valuation_constituent_count ?? s.valuationConstituentCount),
+    sectorPeTtm: nullableNum(s.sector_pe_ttm ?? s.sectorPeTtm),
+    sectorEarningsYield: nullableNum(s.sector_earnings_yield ?? s.sectorEarningsYield),
+    sectorLossMcapPct: nullableNum(s.sector_loss_mcap_pct ?? s.sectorLossMcapPct),
+    sectorPePctile3y: nullableNum(s.sector_pe_pctile_3y ?? s.sectorPePctile3y),
+    sectorPePctile5y: nullableNum(s.sector_pe_pctile_5y ?? s.sectorPePctile5y),
+    sectorPePctile10y: nullableNum(s.sector_pe_pctile_10y ?? s.sectorPePctile10y),
+    valuationZone: s.valuation_zone ?? s.valuationZone ?? null,
+    cycleSignal: s.cycle_signal ?? s.cycleSignal ?? null,
+    valuationInterpretation: s.valuation_interpretation ?? s.valuationInterpretation ?? null,
   };
 }
 

@@ -17,6 +17,7 @@ import EarlyLeaderBanner from '@/components/sectors/EarlyLeaderBanner';
 import SectorLeadershipChart from '@/components/sectors/SectorLeadershipChart';
 import SectorRotationHeatmap from '@/components/sectors/SectorRotationHeatmap';
 import SectorDrilldown from '@/components/sectors/SectorDrilldown';
+import SectorValuationTable from '@/components/sectors/SectorValuationTable';
 import { useRanking, useSectors } from '@/lib/queries';
 
 export default function SectorsPage() {
@@ -58,6 +59,17 @@ export default function SectorsPage() {
       ) : (
         <>
           <EarlyLeaderBanner sectors={sectors} />
+
+          <SectionCard
+            title="Sector Valuation"
+            description="Aggregate PE from market cap divided by aggregate TTM earnings."
+          >
+            <SectorValuationTable
+              sectors={sectors}
+              selected={selectedSector}
+              onSelect={setSelectedSector}
+            />
+          </SectionCard>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <SectionCard

@@ -349,6 +349,20 @@ def _stage2_summary(ranked: pd.DataFrame, *, top_symbols: int = 8) -> dict[str, 
     }
 
 
+def _stage2_source_frame(*frames: pd.DataFrame | None) -> pd.DataFrame:
+    """Pick the first non-empty frame that actually carries Stage 2 fields."""
+    stage2_columns = {"stage2_score", "is_stage2_uptrend", "stage2_label"}
+    fallback = pd.DataFrame()
+    for frame in frames:
+        if frame is None or frame.empty:
+            continue
+        if fallback.empty:
+            fallback = frame
+        if stage2_columns.intersection(frame.columns):
+            return frame
+    return fallback
+
+
 def _apply_stage2_filter(
     ranked: pd.DataFrame,
     *,
@@ -411,6 +425,8 @@ def get_ranking_snapshot_read_model(
 ) -> dict[str, Any]:
     current_snapshot = snapshot or load_latest_operational_snapshot(project_root)
     ranked = current_snapshot.frames.get("ranked_signals", pd.DataFrame())
+    ranked_universe = current_snapshot.frames.get("ranked_universe", pd.DataFrame())
+    stock_scan = current_snapshot.frames.get("stock_scan", pd.DataFrame())
     patterns = current_snapshot.frames.get("pattern_scan", pd.DataFrame())
     ranked = _enrich_operator_rank_fields(ranked, patterns)
     ranked = _enrich_rank_with_fundamentals(
@@ -418,7 +434,8 @@ def get_ranking_snapshot_read_model(
         project_root=project_root,
         watchlist_candidates=current_snapshot.frames.get("watchlist_candidates", pd.DataFrame()),
     )
-    stage2_summary = _stage2_summary(ranked)
+    stage2_source = _stage2_source_frame(stock_scan, ranked_universe, ranked)
+    stage2_summary = _stage2_summary(stage2_source)
     filtered_ranked, stage2_filter = _apply_stage2_filter(
         ranked,
         stage2_only=stage2_only,
@@ -430,6 +447,7 @@ def get_ranking_snapshot_read_model(
         if not filtered_ranked.empty and {"symbol_id", "composite_score"}.issubset(filtered_ranked.columns)
         else [],
         "artifact_count": int(len(ranked.index)) if ranked is not None else 0,
+        "ranked_universe_count": int(len(ranked_universe.index)) if ranked_universe is not None else 0,
         "visible_count": int(len(filtered_ranked.index)) if filtered_ranked is not None else 0,
         "stage2_summary": stage2_summary,
         "stage2_filter": stage2_filter,
@@ -467,6 +485,7 @@ def get_pipeline_workspace_snapshot_read_model(
     latest_insight = get_latest_insight(project_root)
 
     ranked = current_snapshot.frames.get("ranked_signals", pd.DataFrame())
+    ranked_universe = current_snapshot.frames.get("ranked_universe", pd.DataFrame())
     patterns = current_snapshot.frames.get("pattern_scan", pd.DataFrame())
     ranked = _enrich_operator_rank_fields(ranked, patterns)
     ranked = _enrich_rank_with_fundamentals(
@@ -474,7 +493,6 @@ def get_pipeline_workspace_snapshot_read_model(
         project_root=project_root,
         watchlist_candidates=current_snapshot.frames.get("watchlist_candidates", pd.DataFrame()),
     )
-    stage2_summary = _stage2_summary(ranked)
     filtered_ranked, stage2_filter = _apply_stage2_filter(
         ranked,
         stage2_only=stage2_only,
@@ -483,6 +501,8 @@ def get_pipeline_workspace_snapshot_read_model(
     breakouts = current_snapshot.frames.get("breakout_scan", pd.DataFrame())
     sectors = current_snapshot.frames.get("sector_dashboard", pd.DataFrame())
     stock_scan = current_snapshot.frames.get("stock_scan", pd.DataFrame())
+    stage2_source = _stage2_source_frame(stock_scan, ranked_universe, ranked)
+    stage2_summary = _stage2_summary(stage2_source)
     payload_ranked_leaders = current_snapshot.payload.get("ranked_leaders")
     payload_pattern_discoveries = current_snapshot.payload.get("pattern_discoveries")
     payload_breakout_candidates = current_snapshot.payload.get("breakout_candidates")
@@ -557,6 +577,7 @@ def get_pipeline_workspace_snapshot_read_model(
         "stage2_filter": stage2_filter,
         "counts": {
             "ranked": int(len(ranked.index)) if ranked is not None else 0,
+            "ranked_universe": int(len(ranked_universe.index)) if ranked_universe is not None else 0,
             "breakouts": int(len(breakouts.index)) if breakouts is not None else 0,
             "patterns": int(len(patterns.index)) if patterns is not None else 0,
             "sectors": int(len(sectors.index)) if sectors is not None else 0,

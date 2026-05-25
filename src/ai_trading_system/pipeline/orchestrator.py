@@ -30,6 +30,7 @@ from ai_trading_system.pipeline.contracts import (
 from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.platform.logging import logger as logging_module
 from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout, get_domain_paths
+from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
 from ai_trading_system.pipeline.stages import CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, NarrativeStage, PerfTrackerStage, PublishStage, RankStage
@@ -770,7 +771,10 @@ class PipelineOrchestrator:
         configured = Path(str(fundamental_scores_path or get_domain_paths(self.project_root).fundamentals_dir / "fundamental_scores_latest.csv"))
         if not configured.is_absolute():
             configured = self.project_root / configured
-        return configured.exists() and configured.is_file()
+        if configured.exists() and configured.is_file():
+            return True
+        sqlite_path = default_screener_db_path(self.project_root)
+        return sqlite_path.exists() and sqlite_path.is_file()
 
     def _build_run_id(self, run_date: str) -> str:
         return f"pipeline-{run_date}-{uuid.uuid4().hex[:8]}"
@@ -962,6 +966,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--fundamental-scores-path",
         default=str(get_domain_paths().fundamentals_dir / "fundamental_scores_latest.csv"),
         help="Path to latest fundamental scores CSV.",
+    )
+    parser.add_argument(
+        "--screener-financials-db-path",
+        default=str(default_screener_db_path()),
+        help="Canonical Screener SQLite fundamentals DB path.",
+    )
+    parser.add_argument(
+        "--enable-valuation-features",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Refresh point-in-time valuation feature tables during the features stage.",
+    )
+    parser.add_argument(
+        "--valuation-universes",
+        default="UNIV_TOP500_MCAP,UNIV_TOP1000_MCAP",
+        help="Comma-separated valuation universe ids.",
+    )
+    parser.add_argument(
+        "--valuation-min-history-days",
+        type=int,
+        default=756,
+        help="Minimum observations for valuation percentile/z-score bands.",
     )
     parser.add_argument(
         "--data-domain",
@@ -1348,6 +1374,10 @@ def main() -> None:
         "enable_fundamentals": bool(args.enable_fundamentals),
         "fundamental_max_stale_days": int(args.fundamental_max_stale_days),
         "fundamental_scores_path": args.fundamental_scores_path,
+        "screener_financials_db_path": args.screener_financials_db_path,
+        "enable_valuation_features": bool(args.enable_valuation_features),
+        "valuation_universes": args.valuation_universes,
+        "valuation_min_history_days": int(args.valuation_min_history_days),
         "data_domain": args.data_domain,
         "local_publish": args.local_publish,
         "smoke": args.smoke,

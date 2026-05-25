@@ -85,6 +85,18 @@ export interface SectorScore {
   stageS3Count: number;
   stageS4Count: number;
   stageTotal: number;
+  valuationUniverseId?: string | null;
+  valuationDate?: string | null;
+  valuationConstituentCount?: number | null;
+  sectorPeTtm?: number | null;
+  sectorEarningsYield?: number | null;
+  sectorLossMcapPct?: number | null;
+  sectorPePctile3y?: number | null;
+  sectorPePctile5y?: number | null;
+  sectorPePctile10y?: number | null;
+  valuationZone?: string | null;
+  cycleSignal?: string | null;
+  valuationInterpretation?: string | null;
 }
 
 export interface ShadowModelRow {

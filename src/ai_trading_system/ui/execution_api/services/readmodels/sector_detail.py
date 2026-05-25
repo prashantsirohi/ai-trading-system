@@ -51,6 +51,10 @@ def _pct(num: int, denom: int) -> float:
     return round(num / denom * 100, 1) if denom else 0.0
 
 
+def _norm_sector(value: Any) -> str:
+    return str(value or "").strip().casefold()
+
+
 # ── stage snapshot (latest per symbol) ───────────────────────────────────────
 
 def _load_stage_snapshot(ohlcv_db: str) -> pd.DataFrame:
@@ -76,6 +80,124 @@ def _load_stage_snapshot(ohlcv_db: str) -> pd.DataFrame:
     except Exception as exc:
         LOG.warning("_load_stage_snapshot failed: %s", exc)
         return pd.DataFrame(columns=["symbol", "stage_label", "stage_confidence", "week_end_date"])
+
+
+def _load_sector_valuation_snapshot(ohlcv_db: str, universe_id: str = "UNIV_TOP500_MCAP") -> dict[str, dict[str, Any]]:
+    """Latest sector valuation snapshot from feature-layer DuckDB tables."""
+    try:
+        conn = duckdb.connect(ohlcv_db, read_only=True)
+        try:
+            tables = {
+                r[0]
+                for r in conn.execute(
+                    """
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_name IN ('sector_valuation_daily', 'valuation_cycle_features')
+                    """
+                ).fetchall()
+            }
+            if "sector_valuation_daily" not in tables:
+                return {}
+            cycle_join = ""
+            cycle_columns = """
+                NULL::DOUBLE AS pe_pctile_3y,
+                NULL::DOUBLE AS pe_pctile_5y,
+                NULL::DOUBLE AS pe_pctile_10y,
+                NULL::VARCHAR AS valuation_zone,
+                NULL::VARCHAR AS cycle_signal
+            """
+            if "valuation_cycle_features" in tables:
+                cycle_join = """
+                    LEFT JOIN valuation_cycle_features vcf
+                      ON vcf.entity_type = 'sector'
+                     AND vcf.entity_id = sv.universe_id || ':' || sv.sector_name
+                     AND vcf.date = sv.date
+                """
+                cycle_columns = """
+                    vcf.pe_pctile_3y,
+                    vcf.pe_pctile_5y,
+                    vcf.pe_pctile_10y,
+                    vcf.valuation_zone,
+                    vcf.cycle_signal
+                """
+            df = conn.execute(
+                f"""
+                WITH latest AS (
+                    SELECT MAX(date) AS date
+                    FROM sector_valuation_daily
+                    WHERE universe_id = ?
+                )
+                SELECT
+                    sv.universe_id,
+                    sv.date,
+                    sv.sector_name,
+                    sv.constituent_count,
+                    sv.positive_earnings_count,
+                    sv.loss_making_count,
+                    sv.pe_ttm,
+                    sv.earnings_yield,
+                    sv.loss_mcap_pct,
+                    {cycle_columns}
+                FROM sector_valuation_daily sv
+                JOIN latest l ON sv.date = l.date
+                {cycle_join}
+                WHERE sv.universe_id = ?
+                """,
+                [universe_id, universe_id],
+            ).fetchdf()
+        finally:
+            conn.close()
+        if df.empty:
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for _, row in df.iterrows():
+            out[_norm_sector(row.get("sector_name"))] = {
+                "sector_name": row.get("sector_name"),
+                "valuation_universe_id": row.get("universe_id"),
+                "valuation_date": str(row.get("date"))[:10],
+                "valuation_constituent_count": int(row.get("constituent_count") or 0),
+                "valuation_positive_earnings_count": int(row.get("positive_earnings_count") or 0),
+                "valuation_loss_making_count": int(row.get("loss_making_count") or 0),
+                "sector_pe_ttm": _safe_float(row.get("pe_ttm")),
+                "sector_earnings_yield": _safe_float(row.get("earnings_yield")),
+                "sector_loss_mcap_pct": _safe_float(row.get("loss_mcap_pct")),
+                "sector_pe_pctile_3y": _safe_float(row.get("pe_pctile_3y")),
+                "sector_pe_pctile_5y": _safe_float(row.get("pe_pctile_5y")),
+                "sector_pe_pctile_10y": _safe_float(row.get("pe_pctile_10y")),
+                "valuation_zone": row.get("valuation_zone") or None,
+                "cycle_signal": row.get("cycle_signal") or None,
+            }
+        return out
+    except Exception as exc:
+        LOG.warning("_load_sector_valuation_snapshot failed: %s", exc)
+        return {}
+
+
+def _sector_valuation_interpretation(row: dict[str, Any]) -> str | None:
+    zone = str(row.get("valuation_zone") or "").lower()
+    rank = _safe_float(row.get("RS_rank") or row.get("rs_rank") or row.get("rank"))
+    loss_mcap_pct = _safe_float(row.get("sector_loss_mcap_pct"))
+    pe = _safe_float(row.get("sector_pe_ttm"))
+    if loss_mcap_pct is not None and loss_mcap_pct >= 0.25:
+        return "PE less reliable; loss-making market cap is elevated"
+    if pe is not None and (not zone or zone == "unknown"):
+        return "Current PE live; history bands pending"
+    if rank is None or not zone:
+        return None
+    is_strong_rs = rank <= 3
+    is_weak_rs = rank >= 8
+    if is_strong_rs and zone in {"depressed", "cheap", "fair"}:
+        return "High RS with reasonable valuation"
+    if is_strong_rs and zone in {"expensive", "bubble"}:
+        return "Strong but late-cycle"
+    if is_weak_rs and zone in {"depressed", "cheap", "fair"}:
+        return "Valuation reset, wait for RS turn"
+    if is_weak_rs and zone in {"expensive", "bubble"}:
+        return "Weak RS and rich valuation"
+    if zone in {"expensive", "bubble"}:
+        return "Needs earnings growth confirmation"
+    return "Momentum and valuation are balanced"
 
 
 # ── latest technicals from _catalog ──────────────────────────────────────────
@@ -253,6 +375,7 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
 
     # 2. Stage snapshot
     snap = _load_stage_snapshot(ohlcv_db)
+    valuation_by_sector = _load_sector_valuation_snapshot(ohlcv_db)
 
     # 3. Stock→sector mapping from master DB (SQLite). The sector list API is
     #    led by sector_dashboard, but masterdata is the catalog of record; use
@@ -298,8 +421,10 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
             seen_sectors.add(sec_name)
         dist = stage_by_sector.get(sec_name, {})
         total = dist.get("total", 0)
-        enriched.append({
+        valuation = valuation_by_sector.get(_norm_sector(sec_name), {})
+        row = {
             **s,
+            **valuation,
             "stage_s1_pct": _pct(dist.get("S1", 0), total),
             "stage_s2_pct": _pct(dist.get("S2", 0), total),
             "stage_s3_pct": _pct(dist.get("S3", 0), total),
@@ -309,7 +434,9 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
             "stage_s3_count": dist.get("S3", 0),
             "stage_s4_count": dist.get("S4", 0),
             "stage_total": total,
-        })
+        }
+        row["valuation_interpretation"] = _sector_valuation_interpretation(row)
+        enriched.append(row)
 
     max_rank = max(
         (_safe_float(row.get("RS_rank")) or 0 for row in enriched),
@@ -318,7 +445,8 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
     for offset, sec_name in enumerate(sorted(set(sector_counts) - seen_sectors), start=1):
         dist = stage_by_sector.get(sec_name, {})
         total = dist.get("total", 0)
-        enriched.append({
+        valuation = valuation_by_sector.get(_norm_sector(sec_name), {})
+        row = {
             "Sector": sec_name,
             "RS": None,
             "RS_20": None,
@@ -340,7 +468,39 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
             "stage_s4_count": dist.get("S4", 0),
             "stage_total": total,
             "master_count": sector_counts[sec_name],
-        })
+            **valuation,
+        }
+        row["valuation_interpretation"] = _sector_valuation_interpretation(row)
+        enriched.append(row)
+
+    for sec_key, valuation in sorted(valuation_by_sector.items()):
+        if sec_key in {_norm_sector(sector) for sector in seen_sectors | set(sector_counts)}:
+            continue
+        row = {
+            "Sector": valuation.get("sector_name") or sec_key.title(),
+            "RS": None,
+            "RS_20": None,
+            "RS_50": None,
+            "RS_100": None,
+            "Momentum": 0.0,
+            "RS_rank": None,
+            "RS_rank_pct": None,
+            "Momentum_rank": None,
+            "Momentum_rank_pct": None,
+            "Quadrant": "Unranked",
+            "stage_s1_pct": 0.0,
+            "stage_s2_pct": 0.0,
+            "stage_s3_pct": 0.0,
+            "stage_s4_pct": 0.0,
+            "stage_s1_count": 0,
+            "stage_s2_count": 0,
+            "stage_s3_count": 0,
+            "stage_s4_count": 0,
+            "stage_total": 0,
+            **valuation,
+        }
+        row["valuation_interpretation"] = _sector_valuation_interpretation(row)
+        enriched.append(row)
 
     return {"sectors": enriched}
 

@@ -1,6 +1,6 @@
 # Stage: fundamentals
 
-- **Purpose:** Optional enrichment of rank artifacts with a manually imported Screener.in fundamental snapshot — adds tiering, watchlist bucketing, hard red-flag flags, and industry-level scores.
+- **Purpose:** Optional enrichment of rank artifacts from the canonical Screener.in SQLite fundamentals store — adds tiering, watchlist bucketing, hard red-flag flags, and industry-level scores.
 - **Audience:** Operator, developer, debugging
 - **Last verified:** 2026-05-16
 - **Source of truth:**
@@ -14,36 +14,42 @@
 
 ## Purpose
 
-`fundamentals` is an **optional** stage that runs between `rank` and `candidates`. It enriches the rank attempt directory with a Screener.in scoring snapshot, builds a fundamentals-aware watchlist, and (when industry inputs are present) scores industry groups and enriches the sector dashboard.
+`fundamentals` is an **optional** stage that runs between `rank` and `candidates`. It enriches the rank attempt directory with a Screener.in scoring snapshot derived from `screener_financials.db`, builds a fundamentals-aware watchlist, and (when industry inputs are present) scores industry groups and enriches the sector dashboard.
 
 It does **not**:
 
-- scrape Screener (input CSVs are imported manually),
+- require live scraping during pipeline runs,
 - modify `ranked_signals.csv` in place,
 - block the pipeline if its snapshot is missing or stale — it short-circuits to a `skipped_missing_snapshot` summary.
 
 ## Entrypoints
 
 - Stage wrapper: `src/ai_trading_system/pipeline/stages/fundamentals.py::FundamentalsStage.run` (no separate `service.py` exists for this stage; logic lives in the wrapper and the enrichment modules).
-- CLI: `ai-trading-pipeline --enable-fundamentals` or auto-enabled when `data/fundamentals/fundamental_scores_latest.csv` is present (`orchestrator.py:578`, `orchestrator.py:775`).
-- Manual import / enrichment scripts: `python -m ai_trading_system.domains.fundamentals.import_screener …` and `python -m ai_trading_system.domains.fundamentals.enrich_rank …`.
+- CLI: `ai-trading-pipeline --enable-fundamentals` or auto-enabled when `data/fundamentals/fundamental_scores_latest.csv` or `data/fundamentals/screener_financials.db` is present.
+- Screener SQLite sync / readmodel scripts: `ai-trading-fundamentals-sync` and `ai-trading-fundamentals-refresh-readmodels`.
+- Legacy manual CSV import remains available via `python -m ai_trading_system.domains.fundamentals.import_screener …`.
 
 ## Input data
 
-- `data/fundamentals/fundamental_scores_latest.csv` (default; overridable via `--fundamental-scores-path` / param `fundamental_scores_path`).
+- `data/fundamentals/screener_financials.db` (canonical SQLite source; overridable via `--screener-financials-db-path` / param `screener_financials_db_path`).
+- `data/fundamentals/exports/*_screener.xlsx` (local Screener Excel exports used by sync).
+- `data/fundamentals/fundamental_scores_latest.csv` (generated compatibility readmodel; overridable via `--fundamental-scores-path` / param `fundamental_scores_path`).
 - `data/fundamentals/fundamental_trends_latest.csv` (optional; default from `DEFAULT_TRENDS_PATH`).
 - `data/fundamentals/industry_fundamental_scores_latest.csv` (optional).
 - `data/fundamentals/industry_fundamental_trends_latest.csv` (optional).
 - `data/fundamentals/catalyst_scores_latest.csv` (optional).
 - Rank attempt directory: `data/pipeline_runs/<run_id>/rank/attempt_<n>/` — must contain `ranked_signals.csv` (`fundamentals.py:31`).
-- `data/fundamentals.duckdb` (written by `import_screener.py` during import; consumed by `trends.py` for historical deltas).
+- `data/fundamentals.duckdb` is legacy CSV-import storage only; do not treat it as canonical.
 
-Operator workflow for importing a snapshot (preserved from the legacy `fundamental_layer.md`):
+Operator workflow for syncing Screener Excel exports into the canonical DB:
 
 ```bash
-python -m ai_trading_system.domains.fundamentals.import_screener \
-  --file data/raw/screener/screener_fundamentals_<yyyymmdd>.csv \
-  --snapshot-date <yyyy-mm-dd>
+ai-trading-fundamentals-sync \
+  --db-path /Volumes/MacData/Trading/data/fundamentals/screener_financials.db \
+  --exports-dir /Volumes/MacData/Trading/data/fundamentals/exports
+
+ai-trading-fundamentals-refresh-readmodels \
+  --db-path /Volumes/MacData/Trading/data/fundamentals/screener_financials.db
 ```
 
 ## Output artifacts
@@ -67,14 +73,15 @@ Skip path: when the scores CSV is missing, the stage writes only `fundamental_su
 - `domains/fundamentals/enrich_rank.py::enrich_rank_artifacts` — joins scores + trends + (optional) industry + catalysts onto ranked symbols and produces watchlist buckets.
 - `domains/fundamentals/enrich_sector_dashboard.py::enrich_sector_dashboard` — joins industry scores onto `sector_dashboard.csv`.
 - `domains/fundamentals/scoring.py` — composite score, tier assignment, hard red-flag detection.
-- `domains/fundamentals/trends.py` — period-over-period deltas using `data/fundamentals.duckdb`.
+- `domains/fundamentals/screener_store.py` / `screener_sync.py` / `screener_readmodels.py` — SQLite storage, Excel sync, and generated score/trend readmodels.
+- `domains/fundamentals/trends.py` — period-over-period deltas.
 - `domains/fundamentals/import_screener.py` / `import_screener_industries.py` — manual CSV importers (normalize symbols, persist snapshots).
 - `domains/fundamentals/{industry_scoring,industry_trends,industry_schema}.py` — industry-group scoring + labelling.
 
 ## Process flow
 
 1. Resolve all input paths (`_resolve_scores_path` / `_resolve_trends_path` / `_resolve_catalysts_path` / `_resolve_industry_*`, `fundamentals.py:234`–`266`).
-2. If `fundamental_scores` snapshot is missing → write `fundamental_summary.json` with `status="skipped_missing_snapshot"` and return.
+2. If `fundamental_scores` snapshot is missing, attempt to regenerate it from `screener_financials.db`; if still missing, write `fundamental_summary.json` with `status="skipped_missing_snapshot"` and return.
 3. Read scores; compute `snapshot_date` (first non-null `screener_snapshot_date` / `snapshot_date`) and `stale_days = run_date − snapshot_date` (`fundamentals.py:276`–`293`).
 4. Append warning if snapshot date is missing or `stale_days > fundamental_max_stale_days` (default **135**).
 5. Copy `fundamental_scores.csv` into the attempt dir; call `enrich_rank_artifacts(...)` to produce `watchlist_candidates.csv` and `EnrichmentMetrics`.
@@ -111,10 +118,11 @@ Skip path: when the scores CSV is missing, the stage writes only `fundamental_su
 ## Commands
 
 ```bash
-# Import a fresh snapshot (see legacy fundamental_layer.md for full column map).
-python -m ai_trading_system.domains.fundamentals.import_screener \
-  --file data/raw/screener/screener_fundamentals_<yyyymmdd>.csv \
-  --snapshot-date <yyyy-mm-dd>
+# Sync downloaded Screener Excel files and refresh derived scoring CSVs.
+ai-trading-fundamentals-sync
+
+# Refresh only derived scoring/trend CSVs from SQLite.
+ai-trading-fundamentals-refresh-readmodels
 
 # Run the pipeline with fundamentals explicitly enabled.
 ai-trading-pipeline --run-date <yyyy-mm-dd> --enable-fundamentals

@@ -18,6 +18,8 @@ from ai_trading_system.domains.fundamentals.enrich_rank import (
     enrich_rank_artifacts,
 )
 from ai_trading_system.domains.fundamentals.enrich_sector_dashboard import enrich_sector_dashboard
+from ai_trading_system.domains.fundamentals.screener_readmodels import refresh_fundamental_readmodels
+from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 
 
@@ -42,7 +44,20 @@ class FundamentalsStage:
         warnings: list[str] = []
 
         if not scores_path.exists():
-            warnings.append(f"Fundamental scores snapshot missing: {scores_path}")
+            db_path = self._resolve_screener_db_path(context)
+            if db_path.exists():
+                try:
+                    refresh_fundamental_readmodels(
+                        db_path=db_path,
+                        latest_output=scores_path,
+                        trends_output=trends_path,
+                        snapshot_date=context.run_date,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    warnings.append(f"Failed to refresh fundamental scores from Screener SQLite: {exc}")
+            if not scores_path.exists():
+                warnings.append(f"Fundamental scores snapshot missing: {scores_path}")
+        if not scores_path.exists():
             summary = self._summary(
                 context=context,
                 status="skipped_missing_snapshot",
@@ -264,6 +279,13 @@ class FundamentalsStage:
         if configured.is_absolute():
             return configured
         return context.project_root / configured
+
+    def _resolve_screener_db_path(self, context: StageContext) -> Path:
+        configured = context.params.get("screener_financials_db_path") or context.params.get("fundamental_screener_db_path")
+        path = Path(str(configured)) if configured else default_screener_db_path(context.project_root)
+        if path.is_absolute():
+            return path
+        return context.project_root / path
 
     def _snapshot_date_column(self, frame: pd.DataFrame, column: str) -> str | None:
         if column not in frame.columns:

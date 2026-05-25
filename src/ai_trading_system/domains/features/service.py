@@ -122,6 +122,31 @@ class FeaturesOrchestrationService:
             feature_progress_callback=_feature_progress,
         )
 
+        valuation_summary = {"status": "disabled"}
+        if bool(context.params.get("enable_valuation_features", True)):
+            from ai_trading_system.domains.features.valuation_refresh import refresh_valuation_features
+            from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
+            from ai_trading_system.platform.db.paths import get_domain_paths
+
+            paths = get_domain_paths(context.project_root, context.params.get("data_domain", "operational"))
+            raw_universes = context.params.get("valuation_universes") or "UNIV_TOP500_MCAP,UNIV_TOP1000_MCAP"
+            universes = (
+                [item.strip() for item in raw_universes.split(",") if item.strip()]
+                if isinstance(raw_universes, str)
+                else list(raw_universes)
+            )
+            valuation_from_date = context.params.get("valuation_from_date") or context.run_date
+            valuation_to_date = context.params.get("valuation_to_date") or context.run_date
+            valuation_summary = refresh_valuation_features(
+                ohlcv_db_path=paths.ohlcv_db_path,
+                screener_db_path=context.params.get("screener_financials_db_path") or default_screener_db_path(context.project_root),
+                master_db_path=paths.master_db_path,
+                from_date=str(valuation_from_date)[:10],
+                to_date=str(valuation_to_date)[:10],
+                universes=universes,
+                min_history_days=int(context.params.get("valuation_min_history_days", 756) or 756),
+            )
+
         snapshot_id, feature_rows, feature_registry_entries = (
             record_snapshot or self.record_snapshot
         )(context)
@@ -147,6 +172,7 @@ class FeaturesOrchestrationService:
                 "cross_sectional": True,
                 "pattern_preconditions": True,
                 "benchmark_relative": {"enabled": True, "benchmark_symbol": benchmark_symbol},
+                "valuation_features": valuation_summary,
             },
             "trust_confidence": trust_confidence.to_dict(),
             "completed_at": datetime.now(timezone.utc).isoformat(),
