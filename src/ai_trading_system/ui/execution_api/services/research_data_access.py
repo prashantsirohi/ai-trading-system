@@ -13,7 +13,7 @@ import duckdb
 import pandas as pd
 from ai_trading_system.analytics.data_trust import load_data_trust_summary, load_symbol_trust_state
 from ai_trading_system.analytics.registry import RegistryStore
-from ai_trading_system.platform.db.paths import get_domain_paths
+from ai_trading_system.platform.db.paths import find_latest_pipeline_artifact, get_domain_paths
 from ai_trading_system.domains.execution.store import ExecutionStore
 
 
@@ -119,10 +119,21 @@ def _load_latest_payload_path(project_root: str) -> Path | None:
     if not runs_dir.exists():
         return None
 
-    candidates = sorted(
-        runs_dir.glob("*/rank/attempt_*/dashboard_payload.json"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
+    latest_disk = find_latest_pipeline_artifact(
+        project_root=project_root,
+        data_domain="operational",
+        stage_name="rank",
+        filename="dashboard_payload.json",
+    )
+    candidates = [latest_disk[1]] if latest_disk is not None else []
+    candidates.extend(
+        path
+        for path in sorted(
+            runs_dir.glob("*/rank/attempt_*/dashboard_payload.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if path not in candidates
     )
     if not candidates:
         return None
@@ -130,7 +141,7 @@ def _load_latest_payload_path(project_root: str) -> Path | None:
     control_plane_db = get_domain_paths(project_root, "operational").root_dir / "control_plane.duckdb"
     run_metadata: dict[str, dict] = {}
     if control_plane_db.exists():
-        conn = duckdb.connect(str(control_plane_db))
+        conn = duckdb.connect(str(control_plane_db), read_only=True)
         try:
             rows = conn.execute("SELECT run_id, metadata_json FROM pipeline_run").fetchall()
             for run_id, metadata_json in rows:

@@ -10,7 +10,7 @@ from typing import Optional
 import duckdb
 import pandas as pd
 
-from ai_trading_system.platform.db.paths import get_domain_paths
+from ai_trading_system.platform.db.paths import find_latest_pipeline_artifact, get_domain_paths
 
 
 @dataclass(frozen=True)
@@ -47,10 +47,21 @@ def _load_latest_payload_path(ctx: ExecutionContext) -> Optional[Path]:
     runs_dir = ctx.pipeline_runs_dir
     if not runs_dir.exists():
         return None
-    candidates = sorted(
-        runs_dir.glob("*/rank/attempt_*/dashboard_payload.json"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
+    latest_disk = find_latest_pipeline_artifact(
+        project_root=ctx.project_root,
+        data_domain="operational",
+        stage_name="rank",
+        filename="dashboard_payload.json",
+    )
+    candidates = [latest_disk[1]] if latest_disk is not None else []
+    candidates.extend(
+        path
+        for path in sorted(
+            runs_dir.glob("*/rank/attempt_*/dashboard_payload.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if path not in candidates
     )
     if not candidates:
         return None
@@ -58,10 +69,7 @@ def _load_latest_payload_path(ctx: ExecutionContext) -> Optional[Path]:
     control_plane_db = ctx.control_plane_db or (ctx.ohlcv_db.parent / "control_plane.duckdb")
     run_metadata: dict[str, dict] = {}
     if control_plane_db.exists():
-        # Keep the connection mode aligned with RegistryStore, which opens the
-        # same DuckDB file in the API process. DuckDB rejects mixing read-only
-        # and read-write handles to one file under concurrent dashboard loads.
-        conn = duckdb.connect(str(control_plane_db))
+        conn = duckdb.connect(str(control_plane_db), read_only=True)
         try:
             rows = conn.execute(
                 """
