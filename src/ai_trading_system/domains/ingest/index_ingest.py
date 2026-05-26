@@ -9,6 +9,7 @@ from typing import List, Optional
 import pandas as pd
 import duckdb
 import requests
+from urllib.parse import quote
 from ai_trading_system.platform.logging.logger import logger
 
 # Direct NSE API endpoints work without NSEDownload
@@ -128,33 +129,44 @@ class IndexCollector:
         
         # Get index code for API
         index_code = None
-        api_index_name = index_name
         for display_name, code, _, _ in self.config.indices:
             if display_name == index_name:
                 index_code = code
-                # Convert to NSE API format (e.g., "NIFTY%20BANK")
-                api_index_name = index_name.replace(" ", "%20")
                 break
         
         if index_code is None:
             index_code = index_name.upper().replace(" ", "_")
         
         try:
-            url = f'https://www.nseindia.com/api/equity-stockIndices?index={api_index_name}'
+            url = f"https://www.nseindia.com/api/equity-stockIndices?index={quote(index_name)}"
             resp = session.get(url, timeout=15)
-            
-            if resp.status_code != 200:
-                logger.warning(f"NSE API returned {resp.status_code} for {index_name}")
+
+            info = None
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("data"):
+                    info = data["data"][0]
+
+            if info is None:
+                # Fallback endpoint carries all top-level index ticks and is
+                # more stable for broad indices such as NIFTY 50 / NIFTY BANK.
+                fallback_resp = session.get("https://www.nseindia.com/api/allIndices", timeout=15)
+                if fallback_resp.status_code == 200:
+                    all_data = fallback_resp.json().get("data", [])
+                    wanted = index_name.upper().replace(" ", "")
+                    for row in all_data:
+                        row_name = str(row.get("index") or row.get("indexSymbol") or "").upper().replace(" ", "")
+                        if row_name == wanted:
+                            info = row
+                            break
+
+            if info is None:
+                logger.warning(
+                    "NSE index API returned no OHLC payload for %s (primary_status=%s)",
+                    index_name,
+                    resp.status_code,
+                )
                 return pd.DataFrame()
-            
-            data = resp.json()
-            
-            if 'data' not in data or not data['data']:
-                logger.warning(f"No data in response for {index_name}")
-                return pd.DataFrame()
-            
-            # Extract OHLC from first data point (current day)
-            info = data['data'][0]
             
             trade_date = end_date or start_date or date.today().isoformat()
             
@@ -162,11 +174,11 @@ class IndexCollector:
                 'index_code': index_code,
                 'date': trade_date,
                 'open': info.get('open'),
-                'high': info.get('dayHigh'),
-                'low': info.get('dayLow'),
-                'close': info.get('lastPrice'),
-                'volume': info.get('totalTradedVolume'),
-                'value': info.get('totalTradedValue'),
+                'high': info.get('dayHigh', info.get('high')),
+                'low': info.get('dayLow', info.get('low')),
+                'close': info.get('lastPrice', info.get('last')),
+                'volume': info.get('totalTradedVolume', info.get('volume')),
+                'value': info.get('totalTradedValue', info.get('turnover')),
             }])
             
             # Convert numeric columns
@@ -187,14 +199,16 @@ class IndexCollector:
         unique_dates = list(dict.fromkeys(str(date_str) for date_str in dates))
         
         for index_name, _, _, _ in self.config.indices:
-            for date_str in unique_dates:
-                try:
-                    df = self.fetch_index_ohlc(index_name, date_str, date_str)
-                    if not df.empty:
-                        all_data.append(df)
-                except Exception as e:
-                    logger.debug(f"Error fetching {index_name} for {date_str}: {e}")
-                    continue
+            if not unique_dates:
+                continue
+            date_str = unique_dates[-1]
+            try:
+                df = self.fetch_index_ohlc(index_name, date_str, date_str)
+                if not df.empty:
+                    all_data.append(df)
+            except Exception as e:
+                logger.debug(f"Error fetching {index_name} for {date_str}: {e}")
+                continue
         
         if not all_data:
             return pd.DataFrame()

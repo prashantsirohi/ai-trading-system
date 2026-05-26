@@ -181,6 +181,7 @@ def run_backfill(
     if not frames:
         return {"dates_processed": 0, "rows_upserted": 0}
 
+    frames = [frame.dropna(axis=1, how="all") for frame in frames if not frame.empty]
     combined = pd.concat(frames, ignore_index=True)
     logger.info("perf_tracker backfill: %d dates, %d raw rows", len(frames), len(combined))
 

@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 
 from ai_trading_system.pipeline import daily_pipeline
+from ai_trading_system.domains.ingest.providers.yfinance import normalize_nse_symbol_for_yfinance
 
 
 def test_parse_portfolio_sheet_positions_skips_generated_summary_rows():
@@ -16,6 +17,7 @@ def test_parse_portfolio_sheet_positions_skips_generated_summary_rows():
         ["Positions", "1", ""],
         ["bad symbol", "10", "20"],
         ["TCS", "30", "3,500"],
+        ["STLTECH-T.NS", "5", "120"],
     ]
 
     positions = daily_pipeline._parse_portfolio_sheet_positions(values)
@@ -23,7 +25,13 @@ def test_parse_portfolio_sheet_positions_skips_generated_summary_rows():
     assert positions == [
         {"Symbol": "RELIANCE", "Qty": 50.0, "Avg Price": 2500.0},
         {"Symbol": "TCS", "Qty": 30.0, "Avg Price": 3500.0},
+        {"Symbol": "STLTECH", "Qty": 5.0, "Avg Price": 120.0},
     ]
+
+
+def test_yfinance_symbol_normalization_strips_nse_and_trade_suffix():
+    assert normalize_nse_symbol_for_yfinance("STLTECH-T.NS") == "STLTECH"
+    assert normalize_nse_symbol_for_yfinance("reliance.ns") == "RELIANCE"
 
 
 def test_daily_pipeline_default_stages_include_perf_tracker():

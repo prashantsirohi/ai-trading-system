@@ -168,13 +168,24 @@ _PORTFOLIO_SUMMARY_LABELS = {
 _PORTFOLIO_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9&.-]{0,29}$")
 
 
+def _normalize_portfolio_symbol(value: object) -> str:
+    symbol = str(value or "").strip().upper()
+    if symbol.endswith(".NS"):
+        symbol = symbol[:-3]
+    # Yahoo sometimes exposes NSE trade-to-trade symbols with a synthetic
+    # "-T" suffix; the canonical NSE/master-data symbol does not include it.
+    if symbol.endswith("-T"):
+        symbol = symbol[:-2]
+    return symbol
+
+
 def _parse_portfolio_sheet_positions(values: list[list[str]]) -> list[dict[str, float | str]]:
     """Extract holding rows from a portfolio sheet, skipping generated summary rows."""
     data: list[dict[str, float | str]] = []
     for row in values[1:]:
         if not row or len(row) < 3:
             continue
-        symbol = str(row[0]).strip().upper()
+        symbol = _normalize_portfolio_symbol(row[0])
         if symbol.lower() in _PORTFOLIO_SUMMARY_LABELS:
             continue
         if not _PORTFOLIO_SYMBOL_RE.fullmatch(symbol):

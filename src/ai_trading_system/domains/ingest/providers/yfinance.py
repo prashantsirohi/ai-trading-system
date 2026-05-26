@@ -12,6 +12,15 @@ import yfinance as yf
 from ai_trading_system.platform.logging.logger import logger
 
 
+def normalize_nse_symbol_for_yfinance(symbol: object) -> str:
+    out = str(symbol or "").strip().upper()
+    if out.endswith(".NS"):
+        out = out[:-3]
+    if out.endswith("-T"):
+        out = out[:-2]
+    return out
+
+
 def _download_yfinance(*args, **kwargs) -> pd.DataFrame:
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -46,7 +55,8 @@ class YFinanceCollector:
     def fetch_batch(self, symbols: List[str], period: str = "1y") -> pd.DataFrame:
         """Fetch OHLCV for batch of symbols."""
         # Convert to yfinance format
-        nse_symbols = [f"{s}.NS" for s in symbols]
+        symbols = [normalize_nse_symbol_for_yfinance(s) for s in symbols]
+        nse_symbols = [f"{s}.NS" for s in symbols if s]
 
         try:
             data = _download_yfinance(
@@ -126,6 +136,8 @@ class YFinanceCollector:
 
     def get_latest_prices(self, symbols: List[str]) -> Dict[str, float]:
         """Get latest closing prices for given symbols."""
+        symbols = [normalize_nse_symbol_for_yfinance(s) for s in symbols]
+        symbols = [s for s in symbols if s]
         nse_symbols = [f"{s}.NS" for s in symbols]
 
         try:
