@@ -15,6 +15,7 @@ import duckdb
 
 from ai_trading_system.platform.db.paths import canonicalize_project_root
 from ai_trading_system.platform.db.paths import get_domain_paths
+from ai_trading_system.platform.db.paths import resolve_artifact_path
 from ai_trading_system.platform.db.timestamps import utc_naive_now_string
 from ai_trading_system.pipeline.contracts import StageArtifact
 
@@ -764,9 +765,10 @@ class RegistryStore:
         artifacts: Dict[str, Dict[str, StageArtifact]] = {}
         for row in rows:
             stage_name, artifact_type, uri, row_count, content_hash, metadata_json, attempt_number = row
+            resolved_uri = str(resolve_artifact_path(uri, project_root=self.project_root))
             artifacts.setdefault(stage_name, {})[artifact_type] = StageArtifact(
                 artifact_type=artifact_type,
-                uri=uri,
+                uri=resolved_uri,
                 row_count=row_count,
                 content_hash=content_hash,
                 metadata=self._loads(metadata_json),
@@ -836,7 +838,7 @@ class RegistryStore:
         return [
             StageArtifact(
                 artifact_type=artifact_type,
-                uri=row[0],
+                uri=str(resolve_artifact_path(row[0], project_root=self.project_root)),
                 row_count=row[1],
                 content_hash=row[2],
                 metadata=self._loads(row[3]),

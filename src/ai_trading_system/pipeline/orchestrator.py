@@ -29,7 +29,13 @@ from ai_trading_system.pipeline.contracts import (
 )
 from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.platform.logging import logger as logging_module
-from ai_trading_system.platform.db.paths import canonicalize_project_root, ensure_domain_layout, get_domain_paths
+from ai_trading_system.platform.db.paths import (
+    canonicalize_project_root,
+    ensure_domain_layout,
+    find_latest_pipeline_artifact,
+    get_domain_paths,
+    resolve_artifact_path,
+)
 from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
@@ -898,6 +904,16 @@ def _safe_stage_runs(orchestrator: object, run_id: str) -> list[dict[str, object
 
 
 def _resolve_latest_publishable_run_id(project_root: Path, *, limit: int = 50) -> str | None:
+    disk_candidate = find_latest_pipeline_artifact(
+        project_root=project_root,
+        data_domain="operational",
+        stage_name="rank",
+        filename="ranked_signals.csv",
+        limit=max(int(limit), 200),
+    )
+    if disk_candidate is not None:
+        return disk_candidate[0]
+
     control_plane_db = get_domain_paths(project_root).root_dir / "control_plane.duckdb"
     if not control_plane_db.exists():
         return None
@@ -922,7 +938,7 @@ def _resolve_latest_publishable_run_id(project_root: Path, *, limit: int = 50) -
         conn.close()
 
     for row in rows:
-        artifact_path = Path(str(row[1]))
+        artifact_path = resolve_artifact_path(str(row[1]), project_root=project_root)
         if artifact_path.exists():
             return str(row[0])
     return None

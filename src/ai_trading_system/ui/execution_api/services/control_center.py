@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 import duckdb
 
 from ai_trading_system.analytics.registry import RegistryStore
-from ai_trading_system.platform.db.paths import get_domain_paths
+from ai_trading_system.platform.db.paths import find_latest_pipeline_artifact, get_domain_paths, resolve_artifact_path
 from ai_trading_system.platform.db.timestamps import utc_naive_now_string
 from ai_trading_system.platform.logging.logger import logger
 
@@ -536,7 +536,7 @@ def launch_shadow_monitor_task(
 def get_recent_runs(project_root: str | Path, limit: int = 12) -> List[Dict[str, Any]]:
     """Return recent pipeline runs for the execution console."""
     db_path = get_domain_paths(project_root=project_root, data_domain="operational").root_dir / "control_plane.duckdb"
-    conn = duckdb.connect(str(db_path))
+    conn = duckdb.connect(str(db_path), read_only=True)
     try:
         rows = conn.execute(
             """
@@ -566,8 +566,30 @@ def get_recent_runs(project_root: str | Path, limit: int = 12) -> List[Dict[str,
 
 def find_latest_publishable_run(project_root: str | Path, limit: int = 50) -> Dict[str, Any] | None:
     """Return the most recent run that still has a usable rank artifact for publish retry."""
+    disk_candidate = find_latest_pipeline_artifact(
+        project_root=project_root,
+        data_domain="operational",
+        stage_name="rank",
+        filename="ranked_signals.csv",
+        limit=max(int(limit), 200),
+    )
+    if disk_candidate is not None:
+        run_id, artifact_path = disk_candidate
+        match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", run_id)
+        return {
+            "run_id": run_id,
+            "run_date": match.group(1) if match else None,
+            "status": "completed",
+            "current_stage": "rank",
+            "started_at": None,
+            "ended_at": None,
+            "error_class": None,
+            "error_message": None,
+            "ranked_signals_uri": str(artifact_path),
+        }
+
     db_path = get_domain_paths(project_root=project_root, data_domain="operational").root_dir / "control_plane.duckdb"
-    conn = duckdb.connect(str(db_path))
+    conn = duckdb.connect(str(db_path), read_only=True)
     try:
         rows = conn.execute(
             """
@@ -586,7 +608,7 @@ def find_latest_publishable_run(project_root: str | Path, limit: int = 50) -> Di
         conn.close()
 
     for row in rows:
-        artifact_path = Path(str(row[8]))
+        artifact_path = resolve_artifact_path(str(row[8]), project_root=project_root)
         if not artifact_path.exists():
             continue
         return {

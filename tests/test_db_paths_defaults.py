@@ -8,7 +8,9 @@ from ai_trading_system.pipeline.registry import RegistryStore
 from ai_trading_system.platform.db.paths import (
     canonicalize_project_root,
     get_domain_paths,
+    find_latest_pipeline_artifact,
     require_data_root_available,
+    resolve_artifact_path,
 )
 
 
@@ -94,6 +96,34 @@ def test_env_var_overrides_relocate_all_roots(tmp_path: Path, monkeypatch: pytes
     assert paths.model_dir == models_root.resolve()
 
     assert paths.master_db_path == data_root.resolve() / "masterdata.db"
+
+
+def test_resolve_artifact_path_remaps_legacy_pipeline_run_uri(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data_root = tmp_path / "external" / "data"
+    run_id = "pipeline-2026-05-26-demo"
+    migrated = data_root / "pipeline_runs" / run_id / "rank" / "attempt_1" / "ranked_signals.csv"
+    migrated.parent.mkdir(parents=True)
+    migrated.write_text("symbol_id\nAAA\n", encoding="utf-8")
+    monkeypatch.setenv("DATA_ROOT", str(data_root))
+
+    legacy_uri = tmp_path / "repo" / "data" / "pipeline_runs" / run_id / "rank" / "attempt_1" / "ranked_signals.csv"
+
+    assert resolve_artifact_path(legacy_uri, project_root=Path(__file__).resolve().parents[1]) == migrated.resolve()
+
+
+def test_find_latest_pipeline_artifact_scans_migrated_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data_root = tmp_path / "external" / "data"
+    older = data_root / "pipeline_runs" / "pipeline-2026-05-25-old" / "rank" / "attempt_1" / "ranked_signals.csv"
+    newer = data_root / "pipeline_runs" / "pipeline-2026-05-26-new" / "rank" / "attempt_1" / "ranked_signals.csv"
+    older.parent.mkdir(parents=True)
+    newer.parent.mkdir(parents=True)
+    older.write_text("symbol_id\nOLD\n", encoding="utf-8")
+    newer.write_text("symbol_id\nNEW\n", encoding="utf-8")
+    monkeypatch.setenv("DATA_ROOT", str(data_root))
+
+    result = find_latest_pipeline_artifact(project_root=Path(__file__).resolve().parents[1])
+
+    assert result == ("pipeline-2026-05-26-new", newer.resolve())
 
 
 def test_research_domain_nests_under_relocated_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
