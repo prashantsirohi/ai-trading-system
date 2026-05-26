@@ -85,9 +85,9 @@ def _default_project_root() -> Path:
     return here.parents[4]
 
 
-def _resolve_root(env_var: str, default: Path) -> Path:
+def _resolve_root(env_var: str, default: Path, *, honor_env: bool = True) -> Path:
     """Return the env-var override (expanded/resolved) or the default."""
-    raw = os.getenv(env_var)
+    raw = os.getenv(env_var) if honor_env else None
     if raw:
         return Path(raw).expanduser().resolve()
     return default
@@ -126,10 +126,11 @@ def get_domain_paths(
     root = canonicalize_project_root(project_root)
     domain = resolve_data_domain(data_domain)
 
-    data_root = _resolve_root("DATA_ROOT", root / "data")
-    reports_root = _resolve_root("REPORTS_ROOT", root / "reports")
-    logs_root = _resolve_root("LOGS_ROOT", root / "logs")
-    models_root = _resolve_root("MODELS_ROOT", root / "models")
+    honor_env_roots = _looks_like_repo_root(root)
+    data_root = _resolve_root("DATA_ROOT", root / "data", honor_env=honor_env_roots)
+    reports_root = _resolve_root("REPORTS_ROOT", root / "reports", honor_env=honor_env_roots)
+    logs_root = _resolve_root("LOGS_ROOT", root / "logs", honor_env=honor_env_roots)
+    models_root = _resolve_root("MODELS_ROOT", root / "models", honor_env=honor_env_roots)
     master_db_path = root / "data" / "masterdata.db"
 
     if domain == "operational":

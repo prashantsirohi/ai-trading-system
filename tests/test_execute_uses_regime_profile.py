@@ -87,6 +87,77 @@ def test_execute_uses_regime_profile(monkeypatch, tmp_path: Path) -> None:
     assert result.metadata["effective_execution_capital"] == 850000
 
 
+def test_execute_ignores_full_ranked_universe_artifact(monkeypatch, tmp_path: Path) -> None:
+    ranked_path = tmp_path / "ranked_signals.csv"
+    pd.DataFrame(
+        [{"symbol_id": "SHORT", "exchange": "NSE", "close": 100.0, "composite_score": 90.0}]
+    ).to_csv(ranked_path, index=False)
+    ranked_universe_path = tmp_path / "ranked_universe.csv"
+    pd.DataFrame(
+        [
+            {"symbol_id": "SHORT", "exchange": "NSE", "close": 100.0, "composite_score": 90.0},
+            {"symbol_id": "FULL1", "exchange": "NSE", "close": 90.0, "composite_score": 70.0},
+            {"symbol_id": "FULL2", "exchange": "NSE", "close": 80.0, "composite_score": 60.0},
+        ]
+    ).to_csv(ranked_universe_path, index=False)
+
+    dashboard_path = tmp_path / "dashboard_payload.json"
+    dashboard_path.write_text(
+        json.dumps(
+            {
+                "summary": {"data_trust_status": "trusted"},
+                "market_regime": {"regime": "neutral", "raw_regime": "neutral"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    captured = {}
+
+    def fake_run(self, **kwargs):
+        captured.update(kwargs)
+        return {
+            "actions": [],
+            "executions": [],
+            "positions_before": [],
+            "positions_after": [],
+            "status": "completed",
+        }
+
+    monkeypatch.setattr("ai_trading_system.domains.execution.autotrader.AutoTrader.run", fake_run)
+    monkeypatch.setattr(
+        "ai_trading_system.analytics.regime_detector.RegimeDetector.get_market_regime",
+        lambda self: {"market_regime": "TREND"},
+    )
+
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="pipeline-2026-05-20-execute",
+        run_date="2026-05-20",
+        stage_name="execute",
+        attempt_number=1,
+        params={
+            "data_domain": "operational",
+            "execution_capital": 1000000,
+            "execution_preview": True,
+            "execution_enabled": False,
+        },
+        artifacts={
+            "rank": {
+                "ranked_signals": StageArtifact("ranked_signals", str(ranked_path)),
+                "ranked_universe": StageArtifact("ranked_universe", str(ranked_universe_path)),
+                "dashboard_payload": StageArtifact("dashboard_payload", str(dashboard_path)),
+            }
+        },
+    )
+
+    result = ExecuteStage().run(context)
+
+    assert captured["ranked_df"]["symbol_id"].tolist() == ["SHORT"]
+    assert result.metadata["ranked_rows_before_linkage"] == 1
+
+
 def test_execute_honors_risk_off_cash_only(monkeypatch, tmp_path: Path) -> None:
     ranked_path = tmp_path / "ranked_signals.csv"
     pd.DataFrame(

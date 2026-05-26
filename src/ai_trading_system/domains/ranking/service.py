@@ -39,6 +39,7 @@ from ai_trading_system.analytics.regime.profiles import load_risk_matrix
 
 TASK_FILE_MAP = {
     "rank_core": ("ranked_signals", "csv"),
+    "rank_universe": ("ranked_universe", "csv"),
     "breakout_scan": ("breakout_scan", "csv"),
     "pattern_scan": ("pattern_scan", "csv"),
     "stock_scan": ("stock_scan", "csv"),
@@ -546,6 +547,11 @@ class RankOrchestrationService:
                         else None
                     ),
                     s2_pct=float(stage_info.get("s2_pct") or 0.0),
+                    pct_above_200dma=(
+                        regime_snapshot.pct_above_200dma
+                        if regime_snapshot is not None
+                        else None
+                    ),
                     transition_s2_threshold=float(
                         effective_params.get("regime_phase_transition_s2_threshold", 0.30)
                     ),
@@ -645,6 +651,41 @@ class RankOrchestrationService:
 
         ranked = attach_rank_confidence_from_features(ranked)
 
+        ranked_universe, _ = self.execute_rank_task(
+            context=context,
+            task_name="rank_universe",
+            label="Build ranked_universe",
+            fingerprint_payload={
+                "task": "rank_universe",
+                "run_date": context.run_date,
+                "data_domain": effective_params.get("data_domain", "operational"),
+                "rank_mode": str(effective_params.get("rank_mode", "default")),
+                "apply_penalty_adjustment": bool(
+                    effective_params.get("rank_apply_penalty_adjustment", False)
+                ),
+                "weekly_stage_gate": bool(effective_params.get("weekly_stage_gate", False)),
+                "symbol_limit": effective_params.get("symbol_limit"),
+                "market_stage": stage_info["market_stage"],
+                "market_regime": regime_snapshot.to_dict() if regime_snapshot is not None else None,
+            },
+            task_status=task_status,
+            previous_attempt=previous_attempt,
+            previous_statuses=previous_statuses,
+            builder=lambda: ranker.rank_all(
+                date=context.run_date,
+                min_score=0.0,
+                top_n=None,
+                rank_mode=str(effective_params.get("rank_mode", "default")),
+                apply_penalty_adjustment=bool(
+                    effective_params.get("rank_apply_penalty_adjustment", False)
+                ),
+                weekly_stage_gate=bool(effective_params.get("weekly_stage_gate", False)),
+                regime=regime_snapshot.regime if regime_snapshot is not None else None,
+            ),
+            optional=False,
+        )
+        ranked_universe = attach_rank_confidence_from_features(ranked_universe)
+
         daily_turnover = compute_factor_turnover(ranked, previous_df)
         weekly_turnover = compute_factor_turnover(ranked, previous_week_df)
         correlation_result = compute_factor_correlations(ranked)
@@ -669,6 +710,7 @@ class RankOrchestrationService:
 
         outputs: Dict[str, pd.DataFrame] = {
             "ranked_signals": ranked,
+            "ranked_universe": ranked_universe,
             "volume_shockers": volume_shockers,
         }
 
@@ -932,12 +974,13 @@ class RankOrchestrationService:
                 "task": "stock_scan",
                 "run_date": context.run_date,
                 "data_domain": context.params.get("data_domain", "operational"),
+                "ranked_universe_fingerprint": self.dataframe_fingerprint(ranked_universe),
             },
             task_status=task_status,
             previous_attempt=previous_attempt,
             previous_statuses=previous_statuses,
             builder=lambda: build_integrated_stock_scan_view(
-                ranked_df=ranked,
+                ranked_df=ranked_universe if not ranked_universe.empty else ranked,
                 pattern_df=pattern_df,
                 breakout_df=breakout_df,
                 legacy_stock_scan_df=stock_scan.scan_stocks(
@@ -1164,6 +1207,7 @@ class RankOrchestrationService:
                 "task": "dashboard_payload",
                 "run_date": context.run_date,
                 "ranked_fingerprint": self.dataframe_fingerprint(ranked),
+                "ranked_universe_fingerprint": self.dataframe_fingerprint(ranked_universe),
                 "breakout_fingerprint": self.dataframe_fingerprint(breakout_df),
                 "pattern_fingerprint": self.dataframe_fingerprint(pattern_df),
                 "stock_scan_fingerprint": self.dataframe_fingerprint(stock_scan_df),
@@ -1224,6 +1268,8 @@ class RankOrchestrationService:
                 dashboard_payload.setdefault("summary", {})["regime_profile"] = regime_profile.name
                 dashboard_payload.setdefault("summary", {})["effective_min_score"] = regime_profile.min_score
                 dashboard_payload.setdefault("summary", {})["effective_rank_top_n"] = regime_profile.rank_top_n
+            dashboard_payload.setdefault("summary", {})["ranked_shortlist_count"] = int(len(ranked))
+            dashboard_payload.setdefault("summary", {})["ranked_universe_count"] = int(len(ranked_universe))
             dashboard_payload["watchlist"] = (
                 watchlist_final_df.head(15).to_dict(orient="records")
                 if isinstance(watchlist_final_df, pd.DataFrame) and not watchlist_final_df.empty
@@ -1277,7 +1323,9 @@ class RankOrchestrationService:
             "task_status_counts": summarize_task_statuses(task_status),
             "resumed_from_attempt": previous_attempt,
             "trust_status_at_start": trust_summary.get("status"),
-            "symbol_universe_count": len(ranked),
+            "symbol_universe_count": len(ranked_universe),
+            "ranked_shortlist_count": len(ranked),
+            "ranked_universe_count": len(ranked_universe),
             "canary_blocked": bool(context.params.get("canary")) and context.params.get("canary_blocked", False),
             "factor_turnover_pct": daily_turnover.get("turnover_pct", 0.0),
             "factor_turnover_symbols_changed": daily_turnover.get("symbols_changed", 0),

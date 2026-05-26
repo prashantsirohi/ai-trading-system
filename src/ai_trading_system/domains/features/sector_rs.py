@@ -212,6 +212,99 @@ def _build_close_matrix(ohlcv: pd.DataFrame) -> pd.DataFrame:
     return close_df
 
 
+def _build_sector_labels(close_df: pd.DataFrame, sector_map: dict[str, str]) -> pd.Series:
+    """Return sector labels aligned to the close matrix columns."""
+    return pd.Series(
+        {symbol: sector_map.get(symbol, "Other") for symbol in close_df.columns},
+        index=close_df.columns,
+        dtype="object",
+    )
+
+
+def _compute_sector_ew_return_vs_universe_rank(
+    returns: pd.DataFrame,
+    ew_index: pd.Series,
+    lookbacks: list[int],
+    sector_labels: pd.Series,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Rank sector equal-weight return strength versus the universe index."""
+    sector_ew_returns = returns.T.groupby(sector_labels).mean().T
+    sector_ew_index = (1 + sector_ew_returns).cumprod() * 100
+
+    rank_frames = []
+    for lb in lookbacks:
+        sector_index_ret = sector_ew_index / sector_ew_index.shift(lb)
+        universe_ret = ew_index / ew_index.shift(lb)
+        sector_vs_universe_rs = sector_index_ret.div(universe_ret, axis=0)
+        rank_frames.append(sector_vs_universe_rs.rank(axis=1, pct=True))
+
+    if not rank_frames:
+        return pd.DataFrame(index=returns.index), sector_ew_index
+
+    sector_ew_return_vs_universe_rank = (
+        pd.concat(rank_frames, keys=lookbacks).groupby(level=1).mean()
+    )
+    return sector_ew_return_vs_universe_rank, sector_ew_index
+
+
+def _compute_sector_breadth_above_ma(
+    close_df: pd.DataFrame,
+    sector_labels: pd.Series,
+) -> pd.DataFrame:
+    """Compute sector breadth from shares trading above 50DMA and 200DMA."""
+    sma50 = close_df.rolling(50, min_periods=30).mean()
+    sma200 = close_df.rolling(200, min_periods=120).mean()
+
+    above50 = close_df > sma50
+    above200 = close_df > sma200
+
+    sector_pct_above50 = above50.T.groupby(sector_labels).mean().T
+    sector_pct_above200 = above200.T.groupby(sector_labels).mean().T
+
+    return 0.60 * sector_pct_above50 + 0.40 * sector_pct_above200
+
+
+def _align_sector_component(
+    component: pd.DataFrame,
+    reference: pd.DataFrame,
+    fill_value: float = 0.5,
+) -> pd.DataFrame:
+    """Align a sector component to a reference sector frame and fill gaps neutrally."""
+    if reference.empty:
+        return pd.DataFrame(
+            index=reference.index,
+            columns=reference.columns,
+            dtype=float,
+        )
+
+    aligned = component.copy()
+    aligned.index = pd.to_datetime(aligned.index).normalize()
+    aligned = aligned[~aligned.index.duplicated(keep="last")]
+    aligned = aligned.reindex(index=reference.index, columns=reference.columns)
+    return aligned.fillna(fill_value)
+
+
+def _log_latest_top_sectors(label: str, frame: pd.DataFrame, top_n: int = 5) -> None:
+    """Log the latest top sectors for a component when data is available."""
+    if frame.empty:
+        logger.info("%s latest top sectors: <empty>", label)
+        return
+
+    latest = frame.dropna(how="all")
+    if latest.empty:
+        logger.info("%s latest top sectors: <all NaN>", label)
+        return
+
+    top = latest.iloc[-1].dropna().sort_values(ascending=False).head(top_n)
+    if top.empty:
+        logger.info("%s latest top sectors: <none>", label)
+        return
+
+    logger.info("%s latest top sectors:", label)
+    for sector, value in top.items():
+        logger.info("  %s: %.3f", sector, value)
+
+
 def compute_all_symbols_rs(
     db_path: str = _DEFAULT_OHLCV,
     feature_store_dir: str = _DEFAULT_FEATURE_STORE,
@@ -254,13 +347,13 @@ def compute_all_symbols_rs(
 
     logger.info("Step 3: Fetching OHLCV data from DuckDB...")
     conn_duck = duckdb.connect(db_path, read_only=True)
-    query = f"""
+    query = """
         SELECT symbol_id, timestamp, close
         FROM _catalog
-        WHERE symbol_id IN ({",".join([repr(s) for s in all_symbols])})
+        WHERE symbol_id = ANY(?)
         ORDER BY symbol_id, timestamp
     """
-    ohlcv = conn_duck.execute(query).df()
+    ohlcv = conn_duck.execute(query, [all_symbols]).df()
     conn_duck.close()
     logger.info("Fetched %s rows for %s symbols", len(ohlcv), len(all_symbols))
     if ohlcv.empty:
@@ -273,6 +366,7 @@ def compute_all_symbols_rs(
     if close_df.empty:
         logger.warning("Pivoted close matrix is empty; writing empty sector RS artifacts.")
         return _write_empty_outputs(feature_store_dir=feature_store_dir)
+    sector_labels = _build_sector_labels(close_df=close_df, sector_map=sector_map)
 
     logger.info("Step 5: Computing daily returns...")
     returns = close_df.pct_change(fill_method=None)
@@ -311,14 +405,66 @@ def compute_all_symbols_rs(
     logger.info("Combined RS: %s", rs_combined.shape)
 
     logger.info("Step 10: Aggregating RS per sector...")
-    rs_sector = rs_combined.T.groupby(sector_map).mean().T
-    logger.info("Sector RS shape: %s", rs_sector.shape)
-    if rs_sector.empty:
+    sector_member_rs_breadth = rs_combined.T.groupby(sector_labels).mean().T
+    sector_member_rs_breadth.index = pd.to_datetime(
+        sector_member_rs_breadth.index
+    ).normalize()
+    sector_member_rs_breadth = sector_member_rs_breadth[
+        ~sector_member_rs_breadth.index.duplicated(keep="last")
+    ]
+    logger.info("Sector member breadth shape: %s", sector_member_rs_breadth.shape)
+    if sector_member_rs_breadth.empty:
         logger.warning("Sector RS computation produced no rows; writing empty artifacts.")
         return _write_empty_outputs(feature_store_dir=feature_store_dir)
+    _log_latest_top_sectors("Sector member breadth", sector_member_rs_breadth)
 
-    logger.info("Step 11: Ranking sectors...")
-    sector_rank = rs_sector.rank(axis=1, pct=True)
+    logger.info("Step 11: Computing Sector RS v2 components...")
+    sector_ew_return_vs_universe_rank, sector_ew_index = (
+        _compute_sector_ew_return_vs_universe_rank(
+            returns=returns,
+            ew_index=ew_index,
+            lookbacks=lookbacks,
+            sector_labels=sector_labels,
+        )
+    )
+    logger.info(
+        "Sector EW return-vs-universe shape: %s",
+        sector_ew_return_vs_universe_rank.shape,
+    )
+    _log_latest_top_sectors(
+        "Sector EW return-vs-universe", sector_ew_return_vs_universe_rank
+    )
+
+    sector_breadth_above_ma = _compute_sector_breadth_above_ma(
+        close_df=close_df,
+        sector_labels=sector_labels,
+    )
+    logger.info("Sector breadth-above-MA shape: %s", sector_breadth_above_ma.shape)
+    _log_latest_top_sectors("Sector breadth-above-MA", sector_breadth_above_ma)
+
+    member_component = _align_sector_component(
+        sector_member_rs_breadth,
+        sector_member_rs_breadth,
+    )
+    ew_component = _align_sector_component(
+        sector_ew_return_vs_universe_rank,
+        sector_member_rs_breadth,
+    )
+    breadth_component = _align_sector_component(
+        sector_breadth_above_ma,
+        sector_member_rs_breadth,
+    )
+    sector_rs_final = (
+        0.50 * member_component
+        + 0.30 * ew_component
+        + 0.20 * breadth_component
+    )
+    sector_rs_final = sector_rs_final.dropna(how="all")
+    logger.info("Final composite sector RS shape: %s", sector_rs_final.shape)
+    _log_latest_top_sectors("Final composite sector RS", sector_rs_final)
+
+    logger.info("Step 12: Ranking sectors...")
+    sector_rank = sector_rs_final.rank(axis=1, pct=True)
     logger.info("Strong sectors (>70th percentile):")
     latest_sector_rank = sector_rank.iloc[-1]
     strong_sectors = latest_sector_rank[latest_sector_rank > 0.7].sort_values(
@@ -331,24 +477,27 @@ def compute_all_symbols_rs(
     for sector, rank in weak_sectors.items():
         logger.info("  %s: %.2f%%", sector, rank * 100)
 
-    logger.info("Step 12: Computing stock RS vs sector...")
+    logger.info("Step 13: Computing stock RS vs sector...")
     rs_vs_sector = pd.DataFrame(
         index=rs_combined.index, columns=rs_combined.columns, dtype=float
     )
-    for sector in rs_sector.columns:
-        sector_stocks = [s for s in rs_combined.columns if sector_map.get(s) == sector]
+    for sector in sector_member_rs_breadth.columns:
+        sector_stocks = [
+            s for s in rs_combined.columns if sector_labels.get(s, "Other") == sector
+        ]
         if sector_stocks:
             rs_vs_sector[sector_stocks] = (
-                rs_combined[sector_stocks].values - rs_sector[sector].values[:, None]
+                rs_combined[sector_stocks].values
+                - sector_member_rs_breadth[sector].values[:, None]
             )
     logger.info("RS vs Sector shape: %s", rs_vs_sector.shape)
 
-    logger.info("Step 13: Applying triple confirmation filters...")
+    logger.info("Step 14: Applying triple confirmation filters...")
     logger.info("Filter 1: Strong sector (>70th percentile)")
     strong_sector_names = latest_sector_rank[latest_sector_rank > 0.7].index.tolist()
     sector_filter = pd.Series(
         [
-            sector_map.get(c, "Other") in strong_sector_names
+            sector_labels.get(c, "Other") in strong_sector_names
             for c in rs_combined.columns
         ],
         index=rs_combined.columns,
@@ -368,7 +517,7 @@ def compute_all_symbols_rs(
     final_count = final_signal_mask.sum()
     logger.info("Stocks meeting all criteria: %s", final_count)
 
-    logger.info("Step 14: Getting top stocks...")
+    logger.info("Step 15: Getting top stocks...")
     logger.info("Top stocks meeting all criteria:")
 
     final_stocks = []
@@ -381,15 +530,19 @@ def compute_all_symbols_rs(
             final_stocks.append(
                 {
                     "Symbol": sym,
-                    "Sector": sector_map[sym],
+                    "Sector": sector_labels[sym],
                     "RS_Score": latest_scores[sym],
                     "Vs_Sector": latest_vs_sector[sym],
-                    "Sector_Rank": latest_sector_ranks[sector_map[sym]],
+                    "Sector_Rank": latest_sector_ranks[sector_labels[sym]],
                 }
             )
 
     if final_stocks:
-        result_df = pd.DataFrame(final_stocks).sort_values("RS_Score", ascending=False).copy(deep=True)
+        result_df = (
+            pd.DataFrame(final_stocks)
+            .sort_values("RS_Score", ascending=False)
+            .copy(deep=True)
+        )
         result_df.loc[:, "RS_Score"] = result_df["RS_Score"].round(3)
         result_df.loc[:, "Vs_Sector"] = result_df["Vs_Sector"].round(3)
         result_df.loc[:, "Sector_Rank"] = result_df["Sector_Rank"].round(1)
@@ -398,15 +551,37 @@ def compute_all_symbols_rs(
         logger.info("No stocks meet all criteria.")
         result_df = pd.DataFrame(final_stocks)
 
-    logger.info("Step 15: Saving features...")
+    logger.info("Step 16: Saving features...")
     output_dir = Path(feature_store_dir) / "all_symbols"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    rs_sector.index = pd.to_datetime(rs_sector.index).normalize()
-    rs_sector = rs_sector[~rs_sector.index.duplicated(keep="last")]
-    rs_sector = rs_sector.dropna(how="all")
-    rs_sector.to_parquet(output_dir / "sector_rs.parquet", index=True)
-    logger.info("Saved sector RS: %s", rs_sector.shape)
+    sector_rs_final.to_parquet(output_dir / "sector_rs.parquet", index=True)
+    logger.info("Saved Sector RS v2 composite: %s", sector_rs_final.shape)
+
+    sector_member_rs_breadth = sector_member_rs_breadth.dropna(how="all")
+    sector_member_rs_breadth.to_parquet(
+        output_dir / "sector_member_rs_breadth.parquet",
+        index=True,
+    )
+    logger.info("Saved sector member RS breadth: %s", sector_member_rs_breadth.shape)
+
+    ew_component.to_parquet(
+        output_dir / "sector_ew_return_vs_universe.parquet",
+        index=True,
+    )
+    logger.info("Saved sector EW return-vs-universe: %s", ew_component.shape)
+
+    breadth_component.to_parquet(
+        output_dir / "sector_breadth_above_ma.parquet",
+        index=True,
+    )
+    logger.info("Saved sector breadth-above-MA: %s", breadth_component.shape)
+
+    sector_ew_index.index = pd.to_datetime(sector_ew_index.index).normalize()
+    sector_ew_index = sector_ew_index[~sector_ew_index.index.duplicated(keep="last")]
+    sector_ew_index = sector_ew_index.reindex(columns=sector_member_rs_breadth.columns)
+    sector_ew_index.to_parquet(output_dir / "sector_ew_index.parquet", index=True)
+    logger.info("Saved sector EW index: %s", sector_ew_index.shape)
 
     rs_vs_sector.index = pd.to_datetime(rs_vs_sector.index).normalize()
     rs_vs_sector = rs_vs_sector[~rs_vs_sector.index.duplicated(keep="last")]
@@ -426,6 +601,7 @@ def compute_all_symbols_rs(
 
     return result_df
 
+
 def _write_empty_outputs(feature_store_dir: str = _DEFAULT_FEATURE_STORE):
     """Persist empty but schema-valid outputs so downstream consumers can degrade safely."""
     output_dir = Path(feature_store_dir) / "all_symbols"
@@ -433,6 +609,16 @@ def _write_empty_outputs(feature_store_dir: str = _DEFAULT_FEATURE_STORE):
 
     pd.DataFrame().to_parquet(output_dir / "sector_rs.parquet", index=True)
     pd.DataFrame().to_parquet(output_dir / "stock_vs_sector.parquet", index=True)
+    pd.DataFrame().to_parquet(
+        output_dir / "sector_member_rs_breadth.parquet", index=True
+    )
+    pd.DataFrame().to_parquet(
+        output_dir / "sector_ew_return_vs_universe.parquet", index=True
+    )
+    pd.DataFrame().to_parquet(
+        output_dir / "sector_breadth_above_ma.parquet", index=True
+    )
+    pd.DataFrame().to_parquet(output_dir / "sector_ew_index.parquet", index=True)
     pd.DataFrame(columns=["timestamp", "ew_index"]).to_parquet(
         output_dir / "ew_index.parquet", index=False
     )

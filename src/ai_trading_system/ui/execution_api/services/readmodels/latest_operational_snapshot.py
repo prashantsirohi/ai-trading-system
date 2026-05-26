@@ -109,6 +109,7 @@ def _load_payload(payload_path: Path | None) -> dict:
 def _load_frames(rank_dir: Path | None) -> dict[str, pd.DataFrame]:
     frame_names = {
         "ranked_signals": "ranked_signals.csv",
+        "ranked_universe": "ranked_universe.csv",
         "breakout_scan": "breakout_scan.csv",
         "pattern_scan": "pattern_scan.csv",
         "stock_scan": "stock_scan.csv",

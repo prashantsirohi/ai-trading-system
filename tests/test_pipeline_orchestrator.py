@@ -20,6 +20,11 @@ from ai_trading_system.pipeline.stages import FeaturesStage, IngestStage, Publis
 from ai_trading_system.domains.ranking.service import build_integrated_stock_scan_view
 from ai_trading_system.pipeline.contracts import DataQualityCriticalError, PublishStageError, StageArtifact, StageContext
 from ai_trading_system.platform.db.paths import ensure_domain_layout, get_domain_paths, research_static_end_date
+from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_snapshot import (
+    ExecutionContext,
+    LatestOperationalSnapshot,
+)
+from ai_trading_system.ui.execution_api.services.readmodels.rank_snapshot import get_ranking_snapshot_read_model
 
 
 def test_orchestrator_cli_default_stages_include_perf_tracker() -> None:
@@ -428,6 +433,146 @@ def test_build_integrated_stock_scan_view_preserves_discoveries_and_best_context
     assert "SUPPRESS" not in set(merged["symbol_id"])
     assert "EXPIRED" not in set(merged["symbol_id"])
     assert "FILTERED" not in set(merged["symbol_id"])
+
+
+def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path
+    paths = ensure_domain_layout(project_root=project_root, data_domain="operational")
+    registry = RegistryStore(project_root)
+    universe_rows = [
+        {
+            "symbol_id": f"SYM{i:02d}",
+            "exchange": "NSE",
+            "rank": i,
+            "composite_score": float(101 - i),
+            "rel_strength_score": float(90 - (i % 20)),
+            "sector_name": "Tech" if i % 2 else "Finance",
+            "sector_rs_value": 0.80,
+            "stage2_score": float(80 - (i % 10)),
+            "stage2_label": "strong_stage2" if i <= 5 else "stage2",
+        }
+        for i in range(1, 31)
+    ]
+    universe = pd.DataFrame(universe_rows)
+
+    import ai_trading_system.analytics.data_trust as data_trust_module
+    import ai_trading_system.analytics.ranker as ranker_module
+    from ai_trading_system.domains.ranking import breakout as breakout_module
+    from ai_trading_system.domains.ranking import sector_dashboard as sector_dashboard_module
+    from ai_trading_system.domains.ranking import stock_scan as stock_scan_module
+
+    class _FakeRanker:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def rank_all(self, **kwargs):
+            output = universe.copy()
+            min_score = float(kwargs.get("min_score", 0.0) or 0.0)
+            top_n = kwargs.get("top_n")
+            if min_score:
+                output = output.loc[output["composite_score"] >= min_score].copy()
+            if top_n:
+                output = output.head(int(top_n)).copy()
+            return output.reset_index(drop=True)
+
+    monkeypatch.setattr(data_trust_module, "load_data_trust_summary", lambda *args, **kwargs: {"status": "healthy"})
+    monkeypatch.setattr(ranker_module, "StockRanker", _FakeRanker)
+    monkeypatch.setattr(breakout_module, "scan_breakouts", lambda **kwargs: pd.DataFrame())
+    monkeypatch.setattr(stock_scan_module, "load_sector_rs", lambda: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8]}))
+    monkeypatch.setattr(stock_scan_module, "load_stock_vs_sector", lambda: pd.DataFrame({"Symbol": ["SYM01"], "category": ["BUY"]}))
+    monkeypatch.setattr(stock_scan_module, "load_sector_mapping", lambda: pd.DataFrame({"Symbol": ["SYM01"], "Sector": ["Tech"]}))
+    monkeypatch.setattr(stock_scan_module, "scan_stocks", lambda *args, **kwargs: pd.DataFrame({"Symbol": ["SYM01"], "category": ["BUY"]}))
+    monkeypatch.setattr(sector_dashboard_module, "load_sector_rs", lambda: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8]}))
+    monkeypatch.setattr(sector_dashboard_module, "compute_sector_momentum", lambda *args, **kwargs: pd.DataFrame({"Sector": ["Tech"], "Momentum": [0.2]}))
+    monkeypatch.setattr(sector_dashboard_module, "build_dashboard", lambda *args, **kwargs: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8], "Momentum": [0.2]}))
+
+    context = StageContext(
+        project_root=project_root,
+        db_path=paths.ohlcv_db_path,
+        run_id="run-full-universe-rank",
+        run_date="2026-05-20",
+        stage_name="rank",
+        attempt_number=1,
+        registry=registry,
+        params={
+            "data_domain": "operational",
+            "market_stage_override": "NEUTRAL",
+            "min_score": 0,
+            "top_n": 20,
+            "pattern_scan_enabled": False,
+            "watchlist_enabled": False,
+        },
+    )
+
+    result = RankStage().run(context)
+
+    ranked_shortlist = pd.read_csv(context.output_dir() / "ranked_signals.csv")
+    ranked_universe = pd.read_csv(context.output_dir() / "ranked_universe.csv")
+    stock_scan = pd.read_csv(context.output_dir() / "stock_scan.csv")
+    dashboard_payload = json.loads((context.output_dir() / "dashboard_payload.json").read_text(encoding="utf-8"))
+
+    assert len(ranked_shortlist) == 20
+    assert len(ranked_universe) == 30
+    assert len(stock_scan) == 30
+    assert "stage2_label" in stock_scan.columns
+    assert dashboard_payload["summary"]["ranked_shortlist_count"] == 20
+    assert dashboard_payload["summary"]["ranked_universe_count"] == 30
+    assert dashboard_payload["summary"]["stock_scan_count"] == 30
+    assert dashboard_payload["summary"]["stage2_total_count"] == 30
+    assert result.metadata["ranked_rows"] == 20
+    assert result.metadata["ranked_universe_rows"] == 30
+
+
+def test_ranking_readmodel_keeps_top_ranked_shortlist_but_stage_summary_uses_stock_scan(tmp_path: Path) -> None:
+    ranked = pd.DataFrame(
+        [
+            {"symbol_id": "TOP1", "composite_score": 99.0, "stage2_label": "stage2"},
+            {"symbol_id": "TOP2", "composite_score": 98.0, "stage2_label": "stage2"},
+        ]
+    )
+    ranked_universe = pd.DataFrame(
+        [
+            {"symbol_id": "TOP1", "composite_score": 99.0, "stage2_label": "stage2"},
+            {"symbol_id": "TOP2", "composite_score": 98.0, "stage2_label": "stage2"},
+            {"symbol_id": "FULL1", "composite_score": 70.0, "stage2_label": "stage2"},
+        ]
+    )
+    stock_scan = pd.DataFrame(
+        [
+            {"symbol_id": "TOP1", "composite_score": 99.0, "stage2_label": "stage2"},
+            {"symbol_id": "TOP2", "composite_score": 98.0, "stage2_label": "stage2"},
+            {"symbol_id": "FULL1", "composite_score": 70.0, "stage2_label": "strong_stage2"},
+            {"symbol_id": "FULL2", "composite_score": 60.0, "stage2_label": "stage2"},
+        ]
+    )
+    snapshot = LatestOperationalSnapshot(
+        context=ExecutionContext(
+            project_root=tmp_path,
+            ohlcv_db=tmp_path / "ohlcv.duckdb",
+            master_db=tmp_path / "master.duckdb",
+            pipeline_runs_dir=tmp_path / "pipeline_runs",
+        ),
+        payload_path=None,
+        rank_attempt_dir=None,
+        payload={"summary": {}},
+        frames={
+            "ranked_signals": ranked,
+            "ranked_universe": ranked_universe,
+            "stock_scan": stock_scan,
+            "pattern_scan": pd.DataFrame(),
+            "watchlist_candidates": pd.DataFrame(),
+        },
+    )
+
+    model = get_ranking_snapshot_read_model(tmp_path, limit=10, snapshot=snapshot)
+
+    assert [row["symbol_id"] for row in model["top_ranked"]] == ["TOP1", "TOP2"]
+    assert model["artifact_count"] == 2
+    assert model["ranked_universe_count"] == 3
+    assert model["stage2_summary"]["counts_by_label"] == {"stage2": 3, "strong_stage2": 1}
 
 
 def test_dq_critical_failure_blocks_downstream(tmp_path: Path) -> None:
@@ -2421,7 +2566,7 @@ def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyP
     )
     result = stage.run(context_attempt_2)
 
-    assert call_counts["rank_all"] == 1
+    assert call_counts["rank_all"] == 2
     assert call_counts["breakout_scan"] == 1
     assert call_counts["pattern_scan"] == 1
     assert call_counts["stock_scan"] == 1
@@ -2430,4 +2575,6 @@ def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyP
     task_status = result.metadata["task_status"]
     assert task_status["rank_core"]["status"] == "skipped"
     assert int(task_status["rank_core"]["resumed_from_attempt"]) == 1
+    assert task_status["rank_universe"]["status"] == "skipped"
+    assert int(task_status["rank_universe"]["resumed_from_attempt"]) == 1
     assert task_status["breakout_scan"]["status"] == "skipped"
