@@ -101,7 +101,11 @@ def _compute_cycle_features(frame: pd.DataFrame, *, min_history_days: int) -> pd
         group = group.copy()
         pe = pd.to_numeric(group["pe_ttm"], errors="coerce")
         for label, window in {"3y": 756, "5y": 1260, "10y": 2520}.items():
-            min_periods = min(min_history_days, window)
+            min_periods = _effective_min_periods(
+                observations=int(pe.notna().sum()),
+                requested_min=min_history_days,
+                window=window,
+            )
             group.loc[:, f"pe_pctile_{label}"] = pe.rolling(window, min_periods=min_periods).apply(_last_percentile, raw=False)
             mean = pe.rolling(window, min_periods=min_periods).mean()
             std = pe.rolling(window, min_periods=min_periods).std()
@@ -126,6 +130,15 @@ def _compute_cycle_features(frame: pd.DataFrame, *, min_history_days: int) -> pd
         "cycle_signal",
     ]
     return result[columns] if not result.empty else pd.DataFrame(columns=columns)
+
+
+def _effective_min_periods(*, observations: int, requested_min: int, window: int) -> int:
+    configured = min(requested_min, window)
+    if observations >= configured:
+        return configured
+    if observations >= 252:
+        return 252
+    return configured
 
 
 def _last_percentile(values: pd.Series) -> float:

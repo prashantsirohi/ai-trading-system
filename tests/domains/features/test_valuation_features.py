@@ -181,3 +181,29 @@ def test_valuation_cycle_features_labels_extreme_percentiles(tmp_path: Path) -> 
         conn.close()
     assert latest[11] in {"bubble", "expensive"}
     assert latest[12] in {"top_zone", "neutral"}
+
+
+def test_valuation_cycle_features_use_partial_history_when_full_window_unavailable(tmp_path: Path) -> None:
+    db = tmp_path / "ohlcv.duckdb"
+    conn = duckdb.connect(str(db))
+    try:
+        ensure_valuation_schema(conn)
+        rows = []
+        dates = pd.date_range("2025-01-01", periods=260, freq="B")
+        for idx, day in enumerate(dates, start=1):
+            pe = 10.0 + idx / 10.0
+            rows.append(("UNIV_TOP2_MCAP", "market_cap_weight", day.date(), 1000 + idx, 1 / pe, 2, 1000, 100, pe, 1 / pe))
+        conn.executemany("INSERT INTO universe_index_daily VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    finally:
+        conn.close()
+
+    result = refresh_valuation_cycle_features(ohlcv_db_path=db)
+
+    assert result.rows == 260
+    conn = duckdb.connect(str(db), read_only=True)
+    try:
+        latest = conn.execute("SELECT pe_pctile_3y, valuation_zone FROM valuation_cycle_features ORDER BY date DESC LIMIT 1").fetchone()
+    finally:
+        conn.close()
+    assert latest[0] is not None
+    assert latest[1] != "unknown"

@@ -74,10 +74,14 @@ def refresh_valuation_index(
 
         stock_frames = []
         membership_frames = []
+        ranked = base.copy()
+        ranked.loc[:, "market_cap_rank"] = (
+            ranked.groupby("date", sort=False)["market_cap_cr"]
+            .rank(method="first", ascending=False)
+            .astype(int)
+        )
         for universe_id in universe_ids:
             limit = _universe_limit(universe_id)
-            ranked = base.sort_values(["date", "market_cap_cr"], ascending=[True, False], kind="stable").copy()
-            ranked.loc[:, "market_cap_rank"] = ranked.groupby("date").cumcount() + 1
             members = ranked.loc[ranked["market_cap_rank"].le(limit)].copy()
             members.loc[:, "universe_id"] = universe_id
             stock_frames.append(members)
