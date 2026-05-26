@@ -12,7 +12,7 @@ import pandas as pd
 
 from ai_trading_system.domains.ingest.repository import fetch_catalog_close_frame, fetch_catalog_summary
 from ai_trading_system.domains.ingest.series_policy import is_supported
-from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.db.paths import ensure_domain_layout, get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.pipeline.contracts import DataQualityCriticalError, StageArtifact, StageContext, StageResult
 from ai_trading_system.domains.ingest.symbol_master import SymbolMaster
@@ -366,7 +366,7 @@ class IngestOrchestrationService:
         else:
             from ai_trading_system.domains.ingest.providers.nse import NSECollector
 
-            raw_dir = context.project_root / "data" / "raw" / "NSE_EQ"
+            raw_dir = get_domain_paths(project_root=context.project_root, data_domain="operational").raw_dir / "NSE_EQ"
             raw_dir.mkdir(parents=True, exist_ok=True)
             collector = NSECollector(data_dir=str(raw_dir))
             raw_df = collector.get_bhavcopy(validation_date)

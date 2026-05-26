@@ -19,6 +19,7 @@ class ExecutionContext:
     ohlcv_db: Path
     master_db: Path
     pipeline_runs_dir: Path
+    control_plane_db: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ def get_execution_context(project_root: str | Path | None = None) -> ExecutionCo
         project_root=root,
         ohlcv_db=paths.ohlcv_db_path,
         master_db=paths.master_db_path,
+        control_plane_db=paths.root_dir / "control_plane.duckdb",
         pipeline_runs_dir=paths.pipeline_runs_dir,
     )
 
@@ -53,7 +55,7 @@ def _load_latest_payload_path(ctx: ExecutionContext) -> Optional[Path]:
     if not candidates:
         return None
 
-    control_plane_db = ctx.project_root / "data" / "control_plane.duckdb"
+    control_plane_db = ctx.control_plane_db or (ctx.ohlcv_db.parent / "control_plane.duckdb")
     run_metadata: dict[str, dict] = {}
     if control_plane_db.exists():
         # Keep the connection mode aligned with RegistryStore, which opens the

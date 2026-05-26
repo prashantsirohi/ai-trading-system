@@ -469,7 +469,12 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = _parse_args(argv)
 
-    db_path = args.db or (args.project_root / "data" / "research" / "research_ohlcv.duckdb")
+    if args.db:
+        db_path = args.db
+    else:
+        from ai_trading_system.platform.db.paths import get_domain_paths
+
+        db_path = get_domain_paths(project_root=args.project_root, data_domain="research").ohlcv_db_path
     if not db_path.exists():
         print(f"DB not found: {db_path}", file=sys.stderr)
         return 1

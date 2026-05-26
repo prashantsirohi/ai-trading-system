@@ -88,7 +88,9 @@ def _apply_regime_rank_controls(
 ) -> tuple[dict[date, pd.DataFrame], dict[date, RegimeProfile]]:
     profile_by_date: dict[date, RegimeProfile] = {}
     output: dict[date, pd.DataFrame] = {}
-    db_path = project_root / "data" / "research" / "research_ohlcv.duckdb"
+    from ai_trading_system.platform.db.paths import get_domain_paths
+
+    db_path = get_domain_paths(project_root=project_root, data_domain="research").ohlcv_db_path
     for as_of, frame in ranked_by_date.items():
         snapshot = _cached_snapshot(
             str(db_path),

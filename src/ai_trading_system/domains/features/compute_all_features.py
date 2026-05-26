@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 
 from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
 
 project_root = ensure_project_root_on_path(__file__)
 
 from ai_trading_system.domains.features.feature_store import FeatureStore
+from ai_trading_system.platform.db.paths import get_domain_paths
 
 
 def main() -> None:
+    paths = get_domain_paths(project_root=project_root, data_domain="operational")
     fs = FeatureStore(
-        ohlcv_db_path=Path(project_root) / "data" / "ohlcv.duckdb",
-        feature_store_dir=Path(project_root) / "data" / "feature_store",
+        ohlcv_db_path=paths.ohlcv_db_path,
+        feature_store_dir=paths.feature_store_dir,
     )
 
     conn = fs._get_conn()

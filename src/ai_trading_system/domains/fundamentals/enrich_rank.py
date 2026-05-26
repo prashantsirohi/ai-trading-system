@@ -15,16 +15,23 @@ from ai_trading_system.domains.fundamentals.industry_schema import normalize_ind
 from ai_trading_system.platform.db.paths import get_domain_paths
 
 
-# Kept relative because callers (e.g. FundamentalsStage._resolve_*_path) treat
-# relative defaults as project-root-relative and absolute paths as overrides.
-# CLI argparse below converts these to absolute paths via the path resolver,
-# which honors DATA_ROOT.
-DEFAULT_SCORES_PATH = Path("data/fundamentals/fundamental_scores_latest.csv")
-DEFAULT_TRENDS_PATH = Path("data/fundamentals/fundamental_trends_latest.csv")
-DEFAULT_CATALYSTS_PATH = Path("data/fundamentals/catalyst_scores_latest.csv")
-DEFAULT_INDUSTRY_SCORES_PATH = Path("data/fundamentals/industry_fundamental_scores_latest.csv")
-DEFAULT_INDUSTRY_TRENDS_PATH = Path("data/fundamentals/industry_fundamental_trends_latest.csv")
-DEFAULT_OUTPUT_PATH = Path("data/fundamentals/watchlist_candidates_latest.csv")
+DEFAULT_SCORES_PATH = Path("fundamentals/fundamental_scores_latest.csv")
+DEFAULT_TRENDS_PATH = Path("fundamentals/fundamental_trends_latest.csv")
+DEFAULT_CATALYSTS_PATH = Path("fundamentals/catalyst_scores_latest.csv")
+DEFAULT_INDUSTRY_SCORES_PATH = Path("fundamentals/industry_fundamental_scores_latest.csv")
+DEFAULT_INDUSTRY_TRENDS_PATH = Path("fundamentals/industry_fundamental_trends_latest.csv")
+DEFAULT_OUTPUT_PATH = Path("fundamentals/watchlist_candidates_latest.csv")
+
+
+def _resolve_fundamentals_default(path: str | Path | None) -> Path | None:
+    if path is None:
+        return None
+    configured = Path(path)
+    if configured.is_absolute():
+        return configured
+    if configured.parts[:1] == ("fundamentals",) or configured.parts[:2] == ("data", "fundamentals"):
+        return get_domain_paths().fundamentals_dir / configured.name
+    return configured
 
 
 _NEUTRAL_INDUSTRY_SCORES = {
@@ -272,7 +279,12 @@ def enrich_rank_artifacts(
     return_metrics: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, EnrichmentMetrics]:
     rank_dir = Path(rank_dir)
-    output = Path(output)
+    output = _resolve_fundamentals_default(output) or Path(output)
+    fundamental_scores = _resolve_fundamentals_default(fundamental_scores) or Path(fundamental_scores)
+    fundamental_trends = _resolve_fundamentals_default(fundamental_trends)
+    industry_scores = _resolve_fundamentals_default(industry_scores)
+    industry_trends = _resolve_fundamentals_default(industry_trends)
+    catalysts = _resolve_fundamentals_default(catalysts)
     ranked = _symbol_frame(_read_ranked(rank_dir))
     rank_rows = len(ranked)
     breakout = _best_by_symbol(_read_csv_optional(rank_dir / "breakout_scan.csv"), ["breakout_score"])

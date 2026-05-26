@@ -67,7 +67,7 @@ from ai_trading_system.domains.ingest.providers.dhan import DhanCollector, dhan_
 from ai_trading_system.domains.ingest.providers.nse import NSECollector
 from ai_trading_system.domains.ingest.series_policy import is_supported, trading_segment
 from ai_trading_system.domains.features.feature_store import FeatureStore
-from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.db.paths import ensure_domain_layout, get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.ingest.benchmark_ingest import ingest_benchmarks
 from ai_trading_system.domains.ingest.index_ingest import IndexCollector, IndexIngestConfig
@@ -845,7 +845,7 @@ def _run_nse_yfinance_daily_update(
         required_symbol_dates[symbol_id] = {
             trade_date for trade_date in trade_dates if trade_date >= str(start_date)
         }
-    raw_dir = Path(project_root) / "data" / "raw" / "NSE_EQ"
+    raw_dir = get_domain_paths(project_root=project_root, data_domain="operational").raw_dir / "NSE_EQ"
     raw_dir.mkdir(parents=True, exist_ok=True)
     security_map = {str(row["symbol_id"]).strip().upper(): row for row in symbols}
     isin_map = {
@@ -1206,7 +1206,7 @@ def _run_dhan_primary_daily_update(
 
     security_map = {str(row["symbol_id"]): row for row in symbols}
     trade_dates = _business_dates(from_date, to_date, masterdb_path=collector.masterdb_path)
-    raw_dir = Path(project_root) / "data" / "raw" / "NSE_EQ"
+    raw_dir = get_domain_paths(project_root=project_root, data_domain="operational").raw_dir / "NSE_EQ"
     raw_dir.mkdir(parents=True, exist_ok=True)
     nse_rows, nse_dates, missing_dates = _fetch_nse_bhavcopy_rows(
         raw_dir=raw_dir,

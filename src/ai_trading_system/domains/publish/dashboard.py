@@ -14,7 +14,9 @@ from ai_trading_system.domains.publish.decision_bundle import (
     PublishDecisionBundle,
     build_publish_decision_bundle,
 )
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
+from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
 from ai_trading_system.domains.publish.channels.weekly_pdf import metrics as weekly_metrics
 
@@ -231,7 +233,8 @@ def _minimal_breakout_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_operational_breadth(project_root: Path) -> pd.DataFrame:
-    db_path = project_root / "data" / "ohlcv.duckdb"
+    load_project_env(project_root)
+    db_path = get_domain_paths(project_root=project_root, data_domain="operational").ohlcv_db_path
     if not db_path.exists():
         return pd.DataFrame(columns=["Date", "PctAbove200"])
     con = duckdb.connect(str(db_path), read_only=True)

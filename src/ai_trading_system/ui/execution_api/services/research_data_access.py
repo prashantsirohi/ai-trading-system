@@ -127,7 +127,7 @@ def _load_latest_payload_path(project_root: str) -> Path | None:
     if not candidates:
         return None
 
-    control_plane_db = Path(project_root) / "data" / "control_plane.duckdb"
+    control_plane_db = get_domain_paths(project_root, "operational").root_dir / "control_plane.duckdb"
     run_metadata: dict[str, dict] = {}
     if control_plane_db.exists():
         conn = duckdb.connect(str(control_plane_db))
@@ -568,7 +568,7 @@ def load_ops_health_snapshot(
         "execute": 24.0,
         "publish": 48.0,
     }
-    db_path = Path(project_root) / "data" / "control_plane.duckdb"
+    db_path = get_domain_paths(project_root, "operational").root_dir / "control_plane.duckdb"
     if not db_path.exists():
         return {"available": False, "error": "control_plane.duckdb missing"}
 

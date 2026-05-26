@@ -27,6 +27,7 @@ from ai_trading_system.research.perf_tracker.historical_backfill import (
     VALID_FREQUENCIES,
     run_historical_backfill,
 )
+from ai_trading_system.platform.db.paths import get_domain_paths
 
 
 def _parse_date(s: str) -> date:
@@ -34,7 +35,7 @@ def _parse_date(s: str) -> date:
 
 
 def _print_coverage_summary(project_root: Path) -> None:
-    db_path = project_root / "data" / "research.duckdb"
+    db_path = get_domain_paths(project_root=project_root, data_domain="operational").root_dir / "research.duckdb"
     if not db_path.exists():
         return
     con = duckdb.connect(str(db_path), read_only=True)

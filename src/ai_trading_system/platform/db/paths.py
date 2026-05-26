@@ -120,10 +120,17 @@ def get_domain_paths(
     to relocate large trees outside the repo. Falls back to repo-relative paths
     when the env vars are unset, preserving the legacy in-repo layout.
 
-    `master_db_path` is always anchored to the in-repo `data/masterdata.db`
-    because that file is git-tracked and must not move with the data root.
+    `master_db_path` follows `DATA_ROOT` when configured. This keeps the
+    operational master database colocated with migrated runtime data.
     """
     root = canonicalize_project_root(project_root)
+    if _looks_like_repo_root(root):
+        try:
+            from ai_trading_system.platform.utils.env import load_project_env
+
+            load_project_env(root)
+        except Exception:
+            pass
     domain = resolve_data_domain(data_domain)
 
     honor_env_roots = _looks_like_repo_root(root)
@@ -131,7 +138,7 @@ def get_domain_paths(
     reports_root = _resolve_root("REPORTS_ROOT", root / "reports", honor_env=honor_env_roots)
     logs_root = _resolve_root("LOGS_ROOT", root / "logs", honor_env=honor_env_roots)
     models_root = _resolve_root("MODELS_ROOT", root / "models", honor_env=honor_env_roots)
-    master_db_path = root / "data" / "masterdata.db"
+    master_db_path = data_root / "masterdata.db"
 
     if domain == "operational":
         return DataDomainPaths(

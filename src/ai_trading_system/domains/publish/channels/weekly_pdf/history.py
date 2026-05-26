@@ -134,13 +134,10 @@ def load_prior_artifacts(prior: PriorRun) -> Dict[str, pd.DataFrame]:
 
 def resolve_pipeline_runs_dir(project_root: Path, data_domain: str = "operational") -> Path:
     """Mirror the path-resolution used by StageContext.output_dir."""
-    try:
-        from ai_trading_system.platform.db.paths import ensure_domain_layout
+    from ai_trading_system.platform.db.paths import ensure_domain_layout
 
-        paths = ensure_domain_layout(project_root=project_root, data_domain=data_domain)
-        return paths.pipeline_runs_dir
-    except Exception:  # noqa: BLE001 — fall back to the default layout
-        return project_root / "data" / "pipeline_runs"
+    paths = ensure_domain_layout(project_root=project_root, data_domain=data_domain)
+    return paths.pipeline_runs_dir
 
 
 def parse_run_date(run_id: str) -> Optional[date]:

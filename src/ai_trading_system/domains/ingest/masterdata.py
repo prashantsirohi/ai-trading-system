@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Optional, Dict, List
 from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.ingest.series_policy import SUPPORTED_SERIES, is_supported
+from ai_trading_system.platform.db.paths import get_domain_paths
 
 
 class MasterDataCollector:
@@ -18,8 +19,8 @@ class MasterDataCollector:
     - Zerodha: https://zerodha.com/markets/sector/ (NIFTY sector indices)
     """
 
-    def __init__(self, db_path: str = "ai-trading-system/data/masterdata.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: str | None = None):
+        self.db_path = str(db_path or get_domain_paths().master_db_path)
         self.dhan_url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         self.zerodha_sector_url = "https://zerodha.com/markets/sector/"
         self._init_database()

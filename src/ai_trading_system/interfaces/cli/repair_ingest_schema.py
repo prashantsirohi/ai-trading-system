@@ -9,11 +9,11 @@ from pathlib import Path
 import duckdb
 
 from ai_trading_system.analytics.data_trust import ensure_data_trust_schema
-from ai_trading_system.platform.db.paths import canonicalize_project_root
+from ai_trading_system.platform.db.paths import canonicalize_project_root, get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
 
 PROJECT_ROOT = canonicalize_project_root(os.getenv("AI_TRADING_PROJECT_ROOT") or Path.cwd())
-DEFAULT_DB_PATH = str(PROJECT_ROOT / "data" / "ohlcv.duckdb")
+DEFAULT_DB_PATH = str(get_domain_paths(PROJECT_ROOT).ohlcv_db_path)
 
 
 def _table_exists(conn: duckdb.DuckDBPyConnection, table_name: str) -> bool:

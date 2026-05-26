@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import datetime, date
 from typing import List, Optional
@@ -10,6 +9,7 @@ import pandas as pd
 import duckdb
 import requests
 from urllib.parse import quote
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
 
 # Direct NSE API endpoints work without NSEDownload
@@ -76,8 +76,7 @@ class IndexCollector:
         from ai_trading_system.domains.ingest.trust import ensure_index_schema
         
         if config is None:
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-            ohlcv_db_path = os.path.join(project_root, "data", "ohlcv.duckdb")
+            ohlcv_db_path = str(get_domain_paths(data_domain="operational").ohlcv_db_path)
             config = IndexIngestConfig(ohlcv_db_path=ohlcv_db_path)
         
         self.config = config
@@ -361,8 +360,7 @@ class IndexCollector:
 def get_index_collector(ohlcv_db_path: str = None) -> IndexCollector:
     """Get IndexCollector instance with default config."""
     if ohlcv_db_path is None:
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-        ohlcv_db_path = os.path.join(project_root, "data", "ohlcv.duckdb")
+        ohlcv_db_path = str(get_domain_paths(data_domain="operational").ohlcv_db_path)
     
     config = IndexIngestConfig(ohlcv_db_path=ohlcv_db_path)
     return IndexCollector(config)

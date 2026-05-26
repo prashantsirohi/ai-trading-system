@@ -24,6 +24,7 @@ from typing import Any, Optional
 import duckdb
 import pandas as pd
 
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_snapshot import (
     ExecutionContext,
     LatestOperationalSnapshot,
@@ -328,8 +329,7 @@ def _load_latest_quote(ctx: ExecutionContext, symbol: str) -> Optional[dict[str,
 
 
 def _load_fundamentals(project_root: str | Path | None, symbol: str) -> Optional[dict[str, Any]]:
-    root = Path(project_root or ".")
-    path = root / "data" / "fundamentals" / "fundamental_scores_latest.csv"
+    path = get_domain_paths(project_root=project_root, data_domain="operational").fundamentals_dir / "fundamental_scores_latest.csv"
     if not path.exists() or path.stat().st_size == 0:
         return None
     try:

@@ -10,6 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 from ai_trading_system.domains.ingest.providers.nse import NSECollector
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
 
 
@@ -31,7 +32,7 @@ def archive_bhavcopy_range(
     force: bool = False,
     delay_seconds: float = 0.25,
 ) -> dict:
-    raw_dir = project_root / "data" / "raw" / "NSE_EQ"
+    raw_dir = get_domain_paths(project_root=project_root, data_domain="operational").raw_dir / "NSE_EQ"
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     collector = NSECollector(data_dir=str(raw_dir))

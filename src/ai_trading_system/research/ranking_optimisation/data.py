@@ -21,7 +21,9 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-DEFAULT_DB_PATH = Path("data/research/research_ohlcv.duckdb")
+from ai_trading_system.platform.db.paths import get_domain_paths
+
+DEFAULT_DB_PATH = get_domain_paths(data_domain="research").ohlcv_db_path
 
 # Factor names searched by the optimiser. Each must appear as a column on the
 # panel's DataFrame and be such that "higher → better" (no inverse signals).

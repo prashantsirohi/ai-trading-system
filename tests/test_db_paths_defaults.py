@@ -12,13 +12,20 @@ from ai_trading_system.platform.db.paths import (
 )
 
 
-def test_get_domain_paths_default_project_root_resolves_repo_root() -> None:
+def _disable_root_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in ("DATA_ROOT", "REPORTS_ROOT", "LOGS_ROOT", "MODELS_ROOT", "DATA_DOMAIN"):
+        monkeypatch.setenv(key, "")
+
+
+def test_get_domain_paths_default_project_root_resolves_repo_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_root_env(monkeypatch)
     repo_root = Path(__file__).resolve().parents[1]
     paths = get_domain_paths()
     assert paths.root_dir == repo_root / "data"
 
 
-def test_canonicalize_project_root_prefers_single_repo_child(tmp_path: Path) -> None:
+def test_canonicalize_project_root_prefers_single_repo_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_root_env(monkeypatch)
     workspace_root = tmp_path / "workspace"
     repo_root = workspace_root / "ai-trading-system"
     (repo_root / "src" / "ai_trading_system").mkdir(parents=True, exist_ok=True)
@@ -32,7 +39,8 @@ def test_canonicalize_project_root_prefers_single_repo_child(tmp_path: Path) -> 
     assert paths.reports_dir == repo_root / "reports"
 
 
-def test_canonicalize_project_root_climbs_from_package_dir(tmp_path: Path) -> None:
+def test_canonicalize_project_root_climbs_from_package_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_root_env(monkeypatch)
     repo_root = tmp_path / "ai-trading-system"
     package_dir = repo_root / "src" / "ai_trading_system" / "analytics"
     package_dir.mkdir(parents=True, exist_ok=True)
@@ -45,7 +53,8 @@ def test_canonicalize_project_root_climbs_from_package_dir(tmp_path: Path) -> No
     assert not str(paths.root_dir).endswith("src/ai_trading_system/data")
 
 
-def test_registry_store_uses_canonical_repo_child(tmp_path: Path) -> None:
+def test_registry_store_uses_canonical_repo_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_root_env(monkeypatch)
     workspace_root = tmp_path / "workspace"
     repo_root = workspace_root / "ai-trading-system"
     (repo_root / "src" / "ai_trading_system").mkdir(parents=True, exist_ok=True)
@@ -84,9 +93,7 @@ def test_env_var_overrides_relocate_all_roots(tmp_path: Path, monkeypatch: pytes
     assert paths.logs_dir == logs_root.resolve()
     assert paths.model_dir == models_root.resolve()
 
-    # master_db_path is special-cased: always in-repo, never under DATA_ROOT
-    repo_root = Path(__file__).resolve().parents[1]
-    assert paths.master_db_path == repo_root / "data" / "masterdata.db"
+    assert paths.master_db_path == data_root.resolve() / "masterdata.db"
 
 
 def test_research_domain_nests_under_relocated_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

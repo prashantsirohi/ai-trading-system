@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_snapshot import (
     LatestOperationalSnapshot,
     load_latest_operational_snapshot,
@@ -201,7 +202,7 @@ def _normalize_symbol_series(series: pd.Series) -> pd.Series:
 
 
 def _load_latest_fundamental_scores(project_root: str | Path) -> pd.DataFrame:
-    path = Path(project_root) / "data" / "fundamentals" / "fundamental_scores_latest.csv"
+    path = get_domain_paths(project_root=project_root, data_domain="operational").fundamentals_dir / "fundamental_scores_latest.csv"
     if not path.exists() or path.stat().st_size == 0:
         return pd.DataFrame()
     try:
@@ -211,7 +212,7 @@ def _load_latest_fundamental_scores(project_root: str | Path) -> pd.DataFrame:
 
 
 def _load_latest_fundamental_trends(project_root: str | Path) -> pd.DataFrame:
-    path = Path(project_root) / "data" / "fundamentals" / "fundamental_trends_latest.csv"
+    path = get_domain_paths(project_root=project_root, data_domain="operational").fundamentals_dir / "fundamental_trends_latest.csv"
     if not path.exists() or path.stat().st_size == 0:
         return pd.DataFrame()
     try:

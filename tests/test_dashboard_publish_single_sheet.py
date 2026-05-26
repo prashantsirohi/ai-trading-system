@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 
-from ai_trading_system.domains.publish.dashboard import publish_dashboard_payload
+from ai_trading_system.domains.publish.dashboard import _load_operational_breadth, publish_dashboard_payload
 
 
 class _FakeWorksheet:
@@ -83,6 +84,45 @@ class _FakeManager:
         _ = include_index, include_header
         self.writes.append((sheet_name, start_cell, df.copy(), clear_sheet))
         return True
+
+
+def _write_breadth_fixture_db(path: Path, *, start: str, end: str, high_close: float) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect(str(path))
+    try:
+        con.execute(
+            """
+            CREATE TABLE _catalog (
+                symbol_id VARCHAR,
+                exchange VARCHAR,
+                timestamp TIMESTAMP,
+                close DOUBLE
+            )
+            """
+        )
+        rows = []
+        for date_value in pd.bdate_range(start, end):
+            aaa_close = high_close if date_value.date() == pd.Timestamp(end).date() else 100.0
+            rows.append(("AAA", "NSE", date_value.to_pydatetime(), aaa_close))
+            rows.append(("BBB", "NSE", date_value.to_pydatetime(), 100.0))
+        con.executemany("INSERT INTO _catalog VALUES (?, ?, ?, ?)", rows)
+    finally:
+        con.close()
+
+
+def test_load_operational_breadth_honors_data_root(monkeypatch, tmp_path: Path) -> None:
+    external_root = tmp_path / "external-data"
+    repo_root = tmp_path / "repo"
+    (repo_root / "src" / "ai_trading_system").mkdir(parents=True)
+    (repo_root / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    _write_breadth_fixture_db(repo_root / "data" / "ohlcv.duckdb", start="2025-01-01", end="2025-10-10", high_close=200.0)
+    _write_breadth_fixture_db(external_root / "ohlcv.duckdb", start="2025-01-01", end="2025-10-10", high_close=50.0)
+    monkeypatch.setenv("DATA_ROOT", str(external_root))
+
+    breadth = _load_operational_breadth(repo_root)
+
+    assert not breadth.empty
+    assert float(breadth.iloc[-1]["PctAbove200"]) == 0.0
 
 
 def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_breakouts(monkeypatch, tmp_path: Path) -> None:

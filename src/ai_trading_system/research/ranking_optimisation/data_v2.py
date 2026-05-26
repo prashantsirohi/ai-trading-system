@@ -23,6 +23,7 @@ from ai_trading_system.research.backtesting.research_loader import (
     DEFAULT_BENCHMARK_SYMBOL,
     load_research_ranked_by_date,
 )
+from ai_trading_system.platform.db.paths import get_domain_paths
 
 
 # Score columns produced by the live ranker. Order matters: it's the order
@@ -174,7 +175,7 @@ def _load_panel_from_table(
     """
     if horizon_days not in _TABLE_AVAILABLE_HORIZONS:
         return None
-    research_db = project_root / "data" / "research.duckdb"
+    research_db = get_domain_paths(project_root=project_root, data_domain="operational").root_dir / "research.duckdb"
     if not research_db.exists():
         return None
     fwd_col = f"fwd_{horizon_days}d_return"
@@ -295,7 +296,7 @@ def load_live_factor_panel(
     anchor_ts = pd.Timestamp(anchor_date)
 
     # Forward close lookup from _catalog directly (fast — single query).
-    research_db = project_root / "data" / "research" / "research_ohlcv.duckdb"
+    research_db = get_domain_paths(project_root=project_root, data_domain="research").ohlcv_db_path
     symbols = frame["symbol_id"].astype(str).tolist()
     con = duckdb.connect(str(research_db), read_only=True)
     try:

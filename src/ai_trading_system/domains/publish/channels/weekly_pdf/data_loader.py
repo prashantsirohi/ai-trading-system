@@ -18,6 +18,7 @@ import pandas as pd
 
 from ai_trading_system.domains.publish.channels.weekly_pdf import history
 from ai_trading_system.domains.publish.channels.weekly_pdf.breadth import compute_market_breadth
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 
 logger = logging.getLogger(__name__)
@@ -167,7 +168,7 @@ def _attach_phase2_inputs(context: StageContext, data: WeeklyReportData) -> None
             logger.warning("weekly_pdf: lookback breakout discovery failed: %s", exc)
             data.prior_breakouts_per_run = []
 
-        ohlcv_path = project_root / "data" / "ohlcv.duckdb"
+        ohlcv_path = get_domain_paths(project_root=project_root, data_domain="operational").ohlcv_db_path
         try:
             data.market_breadth = compute_market_breadth(
                 ohlcv_path, end_date=current_date, weeks=26

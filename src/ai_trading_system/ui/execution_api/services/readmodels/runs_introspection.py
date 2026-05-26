@@ -30,7 +30,7 @@ _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _control_plane_path(ctx: ExecutionContext) -> Path:
-    return ctx.project_root / "data" / "control_plane.duckdb"
+    return ctx.control_plane_db or (ctx.ohlcv_db.parent / "control_plane.duckdb")
 
 
 # ---------------------------------------------------------------------------

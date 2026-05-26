@@ -10,6 +10,8 @@ from typing import Any
 import duckdb
 import yaml
 
+from ai_trading_system.platform.db.paths import get_domain_paths
+
 
 @dataclass(frozen=True)
 class MarketRegimeSnapshot:
@@ -356,7 +358,7 @@ def compute_market_regime_snapshot(
         confirmation_days=confirmation_days,
     )
     if not snapshots and project_root is not None:
-        research_db = Path(project_root) / "data" / "research" / "research_ohlcv.duckdb"
+        research_db = get_domain_paths(project_root=project_root, data_domain="research").ohlcv_db_path
         if research_db.exists() and Path(db_path).resolve() != research_db.resolve():
             snapshots = _load_recent_raw_snapshots(
                 research_db,

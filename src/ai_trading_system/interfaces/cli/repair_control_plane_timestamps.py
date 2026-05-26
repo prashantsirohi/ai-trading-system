@@ -11,10 +11,10 @@ from ai_trading_system.platform.db.control_plane_timestamp_repair import (
     apply_control_plane_timestamp_repair,
     dry_run_control_plane_timestamp_repair,
 )
-from ai_trading_system.platform.db.paths import canonicalize_project_root
+from ai_trading_system.platform.db.paths import canonicalize_project_root, get_domain_paths
 
 PROJECT_ROOT = canonicalize_project_root(os.getenv("AI_TRADING_PROJECT_ROOT") or Path.cwd())
-DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "control_plane.duckdb"
+DEFAULT_DB_PATH = get_domain_paths(PROJECT_ROOT).root_dir / "control_plane.duckdb"
 
 
 def run(*, db_path: str | Path, apply: bool) -> int:

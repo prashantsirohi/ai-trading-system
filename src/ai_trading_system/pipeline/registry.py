@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import duckdb
 
 from ai_trading_system.platform.db.paths import canonicalize_project_root
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.db.timestamps import utc_naive_now_string
 from ai_trading_system.pipeline.contracts import StageArtifact
 
@@ -314,7 +315,7 @@ class RegistryStore:
         # Keep governance/control-plane metadata in a dedicated database so
         # live OHLCV writers and long-running readers do not block alerting,
         # model governance, or pipeline run tracking.
-        self.db_path = Path(db_path) if db_path else self.project_root / "data" / "control_plane.duckdb"
+        self.db_path = Path(db_path) if db_path else get_domain_paths(self.project_root).root_dir / "control_plane.duckdb"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._write_lock = threading.RLock()
         self._ensure_initialized()

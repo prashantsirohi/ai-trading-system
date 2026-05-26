@@ -20,6 +20,7 @@ from ai_trading_system.domains.fundamentals.enrich_rank import (
 from ai_trading_system.domains.fundamentals.enrich_sector_dashboard import enrich_sector_dashboard
 from ai_trading_system.domains.fundamentals.screener_readmodels import refresh_fundamental_readmodels
 from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 
 
@@ -250,18 +251,24 @@ class FundamentalsStage:
         configured = Path(str(context.params.get("fundamental_scores_path") or DEFAULT_SCORES_PATH))
         if configured.is_absolute():
             return configured
+        if configured.parts[:1] == ("fundamentals",) or configured.parts[:2] == ("data", "fundamentals"):
+            return get_domain_paths(project_root=context.project_root, data_domain="operational").fundamentals_dir / configured.name
         return context.project_root / configured
 
     def _resolve_trends_path(self, context: StageContext) -> Path:
         configured = Path(str(context.params.get("fundamental_trends_path") or DEFAULT_TRENDS_PATH))
         if configured.is_absolute():
             return configured
+        if configured.parts[:1] == ("fundamentals",) or configured.parts[:2] == ("data", "fundamentals"):
+            return get_domain_paths(project_root=context.project_root, data_domain="operational").fundamentals_dir / configured.name
         return context.project_root / configured
 
     def _resolve_catalysts_path(self, context: StageContext) -> Path:
         configured = Path(str(context.params.get("catalyst_scores_path") or DEFAULT_CATALYSTS_PATH))
         if configured.is_absolute():
             return configured
+        if configured.parts[:1] == ("fundamentals",) or configured.parts[:2] == ("data", "fundamentals"):
+            return get_domain_paths(project_root=context.project_root, data_domain="operational").fundamentals_dir / configured.name
         return context.project_root / configured
 
     def _resolve_industry_scores_path(self, context: StageContext) -> Path:
@@ -270,6 +277,8 @@ class FundamentalsStage:
         )
         if configured.is_absolute():
             return configured
+        if configured.parts[:1] == ("fundamentals",) or configured.parts[:2] == ("data", "fundamentals"):
+            return get_domain_paths(project_root=context.project_root, data_domain="operational").fundamentals_dir / configured.name
         return context.project_root / configured
 
     def _resolve_industry_trends_path(self, context: StageContext) -> Path:
@@ -278,6 +287,8 @@ class FundamentalsStage:
         )
         if configured.is_absolute():
             return configured
+        if configured.parts[:1] == ("fundamentals",) or configured.parts[:2] == ("data", "fundamentals"):
+            return get_domain_paths(project_root=context.project_root, data_domain="operational").fundamentals_dir / configured.name
         return context.project_root / configured
 
     def _resolve_screener_db_path(self, context: StageContext) -> Path:

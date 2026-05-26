@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from ai_trading_system.domains.ranking.patterns.cache import PatternCacheStore
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
 
 
@@ -77,7 +78,7 @@ def merge_cached_pattern_symbols(
         return [], metadata
 
     try:
-        store = PatternCacheStore(Path(project_root) / "data" / "control_plane.duckdb")
+        store = PatternCacheStore(get_domain_paths(project_root=project_root).root_dir / "control_plane.duckdb")
     except Exception as exc:
         logger.warning("Pattern seed cache unavailable: %s", exc)
         return [], metadata

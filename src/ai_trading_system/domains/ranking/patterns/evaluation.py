@@ -33,7 +33,7 @@ from ai_trading_system.domains.ranking.patterns.cache import (
     ACTIVE_LIFECYCLE_STATES,
     PatternCacheStore,
 )
-from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.db.paths import ensure_domain_layout, get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
 
 
@@ -616,7 +616,7 @@ def _resolve_scan_symbols(
     if frame.empty or str(data_domain).lower() != "operational":
         return normalized_symbols, pd.DataFrame(), metadata
     try:
-        store = PatternCacheStore(project_root / "data" / "control_plane.duckdb")
+        store = PatternCacheStore(get_domain_paths(project_root=project_root).root_dir / "control_plane.duckdb")
     except duckdb.IOException:
         metadata["fallback_to_full"] = True
         metadata["effective_scan_mode"] = "full"
@@ -917,7 +917,7 @@ def _write_pattern_cache(
     if str(data_domain).lower() != "operational":
         return
     try:
-        store = PatternCacheStore(project_root / "data" / "control_plane.duckdb")
+        store = PatternCacheStore(get_domain_paths(project_root=project_root).root_dir / "control_plane.duckdb")
     except duckdb.IOException:
         return
     normalized_mode = _normalize_scan_mode(scan_mode)

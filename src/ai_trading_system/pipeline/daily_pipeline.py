@@ -31,6 +31,7 @@ from ai_trading_system.platform.utils.data_config import (
     truncate_old_data,
     data_retention_years,
 )
+from ai_trading_system.platform.db.paths import get_domain_paths
 import sqlite3
 
 load_project_env(project_root)
@@ -50,7 +51,7 @@ def is_trading_holiday(date: datetime = None) -> bool:
 
     date_str = date.strftime("%Y-%m-%d")
 
-    conn = sqlite3.connect(os.path.join(project_root, "data", "masterdata.db"))
+    conn = sqlite3.connect(str(get_domain_paths(project_root=project_root).master_db_path))
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM nse_holidays WHERE date = ?", (date_str,))
     count = cursor.fetchone()[0]

@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from ai_trading_system.platform.db.paths import get_domain_paths
+
 LOG = logging.getLogger(__name__)
 
 
@@ -86,7 +88,7 @@ def get_market_breadth_history(
     the most recent N rows for clients that need a lighter payload.
     """
     root = Path(project_root)
-    db_path = root / "data" / "ohlcv.duckdb"
+    db_path = get_domain_paths(project_root=root, data_domain="operational").ohlcv_db_path
     if not db_path.exists():
         return {"available": False, "rows": [], "unit": "percent", "source": str(db_path)}
 

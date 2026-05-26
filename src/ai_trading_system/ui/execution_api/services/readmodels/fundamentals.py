@@ -11,6 +11,8 @@ import duckdb
 import pandas as pd
 from pandas.errors import EmptyDataError
 
+from ai_trading_system.platform.db.paths import get_domain_paths
+
 
 def get_latest_fundamentals(project_root: Path, *, limit: int = 25) -> dict[str, Any]:
     summary_path = _latest_summary_from_registry(project_root) or _latest_summary_from_disk(project_root)
@@ -53,7 +55,8 @@ def get_latest_fundamentals(project_root: Path, *, limit: int = 25) -> dict[str,
 
 
 def _latest_summary_from_registry(project_root: Path) -> Path | None:
-    db_path = project_root / "data" / "control_plane.duckdb"
+    paths = get_domain_paths(project_root=project_root, data_domain="operational")
+    db_path = paths.root_dir / "control_plane.duckdb"
     if not db_path.exists():
         return None
     conn = duckdb.connect(str(db_path))
@@ -80,7 +83,8 @@ def _latest_summary_from_registry(project_root: Path) -> Path | None:
 
 
 def _latest_summary_from_disk(project_root: Path) -> Path | None:
-    candidates = list((project_root / "data" / "pipeline_runs").glob("*/fundamentals/attempt_*/fundamental_summary.json"))
+    paths = get_domain_paths(project_root=project_root, data_domain="operational")
+    candidates = list(paths.pipeline_runs_dir.glob("*/fundamentals/attempt_*/fundamental_summary.json"))
     if not candidates:
         return None
     return max(candidates, key=lambda path: path.stat().st_mtime)

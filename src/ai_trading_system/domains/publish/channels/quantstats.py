@@ -16,6 +16,7 @@ import duckdb
 import numpy as np
 import pandas as pd
 
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
 
 if "MPLCONFIGDIR" not in os.environ:
@@ -96,7 +97,7 @@ def _latest_ranked_snapshots(
 
 
 def _latest_rank_artifact_dir(project_root: Path, run_id: str | None) -> Path | None:
-    pipeline_runs_dir = project_root / "data" / "pipeline_runs"
+    pipeline_runs_dir = get_domain_paths(project_root=project_root, data_domain="operational").pipeline_runs_dir
     if run_id:
         rank_dir = pipeline_runs_dir / run_id / "rank"
         if not rank_dir.exists():
@@ -262,7 +263,7 @@ def _compute_summary_metrics(returns: pd.Series) -> dict[str, float]:
 
 
 def _load_market_breadth_sma200(project_root: Path, start_date: str) -> pd.DataFrame:
-    db_path = project_root / "data" / "ohlcv.duckdb"
+    db_path = get_domain_paths(project_root=project_root, data_domain="operational").ohlcv_db_path
     if not db_path.exists():
         return pd.DataFrame()
 
@@ -595,7 +596,7 @@ def publish_dashboard_quantstats_tearsheet(
         return {"ok": False, "error": "quantstats_not_available"}
 
     root = Path(project_root)
-    pipeline_runs_dir = root / "data" / "pipeline_runs"
+    pipeline_runs_dir = get_domain_paths(project_root=root, data_domain="operational").pipeline_runs_dir
     if not pipeline_runs_dir.exists():
         return {"ok": False, "error": f"pipeline_runs_dir_missing: {pipeline_runs_dir}"}
 

@@ -16,6 +16,7 @@ from ai_trading_system.domains.publish.channels.weekly_pdf.data_loader import (
     load_report_data,
 )
 from ai_trading_system.domains.publish.channels.weekly_pdf.renderer import render
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.pipeline.contracts import StageContext
 
 logger = logging.getLogger(__name__)
@@ -234,7 +235,7 @@ def _render_charts(
 
     if project_root is None:
         return out
-    ohlcv_path = project_root / "data" / "ohlcv.duckdb"
+    ohlcv_path = get_domain_paths(project_root=project_root, data_domain="operational").ohlcv_db_path
     if not ohlcv_path.exists():
         return out
     end_date = _safe_date(run_date)

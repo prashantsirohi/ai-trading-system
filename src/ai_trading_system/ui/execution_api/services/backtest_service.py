@@ -85,7 +85,9 @@ def run_backtest(
         no_data_message = "no research OHLCV data available under data/research/research_ohlcv.duckdb"
     else:
         source = "pipeline_replay"
-        pipeline_runs_dir = project_root / "data" / "pipeline_runs"
+        from ai_trading_system.platform.db.paths import get_domain_paths
+
+        pipeline_runs_dir = get_domain_paths(project_root=project_root, data_domain="operational").pipeline_runs_dir
         ranked_by_date = load_ranked_by_date(
             pipeline_runs_dir, from_date=from_date, to_date=to_date
         )

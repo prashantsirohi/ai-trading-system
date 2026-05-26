@@ -35,14 +35,16 @@ def _resolve_project_root(anchor: str) -> str:
 project_root = _resolve_project_root(__file__)
 
 from ai_trading_system.platform.utils.env import load_project_env
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
 
 load_project_env(project_root)
 
 import duckdb
 
-DB_PATH = os.path.join(project_root, "data", "ohlcv.duckdb")
-FEATURE_DIR = os.path.join(project_root, "data", "feature_store")
+_PATHS = get_domain_paths(project_root=project_root, data_domain="operational")
+DB_PATH = str(_PATHS.ohlcv_db_path)
+FEATURE_DIR = str(_PATHS.feature_store_dir)
 os.makedirs(FEATURE_DIR, exist_ok=True)
 
 

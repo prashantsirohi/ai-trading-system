@@ -176,7 +176,7 @@ def get_execution_ops_health_snapshot(
         "execute": 24.0,
         "publish": 48.0,
     }
-    db_path = ctx.project_root / "data" / "control_plane.duckdb"
+    db_path = ctx.control_plane_db or (ctx.ohlcv_db.parent / "control_plane.duckdb")
     if not db_path.exists():
         return {"available": False, "error": "control_plane.duckdb missing"}
 

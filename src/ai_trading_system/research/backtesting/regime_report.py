@@ -67,7 +67,9 @@ def _resolve_db_path(project_root: Path | str | None, db_path: str | Path | None
     if db_path is not None:
         return Path(db_path)
     root = Path(project_root or ".")
-    return root / "data" / "research" / "research_ohlcv.duckdb"
+    from ai_trading_system.platform.db.paths import get_domain_paths
+
+    return get_domain_paths(project_root=root, data_domain="research").ohlcv_db_path
 
 
 def _load_benchmark_closes(

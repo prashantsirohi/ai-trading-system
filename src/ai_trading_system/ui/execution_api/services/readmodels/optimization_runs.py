@@ -59,7 +59,7 @@ _LEADERBOARD_METRICS = {
 
 
 def _control_plane_path(ctx: ExecutionContext) -> Path:
-    return ctx.project_root / "data" / "control_plane.duckdb"
+    return ctx.control_plane_db or (ctx.ohlcv_db.parent / "control_plane.duckdb")
 
 
 def _connect(project_root: str | Path | None) -> tuple[Optional[duckdb.DuckDBPyConnection], ExecutionContext]:

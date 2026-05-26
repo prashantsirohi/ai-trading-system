@@ -83,7 +83,9 @@ def main():
     )
 
     args = parser.parse_args()
-    base_path = Path(__file__).resolve().parents[4] / "data" / "feature_store"
+    from ai_trading_system.platform.db.paths import get_domain_paths
+
+    base_path = get_domain_paths().feature_store_dir
 
     features = (
         ["rsi", "sma", "atr", "adx", "bb", "roc", "supertrend", "delivery"]

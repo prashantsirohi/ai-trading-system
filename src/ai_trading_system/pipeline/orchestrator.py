@@ -898,7 +898,7 @@ def _safe_stage_runs(orchestrator: object, run_id: str) -> list[dict[str, object
 
 
 def _resolve_latest_publishable_run_id(project_root: Path, *, limit: int = 50) -> str | None:
-    control_plane_db = project_root / "data" / "control_plane.duckdb"
+    control_plane_db = get_domain_paths(project_root).root_dir / "control_plane.duckdb"
     if not control_plane_db.exists():
         return None
     import duckdb

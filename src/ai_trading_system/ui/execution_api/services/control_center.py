@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 import duckdb
 
 from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.db.timestamps import utc_naive_now_string
 from ai_trading_system.platform.logging.logger import logger
 
@@ -534,8 +535,7 @@ def launch_shadow_monitor_task(
 
 def get_recent_runs(project_root: str | Path, limit: int = 12) -> List[Dict[str, Any]]:
     """Return recent pipeline runs for the execution console."""
-    root = Path(project_root)
-    db_path = root / "data" / "control_plane.duckdb"
+    db_path = get_domain_paths(project_root=project_root, data_domain="operational").root_dir / "control_plane.duckdb"
     conn = duckdb.connect(str(db_path))
     try:
         rows = conn.execute(
@@ -566,8 +566,7 @@ def get_recent_runs(project_root: str | Path, limit: int = 12) -> List[Dict[str,
 
 def find_latest_publishable_run(project_root: str | Path, limit: int = 50) -> Dict[str, Any] | None:
     """Return the most recent run that still has a usable rank artifact for publish retry."""
-    root = Path(project_root)
-    db_path = root / "data" / "control_plane.duckdb"
+    db_path = get_domain_paths(project_root=project_root, data_domain="operational").root_dir / "control_plane.duckdb"
     conn = duckdb.connect(str(db_path))
     try:
         rows = conn.execute(

@@ -2,19 +2,24 @@ import os
 from typing import Dict
 from dataclasses import dataclass, field
 
+from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.utils.env import load_project_env
 
 load_project_env(__file__)
 
 
+def _data_paths():
+    return get_domain_paths(data_domain="operational")
+
+
 @dataclass
 class DataConfig:
     """Data collection and storage configuration"""
-    data_dir: str = "ai-trading-system/data"
-    raw_dir: str = "ai-trading-system/data/raw/NSE_EQ"
-    features_dir: str = "ai-trading-system/data/features"
-    signals_dir: str = "ai-trading-system/data/signals"
-    backtests_dir: str = "ai-trading-system/data/backtests"
+    data_dir: str = field(default_factory=lambda: str(_data_paths().root_dir))
+    raw_dir: str = field(default_factory=lambda: str(_data_paths().raw_dir / "NSE_EQ"))
+    features_dir: str = field(default_factory=lambda: str(_data_paths().feature_store_dir))
+    signals_dir: str = field(default_factory=lambda: str(_data_paths().root_dir / "signals"))
+    backtests_dir: str = field(default_factory=lambda: str(_data_paths().root_dir / "backtests"))
     parquet_compression: str = "snappy"
 
 

@@ -35,7 +35,7 @@ from ai_trading_system.domains.ingest.daily_update_runner import _fetch_nse_bhav
 from ai_trading_system.domains.ingest.providers.dhan import DhanCollector
 from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.domains.features import FeatureStore, compute_all_symbols_rs
-from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.db.paths import ensure_domain_layout, get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
 
 
@@ -286,7 +286,7 @@ def _fetch_symbol_frames(
     repair_batch_id: str | None = None,
 ) -> list[pd.DataFrame]:
     security_map = {str(row["symbol_id"]): row for row in symbols}
-    raw_dir = project_root / "data" / "raw" / "NSE_EQ"
+    raw_dir = get_domain_paths(project_root=project_root, data_domain="operational").raw_dir / "NSE_EQ"
     raw_dir.mkdir(parents=True, exist_ok=True)
     trade_dates = [ts.date().isoformat() for ts in pd.bdate_range(from_date, to_date)]
     nse_rows, _, missing_dates = _fetch_nse_bhavcopy_rows(

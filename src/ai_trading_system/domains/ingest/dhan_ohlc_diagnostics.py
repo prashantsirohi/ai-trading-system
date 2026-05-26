@@ -21,7 +21,7 @@ import requests
 from ai_trading_system.domains.ingest.daily_update_runner import _fetch_nse_bhavcopy_rows, _fetch_yfinance_rows
 from ai_trading_system.domains.ingest.providers.dhan import DhanCollector, normalize_dhan_timestamps_ist
 from ai_trading_system.platform.utils.env import load_project_env
-from ai_trading_system.platform.db.paths import ensure_domain_layout
+from ai_trading_system.platform.db.paths import ensure_domain_layout, get_domain_paths
 
 FIELDS = ["open", "high", "low", "close", "volume"]
 
@@ -186,7 +186,7 @@ def _build_reference_map(
 ) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
     security_map = {str(row["symbol_id"]): row for row in symbols}
     trade_dates = [ts.date().isoformat() for ts in pd.bdate_range(from_date, to_date)]
-    raw_dir = project_root / "data" / "raw" / "NSE_EQ"
+    raw_dir = get_domain_paths(project_root=project_root).raw_dir / "NSE_EQ"
     raw_dir.mkdir(parents=True, exist_ok=True)
     nse_rows, nse_dates, missing_dates = _fetch_nse_bhavcopy_rows(
         raw_dir=raw_dir,

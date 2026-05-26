@@ -10,6 +10,7 @@ from typing import Any, Iterable, List, Optional
 import duckdb
 
 from ai_trading_system.domains.execution.models import FillRecord, OrderRecord
+from ai_trading_system.platform.db.paths import get_domain_paths
 
 
 def _load_json(value: str | None) -> dict:
@@ -26,7 +27,7 @@ class ExecutionStore:
 
     def __init__(self, project_root: Path | str, db_path: Optional[Path | str] = None):
         self.project_root = Path(project_root)
-        self.db_path = Path(db_path) if db_path else self.project_root / "data" / "execution.duckdb"
+        self.db_path = Path(db_path) if db_path else get_domain_paths(self.project_root).root_dir / "execution.duckdb"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
