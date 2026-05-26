@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Dict, Optional
 
 import duckdb
@@ -34,7 +35,28 @@ class FeaturesOrchestrationService:
             metadata=metadata,
             attempt_number=context.attempt_number,
         )
-        return StageResult(artifacts=[artifact], metadata=metadata)
+        artifacts = [artifact]
+        sector_earnings = (
+            metadata.get("feature_enhancements", {})
+            .get("sector_earnings_features", {})
+        )
+        sector_earnings_csv = sector_earnings.get("output_csv") if isinstance(sector_earnings, dict) else None
+        if sector_earnings_csv:
+            csv_path = Path(sector_earnings_csv)
+            if csv_path.exists():
+                artifacts.append(
+                    StageArtifact.from_file(
+                        "sector_earnings_leadership",
+                        csv_path,
+                        row_count=sector_earnings.get("latest_rows"),
+                        metadata={
+                            "latest_report_date": sector_earnings.get("latest_report_date"),
+                            "status": sector_earnings.get("status"),
+                        },
+                        attempt_number=context.attempt_number,
+                    )
+                )
+        return StageResult(artifacts=artifacts, metadata=metadata)
 
     def run_default(
         self,
@@ -147,6 +169,24 @@ class FeaturesOrchestrationService:
                 min_history_days=int(context.params.get("valuation_min_history_days", 756) or 756),
             )
 
+        sector_earnings_summary = {"status": "disabled"}
+        if bool(context.params.get("enable_sector_earnings_features", True)):
+            from ai_trading_system.domains.features.sector_earnings_leadership import (
+                refresh_sector_earnings_leadership,
+            )
+            from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
+            from ai_trading_system.platform.db.paths import get_domain_paths
+
+            paths = get_domain_paths(context.project_root, context.params.get("data_domain", "operational"))
+            sector_earnings_summary = refresh_sector_earnings_leadership(
+                ohlcv_db_path=paths.ohlcv_db_path,
+                screener_db_path=context.params.get("screener_financials_db_path") or default_screener_db_path(context.project_root),
+                master_db_path=paths.master_db_path,
+                from_date=context.params.get("sector_earnings_from_date"),
+                to_date=context.params.get("sector_earnings_to_date") or context.run_date,
+                output_csv=context.output_dir() / "sector_earnings_leadership.csv",
+            )
+
         snapshot_id, feature_rows, feature_registry_entries = (
             record_snapshot or self.record_snapshot
         )(context)
@@ -173,6 +213,7 @@ class FeaturesOrchestrationService:
                 "pattern_preconditions": True,
                 "benchmark_relative": {"enabled": True, "benchmark_symbol": benchmark_symbol},
                 "valuation_features": valuation_summary,
+                "sector_earnings_features": sector_earnings_summary,
             },
             "trust_confidence": trust_confidence.to_dict(),
             "completed_at": datetime.now(timezone.utc).isoformat(),

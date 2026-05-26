@@ -36,6 +36,16 @@ export interface SectorRow {
   valuationZone?: string | null;
   cycleSignal?: string | null;
   valuationInterpretation?: string | null;
+  sectorEarningsGrowthScore?: number | null;
+  sectorSalesYoyGrowth?: number | null;
+  sectorProfitYoyGrowth?: number | null;
+  sectorSalesQoqGrowth?: number | null;
+  sectorProfitQoqGrowth?: number | null;
+  salesYoyPositivePct?: number | null;
+  profitYoyPositivePct?: number | null;
+  marginExpansionPct?: number | null;
+  earningsTrendLabel?: string | null;
+  earningsReportDate?: string | null;
 }
 
 function num(s: any, keys: string[], fallback = 0): number {
@@ -88,6 +98,16 @@ function mapSectorRow(s: any): SectorRow {
     valuationZone: s.valuation_zone ?? s.valuationZone ?? null,
     cycleSignal: s.cycle_signal ?? s.cycleSignal ?? null,
     valuationInterpretation: s.valuation_interpretation ?? s.valuationInterpretation ?? null,
+    sectorEarningsGrowthScore: nullableNum(s.sector_earnings_growth_score ?? s.sectorEarningsGrowthScore),
+    sectorSalesYoyGrowth: nullableNum(s.sector_sales_yoy_growth ?? s.sectorSalesYoyGrowth),
+    sectorProfitYoyGrowth: nullableNum(s.sector_profit_yoy_growth ?? s.sectorProfitYoyGrowth),
+    sectorSalesQoqGrowth: nullableNum(s.sector_sales_qoq_growth ?? s.sectorSalesQoqGrowth),
+    sectorProfitQoqGrowth: nullableNum(s.sector_profit_qoq_growth ?? s.sectorProfitQoqGrowth),
+    salesYoyPositivePct: nullableNum(s.sales_yoy_positive_pct ?? s.salesYoyPositivePct),
+    profitYoyPositivePct: nullableNum(s.profit_yoy_positive_pct ?? s.profitYoyPositivePct),
+    marginExpansionPct: nullableNum(s.margin_expansion_pct ?? s.marginExpansionPct),
+    earningsTrendLabel: s.earnings_trend_label ?? s.earningsTrendLabel ?? null,
+    earningsReportDate: s.earnings_report_date ?? s.earningsReportDate ?? null,
   };
 }
 

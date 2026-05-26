@@ -200,6 +200,58 @@ def _sector_valuation_interpretation(row: dict[str, Any]) -> str | None:
     return "Momentum and valuation are balanced"
 
 
+def _load_sector_earnings_snapshot(ohlcv_db: str) -> dict[str, dict[str, Any]]:
+    """Latest sector earnings leadership snapshot from feature-layer DuckDB tables."""
+    try:
+        conn = duckdb.connect(ohlcv_db, read_only=True)
+        try:
+            exists = bool(
+                conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.tables
+                    WHERE table_name = 'sector_earnings_leadership'
+                    """
+                ).fetchone()[0]
+            )
+            if not exists:
+                return {}
+            df = conn.execute(
+                """
+                WITH latest AS (
+                    SELECT MAX(report_date) AS report_date
+                    FROM sector_earnings_leadership
+                )
+                SELECT sel.*
+                FROM sector_earnings_leadership sel
+                JOIN latest l ON sel.report_date = l.report_date
+                """
+            ).fetchdf()
+        finally:
+            conn.close()
+        if df.empty:
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for _, row in df.iterrows():
+            out[_norm_sector(row.get("sector_name"))] = {
+                "sector_name": row.get("sector_name"),
+                "earnings_report_date": str(row.get("report_date"))[:10],
+                "sector_earnings_growth_score": _safe_float(row.get("sector_earnings_growth_score")),
+                "sector_sales_yoy_growth": _safe_float(row.get("sector_sales_yoy_growth")),
+                "sector_profit_yoy_growth": _safe_float(row.get("sector_profit_yoy_growth")),
+                "sector_sales_qoq_growth": _safe_float(row.get("sector_sales_qoq_growth")),
+                "sector_profit_qoq_growth": _safe_float(row.get("sector_profit_qoq_growth")),
+                "sales_yoy_positive_pct": _safe_float(row.get("sales_yoy_positive_pct")),
+                "profit_yoy_positive_pct": _safe_float(row.get("profit_yoy_positive_pct")),
+                "margin_expansion_pct": _safe_float(row.get("margin_expansion_pct")),
+                "earnings_trend_label": row.get("earnings_trend_label") or None,
+            }
+        return out
+    except Exception as exc:
+        LOG.warning("_load_sector_earnings_snapshot failed: %s", exc)
+        return {}
+
+
 # ── latest technicals from _catalog ──────────────────────────────────────────
 
 def _load_latest_technicals(ohlcv_db: str, symbols: list[str]) -> pd.DataFrame:
@@ -376,6 +428,7 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
     # 2. Stage snapshot
     snap = _load_stage_snapshot(ohlcv_db)
     valuation_by_sector = _load_sector_valuation_snapshot(ohlcv_db)
+    earnings_by_sector = _load_sector_earnings_snapshot(ohlcv_db)
 
     # 3. Stock→sector mapping from master DB (SQLite). The sector list API is
     #    led by sector_dashboard, but masterdata is the catalog of record; use
@@ -422,9 +475,11 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
         dist = stage_by_sector.get(sec_name, {})
         total = dist.get("total", 0)
         valuation = valuation_by_sector.get(_norm_sector(sec_name), {})
+        earnings = earnings_by_sector.get(_norm_sector(sec_name), {})
         row = {
             **s,
             **valuation,
+            **earnings,
             "stage_s1_pct": _pct(dist.get("S1", 0), total),
             "stage_s2_pct": _pct(dist.get("S2", 0), total),
             "stage_s3_pct": _pct(dist.get("S3", 0), total),
@@ -446,6 +501,7 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
         dist = stage_by_sector.get(sec_name, {})
         total = dist.get("total", 0)
         valuation = valuation_by_sector.get(_norm_sector(sec_name), {})
+        earnings = earnings_by_sector.get(_norm_sector(sec_name), {})
         row = {
             "Sector": sec_name,
             "RS": None,
@@ -469,15 +525,19 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
             "stage_total": total,
             "master_count": sector_counts[sec_name],
             **valuation,
+            **earnings,
         }
         row["valuation_interpretation"] = _sector_valuation_interpretation(row)
         enriched.append(row)
 
-    for sec_key, valuation in sorted(valuation_by_sector.items()):
+    feature_sector_keys = set(valuation_by_sector) | set(earnings_by_sector)
+    for sec_key in sorted(feature_sector_keys):
         if sec_key in {_norm_sector(sector) for sector in seen_sectors | set(sector_counts)}:
             continue
+        valuation = valuation_by_sector.get(sec_key, {})
+        earnings = earnings_by_sector.get(sec_key, {})
         row = {
-            "Sector": valuation.get("sector_name") or sec_key.title(),
+            "Sector": valuation.get("sector_name") or earnings.get("sector_name") or sec_key.title(),
             "RS": None,
             "RS_20": None,
             "RS_50": None,
@@ -498,6 +558,7 @@ def get_sectors_with_stage(root: Path) -> dict[str, Any]:
             "stage_s4_count": 0,
             "stage_total": 0,
             **valuation,
+            **earnings,
         }
         row["valuation_interpretation"] = _sector_valuation_interpretation(row)
         enriched.append(row)

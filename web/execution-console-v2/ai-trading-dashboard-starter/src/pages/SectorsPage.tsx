@@ -18,6 +18,7 @@ import SectorLeadershipChart from '@/components/sectors/SectorLeadershipChart';
 import SectorRotationHeatmap from '@/components/sectors/SectorRotationHeatmap';
 import SectorDrilldown from '@/components/sectors/SectorDrilldown';
 import SectorValuationTable from '@/components/sectors/SectorValuationTable';
+import SectorEarningsLeadershipTable from '@/components/sectors/SectorEarningsLeadershipTable';
 import { useRanking, useSectors } from '@/lib/queries';
 
 export default function SectorsPage() {
@@ -59,6 +60,17 @@ export default function SectorsPage() {
       ) : (
         <>
           <EarlyLeaderBanner sectors={sectors} />
+
+          <SectionCard
+            title="Sector Earnings Leadership"
+            description="Quarterly aggregate growth, breadth, and margin expansion from Screener fundamentals."
+          >
+            <SectorEarningsLeadershipTable
+              sectors={sectors}
+              selected={selectedSector}
+              onSelect={setSelectedSector}
+            />
+          </SectionCard>
 
           <SectionCard
             title="Sector Valuation"

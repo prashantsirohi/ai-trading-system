@@ -56,6 +56,7 @@ ai-trading-optimize-promote = "ai_trading_system.research.optimization.promote:m
 ai-trading-fundamentals-sync = "ai_trading_system.domains.fundamentals.screener_sync:main"
 ai-trading-fundamentals-refresh-readmodels = "ai_trading_system.domains.fundamentals.screener_readmodels:main"
 ai-trading-valuation-refresh = "ai_trading_system.domains.features.valuation_refresh:main"
+ai-trading-sector-earnings-refresh = "ai_trading_system.domains.features.sector_earnings_leadership:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

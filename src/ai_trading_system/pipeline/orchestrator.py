@@ -990,6 +990,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum observations for valuation percentile/z-score bands.",
     )
     parser.add_argument(
+        "--enable-sector-earnings-features",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Refresh sector earnings leadership feature tables during the features stage.",
+    )
+    parser.add_argument(
+        "--sector-earnings-from-date",
+        default=None,
+        help="Optional first report_date to refresh for sector earnings features.",
+    )
+    parser.add_argument(
+        "--sector-earnings-to-date",
+        default=None,
+        help="Optional last report_date to refresh for sector earnings features.",
+    )
+    parser.add_argument(
         "--data-domain",
         choices=["operational", "research"],
         default="operational",
@@ -1378,6 +1394,9 @@ def main() -> None:
         "enable_valuation_features": bool(args.enable_valuation_features),
         "valuation_universes": args.valuation_universes,
         "valuation_min_history_days": int(args.valuation_min_history_days),
+        "enable_sector_earnings_features": bool(args.enable_sector_earnings_features),
+        "sector_earnings_from_date": args.sector_earnings_from_date,
+        "sector_earnings_to_date": args.sector_earnings_to_date,
         "data_domain": args.data_domain,
         "local_publish": args.local_publish,
         "smoke": args.smoke,

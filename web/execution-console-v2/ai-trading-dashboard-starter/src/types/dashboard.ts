@@ -97,6 +97,16 @@ export interface SectorScore {
   valuationZone?: string | null;
   cycleSignal?: string | null;
   valuationInterpretation?: string | null;
+  sectorEarningsGrowthScore?: number | null;
+  sectorSalesYoyGrowth?: number | null;
+  sectorProfitYoyGrowth?: number | null;
+  sectorSalesQoqGrowth?: number | null;
+  sectorProfitQoqGrowth?: number | null;
+  salesYoyPositivePct?: number | null;
+  profitYoyPositivePct?: number | null;
+  marginExpansionPct?: number | null;
+  earningsTrendLabel?: string | null;
+  earningsReportDate?: string | null;
 }
 
 export interface ShadowModelRow {
