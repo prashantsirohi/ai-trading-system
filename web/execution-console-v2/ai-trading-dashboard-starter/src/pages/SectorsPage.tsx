@@ -41,6 +41,22 @@ export default function SectorsPage() {
     () => sectors.find((s) => s.sector === selectedSector) ?? null,
     [sectors, selectedSector],
   );
+  const earningsRows = useMemo(
+    () => sectors.filter((sector) => sector.sectorEarningsGrowthScore !== null && sector.sectorEarningsGrowthScore !== undefined),
+    [sectors],
+  );
+  const valuationRows = useMemo(
+    () => sectors.filter((sector) => sector.sectorPeTtm !== null && sector.sectorPeTtm !== undefined),
+    [sectors],
+  );
+  const latestEarningsDate = useMemo(
+    () => latestDate(earningsRows.map((sector) => sector.earningsReportDate)),
+    [earningsRows],
+  );
+  const latestValuationDate = useMemo(
+    () => latestDate(valuationRows.map((sector) => sector.valuationDate)),
+    [valuationRows],
+  );
 
   return (
     <PageFrame
@@ -64,6 +80,8 @@ export default function SectorsPage() {
           <SectionCard
             title="Sector Earnings Leadership"
             description="Quarterly aggregate growth, breadth, and margin expansion from Screener fundamentals."
+            collapsible
+            meta={<Availability rows={earningsRows.length} date={latestEarningsDate} />}
           >
             <SectorEarningsLeadershipTable
               sectors={sectors}
@@ -75,6 +93,8 @@ export default function SectorsPage() {
           <SectionCard
             title="Sector Valuation"
             description="Aggregate PE from market cap divided by aggregate TTM earnings."
+            collapsible
+            meta={<Availability rows={valuationRows.length} date={latestValuationDate} />}
           >
             <SectorValuationTable
               sectors={sectors}
@@ -117,4 +137,21 @@ export default function SectorsPage() {
       )}
     </PageFrame>
   );
+}
+
+function Availability({ rows, date }: { rows: number; date: string | null }) {
+  const hasRows = rows > 0;
+  return (
+    <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-slate-700 bg-slate-950 px-2 py-1 font-medium text-slate-300">
+      <span className={hasRows ? 'text-emerald-300' : 'text-amber-300'}>
+        {hasRows ? `${rows} rows` : 'No rows'}
+      </span>
+      {date ? <span className="text-slate-500">{date}</span> : null}
+    </span>
+  );
+}
+
+function latestDate(values: Array<string | null | undefined>): string | null {
+  const dates = values.filter(Boolean).sort();
+  return dates.length ? dates[dates.length - 1] ?? null : null;
 }
