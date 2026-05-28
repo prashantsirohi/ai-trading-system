@@ -57,6 +57,7 @@ ai-trading-fundamentals-sync = "ai_trading_system.domains.fundamentals.screener_
 ai-trading-fundamentals-refresh-readmodels = "ai_trading_system.domains.fundamentals.screener_readmodels:main"
 ai-trading-valuation-refresh = "ai_trading_system.domains.features.valuation_refresh:main"
 ai-trading-sector-earnings-refresh = "ai_trading_system.domains.features.sector_earnings_leadership:main"
+ai-trading-backfill-operational-valuation = "ai_trading_system.interfaces.cli.backfill_operational_valuation:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -4,10 +4,14 @@ import sqlite3
 from pathlib import Path
 
 import duckdb
+import pandas as pd
 
 from ai_trading_system.domains.features.fundamental_growth import refresh_fundamental_growth
 from ai_trading_system.domains.features.fundamental_period_facts import refresh_fundamental_period_facts
-from ai_trading_system.domains.features.sector_earnings_leadership import refresh_sector_earnings_leadership
+from ai_trading_system.domains.features.sector_earnings_leadership import (
+    compute_sector_earnings_leadership_analytical,
+    refresh_sector_earnings_leadership,
+)
 
 
 def _create_screener(path: Path) -> None:
@@ -168,3 +172,38 @@ def test_sector_earnings_leadership_refresh_writes_latest_csv(tmp_path: Path) ->
         conn.close()
     assert latest.iloc[0]["sector_name"] == "Auto"
     assert latest.iloc[0]["earnings_trend_label"] == "accelerating_leader"
+
+
+def test_analytical_sector_leadership_includes_tag_counts_and_revised_score() -> None:
+    company = pd.DataFrame(
+        [
+            {"symbol": "A1", "report_date": "2025-03-31", "sales_cr": 100, "net_profit_cr": 10, "sales_yoy_growth": 0.1, "profit_yoy_growth": 0.1, "sales_qoq_growth": 0.02, "profit_qoq_growth": 0.03, "opm_yoy_change": 1.0},
+            {"symbol": "A1", "report_date": "2026-03-31", "sales_cr": 130, "net_profit_cr": 18, "sales_yoy_growth": 0.3, "profit_yoy_growth": 0.8, "sales_qoq_growth": 0.04, "profit_qoq_growth": 0.05, "opm_yoy_change": 4.0},
+            {"symbol": "A2", "report_date": "2025-03-31", "sales_cr": 80, "net_profit_cr": 8, "sales_yoy_growth": 0.1, "profit_yoy_growth": 0.1, "sales_qoq_growth": 0.02, "profit_qoq_growth": 0.03, "opm_yoy_change": 1.0},
+            {"symbol": "A2", "report_date": "2026-03-31", "sales_cr": 110, "net_profit_cr": 14, "sales_yoy_growth": 0.25, "profit_yoy_growth": 0.7, "sales_qoq_growth": 0.04, "profit_qoq_growth": 0.05, "opm_yoy_change": 3.0},
+            {"symbol": "I1", "report_date": "2025-03-31", "sales_cr": 100, "net_profit_cr": 20, "sales_yoy_growth": 0.1, "profit_yoy_growth": 0.1, "sales_qoq_growth": 0.02, "profit_qoq_growth": 0.03, "opm_yoy_change": 1.0},
+            {"symbol": "I1", "report_date": "2026-03-31", "sales_cr": 90, "net_profit_cr": 16, "sales_yoy_growth": -0.1, "profit_yoy_growth": -0.2, "sales_qoq_growth": -0.01, "profit_qoq_growth": -0.02, "opm_yoy_change": -1.0},
+        ]
+    )
+    tags = pd.DataFrame(
+        [
+            {"symbol": "A1", "report_date": "2026-03-31", "insight_type": "great_result"},
+            {"symbol": "A2", "report_date": "2026-03-31", "insight_type": "turnaround_confirmed"},
+            {"symbol": "A2", "report_date": "2026-03-31", "insight_type": "consistent_compounder"},
+        ]
+    )
+    sector_map = {
+        "A1": {"sector_name": "Auto"},
+        "A2": {"sector_name": "Auto"},
+        "I1": {"sector_name": "IT"},
+    }
+
+    result = compute_sector_earnings_leadership_analytical(company, tags, sector_map)
+    latest = result.loc[result["report_date"].astype(str).eq("2026-03-31")].sort_values("sector_fundamental_score", ascending=False)
+
+    assert latest.iloc[0]["sector_name"] == "Auto"
+    auto = latest.loc[latest["sector_name"].eq("Auto")].iloc[0]
+    assert auto["great_result_count"] == 1
+    assert auto["turnaround_count"] == 1
+    assert auto["compounder_count"] == 1
+    assert auto["sales_positive_pct"] == 100.0

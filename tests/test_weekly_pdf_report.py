@@ -78,6 +78,52 @@ def test_weekly_pdf_renders_return_columns_as_percent_points() -> None:
     assert "2,475.3%" not in html
 
 
+def test_weekly_pdf_renders_fundamental_sections() -> None:
+    html = render_html(
+        {
+            "week_ending": "2026-05-07",
+            "run_id": "pipeline-2026-05-07-abcdef12",
+            "regime": {
+                "trust_status": "trusted",
+                "trust_confidence": None,
+                "ml_status": None,
+                "market_stage": "risk_on",
+                "universe_count": 1,
+                "stage2_count": 0,
+                "sector_quadrant_counts": {},
+            },
+            "sectors": [],
+            "top_ranked": [],
+            "volume_delivery": [],
+            "weekly_price": [],
+            "volume_shockers": [],
+            "tier_a": [],
+            "tier_b": [],
+            "patterns": [],
+            "prior_run_id": None,
+            "prior_run_date": None,
+            "rank_improvers": [],
+            "rank_decliners": [],
+            "sector_movers": [],
+            "failed_breakouts": [],
+            "breadth_latest": {},
+            "breadth_rows": [],
+            "charts": {"valuation_cycle": None},
+            "fundamental_universe": [{"pe_ttm": 24.1, "pe_200dma": 22.8, "pe_percentile_5y": 82, "valuation_zone": "expensive"}],
+            "great_results": [{"symbol": "AAA", "insight_type": "great_result", "insight_score": 88}],
+            "turnarounds": [{"symbol": "BBB", "insight_type": "turnaround_candidate", "insight_score": 81}],
+            "compounders": [{"symbol": "CCC", "insight_type": "consistent_compounder", "insight_score": 78}],
+            "sector_earnings": [{"sector_name": "IT", "sector_fundamental_score": 91, "great_result_count": 1, "turnaround_count": 0}],
+            "valuation_cycle": [{"date": "2026-05-07", "entity_id": "UNIV_TOP500", "pe_ttm": 24.1, "pe_200dma": 22.8, "pe_percentile_5y": 82, "pe_zscore_5y": 1.2, "valuation_zone": "expensive"}],
+        }
+    )
+
+    assert "Fundamental Insight Stories" in html
+    assert "Valuation Cycle" in html
+    assert "AAA" in html
+    assert "Universe PE" in html
+
+
 def test_weekly_move_metrics_capture_price_volume_delivery_and_shockers() -> None:
     no_return_5 = pd.DataFrame(
         [

@@ -89,7 +89,15 @@ def build_report(
         decliners=rank_decliners,
         ranked=data.ranked_signals,
         breakouts=data.breakout_scan,
+        universe_valuation=data.universe_valuation_daily,
+        valuation_cycle=data.valuation_cycle_features,
     )
+    latest_universe = _latest_by_date(data.universe_valuation_daily, "date")
+    latest_valuation_cycle = _latest_by_date(data.valuation_cycle_features, "date")
+    top_sector_earnings = _sort_desc(data.sector_earnings_leadership, "sector_fundamental_score").head(12)
+    great_results = _sort_desc(data.great_results, "insight_score").head(12)
+    turnarounds = _sort_desc(data.turnaround_candidates, "insight_score").head(12)
+    compounders = _sort_desc(data.compounder_candidates, "insight_score").head(12)
 
     template_context = {
         "week_ending": data.run_date,
@@ -113,6 +121,14 @@ def build_report(
         "breadth_rows": _df_to_records(data.market_breadth.tail(10)) if not data.market_breadth.empty else [],
         "events_of_week": events_of_week,
         "charts": chart_paths,
+        "fundamental_summary": data.fundamental_dashboard_payload.get("summary", {}),
+        "fundamental_universe": _df_to_records(latest_universe.head(1)),
+        "great_results": _df_to_records(great_results),
+        "turnarounds": _df_to_records(turnarounds),
+        "compounders": _df_to_records(compounders),
+        "sector_earnings": _df_to_records(top_sector_earnings),
+        "sector_valuation": _df_to_records(_latest_by_date(data.sector_valuation_daily, "date").head(20)),
+        "valuation_cycle": _df_to_records(latest_valuation_cycle.head(20)),
     }
 
     html_path, pdf_path, pdf_error = render(template_context, output_dir)
@@ -133,6 +149,13 @@ def build_report(
             "weekly_sector_movers": sector_movers,
             "weekly_failed_breakouts": failed_breakouts,
             "market_breadth": data.market_breadth,
+            "fundamental_great_results": great_results,
+            "fundamental_turnarounds": turnarounds,
+            "fundamental_compounders": compounders,
+            "fundamental_sector_earnings": top_sector_earnings,
+            "fundamental_sector_valuation": data.sector_valuation_daily,
+            "fundamental_universe_valuation": data.universe_valuation_daily,
+            "fundamental_valuation_cycle": data.valuation_cycle_features,
         },
     )
 
@@ -161,6 +184,11 @@ def build_report(
             "failed_breakouts": len(failed_breakouts),
             "breadth_rows": int(len(data.market_breadth)),
             "events": int(events_of_week.get("headline_count", 0)),
+            "great_results": int(len(great_results)),
+            "turnarounds": int(len(turnarounds)),
+            "compounders": int(len(compounders)),
+            "sector_earnings": int(len(top_sector_earnings)),
+            "valuation_cycle": int(len(data.valuation_cycle_features)),
         },
         "prior_run_id": data.prior_run_id,
         "prior_run_date": data.prior_run_date,
@@ -214,12 +242,14 @@ def _render_charts(
     decliners: pd.DataFrame,
     ranked: pd.DataFrame,
     breakouts: pd.DataFrame,
+    universe_valuation: pd.DataFrame,
+    valuation_cycle: pd.DataFrame,
 ) -> Dict[str, Any]:
     """Generate all charts. Each is independently optional."""
     chart_dir = output_dir / "charts"
     chart_dir.mkdir(parents=True, exist_ok=True)
 
-    out: Dict[str, Any] = {"breadth": None, "sectors": None, "movers": None, "stocks": []}
+    out: Dict[str, Any] = {"breadth": None, "sectors": None, "movers": None, "stocks": [], "valuation_cycle": None}
 
     breadth_path = charts.breadth_chart(breadth, chart_dir / "breadth_above_smas.png")
     if breadth_path is not None:
@@ -232,6 +262,14 @@ def _render_charts(
     mover_path = charts.rank_mover_bars(improvers, decliners, chart_dir / "rank_movers.png")
     if mover_path is not None:
         out["movers"] = "charts/" + mover_path.name
+
+    valuation_path = charts.universe_valuation_cycle(
+        universe_valuation,
+        valuation_cycle,
+        chart_dir / "universe_valuation_cycle.png",
+    )
+    if valuation_path is not None:
+        out["valuation_cycle"] = "charts/" + valuation_path.name
 
     if project_root is None:
         return out
@@ -264,6 +302,25 @@ def _render_charts(
             })
     out["stocks"] = rendered
     return out
+
+
+def _sort_desc(frame: pd.DataFrame, column: str) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    if column not in frame.columns:
+        return frame.copy()
+    return frame.sort_values(column, ascending=False, na_position="last")
+
+
+def _latest_by_date(frame: pd.DataFrame, date_col: str) -> pd.DataFrame:
+    if frame is None or frame.empty or date_col not in frame.columns:
+        return pd.DataFrame()
+    df = frame.copy()
+    df.loc[:, date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    latest = df[date_col].max()
+    if pd.isna(latest):
+        return df
+    return df[df[date_col].eq(latest)]
 
 
 def _safe_date(value: Any) -> Optional[date]:

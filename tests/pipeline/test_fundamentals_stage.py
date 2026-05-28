@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
@@ -215,6 +216,91 @@ def test_fundamentals_stage_records_industry_artifact_when_present(tmp_path: Pat
     output_dir = tmp_path / "data" / "pipeline_runs" / "run-fund" / "fundamentals" / "attempt_1"
     assert (output_dir / "industry_fundamental_scores.csv").exists()
     assert (rank_dir / "sector_dashboard_enriched.csv").exists()
+
+
+def _screener_financials_db(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE screener_financials (
+                symbol TEXT,
+                period_type TEXT,
+                report_date DATE,
+                metric_id TEXT,
+                value REAL,
+                available_at DATE,
+                source TEXT,
+                sync_batch_id TEXT,
+                synced_at TIMESTAMP
+            )
+            """
+        )
+        rows = []
+        reports = ["2025-03-31", "2025-06-30", "2025-09-30", "2025-12-31", "2026-03-31"]
+        for idx, report in enumerate(reports):
+            sales = [100, 105, 110, 115, 140][idx]
+            profit = [-5, 4, 5, 6, 15][idx]
+            op = [10, 12, 13, 15, 25][idx]
+            for metric, value in {"sales": sales, "net_profit": profit, "operating_profit": op, "expenses": sales - op}.items():
+                rows.append(("AAA", "quarterly", report, metric, value, report, "fixture", "b1", "2026-01-01"))
+        conn.executemany("INSERT INTO screener_financials VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_fundamentals_stage_exports_analytical_insight_artifacts(tmp_path: Path) -> None:
+    scores_path = tmp_path / "data" / "fundamentals" / "fundamental_scores_latest.csv"
+    screener_db = tmp_path / "data" / "fundamentals" / "screener_financials.db"
+    _scores(scores_path)
+    _screener_financials_db(screener_db)
+    context = _context(
+        tmp_path,
+        artifacts=_rank_artifacts(tmp_path),
+        params={
+            "fundamental_scores_path": str(scores_path),
+            "screener_financials_db_path": str(screener_db),
+        },
+    )
+
+    result = FundamentalsStage().run(context)
+
+    output_dir = tmp_path / "data" / "pipeline_runs" / "run-fund" / "fundamentals" / "attempt_1"
+    artifact_types = {artifact.artifact_type for artifact in result.artifacts}
+    assert "company_growth_features" in artifact_types
+    assert "company_insight_tags" in artifact_types
+    assert "great_results" in artifact_types
+    assert "great_results_latest" in artifact_types
+    assert "turnaround_candidates" in artifact_types
+    assert "turnaround_candidates_latest" in artifact_types
+    assert "compounder_candidates" in artifact_types
+    assert "compounder_candidates_latest" in artifact_types
+    assert "sector_earnings_leadership" in artifact_types
+    assert "sector_earnings_latest" in artifact_types
+    assert "sector_valuation_daily" in artifact_types
+    assert "sector_valuation_latest" in artifact_types
+    assert "universe_valuation_daily" in artifact_types
+    assert "universe_valuation_latest" in artifact_types
+    assert "valuation_cycle_features" in artifact_types
+    assert "valuation_cycle_latest" in artifact_types
+    assert "fundamental_dashboard_payload" in artifact_types
+    assert (output_dir / "company_growth_features.csv").exists()
+    assert (output_dir / "company_insight_tags.csv").exists()
+    assert (output_dir / "great_results.csv").exists()
+    assert (output_dir / "great_results_latest.csv").exists()
+    assert (output_dir / "turnaround_candidates.csv").exists()
+    assert (output_dir / "turnaround_candidates_latest.csv").exists()
+    assert (output_dir / "compounder_candidates.csv").exists()
+    assert (output_dir / "compounder_candidates_latest.csv").exists()
+    assert (output_dir / "sector_valuation_daily.csv").exists()
+    assert (output_dir / "valuation_cycle_latest.csv").exists()
+    assert (output_dir / "fundamental_dashboard_payload.json").exists()
+    assert result.metadata["fundamental_insights"]["status"] == "completed"
+    assert result.metadata["fundamental_insights"]["company_growth_features"]["rows"] == 5
+    artifacts = result.metadata["fundamental_insights"]["artifacts"]
+    assert artifacts["fundamental_dashboard_payload"].endswith("fundamental_dashboard_payload.json")
 
 
 def test_fundamentals_stage_warns_when_industry_scores_missing(tmp_path: Path) -> None:

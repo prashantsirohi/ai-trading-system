@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -16,6 +17,10 @@ from ai_trading_system.domains.publish.publish_payloads import (
     build_publish_metadata,
 )
 from ai_trading_system.domains.publish.telegram_summary_builder import build_telegram_summary
+from ai_trading_system.domains.fundamentals.insight_readmodels import (
+    GREAT_RESULT_PRIORITY,
+    _curated_stock_tags,
+)
 
 
 def test_build_publish_datasets_loads_optional_artifacts_with_defaults(tmp_path: Path) -> None:
@@ -64,6 +69,89 @@ def test_build_publish_datasets_loads_optional_artifacts_with_defaults(tmp_path:
     assert datasets["publish_rows_telegram"][0]["publish_confidence"] is None
     assert datasets["stage2_summary"]["uptrend_count"] == 0
     assert datasets["stage2_breakdown_symbols"] == ["AAA"]
+
+
+def test_build_publish_datasets_loads_fundamental_artifacts_and_dashboard_payload(tmp_path: Path) -> None:
+    ranked_path = tmp_path / "ranked_signals.csv"
+    ranked_path.write_text("symbol_id,composite_score\nAAA,90\n", encoding="utf-8")
+    ranked_artifact = StageArtifact.from_file("ranked_signals", ranked_path, row_count=1)
+    artifacts: dict[str, StageArtifact] = {"ranked_signals": ranked_artifact}
+    for artifact_type in (
+        "great_results",
+        "turnaround_candidates",
+        "compounder_candidates",
+        "sector_earnings_leadership",
+        "sector_valuation_daily",
+        "universe_valuation_daily",
+        "valuation_cycle_features",
+    ):
+        path = tmp_path / f"{artifact_type}.csv"
+        path.write_text("symbol,insight_score\nAAA,88\n", encoding="utf-8")
+        artifacts[artifact_type] = StageArtifact.from_file(artifact_type, path, row_count=1)
+    payload_path = tmp_path / "fundamental_dashboard_payload.json"
+    payload_path.write_text(
+        '{"summary":{"great_results_count":1},"universe":{"pe_ttm":24.1},"top_great_results":[{"symbol":"AAA"}],"top_turnarounds":[],"top_compounders":[],"sector_earnings_leadership":[],"valuation_chart":[]}',
+        encoding="utf-8",
+    )
+    artifacts["fundamental_dashboard_payload"] = StageArtifact.from_file(
+        "fundamental_dashboard_payload", payload_path, row_count=1
+    )
+
+    datasets = build_publish_datasets(
+        context_artifact_for=lambda name: artifacts.get(name),
+        read_artifact=lambda artifact: pd.read_csv(Path(artifact.uri)),
+        read_json_artifact=lambda artifact: json.loads(Path(artifact.uri).read_text(encoding="utf-8")),
+        ranked_signals_artifact=ranked_artifact,
+    )
+
+    assert not datasets["great_results"].empty
+    assert not datasets["turnaround_candidates"].empty
+    assert not datasets["compounder_candidates"].empty
+    assert datasets["fundamental_dashboard_payload"]["universe"]["pe_ttm"] == 24.1
+    assert datasets["dashboard_payload"]["fundamentals"]["summary"]["great_results_count"] == 1
+    assert datasets["dashboard_payload"]["fundamentals"]["great_results"] == [{"symbol": "AAA"}]
+
+
+def test_curated_stock_tags_use_latest_date_priority_and_one_row_per_symbol() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "report_date": "2025-12-31",
+                "insight_type": "blowout_result",
+                "insight_score": 99,
+                "evidence_json": '{"note":"old blowout"}',
+            },
+            {
+                "symbol": "AAA",
+                "report_date": "2026-03-31",
+                "insight_type": "great_result",
+                "insight_score": 95,
+                "evidence_json": '{"note":"latest great"}',
+            },
+            {
+                "symbol": "AAA",
+                "report_date": "2026-03-31",
+                "insight_type": "blowout_result",
+                "insight_score": 88,
+                "evidence_json": '{"note":"latest blowout"}',
+            },
+            {
+                "symbol": "BBB",
+                "report_date": "2026-03-31",
+                "insight_type": "profit_acceleration_result",
+                "insight_score": 90,
+                "evidence_json": '{"note":"profit acceleration"}',
+            },
+        ]
+    )
+
+    curated = _curated_stock_tags(frame, GREAT_RESULT_PRIORITY, limit=100)
+
+    assert curated["report_date"].astype(str).unique().tolist() == ["2026-03-31"]
+    assert curated["symbol"].tolist() == ["AAA", "BBB"]
+    assert curated.iloc[0]["insight_type"] == "blowout_result"
+    assert curated.iloc[0]["evidence"] == "latest blowout"
 
 
 def test_build_publish_metadata_uses_top_ranked_symbol() -> None:
@@ -172,6 +260,27 @@ def test_telegram_summary_includes_market_regime_phase() -> None:
     message = build_telegram_summary(run_date="2026-04-21", datasets=datasets)
 
     assert "Base forming (S1)" in message
+
+
+def test_telegram_summary_includes_fundamental_pulse() -> None:
+    datasets = {
+        "dashboard_payload": {"summary": {"run_date": "2026-05-07"}},
+        "ranked_signals": pd.DataFrame([{"symbol_id": "AAA", "composite_score": 90.0}]),
+        "fundamental_dashboard_payload": {
+            "universe": {"pe_ttm": 24.1, "pe_200dma": 22.8, "pe_percentile_5y": 82, "valuation_zone": "expensive"}
+        },
+        "sector_earnings_leadership": pd.DataFrame([{"sector_name": "Capital Goods", "sector_fundamental_score": 92}]),
+        "great_results": pd.DataFrame([{"symbol": "ABC", "insight_score": 90}]),
+        "turnaround_candidates": pd.DataFrame([{"symbol": "XYZ", "insight_score": 82}]),
+        "compounder_candidates": pd.DataFrame([{"symbol": "TCS", "insight_score": 78}]),
+    }
+
+    message = build_telegram_summary(run_date="2026-05-07", datasets=datasets)
+
+    assert "Fundamental Pulse" in message
+    assert "Universe PE: <b>24.1</b>" in message
+    assert "Capital Goods" in message
+    assert "ABC" in message
 
 
 def test_attach_market_direction_to_payload_flattens_summary_fields() -> None:

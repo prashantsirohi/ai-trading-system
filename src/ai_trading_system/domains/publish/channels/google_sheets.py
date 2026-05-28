@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Optional
 
@@ -40,6 +41,24 @@ _WATCHLIST_FORMATS: dict[str, dict[str, str]] = {
     "composite_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "rank": GoogleSheetsManager.FORMAT_INT,
     "rank_change": GoogleSheetsManager.FORMAT_INT,
+}
+_FUNDAMENTAL_FORMATS: dict[str, dict[str, str]] = {
+    "report_date": GoogleSheetsManager.FORMAT_DATE,
+    "date": GoogleSheetsManager.FORMAT_DATE,
+    "sales_yoy_growth": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "profit_yoy_growth": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "profit_qoq_growth": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "opm_yoy_change": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "great_result_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "turnaround_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "compounder_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "sector_fundamental_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "pe_ttm": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "pe_200dma": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "pe_percentile_5y": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "pe_zscore_5y": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "index_level_equal_weight": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "index_level_mcap_weight": GoogleSheetsManager.FORMAT_DECIMAL_2,
 }
 
 
@@ -181,6 +200,144 @@ def publish_log_sheet(decision_bundle: PublishDecisionBundle, *, sheet_name: str
     return True
 
 
+def publish_fundamental_dashboard(datasets: dict[str, object]) -> bool:
+    """Publish the compact fundamental insight dashboard worksheet group."""
+    spreadsheet_id = _require_spreadsheet_id()
+    if not spreadsheet_id:
+        raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
+
+    manager = GoogleSheetsManager()
+    if not manager.open_spreadsheet():
+        raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
+
+    frames = _fundamental_dashboard_frames(datasets)
+    for sheet_name, frame in frames.items():
+        sheet = manager.get_or_create_sheet(sheet_name, rows=max(1000, len(frame) + 20), cols=max(12, len(frame.columns) + 2))
+        if not sheet:
+            raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
+        if not manager.write_dataframe(frame.fillna(""), sheet_name, include_header=True, clear_sheet=True):
+            raise RuntimeError(f"Failed writing {sheet_name}: {manager.last_error or 'unknown error'}")
+        manager.apply_number_formats(sheet_name, _FUNDAMENTAL_FORMATS)
+    logger.info("Fundamental dashboard updated in Google Sheets (%s tabs)", len(frames))
+    return True
+
+
+def _fundamental_dashboard_frames(datasets: dict[str, object]) -> dict[str, pd.DataFrame]:
+    payload = datasets.get("fundamental_dashboard_payload")
+    payload = payload if isinstance(payload, dict) else {}
+    universe = payload.get("universe") if isinstance(payload.get("universe"), dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    summary_rows = [
+        {"metric": "Run Date", "value": payload.get("run_date")},
+        {"metric": "Universe PE", "value": universe.get("pe_ttm")},
+        {"metric": "PE 200DMA", "value": universe.get("pe_200dma")},
+        {"metric": "PE 5Y Percentile", "value": universe.get("pe_percentile_5y")},
+        {"metric": "Valuation Zone", "value": universe.get("valuation_zone")},
+        {"metric": "Top Earnings Sector", "value": summary.get("top_earnings_sector")},
+        {"metric": "Great Result Count", "value": summary.get("great_results_count")},
+        {"metric": "Turnaround Count", "value": summary.get("turnaround_count")},
+        {"metric": "Compounder Count", "value": summary.get("compounder_count")},
+    ]
+    return {
+        "FUNDAMENTAL_SUMMARY": pd.DataFrame(summary_rows),
+        "GREAT_RESULTS": _select_columns(_sheet_stock_frame(_first_frame(datasets, "great_results_latest", "great_results"), limit=100), [
+            "symbol", "company_name", "sector", "report_date", "sales_yoy_growth", "profit_yoy_growth",
+            "profit_qoq_growth", "opm_yoy_change", "great_result_score", "insight_score", "evidence", "evidence_json",
+        ]),
+        "TURNAROUNDS": _select_columns(_sheet_stock_frame(_first_frame(datasets, "turnaround_candidates_latest", "turnaround_candidates"), limit=100), [
+            "symbol", "sector", "report_date", "sales_yoy_growth", "profit_yoy_growth", "loss_to_profit",
+            "opm_yoy_change", "turnaround_score", "insight_score", "turnaround_stage", "insight_type", "evidence", "evidence_json",
+        ]),
+        "COMPOUNDERS": _select_columns(_sheet_stock_frame(_first_frame(datasets, "compounder_candidates_latest", "compounder_candidates"), limit=100), [
+            "symbol", "sector", "report_date", "sales_8q_consistency", "profit_8q_consistency",
+            "sales_8q_cagr", "profit_8q_cagr", "margin_stability", "compounder_score", "insight_score",
+            "valuation_zone", "insight_type", "evidence_json",
+        ]),
+        "SECTOR_EARNINGS": _select_columns(_latest_by_date(_first_frame(datasets, "sector_earnings_latest", "sector_earnings_leadership"), "report_date"), [
+            "sector_name", "sector", "report_date", "sector_sales_yoy_growth", "sector_profit_yoy_growth",
+            "sales_positive_pct", "profit_positive_pct", "margin_expansion_pct", "great_result_count",
+            "turnaround_count", "compounder_count", "sector_earnings_score", "sector_fundamental_score",
+        ]),
+        "SECTOR_VALUATION": _latest_by_date(_first_frame(datasets, "sector_valuation_latest", "sector_valuation_daily"), "date"),
+        "UNIVERSE_VALUATION": _recent_by_date(_first_frame(datasets, "universe_valuation_latest", "universe_valuation_daily"), "date", limit=500),
+        "VALUATION_CYCLE": _select_columns(_recent_by_date(_first_frame(datasets, "valuation_cycle_latest", "valuation_cycle_features"), "date", limit=500), [
+            "date", "entity_id", "universe_id", "pe_ttm", "pe_200dma", "pe_percentile_5y",
+            "pe_zscore_5y", "valuation_zone", "index_level", "index_200dma", "pe_distance_from_200dma", "cycle_signal",
+        ]),
+    }
+
+
+def _as_frame(value: object) -> pd.DataFrame:
+    return value.copy() if isinstance(value, pd.DataFrame) else pd.DataFrame()
+
+
+def _first_frame(datasets: dict[str, object], *names: str) -> pd.DataFrame:
+    for name in names:
+        frame = _as_frame(datasets.get(name))
+        if not frame.empty:
+            return frame
+    return pd.DataFrame()
+
+
+def _sheet_stock_frame(frame: pd.DataFrame, *, limit: int) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    output = frame.copy()
+    if "report_date" in output.columns:
+        output = _latest_by_date(output, "report_date")
+    if "evidence" not in output.columns and "evidence_json" in output.columns:
+        output.loc[:, "evidence"] = output["evidence_json"].map(_evidence_text)
+    sort_cols = [column for column in ["insight_score", "symbol"] if column in output.columns]
+    if sort_cols:
+        output = output.sort_values(
+            sort_cols,
+            ascending=[False if column == "insight_score" else True for column in sort_cols],
+            na_position="last",
+        )
+    if "symbol" in output.columns:
+        output = output.drop_duplicates("symbol", keep="first")
+    return output.head(limit).reset_index(drop=True)
+
+
+def _latest_by_date(frame: pd.DataFrame, date_col: str) -> pd.DataFrame:
+    if frame.empty or date_col not in frame.columns:
+        return frame
+    output = frame.copy()
+    output.loc[:, date_col] = pd.to_datetime(output[date_col], errors="coerce")
+    latest = output[date_col].max()
+    if pd.isna(latest):
+        return output
+    return output[output[date_col].eq(latest)].reset_index(drop=True)
+
+
+def _recent_by_date(frame: pd.DataFrame, date_col: str, *, limit: int) -> pd.DataFrame:
+    if frame.empty or date_col not in frame.columns:
+        return frame
+    output = frame.copy()
+    output.loc[:, date_col] = pd.to_datetime(output[date_col], errors="coerce")
+    return output.sort_values(date_col).tail(limit).reset_index(drop=True)
+
+
+def _evidence_text(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return value
+    if not isinstance(parsed, dict):
+        return ""
+    return str(parsed.get("note") or "")
+
+
+def _select_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    selected = [column for column in columns if column in frame.columns]
+    extras = [column for column in frame.columns if column not in selected]
+    return frame[selected + extras[: max(0, 12 - len(selected))]].copy()
+
+
 __all__ = [
     "GoogleSheetsManager",
     "PortfolioSheets",
@@ -190,4 +347,5 @@ __all__ = [
     "publish_watchlist_candidates",
     "publish_event_log_sheet",
     "publish_log_sheet",
+    "publish_fundamental_dashboard",
 ]

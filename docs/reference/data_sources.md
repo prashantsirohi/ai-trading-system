@@ -95,7 +95,7 @@
 | NSE delivery | `data/ohlcv.duckdb::_delivery`, `data/feature_store/delivery/NSE/data_*.parquet` |
 | Dhan | `data/ohlcv.duckdb::ohlcv` (fallback rows) |
 | yfinance | `data/ohlcv.duckdb::ohlcv` (last-resort rows) |
-| Screener.in | `data/fundamentals.duckdb::{fundamental_snapshot, fundamental_scores, fundamental_trends}` |
+| Screener.in | `data/fundamentals/screener_financials.db` for Excel-sync ingestion; mirrored into `data/fundamentals.duckdb` for analytical readmodels such as `company_growth_features`, `company_insight_tags`, `sector_earnings_leadership`, and `universe_valuation_daily` |
 | market_intel | `data/market_intel.duckdb` (read-only from trading system) |
 
 For storage internals see `docs/architecture/storage_and_lineage.md`. For env-var reference see `docs/reference/environment_variables.md`.

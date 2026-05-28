@@ -27,6 +27,7 @@ _FIG_DPI = 110
 _BREADTH_FIG_SIZE = (8.5, 3.2)
 _BAR_FIG_SIZE = (8.5, 3.6)
 _CANDLE_FIG_SIZE = (8.0, 4.6)
+_VALUATION_FIG_SIZE = (8.5, 5.8)
 
 
 def _safe_save(fig, path: Path) -> Optional[Path]:
@@ -136,6 +137,65 @@ def rank_mover_bars(
         return _safe_save(fig, output_path)
     except Exception as exc:  # noqa: BLE001
         logger.warning("rank_mover_bars failed: %s", exc)
+        return None
+
+
+def universe_valuation_cycle(universe: pd.DataFrame, cycle: pd.DataFrame, output_path: Path) -> Optional[Path]:
+    """Three-panel PE cycle chart: index, PE moving average, and percentile bands."""
+    valuation = universe if universe is not None else pd.DataFrame()
+    features = cycle if cycle is not None else pd.DataFrame()
+    if valuation.empty and features.empty:
+        return None
+    try:
+        if not valuation.empty and "date" in valuation.columns:
+            valuation = valuation.copy()
+            valuation.loc[:, "date"] = pd.to_datetime(valuation["date"], errors="coerce")
+            valuation = valuation.dropna(subset=["date"]).sort_values("date")
+        if not features.empty and "date" in features.columns:
+            features = features.copy()
+            features.loc[:, "date"] = pd.to_datetime(features["date"], errors="coerce")
+            features = features.dropna(subset=["date"]).sort_values("date")
+        fig, axes = plt.subplots(3, 1, figsize=_VALUATION_FIG_SIZE, sharex=True)
+        if not valuation.empty:
+            index_col = next((c for c in ("index_level_mcap_weight", "index_level_equal_weight", "index_level") if c in valuation.columns), None)
+            if index_col:
+                axes[0].plot(valuation["date"], pd.to_numeric(valuation[index_col], errors="coerce"), color="#1f77b4", linewidth=1.2, label="Universe index")
+                if len(valuation) >= 20:
+                    axes[0].plot(
+                        valuation["date"],
+                        pd.to_numeric(valuation[index_col], errors="coerce").rolling(200, min_periods=20).mean(),
+                        color="#444",
+                        linewidth=1.0,
+                        label="200DMA",
+                    )
+            axes[0].set_title("Universe index vs 200DMA")
+            axes[0].legend(loc="upper left", fontsize=8, frameon=False)
+        pe_source = features if not features.empty else valuation
+        if not pe_source.empty:
+            axes[1].plot(pe_source["date"], pd.to_numeric(pe_source.get("pe_ttm"), errors="coerce"), color="#2ca02c", linewidth=1.2, label="Universe PE")
+            if "pe_200dma" in pe_source.columns:
+                axes[1].plot(pe_source["date"], pd.to_numeric(pe_source["pe_200dma"], errors="coerce"), color="#444", linewidth=1.0, label="PE 200DMA")
+            median_col = next((c for c in ("pe_5y_median", "pe_3y_median") if c in pe_source.columns), None)
+            if median_col:
+                axes[1].plot(pe_source["date"], pd.to_numeric(pe_source[median_col], errors="coerce"), color="#9467bd", linewidth=0.9, linestyle="--", label=median_col)
+            axes[1].set_title("Universe PE cycle")
+            axes[1].legend(loc="upper left", fontsize=8, frameon=False)
+        percentile_source = features if not features.empty and "pe_percentile_5y" in features.columns else valuation
+        if not percentile_source.empty and "pe_percentile_5y" in percentile_source.columns:
+            axes[2].plot(percentile_source["date"], pd.to_numeric(percentile_source["pe_percentile_5y"], errors="coerce"), color="#d62728", linewidth=1.2, label="PE percentile 5Y")
+            for value, color in ((90, "#d62728"), (80, "#ff7f0e"), (20, "#2ca02c"), (10, "#1f77b4")):
+                axes[2].axhline(value, color=color, linestyle="--", linewidth=0.7, alpha=0.75)
+            axes[2].set_ylim(0, 100)
+            axes[2].set_title("PE percentile zones")
+            axes[2].legend(loc="upper left", fontsize=8, frameon=False)
+        for ax in axes:
+            ax.grid(True, alpha=0.25)
+            for spine in ("top", "right"):
+                ax.spines[spine].set_visible(False)
+        fig.autofmt_xdate()
+        return _safe_save(fig, output_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("universe_valuation_cycle failed: %s", exc)
         return None
 
 

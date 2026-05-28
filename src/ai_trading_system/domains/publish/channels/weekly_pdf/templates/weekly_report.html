@@ -438,6 +438,93 @@
 </section>
 {% endif %}
 
+<section class="section">
+  <h2>10. Fundamental Insight Stories</h2>
+  <div class="move-grid">
+    <div class="move-card">
+      <h3>Great Results</h3>
+      <table class="compact">
+        <thead><tr><th>Symbol</th><th>Insight</th><th class="num">Score</th></tr></thead>
+        <tbody>
+          {% for row in great_results %}{% if loop.index <= 8 %}
+          <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.insight_type or "great_result" }}</td><td class="num">{{ row.insight_score|fmt_num(1) }}</td></tr>
+          {% endif %}{% else %}<tr><td colspan="3" class="muted">No great-result stories available.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="move-card">
+      <h3>Turnaround Stories</h3>
+      <table class="compact">
+        <thead><tr><th>Symbol</th><th>Stage</th><th class="num">Score</th></tr></thead>
+        <tbody>
+          {% for row in turnarounds %}{% if loop.index <= 8 %}
+          <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.insight_type or "turnaround" }}</td><td class="num">{{ row.insight_score|fmt_num(1) }}</td></tr>
+          {% endif %}{% else %}<tr><td colspan="3" class="muted">No turnaround stories available.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="move-card">
+      <h3>Compounders</h3>
+      <table class="compact">
+        <thead><tr><th>Symbol</th><th>Label</th><th class="num">Score</th></tr></thead>
+        <tbody>
+          {% for row in compounders %}{% if loop.index <= 8 %}
+          <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.insight_type or "compounder" }}</td><td class="num">{{ row.insight_score|fmt_num(1) }}</td></tr>
+          {% endif %}{% else %}<tr><td colspan="3" class="muted">No compounder candidates available.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="move-card">
+      <h3>Sector Earnings Leadership</h3>
+      <table class="compact">
+        <thead><tr><th>Sector</th><th class="num">Score</th><th class="num">Great</th><th class="num">Turn</th></tr></thead>
+        <tbody>
+          {% for row in sector_earnings %}{% if loop.index <= 8 %}
+          <tr><td><strong>{{ row.sector_name or row.sector }}</strong></td><td class="num">{{ row.sector_fundamental_score|fmt_num(1) }}</td><td class="num">{{ row.great_result_count }}</td><td class="num">{{ row.turnaround_count }}</td></tr>
+          {% endif %}{% else %}<tr><td colspan="4" class="muted">No sector earnings leadership available.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <h2>11. Valuation Cycle</h2>
+  {% if charts and charts.valuation_cycle %}
+  <div class="chart"><img src="{{ charts.valuation_cycle }}" alt="Universe valuation cycle" /></div>
+  {% endif %}
+  {% if fundamental_universe|length %}
+  <div class="kpi-grid">
+    {% for row in fundamental_universe %}{% if loop.index == 1 %}
+    <div class="kpi"><div class="label">Universe PE</div><div class="value">{{ row.pe_ttm|fmt_num(1) }}</div></div>
+    <div class="kpi"><div class="label">PE 200DMA</div><div class="value">{{ row.pe_200dma|fmt_num(1) }}</div></div>
+    <div class="kpi"><div class="label">PE 5Y %ile</div><div class="value">{{ row.pe_percentile_5y|fmt_num(0) }}</div></div>
+    <div class="kpi"><div class="label">Valuation Zone</div><div class="value">{{ row.valuation_zone or "—" }}</div></div>
+    <div class="kpi"><div class="label">Loss mcap %</div><div class="value">{{ row.loss_mcap_pct|fmt_num(1) }}</div></div>
+    {% endif %}{% endfor %}
+  </div>
+  {% endif %}
+  {% if valuation_cycle|length %}
+  <table>
+    <thead><tr><th>Date</th><th>Entity</th><th class="num">PE</th><th class="num">PE 200DMA</th><th class="num">5Y %ile</th><th class="num">5Y z</th><th>Zone</th><th>Signal</th></tr></thead>
+    <tbody>
+      {% for row in valuation_cycle %}
+      <tr>
+        <td>{{ row.date }}</td>
+        <td>{{ row.entity_id or row.universe_id }}</td>
+        <td class="num">{{ row.pe_ttm|fmt_num(1) }}</td>
+        <td class="num">{{ row.pe_200dma|fmt_num(1) }}</td>
+        <td class="num">{{ row.pe_percentile_5y|fmt_num(0) }}</td>
+        <td class="num">{{ row.pe_zscore_5y|fmt_num(2) }}</td>
+        <td>{{ row.valuation_zone or "—" }}</td>
+        <td>{{ row.cycle_signal or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">Valuation cycle data unavailable for this run.</p>{% endif %}
+</section>
+
 <section class="section appendix">
   <h2>Appendix · Data Quality &amp; Methodology</h2>
   <p>

@@ -205,6 +205,54 @@ class FundamentalsStage:
                     )
                 )
 
+        analytical_artifacts: list[StageArtifact] = []
+        analytical_summary: dict[str, Any] = {"status": "disabled"}
+        if bool(context.params.get("enable_fundamental_insights", True)):
+            db_path = self._resolve_screener_db_path(context)
+            if db_path.exists():
+                try:
+                    from ai_trading_system.domains.fundamentals.insight_readmodels import (
+                        refresh_fundamental_insight_readmodels,
+                    )
+                    from ai_trading_system.platform.db.paths import get_domain_paths
+
+                    paths = get_domain_paths(project_root=context.project_root, data_domain="operational")
+                    analytical_summary = refresh_fundamental_insight_readmodels(
+                        screener_db_path=db_path,
+                        fundamentals_db_path=context.params.get("fundamentals_duckdb_path")
+                        or (paths.root_dir / "fundamentals.duckdb"),
+                        ohlcv_db_path=paths.ohlcv_db_path,
+                        master_db_path=paths.master_db_path,
+                        from_date=context.params.get("fundamental_insights_from_date"),
+                        to_date=context.params.get("fundamental_insights_to_date") or context.run_date,
+                        output_dir=output_dir,
+                        project_root=context.project_root,
+                    )
+                    for artifact_type, path_text in dict(analytical_summary.get("artifacts") or {}).items():
+                        artifact_path = Path(path_text)
+                        if artifact_path.exists():
+                            try:
+                                if artifact_path.suffix.lower() == ".json":
+                                    row_count = None
+                                else:
+                                    row_count = len(pd.read_csv(artifact_path))
+                            except Exception:
+                                row_count = None
+                            analytical_artifacts.append(
+                                StageArtifact.from_file(
+                                    artifact_type,
+                                    artifact_path,
+                                    row_count=row_count,
+                                    metadata={"source": "fundamental_insights"},
+                                    attempt_number=context.attempt_number,
+                                )
+                            )
+                except Exception as exc:  # noqa: BLE001
+                    analytical_summary = {"status": "error", "error": str(exc)}
+                    warnings.append(f"Fundamental insight refresh failed: {exc}")
+            else:
+                analytical_summary = {"status": "skipped_missing_screener_db", "screener_db_path": str(db_path)}
+
         summary = self._summary(
             context=context,
             status="completed",
@@ -225,6 +273,7 @@ class FundamentalsStage:
             missing_industry_rows=int(metrics.missing_industry_rows),
             industry_trend_status=industry_trend_status,
             industry_trend_label_counts=dict(metrics.industry_trend_label_counts),
+            analytical_summary=analytical_summary,
         )
         summary_artifact = self._write_summary(context, summary)
         artifacts = [
@@ -243,6 +292,7 @@ class FundamentalsStage:
                 attempt_number=context.attempt_number,
             ),
             *industry_artifacts,
+            *analytical_artifacts,
             summary_artifact,
         ]
         return StageResult(artifacts=artifacts, metadata=summary)
@@ -347,6 +397,7 @@ class FundamentalsStage:
         missing_industry_rows: int = 0,
         industry_trend_status: str = "unknown",
         industry_trend_label_counts: dict[str, int] | None = None,
+        analytical_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "status": status,
@@ -368,6 +419,7 @@ class FundamentalsStage:
             "missing_industry_rows": int(missing_industry_rows),
             "industry_trend_status": industry_trend_status,
             "industry_trend_label_counts": dict(industry_trend_label_counts or {}),
+            "fundamental_insights": dict(analytical_summary or {}),
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 

@@ -39,7 +39,7 @@ It does **not**:
 - `data/fundamentals/industry_fundamental_trends_latest.csv` (optional).
 - `data/fundamentals/catalyst_scores_latest.csv` (optional).
 - Rank attempt directory: `data/pipeline_runs/<run_id>/rank/attempt_<n>/` — must contain `ranked_signals.csv` (`fundamentals.py:31`).
-- `data/fundamentals.duckdb` is legacy CSV-import storage only; do not treat it as canonical.
+- `data/fundamentals.duckdb` is the canonical analytical fundamentals store for mirrored Screener facts, company growth features, insight tags, sector earnings leadership, and universe valuation-cycle readmodels.
 
 Operator workflow for syncing Screener Excel exports into the canonical DB:
 
@@ -64,6 +64,10 @@ Under `data/pipeline_runs/<run_id>/fundamentals/attempt_<n>/`:
 | `industry_fundamental_scores` (optional) | `industry_fundamental_scores.csv` | Present only when industry input file exists. |
 | `industry_fundamental_trends` (optional) | `industry_fundamental_trends.csv` | Present only when industry trends input file exists. |
 | `sector_dashboard_enriched` (optional) | Written into the **rank** attempt dir as `sector_dashboard_enriched.csv` | `fundamentals.py:147`, registered as a `fundamentals` artifact. |
+| `company_insight_tags` (optional) | `company_insight_tags.csv` | Derived turnaround / great-result / compounder tags from `fundamentals.duckdb`. |
+| `sector_earnings_leadership` (optional) | `sector_earnings_leadership.csv` | Sector growth, breadth, margin, and insight-count leadership metrics. |
+| `universe_valuation_daily` (optional) | `universe_valuation_daily.csv` | Universe PE, PE moving average/median bands, percentiles, and loss-market-cap context. |
+| `valuation_cycle_features` (optional) | `valuation_cycle_features.csv` | Market-cycle signals derived from universe valuation history. |
 
 Skip path: when the scores CSV is missing, the stage writes only `fundamental_summary.json` with `status="skipped_missing_snapshot"` (`fundamentals.py:44`–`68`).
 

@@ -16,10 +16,36 @@ from ai_trading_system.domains.publish.publish_payloads import (
     build_publish_metadata,
 )
 from ai_trading_system.domains.publish.decision_bundle import build_publish_decision_bundle
-from ai_trading_system.domains.publish.telegram_summary_builder import build_telegram_summary
+from ai_trading_system.domains.publish.telegram_summary_builder import build_telegram_summary, render_fundamental_pulse
 from ai_trading_system.domains.publish.watchlist_buckets import (
     assign_watchlist_buckets,
     summarize_buckets,
+)
+
+
+FUNDAMENTAL_ARTIFACT_TYPES = frozenset(
+    {
+        "watchlist_candidates",
+        "fundamental_summary",
+        "fundamental_scores",
+        "company_growth_features",
+        "company_insight_tags",
+        "great_results",
+        "great_results_latest",
+        "turnaround_candidates",
+        "turnaround_candidates_latest",
+        "compounder_candidates",
+        "compounder_candidates_latest",
+        "sector_earnings_leadership",
+        "sector_earnings_latest",
+        "sector_valuation_daily",
+        "sector_valuation_latest",
+        "universe_valuation_daily",
+        "universe_valuation_latest",
+        "valuation_cycle_features",
+        "valuation_cycle_latest",
+        "fundamental_dashboard_payload",
+    }
 )
 
 
@@ -50,6 +76,7 @@ class PublishStage:
         # publish stage — the telegram digest and perf_tracker still need
         # to run so the operator gets *some* signal that the pipeline ran.
         "google_sheets_portfolio": "publish_optional",
+        "google_sheets_fundamentals": "publish_optional",
         "google_sheets_dashboard": "publish_of_record",
         "google_sheets_watchlist": "publish_of_record",
         "google_sheets_event_log": "publish_auxiliary",
@@ -89,12 +116,13 @@ class PublishStage:
             return self.operation(context)
 
         rank_artifact = context.require_artifact("rank", "ranked_signals")
+        fallback_fundamental_artifacts = self._ensure_fundamental_artifact_fallback(context)
         def _context_artifact_for(artifact_type: str) -> StageArtifact | None:
             artifact = context.artifact_for("rank", artifact_type)
             if artifact is not None:
                 return artifact
-            if artifact_type in {"watchlist_candidates", "fundamental_summary", "fundamental_scores"}:
-                return context.artifact_for("fundamentals", artifact_type)
+            if artifact_type in FUNDAMENTAL_ARTIFACT_TYPES:
+                return context.artifact_for("fundamentals", artifact_type) or fallback_fundamental_artifacts.get(artifact_type)
             return None
 
         datasets = build_publish_datasets(
@@ -104,6 +132,7 @@ class PublishStage:
             ranked_signals_artifact=rank_artifact,
             run_id=context.run_id,
             stage_name=self.name,
+            fundamental_artifact_types=FUNDAMENTAL_ARTIFACT_TYPES,
         )
         self._attach_event_datasets(context, datasets)
         self._attach_insight_datasets(context, datasets)
@@ -136,6 +165,7 @@ class PublishStage:
                 **(rank_artifact.metadata or {}),
                 "event_hashes": list(datasets.get("event_hashes") or []),
                 "insight_hash": datasets.get("insight_hash"),
+                "fundamental_fallback_artifacts": sorted(fallback_fundamental_artifacts),
             },
             attempt_number=rank_artifact.attempt_number,
         )
@@ -169,6 +199,11 @@ class PublishStage:
             stage2_breakdown_symbols=list(datasets.get("stage2_breakdown_symbols") or []),
         )
         metadata["watchlist_buckets"] = bucket_counts
+        if fallback_fundamental_artifacts:
+            metadata["fundamental_publish_fallback"] = {
+                "artifact_types": sorted(fallback_fundamental_artifacts),
+                "output_dir": str(context.output_dir() / "fundamentals"),
+            }
         self._attach_fundamentals_publish_summary(context, datasets, metadata)
         if non_blocking_failures:
             # Visible in publish_summary.json but does not raise.
@@ -185,16 +220,45 @@ class PublishStage:
         metadata: Dict[str, Any],
     ) -> None:
         watchlist = datasets.get("watchlist_candidates")
-        if not isinstance(watchlist, pd.DataFrame) or watchlist.empty:
-            return
-        bucket = watchlist.get("watchlist_bucket", pd.Series("", index=watchlist.index)).astype(str)
-        add_rows = watchlist.loc[bucket.eq("ADD_TO_WATCHLIST")].head(10)
-        metadata["fundamentals_top_add_to_watchlist"] = (
-            add_rows.get("symbol", pd.Series(dtype=str)).astype(str).tolist()
-            if not add_rows.empty
-            else []
-        )
+        if isinstance(watchlist, pd.DataFrame) and not watchlist.empty:
+            bucket = watchlist.get("watchlist_bucket", pd.Series("", index=watchlist.index)).astype(str)
+            add_rows = watchlist.loc[bucket.eq("ADD_TO_WATCHLIST")].head(10)
+            metadata["fundamentals_top_add_to_watchlist"] = (
+                add_rows.get("symbol", pd.Series(dtype=str)).astype(str).tolist()
+                if not add_rows.empty
+                else []
+            )
         summary_artifact = context.artifact_for("fundamentals", "fundamental_summary")
+        summary = datasets.get("fundamental_summary") if isinstance(datasets.get("fundamental_summary"), dict) else {}
+        great_results = _first_frame(datasets, "great_results_latest", "great_results")
+        turnarounds = _first_frame(datasets, "turnaround_candidates_latest", "turnaround_candidates")
+        compounders = _first_frame(datasets, "compounder_candidates_latest", "compounder_candidates")
+        sector = _first_frame(datasets, "sector_earnings_latest", "sector_earnings_leadership")
+        universe = _first_frame(datasets, "universe_valuation_latest", "universe_valuation_daily")
+        latest_universe = _latest_frame(universe, "date")
+        top_sector = None
+        if isinstance(sector, pd.DataFrame) and not sector.empty:
+            latest_sector = _latest_frame(sector, "report_date")
+            score_col = "sector_fundamental_score" if "sector_fundamental_score" in latest_sector.columns else None
+            ordered = latest_sector.sort_values(score_col, ascending=False, na_position="last") if score_col else latest_sector
+            if not ordered.empty:
+                top_sector = ordered.iloc[0].get("sector_name") or ordered.iloc[0].get("sector")
+        universe_pe = None
+        valuation_zone = None
+        if not latest_universe.empty:
+            row = latest_universe.iloc[-1]
+            universe_pe = _safe_float(row.get("pe_ttm"))
+            valuation_zone = row.get("valuation_zone")
+        metadata["fundamentals"] = {
+            "great_results_count": _frame_len(great_results),
+            "turnaround_count": _frame_len(turnarounds),
+            "compounder_count": _frame_len(compounders),
+            "top_earnings_sector": str(top_sector) if top_sector is not None else None,
+            "universe_pe": universe_pe,
+            "valuation_zone": str(valuation_zone) if valuation_zone is not None and pd.notna(valuation_zone) else None,
+            "fundamental_summary_uri": summary_artifact.uri if summary_artifact is not None else None,
+            "summary_status": summary.get("status") if isinstance(summary, dict) else None,
+        }
         if summary_artifact is not None:
             metadata["fundamental_summary_uri"] = summary_artifact.uri
 
@@ -326,6 +390,72 @@ class PublishStage:
         with Path(artifact.uri).open("r", encoding="utf-8") as handle:
             return json.load(handle)
 
+    def _ensure_fundamental_artifact_fallback(self, context: StageContext) -> dict[str, StageArtifact]:
+        """Best-effort publish fallback when the run skipped the fundamentals stage.
+
+        The canonical flow remains fundamentals stage -> publish stage. This
+        fallback prevents silent Google Sheets omissions on runs that publish
+        directly from rank artifacts while the Screener cache is present.
+        """
+        if context.artifacts.get("fundamentals"):
+            return {}
+        if not bool(context.params.get("enable_fundamental_publish_fallback", True)):
+            return {}
+        try:
+            from ai_trading_system.domains.fundamentals.insight_readmodels import (
+                refresh_fundamental_insight_readmodels,
+            )
+            from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
+            from ai_trading_system.platform.db.paths import get_domain_paths
+
+            paths = get_domain_paths(project_root=context.project_root, data_domain=context.params.get("data_domain", "operational"))
+            screener_db = Path(
+                str(
+                    context.params.get("screener_financials_db_path")
+                    or context.params.get("fundamental_screener_db_path")
+                    or default_screener_db_path(context.project_root)
+                )
+            )
+            if not screener_db.is_absolute():
+                screener_db = context.project_root / screener_db
+            if not screener_db.exists():
+                return {}
+            output_dir = context.output_dir() / "fundamentals"
+            summary = refresh_fundamental_insight_readmodels(
+                screener_db_path=screener_db,
+                fundamentals_db_path=context.params.get("fundamentals_duckdb_path") or (paths.root_dir / "fundamentals.duckdb"),
+                ohlcv_db_path=paths.ohlcv_db_path,
+                master_db_path=paths.master_db_path,
+                from_date=context.params.get("fundamental_insights_from_date"),
+                to_date=context.params.get("fundamental_insights_to_date") or context.run_date,
+                output_dir=output_dir,
+                project_root=context.project_root,
+            )
+        except Exception:
+            return {}
+
+        artifacts: dict[str, StageArtifact] = {}
+        for artifact_type, path_text in dict(summary.get("artifacts") or {}).items():
+            if artifact_type not in FUNDAMENTAL_ARTIFACT_TYPES:
+                continue
+            path = Path(path_text)
+            if not path.exists():
+                continue
+            row_count = None
+            if path.suffix.lower() != ".json":
+                try:
+                    row_count = len(pd.read_csv(path))
+                except Exception:
+                    row_count = None
+            artifacts[artifact_type] = StageArtifact.from_file(
+                artifact_type,
+                path,
+                row_count=row_count,
+                metadata={"source": "publish_fundamental_fallback"},
+                attempt_number=context.attempt_number,
+            )
+        return artifacts
+
     def _build_handlers(
         self,
         context: StageContext,
@@ -344,6 +474,27 @@ class PublishStage:
             handlers["google_sheets_dashboard"] = self._publish_dashboard_payload
         if not datasets.get("watchlist_candidates", pd.DataFrame()).empty:
             handlers["google_sheets_watchlist"] = self._publish_watchlist
+        has_fundamentals = any(
+            isinstance(datasets.get(name), pd.DataFrame) and not datasets.get(name).empty
+            for name in (
+                "great_results",
+                "great_results_latest",
+                "turnaround_candidates",
+                "turnaround_candidates_latest",
+                "compounder_candidates",
+                "compounder_candidates_latest",
+                "sector_earnings_leadership",
+                "sector_earnings_latest",
+                "sector_valuation_daily",
+                "sector_valuation_latest",
+                "universe_valuation_daily",
+                "universe_valuation_latest",
+                "valuation_cycle_features",
+                "valuation_cycle_latest",
+            )
+        ) or bool(datasets.get("fundamental_dashboard_payload"))
+        if has_fundamentals:
+            handlers["google_sheets_fundamentals"] = self._publish_fundamental_dashboard
         if datasets.get("decision_bundle") is not None:
             handlers["google_sheets_event_log"] = self._publish_event_log
             handlers["google_sheets_publish_log"] = self._publish_publish_log
@@ -456,6 +607,18 @@ class PublishStage:
         if not publish_watchlist_candidates(datasets["watchlist_candidates"], decision_bundle=datasets.get("decision_bundle")):
             raise RuntimeError("watchlist publish returned False")
         return {"report_id": "watchlist_candidates_sheet"}
+
+    def _publish_fundamental_dashboard(
+        self,
+        context: StageContext,
+        rank_artifact: StageArtifact,
+        datasets: Dict[str, pd.DataFrame],
+    ) -> Dict[str, Any]:
+        from ai_trading_system.domains.publish.channels.google_sheets import publish_fundamental_dashboard
+
+        if not publish_fundamental_dashboard(datasets):
+            raise RuntimeError("fundamental dashboard publish returned False")
+        return {"report_id": "fundamental_dashboard_sheet"}
 
     def _publish_event_log(
         self,
@@ -582,6 +745,9 @@ class PublishStage:
                 message = message.rstrip() + "\n\n" + render_watchlist_telegram(watchlist_df, top_n=10)
         else:
             message = self._build_telegram_tearsheet(context, telegram_datasets)
+        pulse = render_fundamental_pulse(telegram_datasets)
+        if pulse and "Fundamental Pulse" not in message:
+            message = message.rstrip() + "\n\n" + pulse
         if not reporter.send_message(message):
             detail = reporter.last_error or "unknown Telegram error"
             if reporter.last_health_check and reporter.last_health_check.get("status") == "failed":
@@ -676,3 +842,35 @@ def _snapshot_severity(row: dict[str, Any]) -> str:
     if row.get("tier") == "B":
         return "medium"
     return "low-info"
+
+
+def _frame_len(value: Any) -> int:
+    return int(len(value)) if isinstance(value, pd.DataFrame) else 0
+
+
+def _first_frame(datasets: Dict[str, Any], *names: str) -> pd.DataFrame:
+    for name in names:
+        value = datasets.get(name)
+        if isinstance(value, pd.DataFrame) and not value.empty:
+            return value
+    return pd.DataFrame()
+
+
+def _latest_frame(value: Any, date_col: str) -> pd.DataFrame:
+    if not isinstance(value, pd.DataFrame) or value.empty or date_col not in value.columns:
+        return pd.DataFrame()
+    frame = value.copy()
+    frame.loc[:, date_col] = pd.to_datetime(frame[date_col], errors="coerce")
+    latest = frame[date_col].max()
+    if pd.isna(latest):
+        return frame
+    return frame[frame[date_col].eq(latest)]
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if pd.isna(value):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None

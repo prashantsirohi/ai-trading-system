@@ -44,6 +44,14 @@ class WeeklyReportData:
     market_breadth: pd.DataFrame = field(default_factory=pd.DataFrame)
     market_events_snapshot: Dict[str, Any] = field(default_factory=dict)
     enriched_event_signals: list = field(default_factory=list)
+    great_results: pd.DataFrame = field(default_factory=pd.DataFrame)
+    turnaround_candidates: pd.DataFrame = field(default_factory=pd.DataFrame)
+    compounder_candidates: pd.DataFrame = field(default_factory=pd.DataFrame)
+    sector_earnings_leadership: pd.DataFrame = field(default_factory=pd.DataFrame)
+    sector_valuation_daily: pd.DataFrame = field(default_factory=pd.DataFrame)
+    universe_valuation_daily: pd.DataFrame = field(default_factory=pd.DataFrame)
+    valuation_cycle_features: pd.DataFrame = field(default_factory=pd.DataFrame)
+    fundamental_dashboard_payload: Dict[str, Any] = field(default_factory=dict)
 
 
 def _read_csv_artifact(artifact: Optional[StageArtifact]) -> pd.DataFrame:
@@ -95,6 +103,7 @@ def load_report_data(
     dashboard_payload = datasets.get("dashboard_payload") or {}
     market_events_snapshot = datasets.get("market_events_snapshot") or {}
     enriched_event_signals = list(datasets.get("enriched_event_signals") or [])
+    fundamental_dashboard_payload = datasets.get("fundamental_dashboard_payload") or {}
 
     trust_status = (
         datasets.get("publish_trust_status")
@@ -115,6 +124,14 @@ def load_report_data(
         trust_status=str(trust_status),
         market_events_snapshot=dict(market_events_snapshot),
         enriched_event_signals=enriched_event_signals,
+        great_results=_first_dataset_frame(datasets, "great_results_latest", "great_results"),
+        turnaround_candidates=_first_dataset_frame(datasets, "turnaround_candidates_latest", "turnaround_candidates"),
+        compounder_candidates=_first_dataset_frame(datasets, "compounder_candidates_latest", "compounder_candidates"),
+        sector_earnings_leadership=_first_dataset_frame(datasets, "sector_earnings_latest", "sector_earnings_leadership"),
+        sector_valuation_daily=_first_dataset_frame(datasets, "sector_valuation_latest", "sector_valuation_daily"),
+        universe_valuation_daily=_first_dataset_frame(datasets, "universe_valuation_latest", "universe_valuation_daily"),
+        valuation_cycle_features=_first_dataset_frame(datasets, "valuation_cycle_latest", "valuation_cycle_features"),
+        fundamental_dashboard_payload=dict(fundamental_dashboard_payload) if isinstance(fundamental_dashboard_payload, dict) else {},
     )
     _attach_phase2_inputs(context, data)
     return data
@@ -185,6 +202,19 @@ def _safe_read_csv(path: Path) -> pd.DataFrame:
         return pd.read_csv(path)
     except pd.errors.EmptyDataError:
         return pd.DataFrame()
+
+
+def _dataset_frame(datasets: Dict[str, Any], name: str) -> pd.DataFrame:
+    value = datasets.get(name)
+    return value if isinstance(value, pd.DataFrame) else pd.DataFrame()
+
+
+def _first_dataset_frame(datasets: Dict[str, Any], *names: str) -> pd.DataFrame:
+    for name in names:
+        frame = _dataset_frame(datasets, name)
+        if not frame.empty:
+            return frame
+    return pd.DataFrame()
 
 
 def _safe_date(value: Any) -> Optional[date]:

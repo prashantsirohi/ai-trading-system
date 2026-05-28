@@ -12,6 +12,32 @@ from ai_trading_system.pipeline.contracts import StageArtifact
 from ai_trading_system.domains.publish.signal_classification import classify_signal
 
 
+DEFAULT_FUNDAMENTAL_ARTIFACT_TYPES = frozenset(
+    {
+        "watchlist_candidates",
+        "fundamental_summary",
+        "fundamental_scores",
+        "company_growth_features",
+        "company_insight_tags",
+        "great_results",
+        "great_results_latest",
+        "turnaround_candidates",
+        "turnaround_candidates_latest",
+        "compounder_candidates",
+        "compounder_candidates_latest",
+        "sector_earnings_leadership",
+        "sector_earnings_latest",
+        "sector_valuation_daily",
+        "sector_valuation_latest",
+        "universe_valuation_daily",
+        "universe_valuation_latest",
+        "valuation_cycle_features",
+        "valuation_cycle_latest",
+        "fundamental_dashboard_payload",
+    }
+)
+
+
 def apply_trust_overlay(payload: dict, trust_status: str) -> dict:
     """Attach trust status to publish payloads in an additive way."""
     output = dict(payload)
@@ -87,8 +113,10 @@ def build_publish_datasets(
     ranked_signals_artifact: StageArtifact,
     run_id: str | None = None,
     stage_name: str | None = "publish",
+    fundamental_artifact_types: set[str] | frozenset[str] | None = None,
 ) -> Dict[str, Any]:
     """Load publish datasets from rank-stage artifacts with compatibility defaults."""
+    fundamental_types = set(fundamental_artifact_types or DEFAULT_FUNDAMENTAL_ARTIFACT_TYPES)
     scan_artifact = context_artifact_for("stock_scan")
     breakout_artifact = context_artifact_for("breakout_scan")
     pattern_artifact = context_artifact_for("pattern_scan")
@@ -99,6 +127,18 @@ def build_publish_datasets(
     ranked_df = read_artifact(ranked_signals_artifact)
     stage2_summary = _build_stage2_summary(ranked_df)
     dashboard_payload = read_json_artifact(dashboard_payload_artifact) if dashboard_payload_artifact else {}
+    fundamental_artifacts = {
+        artifact_type: context_artifact_for(artifact_type)
+        for artifact_type in fundamental_types
+        if artifact_type not in {"watchlist_candidates", "fundamental_summary"}
+    }
+    fundamental_dashboard_payload = (
+        read_json_artifact(fundamental_artifacts["fundamental_dashboard_payload"])
+        if fundamental_artifacts.get("fundamental_dashboard_payload")
+        else {}
+    )
+    if fundamental_dashboard_payload:
+        dashboard_payload["fundamentals"] = _dashboard_fundamentals_payload(fundamental_dashboard_payload)
     trust_status = str(
         (dashboard_payload.get("summary", {}) or {}).get(
             "data_trust_status",
@@ -150,7 +190,7 @@ def build_publish_datasets(
         ]
         dashboard_payload["watchlist"] = watchlist_rows
 
-    return {
+    datasets: Dict[str, Any] = {
         "ranked_signals": ranked_df,
         "breakout_scan": read_artifact(breakout_artifact) if breakout_artifact else pd.DataFrame(),
         "pattern_scan": read_artifact(pattern_artifact) if pattern_artifact else pd.DataFrame(),
@@ -168,6 +208,19 @@ def build_publish_datasets(
         "stage2_summary": stage2_summary,
         "stage2_breakdown_symbols": stage2_summary.get("top_symbols", []),
     }
+    for artifact_type, artifact in fundamental_artifacts.items():
+        if artifact_type == "fundamental_dashboard_payload":
+            datasets[artifact_type] = fundamental_dashboard_payload
+        elif artifact_type == "fundamental_scores":
+            datasets[artifact_type] = read_artifact(artifact) if artifact else pd.DataFrame()
+        elif artifact is not None:
+            datasets[artifact_type] = read_artifact(artifact)
+        elif artifact_type not in datasets:
+            datasets[artifact_type] = pd.DataFrame()
+    if "fundamental_summary" in fundamental_types:
+        summary_artifact = context_artifact_for("fundamental_summary")
+        datasets["fundamental_summary"] = read_json_artifact(summary_artifact) if summary_artifact else {}
+    return datasets
 
 
 def build_publish_metadata(
@@ -224,4 +277,16 @@ def _build_stage2_summary(ranked_df: pd.DataFrame, *, max_symbols: int = 10) -> 
         "uptrend_count": uptrend_count,
         "counts_by_label": label_counts,
         "top_symbols": top_symbols,
+    }
+
+
+def _dashboard_fundamentals_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "summary": dict(payload.get("summary") or {}),
+        "great_results": list(payload.get("top_great_results") or []),
+        "turnarounds": list(payload.get("top_turnarounds") or []),
+        "compounders": list(payload.get("top_compounders") or []),
+        "sector_earnings": list(payload.get("sector_earnings_leadership") or []),
+        "valuation_cycle": list(payload.get("valuation_chart") or []),
+        "universe": dict(payload.get("universe") or {}),
     }

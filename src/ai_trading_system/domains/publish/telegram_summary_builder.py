@@ -15,7 +15,7 @@ def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str
     """Build the compact Telegram market tearsheet."""
     bundle = datasets.get("decision_bundle")
     if bundle is not None and getattr(bundle, "telegram_digest", None):
-        return str(bundle.telegram_digest)
+        return _append_fundamental_pulse(str(bundle.telegram_digest), datasets)
     dashboard = datasets.get("dashboard_payload") or {}
     summary = dashboard.get("summary", {})
     data_trust = dashboard.get("data_trust", {}) or {}
@@ -109,13 +109,88 @@ def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str
         for idx, (_, row) in enumerate(ranked_df.head(10).iterrows(), start=1):
             lines.append(_format_ranked_line(idx, row))
 
-    return "\n".join(lines)
+    return _append_fundamental_pulse("\n".join(lines), datasets)
+
+
+def render_fundamental_pulse(datasets: Mapping[str, Any]) -> str:
+    payload = datasets.get("fundamental_dashboard_payload") or {}
+    dashboard = datasets.get("dashboard_payload") or {}
+    if not isinstance(payload, Mapping):
+        payload = {}
+    if not payload and isinstance(dashboard, Mapping):
+        payload = dashboard.get("fundamentals") or {}
+    universe = payload.get("universe") if isinstance(payload.get("universe"), Mapping) else {}
+    sector_df = _first_frame(datasets, "sector_earnings_latest", "sector_earnings_leadership")
+    great_df = _first_frame(datasets, "great_results_latest", "great_results")
+    turn_df = _first_frame(datasets, "turnaround_candidates_latest", "turnaround_candidates")
+    comp_df = _first_frame(datasets, "compounder_candidates_latest", "compounder_candidates")
+    if not universe and sector_df.empty and great_df.empty and turn_df.empty and comp_df.empty:
+        return ""
+    pe = _format_decimal(universe.get("pe_ttm"), 1)
+    pe_200 = _format_decimal(universe.get("pe_200dma"), 1)
+    percentile = _format_decimal(universe.get("pe_percentile_5y"), 0)
+    zone = escape(str(universe.get("valuation_zone") or "n/a"))
+    sectors = ", ".join(escape(item) for item in _top_sector_names(sector_df, 3)) or "n/a"
+    great = ", ".join(escape(item) for item in _top_symbols(great_df, 3)) or "n/a"
+    turnarounds = ", ".join(escape(item) for item in _top_symbols(turn_df, 3)) or "n/a"
+    compounders = ", ".join(escape(item) for item in _top_symbols(comp_df, 3)) or "n/a"
+    return "\n".join(
+        [
+            "<b>Fundamental Pulse</b>",
+            f"Universe PE: <b>{pe}</b> | PE 200DMA: <b>{pe_200}</b> | PE 5Y %ile: <b>{percentile}</b> | Zone: <b>{zone}</b>",
+            f"Top earnings sectors: {sectors}",
+            f"Great results: {great}",
+            f"Turnarounds: {turnarounds}",
+            f"Compounders: {compounders}",
+        ]
+    )
+
+
+def _append_fundamental_pulse(message: str, datasets: Mapping[str, Any]) -> str:
+    pulse = render_fundamental_pulse(datasets)
+    if not pulse:
+        return message
+    if "Fundamental Pulse" in message:
+        return message
+    return message.rstrip() + "\n\n" + pulse
 
 
 def _as_frame(value: Any) -> pd.DataFrame:
     if isinstance(value, pd.DataFrame):
         return value
     return pd.DataFrame()
+
+
+def _first_frame(datasets: Mapping[str, Any], *names: str) -> pd.DataFrame:
+    for name in names:
+        frame = _as_frame(datasets.get(name))
+        if not frame.empty:
+            return frame
+    return pd.DataFrame()
+
+
+def _top_symbols(frame: pd.DataFrame, limit: int) -> list[str]:
+    if frame.empty:
+        return []
+    df = frame.copy()
+    if "insight_score" in df.columns:
+        df = df.sort_values("insight_score", ascending=False, na_position="last")
+    column = next((col for col in ("symbol", "symbol_id") if col in df.columns), None)
+    if column is None:
+        return []
+    return [str(value) for value in df[column].dropna().astype(str).head(limit).tolist()]
+
+
+def _top_sector_names(frame: pd.DataFrame, limit: int) -> list[str]:
+    if frame.empty:
+        return []
+    df = frame.copy()
+    if "sector_fundamental_score" in df.columns:
+        df = df.sort_values("sector_fundamental_score", ascending=False, na_position="last")
+    column = next((col for col in ("sector_name", "sector", "Sector") if col in df.columns), None)
+    if column is None:
+        return []
+    return [str(value) for value in df[column].dropna().astype(str).head(limit).tolist()]
 
 
 def _format_market_direction_line(dashboard: Mapping[str, Any]) -> str:
