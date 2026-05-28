@@ -179,7 +179,7 @@ def test_latest_operational_snapshot_tolerates_existing_control_plane_connection
     live_payload = _write_snapshot_artifacts(tmp_path, live_run, score=77.0, smoke=False)
     _seed_control_plane(tmp_path, [(live_run, {"params": {}})])
 
-    conn = duckdb.connect(str(tmp_path / "data" / "control_plane.duckdb"))
+    conn = duckdb.connect(str(tmp_path / "data" / "control_plane.duckdb"), read_only=True)
     try:
         snapshot = load_latest_operational_snapshot(tmp_path)
     finally:

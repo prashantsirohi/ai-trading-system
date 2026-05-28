@@ -110,6 +110,9 @@ def _compute_cycle_features(frame: pd.DataFrame, *, min_history_days: int) -> pd
             mean = pe.rolling(window, min_periods=min_periods).mean()
             std = pe.rolling(window, min_periods=min_periods).std()
             group.loc[:, f"pe_zscore_{label}"] = (pe - mean) / std.where(std.ne(0))
+            if label == "5y":
+                group.loc[:, "pe_median_5y"] = pe.rolling(window, min_periods=min_periods).median()
+                group.loc[:, "pe_avg_5y"] = mean
         group.loc[:, "valuation_zone"] = group.apply(_valuation_zone, axis=1)
         group.loc[:, "cycle_signal"] = group.apply(_cycle_signal, axis=1)
         pieces.append(group)
@@ -123,6 +126,8 @@ def _compute_cycle_features(frame: pd.DataFrame, *, min_history_days: int) -> pd
         "pe_pctile_3y",
         "pe_pctile_5y",
         "pe_pctile_10y",
+        "pe_median_5y",
+        "pe_avg_5y",
         "pe_zscore_3y",
         "pe_zscore_5y",
         "pe_zscore_10y",

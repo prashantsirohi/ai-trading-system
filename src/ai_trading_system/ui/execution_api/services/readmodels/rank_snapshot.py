@@ -351,15 +351,24 @@ def _stage2_summary(ranked: pd.DataFrame, *, top_symbols: int = 8) -> dict[str, 
 
 
 def _stage2_source_frame(*frames: pd.DataFrame | None) -> pd.DataFrame:
-    """Pick the first non-empty frame that actually carries Stage 2 fields."""
+    """Pick the first non-empty frame that actually carries Stage 2 fields.
+    If none carry Stage 2 fields, fallback to the first one that has composite_score,
+    otherwise fallback to the first non-empty frame overall.
+    """
     stage2_columns = {"stage2_score", "is_stage2_uptrend", "stage2_label"}
+    for frame in frames:
+        if frame is None or frame.empty:
+            continue
+        if stage2_columns.intersection(frame.columns):
+            return frame
+
     fallback = pd.DataFrame()
     for frame in frames:
         if frame is None or frame.empty:
             continue
         if fallback.empty:
             fallback = frame
-        if stage2_columns.intersection(frame.columns):
+        if "composite_score" in frame.columns:
             return frame
     return fallback
 

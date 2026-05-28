@@ -68,7 +68,7 @@ def _connect(project_root: str | Path | None) -> tuple[Optional[duckdb.DuckDBPyC
     cp_path = _control_plane_path(ctx)
     if not cp_path.exists():
         return None, ctx
-    return duckdb.connect(str(cp_path)), ctx
+    return duckdb.connect(str(cp_path), read_only=True), ctx
 
 
 # ---------------------------------------------------------------------------

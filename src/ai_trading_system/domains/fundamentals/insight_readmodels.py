@@ -15,6 +15,10 @@ from ai_trading_system.domains.features.company_insight_tags import refresh_comp
 from ai_trading_system.domains.features.sector_earnings_leadership import refresh_sector_earnings_leadership_analytical
 from ai_trading_system.domains.features.universe_valuation import refresh_universe_valuation_daily
 from ai_trading_system.domains.features.valuation_cycle_features import refresh_fundamental_valuation_cycle_features
+from ai_trading_system.domains.fundamentals.presentation_payloads import (
+    DEFAULT_PUBLISH_UNIVERSE_ID,
+    build_fundamental_dashboard_payload,
+)
 from ai_trading_system.domains.fundamentals.analytical_store import (
     default_fundamentals_duckdb_path,
     mirror_screener_financials,
@@ -402,12 +406,17 @@ def _build_dashboard_payload(
     universe = _read_csv(universe_path)
     cycle = _read_csv(cycle_path)
     growth = _read_csv(growth_path)
+    universe_id = DEFAULT_PUBLISH_UNIVERSE_ID
+    universe = universe.loc[universe["universe_id"].astype(str).eq(universe_id)].copy() if "universe_id" in universe.columns else universe
+    cycle = cycle.loc[cycle["entity_id"].astype(str).eq(universe_id)].copy() if "entity_id" in cycle.columns else cycle
     latest_universe = _latest_by_date(universe, "date")
     great_latest = _read_csv(great_latest_path) if great_latest_path else _curated_stock_tags(tags, GREAT_RESULT_PRIORITY, limit=100)
     turnaround_latest = _read_csv(turnaround_latest_path) if turnaround_latest_path else _curated_stock_tags(tags, TURNAROUND_PRIORITY, limit=100)
     compounder_latest = _read_csv(compounder_latest_path) if compounder_latest_path else _curated_stock_tags(tags, COMPOUNDER_PRIORITY, limit=100)
     sector_latest = _read_csv(sector_latest_path) if sector_latest_path else _latest_by_date(sectors, "report_date")
     cycle_latest = _read_csv(valuation_cycle_latest_path) if valuation_cycle_latest_path else _recent_by_date(cycle, "date", limit=500)
+    if "entity_id" in cycle_latest.columns:
+        cycle_latest = cycle_latest.loc[cycle_latest["entity_id"].astype(str).eq(universe_id)].copy()
     summary = {
         "company_growth_rows": int(len(growth)),
         "insight_tag_rows": int(len(tags)),
@@ -425,7 +434,7 @@ def _build_dashboard_payload(
     if not latest_universe.empty:
         row = latest_universe.sort_values("date").tail(1).iloc[0].to_dict()
         universe_payload = {key: _json_scalar(value) for key, value in row.items()}
-    return {
+    base_payload = {
         "run_date": str(run_date or _max_date([universe, cycle, sectors, tags]) or ""),
         "summary": summary,
         "universe": universe_payload,
@@ -435,6 +444,19 @@ def _build_dashboard_payload(
         "sector_earnings_leadership": _records(sector_latest.head(20)),
         "valuation_chart": _records(cycle_latest),
     }
+    compact = build_fundamental_dashboard_payload(
+        base_payload=base_payload,
+        great_results=great_latest,
+        turnarounds=turnaround_latest,
+        compounders=compounder_latest,
+        sector_earnings=sector_latest,
+        universe_valuation=universe,
+        valuation_cycle=cycle,
+        universe_id=universe_id,
+        years=5,
+    )
+    base_payload.update(compact)
+    return base_payload
 
 
 def _read_csv(path: Path) -> pd.DataFrame:

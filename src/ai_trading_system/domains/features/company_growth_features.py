@@ -105,7 +105,7 @@ def compute_company_growth_features(facts: pd.DataFrame) -> pd.DataFrame:
     q.loc[:, "sales_growth_positive_quarters_4q"] = grouped["sales_yoy_growth"].transform(lambda s: s.gt(0).rolling(4, min_periods=1).sum())
     q.loc[:, "profit_growth_positive_quarters_4q"] = grouped["profit_yoy_growth"].transform(lambda s: s.gt(0).rolling(4, min_periods=1).sum())
     q.loc[:, "margin_expansion_quarters_4q"] = grouped["opm_yoy_change"].transform(lambda s: s.gt(0).rolling(4, min_periods=1).sum())
-    q.loc[:, "created_at"] = pd.Timestamp.utcnow()
+    q.loc[:, "created_at"] = pd.Timestamp.now(tz='UTC').tz_localize(None)
     for column in (
         "positive_profit_quarters_4q",
         "sales_growth_positive_quarters_4q",

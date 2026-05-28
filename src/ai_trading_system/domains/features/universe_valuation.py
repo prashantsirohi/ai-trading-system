@@ -156,7 +156,7 @@ def compute_universe_valuation_daily(frame: pd.DataFrame) -> pd.DataFrame:
         group.loc[:, "valuation_zone"] = group["pe_percentile_5y"].combine_first(group["pe_percentile_3y"]).map(valuation_zone)
         pieces.append(group)
     result = pd.concat(pieces, ignore_index=True) if pieces else pd.DataFrame()
-    result.loc[:, "created_at"] = pd.Timestamp.utcnow()
+    result.loc[:, "created_at"] = pd.Timestamp.now(tz='UTC').tz_localize(None)
     return result[columns].reset_index(drop=True)
 
 

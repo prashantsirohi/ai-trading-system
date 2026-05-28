@@ -616,6 +616,11 @@ class PublishStage:
     ) -> Dict[str, Any]:
         from ai_trading_system.domains.publish.channels.google_sheets import publish_fundamental_dashboard
 
+        datasets["fundamental_publish_universe_id"] = context.params.get(
+            "fundamental_publish_universe_id",
+            "UNIV_TOP1000_MCAP",
+        )
+        datasets["fundamental_publish_years"] = int(context.params.get("fundamental_publish_years", 5) or 5)
         if not publish_fundamental_dashboard(datasets):
             raise RuntimeError("fundamental dashboard publish returned False")
         return {"report_id": "fundamental_dashboard_sheet"}

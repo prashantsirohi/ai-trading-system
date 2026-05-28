@@ -176,11 +176,15 @@ def test_valuation_cycle_features_labels_extreme_percentiles(tmp_path: Path) -> 
     assert result.rows == 5
     conn = duckdb.connect(str(db), read_only=True)
     try:
-        latest = conn.execute("SELECT * FROM valuation_cycle_features ORDER BY date DESC LIMIT 1").fetchone()
+        latest = conn.execute(
+            "SELECT valuation_zone, cycle_signal, pe_median_5y, pe_avg_5y FROM valuation_cycle_features ORDER BY date DESC LIMIT 1"
+        ).fetchone()
     finally:
         conn.close()
-    assert latest[11] in {"bubble", "expensive"}
-    assert latest[12] in {"top_zone", "neutral"}
+    assert latest[0] in {"bubble", "expensive"}
+    assert latest[1] in {"top_zone", "neutral"}
+    assert latest[2] is not None
+    assert latest[3] is not None
 
 
 def test_valuation_cycle_features_use_partial_history_when_full_window_unavailable(tmp_path: Path) -> None:

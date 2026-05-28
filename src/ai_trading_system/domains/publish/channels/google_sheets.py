@@ -14,6 +14,10 @@ from ai_trading_system.domains.publish.channels.google_sheets_manager import (
     SectorReportSheets,
 )
 from ai_trading_system.domains.publish.decision_bundle import PublishDecisionBundle
+from ai_trading_system.domains.fundamentals.presentation_payloads import (
+    DEFAULT_PUBLISH_UNIVERSE_ID,
+    build_fundamental_sheet_payload,
+)
 from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
 
@@ -201,7 +205,27 @@ def publish_log_sheet(decision_bundle: PublishDecisionBundle, *, sheet_name: str
 
 
 def publish_fundamental_dashboard(datasets: dict[str, object]) -> bool:
-    """Publish the compact fundamental insight dashboard worksheet group."""
+    """Publish the single-tab fundamental valuation dashboard."""
+    universe_id = str(datasets.get("fundamental_publish_universe_id") or DEFAULT_PUBLISH_UNIVERSE_ID)
+    payload = datasets.get("fundamental_sheet_payload")
+    if not isinstance(payload, dict):
+        payload = build_fundamental_sheet_payload(
+            universe_valuation=_first_frame(datasets, "universe_valuation_latest", "universe_valuation_daily"),
+            valuation_cycle=_first_frame(datasets, "valuation_cycle_latest", "valuation_cycle_features"),
+            sector_dashboard=_first_frame(datasets, "sector_dashboard"),
+            sector_valuation=_first_frame(datasets, "sector_valuation_latest", "sector_valuation_daily"),
+            universe_id=universe_id,
+            years=int(datasets.get("fundamental_publish_years") or 5),
+        )
+    return publish_fundamental_valuation_dashboard(payload=payload)
+
+
+def publish_fundamental_valuation_dashboard(
+    *,
+    payload: dict[str, object],
+    sheet_name: str = "VALUATION_DASHBOARD",
+) -> bool:
+    """Publish one operator-facing valuation worksheet."""
     spreadsheet_id = _require_spreadsheet_id()
     if not spreadsheet_id:
         raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
@@ -210,16 +234,87 @@ def publish_fundamental_dashboard(datasets: dict[str, object]) -> bool:
     if not manager.open_spreadsheet():
         raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
 
-    frames = _fundamental_dashboard_frames(datasets)
-    for sheet_name, frame in frames.items():
-        sheet = manager.get_or_create_sheet(sheet_name, rows=max(1000, len(frame) + 20), cols=max(12, len(frame.columns) + 2))
-        if not sheet:
-            raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
-        if not manager.write_dataframe(frame.fillna(""), sheet_name, include_header=True, clear_sheet=True):
-            raise RuntimeError(f"Failed writing {sheet_name}: {manager.last_error or 'unknown error'}")
-        manager.apply_number_formats(sheet_name, _FUNDAMENTAL_FORMATS)
-    logger.info("Fundamental dashboard updated in Google Sheets (%s tabs)", len(frames))
+    frame = _valuation_dashboard_frame(payload)
+    sheet = manager.get_or_create_sheet(sheet_name, rows=max(1000, len(frame) + 20), cols=max(12, len(frame.columns) + 2))
+    if not sheet:
+        raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
+    if not manager.write_dataframe(frame.fillna(""), sheet_name, include_header=False, clear_sheet=True):
+        raise RuntimeError(f"Failed writing {sheet_name}: {manager.last_error or 'unknown error'}")
+    manager.apply_number_formats(sheet_name, _FUNDAMENTAL_FORMATS, header_row=_chart_header_row(payload))
+    _write_valuation_charts(manager, sheet_name, payload)
+    logger.info("Fundamental valuation dashboard updated in Google Sheets (%s rows)", len(frame))
     return True
+
+
+def _valuation_dashboard_frame(payload: dict[str, object]) -> pd.DataFrame:
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    chart_rows = payload.get("chart_rows") if isinstance(payload.get("chart_rows"), list) else []
+    sector_rows = payload.get("sector_context_rows") if isinstance(payload.get("sector_context_rows"), list) else []
+    rows: list[list[object]] = [["VALUATION DASHBOARD", ""]]
+    rows.append(["Metric", "Value"])
+    for key, value in summary.items():
+        rows.append([key, value])
+    rows.extend([[], ["Chart Data"]])
+    chart = pd.DataFrame(chart_rows)
+    if chart.empty:
+        chart = pd.DataFrame(columns=["date", "index_level", "index_200dma", "pe_ttm", "pe_200dma", "pe_5y_median", "pe_percentile_5y"])
+    rows.append(chart.columns.tolist())
+    rows.extend(chart.where(chart.notna(), "").values.tolist())
+    rows.extend([[], ["SECTOR CONTEXT - Leading/Improving only; Rank = absolute RS rank across all sectors"]])
+    sector = pd.DataFrame(sector_rows)
+    if sector.empty:
+        sector = pd.DataFrame(columns=["Rank", "Sector", "RS", "Momentum", "Quadrant", "Valuation vs 5Y Avg PE"])
+    rows.append(sector.columns.tolist())
+    rows.extend(sector.where(sector.notna(), "").values.tolist())
+    width = max((len(row) for row in rows), default=1)
+    normalized = [row + [""] * (width - len(row)) for row in rows]
+    return pd.DataFrame(normalized)
+
+
+def _chart_header_row(payload: dict[str, object]) -> int:
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    return len(summary) + 5
+
+
+def _write_valuation_charts(manager: GoogleSheetsManager, sheet_name: str, payload: dict[str, object]) -> None:
+    chart_rows = payload.get("chart_rows") if isinstance(payload.get("chart_rows"), list) else []
+    if not chart_rows or not hasattr(manager, "replace_line_charts"):
+        return
+    chart = pd.DataFrame(chart_rows)
+    if chart.empty or "date" not in chart.columns:
+        return
+    header_row_zero = _chart_header_row(payload) - 1
+    start_row = header_row_zero
+    end_row = header_row_zero + len(chart) + 1
+    columns = list(chart.columns)
+
+    def idx(name: str) -> int | None:
+        return columns.index(name) if name in columns else None
+
+    specs = []
+    date_col = idx("date")
+    if date_col is None:
+        return
+    for title, names, anchor_row in [
+        ("Index Level vs Index 200DMA", ["index_level", "index_200dma"], 1),
+        ("PE TTM vs PE 200DMA / PE 5Y Median", ["pe_ttm", "pe_200dma", "pe_5y_median"], 17),
+        ("PE Percentile 5Y", ["pe_percentile_5y"], 33),
+    ]:
+        y_cols = [idx(name) for name in names if idx(name) is not None]
+        if y_cols:
+            specs.append(
+                {
+                    "title": title,
+                    "start_row": start_row,
+                    "end_row": end_row,
+                    "x_col": date_col,
+                    "y_cols": y_cols,
+                    "anchor_row": anchor_row,
+                    "anchor_col": 8,
+                }
+            )
+    if specs:
+        manager.replace_line_charts(sheet_name, chart_specs=specs)
 
 
 def _fundamental_dashboard_frames(datasets: dict[str, object]) -> dict[str, pd.DataFrame]:
@@ -348,4 +443,5 @@ __all__ = [
     "publish_event_log_sheet",
     "publish_log_sheet",
     "publish_fundamental_dashboard",
+    "publish_fundamental_valuation_dashboard",
 ]

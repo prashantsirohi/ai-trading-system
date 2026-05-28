@@ -33,6 +33,10 @@ export interface SectorRow {
   sectorPePctile3y?: number | null;
   sectorPePctile5y?: number | null;
   sectorPePctile10y?: number | null;
+  sectorPe5yMedian?: number | null;
+  sectorPe5yAvg?: number | null;
+  sectorPeVs5yMedianPct?: number | null;
+  sectorPeVs5yAvgPct?: number | null;
   valuationZone?: string | null;
   cycleSignal?: string | null;
   valuationInterpretation?: string | null;
@@ -95,6 +99,10 @@ function mapSectorRow(s: any): SectorRow {
     sectorPePctile3y: nullableNum(s.sector_pe_pctile_3y ?? s.sectorPePctile3y),
     sectorPePctile5y: nullableNum(s.sector_pe_pctile_5y ?? s.sectorPePctile5y),
     sectorPePctile10y: nullableNum(s.sector_pe_pctile_10y ?? s.sectorPePctile10y),
+    sectorPe5yMedian: nullableNum(s.sector_pe_5y_median ?? s.sectorPe5yMedian),
+    sectorPe5yAvg: nullableNum(s.sector_pe_5y_avg ?? s.sectorPe5yAvg),
+    sectorPeVs5yMedianPct: nullableNum(s.sector_pe_vs_5y_median_pct ?? s.sectorPeVs5yMedianPct),
+    sectorPeVs5yAvgPct: nullableNum(s.sector_pe_vs_5y_avg_pct ?? s.sectorPeVs5yAvgPct),
     valuationZone: s.valuation_zone ?? s.valuationZone ?? null,
     cycleSignal: s.cycle_signal ?? s.cycleSignal ?? null,
     valuationInterpretation: s.valuation_interpretation ?? s.valuationInterpretation ?? null,

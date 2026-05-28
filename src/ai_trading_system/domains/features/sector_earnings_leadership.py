@@ -414,7 +414,7 @@ def compute_sector_earnings_leadership_analytical(
         + 0.05 * sector["turnaround_count_rank"].fillna(50.0)
     )
     sector.loc[:, "earnings_trend_label"] = sector.apply(_analytical_trend_label, axis=1)
-    sector.loc[:, "created_at"] = pd.Timestamp.utcnow()
+    sector.loc[:, "created_at"] = pd.Timestamp.now(tz='UTC').tz_localize(None)
     return sector[columns].sort_values(["report_date", "sector_fundamental_score"], ascending=[True, False]).reset_index(drop=True)
 
 

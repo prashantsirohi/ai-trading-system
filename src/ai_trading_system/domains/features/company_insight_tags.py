@@ -158,7 +158,7 @@ def compute_company_insight_tags(features: pd.DataFrame) -> pd.DataFrame:
     result = pd.DataFrame(rows, columns=columns)
     if result.empty:
         return result
-    result.loc[:, "created_at"] = pd.Timestamp.utcnow()
+    result.loc[:, "created_at"] = pd.Timestamp.now(tz='UTC').tz_localize(None)
     return result.sort_values(["report_date", "symbol", "insight_type"]).reset_index(drop=True)
 
 
@@ -251,7 +251,7 @@ def _tag(row: pd.Series, insight_type: str, score: float) -> dict[str, Any]:
         "insight_type": insight_type,
         "insight_score": round(float(score), 2),
         "evidence_json": json.dumps(evidence, sort_keys=True),
-        "created_at": pd.Timestamp.utcnow(),
+        "created_at": pd.Timestamp.now(tz='UTC').tz_localize(None),
     }
 
 

@@ -283,10 +283,10 @@ def _build_stage2_summary(ranked_df: pd.DataFrame, *, max_symbols: int = 10) -> 
 def _dashboard_fundamentals_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "summary": dict(payload.get("summary") or {}),
-        "great_results": list(payload.get("top_great_results") or []),
-        "turnarounds": list(payload.get("top_turnarounds") or []),
-        "compounders": list(payload.get("top_compounders") or []),
-        "sector_earnings": list(payload.get("sector_earnings_leadership") or []),
+        "great_results": list(payload.get("great_results_top") or payload.get("top_great_results") or []),
+        "turnarounds": list(payload.get("turnarounds_top") or payload.get("top_turnarounds") or []),
+        "compounders": list(payload.get("compounders_top") or payload.get("top_compounders") or []),
+        "sector_earnings": list(payload.get("sector_earnings_top") or payload.get("sector_earnings_leadership") or []),
         "valuation_cycle": list(payload.get("valuation_chart") or []),
         "universe": dict(payload.get("universe") or {}),
     }

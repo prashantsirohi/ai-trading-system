@@ -331,7 +331,7 @@ def _replace_symbols_dim(conn: duckdb.DuckDBPyConnection, frame: pd.DataFrame) -
     if frame.empty:
         return
     payload = frame.copy()
-    payload.loc[:, "updated_at"] = pd.Timestamp.utcnow()
+    payload.loc[:, "updated_at"] = pd.Timestamp.now(tz='UTC').tz_localize(None)
     columns = [*_symbol_columns(), "updated_at"]
     conn.register("_symbols_dim_frame", payload[columns])
     try:

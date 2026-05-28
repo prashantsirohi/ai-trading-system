@@ -117,6 +117,8 @@ def ensure_valuation_schema(conn: duckdb.DuckDBPyConnection) -> None:
             pe_pctile_3y DOUBLE,
             pe_pctile_5y DOUBLE,
             pe_pctile_10y DOUBLE,
+            pe_median_5y DOUBLE,
+            pe_avg_5y DOUBLE,
             pe_zscore_3y DOUBLE,
             pe_zscore_5y DOUBLE,
             pe_zscore_10y DOUBLE,
@@ -127,6 +129,8 @@ def ensure_valuation_schema(conn: duckdb.DuckDBPyConnection) -> None:
         """
     )
     for statement in (
+        "ALTER TABLE valuation_cycle_features ADD COLUMN IF NOT EXISTS pe_median_5y DOUBLE",
+        "ALTER TABLE valuation_cycle_features ADD COLUMN IF NOT EXISTS pe_avg_5y DOUBLE",
         "CREATE INDEX IF NOT EXISTS idx_fundamental_ttm_symbol_date ON fundamental_ttm(symbol, as_of_date)",
         "CREATE INDEX IF NOT EXISTS idx_stock_valuation_universe_date ON stock_valuation_daily(universe_id, date)",
         "CREATE INDEX IF NOT EXISTS idx_stock_valuation_symbol_date ON stock_valuation_daily(symbol, date)",

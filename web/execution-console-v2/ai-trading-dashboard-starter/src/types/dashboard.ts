@@ -94,6 +94,10 @@ export interface SectorScore {
   sectorPePctile3y?: number | null;
   sectorPePctile5y?: number | null;
   sectorPePctile10y?: number | null;
+  sectorPe5yMedian?: number | null;
+  sectorPe5yAvg?: number | null;
+  sectorPeVs5yMedianPct?: number | null;
+  sectorPeVs5yAvgPct?: number | null;
   valuationZone?: string | null;
   cycleSignal?: string | null;
   valuationInterpretation?: string | null;

@@ -372,6 +372,38 @@ class GoogleSheetsManager:
             logger.warning(message)
             return False
 
+    def replace_line_charts(
+        self,
+        sheet_name: str,
+        *,
+        chart_specs: List[Dict[str, Any]],
+    ) -> bool:
+        """Best-effort replacement of line charts on a worksheet."""
+        worksheet = self.get_worksheet(sheet_name)
+        if worksheet is None or not self.spreadsheet:
+            return False
+        try:
+            sheet_id = worksheet.id
+            metadata = self.spreadsheet.fetch_sheet_metadata()
+            existing = []
+            for sheet in metadata.get("sheets", []):
+                if sheet.get("properties", {}).get("sheetId") != sheet_id:
+                    continue
+                for chart in sheet.get("charts", []):
+                    existing.append({"deleteEmbeddedObject": {"objectId": chart["chartId"]}})
+            requests: List[Dict[str, Any]] = existing
+            for spec in chart_specs:
+                requests.append(_line_chart_request(sheet_id=sheet_id, **spec))
+            if requests:
+                self.spreadsheet.batch_update({"requests": requests})
+            self.last_error = None
+            return True
+        except Exception as e:
+            message = f"Failed replacing charts on '{sheet_name}': {e}"
+            self._set_error(message)
+            logger.warning(message)
+            return False
+
     def get_or_create_sheet(
         self, title: str, rows: int = 1000, cols: int = 26
     ) -> Optional[Worksheet]:
@@ -397,6 +429,62 @@ class GoogleSheetsManager:
             self._set_error(message)
             logger.error(message)
             return None
+
+
+def _dimension_range(sheet_id: int, start_row: int, end_row: int, col: int) -> Dict[str, int]:
+    return {
+        "sheetId": sheet_id,
+        "startRowIndex": start_row,
+        "endRowIndex": end_row,
+        "startColumnIndex": col,
+        "endColumnIndex": col + 1,
+    }
+
+
+def _line_chart_request(
+    *,
+    sheet_id: int,
+    title: str,
+    start_row: int,
+    end_row: int,
+    x_col: int,
+    y_cols: List[int],
+    anchor_row: int,
+    anchor_col: int,
+) -> Dict[str, Any]:
+    return {
+        "addChart": {
+            "chart": {
+                "spec": {
+                    "title": title,
+                    "basicChart": {
+                        "chartType": "LINE",
+                        "legendPosition": "BOTTOM_LEGEND",
+                        "axis": [
+                            {"position": "BOTTOM_AXIS", "title": "Date"},
+                            {"position": "LEFT_AXIS", "title": "Value"},
+                        ],
+                        "domains": [
+                            {"domain": {"sourceRange": {"sources": [_dimension_range(sheet_id, start_row, end_row, x_col)]}}}
+                        ],
+                        "series": [
+                            {"series": {"sourceRange": {"sources": [_dimension_range(sheet_id, start_row, end_row, col)]}}}
+                            for col in y_cols
+                        ],
+                    },
+                },
+                "position": {
+                    "overlayPosition": {
+                        "anchorCell": {"sheetId": sheet_id, "rowIndex": anchor_row, "columnIndex": anchor_col},
+                        "offsetXPixels": 0,
+                        "offsetYPixels": 0,
+                        "widthPixels": 620,
+                        "heightPixels": 300,
+                    }
+                },
+            }
+        }
+    }
 
 
 class PortfolioSheets(GoogleSheetsManager):

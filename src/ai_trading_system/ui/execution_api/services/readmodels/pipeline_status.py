@@ -180,7 +180,7 @@ def get_execution_ops_health_snapshot(
     if not db_path.exists():
         return {"available": False, "error": "control_plane.duckdb missing"}
 
-    conn = duckdb.connect(str(db_path))
+    conn = duckdb.connect(str(db_path), read_only=True)
     try:
         stage_rows = conn.execute(
             """
@@ -238,7 +238,7 @@ def get_execution_ops_health_snapshot(
     latest_rank_run = stages.get("rank", {}).get("run_id")
     dq_summary = {"run_id": latest_rank_run, "failed_by_severity": {}, "total_failed": 0}
     if latest_rank_run:
-        conn = duckdb.connect(str(db_path))
+        conn = duckdb.connect(str(db_path), read_only=True)
         try:
             dq_rows = conn.execute(
                 """

@@ -51,6 +51,12 @@ def _pct(num: int, denom: int) -> float:
     return round(num / denom * 100, 1) if denom else 0.0
 
 
+def _pct_change(current: float | None, baseline: float | None) -> float | None:
+    if current is None or baseline is None or baseline == 0:
+        return None
+    return round((current - baseline) / baseline * 100.0, 2)
+
+
 def _norm_sector(value: Any) -> str:
     return str(value or "").strip().casefold()
 
@@ -104,10 +110,24 @@ def _load_sector_valuation_snapshot(ohlcv_db: str, universe_id: str = "UNIV_TOP5
                 NULL::DOUBLE AS pe_pctile_3y,
                 NULL::DOUBLE AS pe_pctile_5y,
                 NULL::DOUBLE AS pe_pctile_10y,
+                NULL::DOUBLE AS pe_median_5y,
+                NULL::DOUBLE AS pe_avg_5y,
                 NULL::VARCHAR AS valuation_zone,
                 NULL::VARCHAR AS cycle_signal
             """
             if "valuation_cycle_features" in tables:
+                cycle_table_columns = {
+                    r[0]
+                    for r in conn.execute(
+                        """
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_name = 'valuation_cycle_features'
+                        """
+                    ).fetchall()
+                }
+                median_expr = "vcf.pe_median_5y" if "pe_median_5y" in cycle_table_columns else "NULL::DOUBLE"
+                avg_expr = "vcf.pe_avg_5y" if "pe_avg_5y" in cycle_table_columns else "NULL::DOUBLE"
                 cycle_join = """
                     LEFT JOIN valuation_cycle_features vcf
                       ON vcf.entity_type = 'sector'
@@ -118,9 +138,11 @@ def _load_sector_valuation_snapshot(ohlcv_db: str, universe_id: str = "UNIV_TOP5
                     vcf.pe_pctile_3y,
                     vcf.pe_pctile_5y,
                     vcf.pe_pctile_10y,
+                    {median_expr} AS pe_median_5y,
+                    {avg_expr} AS pe_avg_5y,
                     vcf.valuation_zone,
                     vcf.cycle_signal
-                """
+                """.format(median_expr=median_expr, avg_expr=avg_expr)
             df = conn.execute(
                 f"""
                 WITH latest AS (
@@ -165,6 +187,16 @@ def _load_sector_valuation_snapshot(ohlcv_db: str, universe_id: str = "UNIV_TOP5
                 "sector_pe_pctile_3y": _safe_float(row.get("pe_pctile_3y")),
                 "sector_pe_pctile_5y": _safe_float(row.get("pe_pctile_5y")),
                 "sector_pe_pctile_10y": _safe_float(row.get("pe_pctile_10y")),
+                "sector_pe_5y_median": _safe_float(row.get("pe_median_5y")),
+                "sector_pe_5y_avg": _safe_float(row.get("pe_avg_5y")),
+                "sector_pe_vs_5y_median_pct": _pct_change(
+                    _safe_float(row.get("pe_ttm")),
+                    _safe_float(row.get("pe_median_5y")),
+                ),
+                "sector_pe_vs_5y_avg_pct": _pct_change(
+                    _safe_float(row.get("pe_ttm")),
+                    _safe_float(row.get("pe_avg_5y")),
+                ),
                 "valuation_zone": row.get("valuation_zone") or None,
                 "cycle_signal": row.get("cycle_signal") or None,
             }

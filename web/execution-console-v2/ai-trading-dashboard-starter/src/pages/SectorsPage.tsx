@@ -17,6 +17,7 @@ import EarlyLeaderBanner from '@/components/sectors/EarlyLeaderBanner';
 import SectorLeadershipChart from '@/components/sectors/SectorLeadershipChart';
 import SectorRotationHeatmap from '@/components/sectors/SectorRotationHeatmap';
 import SectorDrilldown from '@/components/sectors/SectorDrilldown';
+import SectorValuationCard from '@/components/sectors/SectorValuationCard';
 import SectorValuationTable from '@/components/sectors/SectorValuationTable';
 import SectorEarningsLeadershipTable from '@/components/sectors/SectorEarningsLeadershipTable';
 import { useRanking, useSectors } from '@/lib/queries';
@@ -96,11 +97,14 @@ export default function SectorsPage() {
             collapsible
             meta={<Availability rows={valuationRows.length} date={latestValuationDate} />}
           >
+            {selected ? <SectorValuationCard sector={selected} /> : null}
+            <div className="mt-4">
             <SectorValuationTable
               sectors={sectors}
               selected={selectedSector}
               onSelect={setSelectedSector}
             />
+            </div>
           </SectionCard>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">

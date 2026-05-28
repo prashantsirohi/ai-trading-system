@@ -321,13 +321,13 @@ class RegistryStore:
         self._write_lock = threading.RLock()
         self._ensure_initialized()
 
-    def _connect(self) -> duckdb.DuckDBPyConnection:
-        return duckdb.connect(str(self.db_path))
+    def _connect(self, read_only: bool = False) -> duckdb.DuckDBPyConnection:
+        return duckdb.connect(str(self.db_path), read_only=read_only)
 
     @contextmanager
     def _writer(self) -> Iterable[duckdb.DuckDBPyConnection]:
         with self._write_lock:
-            conn = self._connect()
+            conn = self._connect(read_only=False)
             try:
                 yield conn
                 conn.commit()
@@ -342,7 +342,7 @@ class RegistryStore:
 
     @contextmanager
     def _reader(self) -> Iterable[duckdb.DuckDBPyConnection]:
-        conn = self._connect()
+        conn = self._connect(read_only=True)
         try:
             yield conn
         finally:

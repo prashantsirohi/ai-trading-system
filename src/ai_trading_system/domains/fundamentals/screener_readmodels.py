@@ -231,7 +231,7 @@ def _zero(value: float | None) -> float:
 def _snapshot_date(store: ScreenerFinancialsStore) -> str:
     snapshots = store.read_company_snapshot_frame()
     if snapshots.empty or "as_of_date" not in snapshots.columns:
-        return pd.Timestamp.utcnow().date().isoformat()
+        return pd.Timestamp.now(tz='UTC').date().isoformat()
     return str(snapshots["as_of_date"].max())[:10]
 
 

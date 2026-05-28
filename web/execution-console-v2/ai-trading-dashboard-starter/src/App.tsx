@@ -16,6 +16,7 @@ import WatchlistPage from '@/pages/WatchlistPage';
 import RiskPage from '@/pages/RiskPage';
 import SectorDetailPage from '@/pages/SectorDetailPage';
 import SymbolPage from '@/pages/SymbolPage';
+import FundamentalsPage from '@/pages/FundamentalsPage';
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
           <Route path="/ranking" element={<RankingPage />} />
           <Route path="/patterns" element={<PatternsPage />} />
           <Route path="/sectors" element={<SectorsPage />} />
+          <Route path="/fundamentals" element={<FundamentalsPage />} />
           <Route path="/sectors/:sector" element={<SectorDetailPage />} />
           <Route path="/execution" element={<ExecutionPage />} />
           <Route path="/runs" element={<RunsPage />} />

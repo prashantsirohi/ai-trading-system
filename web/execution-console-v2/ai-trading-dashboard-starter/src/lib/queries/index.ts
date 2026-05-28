@@ -88,6 +88,7 @@ import {
 } from '@/lib/api/stocks';
 import { getWorkspaceSnapshot } from '@/lib/api/workspace';
 import type { WorkspaceSnapshot } from '@/lib/api/workspace';
+import { getFundamentalsDashboard, type FundamentalsDashboard } from '@/lib/api/fundamentals';
 import type {
   PatternResponse,
   PipelineWorkspaceResponse,
@@ -260,6 +261,17 @@ export function useSectors(
   return useQuery<SectorResponse, Error>({
     queryKey: queryKeys.sectors(),
     queryFn: getSectors,
+    ...options,
+  });
+}
+
+export function useFundamentalsDashboard(
+  options: QueryOverrides<FundamentalsDashboard> = {},
+): UseQueryResult<FundamentalsDashboard, Error> {
+  return useQuery<FundamentalsDashboard, Error>({
+    queryKey: queryKeys.fundamentalsDashboard(),
+    queryFn: getFundamentalsDashboard,
+    staleTime: 5 * 60_000,
     ...options,
   });
 }

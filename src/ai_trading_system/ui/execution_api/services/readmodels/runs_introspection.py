@@ -67,7 +67,7 @@ def get_dq_results_for_run(
         params.append(stage)
     where_sql = " AND ".join(where_clauses)
 
-    conn = duckdb.connect(str(cp_path))
+    conn = duckdb.connect(str(cp_path), read_only=True)
     try:
         rows = conn.execute(
             f"""
@@ -180,7 +180,7 @@ def get_artifacts_for_run(
     if not cp_path.exists():
         return {"available": False, "run_id": run_id, "artifacts": []}
 
-    conn = duckdb.connect(str(cp_path))
+    conn = duckdb.connect(str(cp_path), read_only=True)
     try:
         rows = conn.execute(
             """
@@ -278,7 +278,7 @@ def resolve_artifact_path(
             "control_plane.duckdb is not present; cannot resolve artifact"
         )
 
-    conn = duckdb.connect(str(cp_path))
+    conn = duckdb.connect(str(cp_path), read_only=True)
     try:
         rows = conn.execute(
             """

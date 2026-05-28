@@ -92,7 +92,7 @@ def compute_valuation_cycle_features(universe: pd.DataFrame) -> pd.DataFrame:
     frame.loc[:, "cycle_signal"] = frame.apply(_cycle_signal, axis=1)
     frame.loc[:, "entity_type"] = "universe"
     frame.loc[:, "entity_id"] = frame["universe_id"]
-    frame.loc[:, "created_at"] = pd.Timestamp.utcnow()
+    frame.loc[:, "created_at"] = pd.Timestamp.now(tz='UTC').tz_localize(None)
     return frame[columns].reset_index(drop=True)
 
 

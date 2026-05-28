@@ -32,11 +32,14 @@ class _FakeManager:
         self.written[sheet_name] = frame.copy()
         return True
 
-    def apply_number_formats(self, sheet_name, formats):
+    def apply_number_formats(self, sheet_name, formats, header_row=1):
+        return True
+
+    def replace_line_charts(self, sheet_name, *, chart_specs):
         return True
 
 
-def test_publish_fundamental_dashboard_writes_expected_tabs(monkeypatch) -> None:
+def test_publish_fundamental_dashboard_writes_single_valuation_tab(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_SPREADSHEET_ID", "sheet-id")
     monkeypatch.setattr(google_sheets, "GoogleSheetsManager", _FakeManager)
     _FakeManager.instances.clear()
@@ -53,6 +56,31 @@ def test_publish_fundamental_dashboard_writes_expected_tabs(monkeypatch) -> None
                     "valuation_zone": "expensive",
                 },
             },
+            "universe_valuation_daily": pd.DataFrame(
+                [
+                    {"universe_id": "UNIV_TOP1000_MCAP", "date": "2021-05-26", "index_level_mcap_weight": 900, "loss_mcap_pct": 0.04},
+                    {"universe_id": "UNIV_TOP1000_MCAP", "date": "2021-05-27", "index_level_mcap_weight": 1000, "loss_mcap_pct": 0.05},
+                    {"universe_id": "UNIV_TOP1000_MCAP", "date": "2026-05-27", "index_level_mcap_weight": 1500, "loss_mcap_pct": 0.06},
+                    {"universe_id": "UNIV_TOP500_MCAP", "date": "2026-05-27", "index_level_mcap_weight": 1200, "loss_mcap_pct": 0.02},
+                ]
+            ),
+            "valuation_cycle_features": pd.DataFrame(
+                [
+                    {"entity_id": "UNIV_TOP1000_MCAP", "date": "2021-05-26", "pe_ttm": 20, "pe_200dma": 19, "pe_5y_median": 18, "pe_percentile_5y": 40},
+                    {"entity_id": "UNIV_TOP1000_MCAP", "date": "2021-05-27", "pe_ttm": 21, "pe_200dma": 19, "pe_5y_median": 18, "pe_percentile_5y": 50},
+                    {"entity_id": "UNIV_TOP1000_MCAP", "date": "2026-05-27", "pe_ttm": 35, "pe_200dma": 33, "pe_5y_median": 28, "pe_percentile_5y": 74},
+                    {"entity_id": "UNIV_TOP500_MCAP", "date": "2026-05-27", "pe_ttm": 40, "pe_200dma": 38, "pe_5y_median": 30, "pe_percentile_5y": 90},
+                ]
+            ),
+            "sector_dashboard": pd.DataFrame(
+                [
+                    {"RS_rank": 2, "Sector": "Pharma", "RS": 0.74, "Momentum": 0.2, "Quadrant": "Leading"},
+                    {"RS_rank": 3, "Sector": "Banks", "RS": 0.7, "Momentum": -0.1, "Quadrant": "Lagging"},
+                ]
+            ),
+            "sector_valuation_daily": pd.DataFrame(
+                [{"universe_id": "UNIV_TOP1000_MCAP", "date": "2026-05-27", "sector_name": "Pharma", "pe_ttm": 30, "pe_avg_5y": 24}]
+            ),
             "great_results_latest": pd.DataFrame(
                 [{"symbol": f"AAA{i:03d}", "report_date": "2026-03-31", "sales_yoy_growth": 0.2, "insight_score": 200 - i} for i in range(120)]
             ),
@@ -68,25 +96,15 @@ def test_publish_fundamental_dashboard_writes_expected_tabs(monkeypatch) -> None
             "compounder_candidates_latest": pd.DataFrame([{"symbol": "CCC", "report_date": "2026-03-31", "insight_score": 78}]),
             "sector_earnings_latest": pd.DataFrame([{"sector_name": "IT", "report_date": "2026-03-31", "sector_fundamental_score": 91}]),
             "sector_valuation_latest": pd.DataFrame([{"sector_name": "IT", "date": "2026-05-27", "pe_ttm": 20}]),
-            "universe_valuation_latest": pd.DataFrame([{"universe_id": "UNIV_TOP500", "date": "2026-05-27", "pe_ttm": 24.1}]),
-            "valuation_cycle_latest": pd.DataFrame([{"entity_id": "UNIV_TOP500", "date": "2026-05-27", "pe_percentile_5y": 82}]),
         }
     )
 
     manager = _FakeManager.instances[0]
     assert ok is True
-    assert set(manager.written) == {
-        "FUNDAMENTAL_SUMMARY",
-        "GREAT_RESULTS",
-        "TURNAROUNDS",
-        "COMPOUNDERS",
-        "SECTOR_EARNINGS",
-        "SECTOR_VALUATION",
-        "UNIVERSE_VALUATION",
-        "VALUATION_CYCLE",
-    }
-    assert "symbol" in manager.written["GREAT_RESULTS"].columns
-    assert "pe_ttm" in manager.written["UNIVERSE_VALUATION"].columns
-    assert len(manager.written["GREAT_RESULTS"]) == 100
-    assert "OLD" not in set(manager.written["GREAT_RESULTS"]["symbol"])
-    assert manager.written["TURNAROUNDS"].iloc[0]["evidence"] == "PAT loss to profit"
+    assert set(manager.written) == {"VALUATION_DASHBOARD"}
+    values = manager.written["VALUATION_DASHBOARD"].astype(str).values.flatten().tolist()
+    assert "SECTOR CONTEXT - Leading/Improving only; Rank = absolute RS rank across all sectors" in values
+    assert "Pharma" in values
+    assert "Banks" not in values
+    assert "2021-05-26" not in values
+    assert "UNIV_TOP1000_MCAP" in values
