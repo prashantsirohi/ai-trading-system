@@ -187,6 +187,60 @@ def test_valuation_cycle_features_labels_extreme_percentiles(tmp_path: Path) -> 
     assert latest[3] is not None
 
 
+def test_valuation_cycle_features_insert_uses_column_names_for_legacy_table_order(tmp_path: Path) -> None:
+    db = tmp_path / "ohlcv.duckdb"
+    conn = duckdb.connect(str(db))
+    try:
+        ensure_valuation_schema(conn)
+        conn.execute("DROP TABLE valuation_cycle_features")
+        conn.execute(
+            """
+            CREATE TABLE valuation_cycle_features (
+                entity_type VARCHAR NOT NULL,
+                entity_id VARCHAR NOT NULL,
+                date DATE NOT NULL,
+                pe_ttm DOUBLE,
+                earnings_yield DOUBLE,
+                pe_pctile_3y DOUBLE,
+                pe_pctile_5y DOUBLE,
+                pe_pctile_10y DOUBLE,
+                pe_zscore_3y DOUBLE,
+                pe_zscore_5y DOUBLE,
+                pe_zscore_10y DOUBLE,
+                valuation_zone VARCHAR,
+                cycle_signal VARCHAR,
+                PRIMARY KEY (entity_type, entity_id, date)
+            )
+            """
+        )
+        rows = []
+        for idx, pe in enumerate([10, 11, 12, 13, 40], start=1):
+            rows.append(("UNIV_TOP2_MCAP", "market_cap_weight", f"2026-01-0{idx}", 1000 + idx, 0.01, 2, 1000, 100, pe, 1 / pe))
+        conn.executemany("INSERT INTO universe_index_daily VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    finally:
+        conn.close()
+
+    result = refresh_valuation_cycle_features(ohlcv_db_path=db, min_history_days=2)
+
+    assert result.rows == 5
+    conn = duckdb.connect(str(db), read_only=True)
+    try:
+        latest = conn.execute(
+            """
+            SELECT valuation_zone, cycle_signal, pe_median_5y, pe_avg_5y
+            FROM valuation_cycle_features
+            ORDER BY date DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+    assert latest[0] in {"bubble", "expensive"}
+    assert latest[1] in {"top_zone", "neutral"}
+    assert latest[2] is not None
+    assert latest[3] is not None
+
+
 def test_valuation_cycle_features_use_partial_history_when_full_window_unavailable(tmp_path: Path) -> None:
     db = tmp_path / "ohlcv.duckdb"
     conn = duckdb.connect(str(db))

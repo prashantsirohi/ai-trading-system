@@ -328,6 +328,22 @@ def run_corporate_action_normalization(
         _report(progress, "step_start", step="Preparing schema", total=9)
         ensure_corporate_action_schema(ohlcv_db_path)
         _report(progress, "step_done", step="Preparing schema")
+        if execution_mode == "recent" and not force:
+            last_recent_success = _last_successful_execution_at(
+                ohlcv_db_path,
+                execution_mode="recent",
+            )
+            if last_recent_success is not None and pd.Timestamp(last_recent_success).date() == today:
+                result["status"] = "success"
+                result["skipped"] = True
+                result["skip_reason"] = "recent_success_today"
+                result["last_success_at"] = last_recent_success
+                logger.info(
+                    "Skipping corporate action normalization; recent success already recorded at %s",
+                    last_recent_success,
+                )
+                _report(progress, "message", message="Skipped: recent success already recorded today")
+                return result
 
         fetcher = fetcher or fetch_nse_corporate_actions
         start_date = date(2000, 1, 1) if execution_mode == "full" else today - timedelta(days=45)
@@ -373,25 +389,29 @@ def _should_run_full(db_path: str | Path, *, force: bool, max_age_days: int, tod
     if force:
         return True
     ensure_corporate_action_schema(db_path)
-    conn = duckdb.connect(str(db_path), read_only=True)
-    try:
-        row = conn.execute(
-            """
-            SELECT MAX(ended_at)
-            FROM _module_execution_log
-            WHERE module_name = ?
-              AND execution_mode = 'full'
-              AND status = 'success'
-            """,
-            [MODULE_NAME],
-        ).fetchone()
-    finally:
-        conn.close()
-    last_success = row[0] if row else None
+    last_success = _last_successful_execution_at(db_path, execution_mode="full")
     if last_success is None:
         return True
     last_date = pd.Timestamp(last_success).date()
     return (today - last_date).days > int(max_age_days)
+
+
+def _last_successful_execution_at(db_path: str | Path, *, execution_mode: str) -> datetime | None:
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        row = conn.execute(
+            """
+            SELECT MAX(COALESCE(last_success_at, ended_at))
+            FROM _module_execution_log
+            WHERE module_name = ?
+              AND execution_mode = ?
+              AND status = 'success'
+            """,
+            [MODULE_NAME, execution_mode],
+        ).fetchone()
+    finally:
+        conn.close()
+    return row[0] if row else None
 
 
 def upsert_corporate_actions(db_path: str | Path, actions: Iterable[ParsedCorporateAction]) -> int:

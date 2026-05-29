@@ -48,7 +48,38 @@ def refresh_fundamental_valuation_cycle_features(
             )
             conn.register("_fundamental_valuation_cycle_frame", features)
             try:
-                conn.execute("INSERT INTO valuation_cycle_features SELECT * FROM _fundamental_valuation_cycle_frame")
+                conn.execute(
+                    """
+                    INSERT INTO valuation_cycle_features (
+                        entity_type,
+                        entity_id,
+                        date,
+                        pe_ttm,
+                        pe_200dma,
+                        pe_distance_from_200dma,
+                        pe_5y_median,
+                        pe_percentile_5y,
+                        pe_zscore_5y,
+                        valuation_zone,
+                        cycle_signal,
+                        created_at
+                    )
+                    SELECT
+                        entity_type,
+                        entity_id,
+                        date,
+                        pe_ttm,
+                        pe_200dma,
+                        pe_distance_from_200dma,
+                        pe_5y_median,
+                        pe_percentile_5y,
+                        pe_zscore_5y,
+                        valuation_zone,
+                        cycle_signal,
+                        created_at
+                    FROM _fundamental_valuation_cycle_frame
+                    """
+                )
             finally:
                 conn.unregister("_fundamental_valuation_cycle_frame")
         elif from_date or to_date:

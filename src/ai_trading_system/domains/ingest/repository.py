@@ -178,10 +178,19 @@ def initialize_ingest_duckdb(db_path: str | Path) -> None:
             parquet_file       TEXT,
             ingestion_version   BIGINT,
             ingestion_ts        TIMESTAMP,
+            adjusted_open       DOUBLE,
+            adjusted_high       DOUBLE,
+            adjusted_low        DOUBLE,
+            adjusted_close      DOUBLE,
+            adjustment_factor   DOUBLE,
+            adjustment_source   TEXT,
+            adjusted_at         TIMESTAMP,
+            adjustment_version  BIGINT,
             archived_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
+    _ensure_history_adjustment_columns(conn)
 
     conn.execute(
         """
@@ -240,6 +249,23 @@ def _ensure_adjustment_columns(conn: duckdb.DuckDBPyConnection) -> None:
     for column, dtype in additions.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE _catalog ADD COLUMN {column} {dtype}")
+
+
+def _ensure_history_adjustment_columns(conn: duckdb.DuckDBPyConnection) -> None:
+    existing = get_table_columns(conn, "_catalog_history")
+    additions = {
+        "adjusted_open": "DOUBLE",
+        "adjusted_high": "DOUBLE",
+        "adjusted_low": "DOUBLE",
+        "adjusted_close": "DOUBLE",
+        "adjustment_factor": "DOUBLE",
+        "adjustment_source": "TEXT",
+        "adjusted_at": "TIMESTAMP",
+        "adjustment_version": "BIGINT",
+    }
+    for column, dtype in additions.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE _catalog_history ADD COLUMN {column} {dtype}")
 
 
 def fetch_catalog_summary(db_path: str | Path) -> tuple[int, int, object]:

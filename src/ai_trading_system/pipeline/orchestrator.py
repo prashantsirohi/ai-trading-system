@@ -214,6 +214,12 @@ class TerminalProgressRenderer:
                 if fraction > self._current_stage_fraction:
                     self._current_stage_fraction = fraction
                     self._refresh_bar_position()
+        if self._bar is not None and stage_name == self._current_stage and status in {"running", "ok", "success", "completed", "done"}:
+            display_detail = detail or status
+            if task_name:
+                display_detail = f"{task_name}: {display_detail}"
+            self._bar.set_description_str(stage_name)
+            self._bar.set_postfix_str(display_detail)
         # Only surface task lines that the operator actually needs to see —
         # ok/running for every sub-task would drown the bar.
         if status in {"running", "ok", "success", "completed"}:

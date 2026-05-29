@@ -21,6 +21,9 @@ from ai_trading_system.domains.publish.publish_payloads import format_rows_for_c
 from ai_trading_system.domains.publish.channels.weekly_pdf import metrics as weekly_metrics
 
 
+LONG_TERM_BREADTH_START_DATE = "2020-01-01"
+
+
 def _frame(records: Iterable[Dict[str, Any]]) -> pd.DataFrame:
     rows = list(records)
     return pd.DataFrame(rows) if rows else pd.DataFrame()
@@ -267,9 +270,11 @@ def _load_operational_breadth(project_root: Path) -> pd.DataFrame:
                     2
                 ) AS pct_above_200
             FROM base
+            WHERE trade_date >= CAST(? AS DATE)
             GROUP BY trade_date
             ORDER BY trade_date
-            """
+            """,
+            [LONG_TERM_BREADTH_START_DATE],
         ).fetchdf()
     finally:
         con.close()
@@ -556,7 +561,7 @@ def publish_dashboard_payload(
         ("FAILED BREAKOUTS", bundle.failed_breakouts if not bundle.failed_breakouts.empty else failed_breakouts),
         ("TOP RANKED", bundle.top_ranked if not bundle.top_ranked.empty else rank_min),
         ("BREAKOUTS (all, unfiltered)", breakout_min),
-        ("LONG-TERM BREADTH (operational)", breadth),
+        ("LONG-TERM BREADTH (operational, since 2020)", breadth),
     ]
     for title, frame in sections:
         section_title_row = row

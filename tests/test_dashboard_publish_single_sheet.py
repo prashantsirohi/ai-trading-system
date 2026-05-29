@@ -125,6 +125,19 @@ def test_load_operational_breadth_honors_data_root(monkeypatch, tmp_path: Path) 
     assert float(breadth.iloc[-1]["PctAbove200"]) == 0.0
 
 
+def test_load_operational_breadth_starts_at_2020(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    (repo_root / "src" / "ai_trading_system").mkdir(parents=True)
+    (repo_root / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    _write_breadth_fixture_db(repo_root / "data" / "ohlcv.duckdb", start="2019-01-01", end="2020-02-10", high_close=200.0)
+    monkeypatch.delenv("DATA_ROOT", raising=False)
+
+    breadth = _load_operational_breadth(repo_root)
+
+    assert not breadth.empty
+    assert breadth["Date"].min() >= "2020-01-01"
+
+
 def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_breakouts(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("ai_trading_system.domains.publish.dashboard.GoogleSheetsManager", _FakeManager)
     monkeypatch.setattr(

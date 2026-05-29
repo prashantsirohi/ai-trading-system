@@ -106,12 +106,103 @@ class IngestOrchestrationService:
                 project_root=context.project_root,
                 data_domain=context.params.get("data_domain", "operational"),
             )
+
+            step_total = 9
+            step_completed = 0
+            year_total = 0
+            year_completed = 0
+            action_total = 0
+            action_completed = 0
+
+            def _format_corporate_action_progress(event: dict) -> tuple[str, dict] | None:
+                nonlocal step_completed, year_total, year_completed, action_total, action_completed
+                kind = str(event.get("event") or "")
+                metadata = dict(event)
+                metadata.setdefault("total_steps", step_total)
+                metadata.setdefault("completed_steps", step_completed)
+                if kind == "step_start":
+                    step = str(event.get("step") or "working")
+                    return f"corporate actions · {step}", metadata
+                if kind == "step_done":
+                    step_completed = min(step_total, step_completed + 1)
+                    metadata["completed_steps"] = step_completed
+                    step = str(event.get("step") or "step complete")
+                    extras: list[str] = []
+                    for key, label in (
+                        ("catalog_rows", "catalog"),
+                        ("action_count", "actions"),
+                        ("parsed_actions", "parsed"),
+                        ("actions_inserted", "inserted"),
+                        ("rows", "rows"),
+                    ):
+                        if key in event:
+                            extras.append(f"{label}={event.get(key)}")
+                    suffix = f" · {' '.join(extras)}" if extras else ""
+                    return f"corporate actions · done {step} ({step_completed}/{step_total}){suffix}", metadata
+                if kind == "years_start":
+                    year_total = max(1, int(event.get("total") or 1))
+                    year_completed = 0
+                    metadata["total_steps"] = year_total
+                    metadata["completed_steps"] = 0
+                    return str(event.get("description") or "corporate actions · fetching NSE years"), metadata
+                if kind == "year_start":
+                    year = event.get("year")
+                    return f"corporate actions · fetching NSE year {year}", metadata
+                if kind == "year_done":
+                    year_completed = min(max(1, year_total), year_completed + 1)
+                    metadata["total_steps"] = max(1, year_total)
+                    metadata["completed_steps"] = year_completed
+                    return (
+                        f"corporate actions · fetched {event.get('year')} rows={event.get('fetched', 0)} ({year_completed}/{max(1, year_total)})",
+                        metadata,
+                    )
+                if kind == "years_done":
+                    metadata["total_steps"] = max(1, year_total)
+                    metadata["completed_steps"] = max(year_completed, year_total)
+                    return f"corporate actions · NSE fetch complete rows={event.get('total_fetched', 0)}", metadata
+                if kind == "actions_start":
+                    action_total = int(event.get("total") or 0)
+                    action_completed = 0
+                    metadata["total_steps"] = max(1, action_total)
+                    metadata["completed_steps"] = 0
+                    return f"corporate actions · applying factors for {action_total} action(s)", metadata
+                if kind == "action_done":
+                    action_completed += 1
+                    metadata["total_steps"] = max(1, action_total)
+                    metadata["completed_steps"] = min(action_completed, max(1, action_total))
+                    symbol = str(event.get("symbol") or "").strip()
+                    rows = event.get("rows")
+                    skipped = " skipped" if event.get("skipped") else ""
+                    return (
+                        f"corporate actions · adjusted {symbol or 'action'} rows={rows}{skipped} ({action_completed}/{max(1, action_total)})",
+                        metadata,
+                    )
+                if kind == "actions_done":
+                    return f"corporate actions · action factors complete ({action_completed}/{max(1, action_total)})", metadata
+                if kind == "message":
+                    message = str(event.get("message") or "").strip()
+                    return f"corporate actions · {message}", metadata
+                return None
+
+            def _corporate_action_progress(event: dict) -> None:
+                rendered = _format_corporate_action_progress(event)
+                if rendered is None:
+                    return
+                detail, metadata = rendered
+                context.report_task(
+                    task_name="corporate_actions",
+                    status="running",
+                    detail=detail,
+                    metadata=metadata,
+                )
+
             return run_corporate_action_normalization(
                 ohlcv_db_path=context.db_path,
                 masterdb_path=paths.master_db_path,
                 run_id=context.run_id,
                 force=bool(context.params.get("corporate_actions_force_full", False)),
                 max_age_days=int(context.params.get("corporate_actions_full_max_age_days", 30) or 30),
+                progress_callback=_corporate_action_progress,
             )
         except Exception as exc:
             logger.warning("corporate action normalizer failed: %s", exc)

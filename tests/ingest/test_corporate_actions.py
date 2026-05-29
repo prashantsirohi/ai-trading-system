@@ -19,6 +19,7 @@ from ai_trading_system.domains.ingest.corporate_actions import (
     upsert_corporate_actions,
 )
 from ai_trading_system.domains.ingest.repository import initialize_ingest_duckdb
+from ai_trading_system.domains.ingest.service import IngestOrchestrationService
 from ai_trading_system.domains.ingest.symbol_master import SymbolMaster
 from ai_trading_system.pipeline.contracts import StageContext, StageResult
 from ai_trading_system.pipeline.dq.engine import DataQualityEngine
@@ -163,6 +164,36 @@ def test_recompute_adjusted_prices_compounds_from_raw_and_preserves_raw(tmp_path
     ]
 
 
+def test_initialize_ingest_duckdb_migrates_catalog_history_adjustment_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    initialize_ingest_duckdb(db_path)
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute("ALTER TABLE _catalog_history DROP COLUMN adjusted_at")
+        conn.execute("ALTER TABLE _catalog_history DROP COLUMN adjustment_version")
+        conn.commit()
+    finally:
+        conn.close()
+
+    initialize_ingest_duckdb(db_path)
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        columns = {
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = '_catalog_history'
+                """
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    assert {"adjusted_at", "adjustment_version"}.issubset(columns)
+
+
 def test_recompute_adjusted_prices_falls_back_to_symbol_when_catalog_isin_missing(tmp_path: Path) -> None:
     db_path = tmp_path / "ohlcv.duckdb"
     _seed_catalog(db_path)
@@ -282,6 +313,84 @@ def test_run_reports_clear_progress_steps(tmp_path: Path) -> None:
         "Verifying raw OHLC unchanged",
         "Recording execution log",
     ]
+
+
+def test_run_skips_recent_mode_when_success_already_recorded_today(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    masterdb = tmp_path / "masterdata.db"
+    _seed_catalog(db_path)
+    _seed_masterdb(masterdb)
+    ensure_corporate_action_schema(db_path)
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            INSERT INTO _module_execution_log
+            (execution_id, module_name, execution_mode, status, started_at, ended_at, last_success_at)
+            VALUES
+            ('full-success', 'corporate_action_normalizer', 'full', 'success',
+             TIMESTAMP '2026-01-01 00:00:00', TIMESTAMP '2026-01-01 00:00:01', TIMESTAMP '2026-01-01 00:00:01'),
+            ('recent-success', 'corporate_action_normalizer', 'recent', 'success',
+             TIMESTAMP '2026-01-10 09:00:00', TIMESTAMP '2026-01-10 09:00:01', TIMESTAMP '2026-01-10 09:00:01')
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    def fetcher(**_: object) -> list[dict]:
+        raise AssertionError("recent corporate-action fetch should be skipped after same-day success")
+
+    result = run_corporate_action_normalization(
+        ohlcv_db_path=db_path,
+        masterdb_path=masterdb,
+        run_id="rerun",
+        today=pd.Timestamp("2026-01-10").date(),
+        fetcher=fetcher,
+    )
+
+    assert result["status"] == "success"
+    assert result["execution_mode"] == "recent"
+    assert result["skipped"] is True
+    assert result["skip_reason"] == "recent_success_today"
+
+
+def test_ingest_service_reports_corporate_action_progress(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    events: list[dict] = []
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "ohlcv.duckdb",
+        run_id="progress-run",
+        run_date="2026-01-10",
+        stage_name="ingest",
+        attempt_number=1,
+        params={"data_domain": "operational"},
+        task_reporter=events.append,
+    )
+
+    def fake_run_corporate_action_normalization(**kwargs: object) -> dict:
+        progress = kwargs["progress_callback"]
+        progress({"event": "step_start", "step": "Preparing schema", "total": 9})
+        progress({"event": "step_done", "step": "Preparing schema"})
+        progress({"event": "years_start", "total": 2, "description": "Fetching NSE actions 2025-2026"})
+        progress({"event": "year_done", "year": 2025, "fetched": 3})
+        progress({"event": "actions_start", "total": 1, "description": "Applying action factors"})
+        progress({"event": "action_done", "symbol": "AAA", "rows": 4})
+        progress({"event": "step_start", "step": "Writing adjusted prices"})
+        progress({"event": "step_done", "step": "Writing adjusted prices", "rows": 4})
+        return {"status": "success"}
+
+    monkeypatch.setattr(ca_module, "run_corporate_action_normalization", fake_run_corporate_action_normalization)
+
+    result = IngestOrchestrationService().run_corporate_action_normalization(context)
+
+    details = [str(event.get("detail") or "") for event in events]
+    assert result["status"] == "success"
+    assert all(event["task_name"] == "corporate_actions" for event in events)
+    assert any("Preparing schema" in detail for detail in details)
+    assert any("fetched 2025 rows=3 (1/2)" in detail for detail in details)
+    assert any("adjusted AAA rows=4 (1/1)" in detail for detail in details)
+    assert any(event["metadata"].get("completed_steps") for event in events)
 
 
 def test_fetch_nse_corporate_actions_reports_year_progress(monkeypatch: pytest.MonkeyPatch) -> None:

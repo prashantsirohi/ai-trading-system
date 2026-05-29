@@ -49,7 +49,44 @@ def refresh_valuation_cycle_features(
             )
             conn.register("_valuation_cycle_frame", features)
             try:
-                conn.execute("INSERT INTO valuation_cycle_features SELECT * FROM _valuation_cycle_frame")
+                conn.execute(
+                    """
+                    INSERT INTO valuation_cycle_features (
+                        entity_type,
+                        entity_id,
+                        date,
+                        pe_ttm,
+                        earnings_yield,
+                        pe_pctile_3y,
+                        pe_pctile_5y,
+                        pe_pctile_10y,
+                        pe_median_5y,
+                        pe_avg_5y,
+                        pe_zscore_3y,
+                        pe_zscore_5y,
+                        pe_zscore_10y,
+                        valuation_zone,
+                        cycle_signal
+                    )
+                    SELECT
+                        entity_type,
+                        entity_id,
+                        date,
+                        pe_ttm,
+                        earnings_yield,
+                        pe_pctile_3y,
+                        pe_pctile_5y,
+                        pe_pctile_10y,
+                        pe_median_5y,
+                        pe_avg_5y,
+                        pe_zscore_3y,
+                        pe_zscore_5y,
+                        pe_zscore_10y,
+                        valuation_zone,
+                        cycle_signal
+                    FROM _valuation_cycle_frame
+                    """
+                )
             finally:
                 conn.unregister("_valuation_cycle_frame")
     finally:
