@@ -118,6 +118,61 @@ DEFAULT_RULES = [
         "owner": "pipeline",
     },
     {
+        "rule_id": "ingest_adjusted_ohlc_not_null",
+        "stage_name": "ingest",
+        "dataset_name": "_catalog",
+        "severity": "high",
+        "rule_sql": """
+            SELECT COUNT(*)
+            FROM _catalog
+            WHERE exchange = 'NSE'
+              AND NOT COALESCE(is_benchmark, FALSE)
+              AND COALESCE(instrument_type, 'equity') = 'equity'
+              AND (
+                    adjusted_open IS NULL
+                 OR adjusted_high IS NULL
+                 OR adjusted_low IS NULL
+                 OR adjusted_close IS NULL
+              )
+        """,
+        "description": "Equity rows should have adjusted OHLC fields populated.",
+        "owner": "pipeline",
+    },
+    {
+        "rule_id": "ingest_adjustment_factor_positive",
+        "stage_name": "ingest",
+        "dataset_name": "_catalog",
+        "severity": "high",
+        "rule_sql": """
+            SELECT COUNT(*)
+            FROM _catalog
+            WHERE exchange = 'NSE'
+              AND NOT COALESCE(is_benchmark, FALSE)
+              AND COALESCE(instrument_type, 'equity') = 'equity'
+              AND COALESCE(adjustment_factor, 0) <= 0
+        """,
+        "description": "Adjustment factor should be positive for equity rows.",
+        "owner": "pipeline",
+    },
+    {
+        "rule_id": "ingest_raw_ohlc_unchanged_after_normalization",
+        "stage_name": "ingest",
+        "dataset_name": "_catalog",
+        "severity": "high",
+        "rule_sql": None,
+        "description": "Corporate-action normalization should not mutate raw OHLC.",
+        "owner": "pipeline",
+    },
+    {
+        "rule_id": "ingest_corporate_action_explains_large_raw_gap",
+        "stage_name": "ingest",
+        "dataset_name": "_catalog",
+        "severity": "high",
+        "rule_sql": None,
+        "description": "Large raw price gaps near split/bonus ex-dates should be explained by corporate actions.",
+        "owner": "pipeline",
+    },
+    {
         "rule_id": "ingest_recent_universe_price_jump_anomaly",
         "stage_name": "ingest",
         "dataset_name": "_catalog",

@@ -37,6 +37,7 @@ project_root = _resolve_project_root(__file__)
 from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
+from ai_trading_system.domains.features.repository import ensure_feature_catalog_source
 
 load_project_env(project_root)
 
@@ -103,7 +104,7 @@ def batch_rsi(conn, exchange="NSE", period=14):
         WITH prices AS (
             SELECT symbol_id, exchange, timestamp, close,
                    LAG(close) OVER w AS prev_close
-            FROM _catalog
+            FROM _catalog_feature_source
             WHERE exchange = '{exchange}'
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
         ),
@@ -149,7 +150,7 @@ def batch_sma(conn, exchange="NSE", periods=[20, 50, 200]):
             INSERT INTO {tbl}
             SELECT symbol_id, exchange, timestamp, close, {p} AS period,
                    ROUND(AVG(close) OVER w, 4) AS sma_value
-            FROM _catalog
+            FROM _catalog_feature_source
             WHERE exchange = '{exchange}'
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp ROWS BETWEEN {p - 1} PRECEDING AND CURRENT ROW)
             QUALIFY COUNT(*) OVER (PARTITION BY symbol_id) >= {p}
@@ -178,7 +179,7 @@ def batch_ema(conn, exchange="NSE", periods=[12, 26, 50, 200]):
             INSERT INTO {tbl}
             SELECT symbol_id, exchange, timestamp, close, {p} AS ema_period,
                    ROUND(EXPONENTIAL_MOVING_AVERAGE(close, {alpha}) OVER w, 4) AS ema_value
-            FROM _catalog
+            FROM _catalog_feature_source
             WHERE exchange = '{exchange}'
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
             QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp) >= {p}
@@ -210,7 +211,7 @@ def batch_macd(conn, exchange="NSE", fast=12, slow=26, signal=9):
             SELECT symbol_id, exchange, timestamp, close,
                    EXPONENTIAL_MOVING_AVERAGE(close, {alpha_fast}) OVER w AS ef,
                    EXPONENTIAL_MOVING_AVERAGE(close, {alpha_slow}) OVER w AS es
-            FROM _catalog
+            FROM _catalog_feature_source
             WHERE exchange = '{exchange}'
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
         ),
@@ -251,7 +252,7 @@ def batch_atr(conn, exchange="NSE", period=14):
         WITH hlc AS (
             SELECT symbol_id, exchange, timestamp, high, low, close,
                    LAG(close) OVER w AS prev_close
-            FROM _catalog
+            FROM _catalog_feature_source
             WHERE exchange = '{exchange}'
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
         ),
@@ -289,7 +290,7 @@ def batch_adx(conn, exchange="NSE", period=14):
         WITH hlc AS (
             SELECT symbol_id, exchange, timestamp, high, low, close,
                    LAG(close) OVER w AS prev_close
-            FROM _catalog WHERE exchange = '{exchange}'
+            FROM _catalog_feature_source WHERE exchange = '{exchange}'
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
         ),
         tr_hilo AS (
@@ -350,7 +351,7 @@ def batch_bollinger_bands(conn, exchange="NSE", period=20, std_dev=2):
                ROUND(AVG(close) OVER w + {std_dev} * STDDEV(close) OVER w, 4) AS bb_upper,
                ROUND(AVG(close) OVER w - {std_dev} * STDDEV(close) OVER w, 4) AS bb_lower,
                {period} AS bb_period, {std_dev} AS bb_std
-        FROM _catalog
+        FROM _catalog_feature_source
         WHERE exchange = '{exchange}'
         WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp ROWS BETWEEN {period - 1} PRECEDING AND CURRENT ROW)
         QUALIFY COUNT(*) OVER (PARTITION BY symbol_id) >= {period}
@@ -381,7 +382,7 @@ def batch_roc(conn, exchange="NSE", periods=[1, 3, 5, 10, 20]):
                    ROUND(CASE WHEN LAG(close, {p}) OVER w > 0
                        THEN 100 * (close - LAG(close, {p}) OVER w) / LAG(close, {p}) OVER w
                        ELSE 0 END, 4) AS roc_value
-            FROM _catalog
+            FROM _catalog_feature_source
             WHERE exchange = '{exchange}'
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
         """)
@@ -409,7 +410,7 @@ def batch_supertrend(conn, exchange="NSE", period=10, multiplier=3):
             SELECT symbol_id, exchange, timestamp, high, low, close,
                    AVG(high - low) OVER w AS avg_tr,
                    (high + low) / 2 AS hl2
-            FROM _catalog
+            FROM _catalog_feature_source
             WHERE exchange = '{exchange}'
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp ROWS BETWEEN {period - 1} PRECEDING AND CURRENT ROW)
         ),
@@ -491,8 +492,9 @@ def main():
     }
 
     conn = duckdb.connect(DB_PATH)
+    ensure_feature_catalog_source(conn)
     n_syms = conn.execute(
-        "SELECT COUNT(DISTINCT symbol_id) FROM _catalog WHERE exchange = 'NSE'"
+        "SELECT COUNT(DISTINCT symbol_id) FROM _catalog_feature_source WHERE exchange = 'NSE'"
     ).fetchone()[0]
     logger.info(f"Computing features for {n_syms} NSE symbols...")
 

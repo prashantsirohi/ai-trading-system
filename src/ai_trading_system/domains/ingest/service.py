@@ -38,6 +38,7 @@ class IngestOrchestrationService:
 
     def run_default(self, context: StageContext) -> Dict:
         fallback_enabled, fallback_reason = self.resolve_yfinance_fallback_policy(context)
+        corporate_actions_result = self.run_corporate_action_normalization(context)
         if self.operation is not None:
             result = self.operation(context)
         else:
@@ -62,6 +63,13 @@ class IngestOrchestrationService:
         catalog_rows, symbol_count, latest_ts = fetch_catalog_summary(context.db_path)
 
         payload = dict(result or {})
+        payload["corporate_actions"] = corporate_actions_result
+        payload["corporate_actions_status"] = corporate_actions_result.get("status")
+        payload["corporate_actions_warning"] = (
+            corporate_actions_result.get("error_message")
+            if corporate_actions_result.get("status") == "failed"
+            else None
+        )
         latest_catalog_date = None
         if latest_ts is not None:
             latest_catalog_date = pd.Timestamp(latest_ts).date().isoformat()
@@ -85,6 +93,29 @@ class IngestOrchestrationService:
         payload["downstream_input_fingerprint"] = self.build_downstream_input_fingerprint(payload)
         payload["stale_quarantine_sweep"] = self.run_stale_quarantine_sweep(context)
         return payload
+
+    def run_corporate_action_normalization(self, context: StageContext) -> Dict:
+        """Run split/bonus normalization as a warning-only ingest pre-step."""
+        try:
+            from ai_trading_system.domains.ingest.corporate_actions import run_corporate_action_normalization
+        except Exception as exc:
+            logger.warning("corporate action normalizer import failed: %s", exc)
+            return {"status": "failed", "error_message": f"import_failed: {exc}"}
+        try:
+            paths = ensure_domain_layout(
+                project_root=context.project_root,
+                data_domain=context.params.get("data_domain", "operational"),
+            )
+            return run_corporate_action_normalization(
+                ohlcv_db_path=context.db_path,
+                masterdb_path=paths.master_db_path,
+                run_id=context.run_id,
+                force=bool(context.params.get("corporate_actions_force_full", False)),
+                max_age_days=int(context.params.get("corporate_actions_full_max_age_days", 30) or 30),
+            )
+        except Exception as exc:
+            logger.warning("corporate action normalizer failed: %s", exc)
+            return {"status": "failed", "error_message": str(exc)}
 
     def run_stale_quarantine_sweep(self, context: StageContext) -> Dict:
         """Mark long-stuck quarantine rows as permanently_unavailable.

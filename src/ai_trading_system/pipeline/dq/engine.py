@@ -257,8 +257,8 @@ class DataQualityEngine:
                     symbol_id,
                     exchange,
                     CAST(timestamp AS DATE) AS trade_date,
-                    close,
-                    LAG(close) OVER (
+                    COALESCE(adjusted_close, close) AS close,
+                    LAG(COALESCE(adjusted_close, close)) OVER (
                         PARTITION BY symbol_id, exchange
                         ORDER BY timestamp
                     ) AS prev_close
@@ -370,6 +370,103 @@ class DataQualityEngine:
             severity,
             failed,
             message if failed else f"{message} Coverage within thresholds.",
+        )
+
+    def _rule_ingest_raw_ohlc_unchanged_after_normalization(
+        self, context: StageContext, result: StageResult, severity: str
+    ) -> DQRuleFailure:
+        corporate_actions = result.metadata.get("corporate_actions") or {}
+        status = str(corporate_actions.get("status") or "").lower()
+        if not corporate_actions or status == "failed":
+            return self._make_result(
+                "ingest_raw_ohlc_unchanged_after_normalization",
+                severity,
+                0,
+                "Raw OHLC preservation check skipped because corporate-action normalization did not complete.",
+            )
+        unchanged = int(corporate_actions.get("raw_ohlc_unchanged") or 0) == 1
+        return self._make_result(
+            "ingest_raw_ohlc_unchanged_after_normalization",
+            severity,
+            0 if unchanged else 1,
+            "Corporate-action normalization preserved raw OHLC."
+            if unchanged
+            else "Corporate-action normalization reported a raw OHLC checksum change.",
+        )
+
+    def _rule_ingest_corporate_action_explains_large_raw_gap(
+        self, context: StageContext, result: StageResult, severity: str
+    ) -> DQRuleFailure:
+        if not self._table_exists(context.db_path, "_corporate_actions"):
+            return self._make_result(
+                "ingest_corporate_action_explains_large_raw_gap",
+                severity,
+                0,
+                "Corporate-action table is not available; raw-gap explanation check skipped.",
+            )
+        threshold = float(context.params.get("dq_corporate_action_raw_gap_pct", 30.0) or 30.0)
+        window_days = int(context.params.get("dq_corporate_action_gap_window_days", 1) or 1)
+        query = f"""
+            WITH ordered AS (
+                SELECT
+                    symbol_id,
+                    isin,
+                    CAST(timestamp AS DATE) AS trade_date,
+                    close,
+                    adjustment_factor,
+                    adjustment_source,
+                    LAG(close) OVER (PARTITION BY symbol_id ORDER BY timestamp) AS prev_close,
+                    LAG(adjustment_factor) OVER (PARTITION BY symbol_id ORDER BY timestamp) AS prev_adjustment_factor,
+                    LAG(adjustment_source) OVER (PARTITION BY symbol_id ORDER BY timestamp) AS prev_adjustment_source
+                FROM _catalog
+                WHERE exchange = 'NSE'
+                  AND NOT COALESCE(is_benchmark, FALSE)
+                  AND COALESCE(instrument_type, 'equity') = 'equity'
+            ),
+            raw_gaps AS (
+                SELECT
+                    *,
+                    ABS(((close / NULLIF(prev_close, 0)) - 1) * 100.0) AS abs_pct_change
+                FROM ordered
+                WHERE prev_close IS NOT NULL
+                  AND close IS NOT NULL
+                  AND ABS(((close / NULLIF(prev_close, 0)) - 1) * 100.0) >= {threshold}
+            ),
+            near_actions AS (
+                SELECT g.*
+                FROM raw_gaps g
+                INNER JOIN _corporate_actions ca
+                        ON (
+                            COALESCE(g.isin, '') <> ''
+                            AND COALESCE(ca.isin, '') = COALESCE(g.isin, '')
+                        )
+                        OR (
+                            COALESCE(g.isin, '') = ''
+                            AND ca.symbol = g.symbol_id
+                        )
+                WHERE ABS(date_diff('day', g.trade_date, ca.ex_date)) <= {window_days}
+            )
+            SELECT COUNT(*)
+            FROM near_actions
+            WHERE NOT (
+                (
+                    COALESCE(adjustment_factor, 1.0) <> 1.0
+                    AND COALESCE(adjustment_source, '') = 'nse_corporate_actions'
+                )
+                OR (
+                    COALESCE(prev_adjustment_factor, 1.0) <> 1.0
+                    AND COALESCE(prev_adjustment_source, '') = 'nse_corporate_actions'
+                )
+            )
+        """
+        failed_count = self._scalar(context.db_path, query)
+        return self._make_result(
+            "ingest_corporate_action_explains_large_raw_gap",
+            severity,
+            failed_count,
+            "Large raw gaps around corporate-action ex-dates are marked as explained."
+            if failed_count == 0
+            else "Found large raw gaps near corporate-action ex-dates that are not marked as adjusted.",
         )
 
     def _rule_ingest_unresolved_dates_present(

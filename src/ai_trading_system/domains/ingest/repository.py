@@ -52,6 +52,8 @@ def ensure_catalog_compatibility(conn: duckdb.DuckDBPyConnection) -> None:
             "adjusted_close",
             "adjustment_factor",
             "adjustment_source",
+            "adjusted_at",
+            "adjustment_version",
             "instrument_type",
             "is_benchmark",
             "benchmark_label",
@@ -79,6 +81,8 @@ def ensure_catalog_compatibility(conn: duckdb.DuckDBPyConnection) -> None:
             "adjusted_close",
             "adjustment_factor",
             "adjustment_source",
+            "adjusted_at",
+            "adjustment_version",
             "instrument_type",
             "is_benchmark",
             "benchmark_label",
@@ -128,6 +132,7 @@ def initialize_ingest_duckdb(db_path: str | Path) -> None:
         )
         """
     )
+    _ensure_adjustment_columns(conn)
 
     conn.execute(
         """
@@ -218,6 +223,23 @@ def initialize_ingest_duckdb(db_path: str | Path) -> None:
     conn.commit()
     conn.close()
     logger.info(f"DuckDB initialized: {db_path}")
+
+
+def _ensure_adjustment_columns(conn: duckdb.DuckDBPyConnection) -> None:
+    existing = get_table_columns(conn, "_catalog")
+    additions = {
+        "adjusted_open": "DOUBLE",
+        "adjusted_high": "DOUBLE",
+        "adjusted_low": "DOUBLE",
+        "adjusted_close": "DOUBLE",
+        "adjustment_factor": "DOUBLE",
+        "adjustment_source": "TEXT",
+        "adjusted_at": "TIMESTAMP",
+        "adjustment_version": "BIGINT",
+    }
+    for column, dtype in additions.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE _catalog ADD COLUMN {column} {dtype}")
 
 
 def fetch_catalog_summary(db_path: str | Path) -> tuple[int, int, object]:

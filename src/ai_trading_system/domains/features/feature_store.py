@@ -186,7 +186,7 @@ class FeatureStore:
         # Get OHLCV range
         ohlcv_range = conn.execute("""
             SELECT MIN(timestamp)::date, MAX(timestamp)::date, COUNT(DISTINCT symbol_id)
-            FROM _catalog
+            FROM _catalog_feature_source
         """).fetchone()
 
         # Get features count
@@ -332,6 +332,34 @@ class FeatureStore:
             get_conn=self._get_conn,
             table_name=table_name,
         )
+
+    def list_features(self, feature_name: str | None = None) -> pd.DataFrame:
+        """Return feature registry rows, optionally filtered by feature name."""
+        conn = self._get_conn()
+        try:
+            if feature_name:
+                return conn.execute(
+                    """
+                    SELECT feature_id, feature_name, symbol_id, exchange,
+                           computed_at, rows_computed, lookback_days, params,
+                           feature_file, status, note
+                    FROM _feature_registry
+                    WHERE feature_name = ?
+                    ORDER BY computed_at DESC
+                    """,
+                    [feature_name],
+                ).fetchdf()
+            return conn.execute(
+                """
+                SELECT feature_id, feature_name, symbol_id, exchange,
+                       computed_at, rows_computed, lookback_days, params,
+                       feature_file, status, note
+                FROM _feature_registry
+                ORDER BY feature_name, computed_at DESC
+                """
+            ).fetchdf()
+        finally:
+            conn.close()
 
     def create_snapshot(self, description: str = None) -> int:
         conn = self._get_conn()
@@ -571,7 +599,7 @@ class FeatureStore:
                 """
                 SELECT MIN(timestamp) FROM (
                     SELECT timestamp
-                    FROM _catalog
+                    FROM _catalog_feature_source
                     WHERE symbol_id = ? AND exchange = ?
                     ORDER BY timestamp DESC
                     LIMIT ?
@@ -588,7 +616,7 @@ class FeatureStore:
                 """
                 SELECT MIN(timestamp) FROM (
                     SELECT timestamp
-                    FROM _catalog
+                    FROM _catalog_feature_source
                     WHERE symbol_id = ? AND exchange = ?
                     ORDER BY timestamp DESC
                     LIMIT ?
@@ -630,7 +658,7 @@ class FeatureStore:
                     timestamp,
                     close,
                     LAG(close) OVER w AS prev_close
-                FROM _catalog
+                FROM _catalog_feature_source
                 WHERE {{symbol_predicate}}
                   AND {{exchange_predicate}}
                   AND timestamp IS NOT NULL
@@ -705,7 +733,7 @@ class FeatureStore:
                     LAG(close) OVER w AS prev_close,
                     LAG(low) OVER w AS prev_low,
                     LAG(high) OVER w AS prev_high
-                FROM _catalog
+                FROM _catalog_feature_source
                 WHERE {{symbol_predicate}}
                   AND {{exchange_predicate}}
                   AND timestamp IS NOT NULL
@@ -827,7 +855,7 @@ class FeatureStore:
                     timestamp,
                     close,
                     ROW_NUMBER() OVER w AS rn
-                FROM _catalog
+                FROM _catalog_feature_source
                 WHERE {{symbol_predicate}}
                   AND {{exchange_predicate}}
                   AND timestamp IS NOT NULL
@@ -884,7 +912,7 @@ class FeatureStore:
             SELECT
                 symbol_id, exchange, timestamp,
                 MIN(low) OVER w AS swing_low_{window}
-            FROM _catalog
+            FROM _catalog_feature_source
             WHERE {{symbol_predicate}}
               AND {{exchange_predicate}}
               AND timestamp IS NOT NULL
@@ -941,7 +969,7 @@ class FeatureStore:
                 SELECT
                     symbol_id, exchange, timestamp, close,
                     LAG(close) OVER w AS prev_close
-                FROM _catalog
+                FROM _catalog_feature_source
                 WHERE {"symbol_id = ?" if symbol_id else "TRUE"}
                   AND {"exchange = ?" if exchange else "TRUE"}
                   AND timestamp IS NOT NULL
@@ -1016,7 +1044,7 @@ class FeatureStore:
             base = f"""
                 SELECT
                     symbol_id, exchange, timestamp, close
-                FROM _catalog
+                FROM _catalog_feature_source
                 WHERE {"symbol_id = ?" if symbol_id else "TRUE"}
                   AND {"exchange = ?" if exchange else "TRUE"}
                   AND timestamp IS NOT NULL
@@ -1107,7 +1135,7 @@ class FeatureStore:
                     symbol_id, exchange, timestamp,
                     high, low, close,
                     LAG(close) OVER w AS prev_close
-                FROM _catalog
+                FROM _catalog_feature_source
                 WHERE {{symbol_predicate}}
                   AND {{exchange_predicate}}
                   AND timestamp IS NOT NULL
@@ -1170,7 +1198,7 @@ class FeatureStore:
                     AVG(close) OVER w AS sma_mid,
                     STDDEV(close) OVER w AS sd,
                     ROW_NUMBER() OVER w AS rn
-                FROM _catalog
+                FROM _catalog_feature_source
                 WHERE {{symbol_predicate}}
                   AND {{exchange_predicate}}
                   AND timestamp IS NOT NULL
@@ -1230,7 +1258,7 @@ class FeatureStore:
                             100.0 * (close - LAG(close, {p}) OVER w)
                             / NULLIF(LAG(close, {p}) OVER w, 0),
                         4) AS roc_{p}
-                    FROM _catalog
+                    FROM _catalog_feature_source
                     WHERE {"symbol_id = ?" if symbol_id else "TRUE"}
                       AND {"exchange = ?" if exchange else "TRUE"}
                       AND timestamp IS NOT NULL
@@ -1302,7 +1330,7 @@ class FeatureStore:
                 AVG(close) OVER w150 AS sma_150,
                 AVG(close) OVER w200 AS sma_200,
                 MAX(high)  OVER w252 AS high_252
-            FROM _catalog
+            FROM _catalog_feature_source
             WHERE {sym_pred}
               AND {exc_pred}
               AND timestamp IS NOT NULL
@@ -1473,7 +1501,7 @@ class FeatureStore:
                 """
                 SELECT
                     symbol_id, exchange, timestamp, open, high, low, close, volume
-                FROM _catalog
+                FROM _catalog_feature_source
                 WHERE symbol_id = ? AND exchange = ?
                 ORDER BY timestamp
             """,
@@ -1533,7 +1561,7 @@ class FeatureStore:
                         SELECT
                             symbol_id, exchange, timestamp,
                             open, high, low, close, volume
-                        FROM _catalog
+                        FROM _catalog_feature_source
                         WHERE symbol_id = ?
                           AND exchange = ?
                           AND timestamp <= CAST(? AS TIMESTAMP)
@@ -1541,7 +1569,7 @@ class FeatureStore:
                     feat_latest AS (
                         SELECT DISTINCT ON (timestamp)
                             timestamp, open, high, low, close, volume
-                        FROM _catalog
+                        FROM _catalog_feature_source
                         WHERE symbol_id = ?
                           AND exchange = ?
                           AND timestamp <= CAST(? AS TIMESTAMP)
@@ -1555,7 +1583,7 @@ class FeatureStore:
                     LEFT JOIN feat_latest f
                         ON f.timestamp = (
                             SELECT MAX(timestamp)
-                            FROM _catalog
+                            FROM _catalog_feature_source
                             WHERE symbol_id = ?
                               AND exchange = ?
                               AND timestamp <= o.timestamp
@@ -1580,7 +1608,7 @@ class FeatureStore:
                         SELECT
                             symbol_id, exchange, timestamp,
                             open, high, low, close, volume
-                        FROM _catalog
+                        FROM _catalog_feature_source
                         WHERE symbol_id = ?
                           AND exchange = ?
                     ),
@@ -1590,7 +1618,7 @@ class FeatureStore:
                             close AS feat_close,
                             ROW_NUMBER() OVER w AS rn,
                             COUNT(*) OVER () AS total
-                        FROM _catalog
+                        FROM _catalog_feature_source
                         WHERE symbol_id = ?
                           AND exchange = ?
                         WINDOW w AS (ORDER BY timestamp)
@@ -1865,7 +1893,7 @@ class FeatureStore:
             try:
                 sym_rows = conn.execute(
                     """
-                    SELECT DISTINCT symbol_id FROM _catalog
+                    SELECT DISTINCT symbol_id FROM _catalog_feature_source
                     WHERE exchange IN (SELECT UNNEST(?))
                     ORDER BY symbol_id
                 """,
@@ -2127,7 +2155,7 @@ class FeatureStore:
             ohlcv = conn.execute(
                 """
                 SELECT symbol_id, exchange, timestamp, high, low, close
-                FROM _catalog
+                FROM _catalog_feature_source
                 WHERE symbol_id = ? AND exchange = ?
                   AND timestamp IS NOT NULL
                   AND (? IS NULL OR timestamp > CAST(? AS TIMESTAMP))

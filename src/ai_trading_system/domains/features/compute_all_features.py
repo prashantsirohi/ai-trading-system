@@ -22,7 +22,7 @@ def main() -> None:
     conn = fs._get_conn()
     syms_df = conn.execute(
         """
-        SELECT DISTINCT symbol_id FROM _catalog
+        SELECT DISTINCT symbol_id FROM _catalog_feature_source
         WHERE exchange = 'NSE'
         ORDER BY symbol_id
         """
@@ -49,6 +49,7 @@ def main() -> None:
         symbols=symbols,
         exchanges=["NSE"],
         feature_types=feature_types,
+        full_rebuild=True,
     )
 
     total_rows = sum(v for v in result.values())

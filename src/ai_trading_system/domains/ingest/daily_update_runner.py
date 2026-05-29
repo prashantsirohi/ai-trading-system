@@ -168,6 +168,8 @@ def apply_adjustment_fields(frame: pd.DataFrame, corporate_actions: pd.DataFrame
     output.loc[:, "adjusted_close"] = pd.to_numeric(output.get("close"), errors="coerce")
     output.loc[:, "adjustment_factor"] = 1.0
     output.loc[:, "adjustment_source"] = None
+    output.loc[:, "adjusted_at"] = pd.Timestamp.utcnow().tz_localize(None)
+    output.loc[:, "adjustment_version"] = 0
     if corporate_actions is not None and not corporate_actions.empty:
         output.loc[:, "adjustment_source"] = "corporate_actions_pending"
     return output
@@ -574,6 +576,8 @@ def _rows_to_symbol_frames(rows: pd.DataFrame) -> list[pd.DataFrame]:
         "adjusted_close",
         "adjustment_factor",
         "adjustment_source",
+        "adjusted_at",
+        "adjustment_version",
         "instrument_type",
         "is_benchmark",
         "benchmark_label",
@@ -608,6 +612,8 @@ def _rows_to_symbol_frames(rows: pd.DataFrame) -> list[pd.DataFrame]:
                     "adjusted_close",
                     "adjustment_factor",
                     "adjustment_source",
+                    "adjusted_at",
+                    "adjustment_version",
                     "instrument_type",
                     "is_benchmark",
                     "benchmark_label",

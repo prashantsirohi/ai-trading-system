@@ -8,7 +8,38 @@ from ai_trading_system.platform.logging.logger import logger
 
 
 def get_conn(ohlcv_db_path: str) -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(ohlcv_db_path)
+    conn = duckdb.connect(ohlcv_db_path)
+    ensure_feature_catalog_source(conn)
+    return conn
+
+
+def ensure_feature_catalog_source(conn: duckdb.DuckDBPyConnection) -> None:
+    """Expose OHLC columns with adjusted-price fallback for feature queries."""
+    try:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info('_catalog')").fetchall()
+        }
+    except Exception:
+        return
+
+    def price_expr(adjusted_col: str, raw_col: str) -> str:
+        if adjusted_col in columns:
+            return f"COALESCE({adjusted_col}, {raw_col}) AS {raw_col}"
+        return raw_col
+
+    conn.execute(
+        f"""
+        CREATE OR REPLACE TEMP VIEW _catalog_feature_source AS
+        SELECT
+            * EXCLUDE (open, high, low, close),
+            {price_expr("adjusted_open", "open")},
+            {price_expr("adjusted_high", "high")},
+            {price_expr("adjusted_low", "low")},
+            {price_expr("adjusted_close", "close")}
+        FROM _catalog
+        """
+    )
 
 
 def init_feature_registry(ohlcv_db_path: str) -> None:
