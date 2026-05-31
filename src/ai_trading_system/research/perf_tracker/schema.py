@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS rank_cohort_performance (
     factor_sector             DOUBLE,
     factor_momentum_accel     DOUBLE,
     factor_above_200dma       DOUBLE,
+    factor_liquidity          DOUBLE,
+    factor_delivery_trend     DOUBLE,
     sector_name               VARCHAR,
     inserted_at               TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (run_date, symbol_id, exchange)
@@ -57,6 +59,8 @@ CREATE INDEX IF NOT EXISTS idx_rank_cohort_date ON rank_cohort_performance(run_d
 # for new columns, then get populated by the next ingest.
 RANK_COHORT_ALTER_DDLS: tuple[str, ...] = (
     "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS factor_above_200dma DOUBLE",
+    "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS factor_liquidity DOUBLE",
+    "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS factor_delivery_trend DOUBLE",
 )
 
 

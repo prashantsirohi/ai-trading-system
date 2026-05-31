@@ -26,6 +26,7 @@ from ai_trading_system.research.perf_tracker.constants import (
     DRIFT_THRESHOLD_PCT,
     DRIFT_WARNING_MIN_RECENT_N,
     FACTOR_COLUMNS,
+    IC_HORIZONS,
     SAME_DATE_SMALL_SAMPLE_DAYS,
     SAME_DATE_SMALL_SAMPLE_ROWS,
 )
@@ -46,7 +47,7 @@ COHORT_BANDS: tuple[tuple[str, int, int], ...] = (
 )
 
 DEFAULT_IC_WINDOWS: tuple[int, ...] = (30, 90, 180)
-DEFAULT_IC_HORIZONS: tuple[int, ...] = (5, 10, 20)
+DEFAULT_IC_HORIZONS: tuple[int, ...] = IC_HORIZONS
 
 # Partial-coverage threshold is route-local (not shared with the digest yet).
 COVERAGE_PARTIAL_PCT = 50.0
@@ -434,17 +435,17 @@ def _parse_windows(raw: str | None) -> tuple[int, ...]:
 
 
 def _factor_ic_for_window(con, window_days: int, available: Iterable[str]) -> dict[str, dict]:
-    """Compute Spearman IC vs fwd_20d for each factor over the last N days."""
+    """Compute Spearman IC vs 5d/10d/20d forward returns over the last N days."""
     available = list(available)
     if not available:
         return {}
+    fwd_cols = [f"fwd_{h}d_return" for h in DEFAULT_IC_HORIZONS]
     cols = ", ".join(available)
     df = con.execute(
         f"""
-        SELECT {cols}, fwd_20d_return
+        SELECT {cols}, {", ".join(fwd_cols)}
         FROM rank_cohort_performance
-        WHERE fwd_20d_return IS NOT NULL
-          AND run_date >= (
+        WHERE run_date >= (
               SELECT MAX(run_date) - INTERVAL '{int(window_days)} days'
               FROM rank_cohort_performance
           )
@@ -454,9 +455,16 @@ def _factor_ic_for_window(con, window_days: int, available: Iterable[str]) -> di
     if df.empty:
         return out
     for factor in available:
-        valid = df[[factor, "fwd_20d_return"]].dropna()
-        ic = _rank_ic(valid)
-        out[factor] = {"n": int(len(valid)), "ic": _round(ic, 3)}
+        entry: dict = {}
+        for horizon in DEFAULT_IC_HORIZONS:
+            fwd_col = f"fwd_{horizon}d_return"
+            valid = df[[factor, fwd_col]].dropna()
+            ic = _rank_ic_xy(valid[factor], valid[fwd_col]) if len(valid) >= 30 else None
+            entry[horizon] = {"n": int(len(valid)), "ic": _round(ic, 3)}
+        # Legacy drift/UI keys remain anchored to fwd_20d.
+        entry["n"] = entry[20]["n"]
+        entry["ic"] = entry[20]["ic"]
+        out[factor] = entry
     return out
 
 
@@ -518,7 +526,7 @@ def factor_ic(
         description="Comma-separated lookbacks in days (default: 30,90,180).",
     ),
 ):
-    """Spearman rank correlation of each factor score vs fwd_20d return."""
+    """Spearman rank correlation of each factor score vs 5d/10d/20d returns."""
     wins = _parse_windows(windows)
     with open_research_db(project_root=project_root(), read_only=True) as con:
         available = _available_factors(con)
@@ -530,8 +538,12 @@ def factor_ic(
                 cell = per_window[w].get(factor, {"n": 0, "ic": None})
                 entry[f"ic_{w}d"] = cell["ic"]
                 entry[f"n_{w}d"] = cell["n"]
+                for horizon in DEFAULT_IC_HORIZONS:
+                    hcell = cell.get(horizon, {"n": 0, "ic": None})
+                    entry[f"ic_{horizon}d_{w}w"] = hcell["ic"]
+                    entry[f"n_{horizon}d_{w}w"] = hcell["n"]
             rows.append(entry)
-    return {"windows": list(wins), "factors": rows}
+    return {"windows": list(wins), "horizons": list(DEFAULT_IC_HORIZONS), "factors": rows}
 
 
 @router.get("/factor-ic/conditional")

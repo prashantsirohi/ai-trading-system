@@ -24,6 +24,8 @@ RANKED_TO_TRACKER: dict[str, str] = {
     "sector_strength_score": "factor_sector",
     "momentum_acceleration_score": "factor_momentum_accel",
     "above_200dma_score": "factor_above_200dma",
+    "liquidity_score": "factor_liquidity",
+    "delivery_trend_score": "factor_delivery_trend",
 }
 
 # Tracker-side factor columns used by digest aggregations / IC computation.
@@ -37,7 +39,21 @@ FACTOR_COLUMNS: tuple[str, ...] = (
     "factor_sector",
     "factor_momentum_accel",
     "factor_above_200dma",
+    "factor_liquidity",
+    "factor_delivery_trend",
 )
+
+IC_HORIZONS: tuple[int, ...] = (5, 10, 20)
+
+WEIGHT_ACTIVATION_CANDIDATES: tuple[str, ...] = (
+    "factor_liquidity",
+    "factor_delivery_trend",
+    "factor_above_200dma",
+    "factor_momentum_accel",
+)
+
+WEIGHT_ACTIVATION_MIN_N = 30
+WEIGHT_ACTIVATION_MIN_IC_20D = 0.02
 
 # Drift detection thresholds.
 DRIFT_THRESHOLD_PCT = 30.0          # recent IC drop vs baseline that triggers a flag
@@ -78,6 +94,8 @@ COMPOSITION_OPTIONAL_COLUMNS: tuple[str, ...] = (
     "factor_vol",
     "factor_deliv",
     "factor_above_200dma",
+    "factor_liquidity",
+    "factor_delivery_trend",
     "volume_ratio_20",
     "delivery_pct",
     "prior_5d_return",

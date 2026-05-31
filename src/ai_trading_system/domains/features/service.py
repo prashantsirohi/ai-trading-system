@@ -187,6 +187,19 @@ class FeaturesOrchestrationService:
                 output_csv=context.output_dir() / "sector_earnings_leadership.csv",
             )
 
+        phase1_summary = {"status": "disabled"}
+        if bool(context.params.get("enable_phase1_features", True)):
+            from ai_trading_system.domains.features.phase1 import refresh_phase1_features
+
+            try:
+                phase1_summary = refresh_phase1_features(
+                    ohlcv_db_path=context.db_path,
+                    as_of=context.run_date,
+                    exchange=str(context.params.get("exchange", "NSE")),
+                ).to_dict()
+            except Exception as exc:
+                phase1_summary = {"status": "degraded", "error": str(exc)}
+
         snapshot_id, feature_rows, feature_registry_entries = (
             record_snapshot or self.record_snapshot
         )(context)
@@ -214,6 +227,7 @@ class FeaturesOrchestrationService:
                 "benchmark_relative": {"enabled": True, "benchmark_symbol": benchmark_symbol},
                 "valuation_features": valuation_summary,
                 "sector_earnings_features": sector_earnings_summary,
+                "phase1_features": phase1_summary,
             },
             "trust_confidence": trust_confidence.to_dict(),
             "completed_at": datetime.now(timezone.utc).isoformat(),

@@ -18,12 +18,14 @@ from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.pipeline.contracts import TrustConfidenceEnvelope
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 from ai_trading_system.domains.ranking.payloads import (
+    attach_phase1_market_breadth_to_payload,
     attach_market_direction_to_payload,
     attach_market_regime_phase_to_payload,
     augment_dashboard_payload_with_ml,
     build_dashboard_payload,
     summarize_task_statuses,
 )
+from ai_trading_system.domains.features.phase1 import PHASE1_SYMBOL_COLUMNS
 from ai_trading_system.analytics.regime import (
     MarketRegimeSnapshot,
     RegimeProfile,
@@ -93,6 +95,42 @@ def _coerce_numeric_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataF
             output.loc[:, column] = pd.Series([pd.NA] * len(output), index=output.index)
         output.loc[:, column] = pd.to_numeric(output[column], errors="coerce")
     return output
+
+
+def phase1_feature_warnings(
+    frame: pd.DataFrame,
+    *,
+    label: str,
+    run_date: str,
+    coverage_threshold: float = 0.80,
+) -> list[str]:
+    """Warn when Phase 1 enrichment is stale or sparse on an output frame."""
+    if frame is None or frame.empty:
+        return []
+    warnings: list[str] = []
+    feature_cols = [column for column in PHASE1_SYMBOL_COLUMNS if column in frame.columns]
+    if not feature_cols:
+        warnings.append(f"phase1 features unavailable for {label}: no Phase 1 columns present")
+        return warnings
+
+    coverage = frame[feature_cols].notna().any(axis=1).mean()
+    if coverage < float(coverage_threshold):
+        warnings.append(
+            f"phase1 feature coverage low for {label}: {coverage * 100:.1f}% < {coverage_threshold * 100:.1f}%"
+        )
+
+    if "phase1_feature_date" in frame.columns:
+        dates = pd.to_datetime(frame["phase1_feature_date"], errors="coerce").dropna()
+        if not dates.empty:
+            latest = dates.max().date()
+            target = pd.to_datetime(run_date).date()
+            if latest < target:
+                warnings.append(f"phase1 features stale for {label}: latest={latest} run_date={target}")
+        else:
+            warnings.append(f"phase1 feature date unavailable for {label}")
+    else:
+        warnings.append(f"phase1 feature date unavailable for {label}")
+    return warnings
 
 
 def apply_regime_profile_to_rank_params(
@@ -686,6 +724,31 @@ class RankOrchestrationService:
         )
         ranked_universe = attach_rank_confidence_from_features(ranked_universe)
 
+        phase1_breadth = pd.DataFrame()
+        try:
+            phase1_breadth = ranker.input_loader.load_latest_market_breadth(
+                context.run_date,
+                exchange=str(effective_params.get("exchange", "NSE")),
+            )
+        except Exception as exc:
+            warnings.append(f"phase1 market breadth unavailable: {exc}")
+        warnings.extend(
+            phase1_feature_warnings(
+                ranked,
+                label="ranked_signals",
+                run_date=context.run_date,
+                coverage_threshold=float(effective_params.get("phase1_feature_coverage_min", 0.80)),
+            )
+        )
+        warnings.extend(
+            phase1_feature_warnings(
+                ranked_universe,
+                label="ranked_universe",
+                run_date=context.run_date,
+                coverage_threshold=float(effective_params.get("phase1_feature_coverage_min", 0.80)),
+            )
+        )
+
         daily_turnover = compute_factor_turnover(ranked, previous_df)
         weekly_turnover = compute_factor_turnover(ranked, previous_week_df)
         correlation_result = compute_factor_correlations(ranked)
@@ -1212,6 +1275,7 @@ class RankOrchestrationService:
                 "pattern_fingerprint": self.dataframe_fingerprint(pattern_df),
                 "stock_scan_fingerprint": self.dataframe_fingerprint(stock_scan_df),
                 "sector_dashboard_fingerprint": self.dataframe_fingerprint(sector_dashboard_df),
+                "phase1_market_breadth_fingerprint": self.dataframe_fingerprint(phase1_breadth),
                 "warnings": list(warnings),
                 "market_stage": stage_info,
                 "market_stage_info": stage_info,
@@ -1238,6 +1302,7 @@ class RankOrchestrationService:
             optional=False,
         )
         if isinstance(dashboard_payload, dict):
+            attach_phase1_market_breadth_to_payload(dashboard_payload, phase1_breadth)
             if regime_snapshot is not None:
                 disagreement = regime_disagreement(
                     regime_snapshot.regime, regime_snapshot.raw_regime

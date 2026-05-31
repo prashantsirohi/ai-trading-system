@@ -102,6 +102,37 @@ def attach_market_regime_phase_to_payload(
     return payload
 
 
+def attach_phase1_market_breadth_to_payload(
+    payload: Dict[str, object],
+    breadth: pd.DataFrame | dict | None,
+) -> Dict[str, object]:
+    """Attach persisted Phase 1 market breadth fields to dashboard summary."""
+    if breadth is None:
+        return payload
+    if isinstance(breadth, pd.DataFrame):
+        if breadth.empty:
+            return payload
+        row = breadth.iloc[0].to_dict()
+    elif isinstance(breadth, dict):
+        row = dict(breadth)
+    else:
+        return payload
+
+    payload["phase1_market_breadth"] = row
+    summary = payload.setdefault("summary", {})
+    if isinstance(summary, dict):
+        for key in [
+            "breadth_score",
+            "breadth_velocity_score",
+            "breadth_velocity_bucket",
+            "pct_above_200dma",
+            "pct_at_52w_high",
+            "advance_decline_ratio",
+        ]:
+            summary[key] = row.get(key)
+    return payload
+
+
 def _first_present(row: dict, names: list[str]):
     for name in names:
         value = row.get(name)

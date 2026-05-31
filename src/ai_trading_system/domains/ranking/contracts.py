@@ -43,6 +43,9 @@ DEFAULT_FACTOR_WEIGHTS: dict[str, float] = {
     "above_200dma": 0.0,
 }
 
+# TODO(Phase 2): fix RS/proximity overlap; define trend_persistence formally;
+# add IC tracking; activate new weights only after IC/backtest evidence.
+
 STAGE2_FRESH_BARS_MAX = 8
 STAGE2_MID_BARS_MAX = 15
 STAGE2_FRESHNESS_BONUS = 4.0
@@ -143,4 +146,21 @@ RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "rs_vs_nifty_score",
     "sma200_slope_20d_pct",
     "sma_150",
+    # Phase 1A persisted quant features (visibility only; not score inputs)
+    "phase1_feature_date",
+    "realized_vol_20",
+    "realized_vol_60",
+    "beta_to_nifty_60",
+    "beta_to_nifty_60_obs",
+    "max_drawdown_63",
+    "max_drawdown_126",
+    "atr_pct",
+    "avg_value_traded_20",
+    "liquidity_score",
+    "delivery_pct_latest",
+    "delivery_pct_5d_avg",
+    "delivery_pct_20d_avg",
+    "delivery_pct_change_5d",
+    "delivery_pct_vs_20d",
+    "delivery_trend_score",
 )

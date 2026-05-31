@@ -9,6 +9,7 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.features.indicators import add_stage2_features
+from ai_trading_system.domains.features.phase1 import PHASE1_BREADTH_COLUMNS, PHASE1_SYMBOL_COLUMNS
 from ai_trading_system.platform.logging.logger import logger
 
 
@@ -458,6 +459,63 @@ class RankerInputLoader:
         finally:
             conn.close()
         return self.normalize_symbol_exchange_columns(delivery)
+
+    def load_latest_phase1_symbol_features(self, *, date: str, exchange: str = "NSE") -> pd.DataFrame:
+        """Load latest persisted Phase 1 symbol features as of date."""
+        columns = ["symbol_id", "exchange", "timestamp", *PHASE1_SYMBOL_COLUMNS]
+        conn = self.get_conn()
+        try:
+            exists = bool(
+                conn.execute(
+                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'feat_phase1_symbol_features'"
+                ).fetchone()[0]
+            )
+            if not exists:
+                return pd.DataFrame(columns=columns)
+            cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
+            frame = conn.execute(
+                f"""
+                SELECT {", ".join(columns)}
+                FROM feat_phase1_symbol_features
+                WHERE exchange = ?
+                  AND timestamp <= CAST(? AS TIMESTAMP)
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY symbol_id, exchange
+                    ORDER BY timestamp DESC
+                ) = 1
+                """,
+                [exchange, cutoff_ts],
+            ).fetchdf()
+        finally:
+            conn.close()
+        return self.normalize_symbol_exchange_columns(frame)
+
+    def load_latest_market_breadth(self, date: str, exchange: str = "NSE") -> pd.DataFrame:
+        """Load latest persisted Phase 1 market breadth as of date."""
+        columns = ["symbol_id", "exchange", "timestamp", *PHASE1_BREADTH_COLUMNS]
+        conn = self.get_conn()
+        try:
+            exists = bool(
+                conn.execute(
+                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'feat_phase1_market_breadth'"
+                ).fetchone()[0]
+            )
+            if not exists:
+                return pd.DataFrame(columns=columns)
+            cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
+            return conn.execute(
+                f"""
+                SELECT {", ".join(columns)}
+                FROM feat_phase1_market_breadth
+                WHERE exchange = ?
+                  AND timestamp <= CAST(? AS TIMESTAMP)
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                [exchange, cutoff_ts],
+            ).fetchdf()
+        finally:
+            conn.close()
 
     def load_sector_inputs(self) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, str]]:
         if (

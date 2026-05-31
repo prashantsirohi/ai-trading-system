@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.ranking.breakout import (
     _prepare_rank_context,
     compute_breakout_v2_scores,
+    scan_breakouts,
 )
 
 
@@ -527,3 +531,77 @@ def test_prepare_rank_context_preserves_stage2_columns_for_breakout_scan() -> No
     assert bool(row["is_stage2_structural"]) is True
     assert bool(row["is_stage2_candidate"]) is True
     assert row["stage2_label"] == "strong_stage2"
+
+
+def test_breakout_scan_emits_phase1b_risk_liquidity_fields(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE _catalog (
+            symbol_id VARCHAR,
+            exchange VARCHAR,
+            timestamp TIMESTAMP,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
+            volume BIGINT
+        )
+        """
+    )
+    dates = pd.bdate_range("2025-01-01", periods=260)
+    rows = []
+    for i, date in enumerate(dates):
+        close = 100.0 + i * 0.05
+        if i == len(dates) - 1:
+            close = 125.0
+        rows.append(("AAA", "NSE", date.to_pydatetime(), close - 1, close + 1, close - 2, close, 200000 + i))
+    conn.executemany("INSERT INTO _catalog VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.close()
+
+    monkeypatch.setattr(
+        "ai_trading_system.domains.ranking.breakout.RegimeDetector.get_market_regime",
+        lambda self, exchange="NSE", date=None: {
+            "market_regime": "BULL",
+            "market_bias": "BULLISH",
+            "breadth_score": 70.0,
+        },
+    )
+    ranked = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "rel_strength_score": 90.0,
+                "sector_rs_value": 0.8,
+                "liquidity_score": 0.9,
+                "stage2_score": 95.0,
+                "is_stage2_structural": True,
+                "is_stage2_candidate": True,
+            }
+        ]
+    )
+
+    out = scan_breakouts(
+        str(db_path),
+        str(tmp_path / "features"),
+        str(tmp_path / "master.db"),
+        date=str(dates[-1].date()),
+        ranked_df=ranked,
+        top_n=5,
+        breakout_symbol_trend_gate_enabled=False,
+    )
+
+    assert {
+        "atr_pct",
+        "avg_value_traded_20",
+        "liquidity_score",
+        "initial_stop_price",
+        "risk_per_share",
+        "distance_from_breakout_atr",
+    }.issubset(out.columns)
+    row = out.iloc[0]
+    assert row["liquidity_score"] == 0.9
+    assert pd.notna(row["initial_stop_price"])
+    assert pd.notna(row["risk_per_share"])
+    assert pd.notna(row["distance_from_breakout_atr"])

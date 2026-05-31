@@ -27,11 +27,12 @@ def insert_perf_rows(project_root: Path, rows: list[dict]) -> None:
                 fwd_5d_matured_at, fwd_10d_matured_at, fwd_20d_matured_at,
                 fwd_60d_matured_at,
                 factor_rs, factor_vol, factor_trend, factor_prox, factor_deliv,
-                factor_sector, factor_momentum_accel, sector_name
+                factor_sector, factor_momentum_accel, factor_above_200dma,
+                factor_liquidity, factor_delivery_trend, sector_name
             ) VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """,
             [
@@ -45,7 +46,9 @@ def insert_perf_rows(project_root: Path, rows: list[dict]) -> None:
                     r.get("fwd_20d_matured_at", r["run_date"]), r.get("fwd_60d_matured_at"),
                     r.get("factor_rs"), r.get("factor_vol"), r.get("factor_trend"),
                     r.get("factor_prox"), r.get("factor_deliv"), r.get("factor_sector"),
-                    r.get("factor_momentum_accel"), r.get("sector_name", "Test"),
+                    r.get("factor_momentum_accel"), r.get("factor_above_200dma"),
+                    r.get("factor_liquidity"), r.get("factor_delivery_trend"),
+                    r.get("sector_name", "Test"),
                 )
                 for r in rows
             ],

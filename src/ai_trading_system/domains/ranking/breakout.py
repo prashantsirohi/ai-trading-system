@@ -144,6 +144,9 @@ def _prepare_rank_context(ranked_df: Optional[pd.DataFrame]) -> pd.DataFrame:
                 "stage2_label",
                 "stage2_hard_fail_reason",
                 "stage2_fail_reason",
+                "atr_pct",
+                "avg_value_traded_20",
+                "liquidity_score",
             ]
         )
 
@@ -160,6 +163,7 @@ def _prepare_rank_context(ranked_df: Optional[pd.DataFrame]) -> pd.DataFrame:
             "stage2_label",
             "stage2_hard_fail_reason",
             "stage2_fail_reason",
+            "liquidity_score",
         ]
         if col in ranked_df.columns
     ]
@@ -169,6 +173,9 @@ def _prepare_rank_context(ranked_df: Optional[pd.DataFrame]) -> pd.DataFrame:
         ctx.loc[:, "rel_strength_score"] = np.nan
     if "sector_rs_value" not in ctx.columns:
         ctx.loc[:, "sector_rs_value"] = np.nan
+    for column in ["liquidity_score"]:
+        if column not in ctx.columns:
+            ctx.loc[:, column] = np.nan
     ctx.loc[:, "sector_rs_percentile"] = (
         pd.to_numeric(ctx["sector_rs_value"], errors="coerce").rank(pct=True, method="average") * 100.0
     )
@@ -591,6 +598,12 @@ def _empty_breakout_frame() -> pd.DataFrame:
             "range_expansion_confirmed",
             "close_near_high_confirmed",
             "conviction_score",
+            "atr_pct",
+            "avg_value_traded_20",
+            "liquidity_score",
+            "initial_stop_price",
+            "risk_per_share",
+            "distance_from_breakout_atr",
         ]
     )
 
@@ -864,6 +877,7 @@ def scan_breakouts(
         (1 - latest["close"] / latest["high_52w"].replace(0, pd.NA)) * 100
     )
     latest.loc[:, "atr_pct"] = latest["atr_14"] / latest["close"].replace(0, pd.NA) * 100
+    latest.loc[:, "avg_value_traded_20"] = latest["vol_20_avg"] * latest["close"]
     latest.loc[:, "day_range_pct"] = (
         (latest["high"] - latest["low"]) / latest["close"].replace(0, pd.NA) * 100
     )
@@ -1171,6 +1185,21 @@ def scan_breakouts(
     candidates.loc[:, "market_bias"] = market_bias
     candidates.loc[:, "execution_label"] = candidates.apply(_execution_label, axis=1)
     candidates.loc[:, "breakout_tag"] = candidates["taxonomy_family"].fillna(candidates["setup_family"])
+    atr_value = pd.to_numeric(candidates.get("atr_14"), errors="coerce")
+    close_value = pd.to_numeric(candidates.get("close"), errors="coerce")
+    breakout_level = pd.to_numeric(candidates.get("prior_range_high"), errors="coerce")
+    atr_from_pct = pd.to_numeric(candidates.get("atr_pct"), errors="coerce") / 100.0 * close_value
+    day_range_abs = (
+        pd.to_numeric(candidates.get("high"), errors="coerce")
+        - pd.to_numeric(candidates.get("low"), errors="coerce")
+    ).abs()
+    atr_value = atr_value.where(atr_value.notna() & atr_value.gt(0), atr_from_pct)
+    atr_value = atr_value.where(atr_value.notna() & atr_value.gt(0), day_range_abs)
+    candidates.loc[:, "initial_stop_price"] = close_value - (atr_value * 2.0)
+    candidates.loc[:, "risk_per_share"] = close_value - candidates["initial_stop_price"]
+    candidates.loc[:, "distance_from_breakout_atr"] = (
+        (close_value - breakout_level) / atr_value.replace(0, pd.NA)
+    )
 
     cols = [
         "symbol_id",
@@ -1246,6 +1275,14 @@ def scan_breakouts(
         "range_expansion_confirmed",
         "close_near_high_confirmed",
         "conviction_score",
+        # Phase 1B breakout risk/liquidity fields. Stop/risk fields are
+        # breakout-output only, not persisted generic symbol features.
+        "atr_pct",
+        "avg_value_traded_20",
+        "liquidity_score",
+        "initial_stop_price",
+        "risk_per_share",
+        "distance_from_breakout_atr",
     ]
     available_cols = [col for col in cols if col in candidates.columns]
     return (

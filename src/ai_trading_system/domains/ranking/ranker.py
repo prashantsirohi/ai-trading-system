@@ -26,6 +26,7 @@ from ai_trading_system.domains.ranking.contracts import (
     STAGE2_TRANSITION_BONUS,
     STAGE2_TRANSITION_BONUS_BARS_MAX,
 )
+from ai_trading_system.domains.features.phase1 import PHASE1_SYMBOL_COLUMNS
 from ai_trading_system.domains.ranking.eligibility import apply_rank_eligibility
 from ai_trading_system.domains.ranking.factors import (
     add_signal_freshness,
@@ -199,6 +200,7 @@ class StockRanker:
             scores.loc[:, "composite_score"] = scores["composite_score_adjusted"]
         # scores = self._apply_1yr_penalty(scores, weights)
         scores = filter_ranked_scores(scores, min_score=min_score, top_n=top_n)
+        scores = self._attach_phase1_symbol_features(scores, date, exchanges)
         return select_rank_output_columns(scores)
 
     def _apply_1yr_penalty(
@@ -621,6 +623,38 @@ class StockRanker:
         if drop_cols:
             merged = merged.drop(columns=drop_cols, errors="ignore")
         return merged
+
+    def _attach_phase1_symbol_features(
+        self,
+        data: pd.DataFrame,
+        date: str,
+        exchanges: List[str],
+    ) -> pd.DataFrame:
+        """Attach persisted Phase 1 features after scoring so composite_score is unchanged."""
+        if data.empty:
+            return data
+        frames = []
+        for exchange in exchanges or ["NSE"]:
+            try:
+                frame = self.input_loader.load_latest_phase1_symbol_features(date=date, exchange=exchange)
+            except Exception as exc:
+                logger.warning("Could not load Phase 1 symbol features: %s", exc)
+                continue
+            if frame is not None and not frame.empty:
+                frames.append(frame)
+        if not frames:
+            return data
+        phase1 = pd.concat(frames, ignore_index=True).drop_duplicates(["symbol_id", "exchange"], keep="last")
+        cols = ["symbol_id", "exchange", "timestamp", *PHASE1_SYMBOL_COLUMNS]
+        phase1 = phase1[[column for column in cols if column in phase1.columns]].copy()
+        if "timestamp" in phase1.columns:
+            phase1.loc[:, "phase1_feature_date"] = pd.to_datetime(phase1["timestamp"], errors="coerce").dt.date.astype("string")
+            phase1 = phase1.drop(columns=["timestamp"])
+        return data.drop(columns=[c for c in phase1.columns if c not in {"symbol_id", "exchange"}], errors="ignore").merge(
+            phase1,
+            on=["symbol_id", "exchange"],
+            how="left",
+        )
 
     def rank_with_fundamentals(
         self,

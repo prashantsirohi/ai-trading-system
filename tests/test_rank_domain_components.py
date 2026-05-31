@@ -25,6 +25,8 @@ from ai_trading_system.domains.ranking.factors import (
     compute_penalty_score,
 )
 from ai_trading_system.domains.ranking.input_loader import RankerInputLoader
+from ai_trading_system.domains.ranking.payloads import attach_phase1_market_breadth_to_payload
+from ai_trading_system.domains.ranking.service import phase1_feature_warnings
 
 
 def test_load_factor_weights_overrides_defaults(tmp_path):
@@ -649,6 +651,41 @@ def test_stock_ranker_rank_all_preserves_stage2_columns_from_stage2_enrichment(t
     assert row_bbb["stage2_label"] == "stage1_to_stage2"
 
 
+def test_phase1_merge_adds_columns_without_changing_composite_score(tmp_path):
+    ranker = StockRanker(
+        ohlcv_db_path=str(tmp_path / "ohlcv.duckdb"),
+        feature_store_dir=str(tmp_path / "feature_store"),
+    )
+    base = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "exchange": "NSE", "composite_score": 80.0, "close": 100.0},
+            {"symbol_id": "BBB", "exchange": "NSE", "composite_score": 70.0, "close": 90.0},
+        ]
+    )
+    ranker.input_loader.load_latest_phase1_symbol_features = lambda date, exchange="NSE": pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "exchange": "NSE",
+                "timestamp": "2026-04-23",
+                "realized_vol_20": 18.0,
+                "beta_to_nifty_60": 1.2,
+                "avg_value_traded_20": 1000000.0,
+                "liquidity_score": 0.8,
+            }
+        ]
+    )
+
+    merged = ranker._attach_phase1_symbol_features(base, "2026-04-23", ["NSE"])
+
+    assert merged.set_index("symbol_id")["composite_score"].to_dict() == base.set_index("symbol_id")[
+        "composite_score"
+    ].to_dict()
+    assert {"realized_vol_20", "beta_to_nifty_60", "avg_value_traded_20", "liquidity_score"}.issubset(merged.columns)
+    assert merged.loc[merged["symbol_id"] == "AAA", "realized_vol_20"].iloc[0] == pytest.approx(18.0)
+    assert pd.isna(merged.loc[merged["symbol_id"] == "BBB", "realized_vol_20"].iloc[0])
+
+
 def test_stage2_age_bonuses_and_warnings_are_added() -> None:
     ranker = StockRanker.__new__(StockRanker)
     frame = pd.DataFrame(
@@ -779,3 +816,47 @@ def test_rank_projection_includes_optional_momentum_quality_columns() -> None:
         "pivot_distance_penalty",
         "distance_from_pivot_atr",
     }.issubset(projected.columns)
+
+
+def test_phase1_market_breadth_payload_fields_are_attached() -> None:
+    payload = {"summary": {"run_id": "r1"}}
+    breadth = pd.DataFrame(
+        [
+            {
+                "breadth_score": 62.5,
+                "breadth_velocity_score": 4.2,
+                "breadth_velocity_bucket": "positive",
+                "pct_above_200dma": 0.58,
+                "pct_at_52w_high": 0.08,
+                "advance_decline_ratio": 1.7,
+            }
+        ]
+    )
+
+    out = attach_phase1_market_breadth_to_payload(payload, breadth)
+
+    assert out["summary"]["breadth_score"] == pytest.approx(62.5)
+    assert out["summary"]["breadth_velocity_score"] == pytest.approx(4.2)
+    assert out["summary"]["breadth_velocity_bucket"] == "positive"
+    assert out["summary"]["pct_above_200dma"] == pytest.approx(0.58)
+    assert out["summary"]["pct_at_52w_high"] == pytest.approx(0.08)
+    assert out["summary"]["advance_decline_ratio"] == pytest.approx(1.7)
+
+
+def test_phase1_feature_warnings_report_low_coverage_and_staleness() -> None:
+    frame = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "phase1_feature_date": "2026-04-22", "realized_vol_20": 10.0},
+            {"symbol_id": "BBB", "phase1_feature_date": pd.NA, "realized_vol_20": pd.NA},
+        ]
+    )
+
+    warnings = phase1_feature_warnings(
+        frame,
+        label="ranked_signals",
+        run_date="2026-04-23",
+        coverage_threshold=0.80,
+    )
+
+    assert any("coverage low for ranked_signals" in warning for warning in warnings)
+    assert any("stale for ranked_signals" in warning for warning in warnings)

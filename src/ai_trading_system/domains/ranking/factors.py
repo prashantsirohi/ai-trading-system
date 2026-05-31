@@ -7,6 +7,10 @@ import numpy as np
 
 TREND_STRENGTH_WEIGHT = 0.7
 TREND_ALIGNMENT_WEIGHT = 0.3
+TREND_PERSISTENCE_FORMULA = (
+    "trend_persistence = 0.7 * clip(adx_14, 0, 50) / 50 * 100 "
+    "+ 0.3 * (40 * I(close > sma_20) + 60 * I(close > sma_50))"
+)
 
 
 def apply_relative_strength(data: pd.DataFrame, *, return_frame: pd.DataFrame) -> pd.DataFrame:
@@ -101,6 +105,11 @@ def apply_trend_persistence(
     adx_frame: pd.DataFrame,
     sma_frame: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Apply the formal trend-persistence score.
+
+    ``TREND_PERSISTENCE_FORMULA`` is the canonical definition: 70% normalized
+    ADX strength plus 30% directional SMA20/SMA50 alignment.
+    """
     scores = data.copy()
     if adx_frame is not None and not adx_frame.empty:
         scores = scores.merge(

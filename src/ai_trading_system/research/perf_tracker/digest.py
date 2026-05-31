@@ -35,9 +35,13 @@ from ai_trading_system.research.perf_tracker.constants import (
     DRIFT_WARNING_MIN_RECENT_N,
     FACTOR_COLUMNS,
     FORWARD_RETURN_ANOMALY_5D_PCT,
+    IC_HORIZONS,
     MATURATION_WARNING_RATIO,
     SAME_DATE_SMALL_SAMPLE_DAYS,
     SAME_DATE_SMALL_SAMPLE_ROWS,
+    WEIGHT_ACTIVATION_CANDIDATES,
+    WEIGHT_ACTIVATION_MIN_IC_20D,
+    WEIGHT_ACTIVATION_MIN_N,
 )
 from ai_trading_system.research.perf_tracker.schema import open_research_db
 
@@ -222,7 +226,7 @@ def _same_date_bucket_attribution(con) -> pd.DataFrame:
 
 
 def _factor_ic(con, *, window_days: int) -> pd.DataFrame:
-    """Spearman rank correlation between each factor score and fwd-20d return.
+    """Spearman rank correlation between each factor score and forward returns.
 
     Computed over the last ``window_days`` trading days. Spearman rather than
     Pearson because we care about ordinal predictive power (does higher factor
@@ -235,15 +239,18 @@ def _factor_ic(con, *, window_days: int) -> pd.DataFrame:
         ).fetchone()[0] > 0
     ]
     if not available:
-        return pd.DataFrame(columns=["factor", "n", f"ic_20d_{window_days}d"])
+        columns = ["factor"]
+        for horizon in IC_HORIZONS:
+            columns.extend([f"n_{horizon}d_{window_days}d", f"ic_{horizon}d_{window_days}d"])
+        return pd.DataFrame(columns=columns)
 
     cols = ", ".join(available)
+    fwd_cols = [f"fwd_{h}d_return" for h in IC_HORIZONS]
     df = con.execute(
         f"""
-        SELECT {cols}, fwd_20d_return
+        SELECT {cols}, {", ".join(fwd_cols)}
         FROM rank_cohort_performance
-        WHERE fwd_20d_return IS NOT NULL
-          AND run_date >= (
+        WHERE run_date >= (
               SELECT MAX(run_date) - INTERVAL '{window_days} days'
               FROM rank_cohort_performance
           )
@@ -251,17 +258,23 @@ def _factor_ic(con, *, window_days: int) -> pd.DataFrame:
     ).fetchdf()
 
     if df.empty:
-        return pd.DataFrame(columns=["factor", "n", f"ic_20d_{window_days}d"])
+        columns = ["factor"]
+        for horizon in IC_HORIZONS:
+            columns.extend([f"n_{horizon}d_{window_days}d", f"ic_{horizon}d_{window_days}d"])
+        return pd.DataFrame(columns=columns)
 
     rows = []
     for factor in available:
-        valid = df[[factor, "fwd_20d_return"]].dropna()
-        ic = _rank_ic(valid)
-        rows.append({
-            "factor": factor.replace("factor_", ""),
-            "n": int(len(valid)),
-            f"ic_20d_{window_days}d": _round(ic),
-        })
+        row = {"factor": factor.replace("factor_", "")}
+        for horizon in IC_HORIZONS:
+            fwd_col = f"fwd_{horizon}d_return"
+            valid = df[[factor, fwd_col]].dropna()
+            ic = _rank_ic_xy(valid[factor], valid[fwd_col]) if len(valid) >= 30 else None
+            row[f"n_{horizon}d_{window_days}d"] = int(len(valid))
+            row[f"ic_{horizon}d_{window_days}d"] = _round(ic)
+        # Back-compat columns for drift and older digest consumers.
+        row["n"] = row[f"n_20d_{window_days}d"]
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -275,6 +288,13 @@ def _rank_ic(valid: pd.DataFrame) -> float | None:
     return corr if corr == corr else None  # noqa: PLR0124
 
 
+def _rank_ic_xy(x: pd.Series, y: pd.Series) -> float | None:
+    if len(x) < 30:
+        return None
+    corr = float(x.rank().corr(y.rank()))
+    return corr if corr == corr else None  # noqa: PLR0124
+
+
 def _conditional_factor_ic(con, *, window_days: int) -> pd.DataFrame:
     cohorts = {
         "full_universe": "1=1",
@@ -283,14 +303,14 @@ def _conditional_factor_ic(con, *, window_days: int) -> pd.DataFrame:
     }
     rows = [{"factor": factor.replace("factor_", "")} for factor in FACTOR_COLUMNS]
     by_factor = {row["factor"]: row for row in rows}
-    cols = ", ".join(FACTOR_COLUMNS)
+    fwd_cols = [f"fwd_{h}d_return" for h in IC_HORIZONS]
+    cols = ", ".join((*FACTOR_COLUMNS, *fwd_cols))
     for cohort, clause in cohorts.items():
         df = con.execute(
             f"""
-            SELECT {cols}, fwd_20d_return
+            SELECT {cols}
             FROM rank_cohort_performance
-            WHERE fwd_20d_return IS NOT NULL
-              AND {clause}
+            WHERE {clause}
               AND run_date >= (
                   SELECT MAX(run_date) - INTERVAL '{window_days} days'
                   FROM rank_cohort_performance
@@ -298,10 +318,109 @@ def _conditional_factor_ic(con, *, window_days: int) -> pd.DataFrame:
             """
         ).fetchdf()
         for factor in FACTOR_COLUMNS:
-            valid = df[[factor, "fwd_20d_return"]].dropna() if not df.empty else pd.DataFrame()
             row = by_factor[factor.replace("factor_", "")]
-            row[f"ic_20d_{window_days}d_{cohort}"] = _round(_rank_ic(valid))
-            row[f"n_{window_days}d_{cohort}"] = int(len(valid))
+            for horizon in IC_HORIZONS:
+                fwd_col = f"fwd_{horizon}d_return"
+                valid = df[[factor, fwd_col]].dropna() if not df.empty else pd.DataFrame()
+                ic = _rank_ic_xy(valid[factor], valid[fwd_col]) if len(valid) >= 30 else None
+                row[f"ic_{horizon}d_{window_days}d_{cohort}"] = _round(ic)
+                row[f"n_{horizon}d_{window_days}d_{cohort}"] = int(len(valid))
+            row[f"ic_{window_days}d_{cohort}"] = row[f"ic_20d_{window_days}d_{cohort}"]
+            row[f"n_{window_days}d_{cohort}"] = row[f"n_20d_{window_days}d_{cohort}"]
+    return pd.DataFrame(rows)
+
+
+def _factor_overlap(con, *, window_days: int = 180) -> pd.DataFrame:
+    """Measure rank overlap between relative strength and proximity highs."""
+    df = con.execute(
+        f"""
+        SELECT factor_rs, factor_prox
+        FROM rank_cohort_performance
+        WHERE run_date >= (
+            SELECT MAX(run_date) - INTERVAL '{window_days} days'
+            FROM rank_cohort_performance
+        )
+        """
+    ).fetchdf()
+    valid = df[["factor_rs", "factor_prox"]].dropna() if not df.empty else pd.DataFrame()
+    corr = _rank_ic_xy(valid["factor_rs"], valid["factor_prox"]) if len(valid) >= 30 else None
+    abs_corr = abs(corr) if corr is not None else None
+    if abs_corr is None:
+        status = "insufficient_sample"
+    elif abs_corr >= 0.80:
+        status = "high_overlap"
+    elif abs_corr >= 0.60:
+        status = "moderate_overlap"
+    else:
+        status = "low_overlap"
+    return pd.DataFrame([{
+        "factor_a": "rel_strength",
+        "factor_b": "proximity_highs",
+        "window_days": window_days,
+        "n": int(len(valid)),
+        "spearman_corr": _round(corr, 3),
+        "status": status,
+    }])
+
+
+def _weight_activation_evidence(ic_180d: pd.DataFrame) -> pd.DataFrame:
+    """Gate new factor weights behind positive multi-horizon IC evidence."""
+    if ic_180d.empty:
+        return pd.DataFrame(columns=[
+            "factor", "n_5d", "ic_5d", "n_10d", "ic_10d", "n_20d", "ic_20d",
+            "positive_horizons", "decision", "reason",
+        ])
+    rows = []
+    keyed = ic_180d.set_index("factor")
+    for factor_col in WEIGHT_ACTIVATION_CANDIDATES:
+        factor = factor_col.replace("factor_", "")
+        if factor not in keyed.index:
+            rows.append({
+                "factor": factor,
+                "n_5d": 0,
+                "ic_5d": None,
+                "n_10d": 0,
+                "ic_10d": None,
+                "n_20d": 0,
+                "ic_20d": None,
+                "positive_horizons": 0,
+                "decision": "hold_zero_weight",
+                "reason": "not tracked or no coverage",
+            })
+            continue
+        row = keyed.loc[factor]
+        ic_values = {
+            h: row.get(f"ic_{h}d_180d")
+            for h in IC_HORIZONS
+        }
+        n_values = {
+            h: int(row.get(f"n_{h}d_180d") or 0)
+            for h in IC_HORIZONS
+        }
+        positive = sum(1 for value in ic_values.values() if value is not None and value > 0)
+        n_ok = all(n >= WEIGHT_ACTIVATION_MIN_N for n in n_values.values())
+        ic20 = ic_values[20]
+        if n_ok and positive >= 2 and ic20 is not None and ic20 >= WEIGHT_ACTIVATION_MIN_IC_20D:
+            decision = "eligible_for_backtest"
+            reason = "positive IC in at least two horizons; requires backtest before weights"
+        elif not n_ok:
+            decision = "hold_zero_weight"
+            reason = f"sample below {WEIGHT_ACTIVATION_MIN_N} on one or more horizons"
+        else:
+            decision = "hold_zero_weight"
+            reason = "multi-horizon IC is not strong enough"
+        rows.append({
+            "factor": factor,
+            "n_5d": n_values[5],
+            "ic_5d": ic_values[5],
+            "n_10d": n_values[10],
+            "ic_10d": ic_values[10],
+            "n_20d": n_values[20],
+            "ic_20d": ic20,
+            "positive_horizons": positive,
+            "decision": decision,
+            "reason": reason,
+        })
     return pd.DataFrame(rows)
 
 
@@ -361,10 +480,26 @@ def _drift_watch(
             "factor", "ic_recent", "ic_baseline", "recent_n", "baseline_n",
             "delta_ic", "delta_pct", "status", "alert",
         ])
-    recent_col = next(c for c in ic_30d.columns if c.startswith("ic_"))
-    base_col = next(c for c in ic_180d.columns if c.startswith("ic_"))
-    recent_n_col = next(c for c in ic_30d.columns if c == "n" or c.startswith("n_"))
-    base_n_col = next(c for c in ic_180d.columns if c == "n" or c.startswith("n_"))
+    recent_col = (
+        "ic_20d_30d"
+        if "ic_20d_30d" in ic_30d.columns
+        else next(c for c in ic_30d.columns if c.startswith("ic_"))
+    )
+    base_col = (
+        "ic_20d_180d"
+        if "ic_20d_180d" in ic_180d.columns
+        else next(c for c in ic_180d.columns if c.startswith("ic_"))
+    )
+    recent_n_col = (
+        "n_20d_30d"
+        if "n_20d_30d" in ic_30d.columns
+        else next(c for c in ic_30d.columns if c == "n" or c.startswith("n_"))
+    )
+    base_n_col = (
+        "n_20d_180d"
+        if "n_20d_180d" in ic_180d.columns
+        else next(c for c in ic_180d.columns if c == "n" or c.startswith("n_"))
+    )
     recent_frame = ic_30d.rename(columns={recent_col: "ic_recent_raw", recent_n_col: "recent_n_raw"})
     baseline_frame = ic_180d.rename(columns={base_col: "ic_baseline_raw", base_n_col: "baseline_n_raw"})
     merged = recent_frame.merge(baseline_frame, on="factor", how="outer")
@@ -625,6 +760,8 @@ def build_digest(
         sections["ic_90d"]  = _factor_ic(con, window_days=90)
         sections["ic_180d"] = _factor_ic(con, window_days=180)
         sections["conditional_ic_90d"] = _conditional_factor_ic(con, window_days=90)
+        sections["rs_proximity_overlap"] = _factor_overlap(con, window_days=180)
+        sections["weight_activation_evidence"] = _weight_activation_evidence(sections["ic_180d"])
         sections["factor_coverage"] = _factor_coverage(con)
         sections["drift"]   = _drift_watch(
             sections["ic_30d"],
@@ -802,9 +939,9 @@ def _render_markdown(
         )
         parts.append(_df_to_md(sections["bucket_composition"]))
 
-    parts.append("\n## 3. Factor information coefficient (Spearman vs fwd_20d)")
-    parts.append("Higher IC = factor is doing real predictive work. Compare 30d "
-                 "vs 90d vs 180d to spot drift.\n")
+    parts.append("\n## 3. Factor information coefficient (Spearman vs 5d/10d/20d)")
+    parts.append("Higher IC = factor is doing real predictive work. Compare horizons "
+                 "and 30d vs 90d vs 180d windows to spot drift.\n")
     combined = sections["ic_30d"].merge(
         sections["ic_90d"], on="factor", how="outer"
     ).merge(sections["ic_180d"], on="factor", how="outer")
@@ -813,6 +950,21 @@ def _render_markdown(
     parts.append("\n### Conditional factor IC (90d)")
     parts.append("IC split by full universe, top-200, and rank-201+ cohorts.\n")
     parts.append(_df_to_md(sections["conditional_ic_90d"]))
+
+    parts.append("\n### RS/proximity overlap")
+    parts.append(
+        "Spearman correlation between `rel_strength` and `proximity_highs`. "
+        "High overlap means the two factors may be paying twice for similar price action.\n"
+    )
+    parts.append(_df_to_md(sections["rs_proximity_overlap"]))
+
+    parts.append("\n### New-factor weight evidence gate")
+    parts.append(
+        "`liquidity_score`, delivery trend, `above_200dma`, and momentum acceleration "
+        "stay at zero/new-weight hold unless multi-horizon IC is positive and a backtest confirms it. "
+        "Regime-specific weights remain locked behind the same IC/backtest evidence gate.\n"
+    )
+    parts.append(_df_to_md(sections["weight_activation_evidence"]))
 
     parts.append("\n### Factor coverage")
     parts.append("Null-rate diagnostics for every tracked factor column.\n")
