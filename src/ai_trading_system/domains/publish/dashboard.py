@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
-import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.publish.channels.google_sheets import GoogleSheetsManager
@@ -14,14 +13,12 @@ from ai_trading_system.domains.publish.decision_bundle import (
     PublishDecisionBundle,
     build_publish_decision_bundle,
 )
-from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
-from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
 from ai_trading_system.domains.publish.channels.weekly_pdf import metrics as weekly_metrics
-
-
-LONG_TERM_BREADTH_START_DATE = "2020-01-01"
+from ai_trading_system.ui.execution_api.services.readmodels.market_breadth import (
+    load_operational_breadth_frame,
+)
 
 
 def _frame(records: Iterable[Dict[str, Any]]) -> pd.DataFrame:
@@ -236,56 +233,52 @@ def _minimal_breakout_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_operational_breadth(project_root: Path) -> pd.DataFrame:
-    load_project_env(project_root)
-    db_path = get_domain_paths(project_root=project_root, data_domain="operational").ohlcv_db_path
-    if not db_path.exists():
-        return pd.DataFrame(columns=["Date", "PctAbove200"])
-    con = duckdb.connect(str(db_path), read_only=True)
-    try:
-        breadth_df = con.execute(
-            """
-            WITH base AS (
-                SELECT
-                    CAST(timestamp AS DATE) AS trade_date,
-                    symbol_id,
-                    close,
-                    AVG(close) OVER (
-                        PARTITION BY symbol_id
-                        ORDER BY CAST(timestamp AS DATE)
-                        ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
-                    ) AS sma_200,
-                    COUNT(close) OVER (
-                        PARTITION BY symbol_id
-                        ORDER BY CAST(timestamp AS DATE)
-                        ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
-                    ) AS obs_200
-                FROM _catalog
-                WHERE exchange = 'NSE'
-            )
-            SELECT
-                trade_date,
-                ROUND(
-                    SUM(CASE WHEN obs_200 >= 200 AND close > sma_200 THEN 1 ELSE 0 END) * 100.0
-                    / NULLIF(SUM(CASE WHEN obs_200 >= 200 THEN 1 ELSE 0 END), 0),
-                    2
-                ) AS pct_above_200
-            FROM base
-            WHERE trade_date >= CAST(? AS DATE)
-            GROUP BY trade_date
-            ORDER BY trade_date
-            """,
-            [LONG_TERM_BREADTH_START_DATE],
-        ).fetchdf()
-    finally:
-        con.close()
+    breadth_df = load_operational_breadth_frame(project_root)
     if breadth_df.empty:
-        return pd.DataFrame(columns=["Date", "PctAbove200"])
-    breadth_df = breadth_df.assign(
-        trade_date=pd.to_datetime(breadth_df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d"),
-        pct_above_200=pd.to_numeric(breadth_df["pct_above_200"], errors="coerce"),
-    )
-    breadth_df = breadth_df.dropna(subset=["trade_date", "pct_above_200"])
-    return breadth_df.rename(columns={"trade_date": "Date", "pct_above_200": "PctAbove200"}).reset_index(drop=True)
+        return pd.DataFrame(
+            columns=[
+                "Date",
+                "PctAbove200",
+                "New52WHighs",
+                "New52WLows",
+                "HighLowRatio",
+                "HighLowRatioSMA10",
+                "Advancers",
+                "Decliners",
+                "ADLine",
+                "IndexLevel",
+                "PEPctile5Y",
+            ]
+        )
+    return breadth_df.rename(
+        columns={
+            "trade_date": "Date",
+            "pct_above_sma200": "PctAbove200",
+            "new_52w_highs": "New52WHighs",
+            "new_52w_lows": "New52WLows",
+            "high_low_ratio": "HighLowRatio",
+            "high_low_ratio_sma10": "HighLowRatioSMA10",
+            "advancers": "Advancers",
+            "decliners": "Decliners",
+            "ad_line": "ADLine",
+            "index_level": "IndexLevel",
+            "pe_pctile_5y": "PEPctile5Y",
+        }
+    )[
+        [
+            "Date",
+            "PctAbove200",
+            "New52WHighs",
+            "New52WLows",
+            "HighLowRatio",
+            "HighLowRatioSMA10",
+            "Advancers",
+            "Decliners",
+            "ADLine",
+            "IndexLevel",
+            "PEPctile5Y",
+        ]
+    ].reset_index(drop=True)
 
 
 def _write_section(
@@ -412,7 +405,30 @@ def _delete_existing_charts(manager: GoogleSheetsManager, sheet_id: int) -> None
         manager.spreadsheet.batch_update({"requests": requests})
 
 
-def _add_breadth_chart(
+def _chart_range(sheet_id: int, start_idx: int, end_idx: int, column: int) -> dict[str, Any]:
+    return {
+        "sourceRange": {
+            "sources": [
+                {
+                    "sheetId": sheet_id,
+                    "startRowIndex": start_idx,
+                    "endRowIndex": end_idx,
+                    "startColumnIndex": column,
+                    "endColumnIndex": column + 1,
+                }
+            ]
+        }
+    }
+
+
+def _chart_series(sheet_id: int, start_idx: int, end_idx: int, column: int, axis: str = "LEFT_AXIS") -> dict[str, Any]:
+    return {
+        "series": _chart_range(sheet_id, start_idx, end_idx, column),
+        "targetAxis": axis,
+    }
+
+
+def _add_breadth_charts(
     *,
     manager: GoogleSheetsManager,
     worksheet: Any,
@@ -425,69 +441,87 @@ def _add_breadth_chart(
     start_idx = header_row - 1
     end_idx = header_row + data_rows
     _delete_existing_charts(manager, sheet_id)
-    request = {
-        "addChart": {
-            "chart": {
-                "spec": {
-                    "title": "Operational Long-Term Breadth (% Above SMA200)",
-                    "basicChart": {
-                        "chartType": "LINE",
-                        "legendPosition": "NO_LEGEND",
-                        "headerCount": 1,
-                        "axis": [
-                            {"position": "BOTTOM_AXIS", "title": "Date"},
-                            {"position": "LEFT_AXIS", "title": "% Above SMA200"},
-                        ],
-                        "domains": [
-                            {
-                                "domain": {
-                                    "sourceRange": {
-                                        "sources": [
-                                            {
-                                                "sheetId": sheet_id,
-                                                "startRowIndex": start_idx,
-                                                "endRowIndex": end_idx,
-                                                "startColumnIndex": 0,
-                                                "endColumnIndex": 1,
-                                            }
-                                        ]
-                                    }
-                                }
-                            }
-                        ],
-                        "series": [
-                            {
-                                "series": {
-                                    "sourceRange": {
-                                        "sources": [
-                                            {
-                                                "sheetId": sheet_id,
-                                                "startRowIndex": start_idx,
-                                                "endRowIndex": end_idx,
-                                                "startColumnIndex": 1,
-                                                "endColumnIndex": 2,
-                                            }
-                                        ]
-                                    }
-                                },
-                                "targetAxis": "LEFT_AXIS",
-                            }
-                        ],
+    domain = [{"domain": _chart_range(sheet_id, start_idx, end_idx, 0)}]
+
+    def request(
+        *,
+        title: str,
+        chart_type: str,
+        series: list[dict[str, Any]],
+        anchor_row: int,
+        left_title: str,
+        right_title: str | None = None,
+    ) -> dict[str, Any]:
+        axes = [
+            {"position": "BOTTOM_AXIS", "title": "Date"},
+            {"position": "LEFT_AXIS", "title": left_title},
+        ]
+        if right_title:
+            axes.append({"position": "RIGHT_AXIS", "title": right_title})
+        return {
+            "addChart": {
+                "chart": {
+                    "spec": {
+                        "title": title,
+                        "basicChart": {
+                            "chartType": chart_type,
+                            "legendPosition": "BOTTOM_LEGEND",
+                            "headerCount": 1,
+                            "axis": axes,
+                            "domains": domain,
+                            "series": series,
+                        },
                     },
-                },
-                "position": {
-                    "overlayPosition": {
-                        "anchorCell": {"sheetId": sheet_id, "rowIndex": start_idx, "columnIndex": 6},
-                        "offsetXPixels": 16,
-                        "offsetYPixels": 8,
-                        "widthPixels": 860,
-                        "heightPixels": 340,
-                    }
-                },
+                    "position": {
+                        "overlayPosition": {
+                            "anchorCell": {"sheetId": sheet_id, "rowIndex": anchor_row, "columnIndex": 12},
+                            "offsetXPixels": 16,
+                            "offsetYPixels": 8,
+                            "widthPixels": 860,
+                            "heightPixels": 300,
+                        }
+                    },
+                }
             }
         }
-    }
-    manager.spreadsheet.batch_update({"requests": [request]})
+
+    requests = [
+        request(
+            title="Operational Long-Term Breadth (% Above SMA200 and PE 5Y Percentile)",
+            chart_type="LINE",
+            series=[
+                _chart_series(sheet_id, start_idx, end_idx, 1),
+                _chart_series(sheet_id, start_idx, end_idx, 10, "RIGHT_AXIS"),
+            ],
+            anchor_row=start_idx,
+            left_title="% Above SMA200",
+            right_title="PE 5Y percentile",
+        ),
+        request(
+            title="New 52W Highs / Lows and Ratio SMA10",
+            chart_type="COLUMN",
+            series=[
+                _chart_series(sheet_id, start_idx, end_idx, 2),
+                _chart_series(sheet_id, start_idx, end_idx, 3),
+                {**_chart_series(sheet_id, start_idx, end_idx, 5, "RIGHT_AXIS"), "type": "LINE"},
+            ],
+            anchor_row=start_idx + 16,
+            left_title="New highs / lows",
+            right_title="High / low ratio SMA10",
+        ),
+        request(
+            title="A/D Divergence and TOP1000 Index",
+            chart_type="LINE",
+            series=[
+                _chart_series(sheet_id, start_idx, end_idx, 8),
+                _chart_series(sheet_id, start_idx, end_idx, 9, "RIGHT_AXIS"),
+            ],
+            anchor_row=start_idx + 32,
+            left_title="A/D line",
+            right_title="Index level",
+        ),
+    ]
+    manager.spreadsheet.batch_update({"requests": requests})
 
 
 def publish_dashboard_payload(
@@ -596,7 +630,7 @@ def publish_dashboard_payload(
 
     if breadth_header_row is not None and breadth_rows >= 2:
         try:
-            _add_breadth_chart(
+            _add_breadth_charts(
                 manager=manager,
                 worksheet=worksheet,
                 header_row=breadth_header_row,

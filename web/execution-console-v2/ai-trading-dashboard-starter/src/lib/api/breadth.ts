@@ -5,6 +5,12 @@ export interface MarketBreadthPoint {
   above20: number;
   above50: number;
   above200: number;
+  new52wHighs: number;
+  new52wLows: number;
+  advancers: number;
+  decliners: number;
+  indexLevel: number | null;
+  pePctile5y: number | null;
 }
 
 interface BackendMarketBreadthPoint {
@@ -24,6 +30,12 @@ interface BackendMarketBreadthPoint {
   symbols_sma50?: number;
   symbols_sma200?: number;
   symbols_total?: number;
+  new_52w_highs?: number;
+  new_52w_lows?: number;
+  advancers?: number;
+  decliners?: number;
+  index_level?: number | null;
+  pe_pctile_5y?: number | null;
 }
 
 interface BackendMarketBreadthResponse {
@@ -35,6 +47,7 @@ interface BackendMarketBreadthResponse {
 }
 
 function asNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -56,10 +69,18 @@ function mapPoint(row: BackendMarketBreadthPoint): MarketBreadthPoint | null {
   const symbols20 = asNumber(row.symbols_sma20);
   const symbols50 = asNumber(row.symbols_sma50);
   const symbols200 = asNumber(row.symbols_sma200);
+  const extras = {
+    new52wHighs: asNumber(row.new_52w_highs) ?? 0,
+    new52wLows: asNumber(row.new_52w_lows) ?? 0,
+    advancers: asNumber(row.advancers) ?? 0,
+    decliners: asNumber(row.decliners) ?? 0,
+    indexLevel: asNumber(row.index_level),
+    pePctile5y: asNumber(row.pe_pctile_5y),
+  };
 
   if (!date) return null;
   if (pct20 !== null && pct50 !== null && pct200 !== null) {
-    return { date, above20: pct20, above50: pct50, above200: pct200 };
+    return { date, above20: pct20, above50: pct50, above200: pct200, ...extras };
   }
   if (
     above20 !== null &&
@@ -74,6 +95,7 @@ function mapPoint(row: BackendMarketBreadthPoint): MarketBreadthPoint | null {
       above20: Number(((above20 / symbols20) * 100).toFixed(2)),
       above50: Number(((above50 / symbols50) * 100).toFixed(2)),
       above200: Number(((above200 / symbols200) * 100).toFixed(2)),
+      ...extras,
     };
   }
   return null;

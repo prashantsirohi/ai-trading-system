@@ -143,7 +143,34 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     monkeypatch.setattr(
         "ai_trading_system.domains.publish.dashboard._load_operational_breadth",
         lambda _root: pd.DataFrame(
-            [{"Date": "2026-04-07", "PctAbove200": 52.4}, {"Date": "2026-04-08", "PctAbove200": 54.1}]
+            [
+                {
+                    "Date": "2026-04-07",
+                    "PctAbove200": 52.4,
+                    "New52WHighs": 4,
+                    "New52WLows": 0,
+                    "HighLowRatio": None,
+                    "HighLowRatioSMA10": None,
+                    "Advancers": 520,
+                    "Decliners": 480,
+                    "ADLine": 0,
+                    "IndexLevel": 1400,
+                    "PEPctile5Y": 72.0,
+                },
+                {
+                    "Date": "2026-04-08",
+                    "PctAbove200": 54.1,
+                    "New52WHighs": 8,
+                    "New52WLows": 2,
+                    "HighLowRatio": 4.0,
+                    "HighLowRatioSMA10": 4.0,
+                    "Advancers": 560,
+                    "Decliners": 440,
+                    "ADLine": 120,
+                    "IndexLevel": 1425,
+                    "PEPctile5Y": 74.0,
+                },
+            ]
         ),
     )
 
@@ -287,8 +314,38 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert rank_frames
     assert len(rank_frames[0]) == 25
 
+    breadth_frames = [write[2] for write in manager.writes if "PEPctile5Y" in write[2].columns]
+    assert breadth_frames
+    assert list(breadth_frames[0].columns) == [
+        "Date",
+        "PctAbove200",
+        "New52WHighs",
+        "New52WLows",
+        "HighLowRatio",
+        "HighLowRatioSMA10",
+        "Advancers",
+        "Decliners",
+        "ADLine",
+        "IndexLevel",
+        "PEPctile5Y",
+    ]
+    assert pd.isna(breadth_frames[0].iloc[0]["HighLowRatio"])
+    assert breadth_frames[0].iloc[0]["ADLine"] == 0
+    assert breadth_frames[0].iloc[-1]["PEPctile5Y"] == 74.0
+
     assert manager.spreadsheet.batch_requests
-    assert any("addChart" in req for call in manager.spreadsheet.batch_requests for req in call.get("requests", []))
+    chart_requests = [
+        req
+        for call in manager.spreadsheet.batch_requests
+        for req in call.get("requests", [])
+        if "addChart" in req
+    ]
+    assert len(chart_requests) == 3
+    chart_specs = [request["addChart"]["chart"]["spec"] for request in chart_requests]
+    assert chart_specs[0]["title"] == "Operational Long-Term Breadth (% Above SMA200 and PE 5Y Percentile)"
+    assert len(chart_specs[0]["basicChart"]["series"]) == 2
+    assert chart_specs[2]["title"] == "A/D Divergence and TOP1000 Index"
+    assert len(chart_specs[2]["basicChart"]["series"]) == 2
     assert any("updateDimensionProperties" in req for call in manager.spreadsheet.batch_requests for req in call.get("requests", []))
 
 

@@ -20,13 +20,13 @@ import { CardSkeleton } from '@/components/common/LoadingSkeleton';
 import DecisionSummaryBanner from '@/components/control-tower/DecisionSummaryBanner';
 import TrustBanner from '@/components/control-tower/TrustBanner';
 import OutputSummaryCards from '@/components/control-tower/OutputSummaryCards';
-import MovingAverageBreadthChart from '@/components/control-tower/MovingAverageBreadthChart';
+import AdvancedBreadthChart from '@/components/control-tower/AdvancedBreadthChart';
 import MarketDirectionCard from '@/components/control-tower/MarketDirectionCard';
 import { useMarketBreadth, useWorkspaceSnapshot } from '@/lib/queries';
 
 export default function ControlTowerPage() {
   const { data, isLoading, error, refetch } = useWorkspaceSnapshot(3);
-  const breadthQuery = useMarketBreadth();
+  const breadthQuery = useMarketBreadth(0);
 
   return (
     <PageFrame
@@ -53,7 +53,7 @@ export default function ControlTowerPage() {
         <div className="space-y-4">
           <DecisionSummaryBanner actions={data.topActions} />
           <MarketDirectionCard snapshot={data} />
-          <MovingAverageBreadthChart rows={breadthQuery.data ?? []} />
+          <AdvancedBreadthChart rows={breadthQuery.data ?? []} />
           <OutputSummaryCards snapshot={data} />
         </div>
       )}
