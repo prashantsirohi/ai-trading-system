@@ -12,6 +12,8 @@ import pandas as pd
 from ai_trading_system.domains.features.valuation_schema import ensure_valuation_schema
 
 DEFAULT_UNIVERSES = ("UNIV_TOP500_MCAP", "UNIV_TOP1000_MCAP")
+MIN_SOURCE_DATE_COVERAGE_RATIO = 0.5
+MAX_RETURN_GAP_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,8 @@ def refresh_valuation_index(
         base.loc[:, "pe_ttm"] = base["market_cap_cr"] / base["ttm_net_profit_cr"].where(base["ttm_net_profit_cr"].ne(0))
         base.loc[:, "earnings_yield"] = base["ttm_net_profit_cr"] / base["market_cap_cr"].where(base["market_cap_cr"].ne(0))
         base = base.loc[base["market_cap_cr"].notna() & base["market_cap_cr"].gt(0)].copy()
+        replace_start = str(from_date)[:10] if from_date else str(base["date"].min())
+        replace_end = str(to_date)[:10] if to_date else str(base["date"].max())
 
         stock_frames = []
         membership_frames = []
@@ -109,13 +113,18 @@ def refresh_valuation_index(
 
         stock = pd.concat(stock_frames, ignore_index=True) if stock_frames else pd.DataFrame()
         membership = pd.concat(membership_frames, ignore_index=True) if membership_frames else pd.DataFrame()
-        _replace_range(conn, "stock_valuation_daily", stock, start=str(base["date"].min()), end=str(base["date"].max()))
-        _replace_range(conn, "universe_membership", membership, date_col="as_of_date", start=str(base["date"].min()), end=str(base["date"].max()))
+        _replace_range(conn, "stock_valuation_daily", stock, start=replace_start, end=replace_end)
+        _replace_range(conn, "universe_membership", membership, date_col="as_of_date", start=replace_start, end=replace_end)
 
-        universe_index = _build_universe_index(stock)
+        prior_index_levels = _load_prior_index_levels(
+            conn,
+            universe_ids=universe_ids,
+            before_date=replace_start,
+        )
+        universe_index = _build_universe_index(stock, prior_index_levels=prior_index_levels)
         sector_valuation = _build_sector_valuation(stock)
-        _replace_range(conn, "universe_index_daily", universe_index, start=str(base["date"].min()), end=str(base["date"].max()))
-        _replace_range(conn, "sector_valuation_daily", sector_valuation, start=str(base["date"].min()), end=str(base["date"].max()))
+        _replace_range(conn, "universe_index_daily", universe_index, start=replace_start, end=replace_end)
+        _replace_range(conn, "sector_valuation_daily", sector_valuation, start=replace_start, end=replace_end)
     finally:
         conn.close()
 
@@ -136,26 +145,71 @@ def refresh_valuation_index(
 
 
 def _load_prices(conn: duckdb.DuckDBPyConnection, *, from_date: str | None, to_date: str | None) -> pd.DataFrame:
-    filters = ["exchange = 'NSE'", "COALESCE(adjusted_close, close) IS NOT NULL"]
+    filters = []
     params: list[str] = []
     if from_date:
-        filters.append("CAST(timestamp AS DATE) >= CAST(? AS DATE)")
+        filters.append("date >= CAST(? AS DATE)")
         params.append(str(from_date)[:10])
     if to_date:
-        filters.append("CAST(timestamp AS DATE) <= CAST(? AS DATE)")
+        filters.append("date <= CAST(? AS DATE)")
         params.append(str(to_date)[:10])
+    outer_filter = f"WHERE {' AND '.join(filters)}" if filters else ""
     return conn.execute(
         f"""
+        WITH daily_raw AS (
+            SELECT
+                symbol_id AS symbol,
+                CAST(timestamp AS DATE) AS date,
+                COALESCE(adjusted_close, close) AS close
+            FROM _catalog
+            WHERE exchange = 'NSE'
+              AND COALESCE(adjusted_close, close) IS NOT NULL
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY symbol_id, CAST(timestamp AS DATE)
+                ORDER BY timestamp DESC
+            ) = 1
+        ),
+        eligible_dates AS (
+            SELECT date
+            FROM daily_raw
+            GROUP BY date
+            HAVING COUNT(DISTINCT symbol) >= (
+                SELECT GREATEST(1, CEIL(MAX(symbol_count) * {MIN_SOURCE_DATE_COVERAGE_RATIO}))
+                FROM (
+                    SELECT COUNT(DISTINCT symbol) AS symbol_count
+                    FROM daily_raw
+                    GROUP BY date
+                )
+            )
+        ),
+        daily AS (
+            SELECT daily_raw.*
+            FROM daily_raw
+            INNER JOIN eligible_dates USING (date)
+        ),
+        with_previous AS (
+            SELECT
+                symbol,
+                date,
+                close,
+                LAG(date) OVER (
+                    PARTITION BY symbol
+                    ORDER BY date
+                ) AS previous_date,
+                LAG(close) OVER (
+                    PARTITION BY symbol
+                    ORDER BY date
+                ) AS previous_close
+            FROM daily
+        )
         SELECT
-            symbol_id AS symbol,
-            CAST(timestamp AS DATE) AS date,
-            COALESCE(adjusted_close, close) AS close
-        FROM _catalog
-        WHERE {' AND '.join(filters)}
-        QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY symbol_id, CAST(timestamp AS DATE)
-            ORDER BY timestamp DESC
-        ) = 1
+            symbol,
+            date,
+            close,
+            previous_date,
+            previous_close
+        FROM with_previous
+        {outer_filter}
         """,
         params,
     ).df()
@@ -190,11 +244,50 @@ def _universe_limit(universe_id: str) -> int:
     return int(digits or 1000)
 
 
-def _build_universe_index(stock: pd.DataFrame) -> pd.DataFrame:
+def _load_prior_index_levels(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    universe_ids: list[str],
+    before_date: str,
+) -> dict[tuple[str, str], float]:
+    if not universe_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in universe_ids)
+    rows = conn.execute(
+        f"""
+        SELECT universe_id, index_type, level
+        FROM universe_index_daily
+        WHERE universe_id IN ({placeholders})
+          AND date < CAST(? AS DATE)
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY universe_id, index_type
+            ORDER BY date DESC
+        ) = 1
+        """,
+        [*universe_ids, before_date],
+    ).fetchall()
+    return {
+        (str(universe_id), str(index_type)): float(level)
+        for universe_id, index_type, level in rows
+        if level is not None
+    }
+
+
+def _build_universe_index(
+    stock: pd.DataFrame,
+    *,
+    prior_index_levels: dict[tuple[str, str], float] | None = None,
+) -> pd.DataFrame:
     if stock.empty:
         return pd.DataFrame()
+    seeds = prior_index_levels or {}
     ordered = stock.sort_values(["universe_id", "symbol", "date"], kind="stable").copy()
-    ordered.loc[:, "stock_return_1d"] = ordered.groupby(["universe_id", "symbol"])["close"].pct_change(fill_method=None)
+    close = pd.to_numeric(ordered["close"], errors="coerce")
+    previous_close = pd.to_numeric(ordered.get("previous_close"), errors="coerce")
+    dates = pd.to_datetime(ordered["date"], errors="coerce")
+    previous_dates = pd.to_datetime(ordered.get("previous_date"), errors="coerce")
+    recent_previous = dates.sub(previous_dates).dt.days.between(1, MAX_RETURN_GAP_DAYS)
+    ordered.loc[:, "stock_return_1d"] = close / previous_close.where(previous_close.ne(0) & recent_previous) - 1.0
     rows = []
     for universe_id, group in ordered.groupby("universe_id", sort=True):
         daily = group.groupby("date", sort=True).agg(
@@ -209,7 +302,8 @@ def _build_universe_index(stock: pd.DataFrame) -> pd.DataFrame:
         weighted.loc[:, "weight"] = weighted["market_cap_cr"] / weighted.groupby("date")["market_cap_cr"].transform("sum")
         mw_ret = weighted.assign(weighted_return=weighted["weight"] * weighted["stock_return_1d"]).groupby("date", sort=True)["weighted_return"].sum(min_count=1)
         for index_type, returns in {"equal_weight": ew_ret, "market_cap_weight": mw_ret}.items():
-            levels = (1 + returns.fillna(0)).cumprod() * 1000.0
+            seed = seeds.get((str(universe_id), index_type), 1000.0)
+            levels = (1 + returns.fillna(0)).cumprod() * seed
             frame = daily.copy()
             frame.loc[:, "universe_id"] = universe_id
             frame.loc[:, "index_type"] = index_type

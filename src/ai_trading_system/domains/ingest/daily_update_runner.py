@@ -99,6 +99,19 @@ def _business_dates(from_date: str, to_date: str, *, masterdb_path: str | None =
     business_days = [ts.date().isoformat() for ts in pd.bdate_range(from_date, to_date)]
     if not business_days:
         return []
+
+    is_outside_2026 = (from_date < "2026-01-01" or to_date > "2026-12-31")
+    if is_outside_2026:
+        try:
+            import yfinance as yf
+            end_date = (pd.to_datetime(to_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            df = yf.download("^NSEI", start=from_date, end=end_date, progress=False)
+            if not df.empty:
+                actual_trading_days = set(df.index.strftime("%Y-%m-%d"))
+                return [day for day in business_days if day in actual_trading_days]
+        except Exception as e:
+            logger.warning("Failed to fetch dynamic trading days via ^NSEI: %s. Falling back to DB nse_holidays.", e)
+
     holidays = _load_nse_holiday_dates(masterdb_path, business_days[0], business_days[-1])
     if not holidays:
         return business_days
@@ -488,6 +501,11 @@ def _normalize_bhavcopy_frame(
         "LOW_PRICE": "low",
         "CLOSE_PRICE": "close",
         "TTL_TRD_QNTY": "volume",
+        "OPEN": "open",
+        "HIGH": "high",
+        "LOW": "low",
+        "CLOSE": "close",
+        "TOTTRDQTY": "volume",
     }
     df = df.rename(columns=rename_map)
     if "series" in df.columns:

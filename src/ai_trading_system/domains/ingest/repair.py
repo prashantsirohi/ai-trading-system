@@ -31,7 +31,12 @@ from ai_trading_system.analytics.data_trust import (
     resolve_quarantine_for_rows,
 )
 from ai_trading_system.analytics.registry import RegistryStore
-from ai_trading_system.domains.ingest.daily_update_runner import _fetch_nse_bhavcopy_rows, _fetch_yfinance_rows, _rows_to_symbol_frames
+from ai_trading_system.domains.ingest.daily_update_runner import (
+    _business_dates,
+    _fetch_nse_bhavcopy_rows,
+    _fetch_yfinance_rows,
+    _rows_to_symbol_frames,
+)
 from ai_trading_system.domains.ingest.providers.dhan import DhanCollector
 from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.domains.features import FeatureStore, compute_all_symbols_rs
@@ -284,11 +289,13 @@ def _fetch_symbol_frames(
     to_date: str,
     ingest_run_id: str | None = None,
     repair_batch_id: str | None = None,
+    allow_yfinance_fallback: bool = False,
 ) -> list[pd.DataFrame]:
     security_map = {str(row["symbol_id"]): row for row in symbols}
-    raw_dir = get_domain_paths(project_root=project_root, data_domain="operational").raw_dir / "NSE_EQ"
+    paths = get_domain_paths(project_root=project_root, data_domain="operational")
+    raw_dir = paths.raw_dir / "NSE_EQ"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    trade_dates = [ts.date().isoformat() for ts in pd.bdate_range(from_date, to_date)]
+    trade_dates = _business_dates(from_date, to_date, masterdb_path=str(paths.master_db_path))
     nse_rows, _, missing_dates = _fetch_nse_bhavcopy_rows(
         raw_dir=raw_dir,
         trade_dates=trade_dates,
@@ -303,7 +310,13 @@ def _fetch_symbol_frames(
         nse_rows["repair_batch_id"] = repair_batch_id
 
     all_rows = nse_rows.copy() if not nse_rows.empty else pd.DataFrame()
-    if missing_dates:
+    if missing_dates and not allow_yfinance_fallback:
+        sample = ", ".join(missing_dates[:5])
+        raise RuntimeError(
+            f"Official NSE bhavcopy unavailable for {len(missing_dates)} expected trading dates: {sample}. "
+            "Repair stopped before rewriting OHLC rows."
+        )
+    if missing_dates and allow_yfinance_fallback:
         yfinance_rows = _fetch_yfinance_rows(symbol_rows=symbols, trade_dates=missing_dates, batch_size=100)
         if not yfinance_rows.empty:
             yfinance_rows["provider"] = "yfinance"
@@ -403,6 +416,7 @@ def repair_window(
     max_concurrent: int = 5,
     recompute_features: bool = True,
     feature_tail_bars: int = 252,
+    allow_yfinance_fallback: bool = False,
 ) -> dict[str, Any]:
     paths = ensure_domain_layout(project_root=project_root, data_domain="operational")
     collector = DhanCollector(
@@ -432,6 +446,7 @@ def repair_window(
         to_date=to_date,
         ingest_run_id=None,
         repair_batch_id=run_stamp,
+        allow_yfinance_fallback=allow_yfinance_fallback,
     )
 
     api_frame_map: dict[str, pd.DataFrame] = {}
@@ -601,7 +616,7 @@ def repair_window(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Repair a corrupted OHLCV window from NSE bhavcopy and yfinance fallback.")
+    parser = argparse.ArgumentParser(description="Repair a corrupted OHLCV window from official NSE bhavcopy data.")
     parser.add_argument("--from-date", required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--to-date", required=True, help="End date (YYYY-MM-DD)")
     parser.add_argument("--exchange", default="NSE")
@@ -611,6 +626,11 @@ def main() -> None:
     parser.add_argument("--feature-tail-bars", type=int, default=252)
     parser.add_argument("--apply", action="store_true", help="Rewrite mismatched OHLCV rows and recompute features.")
     parser.add_argument("--skip-features", action="store_true", help="Skip feature/sector recomputation after repair.")
+    parser.add_argument(
+        "--allow-yfinance-fallback",
+        action="store_true",
+        help="Allow adjusted Yahoo candles when NSE bhavcopy is unavailable. Avoid for raw historical rebuilds.",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parents[4]
@@ -626,6 +646,7 @@ def main() -> None:
         max_concurrent=max(1, int(args.max_concurrent)),
         recompute_features=not bool(args.skip_features),
         feature_tail_bars=max(30, int(args.feature_tail_bars)),
+        allow_yfinance_fallback=bool(args.allow_yfinance_fallback),
     )
     print(json.dumps(report, indent=2))
 

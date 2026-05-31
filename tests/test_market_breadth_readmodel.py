@@ -156,3 +156,48 @@ def test_market_breadth_history_joins_market_context_and_requires_252_bars(tmp_p
     assert latest["decliners"] == 1
     assert latest["index_level"] == 1234.5
     assert latest["pe_pctile_5y"] == 82.5
+    assert latest["pe_pctile_5y_sma20"] == 82.5
+
+
+def test_market_breadth_excludes_sparse_dates_and_prefers_adjusted_close(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    db_path = data_dir / "ohlcv.duckdb"
+    start = date(2025, 1, 1)
+    final_date = start + timedelta(days=209)
+    sparse_date = final_date + timedelta(days=1)
+
+    con = duckdb.connect(str(db_path))
+    try:
+        con.execute(
+            """
+            CREATE TABLE _catalog (
+                timestamp DATE,
+                symbol_id VARCHAR,
+                exchange VARCHAR,
+                close DOUBLE,
+                adjusted_close DOUBLE
+            )
+            """
+        )
+        rows = []
+        for i in range(210):
+            ts = start + timedelta(days=i)
+            aaa_raw_close = 1000.0 if ts == final_date else 100.0
+            rows.extend(
+                [
+                    (ts, "AAA", "NSE", aaa_raw_close, 100.0),
+                    (ts, "BBB", "NSE", 100.0, 100.0),
+                ]
+            )
+        rows.append((sparse_date, "AAA", "NSE", 2000.0, 2000.0))
+        con.executemany("INSERT INTO _catalog VALUES (?, ?, ?, ?, ?)", rows)
+    finally:
+        con.close()
+
+    readmodel = _load_readmodel()
+    result = readmodel.get_market_breadth_history(tmp_path, limit=1)
+
+    latest = result["rows"][0]
+    assert latest["trade_date"] == str(final_date)
+    assert latest["pct_above_sma200"] == 0.0

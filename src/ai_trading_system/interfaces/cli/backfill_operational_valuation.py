@@ -438,6 +438,28 @@ def _attach_source(conn: duckdb.DuckDBPyConnection, source_db_path: str | Path) 
 
 def _source_daily_sql() -> str:
     return """
+        WITH normalized_source AS (
+            SELECT
+                symbol_id,
+                security_id,
+                exchange,
+                CASE
+                    WHEN CAST(timestamp AS TIME) = TIME '18:30:00'
+                    THEN timestamp + INTERVAL '5 hours 30 minutes'
+                    ELSE timestamp
+                END AS timestamp,
+                open,
+                high,
+                low,
+                close,
+                volume,
+                parquet_file,
+                ingestion_version,
+                ingestion_ts
+            FROM src._catalog
+            WHERE exchange = 'NSE'
+              AND close IS NOT NULL
+        )
         SELECT *
         FROM (
             SELECT
@@ -458,9 +480,7 @@ def _source_daily_sql() -> str:
                     PARTITION BY symbol_id, exchange, CAST(timestamp AS DATE)
                     ORDER BY timestamp DESC, ingestion_ts DESC NULLS LAST
                 ) AS rn
-            FROM src._catalog
-            WHERE exchange = 'NSE'
-              AND close IS NOT NULL
+            FROM normalized_source
         )
         WHERE rn = 1
     """

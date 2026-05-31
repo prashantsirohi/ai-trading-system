@@ -162,7 +162,9 @@ def parse_corporate_action(raw: dict[str, Any], *, symbol_master: SymbolMaster |
     parsed_ratio: str
     price_factor: float
     share_factor: float
-    if "bonus" in subject_lower:
+    has_bonus = "bonus" in subject_lower
+    has_split = _is_split_subject(subject_lower)
+    if has_bonus:
         ratio = _parse_ratio(subject)
         if ratio is None:
             return None
@@ -173,7 +175,18 @@ def parse_corporate_action(raw: dict[str, Any], *, symbol_master: SymbolMaster |
         parsed_ratio = f"{x:g}:{y:g}"
         price_factor = y / (x + y)
         share_factor = (x + y) / y
-    elif _is_split_subject(subject_lower):
+        if has_split:
+            face_values = _parse_split_face_values(subject)
+            if face_values is None:
+                return None
+            old_fv, new_fv = face_values
+            if old_fv <= 0 or new_fv <= 0:
+                return None
+            action_type = "bonus_split"
+            parsed_ratio = f"{parsed_ratio};{old_fv:g}->{new_fv:g}"
+            price_factor *= new_fv / old_fv
+            share_factor *= old_fv / new_fv
+    elif has_split:
         face_values = _parse_split_face_values(subject)
         if face_values is None:
             return None
@@ -218,7 +231,7 @@ def _parse_ratio(text: str) -> tuple[float, float] | None:
 def _parse_split_face_values(text: str) -> tuple[float, float] | None:
     normalized = text.lower().replace("₹", "rs")
     match = re.search(
-        r"from\s+(?:rs\.?|re\.?)?\s*(\d+(?:\.\d+)?)\s*(?:/-)?\s+to\s+(?:rs\.?|re\.?)?\s*(\d+(?:\.\d+)?)",
+        r"from\s+(?:rs\.?|re\.?)?\s*(\d+(?:\.\d+)?)\s*(?:/-)?[^0-9]*?\bto\s+(?:rs\.?|re\.?)?\s*(\d+(?:\.\d+)?)",
         normalized,
     )
     if match:
@@ -440,6 +453,29 @@ def upsert_corporate_actions(db_path: str | Path, actions: Iterable[ParsedCorpor
     inserted = 0
     try:
         for row in frame.to_dict("records"):
+            conn.execute(
+                """
+                DELETE FROM _corporate_actions
+                WHERE symbol = ?
+                  AND COALESCE(isin, '') = COALESCE(?, '')
+                  AND ex_date = ?
+                  AND source = ?
+                  AND raw_payload_hash = ?
+                  AND (
+                        action_type <> ?
+                     OR parsed_ratio <> ?
+                  )
+                """,
+                [
+                    row["symbol"],
+                    row["isin"],
+                    row["ex_date"],
+                    row["source"],
+                    row["raw_payload_hash"],
+                    row["action_type"],
+                    row["parsed_ratio"],
+                ],
+            )
             exists = conn.execute(
                 """
                 SELECT 1

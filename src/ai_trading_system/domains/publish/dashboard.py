@@ -248,6 +248,7 @@ def _load_operational_breadth(project_root: Path) -> pd.DataFrame:
                 "ADLine",
                 "IndexLevel",
                 "PEPctile5Y",
+                "PEPctile5YSMA20",
             ]
         )
     return breadth_df.rename(
@@ -263,6 +264,7 @@ def _load_operational_breadth(project_root: Path) -> pd.DataFrame:
             "ad_line": "ADLine",
             "index_level": "IndexLevel",
             "pe_pctile_5y": "PEPctile5Y",
+            "pe_pctile_5y_sma20": "PEPctile5YSMA20",
         }
     )[
         [
@@ -277,6 +279,7 @@ def _load_operational_breadth(project_root: Path) -> pd.DataFrame:
             "ADLine",
             "IndexLevel",
             "PEPctile5Y",
+            "PEPctile5YSMA20",
         ]
     ].reset_index(drop=True)
 
@@ -487,15 +490,15 @@ def _add_breadth_charts(
 
     requests = [
         request(
-            title="Operational Long-Term Breadth (% Above SMA200 and PE 5Y Percentile)",
+            title="Operational Long-Term Breadth (% Above SMA200 and PE 5Y Percentile SMA20)",
             chart_type="LINE",
             series=[
                 _chart_series(sheet_id, start_idx, end_idx, 1),
-                _chart_series(sheet_id, start_idx, end_idx, 10, "RIGHT_AXIS"),
+                _chart_series(sheet_id, start_idx, end_idx, 11, "RIGHT_AXIS"),
             ],
             anchor_row=start_idx,
             left_title="% Above SMA200",
-            right_title="PE 5Y percentile",
+            right_title="PE 5Y percentile SMA20",
         ),
         request(
             title="New 52W Highs / Lows and Ratio SMA10",

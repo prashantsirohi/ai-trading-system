@@ -112,7 +112,7 @@ function ParticipationChart({ points }: { points: ChartPoint[] }) {
         <ReferenceLine yAxisId="breadth" y={70} stroke="#f59e0b" strokeDasharray="4 4" label={{ value: 'overbought 70%', fill: '#fbbf24', fontSize: 10 }} />
         <ReferenceLine yAxisId="breadth" y={30} stroke="#38bdf8" strokeDasharray="4 4" label={{ value: 'oversold 30%', fill: '#7dd3fc', fontSize: 10 }} />
         <Line yAxisId="breadth" type="monotone" dataKey="above200" name="% Above 200 DMA" stroke="#34d399" strokeWidth={2.2} dot={false} isAnimationActive={false} />
-        <Line yAxisId="pe" type="monotone" dataKey="pePctile5y" name="PE 5Y percentile" stroke="#c084fc" strokeWidth={1.8} dot={false} connectNulls={false} isAnimationActive={false} />
+        <Line yAxisId="pe" type="monotone" dataKey="pePctile5ySma20" name="PE 5Y percentile SMA20" stroke="#c084fc" strokeWidth={1.8} dot={false} connectNulls={false} isAnimationActive={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );

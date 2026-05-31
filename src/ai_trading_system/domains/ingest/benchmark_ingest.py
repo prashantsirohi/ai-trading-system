@@ -83,6 +83,11 @@ def _fetch_spec_rows_for_date(
         "LOW_PRICE": "low",
         "CLOSE_PRICE": "close",
         "TTL_TRD_QNTY": "volume",
+        "OPEN": "open",
+        "HIGH": "high",
+        "LOW": "low",
+        "CLOSE": "close",
+        "TOTTRDQTY": "volume",
     }
     matched = matched.rename(columns=rename_map)
     for field in ("open", "high", "low", "close", "volume"):

@@ -196,6 +196,49 @@ def test_coverage_and_yearly_copy_report_missing_rows(tmp_path: Path) -> None:
     assert chunks[0].missing_rows == 1
 
 
+def test_copy_normalizes_dhan_utc_evening_timestamp_to_ist_trade_date(tmp_path: Path) -> None:
+    source = tmp_path / "research.duckdb"
+    target = tmp_path / "operational.duckdb"
+    _create_source(source)
+    _create_target(target)
+    conn = duckdb.connect(str(source))
+    try:
+        conn.execute(
+            """
+            INSERT INTO _catalog
+            VALUES ('DDD', '4', 'NSE', '2016-01-02 18:30:00', 30, 32, 29, 31, 3000,
+                    'research/d.parquet', 9, '2026-01-03')
+            """
+        )
+    finally:
+        conn.close()
+
+    result = copy_ohlcv_chunk(
+        source_db_path=source,
+        target_db_path=target,
+        from_date="2016-01-03",
+        to_date="2016-01-03",
+        run_id="test_run",
+    )
+
+    conn = duckdb.connect(str(target), read_only=True)
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol_id, timestamp, close
+            FROM _catalog
+            WHERE symbol_id = 'DDD'
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+    assert result.inserted_rows == 1
+    assert row is not None
+    assert row[0] == "DDD"
+    assert str(row[1]) == "2016-01-03 00:00:00"
+    assert row[2] == 31.0
+
+
 def test_validation_summary_handles_missing_valuation_tables(tmp_path: Path) -> None:
     target = tmp_path / "operational.duckdb"
     _create_target(target)

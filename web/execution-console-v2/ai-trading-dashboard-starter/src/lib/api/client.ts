@@ -69,13 +69,7 @@ export async function fetchDashboardJson<T>(path: string, fallback: T): Promise<
   if (USE_MOCK_API) {
     return fallback;
   }
-
-  try {
-    return await requestJson<T>(path);
-  } catch (error) {
-    console.warn(`[execution-console-v2] falling back to mock for ${path}`, error);
-    return fallback;
-  }
+  return requestJson<T>(path);
 }
 
 export async function fetchDashboardJsonStrict<T>(path: string, fallback: T): Promise<T> {

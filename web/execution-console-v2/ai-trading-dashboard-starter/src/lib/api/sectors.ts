@@ -1,7 +1,7 @@
 import type { SectorResponse } from '@/types/api';
 import type { Constituent } from '@/lib/mock/sectorConstituents';
 import { sectorsMock } from '@/lib/mock/sectors';
-import { fetchDashboardJsonStrict } from '@/lib/api/client';
+import { fetchDashboardJsonStrict, USE_MOCK_API } from '@/lib/api/client';
 
 export interface SectorRow {
   sector: string;
@@ -120,6 +120,9 @@ function mapSectorRow(s: any): SectorRow {
 }
 
 export async function getSectors(): Promise<SectorResponse> {
+  if (USE_MOCK_API) {
+    return sectorsMock;
+  }
   // Try the new /api/execution/sectors endpoint first (has stage data).
   try {
     const res = await fetchDashboardJsonStrict<{ sectors: any[] }>(
@@ -136,17 +139,13 @@ export async function getSectors(): Promise<SectorResponse> {
   }
 
   // Fallback: legacy /api/execution/market (no stage data)
-  try {
-    const marketRes = await fetchDashboardJsonStrict<{ sectors: any[] }>('/api/execution/market', { sectors: [] });
-    if (marketRes.sectors?.length) {
-      return {
-        sectors: marketRes.sectors.map(mapSectorRow),
-      } as unknown as SectorResponse;
-    }
-  } catch (e) {
-    console.warn('Sectors API failed, using mock', e);
+  const marketRes = await fetchDashboardJsonStrict<{ sectors: any[] }>('/api/execution/market', { sectors: [] });
+  if (marketRes.sectors?.length) {
+    return {
+      sectors: marketRes.sectors.map(mapSectorRow),
+    } as unknown as SectorResponse;
   }
-  return sectorsMock;
+  return { sectors: [] };
 }
 
 export interface SectorConstituentRow extends Constituent {

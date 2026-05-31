@@ -12,11 +12,47 @@ from ai_trading_system.platform.db.paths import get_domain_paths
 
 LOG = logging.getLogger(__name__)
 LONG_TERM_BREADTH_START_DATE = "2020-01-01"
+MIN_SOURCE_DATE_COVERAGE_RATIO = 0.5
+MAX_RETURN_GAP_DAYS = 7
 
 _BASE_BREADTH_SQL = """
-WITH base AS (
+WITH daily_raw AS (
     SELECT
         CAST(timestamp AS DATE) AS trade_date,
+        symbol_id,
+        {close_expr} AS close
+    FROM _catalog
+    WHERE exchange = 'NSE'
+      AND {close_expr} IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY symbol_id, CAST(timestamp AS DATE)
+        ORDER BY timestamp DESC
+    ) = 1
+),
+eligible_dates AS (
+    SELECT trade_date
+    FROM daily_raw
+    GROUP BY trade_date
+    HAVING COUNT(DISTINCT symbol_id) >= (
+        SELECT CASE
+            WHEN MAX(symbol_count) <= 2 THEN MAX(symbol_count)
+            ELSE CEIL(MAX(symbol_count) * {min_source_date_coverage_ratio})
+        END
+        FROM (
+            SELECT COUNT(DISTINCT symbol_id) AS symbol_count
+            FROM daily_raw
+            GROUP BY trade_date
+        )
+    )
+),
+eligible_daily AS (
+    SELECT daily_raw.*
+    FROM daily_raw
+    INNER JOIN eligible_dates USING (trade_date)
+),
+base AS (
+    SELECT
+        trade_date,
         symbol_id,
         close,
         AVG(close) OVER w20 AS sma_20,
@@ -30,29 +66,32 @@ WITH base AS (
         MIN(close) OVER w252 AS lo_252,
         LAG(close) OVER (
             PARTITION BY symbol_id
-            ORDER BY CAST(timestamp AS DATE)
-        ) AS prev_close
-    FROM _catalog
-    WHERE exchange = 'NSE'
+            ORDER BY trade_date
+        ) AS prev_close,
+        LAG(trade_date) OVER (
+            PARTITION BY symbol_id
+            ORDER BY trade_date
+        ) AS prev_trade_date
+    FROM eligible_daily
     WINDOW
         w20 AS (
             PARTITION BY symbol_id
-            ORDER BY CAST(timestamp AS DATE)
+            ORDER BY trade_date
             ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
         ),
         w50 AS (
             PARTITION BY symbol_id
-            ORDER BY CAST(timestamp AS DATE)
+            ORDER BY trade_date
             ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
         ),
         w200 AS (
             PARTITION BY symbol_id
-            ORDER BY CAST(timestamp AS DATE)
+            ORDER BY trade_date
             ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
         ),
         w252 AS (
             PARTITION BY symbol_id
-            ORDER BY CAST(timestamp AS DATE)
+            ORDER BY trade_date
             ROWS BETWEEN 251 PRECEDING AND CURRENT ROW
         )
 ),
@@ -83,8 +122,8 @@ daily AS (
         ) AS pct_above_sma200,
         SUM(CASE WHEN obs_252 >= 252 AND close >= hi_252 THEN 1 ELSE 0 END) AS new_52w_highs,
         SUM(CASE WHEN obs_252 >= 252 AND close <= lo_252 THEN 1 ELSE 0 END) AS new_52w_lows,
-        SUM(CASE WHEN prev_close IS NOT NULL AND close > prev_close THEN 1 ELSE 0 END) AS advancers,
-        SUM(CASE WHEN prev_close IS NOT NULL AND close < prev_close THEN 1 ELSE 0 END) AS decliners
+        SUM(CASE WHEN prev_close IS NOT NULL AND trade_date - prev_trade_date <= {max_return_gap_days} AND close > prev_close THEN 1 ELSE 0 END) AS advancers,
+        SUM(CASE WHEN prev_close IS NOT NULL AND trade_date - prev_trade_date <= {max_return_gap_days} AND close < prev_close THEN 1 ELSE 0 END) AS decliners
     FROM base
     GROUP BY trade_date
 )
@@ -125,6 +164,7 @@ def _empty_frame() -> pd.DataFrame:
             "decliners",
             "index_level",
             "pe_pctile_5y",
+            "pe_pctile_5y_sma20",
             "high_low_ratio",
             "high_low_ratio_sma10",
             "ad_line",
@@ -141,10 +181,23 @@ def _table_exists(con: Any, table_name: str) -> bool:
     )
 
 
+def _column_exists(con: Any, table_name: str, column_name: str) -> bool:
+    return bool(
+        con.execute(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
+            [table_name, column_name],
+        ).fetchone()[0]
+    )
+
+
 def _breadth_sql(con: Any) -> str:
     has_index = _table_exists(con, "universe_index_daily")
     has_cycle = _table_exists(con, "valuation_cycle_features")
+    close_expr = "COALESCE(adjusted_close, close)" if _column_exists(con, "_catalog", "adjusted_close") else "close"
     return _BASE_BREADTH_SQL.format(
+        close_expr=close_expr,
+        min_source_date_coverage_ratio=MIN_SOURCE_DATE_COVERAGE_RATIO,
+        max_return_gap_days=MAX_RETURN_GAP_DAYS,
         index_level_expr="uid.level" if has_index else "NULL::DOUBLE",
         index_level_join=(
             """
@@ -204,6 +257,7 @@ def load_operational_breadth_frame(project_root: str | Path) -> pd.DataFrame:
     df.loc[:, "high_low_ratio"] = df["new_52w_highs"] / df["new_52w_lows"].where(df["new_52w_lows"].ne(0))
     defined_ratio_sma = df["high_low_ratio"].dropna().rolling(10, min_periods=1).mean()
     df.loc[:, "high_low_ratio_sma10"] = defined_ratio_sma.reindex(df.index).ffill()
+    df.loc[:, "pe_pctile_5y_sma20"] = df["pe_pctile_5y"].rolling(20, min_periods=1).mean()
     daily_ad = df["advancers"].fillna(0) - df["decliners"].fillna(0)
     df.loc[:, "ad_line"] = daily_ad.cumsum() - daily_ad.iloc[0]
     return df.reset_index(drop=True)
@@ -249,6 +303,7 @@ def get_market_breadth_history(
             "decliners": _value(row.decliners, integer=True),
             "index_level": _value(row.index_level),
             "pe_pctile_5y": _value(row.pe_pctile_5y),
+            "pe_pctile_5y_sma20": _value(row.pe_pctile_5y_sma20),
         }
         for row in df.itertuples(index=False)
     ]

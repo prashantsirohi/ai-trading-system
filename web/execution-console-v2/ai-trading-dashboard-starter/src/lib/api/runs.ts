@@ -13,7 +13,7 @@
  */
 import type { RunsResponse } from '@/types/api';
 import { runsMock } from '@/lib/mock/runs';
-import { fetchDashboardJson, fetchDashboardJsonStrict } from '@/lib/api/client';
+import { fetchDashboardJson, fetchDashboardJsonStrict, USE_MOCK_API } from '@/lib/api/client';
 
 // ---------------------------------------------------------------------------
 // /runs (list)
@@ -391,22 +391,21 @@ export async function getRunArtifacts(runId: string): Promise<RunArtifacts> {
 // ---------------------------------------------------------------------------
 
 export async function getRuns(): Promise<RunsResponse> {
-  try {
-    const res = await fetchDashboardJson<{ runs: BackendRunSummary[] }>(
-      '/api/execution/runs?limit=20',
-      { runs: [] },
-    );
-    if (res.runs?.length) {
-      return {
-        stages: res.runs.map((r) => ({
-          id: r.run_id ?? 'unknown',
-          status: r.status ?? 'unknown',
-          stage: r.current_stage ?? 'N/A',
-        })),
-      } as unknown as RunsResponse;
-    }
-  } catch (e) {
-    console.warn('Runs API failed, using mock', e);
+  if (USE_MOCK_API) {
+    return runsMock;
   }
-  return runsMock;
+  const res = await fetchDashboardJson<{ runs: BackendRunSummary[] }>(
+    '/api/execution/runs?limit=20',
+    { runs: [] },
+  );
+  if (res.runs?.length) {
+    return {
+      stages: res.runs.map((r) => ({
+        id: r.run_id ?? 'unknown',
+        status: r.status ?? 'unknown',
+        stage: r.current_stage ?? 'N/A',
+      })),
+    } as unknown as RunsResponse;
+  }
+  return { stages: [] };
 }

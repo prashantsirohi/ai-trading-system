@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import duckdb
 import pandas as pd
@@ -12,6 +13,7 @@ from ai_trading_system.domains.ingest.repair import (
     _build_comparison_results,
     _compare_trade_frames,
     _delete_window_rows,
+    _fetch_symbol_frames,
 )
 
 
@@ -141,6 +143,35 @@ def test_delete_window_rows_removes_stale_rows_for_target_symbols(tmp_path: Path
         conn.close()
 
     assert remaining == [("BBB", pd.Timestamp("2026-04-01").date())]
+
+
+def test_historical_repair_does_not_use_yfinance_fallback_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        repair_ohlcv_window,
+        "get_domain_paths",
+        lambda **_: SimpleNamespace(raw_dir=tmp_path / "raw", master_db_path=tmp_path / "master.db"),
+    )
+    monkeypatch.setattr(repair_ohlcv_window, "_business_dates", lambda *_, **__: ["2022-08-08"])
+    monkeypatch.setattr(
+        repair_ohlcv_window,
+        "_fetch_nse_bhavcopy_rows",
+        lambda **_: (pd.DataFrame(), [], ["2022-08-08"]),
+    )
+
+    def fail_yfinance(**_: object) -> pd.DataFrame:
+        raise AssertionError("Historical repair should not silently use Yahoo candles.")
+
+    monkeypatch.setattr(repair_ohlcv_window, "_fetch_yfinance_rows", fail_yfinance)
+
+    with pytest.raises(RuntimeError, match="Repair stopped before rewriting OHLC rows"):
+        _fetch_symbol_frames(
+            project_root=tmp_path,
+            symbols=[{"symbol_id": "AAA", "security_id": "1", "exchange": "NSE"}],
+            from_date="2022-08-08",
+            to_date="2022-08-08",
+        )
 
 
 def test_repair_window_requires_symbols_for_repair(tmp_path: Path) -> None:

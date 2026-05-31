@@ -173,6 +173,15 @@ DEFAULT_RULES = [
         "owner": "pipeline",
     },
     {
+        "rule_id": "ingest_bulk_raw_price_basis_shift",
+        "stage_name": "ingest",
+        "dataset_name": "_catalog",
+        "severity": "critical",
+        "rule_sql": None,
+        "description": "Broad simultaneous raw-price gaps should not indicate a provider basis cutover.",
+        "owner": "pipeline",
+    },
+    {
         "rule_id": "ingest_recent_universe_price_jump_anomaly",
         "stage_name": "ingest",
         "dataset_name": "_catalog",

@@ -115,6 +115,65 @@ def test_parse_bonus_and_split_factors_prefer_isin_mapping() -> None:
     assert split.share_factor == 5.0
 
 
+def test_parse_combined_bonus_and_split_compounds_factors() -> None:
+    action = parse_corporate_action(
+        {
+            "symbol": "AAA",
+            "isin": "INE000A01011",
+            "exDate": "08-Sep-2016",
+            "subject": "Bonus 1:1/Face Value Split (Sub-Division) - From Rs 10/- Per Share To Rs 2/- Per Share",
+        }
+    )
+
+    assert action is not None
+    assert action.action_type == "bonus_split"
+    assert action.parsed_ratio == "1:1;10->2"
+    assert action.price_factor == 0.1
+    assert action.share_factor == 10.0
+
+
+def test_upsert_replaces_stale_parse_for_same_payload(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    _seed_catalog(db_path)
+    ensure_corporate_action_schema(db_path)
+    action = parse_corporate_action(
+        {
+            "symbol": "AAA",
+            "isin": "INE000A01011",
+            "exDate": "08-Sep-2016",
+            "subject": "Bonus 1:1/Face Value Split (Sub-Division) - From Rs 10/- Per Share To Rs 2/- Per Share",
+        }
+    )
+    assert action is not None
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            INSERT INTO _corporate_actions
+            (symbol, isin, ex_date, action_type, parsed_ratio, price_factor, share_factor,
+             source, raw_subject, raw_payload_hash, raw_payload_json)
+            VALUES (?, ?, ?, 'bonus', '1:1', 0.5, 2.0, ?, ?, ?, ?)
+            """,
+            [action.symbol, action.isin, action.ex_date, action.source, action.raw_subject, action.raw_payload_hash, action.raw_payload_json],
+        )
+    finally:
+        conn.close()
+
+    upsert_corporate_actions(db_path, [action])
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT action_type, parsed_ratio, price_factor, share_factor
+            FROM _corporate_actions
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [("bonus_split", "1:1;10->2", 0.1, 10.0)]
+
+
 def test_recompute_adjusted_prices_compounds_from_raw_and_preserves_raw(tmp_path: Path) -> None:
     db_path = tmp_path / "ohlcv.duckdb"
     _seed_catalog(db_path)
@@ -558,3 +617,40 @@ def test_dq_large_raw_gap_near_action_requires_adjustment_marker(tmp_path: Path)
 
     assert failed.status == "failed"
     assert passed.status == "passed"
+
+
+def test_dq_bulk_raw_price_basis_shift_detects_simultaneous_gaps(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    _seed_catalog(db_path)
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            INSERT INTO _catalog
+            (symbol_id, security_id, exchange, timestamp, open, high, low, close, volume,
+             instrument_type, is_benchmark, isin)
+            VALUES
+            ('BBB', '2', 'NSE', '2026-01-01', 50, 55, 45, 50, 1000, 'equity', false, 'INE000A01012'),
+            ('BBB', '2', 'NSE', '2026-01-02', 100, 110, 90, 100, 1000, 'equity', false, 'INE000A01012')
+            """
+        )
+    finally:
+        conn.close()
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=db_path,
+        run_id="run-1",
+        run_date="2026-01-10",
+        stage_name="ingest",
+        attempt_number=1,
+        params={"dq_bulk_raw_gap_pct": 50.0, "dq_bulk_raw_gap_symbol_count": 2},
+    )
+
+    outcome = DataQualityEngine(registry=None)._rule_ingest_bulk_raw_price_basis_shift(  # type: ignore[arg-type]
+        context,
+        StageResult(metadata={}),
+        "critical",
+    )
+
+    assert outcome.status == "failed"
+    assert outcome.failed_count == 1

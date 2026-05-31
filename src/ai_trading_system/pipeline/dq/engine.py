@@ -469,6 +469,54 @@ class DataQualityEngine:
             else "Found large raw gaps near corporate-action ex-dates that are not marked as adjusted.",
         )
 
+    def _rule_ingest_bulk_raw_price_basis_shift(
+        self, context: StageContext, result: StageResult, severity: str
+    ) -> DQRuleFailure:
+        threshold = float(context.params.get("dq_bulk_raw_gap_pct", 30.0) or 30.0)
+        symbol_threshold = int(context.params.get("dq_bulk_raw_gap_symbol_count", 10) or 10)
+        query = f"""
+            WITH ordered AS (
+                SELECT
+                    symbol_id,
+                    CAST(timestamp AS DATE) AS trade_date,
+                    close,
+                    LAG(close) OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp
+                    ) AS prev_close
+                FROM _catalog
+                WHERE exchange = 'NSE'
+                  AND NOT COALESCE(is_benchmark, FALSE)
+                  AND COALESCE(instrument_type, 'equity') = 'equity'
+            ),
+            raw_gaps AS (
+                SELECT trade_date, symbol_id
+                FROM ordered
+                WHERE prev_close IS NOT NULL
+                  AND close IS NOT NULL
+                  AND ABS(((close / NULLIF(prev_close, 0)) - 1) * 100.0) >= {threshold}
+            )
+            SELECT COUNT(*)
+            FROM (
+                SELECT trade_date
+                FROM raw_gaps
+                GROUP BY trade_date
+                HAVING COUNT(DISTINCT symbol_id) >= {symbol_threshold}
+            ) suspicious_dates
+        """
+        failed_count = self._scalar(context.db_path, query)
+        return self._make_result(
+            "ingest_bulk_raw_price_basis_shift",
+            severity,
+            failed_count,
+            "No broad simultaneous raw-price basis shifts detected."
+            if failed_count == 0
+            else (
+                "Found trade dates with broad simultaneous raw-price gaps; "
+                "inspect provider cutovers before using adjusted history."
+            ),
+        )
+
     def _rule_ingest_unresolved_dates_present(
         self, context: StageContext, result: StageResult, severity: str
     ) -> DQRuleFailure:

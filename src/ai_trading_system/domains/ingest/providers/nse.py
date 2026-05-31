@@ -28,8 +28,10 @@ class NSECollector:
         date_compact = date.replace("-", "")
         dt = datetime.fromisoformat(date)
         ddmmyyyy = dt.strftime("%d%m%Y")
+        ddmonyyyy = dt.strftime("%d%b%Y").upper()
         return [
             f"https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{ddmmyyyy}.csv",
+            f"https://archives.nseindia.com/content/historical/EQUITIES/{dt.year}/{dt.strftime('%b').upper()}/cm{ddmonyyyy}bhav.csv.zip",
             f"https://www.nseindia.com/content/nsccl/CM{date_compact}bhav.csv.zip",
         ]
 
@@ -78,15 +80,18 @@ class NSECollector:
 
             logger.info(f"Downloading bhavcopy for {date}")
             for url in self._candidate_bhavcopy_urls(date):
-                response = self.session.get(url, timeout=30)
-                if response.status_code == 404:
-                    continue
-                response.raise_for_status()
-                df = self._read_bhavcopy_response(response)
-                if not df.empty:
-                    os.makedirs(self.data_dir, exist_ok=True)
-                    df.to_csv(local_path, index=False)
-                    return df
+                try:
+                    response = self.session.get(url, timeout=30)
+                    if response.status_code == 404:
+                        continue
+                    response.raise_for_status()
+                    df = self._read_bhavcopy_response(response)
+                    if not df.empty:
+                        os.makedirs(self.data_dir, exist_ok=True)
+                        df.to_csv(local_path, index=False)
+                        return df
+                except Exception as exc:
+                    logger.warning("Bhavcopy candidate failed for %s: %s", url, exc)
 
             return pd.DataFrame()
 

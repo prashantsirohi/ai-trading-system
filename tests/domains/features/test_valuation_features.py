@@ -7,7 +7,7 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.features.valuation_cycle import refresh_valuation_cycle_features
-from ai_trading_system.domains.features.valuation_index import refresh_valuation_index
+from ai_trading_system.domains.features.valuation_index import _build_universe_index, _load_prices, refresh_valuation_index
 from ai_trading_system.domains.features.valuation_schema import ensure_valuation_schema
 from ai_trading_system.domains.features.valuation_ttm import refresh_fundamental_ttm
 
@@ -157,6 +157,124 @@ def test_stock_universe_and_sector_valuation_use_aggregate_earnings(tmp_path: Pa
     total_profit = float(stock["ttm_net_profit_cr"].sum())
     assert round(float(sector["total_market_cap_cr"].sum()), 4) == round(total_mcap, 4)
     assert round(float(sector["total_ttm_profit_cr"].sum()), 4) == round(total_profit, 4)
+
+
+def test_incremental_valuation_index_refresh_carries_forward_prior_level(tmp_path: Path) -> None:
+    ohlcv = tmp_path / "ohlcv.duckdb"
+    screener = tmp_path / "screener.db"
+    master = tmp_path / "master.db"
+    _create_ohlcv(ohlcv)
+    _create_screener(screener)
+    _create_master(master)
+    refresh_fundamental_ttm(ohlcv_db_path=ohlcv, screener_db_path=screener, valuation_dates=["2026-01-10", "2026-01-11"])
+
+    refresh_valuation_index(
+        ohlcv_db_path=ohlcv,
+        master_db_path=master,
+        universes=["UNIV_TOP2_MCAP"],
+        from_date="2026-01-10",
+        to_date="2026-01-10",
+    )
+    refresh_valuation_index(
+        ohlcv_db_path=ohlcv,
+        master_db_path=master,
+        universes=["UNIV_TOP2_MCAP"],
+        from_date="2026-01-11",
+        to_date="2026-01-11",
+    )
+
+    conn = duckdb.connect(str(ohlcv), read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT date, level, return_1d
+            FROM universe_index_daily
+            WHERE universe_id = 'UNIV_TOP2_MCAP'
+              AND index_type = 'market_cap_weight'
+            ORDER BY date
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert rows[0][1] == 1000.0
+    assert rows[0][2] is None
+    assert rows[1][1] != 1000.0
+    assert rows[1][2] is not None
+    assert round(float(rows[1][1]), 4) == round(1000.0 * (1.0 + float(rows[1][2])), 4)
+
+
+def test_load_prices_excludes_sparse_dates_and_tracks_previous_date(tmp_path: Path) -> None:
+    ohlcv = tmp_path / "ohlcv.duckdb"
+    _create_ohlcv(ohlcv)
+    conn = duckdb.connect(str(ohlcv))
+    try:
+        conn.execute("INSERT INTO _catalog VALUES ('AAA', 'NSE', '2026-01-12', 125.0, 125.0)")
+        prices = _load_prices(conn, from_date="2026-01-10", to_date="2026-01-12")
+    finally:
+        conn.close()
+
+    assert set(prices["date"].astype(str)) == {"2026-01-10", "2026-01-11"}
+    aaa_latest = prices.loc[prices["symbol"].eq("AAA")].sort_values("date").iloc[-1]
+    assert str(aaa_latest["previous_date"]) == "2026-01-10 00:00:00"
+
+
+def test_universe_index_ignores_returns_after_long_symbol_absence() -> None:
+    stock = pd.DataFrame(
+        [
+            {
+                "universe_id": "UNIV_TOP1_MCAP",
+                "symbol": "AAA",
+                "date": pd.Timestamp("2022-01-03").date(),
+                "close": 100.0,
+                "previous_date": pd.Timestamp("2015-12-31").date(),
+                "previous_close": 1.0,
+                "market_cap_cr": 1000.0,
+                "ttm_net_profit_cr": 100.0,
+            }
+        ]
+    )
+
+    index = _build_universe_index(stock)
+
+    row = index.loc[index["index_type"].eq("market_cap_weight")].iloc[0]
+    assert row["level"] == 1000.0
+    assert pd.isna(row["return_1d"])
+
+
+def test_requested_refresh_range_removes_stale_rows_before_first_price(tmp_path: Path) -> None:
+    ohlcv = tmp_path / "ohlcv.duckdb"
+    screener = tmp_path / "screener.db"
+    master = tmp_path / "master.db"
+    _create_ohlcv(ohlcv)
+    _create_screener(screener)
+    _create_master(master)
+    refresh_fundamental_ttm(ohlcv_db_path=ohlcv, screener_db_path=screener, valuation_dates=["2026-01-10", "2026-01-11"])
+    conn = duckdb.connect(str(ohlcv))
+    try:
+        conn.execute(
+            """
+            INSERT INTO universe_index_daily
+            VALUES ('UNIV_TOP2_MCAP', 'market_cap_weight', '2026-01-09', 999, NULL, 1, 999, 99, 10, .1)
+            """
+        )
+    finally:
+        conn.close()
+
+    refresh_valuation_index(
+        ohlcv_db_path=ohlcv,
+        master_db_path=master,
+        universes=["UNIV_TOP2_MCAP"],
+        from_date="2026-01-09",
+        to_date="2026-01-11",
+    )
+
+    conn = duckdb.connect(str(ohlcv), read_only=True)
+    try:
+        stale = conn.execute("SELECT COUNT(*) FROM universe_index_daily WHERE date = '2026-01-09'").fetchone()[0]
+    finally:
+        conn.close()
+    assert stale == 0
 
 
 def test_valuation_cycle_features_labels_extreme_percentiles(tmp_path: Path) -> None:

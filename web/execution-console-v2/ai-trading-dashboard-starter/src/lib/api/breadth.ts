@@ -11,6 +11,7 @@ export interface MarketBreadthPoint {
   decliners: number;
   indexLevel: number | null;
   pePctile5y: number | null;
+  pePctile5ySma20: number | null;
 }
 
 interface BackendMarketBreadthPoint {
@@ -36,6 +37,7 @@ interface BackendMarketBreadthPoint {
   decliners?: number;
   index_level?: number | null;
   pe_pctile_5y?: number | null;
+  pe_pctile_5y_sma20?: number | null;
 }
 
 interface BackendMarketBreadthResponse {
@@ -76,6 +78,7 @@ function mapPoint(row: BackendMarketBreadthPoint): MarketBreadthPoint | null {
     decliners: asNumber(row.decliners) ?? 0,
     indexLevel: asNumber(row.index_level),
     pePctile5y: asNumber(row.pe_pctile_5y),
+    pePctile5ySma20: asNumber(row.pe_pctile_5y_sma20),
   };
 
   if (!date) return null;

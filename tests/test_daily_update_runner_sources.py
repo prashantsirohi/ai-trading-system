@@ -8,6 +8,7 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.ingest import daily_update_runner
+from ai_trading_system.domains.ingest.providers.nse import NSECollector
 
 
 class _FixedDateTime(datetime):
@@ -32,6 +33,48 @@ def test_business_dates_exclude_nse_holidays(tmp_path: Path) -> None:
         masterdb_path=str(masterdb),
     )
     assert dates == ["2026-04-01", "2026-04-02", "2026-04-06", "2026-04-07"]
+
+
+def test_nse_collector_includes_legacy_equity_archive_url(tmp_path: Path) -> None:
+    collector = NSECollector(data_dir=str(tmp_path))
+
+    urls = collector._candidate_bhavcopy_urls("2022-08-08")
+
+    assert (
+        "https://archives.nseindia.com/content/historical/EQUITIES/2022/AUG/cm08AUG2022bhav.csv.zip"
+        in urls
+    )
+
+
+def test_nse_collector_tries_next_archive_candidate_after_error(tmp_path: Path) -> None:
+    collector = NSECollector(data_dir=str(tmp_path))
+    calls: list[str] = []
+
+    class Session:
+        def get(self, url: str, timeout: int) -> object:
+            calls.append(url)
+            if url == "https://example.invalid/first":
+                raise RuntimeError("primary archive unavailable")
+
+            class Response:
+                status_code = 200
+
+                def raise_for_status(self) -> None:
+                    return None
+
+            return Response()
+
+    collector.session = Session()  # type: ignore[assignment]
+    collector._candidate_bhavcopy_urls = lambda _: [  # type: ignore[method-assign]
+        "https://example.invalid/first",
+        "https://example.invalid/second",
+    ]
+    collector._read_bhavcopy_response = lambda _: pd.DataFrame([{"SYMBOL": "AAA"}])  # type: ignore[method-assign]
+
+    frame = collector.get_bhavcopy("2022-08-08")
+
+    assert calls == ["https://example.invalid/first", "https://example.invalid/second"]
+    assert list(frame["SYMBOL"]) == ["AAA"]
 
 
 def test_normalize_bhavcopy_frame_strips_series_values() -> None:

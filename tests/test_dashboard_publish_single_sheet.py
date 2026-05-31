@@ -156,6 +156,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
                     "ADLine": 0,
                     "IndexLevel": 1400,
                     "PEPctile5Y": 72.0,
+                    "PEPctile5YSMA20": 72.0,
                 },
                 {
                     "Date": "2026-04-08",
@@ -169,6 +170,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
                     "ADLine": 120,
                     "IndexLevel": 1425,
                     "PEPctile5Y": 74.0,
+                    "PEPctile5YSMA20": 73.0,
                 },
             ]
         ),
@@ -328,10 +330,12 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         "ADLine",
         "IndexLevel",
         "PEPctile5Y",
+        "PEPctile5YSMA20",
     ]
     assert pd.isna(breadth_frames[0].iloc[0]["HighLowRatio"])
     assert breadth_frames[0].iloc[0]["ADLine"] == 0
     assert breadth_frames[0].iloc[-1]["PEPctile5Y"] == 74.0
+    assert breadth_frames[0].iloc[-1]["PEPctile5YSMA20"] == 73.0
 
     assert manager.spreadsheet.batch_requests
     chart_requests = [
@@ -342,7 +346,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     ]
     assert len(chart_requests) == 3
     chart_specs = [request["addChart"]["chart"]["spec"] for request in chart_requests]
-    assert chart_specs[0]["title"] == "Operational Long-Term Breadth (% Above SMA200 and PE 5Y Percentile)"
+    assert chart_specs[0]["title"] == "Operational Long-Term Breadth (% Above SMA200 and PE 5Y Percentile SMA20)"
     assert len(chart_specs[0]["basicChart"]["series"]) == 2
     assert chart_specs[2]["title"] == "A/D Divergence and TOP1000 Index"
     assert len(chart_specs[2]["basicChart"]["series"]) == 2
