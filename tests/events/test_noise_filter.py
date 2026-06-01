@@ -381,7 +381,10 @@ def test_filter_chain_lets_passing_events_through_full_chain():
 def test_default_chain_loads_config_and_works():
     cfg = load_default_config()
     assert cfg, "events_filters.json should ship in platform/config/"
-    chain = build_default_filter_chain(config=cfg)
+    chain = build_default_filter_chain(
+        config=cfg,
+        as_of=datetime(2026, 5, 15, tzinfo=timezone.utc),
+    )
     # Without market_cap_provider/conn_provider, the chain still has whitelist
     # + trust + time-decay + corroboration as a minimum.
     assert len(chain.filters) >= 3

@@ -66,13 +66,15 @@ def _make_research_db_with_rows(
                 "factor_sector":         60.0 * factor_scale + i,
                 "factor_momentum_accel": 70.0 * factor_scale + i,
                 "factor_above_200dma":   80.0 * factor_scale + i,
+                "factor_liquidity":      None,
+                "factor_delivery_trend": None,
                 "sector_name": "IT",
             }
         )
     df = pd.DataFrame(rows)
     con.register("incoming", df)
     con.execute(
-        "INSERT INTO rank_cohort_performance "
+        "INSERT INTO rank_cohort_performance BY NAME "
         "SELECT *, CURRENT_TIMESTAMP AS inserted_at FROM incoming"
     )
     con.unregister("incoming")

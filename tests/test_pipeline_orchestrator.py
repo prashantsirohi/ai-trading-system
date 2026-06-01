@@ -52,7 +52,14 @@ def _init_catalog(db_path: Path, rows: list[tuple]) -> None:
         )
         conn.execute("DELETE FROM _catalog")
         for row in rows:
-            conn.execute("INSERT INTO _catalog VALUES (?, ?, ?, ?, ?, ?, ?, ?)", row)
+            conn.execute(
+                """
+                INSERT INTO _catalog
+                (symbol_id, exchange, timestamp, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                row,
+            )
     finally:
         conn.close()
 

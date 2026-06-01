@@ -44,12 +44,14 @@ def test_import_writes_latest_csv_and_duckdb_tables(tmp_path: Path) -> None:
     pd.DataFrame([_row(1, "Banks"), _row(2, "Pharma"), _row(3, "Cement")]).to_csv(csv_path, index=False)
     db_path = tmp_path / "fundamentals.duckdb"
     latest = tmp_path / "industry_scores_latest.csv"
+    trends = tmp_path / "industry_trends_latest.csv"
 
     scores = import_screener_industries_file(
         csv_path=csv_path,
         snapshot_date="2026-05-08",
         db_path=db_path,
         latest_output=latest,
+        trends_output=trends,
     )
 
     assert latest.exists()
@@ -71,12 +73,15 @@ def test_reimport_same_snapshot_replaces_rows(tmp_path: Path) -> None:
     pd.DataFrame([_row(1, "Banks"), _row(2, "Pharma")]).to_csv(csv_path, index=False)
     db_path = tmp_path / "fundamentals.duckdb"
     latest = tmp_path / "industry_scores_latest.csv"
+    trends = tmp_path / "industry_trends_latest.csv"
 
     import_screener_industries_file(
-        csv_path=csv_path, snapshot_date="2026-05-08", db_path=db_path, latest_output=latest
+        csv_path=csv_path, snapshot_date="2026-05-08", db_path=db_path, latest_output=latest,
+        trends_output=trends,
     )
     import_screener_industries_file(
-        csv_path=csv_path, snapshot_date="2026-05-08", db_path=db_path, latest_output=latest
+        csv_path=csv_path, snapshot_date="2026-05-08", db_path=db_path, latest_output=latest,
+        trends_output=trends,
     )
 
     conn = duckdb.connect(str(db_path), read_only=True)

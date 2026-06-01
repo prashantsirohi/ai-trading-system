@@ -610,7 +610,7 @@ def test_control_center_create_task_sets_task_metadata_without_duplicate_task_id
     assert task_id.startswith("task-")
 
 
-def test_list_operator_tasks_normalizes_missing_task_id_field() -> None:
+def test_list_operator_tasks_normalizes_missing_task_id_field(tmp_path: Path) -> None:
     _TASKS["task-legacy"] = {
         "label": "Legacy task",
         "task_type": "pipeline",
@@ -618,7 +618,7 @@ def test_list_operator_tasks_normalizes_missing_task_id_field() -> None:
         "started_at": "2026-04-05 18:00:00",
     }
 
-    tasks = list_operator_tasks()
+    tasks = list_operator_tasks(tmp_path)
     legacy = next(task for task in tasks if task["task_id"] == "task-legacy")
 
     assert legacy["label"] == "Legacy task"

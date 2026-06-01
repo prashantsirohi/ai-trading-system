@@ -36,7 +36,9 @@ def _seed_catalog(db_path: Path, run_date: str) -> None:
         )
         conn.execute(
             """
-            INSERT INTO _catalog VALUES
+            INSERT INTO _catalog
+            (symbol_id, exchange, timestamp, open, high, low, close, volume)
+            VALUES
             ('AAA', 'NSE', ?, 100.0, 105.0, 99.0, 104.0, 1000),
             ('BBB', 'NSE', ?, 95.0, 99.0, 94.0, 98.0, 1500)
             """,
