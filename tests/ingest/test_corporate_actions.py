@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 from pathlib import Path
 
 import duckdb
@@ -13,7 +14,9 @@ from ai_trading_system.domains.ingest.corporate_actions import (
     build_parser,
     ensure_corporate_action_schema,
     fetch_nse_corporate_actions,
+    load_corporate_action_sync_state,
     parse_corporate_action,
+    reconcile_corporate_actions,
     recompute_adjusted_prices,
     run_corporate_action_normalization,
     upsert_corporate_actions,
@@ -374,32 +377,25 @@ def test_run_reports_clear_progress_steps(tmp_path: Path) -> None:
     ]
 
 
-def test_run_skips_recent_mode_when_success_already_recorded_today(tmp_path: Path) -> None:
+def test_incremental_skips_recompute_when_no_action_state_changed(tmp_path: Path) -> None:
     db_path = tmp_path / "ohlcv.duckdb"
     masterdb = tmp_path / "masterdata.db"
     _seed_catalog(db_path)
     _seed_masterdb(masterdb)
-    ensure_corporate_action_schema(db_path)
-    conn = duckdb.connect(str(db_path))
-    try:
-        conn.execute(
-            """
-            INSERT INTO _module_execution_log
-            (execution_id, module_name, execution_mode, status, started_at, ended_at, last_success_at)
-            VALUES
-            ('full-success', 'corporate_action_normalizer', 'full', 'success',
-             TIMESTAMP '2026-01-01 00:00:00', TIMESTAMP '2026-01-01 00:00:01', TIMESTAMP '2026-01-01 00:00:01'),
-            ('recent-success', 'corporate_action_normalizer', 'recent', 'success',
-             TIMESTAMP '2026-01-10 09:00:00', TIMESTAMP '2026-01-10 09:00:01', TIMESTAMP '2026-01-10 09:00:01')
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    raw = {"symbol": "AAA", "isin": "INE000A01011", "exDate": "02-Jan-2026", "subject": "Bonus 1:1"}
+    fetch_windows: list[tuple[date, date]] = []
 
-    def fetcher(**_: object) -> list[dict]:
-        raise AssertionError("recent corporate-action fetch should be skipped after same-day success")
+    def fetcher(**kwargs: object) -> list[dict]:
+        fetch_windows.append((kwargs["start_date"], kwargs["end_date"]))  # type: ignore[arg-type]
+        return [raw]
 
+    first = run_corporate_action_normalization(
+        ohlcv_db_path=db_path,
+        masterdb_path=masterdb,
+        run_id="first",
+        today=pd.Timestamp("2026-01-10").date(),
+        fetcher=fetcher,
+    )
     result = run_corporate_action_normalization(
         ohlcv_db_path=db_path,
         masterdb_path=masterdb,
@@ -408,10 +404,144 @@ def test_run_skips_recent_mode_when_success_already_recorded_today(tmp_path: Pat
         fetcher=fetcher,
     )
 
+    assert first["status"] == "success"
     assert result["status"] == "success"
-    assert result["execution_mode"] == "recent"
+    assert result["execution_mode"] == "incremental"
     assert result["skipped"] is True
-    assert result["skip_reason"] == "recent_success_today"
+    assert result["skip_reason"] == "no_action_state_change"
+    assert result["recompute_scope"] == "skipped"
+    assert result["rows_adjusted"] == 0
+    assert fetch_windows == [
+        (pd.Timestamp("2000-01-01").date(), pd.Timestamp("2026-01-10").date()),
+        (pd.Timestamp("2025-11-26").date(), pd.Timestamp("2026-01-10").date()),
+    ]
+
+
+def test_incremental_changed_payload_recomputes_only_affected_symbol(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    masterdb = tmp_path / "masterdata.db"
+    _seed_catalog(db_path)
+    _seed_masterdb(masterdb)
+    first_raw = {"symbol": "AAA", "isin": "INE000A01011", "exDate": "02-Jan-2026", "subject": "Bonus 1:1"}
+    changed_raw = {**first_raw, "note": "corrected by NSE"}
+
+    run_corporate_action_normalization(
+        ohlcv_db_path=db_path, masterdb_path=masterdb, today=pd.Timestamp("2026-01-10").date(),
+        fetcher=lambda **_: [first_raw],
+    )
+    result = run_corporate_action_normalization(
+        ohlcv_db_path=db_path, masterdb_path=masterdb, today=pd.Timestamp("2026-01-11").date(),
+        fetcher=lambda **_: [changed_raw],
+    )
+
+    assert result["actions_changed"] == 1
+    assert result["affected_symbols"] == ["AAA"]
+    assert result["recompute_scope"] == "symbols"
+
+
+def test_incremental_disappeared_action_rebuilds_symbol_back_to_raw(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    masterdb = tmp_path / "masterdata.db"
+    _seed_catalog(db_path)
+    _seed_masterdb(masterdb)
+    raw = {"symbol": "AAA", "isin": "INE000A01011", "exDate": "02-Jan-2026", "subject": "Bonus 1:1"}
+    run_corporate_action_normalization(
+        ohlcv_db_path=db_path, masterdb_path=masterdb, today=pd.Timestamp("2026-01-10").date(),
+        fetcher=lambda **_: [raw],
+    )
+    result = run_corporate_action_normalization(
+        ohlcv_db_path=db_path, masterdb_path=masterdb, today=pd.Timestamp("2026-01-11").date(),
+        fetcher=lambda **_: [],
+    )
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        close, adjusted_close = conn.execute(
+            """
+            SELECT close, adjusted_close FROM _catalog
+            WHERE symbol_id = 'AAA' AND CAST(timestamp AS DATE) = DATE '2026-01-01'
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+    assert result["actions_deactivated"] == 1
+    assert result["recompute_scope"] == "symbols"
+    assert result["rows_adjusted"] > 0
+    assert adjusted_close == close
+
+
+def test_recent_reconcile_deactivates_only_inside_overlap(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    _seed_catalog(db_path)
+    recent = parse_corporate_action(
+        {"symbol": "AAA", "isin": "INE000A01011", "exDate": "02-Jan-2026", "subject": "Bonus 1:1"}
+    )
+    old = parse_corporate_action(
+        {"symbol": "OLD", "isin": "INE000A01099", "exDate": "02-Jan-2020", "subject": "Bonus 1:1"}
+    )
+    assert recent is not None and old is not None
+    reconcile_corporate_actions(
+        db_path, [recent, old], fetch_from=pd.Timestamp("2000-01-01").date(),
+        fetch_to=pd.Timestamp("2026-01-10").date(), full_reconcile=True,
+    )
+    result = reconcile_corporate_actions(
+        db_path, [], fetch_from=pd.Timestamp("2025-11-26").date(),
+        fetch_to=pd.Timestamp("2026-01-10").date(),
+    )
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        statuses = dict(conn.execute("SELECT symbol, status FROM _corporate_actions").fetchall())
+    finally:
+        conn.close()
+    assert result["actions_deactivated"] == 1
+    assert result["affected_symbols"] == ["AAA"]
+    assert statuses == {"AAA": "inactive", "OLD": "active"}
+
+
+def test_full_reconcile_deactivates_missing_actions_globally(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    _seed_catalog(db_path)
+    action = parse_corporate_action(
+        {"symbol": "AAA", "isin": "INE000A01011", "exDate": "02-Jan-2026", "subject": "Bonus 1:1"}
+    )
+    assert action is not None
+    reconcile_corporate_actions(
+        db_path, [action], fetch_from=pd.Timestamp("2000-01-01").date(),
+        fetch_to=pd.Timestamp("2026-01-10").date(), full_reconcile=True,
+    )
+    result = reconcile_corporate_actions(
+        db_path, [], fetch_from=pd.Timestamp("2000-01-01").date(),
+        fetch_to=pd.Timestamp("2026-01-11").date(), full_reconcile=True,
+    )
+    assert result["actions_deactivated"] == 1
+    assert result["affected_symbols"] == ["AAA"]
+
+
+def test_sync_state_advances_only_after_recompute_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    masterdb = tmp_path / "masterdata.db"
+    _seed_catalog(db_path)
+    _seed_masterdb(masterdb)
+    raw = {"symbol": "AAA", "isin": "INE000A01011", "exDate": "02-Jan-2026", "subject": "Bonus 1:1"}
+    first = run_corporate_action_normalization(
+        ohlcv_db_path=db_path, masterdb_path=masterdb, today=pd.Timestamp("2026-01-10").date(),
+        fetcher=lambda **_: [raw],
+    )
+    assert first["status"] == "success"
+
+    def fail_recompute(*_args: object, **_kwargs: object) -> dict:
+        raise RuntimeError("forced recompute failure")
+
+    monkeypatch.setattr(ca_module, "recompute_adjusted_prices", fail_recompute)
+    failed = run_corporate_action_normalization(
+        ohlcv_db_path=db_path, masterdb_path=masterdb, today=pd.Timestamp("2026-01-11").date(),
+        fetcher=lambda **_: [{**raw, "note": "corrected"}],
+    )
+    state = load_corporate_action_sync_state(db_path)
+    assert failed["status"] == "failed"
+    assert state is not None
+    assert state["last_successful_fetch_to_date"] == pd.Timestamp("2026-01-10").date()
 
 
 def test_ingest_service_reports_corporate_action_progress(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -515,6 +645,9 @@ def test_cli_progress_flags_parse() -> None:
     assert parser.parse_args(["--progress"]).progress is True
     assert parser.parse_args(["--no-progress"]).progress is False
     assert parser.parse_args(["--force", "--progress"]).force is True
+    args = parser.parse_args(["--overlap-days", "60", "--normalizer-version", "2"])
+    assert args.overlap_days == 60
+    assert args.normalizer_version == 2
 
 
 def test_feature_catalog_source_uses_adjusted_close_fallback(tmp_path: Path) -> None:

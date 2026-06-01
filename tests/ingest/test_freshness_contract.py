@@ -177,3 +177,26 @@ def test_downstream_skip_eligible_requires_fresh_catalog_and_no_unresolved_dates
             "unresolved_date_count_all": 1,
         }
     ) is False
+
+    assert service.is_downstream_skip_eligible(
+        {
+            "rows_written": 0,
+            "updated_symbols": [],
+            "freshness_status": "fresh",
+            "unresolved_date_count_all": 0,
+            "corporate_actions": {"recompute_scope": "symbols", "rows_adjusted": 1},
+        }
+    ) is False
+
+
+def test_downstream_fingerprint_changes_with_corporate_action_hash() -> None:
+    service = IngestOrchestrationService(operation=lambda _ctx: {})
+    base = {
+        "catalog_rows": 3,
+        "symbol_count": 1,
+        "rows_written": 0,
+        "updated_symbols": [],
+        "corporate_actions": {"status": "success", "action_set_hash": "before"},
+    }
+    changed = {**base, "corporate_actions": {"status": "success", "action_set_hash": "after"}}
+    assert service.build_downstream_input_fingerprint(base) != service.build_downstream_input_fingerprint(changed)

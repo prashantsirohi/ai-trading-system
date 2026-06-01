@@ -82,14 +82,34 @@ def ensure_corporate_action_schema(db_path: str | Path) -> None:
             )
             """
         )
+        _ensure_corporate_action_columns(conn)
         conn.execute(
             """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_corporate_actions_identity
-            ON _corporate_actions (
-                symbol, isin, ex_date, action_type, parsed_ratio, source, raw_payload_hash
+            CREATE TABLE IF NOT EXISTS _corporate_action_sync_state (
+                module_name VARCHAR PRIMARY KEY,
+                source VARCHAR NOT NULL,
+                last_successful_fetch_from_date DATE,
+                last_successful_fetch_to_date DATE,
+                last_successful_normalized_at TIMESTAMP,
+                last_action_set_hash VARCHAR,
+                normalizer_version BIGINT NOT NULL DEFAULT 1,
+                overlap_days INTEGER NOT NULL DEFAULT 45,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                metadata_json VARCHAR
             )
             """
         )
+        conn.execute("DROP INDEX IF EXISTS idx_corporate_actions_identity")
+        _backfill_corporate_action_keys(conn)
+        try:
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_corporate_actions_action_key
+                ON _corporate_actions (action_key)
+                """
+            )
+        except duckdb.Error as exc:
+            logger.warning("Could not create corporate-action stable-key index: %s", exc)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS _module_execution_log (
@@ -113,6 +133,76 @@ def ensure_corporate_action_schema(db_path: str | Path) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_corporate_action_columns(conn: duckdb.DuckDBPyConnection) -> None:
+    existing = {
+        row[0]
+        for row in conn.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = '_corporate_actions'
+            """
+        ).fetchall()
+    }
+    additions = {
+        "action_key": "VARCHAR",
+        "status": "VARCHAR DEFAULT 'active'",
+        "changed_at": "TIMESTAMP",
+        "deactivated_at": "TIMESTAMP",
+        "normalizer_version": "BIGINT DEFAULT 1",
+    }
+    for column, dtype in additions.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE _corporate_actions ADD COLUMN {column} {dtype}")
+
+
+def _backfill_corporate_action_keys(conn: duckdb.DuckDBPyConnection) -> None:
+    rows = conn.execute(
+        """
+        SELECT rowid, symbol, isin, ex_date, action_type, source, last_seen_at, first_seen_at,
+               action_key, status
+        FROM _corporate_actions
+        ORDER BY COALESCE(last_seen_at, first_seen_at) DESC NULLS LAST, rowid DESC
+        """
+    ).fetchall()
+    claimed: set[str] = set()
+    for rowid, symbol, isin, ex_date, action_type, source, _last_seen, _first_seen, current_key, status in rows:
+        action_key = make_corporate_action_key(
+            {
+                "symbol": symbol,
+                "isin": isin,
+                "ex_date": ex_date,
+                "action_type": action_type,
+                "source": source,
+            }
+        )
+        if action_key in claimed:
+            if current_key is not None or status != "inactive":
+                conn.execute(
+                    """
+                    UPDATE _corporate_actions
+                    SET action_key = NULL,
+                        status = 'inactive',
+                        deactivated_at = COALESCE(deactivated_at, CURRENT_TIMESTAMP)
+                    WHERE rowid = ?
+                    """,
+                    [rowid],
+                )
+            continue
+        claimed.add(action_key)
+        if current_key != action_key or status is None:
+            conn.execute(
+                """
+                UPDATE _corporate_actions
+                SET action_key = ?,
+                    status = COALESCE(status, 'active'),
+                    normalizer_version = COALESCE(normalizer_version, 1)
+                WHERE rowid = ?
+                """,
+                [action_key, rowid],
+            )
 
 
 def _ensure_catalog_adjustment_columns(conn: duckdb.DuckDBPyConnection) -> None:
@@ -255,6 +345,27 @@ def _normalize_isin(value: object) -> str:
     return str(value or "").strip().upper()
 
 
+def make_corporate_action_key(action: ParsedCorporateAction | dict[str, Any]) -> str:
+    """Build the stable identity used for corrected NSE action payloads."""
+    if isinstance(action, ParsedCorporateAction):
+        values = action.__dict__
+    else:
+        values = action
+    identity = _normalize_isin(values.get("isin")) or str(values.get("symbol") or "").strip().upper()
+    ex_date = values.get("ex_date")
+    if isinstance(ex_date, (date, datetime)):
+        ex_date = ex_date.date().isoformat() if isinstance(ex_date, datetime) else ex_date.isoformat()
+    raw = "|".join(
+        [
+            str(values.get("source") or SOURCE_NAME),
+            identity,
+            str(ex_date or ""),
+            str(values.get("action_type") or ""),
+        ]
+    ).upper()
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def fetch_nse_corporate_actions(
     *,
     start_date: date,
@@ -316,6 +427,8 @@ def run_corporate_action_normalization(
     run_id: str | None = None,
     force: bool = False,
     max_age_days: int = 30,
+    overlap_days: int = 45,
+    normalizer_version: int = 1,
     today: date | None = None,
     fetcher: Callable[..., list[dict[str, Any]]] | None = None,
     show_progress: bool = False,
@@ -324,16 +437,28 @@ def run_corporate_action_normalization(
     """Sync NSE actions and recompute adjusted OHLC from raw prices."""
     started_at = _utc_now()
     today = today or date.today()
-    execution_mode = "full" if _should_run_full(ohlcv_db_path, force=force, max_age_days=max_age_days, today=today) else "recent"
     progress = _ProgressMux(show_progress=show_progress, callback=progress_callback)
     result: dict[str, Any] = {
         "module_name": MODULE_NAME,
         "status": "started",
-        "execution_mode": execution_mode,
+        "execution_mode": None,
         "actions_fetched": 0,
+        "actions_parsed": 0,
+        "actions_seen": 0,
         "actions_inserted": 0,
+        "actions_changed": 0,
+        "actions_unchanged": 0,
+        "actions_deactivated": 0,
+        "affected_symbols": [],
+        "affected_symbols_count": 0,
         "rows_adjusted": 0,
         "symbols_adjusted": 0,
+        "raw_ohlc_unchanged": 1,
+        "recompute_scope": "skipped",
+        "skipped": False,
+        "skip_reason": None,
+        "overlap_days": int(overlap_days),
+        "normalizer_version": int(normalizer_version),
         "error_message": None,
     }
 
@@ -341,29 +466,25 @@ def run_corporate_action_normalization(
         _report(progress, "step_start", step="Preparing schema", total=9)
         ensure_corporate_action_schema(ohlcv_db_path)
         _report(progress, "step_done", step="Preparing schema")
-        if execution_mode == "recent" and not force:
-            last_recent_success = _last_successful_execution_at(
-                ohlcv_db_path,
-                execution_mode="recent",
-            )
-            if last_recent_success is not None and pd.Timestamp(last_recent_success).date() == today:
-                result["status"] = "success"
-                result["skipped"] = True
-                result["skip_reason"] = "recent_success_today"
-                result["last_success_at"] = last_recent_success
-                logger.info(
-                    "Skipping corporate action normalization; recent success already recorded at %s",
-                    last_recent_success,
-                )
-                _report(progress, "message", message="Skipped: recent success already recorded today")
-                return result
-
+        state = load_corporate_action_sync_state(ohlcv_db_path)
+        execution_mode = "full" if force or state is None else "incremental"
+        result["execution_mode"] = execution_mode
+        previous_hash = state.get("last_action_set_hash") if state else None
+        previous_version = int(state.get("normalizer_version") or 1) if state else None
+        result["previous_action_set_hash"] = previous_hash
+        fetch_to = today
+        fetch_from = (
+            date(2000, 1, 1)
+            if execution_mode == "full"
+            else pd.Timestamp(state["last_successful_fetch_to_date"]).date() - timedelta(days=int(overlap_days))
+        )
+        result["fetch_from_date"] = fetch_from.isoformat()
+        result["fetch_to_date"] = fetch_to.isoformat()
         fetcher = fetcher or fetch_nse_corporate_actions
-        start_date = date(2000, 1, 1) if execution_mode == "full" else today - timedelta(days=45)
-        _report(progress, "step_start", step=f"Fetching NSE actions {start_date.year}-{today.year}")
-        raw_actions = fetcher(start_date=start_date, end_date=today, progress=progress)
+        _report(progress, "step_start", step=f"Fetching NSE actions {fetch_from.year}-{fetch_to.year}")
+        raw_actions = fetcher(start_date=fetch_from, end_date=fetch_to, progress=progress)
         result["actions_fetched"] = len(raw_actions)
-        _report(progress, "step_done", step=f"Fetching NSE actions {start_date.year}-{today.year}")
+        _report(progress, "step_done", step=f"Fetching NSE actions {fetch_from.year}-{fetch_to.year}")
 
         _report(progress, "step_start", step="Parsing split/bonus actions")
         symbol_master = SymbolMaster.from_masterdb(masterdb_path)
@@ -372,15 +493,74 @@ def run_corporate_action_normalization(
             for action in (parse_corporate_action(raw, symbol_master=symbol_master) for raw in raw_actions)
             if action is not None
         ]
+        result["actions_parsed"] = len(parsed)
         _report(progress, "step_done", step="Parsing split/bonus actions", parsed_actions=len(parsed))
 
         _report(progress, "step_start", step="Saving corporate actions")
-        inserted = upsert_corporate_actions(ohlcv_db_path, parsed)
-        result["actions_inserted"] = inserted
-        _report(progress, "step_done", step="Saving corporate actions", actions_inserted=inserted)
+        conn = duckdb.connect(str(ohlcv_db_path))
+        try:
+            conn.execute("BEGIN TRANSACTION")
+            reconcile_result = reconcile_corporate_actions(
+                ohlcv_db_path,
+                parsed,
+                fetch_from=fetch_from,
+                fetch_to=fetch_to,
+                full_reconcile=execution_mode == "full",
+                normalizer_version=normalizer_version,
+                _conn=conn,
+            )
+            result.update(reconcile_result)
+            result["affected_symbols_count"] = len(result["affected_symbols"])
+            _report(progress, "step_done", step="Saving corporate actions", **reconcile_result)
 
-        normalize_result = recompute_adjusted_prices(ohlcv_db_path, progress=progress)
-        result.update(normalize_result)
+            skip_recompute = should_skip_adjustment_recompute(
+                force=force,
+                reconcile_result=reconcile_result,
+                previous_action_set_hash=previous_hash,
+                normalizer_version=normalizer_version,
+                previous_normalizer_version=previous_version,
+            )
+            if skip_recompute:
+                result.update(
+                    {
+                        "rows_adjusted": 0,
+                        "symbols_adjusted": 0,
+                        "raw_ohlc_unchanged": 1,
+                        "recompute_scope": "skipped",
+                        "skipped": True,
+                        "skip_reason": "no_action_state_change",
+                    }
+                )
+                _report(progress, "message", message="Skipped adjusted-price rewrite: no action state change")
+            else:
+                full_recompute = execution_mode == "full" or previous_version != int(normalizer_version)
+                result.update(
+                    recompute_adjusted_prices(
+                        ohlcv_db_path,
+                        symbols=None if full_recompute else reconcile_result["affected_symbols"],
+                        force=full_recompute,
+                        progress=progress,
+                        _conn=conn,
+                    )
+                )
+            normalized_at = _utc_now()
+            update_corporate_action_sync_state(
+                ohlcv_db_path,
+                fetch_from=fetch_from,
+                fetch_to=fetch_to,
+                action_set_hash=reconcile_result["action_set_hash"],
+                normalizer_version=normalizer_version,
+                overlap_days=overlap_days,
+                normalized_at=normalized_at,
+                metadata=result,
+                _conn=conn,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
         result["status"] = "success"
         result["last_success_at"] = _utc_now().isoformat(sep=" ")
         _report(progress, "step_start", step="Recording execution log")
@@ -396,17 +576,6 @@ def run_corporate_action_normalization(
         return result
     finally:
         progress.close()
-
-
-def _should_run_full(db_path: str | Path, *, force: bool, max_age_days: int, today: date) -> bool:
-    if force:
-        return True
-    ensure_corporate_action_schema(db_path)
-    last_success = _last_successful_execution_at(db_path, execution_mode="full")
-    if last_success is None:
-        return True
-    last_date = pd.Timestamp(last_success).date()
-    return (today - last_date).days > int(max_age_days)
 
 
 def _last_successful_execution_at(db_path: str | Path, *, execution_mode: str) -> datetime | None:
@@ -427,175 +596,416 @@ def _last_successful_execution_at(db_path: str | Path, *, execution_mode: str) -
     return row[0] if row else None
 
 
-def upsert_corporate_actions(db_path: str | Path, actions: Iterable[ParsedCorporateAction]) -> int:
-    rows = [
-        {
-            "symbol": action.symbol,
-            "isin": action.isin,
-            "ex_date": action.ex_date,
-            "action_type": action.action_type,
-            "parsed_ratio": action.parsed_ratio,
-            "price_factor": action.price_factor,
-            "share_factor": action.share_factor,
-            "source": action.source,
-            "raw_subject": action.raw_subject,
-            "raw_payload_hash": action.raw_payload_hash,
-            "raw_payload_json": action.raw_payload_json,
-        }
-        for action in actions
-    ]
-    if not rows:
-        return 0
-    frame = pd.DataFrame(rows).drop_duplicates(
-        subset=["symbol", "isin", "ex_date", "action_type", "parsed_ratio", "source", "raw_payload_hash"]
-    )
-    conn = duckdb.connect(str(db_path))
-    inserted = 0
+def load_corporate_action_sync_state(db_path: str | Path) -> dict[str, Any] | None:
+    ensure_corporate_action_schema(db_path)
+    conn = duckdb.connect(str(db_path), read_only=True)
     try:
-        for row in frame.to_dict("records"):
-            conn.execute(
+        row = conn.execute(
+            """
+            SELECT module_name, source, last_successful_fetch_from_date,
+                   last_successful_fetch_to_date, last_successful_normalized_at,
+                   last_action_set_hash, normalizer_version, overlap_days,
+                   updated_at, metadata_json
+            FROM _corporate_action_sync_state
+            WHERE module_name = ?
+            """,
+            [MODULE_NAME],
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    keys = [
+        "module_name",
+        "source",
+        "last_successful_fetch_from_date",
+        "last_successful_fetch_to_date",
+        "last_successful_normalized_at",
+        "last_action_set_hash",
+        "normalizer_version",
+        "overlap_days",
+        "updated_at",
+        "metadata_json",
+    ]
+    return dict(zip(keys, row))
+
+
+def update_corporate_action_sync_state(
+    db_path: str | Path,
+    *,
+    fetch_from: date,
+    fetch_to: date,
+    action_set_hash: str,
+    normalizer_version: int,
+    overlap_days: int,
+    normalized_at: datetime,
+    metadata: dict[str, Any] | None = None,
+    _conn: duckdb.DuckDBPyConnection | None = None,
+) -> None:
+    conn = _conn or duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            INSERT INTO _corporate_action_sync_state
+            (module_name, source, last_successful_fetch_from_date, last_successful_fetch_to_date,
+             last_successful_normalized_at, last_action_set_hash, normalizer_version,
+             overlap_days, updated_at, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, now(), ?)
+            ON CONFLICT (module_name) DO UPDATE SET
+                source = EXCLUDED.source,
+                last_successful_fetch_from_date = EXCLUDED.last_successful_fetch_from_date,
+                last_successful_fetch_to_date = EXCLUDED.last_successful_fetch_to_date,
+                last_successful_normalized_at = EXCLUDED.last_successful_normalized_at,
+                last_action_set_hash = EXCLUDED.last_action_set_hash,
+                normalizer_version = EXCLUDED.normalizer_version,
+                overlap_days = EXCLUDED.overlap_days,
+                updated_at = now(),
+                metadata_json = EXCLUDED.metadata_json
+            """,
+            [
+                MODULE_NAME,
+                SOURCE_NAME,
+                fetch_from,
+                fetch_to,
+                normalized_at,
+                action_set_hash,
+                int(normalizer_version),
+                int(overlap_days),
+                json.dumps(metadata or {}, sort_keys=True, default=str),
+            ],
+        )
+        if _conn is None:
+            conn.commit()
+    finally:
+        if _conn is None:
+            conn.close()
+
+
+def compute_active_action_set_hash(
+    db_path: str | Path,
+    *,
+    _conn: duckdb.DuckDBPyConnection | None = None,
+) -> str:
+    conn = _conn or duckdb.connect(str(db_path), read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT symbol, isin, ex_date, action_type, parsed_ratio, price_factor,
+                   share_factor, raw_payload_hash, normalizer_version
+            FROM _corporate_actions
+            WHERE COALESCE(status, 'active') = 'active'
+            ORDER BY symbol, isin, ex_date, action_type, parsed_ratio, price_factor,
+                     share_factor, raw_payload_hash, normalizer_version
+            """
+        ).fetchall()
+    finally:
+        if _conn is None:
+            conn.close()
+    encoded = json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def reconcile_corporate_actions(
+    db_path: str | Path,
+    actions: Iterable[ParsedCorporateAction],
+    *,
+    fetch_from: date,
+    fetch_to: date,
+    full_reconcile: bool = False,
+    normalizer_version: int = 1,
+    _deactivate_missing: bool = True,
+    _conn: duckdb.DuckDBPyConnection | None = None,
+) -> dict[str, Any]:
+    """Upsert mutable action state and deactivate records absent from the fetched window."""
+    if _conn is None:
+        ensure_corporate_action_schema(db_path)
+    conn = _conn or duckdb.connect(str(db_path))
+    counters = {"actions_inserted": 0, "actions_changed": 0, "actions_unchanged": 0}
+    affected_symbols: set[str] = set()
+    seen_keys: set[str] = set()
+    deduped = {make_corporate_action_key(action): action for action in actions}
+    try:
+        for action_key, action in deduped.items():
+            seen_keys.add(action_key)
+            existing = conn.execute(
                 """
-                DELETE FROM _corporate_actions
-                WHERE symbol = ?
-                  AND COALESCE(isin, '') = COALESCE(?, '')
-                  AND ex_date = ?
-                  AND source = ?
-                  AND raw_payload_hash = ?
-                  AND (
-                        action_type <> ?
-                     OR parsed_ratio <> ?
-                  )
-                """,
-                [
-                    row["symbol"],
-                    row["isin"],
-                    row["ex_date"],
-                    row["source"],
-                    row["raw_payload_hash"],
-                    row["action_type"],
-                    row["parsed_ratio"],
-                ],
-            )
-            exists = conn.execute(
-                """
-                SELECT 1
+                SELECT parsed_ratio, price_factor, share_factor, raw_payload_hash,
+                       raw_subject, raw_payload_json, normalizer_version, status, symbol
                 FROM _corporate_actions
-                WHERE symbol = ?
-                  AND COALESCE(isin, '') = COALESCE(?, '')
-                  AND ex_date = ?
-                  AND action_type = ?
-                  AND parsed_ratio = ?
-                  AND source = ?
-                  AND raw_payload_hash = ?
-                LIMIT 1
+                WHERE action_key = ?
                 """,
-                [
-                    row["symbol"],
-                    row["isin"],
-                    row["ex_date"],
-                    row["action_type"],
-                    row["parsed_ratio"],
-                    row["source"],
-                    row["raw_payload_hash"],
-                ],
+                [action_key],
             ).fetchone()
-            if exists:
+            values = [
+                action.symbol,
+                action.isin,
+                action.ex_date,
+                action.action_type,
+                action.parsed_ratio,
+                action.price_factor,
+                action.share_factor,
+                action.source,
+                action.raw_subject,
+                action.raw_payload_hash,
+                action.raw_payload_json,
+                action_key,
+                int(normalizer_version),
+            ]
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO _corporate_actions
+                    (symbol, isin, ex_date, action_type, parsed_ratio, price_factor, share_factor,
+                     source, raw_subject, raw_payload_hash, raw_payload_json, action_key,
+                     status, changed_at, normalizer_version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, ?)
+                    """,
+                    values,
+                )
+                counters["actions_inserted"] += 1
+                affected_symbols.add(action.symbol)
+                continue
+            comparable = (
+                action.parsed_ratio,
+                action.price_factor,
+                action.share_factor,
+                action.raw_payload_hash,
+                action.raw_subject,
+                action.raw_payload_json,
+                int(normalizer_version),
+                "active",
+            )
+            if tuple(existing[:8]) != comparable:
                 conn.execute(
                     """
                     UPDATE _corporate_actions
-                    SET last_seen_at = CURRENT_TIMESTAMP
-                    WHERE symbol = ?
-                      AND COALESCE(isin, '') = COALESCE(?, '')
-                      AND ex_date = ?
-                      AND action_type = ?
-                      AND parsed_ratio = ?
-                      AND source = ?
-                      AND raw_payload_hash = ?
+                    SET symbol = ?, isin = ?, ex_date = ?, action_type = ?, parsed_ratio = ?,
+                        price_factor = ?, share_factor = ?, source = ?, raw_subject = ?,
+                        raw_payload_hash = ?, raw_payload_json = ?,
+                        status = 'active', changed_at = CURRENT_TIMESTAMP, deactivated_at = NULL,
+                        normalizer_version = ?, last_seen_at = CURRENT_TIMESTAMP
+                    WHERE action_key = ?
                     """,
-                    [
-                        row["symbol"],
-                        row["isin"],
-                        row["ex_date"],
-                        row["action_type"],
-                        row["parsed_ratio"],
-                        row["source"],
-                        row["raw_payload_hash"],
-                    ],
+                    [*values[:11], int(normalizer_version), action_key],
                 )
-                continue
-            conn.execute(
-                """
-                INSERT INTO _corporate_actions
-                (symbol, isin, ex_date, action_type, parsed_ratio, price_factor, share_factor,
-                 source, raw_subject, raw_payload_hash, raw_payload_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    row["symbol"],
-                    row["isin"],
-                    row["ex_date"],
-                    row["action_type"],
-                    row["parsed_ratio"],
-                    row["price_factor"],
-                    row["share_factor"],
-                    row["source"],
-                    row["raw_subject"],
-                    row["raw_payload_hash"],
-                    row["raw_payload_json"],
-                ],
-            )
-            inserted += 1
-        conn.commit()
-        return inserted
+                counters["actions_changed"] += 1
+                affected_symbols.update([str(existing[8]), action.symbol])
+            else:
+                conn.execute(
+                    "UPDATE _corporate_actions SET last_seen_at = CURRENT_TIMESTAMP WHERE action_key = ?",
+                    [action_key],
+                )
+                counters["actions_unchanged"] += 1
+
+        if _deactivate_missing:
+            if full_reconcile:
+                candidates = conn.execute(
+                    """
+                    SELECT action_key, symbol
+                    FROM _corporate_actions
+                    WHERE COALESCE(status, 'active') = 'active'
+                    """
+                ).fetchall()
+            else:
+                candidates = conn.execute(
+                    """
+                    SELECT action_key, symbol
+                    FROM _corporate_actions
+                    WHERE COALESCE(status, 'active') = 'active'
+                      AND ex_date BETWEEN ? AND ?
+                    """,
+                    [fetch_from, fetch_to],
+                ).fetchall()
+            missing_keys = [key for key, _symbol in candidates if key and key not in seen_keys]
+            for action_key in missing_keys:
+                conn.execute(
+                    """
+                    UPDATE _corporate_actions
+                    SET status = 'inactive', deactivated_at = CURRENT_TIMESTAMP,
+                        changed_at = CURRENT_TIMESTAMP
+                    WHERE action_key = ?
+                    """,
+                    [action_key],
+                )
+            affected_symbols.update(str(symbol) for key, symbol in candidates if key in missing_keys)
+        else:
+            missing_keys = []
+        result = {
+            "actions_seen": len(deduped),
+            **counters,
+            "actions_deactivated": len(missing_keys),
+            "affected_symbols": sorted(symbol for symbol in affected_symbols if symbol),
+            "action_set_hash": compute_active_action_set_hash(db_path, _conn=conn),
+        }
+        if _conn is None:
+            conn.commit()
+        return result
+    except Exception:
+        if _conn is None:
+            conn.rollback()
+        raise
     finally:
-        conn.close()
+        if _conn is None:
+            conn.close()
 
 
-def recompute_adjusted_prices(db_path: str | Path, *, progress: ProgressCallback | None = None) -> dict[str, int]:
-    """Recompute all adjusted OHLC values from raw prices and stored actions."""
-    _report(progress, "step_start", step="Loading catalog rows")
+def should_skip_adjustment_recompute(
+    *,
+    force: bool,
+    reconcile_result: dict[str, Any],
+    previous_action_set_hash: str | None,
+    normalizer_version: int,
+    previous_normalizer_version: int | None,
+) -> bool:
+    return (
+        not force
+        and int(reconcile_result.get("actions_inserted") or 0) == 0
+        and int(reconcile_result.get("actions_changed") or 0) == 0
+        and int(reconcile_result.get("actions_deactivated") or 0) == 0
+        and reconcile_result.get("action_set_hash") == previous_action_set_hash
+        and previous_normalizer_version == int(normalizer_version)
+    )
+
+
+def upsert_corporate_actions(db_path: str | Path, actions: Iterable[ParsedCorporateAction]) -> int:
+    """Compatibility wrapper that upserts without deactivating unseen rows."""
+    action_rows = list(actions)
     ensure_corporate_action_schema(db_path)
+    if not action_rows:
+        return 0
+    dates = [action.ex_date for action in action_rows]
     conn = duckdb.connect(str(db_path))
     try:
-        raw_before = _raw_ohlc_checksum(conn)
-        conn.execute(
-            """
-            UPDATE _catalog
-            SET adjusted_open = open,
-                adjusted_high = high,
-                adjusted_low = low,
-                adjusted_close = close,
-                adjustment_factor = 1.0,
-                adjustment_source = NULL,
-                adjusted_at = CURRENT_TIMESTAMP,
-                adjustment_version = COALESCE(adjustment_version, 0) + 1
-            WHERE COALESCE(is_benchmark, FALSE)
-               OR COALESCE(instrument_type, 'equity') <> 'equity'
-               OR exchange <> 'NSE'
-            """
-        )
+        for action in action_rows:
+            conn.execute(
+                """
+                DELETE FROM _corporate_actions
+                WHERE source = ?
+                  AND symbol = ?
+                  AND COALESCE(isin, '') = COALESCE(?, '')
+                  AND ex_date = ?
+                  AND raw_payload_hash = ?
+                  AND COALESCE(action_key, '') <> ?
+                """,
+                [
+                    action.source,
+                    action.symbol,
+                    action.isin,
+                    action.ex_date,
+                    action.raw_payload_hash,
+                    make_corporate_action_key(action),
+                ],
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    result = reconcile_corporate_actions(
+        db_path,
+        action_rows,
+        fetch_from=min(dates),
+        fetch_to=max(dates),
+        _deactivate_missing=False,
+    )
+    return int(result["actions_inserted"])
 
-        catalog = conn.execute(
+
+def recompute_adjusted_prices(
+    db_path: str | Path,
+    *,
+    symbols: list[str] | None = None,
+    force: bool = False,
+    progress: ProgressCallback | None = None,
+    _conn: duckdb.DuckDBPyConnection | None = None,
+) -> dict[str, Any]:
+    """Recompute adjusted OHLC values from raw prices and active stored actions."""
+    _report(progress, "step_start", step="Loading catalog rows")
+    if _conn is None:
+        ensure_corporate_action_schema(db_path)
+    conn = _conn or duckdb.connect(str(db_path))
+    scoped_symbols = sorted({str(symbol).strip() for symbol in symbols or [] if str(symbol).strip()})
+    full_recompute = force or symbols is None
+    scope = "full" if full_recompute else "symbols"
+    try:
+        raw_before = _raw_ohlc_checksum(conn)
+        if full_recompute:
+            conn.execute(
+                """
+                UPDATE _catalog
+                SET adjusted_open = open, adjusted_high = high, adjusted_low = low,
+                    adjusted_close = close, adjustment_factor = 1.0, adjustment_source = NULL,
+                    adjusted_at = CURRENT_TIMESTAMP,
+                    adjustment_version = COALESCE(adjustment_version, 0) + 1
+                WHERE COALESCE(is_benchmark, FALSE)
+                   OR COALESCE(instrument_type, 'equity') <> 'equity'
+                   OR exchange <> 'NSE'
+                """
+            )
+        elif scoped_symbols:
+            conn.execute(
+                """
+                UPDATE _catalog
+                SET adjusted_open = open, adjusted_high = high, adjusted_low = low,
+                    adjusted_close = close, adjustment_factor = 1.0, adjustment_source = NULL,
+                    adjusted_at = CURRENT_TIMESTAMP,
+                    adjustment_version = COALESCE(adjustment_version, 0) + 1
+                WHERE symbol_id IN (SELECT UNNEST(?))
+                  AND (
+                       COALESCE(is_benchmark, FALSE)
+                    OR COALESCE(instrument_type, 'equity') <> 'equity'
+                    OR exchange <> 'NSE'
+                  )
+                """,
+                [scoped_symbols],
+            )
+
+        catalog_query = (
             """
-            SELECT symbol_id, isin, exchange, timestamp, open, high, low, close
+            SELECT symbol_id, isin, exchange, timestamp, open, high, low, close,
+                   adjusted_open, adjusted_high, adjusted_low, adjusted_close,
+                   adjustment_factor AS prior_adjustment_factor,
+                   adjustment_source AS prior_adjustment_source
             FROM _catalog
             WHERE exchange = 'NSE'
               AND NOT COALESCE(is_benchmark, FALSE)
               AND COALESCE(instrument_type, 'equity') = 'equity'
             """
-        ).fetchdf()
+        )
+        if not full_recompute:
+            catalog_query += " AND symbol_id IN (SELECT UNNEST(?))"
+        catalog = conn.execute(catalog_query, [] if full_recompute else [scoped_symbols]).fetchdf()
         if catalog.empty:
             _report(progress, "step_done", step="Loading catalog rows", catalog_rows=0)
-            return {"rows_adjusted": 0, "symbols_adjusted": 0, "raw_ohlc_unchanged": 1}
+            return {
+                "rows_adjusted": 0,
+                "symbols_adjusted": 0,
+                "raw_ohlc_unchanged": 1,
+                "recompute_scope": scope,
+                "affected_symbols": scoped_symbols,
+            }
 
-        actions = conn.execute(
+        action_query = (
             """
             SELECT symbol, isin, ex_date, price_factor
             FROM _corporate_actions
-            WHERE price_factor > 0
+            WHERE COALESCE(status, 'active') = 'active'
+              AND price_factor > 0
+            """
+        )
+        if not full_recompute:
+            scoped_isins = sorted(
+                {
+                    _normalize_isin(value)
+                    for value in catalog["isin"].tolist()
+                    if _normalize_isin(value)
+                }
+            )
+            action_query += " AND (symbol IN (SELECT UNNEST(?)) OR isin IN (SELECT UNNEST(?)))"
+        action_query += (
+            """
             ORDER BY ex_date
             """
-        ).fetchdf()
+        )
+        actions = conn.execute(action_query, [] if full_recompute else [scoped_symbols, scoped_isins]).fetchdf()
         _report(progress, "step_done", step="Loading catalog rows", catalog_rows=len(catalog), action_count=len(actions))
         _report(progress, "step_start", step="Applying action factors")
         catalog = catalog.copy(deep=True)
@@ -669,16 +1079,28 @@ def recompute_adjusted_prices(db_path: str | Path, *, progress: ProgressCallback
         raw_after = _raw_ohlc_checksum(conn)
         if raw_before != raw_after:
             raise RuntimeError("raw OHLC checksum changed during corporate-action normalization")
-        conn.commit()
+        if _conn is None:
+            conn.commit()
         _report(progress, "step_done", step="Verifying raw OHLC unchanged")
-        adjusted = updates[pd.to_numeric(updates["adjustment_factor"], errors="coerce").fillna(1.0).ne(1.0)]
+        resulting_adjusted = pd.to_numeric(catalog["adjustment_factor"], errors="coerce").fillna(1.0).ne(1.0)
+        changed_back_to_raw = pd.to_numeric(catalog["prior_adjustment_factor"], errors="coerce").fillna(1.0).ne(
+            pd.to_numeric(catalog["adjustment_factor"], errors="coerce").fillna(1.0)
+        )
+        changed_rows = catalog[resulting_adjusted | changed_back_to_raw]
         return {
-            "rows_adjusted": int(len(adjusted)),
-            "symbols_adjusted": int(adjusted["symbol_id"].nunique()) if not adjusted.empty else 0,
+            "rows_adjusted": int(len(changed_rows)),
+            "symbols_adjusted": int(changed_rows["symbol_id"].nunique()) if not changed_rows.empty else 0,
             "raw_ohlc_unchanged": 1,
+            "recompute_scope": scope,
+            "affected_symbols": scoped_symbols if not full_recompute else sorted(catalog["symbol_id"].astype(str).unique()),
         }
+    except Exception:
+        if _conn is None:
+            conn.rollback()
+        raise
     finally:
-        conn.close()
+        if _conn is None:
+            conn.close()
 
 
 def _raw_ohlc_checksum(conn: duckdb.DuckDBPyConnection) -> str:
@@ -859,6 +1281,8 @@ def main() -> None:
         ohlcv_db_path=paths.ohlcv_db_path,
         masterdb_path=paths.master_db_path,
         force=args.force,
+        overlap_days=args.overlap_days,
+        normalizer_version=args.normalizer_version,
         show_progress=show_progress,
     )
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
@@ -867,6 +1291,8 @@ def main() -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Sync NSE split/bonus actions and normalize adjusted OHLC.")
     parser.add_argument("--force", action="store_true", help="Force full NSE corporate-action backfill")
+    parser.add_argument("--overlap-days", type=int, default=45, help="Incremental fetch overlap window")
+    parser.add_argument("--normalizer-version", type=int, default=1, help="Adjusted-price algorithm version")
     parser.add_argument("--data-domain", default="operational")
     progress_group = parser.add_mutually_exclusive_group()
     progress_group.add_argument("--progress", dest="progress", action="store_true", help="Show terminal progress bars")

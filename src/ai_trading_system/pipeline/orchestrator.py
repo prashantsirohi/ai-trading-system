@@ -965,6 +965,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--force", action="store_true", help="Preserved for compatibility with wrappers")
     parser.add_argument(
+        "--corporate-actions-force-full",
+        action="store_true",
+        help="Force a full NSE corporate-action reconciliation and adjusted-price rebuild.",
+    )
+    parser.add_argument(
+        "--corporate-actions-overlap-days",
+        type=int,
+        default=45,
+        help="Incremental NSE corporate-action fetch overlap window.",
+    )
+    parser.add_argument(
+        "--corporate-actions-normalizer-version",
+        type=int,
+        default=1,
+        help="Adjusted-price normalizer version; changing it forces a rebuild.",
+    )
+    parser.add_argument(
         "--force-rerun",
         action="store_true",
         help="Re-run the listed --stages even if a previous attempt completed (creates a new attempt).",
@@ -1404,6 +1421,9 @@ def main() -> None:
         run_id = orchestrator._build_run_id(run_date)
     params = {
         "force": args.force,
+        "corporate_actions_force_full": bool(args.corporate_actions_force_full or args.force),
+        "corporate_actions_overlap_days": int(args.corporate_actions_overlap_days),
+        "corporate_actions_normalizer_version": int(args.corporate_actions_normalizer_version),
         "force_rerun": args.force_rerun,
         "batch_size": args.batch_size,
         "bulk": args.bulk,

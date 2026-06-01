@@ -445,6 +445,7 @@ class DataQualityEngine:
                             AND ca.symbol = g.symbol_id
                         )
                 WHERE ABS(date_diff('day', g.trade_date, ca.ex_date)) <= {window_days}
+                  AND COALESCE(ca.status, 'active') = 'active'
             )
             SELECT COUNT(*)
             FROM near_actions

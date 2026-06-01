@@ -70,6 +70,16 @@ class IngestOrchestrationService:
             if corporate_actions_result.get("status") == "failed"
             else None
         )
+        updated_symbols = payload.get("updated_symbols") if isinstance(payload.get("updated_symbols"), list) else []
+        adjusted_symbols = (
+            corporate_actions_result.get("affected_symbols", [])
+            if int(corporate_actions_result.get("rows_adjusted") or 0) > 0
+            else []
+        )
+        payload["adjusted_symbols"] = sorted({str(symbol) for symbol in adjusted_symbols if str(symbol).strip()})
+        payload["downstream_changed_symbols"] = sorted(
+            {str(symbol) for symbol in [*updated_symbols, *payload["adjusted_symbols"]] if str(symbol).strip()}
+        )
         latest_catalog_date = None
         if latest_ts is not None:
             latest_catalog_date = pd.Timestamp(latest_ts).date().isoformat()
@@ -202,6 +212,8 @@ class IngestOrchestrationService:
                 run_id=context.run_id,
                 force=bool(context.params.get("corporate_actions_force_full", False)),
                 max_age_days=int(context.params.get("corporate_actions_full_max_age_days", 30) or 30),
+                overlap_days=int(context.params.get("corporate_actions_overlap_days", 45) or 45),
+                normalizer_version=int(context.params.get("corporate_actions_normalizer_version", 1) or 1),
                 progress_callback=_corporate_action_progress,
             )
         except Exception as exc:
@@ -272,6 +284,12 @@ class IngestOrchestrationService:
         rows_written = int(payload.get("rows_written", 0) or 0)
         unresolved_date_count = int(payload.get("unresolved_date_count_all", payload.get("unresolved_date_count", 0)) or 0)
         freshness_status = str(payload.get("freshness_status") or "").strip().lower()
+        corporate_actions = payload.get("corporate_actions") if isinstance(payload.get("corporate_actions"), dict) else {}
+        if (
+            corporate_actions.get("recompute_scope") in {"full", "symbols"}
+            and int(corporate_actions.get("rows_adjusted") or 0) > 0
+        ):
+            return False
         return (
             rows_written == 0
             and not bool(updated_symbols)
@@ -287,6 +305,13 @@ class IngestOrchestrationService:
         else:
             normalized_symbols = []
         trust_summary = payload.get("trust_summary") if isinstance(payload.get("trust_summary"), dict) else {}
+        corporate_actions = payload.get("corporate_actions") if isinstance(payload.get("corporate_actions"), dict) else {}
+        affected_symbols = corporate_actions.get("affected_symbols")
+        normalized_affected_symbols = (
+            sorted({str(symbol).strip() for symbol in affected_symbols if str(symbol).strip()})
+            if isinstance(affected_symbols, list)
+            else []
+        )
         fingerprint_payload = {
             "catalog_rows": int(payload.get("catalog_rows", 0) or 0),
             "symbol_count": int(payload.get("symbol_count", 0) or 0),
@@ -297,6 +322,19 @@ class IngestOrchestrationService:
             "unresolved_date_count": int(payload.get("unresolved_date_count", 0) or 0),
             "unresolved_symbol_count": int(payload.get("unresolved_symbol_count", 0) or 0),
             "validation_counts": payload.get("validation_counts") if isinstance(payload.get("validation_counts"), dict) else {},
+            "corporate_actions": {
+                "status": corporate_actions.get("status"),
+                "action_set_hash": corporate_actions.get("action_set_hash"),
+                "previous_action_set_hash": corporate_actions.get("previous_action_set_hash"),
+                "actions_inserted": int(corporate_actions.get("actions_inserted") or 0),
+                "actions_changed": int(corporate_actions.get("actions_changed") or 0),
+                "actions_deactivated": int(corporate_actions.get("actions_deactivated") or 0),
+                "rows_adjusted": int(corporate_actions.get("rows_adjusted") or 0),
+                "symbols_adjusted": int(corporate_actions.get("symbols_adjusted") or 0),
+                "normalizer_version": corporate_actions.get("normalizer_version"),
+                "recompute_scope": corporate_actions.get("recompute_scope"),
+                "affected_symbols": normalized_affected_symbols,
+            },
             "trust_summary": {
                 "status": trust_summary.get("status"),
                 "fallback_ratio_latest": trust_summary.get("fallback_ratio_latest"),

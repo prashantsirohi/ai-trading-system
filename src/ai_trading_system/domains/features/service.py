@@ -75,7 +75,11 @@ class FeaturesOrchestrationService:
             try:
                 with open(ingest_artifact.uri, "r", encoding="utf-8") as handle:
                     ingest_summary = json.load(handle)
-                updated_symbols = ingest_summary.get("updated_symbols") or None
+                updated_symbols = (
+                    ingest_summary.get("downstream_changed_symbols")
+                    or ingest_summary.get("updated_symbols")
+                    or None
+                )
             except Exception:
                 updated_symbols = None
 

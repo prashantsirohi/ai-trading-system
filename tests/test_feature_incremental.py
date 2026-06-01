@@ -109,7 +109,7 @@ def test_features_stage_uses_ingest_updated_symbols_for_incremental_runs(
     ingest_dir.mkdir(parents=True, exist_ok=True)
     ingest_summary = ingest_dir / "ingest_summary.json"
     ingest_summary.write_text(
-        '{"updated_symbols": ["ABC", "XYZ"]}',
+        '{"updated_symbols": ["ABC"], "downstream_changed_symbols": ["ABC", "XYZ"]}',
         encoding="utf-8",
     )
 
