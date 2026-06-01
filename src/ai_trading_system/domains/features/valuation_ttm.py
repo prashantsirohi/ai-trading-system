@@ -266,6 +266,7 @@ def _merge_events_asof(grid: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame
     if "available_at" in events.columns:
         events = events.assign(available_at=pd.to_datetime(events["available_at"]))
     event_columns = [column for column in events.columns if column not in {"symbol", "available_at"}]
+    output_columns = ["symbol", "as_of_date", *event_columns]
     if not event_columns:
         return grid.reset_index(drop=True)
     for symbol, symbol_grid in grid.groupby("symbol", sort=True):
@@ -285,8 +286,11 @@ def _merge_events_asof(grid: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame
             )
             if "symbol_x" in merged.columns:
                 merged = merged.rename(columns={"symbol_x": "symbol"}).drop(columns=["symbol_y"], errors="ignore")
-        output.append(merged[["symbol", "as_of_date", *event_columns]])
-    return pd.concat(output, ignore_index=True) if output else grid.reset_index(drop=True)
+        output.append(merged[output_columns])
+    if not output:
+        return grid.reset_index(drop=True)
+    normalized = [frame.dropna(axis=1, how="all") for frame in output]
+    return pd.concat(normalized, ignore_index=True).reindex(columns=output_columns)
 
 
 def _dedupe_events(events: pd.DataFrame) -> pd.DataFrame:

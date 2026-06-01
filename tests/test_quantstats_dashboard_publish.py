@@ -310,6 +310,20 @@ def test_build_dashboard_strategy_returns_handles_mixed_run_id_date_parsing(tmp_
     assert len(returns) == 1
 
 
+def test_build_dashboard_strategy_returns_skips_legacy_snapshots_without_close(tmp_path: Path) -> None:
+    legacy = tmp_path / "data" / "pipeline_runs" / "pipeline-2026-03-01-aaaa1111" / "rank" / "attempt_1" / "ranked_signals.csv"
+    run2 = tmp_path / "data" / "pipeline_runs" / "pipeline-2026-03-02-bbbb2222" / "rank" / "attempt_1" / "ranked_signals.csv"
+    run3 = tmp_path / "data" / "pipeline_runs" / "pipeline-2026-03-03-cccc3333" / "rank" / "attempt_1" / "ranked_signals.csv"
+    _write_ranked(legacy, [{"symbol_id": "AAA", "composite_score": 90.0}])
+    _write_ranked(run2, [{"symbol_id": "AAA", "close": 100.0, "composite_score": 91.0}])
+    _write_ranked(run3, [{"symbol_id": "AAA", "close": 110.0, "composite_score": 92.0}])
+
+    returns, detail_df = build_dashboard_strategy_returns([legacy, run2, run3], top_n=1, min_overlap=1)
+
+    assert len(detail_df) == 1
+    assert abs(float(returns.iloc[0]) - 0.1) < 1e-12
+
+
 def test_parse_run_date_fallback_from_mtime_is_timezone_naive() -> None:
     parsed = _parse_run_date("manual-run-a", 1_710_000_000.0)
     assert parsed.tzinfo is None

@@ -128,6 +128,18 @@ def _read_csv_if_exists(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _read_ranked_return_frame(path: Path, columns: list[str]) -> pd.DataFrame | None:
+    """Read columns needed for return construction, skipping legacy snapshots."""
+    try:
+        header = pd.read_csv(path, nrows=0)
+        if not set(columns).issubset(header.columns):
+            return None
+        return pd.read_csv(path, usecols=columns)
+    except Exception as exc:
+        logger.warning("Could not read ranked snapshot %s: %s", path, exc)
+        return None
+
+
 def _load_rank_snapshot_frames(
     project_root: Path,
     run_id: str | None,
@@ -169,11 +181,9 @@ def build_dashboard_strategy_returns(
 
     details: list[dict[str, object]] = []
     for prev_snap, next_snap in zip(snapshots, snapshots[1:]):
-        try:
-            prev_df = pd.read_csv(prev_snap.path, usecols=["symbol_id", "close", "composite_score"])
-            next_df = pd.read_csv(next_snap.path, usecols=["symbol_id", "close"])
-        except Exception as exc:
-            logger.warning("Could not read ranked snapshots %s -> %s: %s", prev_snap.path, next_snap.path, exc)
+        prev_df = _read_ranked_return_frame(prev_snap.path, ["symbol_id", "close", "composite_score"])
+        next_df = _read_ranked_return_frame(next_snap.path, ["symbol_id", "close"])
+        if prev_df is None or next_df is None:
             continue
 
         if prev_df.empty or next_df.empty:

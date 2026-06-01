@@ -198,9 +198,9 @@ def run_backfill(
         *FACTOR_COLUMNS,
         "sector_name",
     ]
-    for col in schema_cols:
-        if col not in enriched.columns:
-            enriched[col] = pd.NA
+    missing_cols = {col: pd.NA for col in schema_cols if col not in enriched.columns}
+    if missing_cols:
+        enriched = enriched.assign(**missing_cols)
     enriched = enriched[schema_cols]
 
     # DELETE + INSERT keyed by run_date for idempotency. Bulk-load via
