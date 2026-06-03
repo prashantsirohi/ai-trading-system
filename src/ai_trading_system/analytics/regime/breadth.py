@@ -37,6 +37,21 @@ class MarketRegimeSnapshot:
     eligible_200dma_count: int = 0
     total_symbols_count: int = 0
     breadth_confidence: float = 0.0
+    # ── A/D pressure and 52W high/low internals ──────────────────────────
+    advancers: int = 0
+    decliners: int = 0
+    unchanged: int = 0
+    ad_net: int = 0
+    ad_pct: float = 0.0
+    ad_pct_sma10: float = 0.0
+    ad_pct_sma20: float = 0.0
+    ad_pct_sum63: float = 0.0
+    ad_z252: float = 0.0
+    ad_divergence_63d: bool = False
+    new_52w_highs: int = 0
+    new_52w_lows: int = 0
+    net_new_highs_pct: float = 0.0
+    high_low_ratio_sma10: float = 0.0
     # ── Derived metrics (Phase 4b) ───────────────────────────────────────
     # regime_score: continuous 0..100 blend of the three breadth metrics so
     # downstream code can read a numeric signal independent of the
@@ -92,6 +107,19 @@ _NUMERIC_METRICS: frozenset[str] = frozenset({
     "eligible_200dma_count",
     "total_symbols_count",
     "breadth_confidence",
+    "advancers",
+    "decliners",
+    "unchanged",
+    "ad_net",
+    "ad_pct",
+    "ad_pct_sma10",
+    "ad_pct_sma20",
+    "ad_pct_sum63",
+    "ad_z252",
+    "new_52w_highs",
+    "new_52w_lows",
+    "net_new_highs_pct",
+    "high_low_ratio_sma10",
     "regime_score",
     "regime_confidence",
     "pct_above_200dma_chg_5d",
@@ -104,6 +132,7 @@ _NUMERIC_METRICS: frozenset[str] = frozenset({
 _BOOLEAN_METRICS: frozenset[str] = frozenset({
     "top1000_above_50dma",
     "top1000_above_200dma",
+    "ad_divergence_63d",
     "regime_transition_day",
     "leadership_velocity_confirmed",
 })
@@ -722,57 +751,115 @@ def _load_recent_raw_snapshots(
             ).fetchall()
         }
         benchmark_filter = "AND COALESCE(is_benchmark, FALSE) = FALSE" if "is_benchmark" in catalog_columns else ""
+        px_expr = (
+            "CASE WHEN adjusted_close IS NOT NULL AND adjusted_close > 0 "
+            "THEN adjusted_close ELSE close END"
+            if "adjusted_close" in catalog_columns
+            else "close"
+        )
+        has_membership = bool(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.tables
+                WHERE table_name = '_universe_membership'
+                """
+            ).fetchone()[0]
+        )
+        membership_has_rows = (
+            bool(conn.execute("SELECT COUNT(*) FROM _universe_membership").fetchone()[0])
+            if has_membership
+            else False
+        )
+        membership_ctes = ""
+        breadth_from = "FROM symbol_roll sr"
+        if membership_has_rows:
+            membership_ctes = """
+            latest_membership AS (
+                SELECT dates.d, MAX(m.rebalance_date) AS rebalance_date
+                FROM (SELECT DISTINCT d FROM symbol_roll) dates
+                JOIN _universe_membership m
+                  ON m.rebalance_date <= dates.d
+                GROUP BY dates.d
+            ),
+            """
+            breadth_from = """
+                FROM symbol_roll sr
+                JOIN latest_membership lm
+                  ON lm.d = sr.d
+                JOIN _universe_membership um
+                  ON um.rebalance_date = lm.rebalance_date
+                 AND um.symbol_id = sr.symbol_id
+            """
         rows = conn.execute(
             f"""
             WITH symbol_roll AS (
                 SELECT
                     symbol_id,
                     CAST(timestamp AS DATE) AS d,
-                    close,
-                    AVG(close) OVER (
+                    {px_expr} AS px,
+                    AVG({px_expr}) OVER (
                         PARTITION BY symbol_id ORDER BY CAST(timestamp AS DATE)
                         ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
                     ) AS sma50,
-                    AVG(close) OVER (
+                    AVG({px_expr}) OVER (
                         PARTITION BY symbol_id ORDER BY CAST(timestamp AS DATE)
                         ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
                     ) AS sma200,
-                    MAX(close) OVER (
+                    MAX({px_expr}) OVER (
                         PARTITION BY symbol_id ORDER BY CAST(timestamp AS DATE)
                         ROWS BETWEEN 251 PRECEDING AND CURRENT ROW
                     ) AS high252,
-                    COUNT(close) OVER (
+                    MIN({px_expr}) OVER (
+                        PARTITION BY symbol_id ORDER BY CAST(timestamp AS DATE)
+                        ROWS BETWEEN 251 PRECEDING AND CURRENT ROW
+                    ) AS low252,
+                    LAG({px_expr}) OVER (
+                        PARTITION BY symbol_id ORDER BY CAST(timestamp AS DATE)
+                    ) AS prev_px,
+                    COUNT({px_expr}) OVER (
                         PARTITION BY symbol_id ORDER BY CAST(timestamp AS DATE)
                         ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
                     ) AS n50,
-                    COUNT(close) OVER (
+                    COUNT({px_expr}) OVER (
                         PARTITION BY symbol_id ORDER BY CAST(timestamp AS DATE)
                         ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
-                    ) AS n200
+                    ) AS n200,
+                    COUNT({px_expr}) OVER (
+                        PARTITION BY symbol_id ORDER BY CAST(timestamp AS DATE)
+                        ROWS BETWEEN 251 PRECEDING AND CURRENT ROW
+                    ) AS n252
                 FROM _catalog
                 WHERE exchange = ?
                   AND CAST(timestamp AS DATE) <= ?::DATE
-                  AND close IS NOT NULL
-                  AND close > 0
+                  AND {px_expr} IS NOT NULL
+                  AND {px_expr} > 0
                   {benchmark_filter}
             ),
+            {membership_ctes}
             breadth AS (
                 SELECT
-                    d,
+                    sr.d,
                     COUNT(*) AS total_symbols_count,
                     COUNT(*) FILTER (WHERE n50 = 50) AS eligible_50dma_count,
                     COUNT(*) FILTER (WHERE n200 = 200) AS eligible_200dma_count,
+                    COUNT(*) FILTER (WHERE n252 = 252) AS eligible_252dma_count,
                     COUNT(*) FILTER (WHERE n200 = 200) AS universe_count,
-                    SUM(CASE WHEN n50 = 50 AND close > sma50 THEN 1 ELSE 0 END)::DOUBLE
+                    SUM(CASE WHEN n50 = 50 AND px > sma50 THEN 1 ELSE 0 END)::DOUBLE
                         / NULLIF(COUNT(*) FILTER (WHERE n50 = 50), 0) AS pct_above_50dma,
-                    SUM(CASE WHEN n200 = 200 AND close > sma200 THEN 1 ELSE 0 END)::DOUBLE
+                    SUM(CASE WHEN n200 = 200 AND px > sma200 THEN 1 ELSE 0 END)::DOUBLE
                         / NULLIF(COUNT(*) FILTER (WHERE n200 = 200), 0) AS pct_above_200dma,
-                    SUM(CASE WHEN n200 = 200 AND high252 > 0 AND close >= high252 * 0.90 THEN 1 ELSE 0 END)::DOUBLE
-                        / NULLIF(COUNT(*) FILTER (WHERE n200 = 200), 0) AS pct_near_52w_high,
-                    SUM(CASE WHEN n200 = 200 AND high252 > 0 AND close >= high252 THEN 1 ELSE 0 END)::DOUBLE
-                        / NULLIF(COUNT(*) FILTER (WHERE n200 = 200), 0) AS pct_at_52w_high
-                FROM symbol_roll
-                GROUP BY d
+                    SUM(CASE WHEN n252 = 252 AND high252 > 0 AND px >= high252 * 0.90 THEN 1 ELSE 0 END)::DOUBLE
+                        / NULLIF(COUNT(*) FILTER (WHERE n252 = 252), 0) AS pct_near_52w_high,
+                    SUM(CASE WHEN n252 = 252 AND high252 > 0 AND px >= high252 THEN 1 ELSE 0 END)::DOUBLE
+                        / NULLIF(COUNT(*) FILTER (WHERE n252 = 252), 0) AS pct_at_52w_high,
+                    SUM(CASE WHEN n252 = 252 AND high252 > 0 AND px >= high252 THEN 1 ELSE 0 END) AS new_52w_highs,
+                    SUM(CASE WHEN n252 = 252 AND low252 > 0 AND px <= low252 THEN 1 ELSE 0 END) AS new_52w_lows,
+                    SUM(CASE WHEN prev_px IS NOT NULL AND px > prev_px THEN 1 ELSE 0 END) AS advancers,
+                    SUM(CASE WHEN prev_px IS NOT NULL AND px < prev_px THEN 1 ELSE 0 END) AS decliners,
+                    SUM(CASE WHEN prev_px IS NOT NULL AND px = prev_px THEN 1 ELSE 0 END) AS unchanged
+                {breadth_from}
+                GROUP BY sr.d
             ),
             idx AS (
                 SELECT
@@ -799,7 +886,14 @@ def _load_recent_raw_snapshots(
                 COALESCE(b.eligible_50dma_count, 0) AS eligible_50dma_count,
                 COALESCE(b.eligible_200dma_count, 0) AS eligible_200dma_count,
                 COALESCE(b.total_symbols_count, 0) AS total_symbols_count,
-                COALESCE(b.pct_at_52w_high, 0.0) AS pct_at_52w_high
+                COALESCE(b.pct_at_52w_high, 0.0) AS pct_at_52w_high,
+                COALESCE(b.eligible_252dma_count, 0) AS eligible_252dma_count,
+                COALESCE(b.new_52w_highs, 0) AS new_52w_highs,
+                COALESCE(b.new_52w_lows, 0) AS new_52w_lows,
+                COALESCE(b.advancers, 0) AS advancers,
+                COALESCE(b.decliners, 0) AS decliners,
+                COALESCE(b.unchanged, 0) AS unchanged,
+                i.close AS index_close
             FROM breadth b
             JOIN idx i USING (d)
             WHERE b.universe_count > 0
@@ -826,6 +920,18 @@ def _load_recent_raw_snapshots(
         eligible_200 = int(row[8] or 0)
         total_syms = int(row[9] or 0)
         pct_at_high = float(row[10] or 0.0)
+        eligible_252 = int(row[11] or 0)
+        new_highs = int(row[12] or 0)
+        new_lows = int(row[13] or 0)
+        advancers = int(row[14] or 0)
+        decliners = int(row[15] or 0)
+        unchanged = int(row[16] or 0)
+        ad_net = advancers - decliners
+        ad_denom = advancers + decliners
+        ad_pct = (ad_net / ad_denom) if ad_denom > 0 else 0.0
+        net_new_highs_pct = (
+            ((new_highs - new_lows) / eligible_252) if eligible_252 > 0 else 0.0
+        )
         breadth_conf = (eligible_200 / total_syms) if total_syms > 0 else 0.0
         metrics = {
             "pct_above_50dma": float(row[1] or 0.0),
@@ -839,6 +945,14 @@ def _load_recent_raw_snapshots(
             "eligible_200dma_count": eligible_200,
             "total_symbols_count": total_syms,
             "breadth_confidence": breadth_conf,
+            "advancers": advancers,
+            "decliners": decliners,
+            "unchanged": unchanged,
+            "ad_net": ad_net,
+            "ad_pct": ad_pct,
+            "new_52w_highs": new_highs,
+            "new_52w_lows": new_lows,
+            "net_new_highs_pct": net_new_highs_pct,
         }
         regime_label = classify_regime(metrics, rules, previous_regime=rolling_prev)
         regime_score = compute_regime_score(metrics)
@@ -854,7 +968,17 @@ def _load_recent_raw_snapshots(
                 "breadth_conf": breadth_conf,
                 "eligible_50": eligible_50,
                 "eligible_200": eligible_200,
+                "eligible_252": eligible_252,
                 "total_syms": total_syms,
+                "new_highs": new_highs,
+                "new_lows": new_lows,
+                "advancers": advancers,
+                "decliners": decliners,
+                "unchanged": unchanged,
+                "ad_net": ad_net,
+                "ad_pct": ad_pct,
+                "net_new_highs_pct": net_new_highs_pct,
+                "index_close": float(row[17] or 0.0),
             }
         )
         rolling_prev = regime_label
@@ -882,6 +1006,12 @@ def _load_recent_raw_snapshots(
     pct200_arr = [it["metrics"]["pct_above_200dma"] for it in intermediates]
     pcthigh_arr = [it["pct_at_high"] for it in intermediates]
     score_arr = [it["regime_score"] for it in intermediates]
+    ad_pct_arr = [float(it["ad_pct"]) for it in intermediates]
+    high_low_ratio_arr = [
+        (float(it["new_highs"]) / max(int(it["new_lows"]), 1))
+        for it in intermediates
+    ]
+    index_close_arr = [float(it["index_close"]) for it in intermediates]
     raw_regime_arr = [str(it["regime"]) for it in intermediates]
     confirmed_regime_arr = _confirmed_regime_series(
         raw_regime_arr, confirmation_days=confirmation_days
@@ -910,6 +1040,36 @@ def _load_recent_raw_snapshots(
             pcthigh_arr[i] - pcthigh_arr[i - 20] if i >= 20 else 0.0
         )
         chg_5d_score = chg5_score_arr[i]
+        ad_window10 = ad_pct_arr[max(0, i - 9): i + 1]
+        ad_window20 = ad_pct_arr[max(0, i - 19): i + 1]
+        ad_window63 = ad_pct_arr[max(0, i - 62): i + 1]
+        ad_window252 = ad_pct_arr[max(0, i - 251): i + 1]
+        ad_pct_sma10 = sum(ad_window10) / len(ad_window10) if ad_window10 else 0.0
+        ad_pct_sma20 = sum(ad_window20) / len(ad_window20) if ad_window20 else 0.0
+        ad_pct_sum63 = sum(ad_window63)
+        ad_z252 = 0.0
+        if len(ad_window252) >= 2:
+            mean252 = sum(ad_window252) / len(ad_window252)
+            var252 = sum((value - mean252) ** 2 for value in ad_window252) / len(ad_window252)
+            std252 = var252 ** 0.5
+            if std252 > 0:
+                ad_z252 = (ad_pct_arr[i] - mean252) / std252
+        high_low_window10 = high_low_ratio_arr[max(0, i - 9): i + 1]
+        high_low_ratio_sma10 = (
+            sum(high_low_window10) / len(high_low_window10)
+            if high_low_window10
+            else 0.0
+        )
+        prev_ad_window63 = ad_pct_arr[max(0, i - 125): i - 62] if i >= 63 else []
+        prev_ad_pct_sum63 = sum(prev_ad_window63) if len(prev_ad_window63) == 63 else 0.0
+        index_return_63d = (
+            (index_close_arr[i] / index_close_arr[i - 63] - 1.0)
+            if i >= 63 and index_close_arr[i - 63] > 0
+            else 0.0
+        )
+        ad_divergence_63d = (
+            i >= 126 and index_return_63d > 0 and ad_pct_sum63 < prev_ad_pct_sum63
+        )
 
         # Quintile bucket from PRIOR rows only (strict `< i`). Pre-warmup
         # rows (i < 5) contribute 0.0 chg values; we skip them by starting
@@ -949,6 +1109,20 @@ def _load_recent_raw_snapshots(
                 eligible_200dma_count=item["eligible_200"],
                 total_symbols_count=item["total_syms"],
                 breadth_confidence=item["breadth_conf"],
+                advancers=item["advancers"],
+                decliners=item["decliners"],
+                unchanged=item["unchanged"],
+                ad_net=item["ad_net"],
+                ad_pct=round(item["ad_pct"], 6),
+                ad_pct_sma10=round(ad_pct_sma10, 6),
+                ad_pct_sma20=round(ad_pct_sma20, 6),
+                ad_pct_sum63=round(ad_pct_sum63, 6),
+                ad_z252=round(ad_z252, 6),
+                ad_divergence_63d=ad_divergence_63d,
+                new_52w_highs=item["new_highs"],
+                new_52w_lows=item["new_lows"],
+                net_new_highs_pct=round(item["net_new_highs_pct"], 6),
+                high_low_ratio_sma10=round(high_low_ratio_sma10, 6),
                 regime_score=item["regime_score"],
                 regime_confidence=regime_conf,
                 pct_above_200dma_chg_5d=round(chg_5d_pct200, 6),

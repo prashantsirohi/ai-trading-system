@@ -123,7 +123,8 @@ daily AS (
         SUM(CASE WHEN obs_252 >= 252 AND close >= hi_252 THEN 1 ELSE 0 END) AS new_52w_highs,
         SUM(CASE WHEN obs_252 >= 252 AND close <= lo_252 THEN 1 ELSE 0 END) AS new_52w_lows,
         SUM(CASE WHEN prev_close IS NOT NULL AND trade_date - prev_trade_date <= {max_return_gap_days} AND close > prev_close THEN 1 ELSE 0 END) AS advancers,
-        SUM(CASE WHEN prev_close IS NOT NULL AND trade_date - prev_trade_date <= {max_return_gap_days} AND close < prev_close THEN 1 ELSE 0 END) AS decliners
+        SUM(CASE WHEN prev_close IS NOT NULL AND trade_date - prev_trade_date <= {max_return_gap_days} AND close < prev_close THEN 1 ELSE 0 END) AS decliners,
+        SUM(CASE WHEN prev_close IS NOT NULL AND trade_date - prev_trade_date <= {max_return_gap_days} AND close = prev_close THEN 1 ELSE 0 END) AS unchanged
     FROM base
     GROUP BY trade_date
 )
@@ -162,9 +163,18 @@ def _empty_frame() -> pd.DataFrame:
             "new_52w_lows",
             "advancers",
             "decliners",
+            "unchanged",
+            "ad_net",
+            "ad_pct",
+            "ad_pct_sma10",
+            "ad_pct_sma20",
+            "ad_pct_sum63",
+            "ad_z252",
             "index_level",
             "pe_pctile_5y",
             "pe_pctile_5y_sma20",
+            "net_new_highs",
+            "net_new_highs_pct",
             "high_low_ratio",
             "high_low_ratio_sma10",
             "ad_line",
@@ -254,11 +264,25 @@ def load_operational_breadth_frame(project_root: str | Path) -> pd.DataFrame:
         trade_date=pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d"),
         **{column: pd.to_numeric(df[column], errors="coerce") for column in numeric_columns},
     ).dropna(subset=["trade_date"])
-    df.loc[:, "high_low_ratio"] = df["new_52w_highs"] / df["new_52w_lows"].where(df["new_52w_lows"].ne(0))
-    defined_ratio_sma = df["high_low_ratio"].dropna().rolling(10, min_periods=1).mean()
-    df.loc[:, "high_low_ratio_sma10"] = defined_ratio_sma.reindex(df.index).ffill()
+    df.loc[:, "net_new_highs"] = df["new_52w_highs"].fillna(0) - df["new_52w_lows"].fillna(0)
+    df.loc[:, "net_new_highs_pct"] = (
+        df["net_new_highs"] / df["symbols_sma200"].where(df["symbols_sma200"].ne(0))
+    ).fillna(0.0)
+    df.loc[:, "high_low_ratio"] = df["new_52w_highs"].fillna(0) / df["new_52w_lows"].fillna(0).clip(lower=1)
+    df.loc[:, "high_low_ratio_sma10"] = df["high_low_ratio"].rolling(10, min_periods=1).mean()
     df.loc[:, "pe_pctile_5y_sma20"] = df["pe_pctile_5y"].rolling(20, min_periods=1).mean()
     daily_ad = df["advancers"].fillna(0) - df["decliners"].fillna(0)
+    ad_denom = (df["advancers"].fillna(0) + df["decliners"].fillna(0)).replace(0, float("nan"))
+    df.loc[:, "ad_net"] = daily_ad
+    df.loc[:, "ad_pct"] = (daily_ad / ad_denom).fillna(0.0)
+    df.loc[:, "ad_pct_sma10"] = df["ad_pct"].rolling(10, min_periods=1).mean()
+    df.loc[:, "ad_pct_sma20"] = df["ad_pct"].rolling(20, min_periods=1).mean()
+    df.loc[:, "ad_pct_sum63"] = df["ad_pct"].rolling(63, min_periods=1).sum()
+    rolling_mean252 = df["ad_pct"].rolling(252, min_periods=2).mean()
+    rolling_std252 = df["ad_pct"].rolling(252, min_periods=2).std(ddof=0)
+    df.loc[:, "ad_z252"] = (
+        (df["ad_pct"] - rolling_mean252) / rolling_std252.replace(0, float("nan"))
+    ).fillna(0.0)
     df.loc[:, "ad_line"] = daily_ad.cumsum() - daily_ad.iloc[0]
     return df.reset_index(drop=True)
 
@@ -301,6 +325,17 @@ def get_market_breadth_history(
             "new_52w_lows": _value(row.new_52w_lows, integer=True),
             "advancers": _value(row.advancers, integer=True),
             "decliners": _value(row.decliners, integer=True),
+            "unchanged": _value(row.unchanged, integer=True),
+            "ad_net": _value(row.ad_net, integer=True),
+            "ad_pct": _value(row.ad_pct),
+            "ad_pct_sma10": _value(row.ad_pct_sma10),
+            "ad_pct_sma20": _value(row.ad_pct_sma20),
+            "ad_pct_sum63": _value(row.ad_pct_sum63),
+            "ad_z252": _value(row.ad_z252),
+            "net_new_highs": _value(row.net_new_highs, integer=True),
+            "net_new_highs_pct": _value(row.net_new_highs_pct),
+            "high_low_ratio": _value(row.high_low_ratio),
+            "high_low_ratio_sma10": _value(row.high_low_ratio_sma10),
             "index_level": _value(row.index_level),
             "pe_pctile_5y": _value(row.pe_pctile_5y),
             "pe_pctile_5y_sma20": _value(row.pe_pctile_5y_sma20),

@@ -83,6 +83,13 @@ def test_market_breadth_history_returns_percentages_and_dates(tmp_path: Path) ->
     assert latest["new_52w_lows"] == 0
     assert latest["advancers"] == 1
     assert latest["decliners"] == 1
+    assert latest["unchanged"] == 0
+    assert latest["ad_net"] == 0
+    assert latest["ad_pct"] == 0.0
+    assert latest["ad_pct_sma10"] == 0.0
+    assert latest["net_new_highs"] == 0
+    assert latest["net_new_highs_pct"] == 0.0
+    assert latest["high_low_ratio"] == 0.0
     assert latest["index_level"] is None
     assert latest["pe_pctile_5y"] is None
 
@@ -154,6 +161,10 @@ def test_market_breadth_history_joins_market_context_and_requires_252_bars(tmp_p
     assert latest["new_52w_lows"] == 1
     assert latest["advancers"] == 1
     assert latest["decliners"] == 1
+    assert latest["ad_net"] == 0
+    assert latest["ad_pct"] == 0.0
+    assert latest["net_new_highs"] == 0
+    assert latest["high_low_ratio"] == 1.0
     assert latest["index_level"] == 1234.5
     assert latest["pe_pctile_5y"] == 82.5
     assert latest["pe_pctile_5y_sma20"] == 82.5

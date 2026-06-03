@@ -280,6 +280,47 @@ def test_market_breadth_date_normalization_has_no_chained_assignment_warning(tmp
     assert not any("ChainedAssignmentError" in str(w.message) for w in captured)
 
 
+def test_weekly_market_breadth_uses_adjusted_close_and_252_eligibility(tmp_path: Path) -> None:
+    import duckdb
+
+    db_path = tmp_path / "ohlcv.duckdb"
+    con = duckdb.connect(str(db_path))
+    con.execute(
+        """
+        CREATE TABLE _catalog(
+            timestamp TIMESTAMP,
+            symbol_id VARCHAR,
+            close DOUBLE,
+            adjusted_close DOUBLE,
+            exchange VARCHAR
+        )
+        """
+    )
+    start = date(2025, 1, 1)
+    rows = []
+    for idx in range(260):
+        trade_date = start + timedelta(days=idx)
+        adjusted = 100.0 + idx
+        raw_aaa = 10.0 if idx == 259 else adjusted
+        rows.append((trade_date.isoformat(), "AAA", raw_aaa, adjusted, "NSE"))
+        rows.append((trade_date.isoformat(), "BBB", adjusted, adjusted, "NSE"))
+        if idx >= 250:
+            rows.append((trade_date.isoformat(), "FRESH", 1000.0 + idx, 1000.0 + idx, "NSE"))
+    con.executemany("INSERT INTO _catalog VALUES (?, ?, ?, ?, ?)", rows)
+    con.close()
+
+    result = breadth.compute_market_breadth(db_path, start + timedelta(days=259), weeks=2)
+    latest = result.iloc[-1]
+
+    assert latest["pct_above_sma200"] == 100.0
+    assert latest["new_52w_highs"] == 2
+    assert latest["symbols_252"] == 2
+    assert latest["advancers"] == 3
+    assert latest["decliners"] == 0
+    assert latest["ad_pct"] == 1.0
+    assert "ad_pct_sum63" in result.columns
+
+
 def test_build_report_writes_html_manifest_and_tables(tmp_path: Path) -> None:
     rank_dir = tmp_path / "data" / "pipeline_runs" / "pipeline-2026-04-29-abcdef12" / "rank" / "attempt_1"
     rank_dir.mkdir(parents=True)
