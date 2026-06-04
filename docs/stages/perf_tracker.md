@@ -40,11 +40,14 @@ This stage is **observability**, not a hard dependency. Any failure is a trackin
 | Artifact | Path | Notes |
 |---|---|---|
 | `perf_tracker_summary` | `data/pipeline_runs/<run_id>/perf_tracker/attempt_<n>/perf_tracker_summary.json` | Status + `dates_processed` + `rows_upserted`. On failure: status=`failed` with error message. |
+| `tracker_health` | `data/pipeline_runs/<run_id>/perf_tracker/attempt_<n>/tracker_health.json` | Raw/trusted/excluded rows, fixture and duplicate checks, artifact lag, and recent cohort-size regression warning. |
 
 **DuckDB writes:**
 
 - Database: `data/research.duckdb` (resolved by [`schema.py::research_db_path`](../../src/ai_trading_system/research/perf_tracker/schema.py) as `operational paths.root_dir / "research.duckdb"`). **This is NOT `data/research_ohlcv.duckdb`** (that's the OHLCV isolation store).
 - Table: `rank_cohort_performance` — DDL in `schema.py::RANK_COHORT_DDL`. Primary key `(run_date, symbol_id, exchange)`. Columns: rank_position, composite_score (+adjusted), rank_mode, watchlist_bucket, config_id, `fwd_<N>d_return`/`fwd_<N>d_matured_at` for N∈{5,10,20,60}, factor scores (`factor_rs`, `factor_vol`, `factor_trend`, `factor_prox`, `factor_deliv`, `factor_sector`, `factor_momentum_accel`), sector_name, inserted_at.
+- Trusted analytics view: `rank_cohort_performance_trusted`. API diagnostics, digests, and the optimizer fast path read this view so rows with `data_quality_status != 'trusted'` or a persisted forward-return anomaly remain inspectable but do not influence strategy metrics.
+- Provenance columns: `source_type`, `source_run_id`, and `source_artifact_path`. New writes identify whether rows came from operational pipeline artifacts or historical research scoring.
 - Index: `idx_rank_cohort_date` on `run_date`.
 
 Schema is idempotent (`CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`), ensured on every connection via `open_research_db()`.
@@ -80,6 +83,7 @@ None — by design. See "Purpose" above.
 | `rows_upserted: 0` | No new dates to process, or no `_catalog` data for any symbol. |
 | Forward-return columns all NaN | Horizon hasn't matured yet (expected for latest run_date). |
 | Tracker missing a new factor column | `RANKED_TO_TRACKER` not updated after rank stage added it. |
+| Raw row count exceeds trusted row count | Rows were quarantined or excluded by the persisted 5-day anomaly guardrail. Inspect the raw table before changing weights. |
 
 ## Retry behavior
 

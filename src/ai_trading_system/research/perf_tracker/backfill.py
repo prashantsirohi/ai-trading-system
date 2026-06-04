@@ -29,7 +29,8 @@ from ai_trading_system.research.perf_tracker.schema import open_research_db
 
 logger = logging.getLogger(__name__)
 
-DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+PIPELINE_RUN_RE = re.compile(r"^pipeline-(\d{4}-\d{2}-\d{2})-.+$")
+FIXTURE_SYMBOL_RE = re.compile(r"^(?:BASE|DRIFT|REC|OLD|R|T|SYM)\d+$|^(?:AAA|BBB|CCC)$")
 
 
 def _latest_attempt_per_date(
@@ -45,7 +46,7 @@ def _latest_attempt_per_date(
     for run_dir in sorted(pipeline_runs_dir.iterdir()):
         if not run_dir.is_dir():
             continue
-        match = DATE_RE.search(run_dir.name)
+        match = PIPELINE_RUN_RE.fullmatch(run_dir.name)
         if not match:
             continue
         d = match.group(1)
@@ -69,6 +70,27 @@ def _latest_attempt_per_date(
     return result
 
 
+def _operational_trading_dates(ohlcv_db_path: Path) -> set[str]:
+    """Return exchange dates present in the operational OHLCV catalog."""
+    import duckdb
+
+    con = duckdb.connect(str(ohlcv_db_path), read_only=True)
+    try:
+        rows = con.execute(
+            """
+            SELECT DISTINCT CAST(timestamp AS DATE)
+            FROM _catalog
+            WHERE timestamp IS NOT NULL
+              AND close IS NOT NULL
+              AND close > 0
+              AND DAYOFWEEK(CAST(timestamp AS DATE)) NOT IN (0, 6)
+            """
+        ).fetchall()
+    finally:
+        con.close()
+    return {str(row[0]) for row in rows}
+
+
 def _read_ranked(path: Path) -> pd.DataFrame | None:
     try:
         df = pd.read_csv(path)
@@ -84,6 +106,9 @@ def build_rows_from_ranked_frame(
     ranked: pd.DataFrame,
     *,
     buckets: pd.DataFrame | None = None,
+    source_type: str = "unknown",
+    source_run_id: str | None = None,
+    source_artifact_path: str | None = None,
 ) -> pd.DataFrame:
     """Convert a ranked-signals DataFrame into rank_cohort_performance row form.
 
@@ -122,6 +147,10 @@ def build_rows_from_ranked_frame(
         if col not in out.columns:
             out[col] = pd.NA
     out["config_id"] = pd.NA  # populated post-Phase-1
+    out["source_type"] = source_type
+    out["source_run_id"] = source_run_id
+    out["source_artifact_path"] = source_artifact_path
+    out["data_quality_status"] = "trusted"
     return out
 
 
@@ -139,7 +168,48 @@ def _build_rows_for_date(
             buckets_df = pd.read_csv(buckets_path)
         except (pd.errors.EmptyDataError, FileNotFoundError):
             buckets_df = None
-    return build_rows_from_ranked_frame(run_date, ranked, buckets=buckets_df)
+    return build_rows_from_ranked_frame(
+        run_date,
+        ranked,
+        buckets=buckets_df,
+        source_type="pipeline",
+        source_run_id=ranked_path.parent.parent.parent.name,
+        source_artifact_path=str(ranked_path),
+    )
+
+
+def _validate_operational_rows(rows: pd.DataFrame) -> None:
+    """Reject fixture-like or duplicate rows before they reach the live table."""
+    keys = ["run_date", "symbol_id", "exchange"]
+    duplicates = rows.duplicated(keys, keep=False)
+    if duplicates.any():
+        sample = rows.loc[duplicates, keys].head(5).to_dict("records")
+        raise ValueError(f"perf_tracker duplicate cohort keys: {sample}")
+
+    symbols = rows["symbol_id"].astype(str)
+    fixture_like = symbols.str.match(FIXTURE_SYMBOL_RE)
+    if fixture_like.any():
+        sample = sorted(symbols.loc[fixture_like].unique())[:10]
+        raise ValueError(f"perf_tracker fixture-like operational symbols: {sample}")
+
+    run_dates = pd.to_datetime(rows["run_date"], errors="coerce")
+    weekend_dates = sorted({
+        d.date().isoformat() for d in run_dates if pd.notna(d) and d.weekday() >= 5
+    })
+    if weekend_dates:
+        logger.warning("perf_tracker operational cohorts include weekend dates: %s", weekend_dates)
+
+    daily_sizes = rows.groupby("run_date").size()
+    if len(daily_sizes) >= 2:
+        median_size = float(daily_sizes.median())
+        if median_size > 0:
+            sharp_drops = daily_sizes[daily_sizes < median_size * 0.20]
+            if not sharp_drops.empty:
+                logger.warning(
+                    "perf_tracker cohort-size drop below 20%% of median %.1f: %s",
+                    median_size,
+                    sharp_drops.to_dict(),
+                )
 
 
 def run_backfill(
@@ -159,6 +229,11 @@ def run_backfill(
     """
     paths = get_domain_paths(project_root=project_root, data_domain="operational")
     by_date = _latest_attempt_per_date(paths.pipeline_runs_dir)
+    trading_dates = _operational_trading_dates(paths.ohlcv_db_path)
+    skipped_dates = sorted(set(by_date) - trading_dates)
+    if skipped_dates:
+        logger.warning("perf_tracker skipped non-trading artifact dates: %s", skipped_dates)
+    by_date = {d: value for d, value in by_date.items() if d in trading_dates}
     if only_dates:
         by_date = {d: v for d, v in by_date.items() if d in set(only_dates)}
 
@@ -187,6 +262,7 @@ def run_backfill(
 
     # Compute forward returns in one pass (helper batches by symbol internally).
     enriched = compute_forward_returns(combined, project_root=project_root)
+    _validate_operational_rows(enriched)
 
     # Align to schema column order before insert.
     schema_cols = [
@@ -197,6 +273,8 @@ def run_backfill(
         "fwd_5d_matured_at", "fwd_10d_matured_at", "fwd_20d_matured_at", "fwd_60d_matured_at",
         *FACTOR_COLUMNS,
         "sector_name",
+        "fwd_5d_anomaly", "fwd_return_anomaly", "source_type", "source_run_id", "source_artifact_path",
+        "data_quality_status",
     ]
     missing_cols = {col: pd.NA for col in schema_cols if col not in enriched.columns}
     if missing_cols:

@@ -80,7 +80,7 @@ def _lookback_clause(lookback_days: int | None) -> str:
     return (
         " AND run_date >= ("
         "  SELECT MAX(run_date) - INTERVAL '" + str(int(lookback_days)) + " days'"
-        "  FROM rank_cohort_performance"
+        "  FROM rank_cohort_performance_trusted"
         ")"
     )
 
@@ -128,7 +128,7 @@ def _coverage_status(coverage_pct: float | None) -> str:
 def _compute_factor_coverage(con) -> list[dict]:
     """Per-factor coverage rows (used by /factor-coverage and /drift)."""
     total = con.execute(
-        "SELECT COUNT(*) FROM rank_cohort_performance"
+        "SELECT COUNT(*) FROM rank_cohort_performance_trusted"
     ).fetchone()[0] or 0
     total = int(total)
     rows: list[dict] = []
@@ -139,7 +139,7 @@ def _compute_factor_coverage(con) -> list[dict]:
                 COUNT({factor}),
                 MIN(CASE WHEN {factor} IS NOT NULL THEN run_date END),
                 MAX(CASE WHEN {factor} IS NOT NULL THEN run_date END)
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             """
         ).fetchone()
         non_null_count = int(non_null or 0)
@@ -167,12 +167,24 @@ def _compute_factor_coverage(con) -> list[dict]:
 
 @router.get("/coverage")
 def coverage():
-    """Date-range + row-count summary for the header strip."""
+    """Date-range + row-count summary, including excluded-row visibility."""
     with open_research_db(project_root=project_root(), read_only=True) as con:
         row = con.execute(
             "SELECT MIN(run_date), MAX(run_date), "
             "COUNT(DISTINCT run_date), COUNT(*) "
-            "FROM rank_cohort_performance"
+            "FROM rank_cohort_performance_trusted"
+        ).fetchone()
+        raw_rows, excluded_rows, anomaly_rows = con.execute(
+            """
+            SELECT
+                COUNT(*),
+                COUNT(*) FILTER (
+                    WHERE COALESCE(data_quality_status, 'trusted') <> 'trusted'
+                       OR COALESCE(fwd_return_anomaly, FALSE)
+                ),
+                COUNT(*) FILTER (WHERE COALESCE(fwd_return_anomaly, FALSE))
+            FROM rank_cohort_performance
+            """
         ).fetchone()
     first_date, last_date, n_dates, n_rows = row
     return {
@@ -180,6 +192,9 @@ def coverage():
         "last_date":  last_date.isoformat() if last_date else None,
         "dates":      int(n_dates or 0),
         "rows":       int(n_rows or 0),
+        "raw_rows":   int(raw_rows or 0),
+        "excluded_rows": int(excluded_rows or 0),
+        "anomaly_rows": int(anomaly_rows or 0),
     }
 
 
@@ -209,7 +224,7 @@ def cohorts(
                           / NULLIF(COUNT(fwd_5d_return),  0),
                     100.0 * SUM(CASE WHEN fwd_20d_return > 0 THEN 1 ELSE 0 END)
                           / NULLIF(COUNT(fwd_20d_return), 0)
-                FROM rank_cohort_performance
+                FROM rank_cohort_performance_trusted
                 WHERE rank_position BETWEEN {lo} AND {hi}
                 {lb}
                 """
@@ -253,7 +268,7 @@ def buckets(
                       / NULLIF(COUNT(fwd_5d_return),  0),
                 100.0 * SUM(CASE WHEN fwd_20d_return > 0 THEN 1 ELSE 0 END)
                       / NULLIF(COUNT(fwd_20d_return), 0)
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             WHERE 1=1
             {lb}
             GROUP BY bucket
@@ -294,7 +309,7 @@ def bucket_coverage():
                 COUNT(*) * 1.0 / NULLIF(SUM(COUNT(*)) OVER (), 0) AS pct_of_all_rows,
                 AVG(CASE WHEN fwd_5d_return  IS NOT NULL THEN 1.0 ELSE 0.0 END) AS pct_with_fwd_5d,
                 AVG(CASE WHEN fwd_20d_return IS NOT NULL THEN 1.0 ELSE 0.0 END) AS pct_with_fwd_20d
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             GROUP BY bucket
             ORDER BY {BUCKET_ORDER_SQL}
             """
@@ -331,7 +346,7 @@ def same_date_buckets(
             f"""
             WITH bucket_dates AS (
                 SELECT DISTINCT run_date
-                FROM rank_cohort_performance
+                FROM rank_cohort_performance_trusted
                 WHERE watchlist_bucket IS NOT NULL
                 {lb}
             )
@@ -343,7 +358,7 @@ def same_date_buckets(
                 AVG(fwd_10d_return) AS avg_10d,
                 AVG(fwd_20d_return) AS avg_20d,
                 COUNT(DISTINCT run_date) AS trading_days
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             WHERE run_date IN (SELECT run_date FROM bucket_dates)
             """
         ).fetchone()
@@ -351,7 +366,7 @@ def same_date_buckets(
             f"""
             WITH bucket_dates AS (
                 SELECT DISTINCT run_date
-                FROM rank_cohort_performance
+                FROM rank_cohort_performance_trusted
                 WHERE watchlist_bucket IS NOT NULL
                 {lb}
             )
@@ -368,7 +383,7 @@ def same_date_buckets(
                 100.0 * SUM(CASE WHEN fwd_20d_return > 0 THEN 1 ELSE 0 END)
                       / NULLIF(COUNT(fwd_20d_return), 0) AS hitrate_20d,
                 COUNT(DISTINCT run_date) AS trading_days
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             WHERE run_date IN (SELECT run_date FROM bucket_dates)
             GROUP BY bucket
             ORDER BY {BUCKET_ORDER_SQL}
@@ -444,10 +459,10 @@ def _factor_ic_for_window(con, window_days: int, available: Iterable[str]) -> di
     df = con.execute(
         f"""
         SELECT {cols}, {", ".join(fwd_cols)}
-        FROM rank_cohort_performance
+        FROM rank_cohort_performance_trusted
         WHERE run_date >= (
               SELECT MAX(run_date) - INTERVAL '{int(window_days)} days'
-              FROM rank_cohort_performance
+              FROM rank_cohort_performance_trusted
           )
         """
     ).fetchdf()
@@ -472,7 +487,7 @@ def _available_factors(con) -> list[str]:
     return [
         col for col in FACTOR_COLUMNS
         if con.execute(
-            f"SELECT COUNT(*) FROM rank_cohort_performance WHERE {col} IS NOT NULL"
+            f"SELECT COUNT(*) FROM rank_cohort_performance_trusted WHERE {col} IS NOT NULL"
         ).fetchone()[0] > 0
     ]
 
@@ -493,11 +508,11 @@ def _conditional_ic_for_window(
     df = con.execute(
         f"""
         SELECT {cols}
-        FROM rank_cohort_performance
+        FROM rank_cohort_performance_trusted
         WHERE {cohort_clause}
           AND run_date >= (
               SELECT MAX(run_date) - INTERVAL '{int(window_days)} days'
-              FROM rank_cohort_performance
+              FROM rank_cohort_performance_trusted
           )
         """
     ).fetchdf()
@@ -711,7 +726,7 @@ def buckets_composition():
         result = con.execute(
             f"""
             SELECT {', '.join(select_pieces)}
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             GROUP BY bucket
             ORDER BY {BUCKET_ORDER_SQL}
             """
@@ -758,7 +773,7 @@ def buckets_daily(
                 AVG(fwd_5d_return) AS avg_5d,
                 100.0 * SUM(CASE WHEN fwd_5d_return > 0 THEN 1 ELSE 0 END)
                       / NULLIF(COUNT(fwd_5d_return), 0) AS hitrate_5d
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             WHERE 1=1
             {lb}
             GROUP BY run_date, bucket
@@ -806,7 +821,7 @@ def concentration(
                     AVG(fwd_20d_return),
                     100.0 * SUM(CASE WHEN fwd_20d_return > 0 THEN 1 ELSE 0 END)
                           / NULLIF(COUNT(fwd_20d_return), 0)
-                FROM rank_cohort_performance
+                FROM rank_cohort_performance_trusted
                 WHERE rank_position BETWEEN {lo} AND {hi}
                 {lb}
                 """

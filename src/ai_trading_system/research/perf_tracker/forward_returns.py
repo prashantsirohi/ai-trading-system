@@ -18,6 +18,7 @@ import pandas as pd
 from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.research.perf_tracker.constants import (
     FORWARD_RETURN_ANOMALY_5D_PCT,
+    FORWARD_RETURN_ANOMALY_THRESHOLDS,
 )
 
 FORWARD_HORIZONS: tuple[int, ...] = (5, 10, 20, 60)
@@ -73,9 +74,10 @@ def compute_forward_returns(
         # Pull every (symbol, date, close) for symbols we care about, ordered,
         # then assign each row a per-symbol trading-day index. Forward returns
         # become a self-join on (symbol, idx + horizon).
-        symbols_csv = ",".join(f"'{s}'" for s in work["symbol_id"].unique())
-        if not symbols_csv:
+        symbols = work["symbol_id"].dropna().astype(str).unique().tolist()
+        if not symbols:
             return work
+        placeholders = ",".join("?" for _ in symbols)
         ohlcv = con.execute(
             f"""
             SELECT symbol_id,
@@ -84,10 +86,11 @@ def compute_forward_returns(
                    close,
                    ROW_NUMBER() OVER (PARTITION BY symbol_id, exchange ORDER BY timestamp) AS idx
             FROM _catalog
-            WHERE symbol_id IN ({symbols_csv})
+            WHERE symbol_id IN ({placeholders})
               AND close > 0
               AND timestamp IS NOT NULL
-            """
+            """,
+            symbols,
         ).fetchdf()
     finally:
         con.close()
@@ -96,6 +99,8 @@ def compute_forward_returns(
         for n in horizons:
             work[f"fwd_{n}d_return"] = pd.NA
             work[f"fwd_{n}d_matured_at"] = pd.NaT
+        work["fwd_5d_anomaly"] = False
+        work["fwd_return_anomaly"] = False
         return work
 
     ohlcv = ohlcv.assign(d=pd.to_datetime(ohlcv["d"]).dt.date)
@@ -132,5 +137,16 @@ def compute_forward_returns(
         work.loc[:, "fwd_5d_anomaly"] = (r5.abs() > FORWARD_RETURN_ANOMALY_5D_PCT).fillna(False)
     else:
         work.loc[:, "fwd_5d_anomaly"] = False
+    anomaly_columns = [
+        pd.to_numeric(work[f"fwd_{n}d_return"], errors="coerce").abs()
+        > FORWARD_RETURN_ANOMALY_THRESHOLDS.get(n, FORWARD_RETURN_ANOMALY_5D_PCT)
+        for n in horizons
+        if f"fwd_{n}d_return" in work.columns
+    ]
+    work.loc[:, "fwd_return_anomaly"] = (
+        pd.concat(anomaly_columns, axis=1).any(axis=1)
+        if anomaly_columns
+        else False
+    )
 
     return work

@@ -2,11 +2,13 @@
 
 The Research page is purely observational. It does not change ranking weights,
 paper-trading rules, bucket thresholds, or any production config. It reads
-`data/research.duckdb` (`rank_cohort_performance`) and answers six questions.
+`data/research.duckdb` through `rank_cohort_performance_trusted`: quarantined
+rows and persisted horizon-specific forward-return anomalies remain in the raw table for review
+but are excluded from strategy metrics.
 
 ## 1. Tracker health
-Date range and row count of the underlying table. If `rows == 0`, the rank
-backfill has not run yet — nothing else will populate.
+Date range and trusted row count, plus raw and excluded row counts. If
+`rows == 0`, the rank backfill has not run yet or every row is quarantined.
 
 ## 2. Three-number monitor
 Top-10 avg_20d, top-200 avg_20d, and `top-200 − 201+` Δ on the 20-day horizon.

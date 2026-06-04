@@ -184,7 +184,10 @@ def _load_panel_from_table(
         # Pick the first stored run_date on/after as_of so weekend/holiday
         # anchors snap forward deterministically (matches the live path).
         anchor_row = con.execute(
-            "SELECT MIN(run_date) FROM rank_cohort_performance WHERE run_date >= ?::DATE",
+            "SELECT MIN(run_date) FROM rank_cohort_performance "
+            "WHERE run_date >= ?::DATE "
+            "AND COALESCE(data_quality_status, 'trusted') = 'trusted' "
+            "AND NOT COALESCE(fwd_return_anomaly, FALSE)",
             [str(as_of.date())],
         ).fetchone()
         if anchor_row is None or anchor_row[0] is None:
@@ -199,6 +202,8 @@ def _load_panel_from_table(
                    {fwd_col}
             FROM rank_cohort_performance
             WHERE run_date = ?
+              AND COALESCE(data_quality_status, 'trusted') = 'trusted'
+              AND NOT COALESCE(fwd_return_anomaly, FALSE)
             """,
             [anchor_date],
         ).fetchdf()

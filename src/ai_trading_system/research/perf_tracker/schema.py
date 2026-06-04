@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS rank_cohort_performance (
     factor_liquidity          DOUBLE,
     factor_delivery_trend     DOUBLE,
     sector_name               VARCHAR,
+    fwd_5d_anomaly            BOOLEAN DEFAULT FALSE,
+    fwd_return_anomaly        BOOLEAN DEFAULT FALSE,
+    source_type               VARCHAR DEFAULT 'unknown',
+    source_run_id             VARCHAR,
+    source_artifact_path      VARCHAR,
+    data_quality_status       VARCHAR DEFAULT 'trusted',
     inserted_at               TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (run_date, symbol_id, exchange)
 );
@@ -61,7 +67,22 @@ RANK_COHORT_ALTER_DDLS: tuple[str, ...] = (
     "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS factor_above_200dma DOUBLE",
     "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS factor_liquidity DOUBLE",
     "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS factor_delivery_trend DOUBLE",
+    "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS fwd_5d_anomaly BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS fwd_return_anomaly BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS source_type VARCHAR DEFAULT 'unknown'",
+    "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS source_run_id VARCHAR",
+    "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS source_artifact_path VARCHAR",
+    "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS data_quality_status VARCHAR DEFAULT 'trusted'",
 )
+
+TRUSTED_COHORT_VIEW_DDL = """
+CREATE OR REPLACE VIEW rank_cohort_performance_trusted AS
+SELECT *
+FROM rank_cohort_performance
+WHERE COALESCE(data_quality_status, 'trusted') = 'trusted'
+  AND NOT COALESCE(fwd_5d_anomaly, FALSE)
+  AND NOT COALESCE(fwd_return_anomaly, FALSE);
+"""
 
 
 def research_db_path(project_root: str | Path | None = None) -> Path:
@@ -78,6 +99,16 @@ def ensure_schema(con: duckdb.DuckDBPyConnection) -> None:
     con.execute(RANK_COHORT_INDEX_DDL)
     for stmt in RANK_COHORT_ALTER_DDLS:
         con.execute(stmt)
+    con.execute(TRUSTED_COHORT_VIEW_DDL)
+
+
+def ensure_schema_at_path(path: Path) -> None:
+    """Ensure schema exists before callers open a read-only connection."""
+    con = duckdb.connect(str(path), read_only=False)
+    try:
+        ensure_schema(con)
+    finally:
+        con.close()
 
 
 @contextmanager
@@ -92,6 +123,8 @@ def open_research_db(
     concurrent readers while a writer is active in another process.
     """
     path = research_db_path(project_root=project_root)
+    if read_only:
+        ensure_schema_at_path(path)
     con = duckdb.connect(str(path), read_only=read_only)
     try:
         if not read_only:

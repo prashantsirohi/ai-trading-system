@@ -34,7 +34,7 @@ from ai_trading_system.research.perf_tracker.constants import (
     DRIFT_THRESHOLD_PCT,
     DRIFT_WARNING_MIN_RECENT_N,
     FACTOR_COLUMNS,
-    FORWARD_RETURN_ANOMALY_5D_PCT,
+    FORWARD_RETURN_ANOMALY_THRESHOLDS,
     IC_HORIZONS,
     MATURATION_WARNING_RATIO,
     SAME_DATE_SMALL_SAMPLE_DAYS,
@@ -97,7 +97,7 @@ def _cohort_returns(con) -> pd.DataFrame:
                       / NULLIF(COUNT(fwd_5d_return),  0)                     AS hitrate_5d,
                 100.0 * SUM(CASE WHEN fwd_20d_return > 0 THEN 1 ELSE 0 END)
                       / NULLIF(COUNT(fwd_20d_return), 0)                     AS hitrate_20d
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             WHERE rank_position BETWEEN {lo} AND {hi}
             """
         ).fetchone()
@@ -135,7 +135,7 @@ def _bucket_attribution(con) -> pd.DataFrame:
                         / NULLIF(COUNT(fwd_5d_return),  0), 1) AS hitrate_5d,
             ROUND(100.0 * SUM(CASE WHEN fwd_20d_return > 0 THEN 1 ELSE 0 END)
                         / NULLIF(COUNT(fwd_20d_return), 0), 1) AS hitrate_20d
-        FROM rank_cohort_performance
+        FROM rank_cohort_performance_trusted
         GROUP BY bucket
         ORDER BY {BUCKET_ORDER_SQL}
         """
@@ -152,7 +152,7 @@ def _bucket_coverage(con) -> pd.DataFrame:
             MAX(run_date) AS last_date,
             COUNT(*) AS rows,
             COUNT(DISTINCT run_date) AS dates
-        FROM rank_cohort_performance
+        FROM rank_cohort_performance_trusted
         GROUP BY bucket
         ORDER BY {BUCKET_ORDER_SQL}
         """
@@ -164,14 +164,14 @@ def _same_date_bucket_attribution(con) -> pd.DataFrame:
         """
         WITH bucket_dates AS (
             SELECT DISTINCT run_date
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             WHERE watchlist_bucket IS NOT NULL
         )
         SELECT
             AVG(fwd_5d_return),
             AVG(fwd_10d_return),
             AVG(fwd_20d_return)
-        FROM rank_cohort_performance
+        FROM rank_cohort_performance_trusted
         WHERE run_date IN (SELECT run_date FROM bucket_dates)
         """
     ).fetchone()
@@ -182,7 +182,7 @@ def _same_date_bucket_attribution(con) -> pd.DataFrame:
         f"""
         WITH bucket_dates AS (
             SELECT DISTINCT run_date
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             WHERE watchlist_bucket IS NOT NULL
         )
         SELECT
@@ -197,7 +197,7 @@ def _same_date_bucket_attribution(con) -> pd.DataFrame:
                   / NULLIF(COUNT(fwd_5d_return),  0) AS hitrate_5d,
             100.0 * SUM(CASE WHEN fwd_20d_return > 0 THEN 1 ELSE 0 END)
                   / NULLIF(COUNT(fwd_20d_return), 0) AS hitrate_20d
-        FROM rank_cohort_performance
+        FROM rank_cohort_performance_trusted
         WHERE run_date IN (SELECT run_date FROM bucket_dates)
         GROUP BY bucket
         ORDER BY {BUCKET_ORDER_SQL}
@@ -205,14 +205,16 @@ def _same_date_bucket_attribution(con) -> pd.DataFrame:
     ).fetchdf()
     if df.empty:
         return df
-    df.loc[:, "avg_5d"] = df["avg_5d"].map(_round)
-    df.loc[:, "avg_10d"] = df["avg_10d"].map(_round)
-    df.loc[:, "avg_20d"] = df["avg_20d"].map(_round)
-    df.loc[:, "hitrate_5d"] = df["hitrate_5d"].map(lambda v: _round(v, 1))
-    df.loc[:, "hitrate_20d"] = df["hitrate_20d"].map(lambda v: _round(v, 1))
-    df["control_avg_5d"] = control_5d
-    df["control_avg_10d"] = control_10d
-    df["control_avg_20d"] = control_20d
+    df = df.assign(
+        avg_5d=df["avg_5d"].map(_round).astype(object),
+        avg_10d=df["avg_10d"].map(_round).astype(object),
+        avg_20d=df["avg_20d"].map(_round).astype(object),
+        hitrate_5d=df["hitrate_5d"].map(lambda v: _round(v, 1)).astype(object),
+        hitrate_20d=df["hitrate_20d"].map(lambda v: _round(v, 1)).astype(object),
+        control_avg_5d=control_5d,
+        control_avg_10d=control_10d,
+        control_avg_20d=control_20d,
+    )
     df.loc[:, "excess_5d"] = df["avg_5d"].map(
         lambda v: _round(v - control_5d) if v is not None and control_5d is not None else None
     )
@@ -235,7 +237,7 @@ def _factor_ic(con, *, window_days: int) -> pd.DataFrame:
     available = [
         col for col in FACTOR_COLUMNS
         if con.execute(
-            f"SELECT COUNT(*) FROM rank_cohort_performance WHERE {col} IS NOT NULL"
+            f"SELECT COUNT(*) FROM rank_cohort_performance_trusted WHERE {col} IS NOT NULL"
         ).fetchone()[0] > 0
     ]
     if not available:
@@ -249,10 +251,10 @@ def _factor_ic(con, *, window_days: int) -> pd.DataFrame:
     df = con.execute(
         f"""
         SELECT {cols}, {", ".join(fwd_cols)}
-        FROM rank_cohort_performance
+        FROM rank_cohort_performance_trusted
         WHERE run_date >= (
               SELECT MAX(run_date) - INTERVAL '{window_days} days'
-              FROM rank_cohort_performance
+              FROM rank_cohort_performance_trusted
           )
         """
     ).fetchdf()
@@ -309,11 +311,11 @@ def _conditional_factor_ic(con, *, window_days: int) -> pd.DataFrame:
         df = con.execute(
             f"""
             SELECT {cols}
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             WHERE {clause}
               AND run_date >= (
                   SELECT MAX(run_date) - INTERVAL '{window_days} days'
-                  FROM rank_cohort_performance
+                  FROM rank_cohort_performance_trusted
               )
             """
         ).fetchdf()
@@ -335,10 +337,10 @@ def _factor_overlap(con, *, window_days: int = 180) -> pd.DataFrame:
     df = con.execute(
         f"""
         SELECT factor_rs, factor_prox
-        FROM rank_cohort_performance
+        FROM rank_cohort_performance_trusted
         WHERE run_date >= (
             SELECT MAX(run_date) - INTERVAL '{window_days} days'
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
         )
         """
     ).fetchdf()
@@ -425,7 +427,7 @@ def _weight_activation_evidence(ic_180d: pd.DataFrame) -> pd.DataFrame:
 
 
 def _factor_coverage(con) -> pd.DataFrame:
-    total = con.execute("SELECT COUNT(*) FROM rank_cohort_performance").fetchone()[0] or 0
+    total = con.execute("SELECT COUNT(*) FROM rank_cohort_performance_trusted").fetchone()[0] or 0
     rows = []
     for factor in FACTOR_COLUMNS:
         non_null, first_date, last_date = con.execute(
@@ -434,7 +436,7 @@ def _factor_coverage(con) -> pd.DataFrame:
                 COUNT({factor}),
                 MIN(CASE WHEN {factor} IS NOT NULL THEN run_date END),
                 MAX(CASE WHEN {factor} IS NOT NULL THEN run_date END)
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             """
         ).fetchone()
         non_null_count = int(non_null or 0)
@@ -566,24 +568,23 @@ def _anomaly_summary(con) -> dict:
     surfaces the count so users can investigate before relying on a digest
     that includes them.
     """
-    threshold = FORWARD_RETURN_ANOMALY_5D_PCT
     row = con.execute(
-        f"""
+        """
         SELECT
-            COUNT(*) FILTER (WHERE fwd_5d_return IS NOT NULL) AS n_matured,
-            COUNT(*) FILTER (
-                WHERE fwd_5d_return IS NOT NULL AND ABS(fwd_5d_return) > {threshold}
-            ) AS n_anomaly
+            COUNT(*) AS n_rows,
+            COUNT(*) FILTER (WHERE COALESCE(fwd_return_anomaly, FALSE)) AS n_anomaly,
+            COUNT(*) FILTER (WHERE COALESCE(fwd_5d_anomaly, FALSE)) AS n_5d_anomaly
         FROM rank_cohort_performance
         """
     ).fetchone()
-    n_matured = int(row[0] or 0)
+    n_rows = int(row[0] or 0)
     n_anomaly = int(row[1] or 0)
     return {
-        "threshold_pct": threshold,
-        "n_matured": n_matured,
+        "thresholds": FORWARD_RETURN_ANOMALY_THRESHOLDS,
+        "n_rows": n_rows,
         "n_anomaly": n_anomaly,
-        "pct": (100.0 * n_anomaly / n_matured) if n_matured else None,
+        "n_5d_anomaly": int(row[2] or 0),
+        "pct": (100.0 * n_anomaly / n_rows) if n_rows else None,
     }
 
 
@@ -610,7 +611,7 @@ def _bucket_composition(con) -> pd.DataFrame:
     df = con.execute(
         f"""
         SELECT {', '.join(select_pieces)}
-        FROM rank_cohort_performance
+        FROM rank_cohort_performance_trusted
         GROUP BY bucket
         ORDER BY {BUCKET_ORDER_SQL}
         """
@@ -629,7 +630,7 @@ def _bucket_daily(con, *, lookback_days: int = 90) -> pd.DataFrame:
         lb = (
             " AND run_date >= ("
             "  SELECT MAX(run_date) - INTERVAL '" + str(int(lookback_days)) + " days'"
-            "  FROM rank_cohort_performance)"
+            "  FROM rank_cohort_performance_trusted)"
         )
     return con.execute(
         f"""
@@ -640,7 +641,7 @@ def _bucket_daily(con, *, lookback_days: int = 90) -> pd.DataFrame:
             ROUND(AVG(fwd_5d_return), 2) AS avg_5d,
             ROUND(100.0 * SUM(CASE WHEN fwd_5d_return > 0 THEN 1 ELSE 0 END)
                         / NULLIF(COUNT(fwd_5d_return), 0), 1) AS hitrate_5d
-        FROM rank_cohort_performance
+        FROM rank_cohort_performance_trusted
         WHERE 1=1
         {lb}
         GROUP BY run_date, bucket
@@ -656,7 +657,7 @@ def _concentration(con, *, lookback_days: int = 90) -> dict:
         lb = (
             " AND run_date >= ("
             "  SELECT MAX(run_date) - INTERVAL '" + str(int(lookback_days)) + " days'"
-            "  FROM rank_cohort_performance)"
+            "  FROM rank_cohort_performance_trusted)"
         )
     rows: list[dict] = []
     by_cohort: dict[str, dict] = {}
@@ -670,7 +671,7 @@ def _concentration(con, *, lookback_days: int = 90) -> dict:
                 AVG(fwd_20d_return),
                 100.0 * SUM(CASE WHEN fwd_20d_return > 0 THEN 1 ELSE 0 END)
                       / NULLIF(COUNT(fwd_20d_return), 0)
-            FROM rank_cohort_performance
+            FROM rank_cohort_performance_trusted
             WHERE rank_position BETWEEN {lo} AND {hi}
             {lb}
             """
@@ -749,7 +750,7 @@ def build_digest(
     with open_research_db(project_root=project_root, read_only=True) as con:
         meta = con.execute(
             "SELECT MIN(run_date), MAX(run_date), COUNT(DISTINCT run_date), COUNT(*) "
-            "FROM rank_cohort_performance"
+            "FROM rank_cohort_performance_trusted"
         ).fetchone()
         first_date, last_date, n_dates, n_rows = meta
         sections["cohorts"] = _cohort_returns(con)
@@ -852,16 +853,17 @@ def _render_markdown(
             )
 
     # Corporate-action anomaly indicator: raw close means split/bonus days
-    # produce spurious ±50%+ 5-day returns. We don't drop them silently —
-    # surface a count so the user can decide.
+    # produce spurious returns. Rows stay inspectable but are excluded from
+    # analytics through the trusted view.
     if anomaly_meta and anomaly_meta.get("n_anomaly", 0) > 0:
         pct = anomaly_meta.get("pct")
         pct_str = f"{pct:.2f}%" if pct is not None else "n/a"
         parts.append(
             f"> **Forward-return anomalies**: {anomaly_meta['n_anomaly']:,} rows "
-            f"(of {anomaly_meta['n_matured']:,} matured at 5d, {pct_str}) have "
-            f"|fwd_5d_return| > {anomaly_meta['threshold_pct']:.0f}% — likely "
-            f"corporate actions in the raw-close OHLCV feed.\n"
+            f"(of {anomaly_meta['n_rows']:,} raw rows, {pct_str}) exceed the "
+            "horizon-specific anomaly thresholds and are excluded from analytics "
+            f"({anomaly_meta['n_5d_anomaly']:,} at 5d) — likely corporate actions "
+            "in the raw-close OHLCV feed.\n"
         )
 
     # Same-date bias indicator.

@@ -20,6 +20,7 @@ import logging
 
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 from ai_trading_system.research.perf_tracker.backfill import run_backfill
+from ai_trading_system.research.perf_tracker.health import build_tracker_health
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +53,25 @@ class PerfTrackerStage:
             "dates_processed": int(result.get("dates_processed", 0)),
             "rows_upserted": int(result.get("rows_upserted", 0)),
         }
+        health = build_tracker_health(project_root=context.project_root)
+        metadata["tracker_health_status"] = health["status"]
         artifact_path = context.write_json("perf_tracker_summary.json", metadata)
+        health_path = context.write_json("tracker_health.json", health)
         return StageResult(
-            artifacts=[StageArtifact.from_file(
-                "perf_tracker_summary",
-                artifact_path,
-                row_count=metadata["rows_upserted"],
-                metadata=metadata,
-                attempt_number=context.attempt_number,
-            )],
+            artifacts=[
+                StageArtifact.from_file(
+                    "perf_tracker_summary",
+                    artifact_path,
+                    row_count=metadata["rows_upserted"],
+                    metadata=metadata,
+                    attempt_number=context.attempt_number,
+                ),
+                StageArtifact.from_file(
+                    "tracker_health",
+                    health_path,
+                    metadata=health,
+                    attempt_number=context.attempt_number,
+                ),
+            ],
             metadata=metadata,
         )

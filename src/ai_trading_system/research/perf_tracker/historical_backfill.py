@@ -53,7 +53,9 @@ SCHEMA_COLUMNS: tuple[str, ...] = (
     "fwd_5d_matured_at", "fwd_10d_matured_at", "fwd_20d_matured_at", "fwd_60d_matured_at",
     "factor_rs", "factor_vol", "factor_trend", "factor_prox", "factor_deliv",
     "factor_sector", "factor_momentum_accel", "factor_above_200dma",
-    "sector_name",
+    "factor_liquidity", "factor_delivery_trend", "sector_name",
+    "fwd_5d_anomaly", "fwd_return_anomaly", "source_type", "source_run_id",
+    "source_artifact_path", "data_quality_status",
 )
 
 VALID_FREQUENCIES = ("daily", "weekly", "quarterly")
@@ -85,6 +87,7 @@ def _enumerate_trading_dates(
             FROM _catalog
             WHERE exchange = ? AND CAST(timestamp AS DATE) BETWEEN ?::DATE AND ?::DATE
               AND close IS NOT NULL AND close > 0
+              AND DAYOFWEEK(CAST(timestamp AS DATE)) NOT IN (0, 6)
             ORDER BY d
             """,
             [exchange, str(from_date), str(to_date)],
@@ -179,7 +182,12 @@ def run_historical_backfill(
         for run_date, ranked_df in sorted(ranked_by_date.items()):
             if run_date not in target_set:
                 continue
-            rows = build_rows_from_ranked_frame(str(run_date), ranked_df)
+            rows = build_rows_from_ranked_frame(
+                str(run_date),
+                ranked_df,
+                source_type="historical_research",
+                source_run_id=f"historical-{frequency}-{run_date}",
+            )
             if rows is None or rows.empty:
                 continue
             frames.append(rows)
