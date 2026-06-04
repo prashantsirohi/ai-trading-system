@@ -47,6 +47,7 @@ TASK_FILE_MAP = {
     "stock_scan": ("stock_scan", "csv"),
     "sector_dashboard": ("sector_dashboard", "csv"),
     "watchlist_prefilter": ("watchlist_prefilter", "csv"),
+    "watchlist_rejections": ("watchlist_rejections", "csv"),
     "watchlist_catalyst": ("watchlist_catalyst", "json"),
     "watchlist_final": ("watchlist_candidates", "csv"),
     "dashboard_payload": ("dashboard_payload", "json"),
@@ -439,6 +440,7 @@ class RankOrchestrationService:
             )
         for artifact_type, filename in (
             ("watchlist_candidates_json", "watchlist_candidates.json"),
+            ("watchlist_rejections_json", "watchlist_rejections.json"),
             ("watchlist_digest", "watchlist_digest.md"),
             ("watchlist_catalyst", "watchlist_catalyst.json"),
         ):
@@ -448,6 +450,8 @@ class RankOrchestrationService:
             row_count = None
             if artifact_type == "watchlist_candidates_json":
                 row_count = len(outputs.get("watchlist_candidates", pd.DataFrame()))
+            if artifact_type == "watchlist_rejections_json":
+                row_count = len(outputs.get("watchlist_rejections", pd.DataFrame()))
             artifacts.append(
                 StageArtifact.from_file(
                     artifact_type,
@@ -1133,6 +1137,48 @@ class RankOrchestrationService:
                 "watchlist_prefilter unavailable: "
                 f"{watchlist_prefilter_status.get('error_message', watchlist_prefilter_status.get('detail'))}"
             )
+
+        watchlist_rejections_df, watchlist_rejections_status = self.execute_rank_task(
+            context=context,
+            task_name="watchlist_rejections",
+            label="Build watchlist_rejections",
+            fingerprint_payload={
+                "task": "watchlist_rejections",
+                "logic_version": "2026-06-v2-gates",
+                "run_date": context.run_date,
+                "ranked_fingerprint": self.dataframe_fingerprint(ranked),
+                "breakout_fingerprint": self.dataframe_fingerprint(breakout_df),
+                "pattern_fingerprint": self.dataframe_fingerprint(pattern_df),
+                "sector_fingerprint": self.dataframe_fingerprint(sector_dashboard_df),
+                "trust_status": trust_summary.get("status"),
+            },
+            task_status=task_status,
+            previous_attempt=previous_attempt,
+            previous_statuses=previous_statuses,
+            builder=lambda: watchlist.build_watchlist_rejections(
+                ranked,
+                breakout_df,
+                pattern_df,
+                sector_dashboard_df,
+                top_n=int(context.params.get("watchlist_rejections_top_n", 100) or 100),
+                trust_summary=trust_summary,
+            ),
+            optional=True,
+            skip_reason=watchlist_skip_reason,
+        )
+        outputs["watchlist_rejections"] = watchlist_rejections_df
+        if watchlist_rejections_status["status"] in {"failed", "timed_out", "degraded"}:
+            warnings.append(
+                "watchlist_rejections unavailable: "
+                f"{watchlist_rejections_status.get('error_message', watchlist_rejections_status.get('detail'))}"
+            )
+        try:
+            context.write_json(
+                "watchlist_rejections.json",
+                watchlist_rejections_df.to_dict(orient="records") if isinstance(watchlist_rejections_df, pd.DataFrame) else [],
+            )
+        except Exception as exc:
+            warnings.append(f"watchlist rejections sidecar unavailable: {exc}")
 
         watchlist_llm_enabled = bool(context.params.get("watchlist_llm_enabled", False))
         catalyst_skip_reason = None

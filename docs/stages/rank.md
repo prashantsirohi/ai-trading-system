@@ -44,6 +44,7 @@ Under `data/pipeline_runs/<run_id>/rank/attempt_<n>/`:
 | `stock_scan` | `stock_scan.csv` | `domains/ranking/stock_scan.py` (integrated view from `build_integrated_stock_scan_view`, `service.py:179`) |
 | `sector_dashboard` | `sector_dashboard.csv` | `domains/ranking/sector_dashboard.py` |
 | `watchlist_prefilter` | `watchlist_prefilter.csv` | `domains/ranking/watchlist.py` |
+| `watchlist_rejections` | `watchlist_rejections.csv` + `watchlist_rejections.json` sidecar | V2 watchlist gate diagnostics from `domains/ranking/watchlist.py` |
 | `watchlist_catalyst` | `watchlist_catalyst.json` | `domains/ranking/watchlist_catalyst.py` |
 | `watchlist_final` | `watchlist_candidates.csv` + `watchlist_candidates.json` + `watchlist_digest.md` sidecars | `service.py:375`–`394` |
 | `dashboard_payload` | `dashboard_payload.json` | `domains/ranking/payloads.py::build_dashboard_payload` |

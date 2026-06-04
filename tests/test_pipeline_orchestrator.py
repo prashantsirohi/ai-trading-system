@@ -1450,10 +1450,14 @@ def test_rank_stage_writes_watchlist_sidecar_artifacts(tmp_path: Path) -> None:
             json.dumps(watchlist_df.to_dict(orient="records")),
             encoding="utf-8",
         )
+        (output_dir / "watchlist_rejections.json").write_text("[]", encoding="utf-8")
         (output_dir / "watchlist_digest.md").write_text("# Watchlist Candidates\n", encoding="utf-8")
         return {
             "ranked_signals": pd.DataFrame([{"symbol_id": "AAA", "composite_score": 91.0}]),
             "watchlist_prefilter": watchlist_df.copy(),
+            "watchlist_rejections": pd.DataFrame(
+                columns=["symbol_id", "gate_status", "gate_failures", "primary_gate_failure"]
+            ),
             "watchlist_candidates": watchlist_df.copy(),
             "__dashboard_payload__": {
                 "summary": {"run_id": "run-watchlist", "ranked_count": 1},
@@ -1468,11 +1472,15 @@ def test_rank_stage_writes_watchlist_sidecar_artifacts(tmp_path: Path) -> None:
 
     output_dir = context.output_dir()
     assert (output_dir / "watchlist_prefilter.csv").exists()
+    assert (output_dir / "watchlist_rejections.csv").exists()
+    assert (output_dir / "watchlist_rejections.json").exists()
     assert (output_dir / "watchlist_candidates.csv").exists()
     assert (output_dir / "watchlist_candidates.json").exists()
     assert (output_dir / "watchlist_digest.md").exists()
     assert any(artifact.artifact_type == "watchlist_candidates" for artifact in result.artifacts)
     assert any(artifact.artifact_type == "watchlist_candidates_json" for artifact in result.artifacts)
+    assert any(artifact.artifact_type == "watchlist_rejections" for artifact in result.artifacts)
+    assert any(artifact.artifact_type == "watchlist_rejections_json" for artifact in result.artifacts)
     final = pd.read_csv(output_dir / "watchlist_candidates.csv")
     assert "sector_escape_hatch" in final.columns
     dashboard_payload = json.loads((output_dir / "dashboard_payload.json").read_text(encoding="utf-8"))

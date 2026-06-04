@@ -4,6 +4,7 @@ import pandas as pd
 
 from ai_trading_system.domains.ranking.watchlist import (
     build_final_watchlist,
+    build_watchlist_rejections,
     build_watchlist_prefilter,
     compute_watchlist_score,
     validate_watchlist_candidates,
@@ -109,6 +110,35 @@ def test_watchlist_score_is_bounded_and_deterministic() -> None:
     assert score == compute_watchlist_score(prefilter.iloc[0])
 
 
+def test_top_ranked_alone_does_not_satisfy_momentum_gate() -> None:
+    ranked = pd.DataFrame(
+        [
+            {
+                "symbol_id": "TOP",
+                "sector": "Capital Goods",
+                "rank": 1,
+                "stage2_label": "stage2",
+                "return_1": 0,
+                "return_5": 0,
+                "near_52w_high_pct": 20,
+                "volume_ratio": 1.0,
+                "delivery_pct": pd.NA,
+                "close": 120,
+                "sma_50": 110,
+                "composite_score": 95,
+            }
+        ]
+    )
+    breakout = pd.DataFrame([{"symbol_id": "TOP", "candidate_tier": "A", "qualified": True, "breakout_score": 90}])
+    sectors = pd.DataFrame([{"Sector": "Capital Goods", "Quadrant": "Leading"}])
+
+    prefilter = build_watchlist_prefilter(ranked, breakout, pd.DataFrame(), sectors, top_n=30)
+    rejections = build_watchlist_rejections(ranked, breakout, pd.DataFrame(), sectors)
+
+    assert prefilter.empty
+    assert rejections.iloc[0]["primary_gate_failure"] == "MOMENTUM"
+
+
 def test_llm_failure_path_final_has_empty_llm_fields() -> None:
     prefilter = build_watchlist_prefilter(_ranked(), _breakout(), _pattern(), _sectors(), top_n=30)
     final = build_final_watchlist(prefilter, catalyst_enrichment=None, top_n=15, data_trust_status="trusted")
@@ -204,6 +234,18 @@ def test_final_includes_sector_escape_hatch() -> None:
     assert bool(final.loc[final["symbol_id"].eq("EEE"), "sector_escape_hatch"].iloc[0]) is True
 
 
+def test_final_includes_v2_bucket_and_operator_action() -> None:
+    prefilter = build_watchlist_prefilter(_ranked(), _breakout(), _pattern(), _sectors(), top_n=30)
+    final = build_final_watchlist(prefilter, top_n=15)
+    row = final.loc[final["symbol_id"].eq("AAA")].iloc[0]
+    assert row["watchlist_bucket"] == "TRIGGERED_TODAY"
+    assert row["operator_action"] == "Act Today"
+    assert row["gate_status"] == "PASSED"
+    assert row["score_version"] == "watchlist_v2_2026_06"
+    escape = final.loc[final["symbol_id"].eq("EEE")].iloc[0]
+    assert escape["watchlist_bucket"] != "TRIGGERED_TODAY"
+
+
 def test_escape_hatch_score_is_penalized_vs_clean_sector() -> None:
     clean = pd.Series(
         {
@@ -241,6 +283,41 @@ def test_delivery_accumulation_requires_more_than_sector_median() -> None:
     tags = dict(zip(prefilter["symbol_id"], prefilter["momentum_tags"], strict=False))
     assert "DELIVERY_ACCUMULATION" not in tags["MID"]
     assert "DELIVERY_ACCUMULATION" in tags["HIGH"]
+
+
+def test_tradability_missing_liquidity_does_not_block_but_low_liquidity_rejects() -> None:
+    ranked = pd.DataFrame(
+        [
+            {"symbol_id": "UNKNOWN", "sector": "Capital Goods", "rank": 1, "stage2_label": "stage2", "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2, "delivery_pct": 60, "close": 120, "sma_50": 110, "composite_score": 95},
+            {"symbol_id": "LOWLIQ", "sector": "Capital Goods", "rank": 2, "stage2_label": "stage2", "return_5": 6, "near_52w_high_pct": 3, "volume_ratio": 2, "delivery_pct": 60, "close": 120, "sma_50": 110, "composite_score": 94, "avg_traded_value": 1000},
+        ]
+    )
+    breakout = pd.DataFrame(
+        [
+            {"symbol_id": "UNKNOWN", "candidate_tier": "A", "qualified": True, "breakout_score": 90},
+            {"symbol_id": "LOWLIQ", "candidate_tier": "A", "qualified": True, "breakout_score": 90},
+        ]
+    )
+    sectors = pd.DataFrame([{"Sector": "Capital Goods", "Quadrant": "Leading"}])
+
+    prefilter = build_watchlist_prefilter(ranked, breakout, pd.DataFrame(), sectors, top_n=30)
+    rejections = build_watchlist_rejections(ranked, breakout, pd.DataFrame(), sectors)
+
+    assert "UNKNOWN" in set(prefilter["symbol_id"])
+    assert prefilter.loc[prefilter["symbol_id"].eq("UNKNOWN"), "tradability_status"].iloc[0] == "UNKNOWN"
+    assert "LOWLIQ" not in set(prefilter["symbol_id"])
+    assert rejections.loc[rejections["symbol_id"].eq("LOWLIQ"), "primary_gate_failure"].iloc[0] == "TRADABILITY"
+
+
+def test_watchlist_rejections_exclude_accepted_and_include_gate_reason() -> None:
+    rejections = build_watchlist_rejections(_ranked(), _breakout(), _pattern(), _sectors(), top_n=30)
+    symbols = set(rejections["symbol_id"])
+    assert "AAA" not in symbols
+    assert "EEE" not in symbols
+    assert "DDD" in symbols
+    row = rejections.loc[rejections["symbol_id"].eq("DDD")].iloc[0]
+    assert row["primary_gate_failure"] == "EXTENSION"
+    assert "EXTENSION" in row["gate_failures"]
 
 
 def test_watchlist_validation_warns_on_malformed_rows() -> None:

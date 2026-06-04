@@ -11,6 +11,21 @@ import pandas as pd
 LEADING_QUADRANTS = {"leading", "improving"}
 STAGE2_LABELS = {"strong_stage2", "stage2", "stage1_to_stage2"}
 PATTERN_LIFECYCLES = {"watchlist", "confirmed"}
+SCORE_VERSION = "watchlist_v2_2026_06"
+REAL_MOMENTUM_TAGS = {"52W_HIGH", "WEEKLY_GAINER", "DAILY_GAINER", "UNUSUAL_VOLUME", "DELIVERY_ACCUMULATION"}
+WATCHLIST_BUCKETS = {"TRIGGERED_TODAY", "CORE_MOMENTUM", "EARLY_STAGE2", "AVOID_WEAK_CONFIRMATION"}
+LIQUIDITY_COLUMNS = (
+    "avg_traded_value",
+    "avg_traded_value_20",
+    "avg_traded_value_20d",
+    "average_traded_value",
+    "traded_value",
+    "turnover",
+    "turnover_20d",
+    "avg_turnover_20d",
+    "dollar_volume",
+)
+MIN_LIQUIDITY_VALUE = 10_000_000.0
 PATTERN_TAGS = {
     "cup": "CUP_HANDLE",
     "cup_with_handle": "CUP_HANDLE",
@@ -43,6 +58,36 @@ FINAL_COLUMNS = [
     "action",
     "data_trust_status",
     "watchlist_reason",
+    "watchlist_bucket",
+    "operator_action",
+    "gate_status",
+    "gate_failures",
+    "primary_gate_failure",
+    "tradability_status",
+    "liquidity_score",
+    "extension_pct_sma50",
+    "score_version",
+]
+REJECTION_COLUMNS = [
+    "symbol_id",
+    "rank",
+    "sector",
+    "sector_status",
+    "stage",
+    "momentum_tags",
+    "setup_label",
+    "gate_status",
+    "gate_failures",
+    "primary_gate_failure",
+    "tradability_status",
+    "liquidity_score",
+    "extension_pct_sma50",
+    "watchlist_bucket",
+    "composite_score",
+    "breakout_score",
+    "pattern_score",
+    "sector_escape_hatch",
+    "score_version",
 ]
 
 
@@ -145,6 +190,42 @@ def _delivery_accumulation(row: pd.Series) -> bool:
     median_ok = pd.notna(median) and delivery >= median + 10.0
     p75_ok = pd.notna(p75) and delivery >= p75
     return bool(delivery >= 0 and (median_ok or p75_ok))
+
+
+def _momentum_tag_list(row: pd.Series) -> list[str]:
+    return [tag.strip() for tag in str(row.get("momentum_tags", "")).split(",") if tag.strip()]
+
+
+def _has_real_momentum(row: pd.Series) -> bool:
+    return any(tag in REAL_MOMENTUM_TAGS for tag in _momentum_tag_list(row))
+
+
+def _extension_pct(row: pd.Series) -> float:
+    close = _num(row, "close", float("nan"))
+    sma50 = _num(row, "sma_50", float("nan"))
+    if pd.isna(close) or pd.isna(sma50) or sma50 <= 0:
+        return float("nan")
+    return round(((close - sma50) / sma50) * 100.0, 2)
+
+
+def _liquidity_value(row: pd.Series) -> float:
+    for column in LIQUIDITY_COLUMNS:
+        value = _num(row, column, float("nan"))
+        if pd.notna(value):
+            return value
+    return float("nan")
+
+
+def _tradability(row: pd.Series) -> dict[str, Any]:
+    close = _num(row, "close", float("nan"))
+    liquidity = _liquidity_value(row)
+    if pd.notna(close) and close <= 0:
+        return {"tradability_status": "FAILED", "liquidity_score": 0.0}
+    if pd.isna(liquidity):
+        return {"tradability_status": "UNKNOWN", "liquidity_score": pd.NA}
+    score = max(0.0, min(100.0, (liquidity / MIN_LIQUIDITY_VALUE) * 100.0))
+    status = "PASSED" if liquidity >= MIN_LIQUIDITY_VALUE else "FAILED"
+    return {"tradability_status": status, "liquidity_score": round(score, 2)}
 
 
 def _collect_momentum_tags(row: pd.Series) -> list[str]:
@@ -259,6 +340,47 @@ def compute_watchlist_score(row: pd.Series) -> float:
     return round(min(100.0, max(0.0, score)), 2)
 
 
+def _assign_watchlist_bucket(row: pd.Series) -> str:
+    composite_percentile = _num(row, "composite_percentile", 0.0)
+    conviction = max(_num(row, "conviction_score"), _num(row, "breakout_score"))
+    volume_ratio_20 = max(_num(row, "volume_ratio_20"), _num(row, "volume_ratio"))
+    high_state = composite_percentile >= 80.0
+    weak_state = composite_percentile < 50.0
+    triggered = high_state and conviction >= 50.0 and not _truthy(row.get("sector_escape_hatch"))
+    if triggered:
+        return "TRIGGERED_TODAY"
+    if _classify_stage(row) == "STAGE_1_TO_2" or _text(row, "stage2_label").lower() == "stage1_to_stage2":
+        return "EARLY_STAGE2"
+    if high_state:
+        return "CORE_MOMENTUM"
+    if volume_ratio_20 >= 1.5 and weak_state:
+        return "AVOID_WEAK_CONFIRMATION"
+    return "CORE_MOMENTUM" if _text(row, "sector_status") in {"LEADING", "IMPROVING"} else "AVOID_WEAK_CONFIRMATION"
+
+
+def _evaluate_gate_row(row: pd.Series) -> dict[str, Any]:
+    failures: list[str] = []
+    if _truthy(row.get("is_quarantined")) or _text(row, "data_trust_status").lower() == "blocked":
+        failures.append("DATA_TRUST")
+    if _text(row, "tradability_status") == "FAILED":
+        failures.append("TRADABILITY")
+    if not _truthy(row.get("sector_ok")):
+        failures.append("REGIME")
+    if not _truthy(row.get("stage_ok")):
+        failures.append("STAGE")
+    if not _truthy(row.get("setup_ok")):
+        failures.append("SETUP")
+    if not _truthy(row.get("real_momentum_ok")):
+        failures.append("MOMENTUM")
+    if not _truthy(row.get("not_extended")):
+        failures.append("EXTENSION")
+    return {
+        "gate_status": "PASSED" if not failures else "REJECTED",
+        "gate_failures": ",".join(failures),
+        "primary_gate_failure": failures[0] if failures else "",
+    }
+
+
 def build_watchlist_prefilter(
     ranked: pd.DataFrame,
     breakout: pd.DataFrame,
@@ -266,6 +388,100 @@ def build_watchlist_prefilter(
     sector_dash: pd.DataFrame,
     *,
     top_n: int = 30,
+    trust_summary: dict[str, Any] | None = None,
+) -> pd.DataFrame:
+    universe = _build_watchlist_universe(ranked, breakout, pattern, sector_dash, trust_summary=trust_summary)
+    if universe.empty:
+        return pd.DataFrame()
+    accepted = universe.loc[universe["gate_status"].eq("PASSED")].copy()
+    escape = universe.loc[
+        universe["gate_status"].eq("REJECTED")
+        & universe["gate_failures"].eq("REGIME")
+        & universe["stage_ok"]
+        & universe["real_momentum_ok"]
+        & universe["setup_ok"]
+        & universe["not_extended"]
+        & universe["tradability_status"].ne("FAILED")
+        & (pd.to_numeric(universe["breakout_score"], errors="coerce").fillna(0) >= 80)
+        & universe.get("qualified", pd.Series(False, index=universe.index)).map(_truthy)
+    ].copy()
+    if not escape.empty:
+        escape.loc[:, "sector_escape_hatch"] = True
+        escape.loc[:, "gate_status"] = "PASSED"
+        escape.loc[:, "gate_failures"] = ""
+        escape.loc[:, "primary_gate_failure"] = ""
+        escape = escape.sort_values(["breakout_score", "symbol_id"], ascending=[False, True], kind="stable").head(2)
+    selected = pd.concat([accepted, escape], ignore_index=True)
+    if selected.empty:
+        return selected
+
+    selected.loc[:, "watchlist_bucket"] = selected.apply(_assign_watchlist_bucket, axis=1)
+    selected.loc[:, "operator_action"] = selected["watchlist_bucket"].map(
+        {
+            "TRIGGERED_TODAY": "Act Today",
+            "CORE_MOMENTUM": "Study",
+            "EARLY_STAGE2": "Watch",
+            "AVOID_WEAK_CONFIRMATION": "Avoid",
+        }
+    ).fillna("Watch")
+    tech = selected.apply(build_technical_catalyst, axis=1, result_type="expand")
+    selected = pd.concat([selected.reset_index(drop=True), tech.reset_index(drop=True)], axis=1)
+    selected.loc[:, "watchlist_score"] = selected.apply(compute_watchlist_score, axis=1)
+    selected.loc[:, "score_version"] = SCORE_VERSION
+    selected = selected.sort_values(
+        ["watchlist_score", "composite_score", "breakout_score", "pattern_score", "symbol_id"],
+        ascending=[False, False, False, False, True],
+        na_position="last",
+        kind="stable",
+    ).head(int(top_n)).reset_index(drop=True)
+    selected.loc[:, "prefilter_rank"] = range(1, len(selected) + 1)
+    return selected
+
+
+def build_watchlist_rejections(
+    ranked: pd.DataFrame,
+    breakout: pd.DataFrame,
+    pattern: pd.DataFrame,
+    sector_dash: pd.DataFrame,
+    *,
+    top_n: int = 100,
+    trust_summary: dict[str, Any] | None = None,
+) -> pd.DataFrame:
+    universe = _build_watchlist_universe(ranked, breakout, pattern, sector_dash, trust_summary=trust_summary)
+    if universe.empty:
+        return pd.DataFrame(columns=REJECTION_COLUMNS)
+    accepted = build_watchlist_prefilter(
+        ranked,
+        breakout,
+        pattern,
+        sector_dash,
+        top_n=len(universe),
+        trust_summary=trust_summary,
+    )
+    accepted_symbols = set(accepted.get("symbol_id", pd.Series(dtype=str)).astype(str))
+    rejected = universe.loc[~universe["symbol_id"].astype(str).isin(accepted_symbols)].copy()
+    rejected = rejected.loc[rejected["gate_status"].eq("REJECTED")].copy()
+    if rejected.empty:
+        return pd.DataFrame(columns=REJECTION_COLUMNS)
+    rejected.loc[:, "score_version"] = SCORE_VERSION
+    for column in REJECTION_COLUMNS:
+        if column not in rejected.columns:
+            rejected.loc[:, column] = ""
+    rejected = rejected.sort_values(
+        ["rank", "composite_score", "breakout_score", "pattern_score", "symbol_id"],
+        ascending=[True, False, False, False, True],
+        na_position="last",
+        kind="stable",
+    ).head(int(top_n)).reset_index(drop=True)
+    return rejected[REJECTION_COLUMNS]
+
+
+def _build_watchlist_universe(
+    ranked: pd.DataFrame,
+    breakout: pd.DataFrame,
+    pattern: pd.DataFrame,
+    sector_dash: pd.DataFrame,
+    *,
     trust_summary: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     base = _as_symbol_frame(ranked)
@@ -301,7 +517,22 @@ def build_watchlist_prefilter(
     ):
         if source in merged.columns and fallback not in merged.columns:
             merged.loc[:, fallback] = merged[source]
-    for column in ("breakout_score", "pattern_score", "close", "sma_50", "delivery_pct", "return_1", "return_5", "near_52w_high_pct", "volume_ratio", "composite_score"):
+    numeric_columns = (
+        "breakout_score",
+        "pattern_score",
+        "close",
+        "sma_50",
+        "delivery_pct",
+        "return_1",
+        "return_5",
+        "near_52w_high_pct",
+        "volume_ratio",
+        "volume_ratio_20",
+        "conviction_score",
+        "composite_score",
+        *LIQUIDITY_COLUMNS,
+    )
+    for column in numeric_columns:
         if column not in merged.columns:
             merged.loc[:, column] = pd.NA
         merged.loc[:, column] = pd.to_numeric(merged[column], errors="coerce")
@@ -314,11 +545,11 @@ def build_watchlist_prefilter(
         active_quarantine = {str(item) for item in quarantine_value}
     else:
         active_quarantine = set()
-    if active_quarantine:
-        merged = merged.loc[~merged["symbol_id"].astype(str).isin(active_quarantine)].copy()
+    merged.loc[:, "is_quarantined"] = merged["symbol_id"].astype(str).isin(active_quarantine)
 
     if "sector" in merged.columns:
-        sector_delivery = merged.groupby("sector")["delivery_pct"]
+        delivery_numeric = pd.to_numeric(merged["delivery_pct"], errors="coerce")
+        sector_delivery = delivery_numeric.groupby(merged["sector"])
         sector_medians = sector_delivery.median(numeric_only=True).to_dict()
         sector_p75 = sector_delivery.quantile(0.75).to_dict()
     else:
@@ -333,10 +564,17 @@ def build_watchlist_prefilter(
         axis=1,
     )
     merged.loc[:, "setup_label"] = merged.apply(_classify_setup_label, axis=1)
+    if "composite_score" in merged.columns:
+        merged.loc[:, "composite_percentile"] = pd.to_numeric(merged["composite_score"], errors="coerce").rank(pct=True) * 100.0
+    else:
+        merged.loc[:, "composite_percentile"] = pd.NA
+    tradability = merged.apply(_tradability, axis=1, result_type="expand")
+    merged = pd.concat([merged.reset_index(drop=True), tradability.reset_index(drop=True)], axis=1)
+    merged.loc[:, "extension_pct_sma50"] = merged.apply(_extension_pct, axis=1)
 
     sector_ok = merged["sector_status"].isin({"LEADING", "IMPROVING"})
     stage_ok = merged["stage"].isin({"STAGE_2", "STAGE_1_TO_2"})
-    momentum_ok = merged["momentum_tags"].astype(str).str.len() > 0
+    real_momentum_ok = merged.apply(_has_real_momentum, axis=1)
     breakout_ok = merged.get("candidate_tier", pd.Series("", index=merged.index)).astype(str).str.upper().isin({"A", "B"}) & merged.get("qualified", pd.Series(False, index=merged.index)).map(_truthy)
     pattern_ok = (
         pd.to_numeric(merged["pattern_score"], errors="coerce").fillna(0) >= 60
@@ -346,37 +584,20 @@ def build_watchlist_prefilter(
     sma50 = pd.to_numeric(merged["sma_50"], errors="coerce")
     close = pd.to_numeric(merged["close"], errors="coerce")
     not_extended = ~((sma50 > 0) & (((close - sma50) / sma50) > 0.25))
+    setup_ok = breakout_ok | pattern_ok
 
-    primary = merged.loc[sector_ok & stage_ok & momentum_ok & (breakout_ok | pattern_ok) & not_extended].copy()
-    escape = merged.loc[
-        (~sector_ok)
-        & stage_ok
-        & momentum_ok
-        & not_extended
-        & (pd.to_numeric(merged["breakout_score"], errors="coerce").fillna(0) >= 80)
-        & merged.get("qualified", pd.Series(False, index=merged.index)).map(_truthy)
-    ].copy()
-    if not escape.empty:
-        escape.loc[:, "sector_escape_hatch"] = True
-        escape = escape.sort_values(["breakout_score", "symbol_id"], ascending=[False, True], kind="stable").head(2)
-    primary.loc[:, "sector_escape_hatch"] = pd.Series(False, index=primary.index, dtype=bool)
-    if escape.empty:
-        escape.loc[:, "sector_escape_hatch"] = pd.Series(dtype=bool)
-    selected = pd.concat([primary, escape], ignore_index=True)
-    if selected.empty:
-        return selected
-
-    tech = selected.apply(build_technical_catalyst, axis=1, result_type="expand")
-    selected = pd.concat([selected.reset_index(drop=True), tech.reset_index(drop=True)], axis=1)
-    selected.loc[:, "watchlist_score"] = selected.apply(compute_watchlist_score, axis=1)
-    selected = selected.sort_values(
-        ["watchlist_score", "composite_score", "breakout_score", "pattern_score", "symbol_id"],
-        ascending=[False, False, False, False, True],
-        na_position="last",
-        kind="stable",
-    ).head(int(top_n)).reset_index(drop=True)
-    selected.loc[:, "prefilter_rank"] = range(1, len(selected) + 1)
-    return selected
+    merged.loc[:, "sector_ok"] = sector_ok
+    merged.loc[:, "stage_ok"] = stage_ok
+    merged.loc[:, "real_momentum_ok"] = real_momentum_ok
+    merged.loc[:, "setup_ok"] = setup_ok
+    merged.loc[:, "not_extended"] = not_extended
+    merged.loc[:, "sector_escape_hatch"] = False
+    merged.loc[:, "watchlist_bucket"] = pd.NA
+    merged.loc[:, "operator_action"] = pd.NA
+    merged.loc[:, "score_version"] = SCORE_VERSION
+    gate = merged.apply(_evaluate_gate_row, axis=1, result_type="expand")
+    merged = pd.concat([merged.reset_index(drop=True), gate.reset_index(drop=True)], axis=1)
+    return merged
 
 
 def build_final_watchlist(
@@ -394,7 +615,8 @@ def build_final_watchlist(
         if column not in rows.columns:
             rows.loc[:, column] = ""
     for idx, row in rows.iterrows():
-        record = enrichment.get(str(row.get("symbol_id")), {}) if isinstance(enrichment, dict) else {}
+        symbol_key = str(row.get("symbol_id") or "")
+        record = enrichment.get(symbol_key, enrichment.get(symbol_key.upper(), {})) if isinstance(enrichment, dict) else {}
         if isinstance(record, str):
             try:
                 record = json.loads(record)
@@ -406,6 +628,8 @@ def build_final_watchlist(
         rows.at[idx, "risk_flags"] = ",".join(record.get("risk_flags", []) or [])
         rows.at[idx, "watchlist_reason"] = record.get("watchlist_reason", "") or row.get("technical_catalyst_summary", "")
     rows.loc[:, "action"] = rows["watchlist_score"].map(lambda score: "Study" if float(score) >= 80.0 else "Watch")
+    if "operator_action" not in rows.columns:
+        rows.loc[:, "operator_action"] = rows["action"]
     rows.loc[:, "data_trust_status"] = data_trust_status
     rows = rows.sort_values(
         ["watchlist_score", "composite_score", "breakout_score", "pattern_score", "symbol_id"],
@@ -445,4 +669,18 @@ def validate_watchlist_candidates(frame: pd.DataFrame) -> list[str]:
         blocked = frame["data_trust_status"].astype(str).str.lower().eq("blocked")
         if blocked.any():
             warnings.append("watchlist contains blocked data_trust_status")
+    if "watchlist_bucket" in frame.columns:
+        buckets = frame["watchlist_bucket"].dropna().astype(str)
+        invalid = buckets.ne("") & ~buckets.isin(WATCHLIST_BUCKETS)
+        if invalid.any():
+            warnings.append("watchlist_bucket contains unknown values")
+    if "operator_action" in frame.columns:
+        empty_action = frame["operator_action"].fillna("").astype(str).str.strip().eq("")
+        if empty_action.any():
+            warnings.append("operator_action must be non-empty")
+    if "gate_status" in frame.columns:
+        statuses = frame["gate_status"].dropna().astype(str)
+        invalid_status = statuses.ne("") & ~statuses.isin({"PASSED", "REJECTED"})
+        if invalid_status.any():
+            warnings.append("gate_status contains unknown values")
     return warnings
