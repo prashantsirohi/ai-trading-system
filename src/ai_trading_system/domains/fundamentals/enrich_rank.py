@@ -287,10 +287,14 @@ def _fundamental_tracking_bucket(frame: pd.DataFrame) -> pd.Series:
     bucket.loc[q_score.ge(70) & valuation_bucket.isin(["DEEPLY_BELOW_HISTORY", "BELOW_OWN_MEDIAN"]) & composite.ge(55)] = (
         "F2_RESULT_VALUE_ACCUMULATION"
     )
-    bucket.loc[q_score.ge(75) & v_score.ge(55) & composite.ge(65) & sector.ge(60)] = "F3_FUND_VALUE_TECH_READY"
     bucket.loc[
         q_score.ge(75)
-        & v_score.ge(55)
+        & valuation_bucket.isin(["DEEPLY_BELOW_HISTORY", "BELOW_OWN_MEDIAN", "FAIR_VALUE"])
+        & composite.ge(65)
+        & sector.ge(60)
+    ] = "F3_FUND_VALUE_TECH_READY"
+    bucket.loc[
+        q_score.ge(80)
         & allowed_value
         & composite.ge(70)
         & sector.ge(65)

@@ -106,7 +106,61 @@ def test_expensive_valuation_blocks_f4(tmp_path: Path) -> None:
         output=tmp_path / "watchlist.csv",
     )
 
-    assert result.set_index("symbol").loc["EXP", "watchlist_bucket"] == "F3_FUND_VALUE_TECH_READY"
+    assert result.set_index("symbol").loc["EXP", "watchlist_bucket"] != "F4_ACTION_CANDIDATE"
+
+
+def test_fair_valuation_with_strong_result_and_technical_gets_f3(tmp_path: Path) -> None:
+    rank_dir, scores, results, bands = _write_inputs(tmp_path)
+    pd.DataFrame(
+        [
+            {"symbol_id": "FAIR", "composite_score": 76, "sector_strength_score": 68, "prox_high": 8},
+        ]
+    ).to_csv(rank_dir / "ranked_signals.csv", index=False)
+    pd.DataFrame([{"symbol_id": "FAIR", "breakout_score": 70, "candidate_tier": "B", "qualified": False}]).to_csv(
+        rank_dir / "breakout_scan.csv",
+        index=False,
+    )
+    pd.DataFrame([{"symbol_id": "FAIR", "pattern_score": 70, "setup_quality": 70}]).to_csv(
+        rank_dir / "pattern_scan.csv",
+        index=False,
+    )
+    pd.DataFrame([{"symbol": "FAIR", "fundamental_score": 78, "fundamental_tier": "A", "hard_red_flag": False}]).to_csv(
+        scores,
+        index=False,
+    )
+    pd.DataFrame(
+        [
+            {
+                "symbol": "FAIR",
+                "available_at": "2026-05-01",
+                "quarterly_result_score": 82,
+                "quarterly_result_bucket": "GREAT_RESULT",
+            }
+        ]
+    ).to_csv(results, index=False)
+    pd.DataFrame(
+        [
+            {
+                "symbol": "FAIR",
+                "date": "2026-05-31",
+                "valuation_history_score": 50,
+                "valuation_history_bucket": "FAIR_VALUE",
+                "valuation_reason": "Fair versus own valuation history",
+            }
+        ]
+    ).to_csv(bands, index=False)
+
+    result = enrich_rank_artifacts(
+        rank_dir=rank_dir,
+        fundamental_scores=scores,
+        fundamental_trends=None,
+        quarterly_result_scores=results,
+        stock_valuation_bands=bands,
+        watchlist_mode="fundamental_tracking",
+        output=tmp_path / "watchlist.csv",
+    )
+
+    assert result.set_index("symbol").loc["FAIR", "watchlist_bucket"] == "F3_FUND_VALUE_TECH_READY"
 
 
 def test_deteriorating_result_gets_d1(tmp_path: Path) -> None:
