@@ -160,6 +160,42 @@ def test_fundamental_ttm_repairs_tiny_adjusted_share_count_from_raw_share_count(
     assert row[1] == 1000.0
 
 
+def test_fundamental_ttm_does_not_mix_other_symbol_quarters(tmp_path: Path) -> None:
+    ohlcv = tmp_path / "ohlcv.duckdb"
+    screener = tmp_path / "screener.db"
+    _create_ohlcv(ohlcv)
+    _create_screener(screener)
+    conn = sqlite3.connect(str(screener))
+    try:
+        rows = []
+        for idx, report_date in enumerate(["2025-03-31", "2025-06-30", "2025-09-30", "2025-12-31"]):
+            available_at = ["2025-05-15", "2025-08-14", "2025-11-14", "2026-01-09"][idx]
+            rows.extend(
+                [
+                    ("ZZZ", "quarterly", report_date, "net_profit", 10_000 + idx, available_at, "screener", "huge", "2026-01-01"),
+                    ("ZZZ", "quarterly", report_date, "sales", 20_000 + idx, available_at, "screener", "huge", "2026-01-01"),
+                    ("ZZZ", "quarterly", report_date, "operating_profit", 30_000 + idx, available_at, "screener", "huge", "2026-01-01"),
+                ]
+            )
+        conn.executemany("INSERT INTO screener_financials VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        conn.commit()
+    finally:
+        conn.close()
+
+    refresh_fundamental_ttm(
+        ohlcv_db_path=ohlcv,
+        screener_db_path=screener,
+        valuation_dates=["2026-01-10"],
+    )
+
+    conn = duckdb.connect(str(ohlcv), read_only=True)
+    try:
+        row = conn.execute("SELECT ttm_sales_cr, ttm_net_profit_cr FROM fundamental_ttm WHERE symbol='AAA'").fetchone()
+    finally:
+        conn.close()
+    assert row == (406.0, 46.0)
+
+
 def test_stock_universe_and_sector_valuation_use_aggregate_earnings(tmp_path: Path) -> None:
     ohlcv = tmp_path / "ohlcv.duckdb"
     screener = tmp_path / "screener.db"

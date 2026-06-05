@@ -145,7 +145,7 @@ def _load_financials(screener_db_path: str | Path) -> pd.DataFrame:
     try:
         frame = pd.read_sql_query(
             f"""
-            SELECT symbol, period_type, report_date, metric_id, value, available_at, sync_batch_id
+            SELECT symbol, period_type, report_date, metric_id, value, available_at, sync_batch_id, synced_at
             FROM screener_financials
             WHERE metric_id IN ({','.join(['?'] * len(TTM_METRICS))})
               AND value IS NOT NULL
@@ -158,10 +158,13 @@ def _load_financials(screener_db_path: str | Path) -> pd.DataFrame:
         conn.close()
     if frame.empty:
         return frame
-    frame.loc[:, "symbol"] = frame["symbol"].astype(str).str.upper().str.strip()
-    frame.loc[:, "report_date"] = pd.to_datetime(frame["report_date"]).dt.date
-    frame.loc[:, "available_at"] = pd.to_datetime(frame["available_at"]).dt.date
-    frame.loc[:, "value"] = pd.to_numeric(frame["value"], errors="coerce")
+    frame = frame.assign(
+        symbol=frame["symbol"].astype(str).str.upper().str.strip(),
+        report_date=pd.to_datetime(frame["report_date"]).dt.date,
+        available_at=pd.to_datetime(frame["available_at"]).dt.date,
+        synced_at=pd.to_datetime(frame["synced_at"], errors="coerce"),
+        value=pd.to_numeric(frame["value"], errors="coerce"),
+    )
     return frame.dropna(subset=["symbol", "available_at", "value"])
 
 
@@ -251,16 +254,7 @@ def _share_book_events(financials: pd.DataFrame) -> pd.DataFrame:
     if facts.empty:
         return pd.DataFrame(columns=columns)
     facts = facts.sort_values(["symbol", "available_at", "report_date"], kind="stable")
-    wide = (
-        facts.pivot_table(
-            index=["symbol", "available_at"],
-            columns="metric_id",
-            values="value",
-            aggfunc="last",
-        )
-        .reset_index()
-        .rename_axis(None, axis=1)
-    )
+    wide = _wide_metric_values(facts, index_columns=["symbol", "available_at"])
     for column in ("adjusted_equity_shares_cr", "equity_shares_outstanding", "equity_share_capital", "reserves"):
         if column not in wide.columns:
             wide.loc[:, column] = pd.NA
@@ -296,18 +290,16 @@ def _wide_period_facts(financials: pd.DataFrame, *, period_type: str) -> pd.Data
     ].copy()
     if facts.empty:
         return pd.DataFrame()
-    wide = (
-        facts.pivot_table(
-            index=["symbol", "report_date", "available_at"],
-            columns="metric_id",
-            values="value",
-            aggfunc="max",
-        )
-        .reset_index()
-        .rename_axis(None, axis=1)
+    wide = _wide_metric_values(facts, index_columns=["symbol", "report_date", "available_at"])
+    batch_facts = facts.copy()
+    batch_facts = batch_facts.assign(
+        symbol=batch_facts["symbol"].astype(str).str.upper().str.strip(),
+        report_date=pd.to_datetime(batch_facts["report_date"]),
+        available_at=pd.to_datetime(batch_facts["available_at"]),
     )
     batch = (
-        facts.groupby(["symbol", "report_date", "available_at"], as_index=False)["sync_batch_id"]
+        batch_facts.sort_values(["symbol", "report_date", "available_at", "synced_at"], kind="stable")
+        .groupby(["symbol", "report_date", "available_at"], as_index=False)["sync_batch_id"]
         .last()
         .rename(columns={"sync_batch_id": "source_batch_id"})
     )
@@ -315,6 +307,36 @@ def _wide_period_facts(financials: pd.DataFrame, *, period_type: str) -> pd.Data
     for column in ("sales", "net_profit", "operating_profit"):
         if column not in wide.columns:
             wide.loc[:, column] = pd.NA
+    return wide
+
+
+def _wide_metric_values(facts: pd.DataFrame, *, index_columns: list[str]) -> pd.DataFrame:
+    if facts.empty:
+        return pd.DataFrame()
+    frame = facts.copy()
+    frame = frame.assign(
+        symbol=frame["symbol"].astype(str).str.upper().str.strip(),
+        metric_id=frame["metric_id"].astype(str).str.lower().str.strip(),
+    )
+    for column in ("report_date", "available_at"):
+        if column in frame.columns:
+            frame = frame.assign(**{column: pd.to_datetime(frame[column])})
+    sort_columns = [*index_columns]
+    if "report_date" in frame.columns and "report_date" not in index_columns:
+        sort_columns.append("report_date")
+    sort_columns.append("metric_id")
+    if "synced_at" in frame.columns:
+        sort_columns.append("synced_at")
+    frame = frame.sort_values(sort_columns, kind="stable")
+    frame = frame.drop_duplicates([*index_columns, "metric_id"], keep="last")
+    wide = frame[index_columns].drop_duplicates().reset_index(drop=True)
+    for metric in sorted(frame["metric_id"].dropna().unique()):
+        metric_values = (
+            frame.loc[frame["metric_id"].eq(metric), [*index_columns, "value"]]
+            .drop_duplicates(index_columns, keep="last")
+            .rename(columns={"value": metric})
+        )
+        wide = wide.merge(metric_values, on=index_columns, how="left")
     return wide
 
 
