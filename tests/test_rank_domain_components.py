@@ -26,7 +26,7 @@ from ai_trading_system.domains.ranking.factors import (
 )
 from ai_trading_system.domains.ranking.input_loader import RankerInputLoader
 from ai_trading_system.domains.ranking.payloads import attach_phase1_market_breadth_to_payload
-from ai_trading_system.domains.ranking.service import phase1_feature_warnings
+from ai_trading_system.domains.ranking.service import RankOrchestrationService, phase1_feature_warnings
 
 
 def test_load_factor_weights_overrides_defaults(tmp_path):
@@ -860,3 +860,21 @@ def test_phase1_feature_warnings_report_low_coverage_and_staleness() -> None:
 
     assert any("coverage low for ranked_signals" in warning for warning in warnings)
     assert any("stale for ranked_signals" in warning for warning in warnings)
+
+
+def test_dataframe_fingerprint_handles_duplicate_column_labels() -> None:
+    frame = pd.DataFrame(
+        [
+            ["AAA", "AAA", ["breakout", "volume"], 90.0],
+            ["BBB", "BBB", ["pullback"], 85.0],
+        ],
+        columns=["symbol_id", "symbol_id", "tags", "composite_score"],
+    )
+    changed = frame.copy()
+    changed.iloc[1, 3] = 86.0
+    service = RankOrchestrationService()
+
+    fingerprint = service.dataframe_fingerprint(frame)
+
+    assert fingerprint == service.dataframe_fingerprint(frame.copy())
+    assert fingerprint != service.dataframe_fingerprint(changed)

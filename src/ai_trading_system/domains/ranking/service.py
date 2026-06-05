@@ -1625,9 +1625,10 @@ class RankOrchestrationService:
         normalized = frame.copy()
         normalized.columns = [str(column) for column in normalized.columns]
         normalized = normalized.sort_index(axis=1)
-        for col in normalized.columns:
-            if normalized[col].dtype == object:
-                normalized.loc[:, col] = normalized[col].map(
+        for column_index in range(len(normalized.columns)):
+            column = normalized.iloc[:, column_index]
+            if column.dtype == object:
+                normalized.iloc[:, column_index] = column.map(
                     lambda x: tuple(x) if isinstance(x, list) else x
                 )
         normalized = normalized.astype("object").where(pd.notna(normalized), "<NA>")
