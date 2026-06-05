@@ -499,6 +499,10 @@ class PublishStage:
             watchlist = datasets.get("watchlist_candidates", pd.DataFrame())
             if _has_fundamental_tracking_watchlist(watchlist):
                 handlers["google_sheets_fundamental_watchlist"] = self._publish_fundamental_watchlist
+                existing = list(context.params.get("bypass_dedupe_channels") or [])
+                if "google_sheets_fundamental_watchlist" not in existing:
+                    existing.append("google_sheets_fundamental_watchlist")
+                    context.params["bypass_dedupe_channels"] = existing
         has_fundamentals = any(
             isinstance(datasets.get(name), pd.DataFrame) and not datasets.get(name).empty
             for name in (
