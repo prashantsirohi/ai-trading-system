@@ -77,6 +77,14 @@ def build_final_candidates(
     merged.loc[:, "fundamental_trend_label"] = (
         merged.get("fundamental_trend_label", pd.Series("", index=merged.index)).fillna("").astype(str).str.upper()
     )
+    merged.loc[:, "watchlist_bucket"] = merged.get("watchlist_bucket", pd.Series("", index=merged.index)).fillna("").astype(str)
+    merged.loc[:, "quarterly_result_bucket"] = (
+        merged.get("quarterly_result_bucket", pd.Series("", index=merged.index)).fillna("").astype(str)
+    )
+    merged.loc[:, "valuation_history_bucket"] = (
+        merged.get("valuation_history_bucket", pd.Series("", index=merged.index)).fillna("").astype(str)
+    )
+    merged.loc[:, "valuation_reason"] = merged.get("valuation_reason", pd.Series("", index=merged.index)).fillna("").astype(str)
     merged.loc[:, "_hard_red_flag"] = _truthy(merged, "hard_red_flag") | merged["fundamental_tier"].str.upper().eq("REJECT")
     merged.loc[:, "_qualified_breakout"] = _truthy(merged, "qualified") | merged["breakout_score"].ge(75)
     merged.loc[:, "_strong_pattern"] = merged["pattern_score"].ge(75) | _num(merged, "setup_quality", default=0.0).ge(70)
@@ -94,8 +102,17 @@ def build_final_candidates(
     merged.loc[:, "candidate_reason"] = merged.apply(_candidate_reason, axis=1)
     merged.loc[:, "next_action"] = merged["candidate_group"].map(_next_action)
 
-    normal = merged.loc[~merged["_hard_red_flag"] & merged["_has_setup"]].copy()
-    avoid = merged.loc[merged["_hard_red_flag"]].copy()
+    result_watchlist = merged["watchlist_bucket"].isin(
+        [
+            "F4_ACTION_CANDIDATE",
+            "F3_FUND_VALUE_TECH_READY",
+            "F2_RESULT_VALUE_ACCUMULATION",
+            "F1_FUNDAMENTAL_WATCH",
+        ]
+    )
+    result_downturn = merged["watchlist_bucket"].eq("D1_RESULT_DOWNTURN")
+    normal = merged.loc[~merged["_hard_red_flag"] & ~result_downturn & (merged["_has_setup"] | result_watchlist)].copy()
+    avoid = merged.loc[merged["_hard_red_flag"] | result_downturn].copy()
     selected = pd.concat([normal, avoid], ignore_index=True)
     selected.loc[:, "_group_priority"] = selected["candidate_group"].map(CANDIDATE_GROUP_PRIORITY).fillna(99)
     selected = selected.sort_values(
@@ -303,6 +320,17 @@ def _final_score(frame: pd.DataFrame) -> pd.Series:
 def _candidate_group(row: pd.Series) -> str:
     if bool(row.get("_hard_red_flag")):
         return "AVOID_RED_FLAG"
+    watchlist_bucket = str(row.get("watchlist_bucket") or "")
+    if watchlist_bucket == "F4_ACTION_CANDIDATE":
+        return "BLOWOUT_RESULT_BREAKOUT"
+    if watchlist_bucket == "F3_FUND_VALUE_TECH_READY":
+        return "FUND_VALUE_TECH_READY"
+    if watchlist_bucket == "F2_RESULT_VALUE_ACCUMULATION":
+        return "RESULT_VALUE_ACCUMULATION"
+    if watchlist_bucket == "F1_FUNDAMENTAL_WATCH":
+        return "FUNDAMENTAL_WATCH"
+    if watchlist_bucket == "D1_RESULT_DOWNTURN":
+        return "RESULT_DOWNTURN_AVOID"
     if bool(row.get("_catalyst_present")):
         return "RESULTS_OR_CATALYST_PENDING"
     if str(row.get("fundamental_trend_label") or "").upper() == "IMPROVING":
@@ -319,6 +347,17 @@ def _candidate_reason(row: pd.Series) -> str:
     parts: list[str] = []
     if group == "AVOID_RED_FLAG":
         return f"Rejected by fundamental red flag: {str(row.get('red_flags') or 'hard red flag')}"
+    if group == "RESULT_DOWNTURN_AVOID":
+        return f"Result downturn: {str(row.get('quarterly_result_bucket') or 'DETERIORATING')}"
+    q_bucket = str(row.get("quarterly_result_bucket") or "").strip()
+    v_bucket = str(row.get("valuation_history_bucket") or "").strip()
+    v_reason = str(row.get("valuation_reason") or "").strip()
+    if q_bucket:
+        parts.append(q_bucket)
+    if v_bucket:
+        parts.append(v_bucket)
+    if v_reason:
+        parts.append(v_reason)
     if bool(row.get("_qualified_breakout")):
         parts.append("qualified breakout")
     elif bool(row.get("_strong_pattern")):

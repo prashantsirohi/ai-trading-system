@@ -171,6 +171,18 @@ class FeaturesOrchestrationService:
                 to_date=str(valuation_to_date)[:10],
                 universes=universes,
                 min_history_days=int(context.params.get("valuation_min_history_days", 756) or 756),
+                enable_stock_valuation_bands=bool(context.params.get("enable_stock_valuation_bands", True)),
+                stock_valuation_band_universe_id=str(
+                    context.params.get("stock_valuation_band_universe_id", "UNIV_TOP1000_MCAP")
+                    or "UNIV_TOP1000_MCAP"
+                ),
+                valuation_band_min_history_days_3y=int(
+                    context.params.get("valuation_band_min_history_days_3y", 504) or 504
+                ),
+                valuation_band_min_history_days_5y=int(
+                    context.params.get("valuation_band_min_history_days_5y", 756) or 756
+                ),
+                stock_valuation_bands_output_csv=context.output_dir() / "stock_valuation_bands_latest.csv",
             )
 
         sector_earnings_summary = {"status": "disabled"}

@@ -9,6 +9,7 @@ from typing import Any
 
 from ai_trading_system.domains.features.valuation_cycle import refresh_valuation_cycle_features
 from ai_trading_system.domains.features.valuation_index import DEFAULT_UNIVERSES, refresh_valuation_index
+from ai_trading_system.domains.features.stock_valuation_bands import refresh_stock_valuation_bands
 from ai_trading_system.domains.features.valuation_ttm import refresh_fundamental_ttm
 from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
 from ai_trading_system.platform.db.paths import get_domain_paths
@@ -23,6 +24,11 @@ def refresh_valuation_features(
     to_date: str | None = None,
     universes: list[str] | tuple[str, ...] | None = None,
     min_history_days: int = 756,
+    enable_stock_valuation_bands: bool = True,
+    stock_valuation_band_universe_id: str = "UNIV_TOP1000_MCAP",
+    valuation_band_min_history_days_3y: int = 504,
+    valuation_band_min_history_days_5y: int = 756,
+    stock_valuation_bands_output_csv: str | Path | None = None,
 ) -> dict[str, Any]:
     paths = get_domain_paths()
     resolved_ohlcv = Path(ohlcv_db_path) if ohlcv_db_path is not None else paths.ohlcv_db_path
@@ -54,6 +60,17 @@ def refresh_valuation_features(
         to_date=to_date,
         min_history_days=min_history_days,
     )
+    bands = None
+    if enable_stock_valuation_bands:
+        bands = refresh_stock_valuation_bands(
+            ohlcv_db_path=resolved_ohlcv,
+            from_date=from_date,
+            to_date=to_date,
+            universe_id=stock_valuation_band_universe_id,
+            min_history_days_3y=valuation_band_min_history_days_3y,
+            min_history_days_5y=valuation_band_min_history_days_5y,
+            output_csv=stock_valuation_bands_output_csv,
+        )
     return {
         "status": "completed",
         "screener_db_path": str(resolved_screener),
@@ -62,6 +79,7 @@ def refresh_valuation_features(
         "ttm": asdict(ttm),
         "valuation": asdict(valuation),
         "cycle": asdict(cycle),
+        "stock_valuation_bands": asdict(bands) if bands is not None else {"status": "disabled"},
     }
 
 
@@ -76,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ohlcv-db-path", default=str(paths.ohlcv_db_path))
     parser.add_argument("--master-db-path", default=str(paths.master_db_path))
     parser.add_argument("--valuation-min-history-days", type=int, default=756)
+    parser.add_argument("--enable-stock-valuation-bands", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--stock-valuation-band-universe-id", default="UNIV_TOP1000_MCAP")
+    parser.add_argument("--valuation-band-min-history-days-3y", type=int, default=504)
+    parser.add_argument("--valuation-band-min-history-days-5y", type=int, default=756)
+    parser.add_argument("--stock-valuation-bands-output-csv", default=None)
     return parser
 
 
@@ -89,6 +112,11 @@ def main() -> None:
         to_date=args.to_date,
         universes=args.universe_id or list(DEFAULT_UNIVERSES),
         min_history_days=args.valuation_min_history_days,
+        enable_stock_valuation_bands=bool(args.enable_stock_valuation_bands),
+        stock_valuation_band_universe_id=args.stock_valuation_band_universe_id,
+        valuation_band_min_history_days_3y=int(args.valuation_band_min_history_days_3y),
+        valuation_band_min_history_days_5y=int(args.valuation_band_min_history_days_5y),
+        stock_valuation_bands_output_csv=args.stock_valuation_bands_output_csv,
     )
     print(result)
 

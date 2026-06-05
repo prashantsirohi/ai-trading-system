@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.fundamentals.enrich_rank import (
@@ -99,18 +100,8 @@ class FundamentalsStage:
         watchlist_output = output_dir / "watchlist_candidates.csv"
         industry_available = industry_scores_path.exists()
         industry_trends_available = industry_trends_path.exists()
-        watchlist, metrics = enrich_rank_artifacts(
-            rank_dir=rank_dir,
-            fundamental_scores=scores_path,
-            fundamental_trends=trends_path,
-            industry_scores=industry_scores_path if industry_available else None,
-            industry_trends=industry_trends_path if industry_trends_available else None,
-            catalysts=catalysts_path if catalysts_path.exists() else None,
-            output=watchlist_output,
-            top_n=int(context.params.get("fundamental_top_n", 100) or 100),
-            min_technical_score=float(context.params.get("fundamental_min_technical_score", 50.0) or 50.0),
-            return_metrics=True,
-        )
+        watchlist = pd.DataFrame()
+        metrics = None
 
         tier_counts = (
             scores.get("fundamental_tier", pd.Series(dtype=str))
@@ -207,6 +198,10 @@ class FundamentalsStage:
 
         analytical_artifacts: list[StageArtifact] = []
         analytical_summary: dict[str, Any] = {"status": "disabled"}
+        fundamentals_db_path = (
+            context.params.get("fundamentals_duckdb_path")
+            or (get_domain_paths(project_root=context.project_root, data_domain="operational").root_dir / "fundamentals.duckdb")
+        )
         if bool(context.params.get("enable_fundamental_insights", True)):
             db_path = self._resolve_screener_db_path(context)
             if db_path.exists():
@@ -214,13 +209,11 @@ class FundamentalsStage:
                     from ai_trading_system.domains.fundamentals.insight_readmodels import (
                         refresh_fundamental_insight_readmodels,
                     )
-                    from ai_trading_system.platform.db.paths import get_domain_paths
 
                     paths = get_domain_paths(project_root=context.project_root, data_domain="operational")
                     analytical_summary = refresh_fundamental_insight_readmodels(
                         screener_db_path=db_path,
-                        fundamentals_db_path=context.params.get("fundamentals_duckdb_path")
-                        or (paths.root_dir / "fundamentals.duckdb"),
+                        fundamentals_db_path=fundamentals_db_path,
                         ohlcv_db_path=paths.ohlcv_db_path,
                         master_db_path=paths.master_db_path,
                         from_date=context.params.get("fundamental_insights_from_date"),
@@ -253,6 +246,52 @@ class FundamentalsStage:
             else:
                 analytical_summary = {"status": "skipped_missing_screener_db", "screener_db_path": str(db_path)}
 
+        quarterly_output = output_dir / "quarterly_result_scores.csv"
+        try:
+            from ai_trading_system.domains.fundamentals.quarterly_result_scoring import (
+                build_quarterly_result_scores,
+            )
+
+            quarterly_scores = build_quarterly_result_scores(
+                fundamentals_db_path=fundamentals_db_path,
+                asof_date=context.run_date,
+                output_path=quarterly_output,
+            )
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"Quarterly result scoring failed: {exc}")
+            quarterly_scores = pd.DataFrame()
+            quarterly_output.write_text("", encoding="utf-8")
+
+        paths = get_domain_paths(project_root=context.project_root, data_domain=context.params.get("data_domain", "operational"))
+        valuation_bands_output = output_dir / "stock_valuation_bands_latest.csv"
+        try:
+            valuation_bands = self._export_latest_stock_valuation_bands(
+                ohlcv_db_path=paths.ohlcv_db_path,
+                output_path=valuation_bands_output,
+                universe_id=str(context.params.get("stock_valuation_band_universe_id", "UNIV_TOP1000_MCAP")),
+                asof_date=context.run_date,
+            )
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"Stock valuation band export failed: {exc}")
+            valuation_bands = pd.DataFrame()
+            valuation_bands_output.write_text("", encoding="utf-8")
+
+        watchlist, metrics = enrich_rank_artifacts(
+            rank_dir=rank_dir,
+            fundamental_scores=scores_path,
+            fundamental_trends=trends_path,
+            industry_scores=industry_scores_path if industry_available else None,
+            industry_trends=industry_trends_path if industry_trends_available else None,
+            catalysts=catalysts_path if catalysts_path.exists() else None,
+            quarterly_result_scores=quarterly_output if quarterly_output.exists() else None,
+            stock_valuation_bands=valuation_bands_output if valuation_bands_output.exists() else None,
+            watchlist_mode=str(context.params.get("fundamental_watchlist_mode", "legacy") or "legacy"),
+            output=watchlist_output,
+            top_n=int(context.params.get("fundamental_top_n", 100) or 100),
+            min_technical_score=float(context.params.get("fundamental_min_technical_score", 50.0) or 50.0),
+            return_metrics=True,
+        )
+
         summary = self._summary(
             context=context,
             status="completed",
@@ -274,6 +313,23 @@ class FundamentalsStage:
             industry_trend_status=industry_trend_status,
             industry_trend_label_counts=dict(metrics.industry_trend_label_counts),
             analytical_summary=analytical_summary,
+            quarterly_result_rows=len(quarterly_scores),
+            quarterly_result_bucket_counts=(
+                quarterly_scores.get("quarterly_result_bucket", pd.Series(dtype=str))
+                .fillna("unknown")
+                .astype(str)
+                .value_counts()
+                .to_dict()
+            ),
+            valuation_band_rows=len(valuation_bands),
+            valuation_bucket_counts=(
+                valuation_bands.get("valuation_history_bucket", pd.Series(dtype=str))
+                .fillna("unknown")
+                .astype(str)
+                .value_counts()
+                .to_dict()
+            ),
+            fundamental_watchlist_mode=str(context.params.get("fundamental_watchlist_mode", "legacy") or "legacy"),
         )
         summary_artifact = self._write_summary(context, summary)
         artifacts = [
@@ -289,6 +345,20 @@ class FundamentalsStage:
                 scores_output,
                 row_count=len(scores),
                 metadata={"columns": list(scores.columns), "source_path": str(scores_path)},
+                attempt_number=context.attempt_number,
+            ),
+            StageArtifact.from_file(
+                "quarterly_result_scores",
+                quarterly_output,
+                row_count=len(quarterly_scores),
+                metadata={"columns": list(quarterly_scores.columns), "source": "fundamentals"},
+                attempt_number=context.attempt_number,
+            ),
+            StageArtifact.from_file(
+                "stock_valuation_bands_latest",
+                valuation_bands_output,
+                row_count=len(valuation_bands),
+                metadata={"columns": list(valuation_bands.columns), "source": "stock_valuation_bands"},
                 attempt_number=context.attempt_number,
             ),
             *industry_artifacts,
@@ -398,6 +468,11 @@ class FundamentalsStage:
         industry_trend_status: str = "unknown",
         industry_trend_label_counts: dict[str, int] | None = None,
         analytical_summary: dict[str, Any] | None = None,
+        quarterly_result_rows: int = 0,
+        quarterly_result_bucket_counts: dict[str, int] | None = None,
+        valuation_band_rows: int = 0,
+        valuation_bucket_counts: dict[str, int] | None = None,
+        fundamental_watchlist_mode: str = "legacy",
     ) -> dict[str, Any]:
         return {
             "status": status,
@@ -420,8 +495,60 @@ class FundamentalsStage:
             "industry_trend_status": industry_trend_status,
             "industry_trend_label_counts": dict(industry_trend_label_counts or {}),
             "fundamental_insights": dict(analytical_summary or {}),
+            "quarterly_result_rows": int(quarterly_result_rows),
+            "quarterly_result_bucket_counts": dict(quarterly_result_bucket_counts or {}),
+            "valuation_band_rows": int(valuation_band_rows),
+            "valuation_bucket_counts": dict(valuation_bucket_counts or {}),
+            "fundamental_watchlist_mode": str(fundamental_watchlist_mode or "legacy"),
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    def _export_latest_stock_valuation_bands(
+        self,
+        *,
+        ohlcv_db_path: str | Path,
+        output_path: str | Path,
+        universe_id: str,
+        asof_date: str,
+    ) -> pd.DataFrame:
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        path = Path(ohlcv_db_path)
+        if not path.exists():
+            frame = pd.DataFrame()
+            frame.to_csv(output, index=False)
+            return frame
+        conn = duckdb.connect(str(path), read_only=True)
+        try:
+            exists = bool(
+                conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.tables
+                    WHERE table_name = 'stock_valuation_bands'
+                    """
+                ).fetchone()[0]
+            )
+            if not exists:
+                frame = pd.DataFrame()
+            else:
+                frame = conn.execute(
+                    """
+                    SELECT *
+                    FROM stock_valuation_bands
+                    WHERE universe_id = ?
+                      AND date <= CAST(? AS DATE)
+                    QUALIFY ROW_NUMBER() OVER (
+                        PARTITION BY symbol
+                        ORDER BY date DESC
+                    ) = 1
+                    """,
+                    [str(universe_id or "UNIV_TOP1000_MCAP").strip().upper(), str(asof_date)[:10]],
+                ).df()
+        finally:
+            conn.close()
+        frame.to_csv(output, index=False)
+        return frame
 
     def _write_summary(self, context: StageContext, summary: dict[str, Any]) -> StageArtifact:
         summary_path = context.write_json("fundamental_summary.json", summary)

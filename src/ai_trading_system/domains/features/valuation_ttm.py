@@ -13,7 +13,14 @@ import pandas as pd
 
 from ai_trading_system.domains.features.valuation_schema import ensure_valuation_schema
 
-TTM_METRICS = ("sales", "net_profit", "operating_profit", "adjusted_equity_shares_cr")
+TTM_METRICS = (
+    "sales",
+    "net_profit",
+    "operating_profit",
+    "adjusted_equity_shares_cr",
+    "equity_share_capital",
+    "reserves",
+)
 
 
 @dataclass(frozen=True)
@@ -60,7 +67,18 @@ def refresh_fundamental_ttm(
             try:
                 conn.execute(
                     """
-                    INSERT INTO fundamental_ttm
+                    INSERT INTO fundamental_ttm (
+                        symbol,
+                        as_of_date,
+                        ttm_sales_cr,
+                        ttm_net_profit_cr,
+                        ttm_operating_profit_cr,
+                        adjusted_equity_shares_cr,
+                        book_value_cr,
+                        earnings_source,
+                        source_batch_id,
+                        created_at
+                    )
                     SELECT
                         symbol,
                         CAST(as_of_date AS DATE),
@@ -68,6 +86,7 @@ def refresh_fundamental_ttm(
                         ttm_net_profit_cr,
                         ttm_operating_profit_cr,
                         adjusted_equity_shares_cr,
+                        book_value_cr,
                         earnings_source,
                         source_batch_id,
                         CURRENT_TIMESTAMP
@@ -161,11 +180,11 @@ def _build_ttm_frame(financials: pd.DataFrame, dates: list[str]) -> pd.DataFrame
 
     quarterly_events = _quarterly_ttm_events(financials)
     annual_events = _annual_fallback_events(financials)
-    share_events = _share_events(financials)
+    share_book_events = _share_book_events(financials)
 
     quarterly_asof = _merge_events_asof(grid, quarterly_events)
     annual_asof = _merge_events_asof(grid[["symbol", "as_of_date"]], annual_events)
-    share_asof = _merge_events_asof(grid[["symbol", "as_of_date"]], share_events)
+    share_book_asof = _merge_events_asof(grid[["symbol", "as_of_date"]], share_book_events)
 
     frame = quarterly_asof[["symbol", "as_of_date"]].copy()
     has_quarterly = quarterly_asof["ttm_net_profit_cr"].notna()
@@ -173,7 +192,8 @@ def _build_ttm_frame(financials: pd.DataFrame, dates: list[str]) -> pd.DataFrame
 
     for column in ("ttm_sales_cr", "ttm_net_profit_cr", "ttm_operating_profit_cr"):
         frame.loc[:, column] = quarterly_asof[column].where(has_quarterly, annual_asof[column])
-    frame.loc[:, "adjusted_equity_shares_cr"] = share_asof["adjusted_equity_shares_cr"]
+    frame.loc[:, "adjusted_equity_shares_cr"] = share_book_asof["adjusted_equity_shares_cr"]
+    frame.loc[:, "book_value_cr"] = share_book_asof["book_value_cr"]
     frame.loc[:, "earnings_source"] = "missing"
     frame.loc[has_annual, "earnings_source"] = "annual_fallback"
     frame.loc[has_quarterly, "earnings_source"] = "quarterly_ttm"
@@ -220,15 +240,32 @@ def _annual_fallback_events(financials: pd.DataFrame) -> pd.DataFrame:
     return _dedupe_events(events)
 
 
-def _share_events(financials: pd.DataFrame) -> pd.DataFrame:
-    shares = financials.loc[financials["metric_id"].eq("adjusted_equity_shares_cr")].copy()
-    if shares.empty:
-        return pd.DataFrame(columns=["symbol", "available_at", "adjusted_equity_shares_cr"])
-    shares = shares.sort_values(["symbol", "available_at", "report_date"], kind="stable")
-    shares = shares.drop_duplicates(["symbol", "available_at"], keep="last")
-    shares = shares.rename(columns={"value": "adjusted_equity_shares_cr"})
-    shares.loc[:, "available_at"] = pd.to_datetime(shares["available_at"])
-    return shares[["symbol", "available_at", "adjusted_equity_shares_cr"]].reset_index(drop=True)
+def _share_book_events(financials: pd.DataFrame) -> pd.DataFrame:
+    facts = financials.loc[
+        financials["metric_id"].isin(["adjusted_equity_shares_cr", "equity_share_capital", "reserves"])
+    ].copy()
+    columns = ["symbol", "available_at", "adjusted_equity_shares_cr", "book_value_cr"]
+    if facts.empty:
+        return pd.DataFrame(columns=columns)
+    facts = facts.sort_values(["symbol", "available_at", "report_date"], kind="stable")
+    wide = (
+        facts.pivot_table(
+            index=["symbol", "available_at"],
+            columns="metric_id",
+            values="value",
+            aggfunc="last",
+        )
+        .reset_index()
+        .rename_axis(None, axis=1)
+    )
+    for column in ("adjusted_equity_shares_cr", "equity_share_capital", "reserves"):
+        if column not in wide.columns:
+            wide.loc[:, column] = pd.NA
+        wide.loc[:, column] = pd.to_numeric(wide[column], errors="coerce")
+    wide.loc[:, "book_value_cr"] = wide["equity_share_capital"] + wide["reserves"]
+    wide.loc[wide[["equity_share_capital", "reserves"]].isna().any(axis=1), "book_value_cr"] = pd.NA
+    wide.loc[:, "available_at"] = pd.to_datetime(wide["available_at"])
+    return wide[columns].reset_index(drop=True)
 
 
 def _wide_period_facts(financials: pd.DataFrame, *, period_type: str) -> pd.DataFrame:
@@ -322,6 +359,7 @@ def _ttm_columns() -> list[str]:
         "ttm_net_profit_cr",
         "ttm_operating_profit_cr",
         "adjusted_equity_shares_cr",
+        "book_value_cr",
         "earnings_source",
         "source_batch_id",
     ]

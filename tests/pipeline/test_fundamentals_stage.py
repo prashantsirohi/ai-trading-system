@@ -91,6 +91,8 @@ def test_fundamentals_stage_writes_attempt_artifacts(tmp_path: Path) -> None:
     assert {artifact.artifact_type for artifact in result.artifacts} == {
         "watchlist_candidates",
         "fundamental_scores",
+        "quarterly_result_scores",
+        "stock_valuation_bands_latest",
         "fundamental_summary",
     }
     summary = json.loads((output_dir / "fundamental_summary.json").read_text(encoding="utf-8"))

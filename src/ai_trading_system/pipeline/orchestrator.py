@@ -1007,6 +1007,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to latest fundamental scores CSV.",
     )
     parser.add_argument(
+        "--fundamental-watchlist-mode",
+        choices=["legacy", "fundamental_tracking"],
+        default="legacy",
+        help="Fundamental watchlist scoring mode.",
+    )
+    parser.add_argument(
         "--screener-financials-db-path",
         default=str(default_screener_db_path()),
         help="Canonical Screener SQLite fundamentals DB path.",
@@ -1027,6 +1033,29 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=756,
         help="Minimum observations for valuation percentile/z-score bands.",
+    )
+    parser.add_argument(
+        "--enable-stock-valuation-bands",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Refresh stock-level PE/PS/PB own-history valuation bands during the features stage.",
+    )
+    parser.add_argument(
+        "--stock-valuation-band-universe-id",
+        default="UNIV_TOP1000_MCAP",
+        help="Universe id used for stock-level valuation bands.",
+    )
+    parser.add_argument(
+        "--valuation-band-min-history-days-3y",
+        type=int,
+        default=504,
+        help="Minimum observations for 3Y stock valuation-band scoring.",
+    )
+    parser.add_argument(
+        "--valuation-band-min-history-days-5y",
+        type=int,
+        default=756,
+        help="Minimum observations for 5Y stock valuation-band scoring.",
     )
     parser.add_argument(
         "--enable-sector-earnings-features",
@@ -1432,10 +1461,15 @@ def main() -> None:
         "enable_fundamentals": bool(args.enable_fundamentals),
         "fundamental_max_stale_days": int(args.fundamental_max_stale_days),
         "fundamental_scores_path": args.fundamental_scores_path,
+        "fundamental_watchlist_mode": args.fundamental_watchlist_mode,
         "screener_financials_db_path": args.screener_financials_db_path,
         "enable_valuation_features": bool(args.enable_valuation_features),
         "valuation_universes": args.valuation_universes,
         "valuation_min_history_days": int(args.valuation_min_history_days),
+        "enable_stock_valuation_bands": bool(args.enable_stock_valuation_bands),
+        "stock_valuation_band_universe_id": args.stock_valuation_band_universe_id,
+        "valuation_band_min_history_days_3y": int(args.valuation_band_min_history_days_3y),
+        "valuation_band_min_history_days_5y": int(args.valuation_band_min_history_days_5y),
         "enable_sector_earnings_features": bool(args.enable_sector_earnings_features),
         "sector_earnings_from_date": args.sector_earnings_from_date,
         "sector_earnings_to_date": args.sector_earnings_to_date,

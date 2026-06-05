@@ -28,6 +28,8 @@ FUNDAMENTAL_ARTIFACT_TYPES = frozenset(
         "watchlist_candidates",
         "fundamental_summary",
         "fundamental_scores",
+        "quarterly_result_scores",
+        "stock_valuation_bands_latest",
         "company_growth_features",
         "company_insight_tags",
         "great_results",

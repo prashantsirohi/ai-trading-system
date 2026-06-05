@@ -139,6 +139,20 @@ def _read_industry_trends(path: str | Path | None) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
+def _read_symbol_latest(path: str | Path | None, *, date_column: str | None = None) -> pd.DataFrame:
+    if path is None:
+        return pd.DataFrame(columns=["symbol"])
+    resolved = Path(path)
+    frame = _symbol_frame(_read_csv_optional(resolved))
+    if frame.empty:
+        return frame
+    if date_column and date_column in frame.columns:
+        frame.loc[:, "_sort_date"] = pd.to_datetime(frame[date_column], errors="coerce")
+        frame = frame.sort_values(["_sort_date", "symbol"], ascending=[False, True], na_position="last", kind="stable")
+        frame = frame.drop(columns=["_sort_date"], errors="ignore")
+    return frame.drop_duplicates(subset=["symbol"], keep="first").reset_index(drop=True)
+
+
 def _read_ranked(rank_dir: Path) -> pd.DataFrame:
     path = rank_dir / "ranked_signals.csv"
     if not path.exists():
@@ -177,6 +191,15 @@ def _num(frame: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
     if column not in frame.columns:
         return pd.Series(default, index=frame.index, dtype=float)
     return pd.to_numeric(frame[column], errors="coerce").fillna(default).astype(float)
+
+
+def _float(value: Any) -> float:
+    try:
+        if pd.isna(value):
+            return float("nan")
+        return float(value)
+    except Exception:
+        return float("nan")
 
 
 def _truthy_series(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -227,6 +250,59 @@ def _bucket(frame: pd.DataFrame) -> pd.Series:
     return bucket
 
 
+def _near_high_series(frame: pd.DataFrame) -> pd.Series:
+    near_pct = _num(frame, "near_52w_high_pct", default=float("nan"))
+    proximity = _num(frame, "proximity_to_highs", default=float("nan"))
+    prox_high = _num(frame, "prox_high", default=float("nan"))
+    prox_high_score = _num(frame, "prox_high_score", default=float("nan"))
+    return (
+        near_pct.le(10).fillna(False)
+        | proximity.ge(70).fillna(False)
+        | proximity.le(10).fillna(False)
+        | prox_high.le(10).fillna(False)
+        | prox_high_score.ge(70).fillna(False)
+    )
+
+
+def _fundamental_tracking_bucket(frame: pd.DataFrame) -> pd.Series:
+    q_score = _num(frame, "quarterly_result_score", 50.0)
+    v_score = _num(frame, "valuation_history_score", 50.0)
+    composite = _num(frame, "composite_score", 0.0)
+    sector = _num(frame, "sector_strength", 50.0)
+    pattern_score = _num(frame, "pattern_score", 0.0)
+    valuation_bucket = frame.get("valuation_history_bucket", pd.Series("", index=frame.index)).fillna("").astype(str)
+    result_bucket = frame.get("quarterly_result_bucket", pd.Series("", index=frame.index)).fillna("").astype(str)
+    fundamental_tier = frame.get("fundamental_tier", pd.Series("", index=frame.index)).astype("string").str.upper()
+    hard = _truthy_series(frame, "hard_red_flag")
+    qualified = _truthy_series(frame, "qualified")
+    candidate_tier = frame.get("candidate_tier", pd.Series("", index=frame.index)).astype("string").str.upper()
+    setup = qualified | candidate_tier.eq("A") | pattern_score.ge(75)
+    near_high = _near_high_series(frame)
+    allowed_value = valuation_bucket.isin(["DEEPLY_BELOW_HISTORY", "BELOW_OWN_MEDIAN", "FAIR_VALUE"])
+    expensive = valuation_bucket.eq("EXPENSIVE_VS_HISTORY")
+    expensive_override = ~expensive | (q_score.ge(90) & composite.ge(80))
+
+    bucket = pd.Series("IGNORE_FOR_NOW", index=frame.index)
+    bucket.loc[q_score.ge(70)] = "F1_FUNDAMENTAL_WATCH"
+    bucket.loc[q_score.ge(70) & valuation_bucket.isin(["DEEPLY_BELOW_HISTORY", "BELOW_OWN_MEDIAN"]) & composite.ge(55)] = (
+        "F2_RESULT_VALUE_ACCUMULATION"
+    )
+    bucket.loc[q_score.ge(75) & v_score.ge(55) & composite.ge(65) & sector.ge(60)] = "F3_FUND_VALUE_TECH_READY"
+    bucket.loc[
+        q_score.ge(75)
+        & v_score.ge(55)
+        & allowed_value
+        & composite.ge(70)
+        & sector.ge(65)
+        & near_high
+        & setup
+        & expensive_override
+    ] = "F4_ACTION_CANDIDATE"
+    bucket.loc[result_bucket.eq("DETERIORATING")] = "D1_RESULT_DOWNTURN"
+    bucket.loc[hard | fundamental_tier.eq("REJECT")] = "D2_AVOID_RED_FLAG"
+    return bucket
+
+
 def _reason(row: pd.Series) -> str:
     bucket = str(row.get("watchlist_bucket", ""))
     tier = str(row.get("fundamental_tier", "") or "missing")
@@ -254,8 +330,39 @@ def _reason(row: pd.Series) -> str:
     return reason
 
 
+def _fundamental_tracking_reason(row: pd.Series) -> str:
+    bucket = str(row.get("watchlist_bucket") or "")
+    result_bucket = str(row.get("quarterly_result_bucket") or "result neutral")
+    valuation_bucket = str(row.get("valuation_history_bucket") or "valuation neutral")
+    valuation_reason = str(row.get("valuation_reason") or "").strip()
+    parts: list[str] = []
+    if bucket == "D2_AVOID_RED_FLAG":
+        return f"Fundamental red flag: {str(row.get('red_flags') or 'Reject tier')}"
+    if bucket == "D1_RESULT_DOWNTURN":
+        return f"Deteriorating quarterly result + {valuation_bucket}"
+    if result_bucket and result_bucket != "IGNORE":
+        parts.append(result_bucket.replace("_", " ").title())
+    if valuation_reason:
+        parts.append(valuation_reason)
+    elif valuation_bucket:
+        parts.append(valuation_bucket.replace("_", " ").title())
+    if _num(pd.DataFrame([row]), "composite_score").iloc[0] >= 70:
+        parts.append("strong RS")
+    if _num(pd.DataFrame([row]), "sector_strength", 50.0).iloc[0] >= 60:
+        parts.append("sector strength")
+    if bool(row.get("qualified")) or str(row.get("candidate_tier") or "").upper() == "A" or _float(row.get("pattern_score")) >= 75:
+        parts.append("technical confirmation")
+    return " + ".join(parts) if parts else "No strong result/value/technical alignment yet"
+
+
 def _next_action(bucket: str) -> str:
     return {
+        "F4_ACTION_CANDIDATE": "Prioritize chart review and add to action watchlist",
+        "F3_FUND_VALUE_TECH_READY": "Track for breakout confirmation",
+        "F2_RESULT_VALUE_ACCUMULATION": "Accumulate research; wait for technical strength",
+        "F1_FUNDAMENTAL_WATCH": "Watch next result and technical setup",
+        "D1_RESULT_DOWNTURN": "Avoid until result trend improves",
+        "D2_AVOID_RED_FLAG": "Avoid unless special situation/catalyst",
         "ADD_TO_WATCHLIST": "Add to watchlist and review chart",
         "STUDY_ONLY": "Study fundamentals and wait for better setup",
         "TECHNICAL_ONLY_RISK": "Review manually; technical strong but fundamentals mixed",
@@ -272,6 +379,9 @@ def enrich_rank_artifacts(
     industry_scores: str | Path | None = DEFAULT_INDUSTRY_SCORES_PATH,
     industry_trends: str | Path | None = DEFAULT_INDUSTRY_TRENDS_PATH,
     catalysts: str | Path | None = None,
+    quarterly_result_scores: str | Path | None = None,
+    stock_valuation_bands: str | Path | None = None,
+    watchlist_mode: str = "legacy",
     output: str | Path = DEFAULT_OUTPUT_PATH,
     run_id: str | None = None,
     top_n: int = 100,
@@ -285,6 +395,9 @@ def enrich_rank_artifacts(
     industry_scores = _resolve_fundamentals_default(industry_scores)
     industry_trends = _resolve_fundamentals_default(industry_trends)
     catalysts = _resolve_fundamentals_default(catalysts)
+    quarterly_result_scores = _resolve_fundamentals_default(quarterly_result_scores)
+    stock_valuation_bands = _resolve_fundamentals_default(stock_valuation_bands)
+    watchlist_mode = str(watchlist_mode or "legacy").strip().lower()
     ranked = _symbol_frame(_read_ranked(rank_dir))
     rank_rows = len(ranked)
     breakout = _best_by_symbol(_read_csv_optional(rank_dir / "breakout_scan.csv"), ["breakout_score"])
@@ -294,6 +407,8 @@ def enrich_rank_artifacts(
         fundamentals.loc[:, "industry_key"] = fundamentals["industry"].map(normalize_industry_key)
     trends = _symbol_frame(_read_csv_optional(Path(fundamental_trends))) if fundamental_trends else pd.DataFrame(columns=["symbol"])
     catalyst_frame = _symbol_frame(_read_csv_optional(Path(catalysts))) if catalysts else pd.DataFrame(columns=["symbol"])
+    result_frame = _read_symbol_latest(quarterly_result_scores, date_column="available_at")
+    valuation_frame = _read_symbol_latest(stock_valuation_bands, date_column="date")
 
     ranked = ranked.loc[_num(ranked, "composite_score").ge(float(min_technical_score))].copy()
     merged = ranked.merge(fundamentals, on="symbol", how="left", suffixes=("", "_fundamental"))
@@ -307,6 +422,10 @@ def enrich_rank_artifacts(
     has_catalyst_scores = not catalyst_frame.empty
     if has_catalyst_scores:
         merged = merged.merge(catalyst_frame, on="symbol", how="left", suffixes=("", "_catalyst"))
+    if not result_frame.empty:
+        merged = merged.merge(result_frame, on="symbol", how="left", suffixes=("", "_result"))
+    if not valuation_frame.empty:
+        merged = merged.merge(valuation_frame, on="symbol", how="left", suffixes=("", "_valuation"))
 
     merged.loc[:, "name"] = _first_available(merged, ["name", "name_fundamental"], "")
     merged.loc[:, "industry_group"] = _first_available(merged, ["industry_group", "industry_group_fundamental"], "")
@@ -340,6 +459,24 @@ def enrich_rank_artifacts(
     if "trend_reason" not in merged.columns:
         merged.loc[:, "trend_reason"] = ""
     merged.loc[:, "trend_reason"] = merged["trend_reason"].fillna("")
+    for column, default in (
+        ("quarterly_result_score", 50.0),
+        ("valuation_history_score", 50.0),
+        ("sector_strength", 50.0),
+        ("breakout_pattern_score", 50.0),
+    ):
+        if column not in merged.columns:
+            merged.loc[:, column] = default
+        merged.loc[:, column] = pd.to_numeric(merged[column], errors="coerce").fillna(default)
+    for column, default in (
+        ("quarterly_result_bucket", "IGNORE"),
+        ("quarterly_result_reason", ""),
+        ("valuation_history_bucket", "FAIR_VALUE"),
+        ("valuation_reason", ""),
+    ):
+        if column not in merged.columns:
+            merged.loc[:, column] = default
+        merged.loc[:, column] = merged[column].fillna(default)
     merged.loc[:, "breakout_pattern_score"] = _breakout_pattern_score(merged)
     catalyst_score = _num(merged, "catalyst_score", default=float("nan"))
     has_row_catalyst = catalyst_score.notna()
@@ -354,14 +491,29 @@ def enrich_rank_artifacts(
         + 0.15 * _num(merged, "fundamental_score", 50.0)
         + 0.10 * catalyst_score.fillna(0.0)
     )
-    merged.loc[:, "final_watchlist_score"] = base_score.where(~has_row_catalyst, catalyst_adjusted_score)
+    if watchlist_mode == "fundamental_tracking":
+        merged.loc[:, "final_watchlist_score"] = (
+            0.35 * _num(merged, "quarterly_result_score", 50.0)
+            + 0.20 * _num(merged, "valuation_history_score", 50.0)
+            + 0.15 * _num(merged, "fundamental_score", 50.0)
+            + 0.15 * _num(merged, "composite_score", 50.0)
+            + 0.10 * _num(merged, "sector_strength", 50.0)
+            + 0.05 * _num(merged, "breakout_pattern_score", 50.0)
+        )
+    else:
+        merged.loc[:, "final_watchlist_score"] = base_score.where(~has_row_catalyst, catalyst_adjusted_score)
     value_trap = merged["fundamental_trend_label"].astype(str).str.upper().eq("VALUE_TRAP_RISK")
-    merged.loc[value_trap, "final_watchlist_score"] = merged.loc[value_trap, "final_watchlist_score"] - 7.0
+    if watchlist_mode != "fundamental_tracking":
+        merged.loc[value_trap, "final_watchlist_score"] = merged.loc[value_trap, "final_watchlist_score"] - 7.0
     merged.loc[:, "final_watchlist_score"] = pd.to_numeric(merged["final_watchlist_score"], errors="coerce").clip(0, 100).round(2)
-    merged.loc[:, "watchlist_bucket"] = _bucket(merged)
+    merged.loc[:, "watchlist_bucket"] = _fundamental_tracking_bucket(merged) if watchlist_mode == "fundamental_tracking" else _bucket(merged)
     add_value_trap = value_trap & merged["watchlist_bucket"].eq("ADD_TO_WATCHLIST")
     merged.loc[add_value_trap, "watchlist_bucket"] = "STUDY_ONLY"
-    merged.loc[:, "watchlist_reason"] = merged.apply(_reason, axis=1)
+    merged.loc[:, "watchlist_reason"] = (
+        merged.apply(_fundamental_tracking_reason, axis=1)
+        if watchlist_mode == "fundamental_tracking"
+        else merged.apply(_reason, axis=1)
+    )
 
     industry_frame = _read_industry_scores(industry_scores)
     matched_industry_rows = 0
@@ -520,6 +672,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Latest industry fundamental trends CSV",
     )
     parser.add_argument("--catalysts", default=None, help="Optional catalyst score CSV")
+    parser.add_argument("--quarterly-result-scores", default=None, help="Optional quarterly result scores CSV")
+    parser.add_argument("--stock-valuation-bands", default=None, help="Optional latest stock valuation bands CSV")
+    parser.add_argument("--watchlist-mode", choices=["legacy", "fundamental_tracking"], default="legacy")
     parser.add_argument(
         "--output",
         default=str(fundamentals_dir / "watchlist_candidates_latest.csv"),
@@ -540,6 +695,9 @@ def main() -> None:
         industry_scores=args.industry_scores,
         industry_trends=args.industry_trends,
         catalysts=args.catalysts,
+        quarterly_result_scores=args.quarterly_result_scores,
+        stock_valuation_bands=args.stock_valuation_bands,
+        watchlist_mode=args.watchlist_mode,
         output=args.output,
         run_id=args.run_id,
         top_n=args.top_n,

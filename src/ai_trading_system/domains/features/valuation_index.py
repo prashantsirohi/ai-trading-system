@@ -52,7 +52,14 @@ def refresh_valuation_index(
         prices.loc[:, "date"] = pd.to_datetime(prices["date"]).dt.date
         ttm = conn.execute(
             """
-            SELECT symbol, as_of_date AS date, adjusted_equity_shares_cr, ttm_net_profit_cr, earnings_source
+            SELECT
+                symbol,
+                as_of_date AS date,
+                adjusted_equity_shares_cr,
+                ttm_sales_cr,
+                ttm_net_profit_cr,
+                book_value_cr,
+                earnings_source
             FROM fundamental_ttm
             WHERE as_of_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             """,
@@ -69,9 +76,14 @@ def refresh_valuation_index(
         base.loc[:, "market_cap_cr"] = pd.to_numeric(base["close"], errors="coerce") * pd.to_numeric(
             base["adjusted_equity_shares_cr"], errors="coerce"
         )
+        base.loc[:, "ttm_sales_cr"] = pd.to_numeric(base["ttm_sales_cr"], errors="coerce")
         base.loc[:, "ttm_net_profit_cr"] = pd.to_numeric(base["ttm_net_profit_cr"], errors="coerce")
-        base.loc[:, "pe_ttm"] = base["market_cap_cr"] / base["ttm_net_profit_cr"].where(base["ttm_net_profit_cr"].ne(0))
+        base.loc[:, "book_value_cr"] = pd.to_numeric(base["book_value_cr"], errors="coerce")
+        base.loc[:, "pe_ttm"] = base["market_cap_cr"] / base["ttm_net_profit_cr"].where(base["ttm_net_profit_cr"].gt(0))
+        base.loc[:, "ps_ttm"] = base["market_cap_cr"] / base["ttm_sales_cr"].where(base["ttm_sales_cr"].gt(0))
+        base.loc[:, "pb"] = base["market_cap_cr"] / base["book_value_cr"].where(base["book_value_cr"].gt(0))
         base.loc[:, "earnings_yield"] = base["ttm_net_profit_cr"] / base["market_cap_cr"].where(base["market_cap_cr"].ne(0))
+        base.loc[:, "valuation_warning"] = base.apply(_valuation_warning, axis=1)
         base = base.loc[base["market_cap_cr"].notna() & base["market_cap_cr"].gt(0)].copy()
         replace_start = str(from_date)[:10] if from_date else str(base["date"].min())
         replace_end = str(to_date)[:10] if to_date else str(base["date"].max())
@@ -395,9 +407,14 @@ def _replace_range(
             "close",
             "adjusted_equity_shares_cr",
             "market_cap_cr",
+            "ttm_sales_cr",
             "ttm_net_profit_cr",
+            "book_value_cr",
             "pe_ttm",
+            "ps_ttm",
+            "pb",
             "earnings_yield",
+            "valuation_warning",
             "earnings_source",
         ],
         "universe_membership": [
@@ -447,6 +464,20 @@ def _replace_range(
         conn.execute(f"INSERT INTO {table_name} ({', '.join(columns)}) SELECT {', '.join(columns)} FROM _valuation_frame")
     finally:
         conn.unregister("_valuation_frame")
+
+
+def _valuation_warning(row: pd.Series) -> str | None:
+    warnings: list[str] = []
+    profit = row.get("ttm_net_profit_cr")
+    sales = row.get("ttm_sales_cr")
+    book = row.get("book_value_cr")
+    if pd.isna(profit) or float(profit) <= 0:
+        warnings.append("loss_making_or_negative_ttm_profit")
+    if pd.isna(sales) or float(sales) <= 0:
+        warnings.append("missing_sales")
+    if pd.isna(book) or float(book) <= 0:
+        warnings.append("missing_book_value")
+    return "; ".join(warnings) if warnings else None
 
 
 __all__ = ["DEFAULT_UNIVERSES", "ValuationIndexResult", "refresh_valuation_index"]
