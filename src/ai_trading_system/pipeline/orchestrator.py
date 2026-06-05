@@ -52,6 +52,7 @@ PIPELINE_ORDER = ["ingest", "features", "rank", "fundamentals", "candidates", "e
 # Stages dropped from the default order unless explicitly enabled (e.g. by a flag
 # or by a detected input). They remain valid when named in an explicit stage list.
 OPTIONAL_STAGES = frozenset({"fundamentals"})
+DEFAULT_CLI_STAGES = "ingest,features,rank,fundamentals,candidates,events,execute,insight,publish,perf_tracker"
 
 
 _BANNER_WIDTH = 78
@@ -955,7 +956,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", help="Reuse an existing run_id, typically for stage retries")
     parser.add_argument(
         "--stages",
-        default="ingest,features,rank,events,execute,insight,publish,perf_tracker",
+        default=DEFAULT_CLI_STAGES,
         help="Comma-separated stage list. Example: publish",
     )
     parser.add_argument(
@@ -992,8 +993,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-score", type=float, default=0.0)
     parser.add_argument(
         "--enable-fundamentals",
-        action="store_true",
-        help="Run optional fundamentals enrichment after rank and before publish.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run fundamentals enrichment after rank and before candidates/publish.",
     )
     parser.add_argument(
         "--fundamental-max-stale-days",
@@ -1009,7 +1011,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--fundamental-watchlist-mode",
         choices=["legacy", "fundamental_tracking"],
-        default="legacy",
+        default="fundamental_tracking",
         help="Fundamental watchlist scoring mode.",
     )
     parser.add_argument(
@@ -1432,7 +1434,7 @@ def main() -> None:
         if hasattr(orchestrator, "progress_renderer"):
             orchestrator.progress_renderer = progress_renderer
     run_date = args.run_date or date.today().isoformat()
-    if args.canary and args.stages == "ingest,features,rank,events,execute,insight,publish,perf_tracker":
+    if args.canary and args.stages == DEFAULT_CLI_STAGES:
         stage_names = ["ingest", "features", "rank"]
     else:
         stage_names = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
