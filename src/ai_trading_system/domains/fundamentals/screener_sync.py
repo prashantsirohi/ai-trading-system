@@ -21,6 +21,10 @@ DEFAULT_SYMBOL_ATTEMPTS = 3
 DEFAULT_RETRY_BACKOFF_SEC = 5.0
 
 
+class MissingExpectedQuarterError(ValueError):
+    """Raised when a Screener export is valid but not updated to the expected quarter."""
+
+
 def run_sync(
     *,
     limit: int | None = None,
@@ -79,6 +83,7 @@ def run_sync(
             _emit(progress, "No symbols to sync; all available symbols are already synced.")
     succeeded = 0
     failed = 0
+    skipped = 0
     for index, symbol in enumerate(symbols):
         item_start = time.monotonic()
         action = "download+parse" if allow_download else "parse export"
@@ -101,7 +106,15 @@ def run_sync(
             _emit(
                 progress,
                 f"[{index + 1}/{len(symbols)}] {symbol}: ok "
-                f"elapsed={time.monotonic() - item_start:.1f}s succeeded={succeeded} failed={failed}",
+                f"elapsed={time.monotonic() - item_start:.1f}s succeeded={succeeded} skipped={skipped} failed={failed}",
+            )
+        except MissingExpectedQuarterError as exc:
+            skipped += 1
+            _emit(
+                progress,
+                f"[{index + 1}/{len(symbols)}] {symbol}: skipped "
+                f"reason={exc} elapsed={time.monotonic() - item_start:.1f}s "
+                f"succeeded={succeeded} skipped={skipped} failed={failed}",
             )
         except Exception as exc:  # noqa: BLE001
             failed += 1
@@ -109,7 +122,7 @@ def run_sync(
             _emit(
                 progress,
                 f"[{index + 1}/{len(symbols)}] {symbol}: failed "
-                f"error={type(exc).__name__}: {exc} succeeded={succeeded} failed={failed}",
+                f"error={type(exc).__name__}: {exc} succeeded={succeeded} skipped={skipped} failed={failed}",
             )
     store.finish_batch(batch_id, succeeded=succeeded, failed=failed)
     if refresh_readmodels and succeeded:
@@ -121,7 +134,7 @@ def run_sync(
     _emit(
         progress,
         f"Finished Screener sync sync_batch_id={batch_id} total={len(symbols)} "
-        f"succeeded={succeeded} failed={failed}",
+        f"succeeded={succeeded} skipped={skipped} failed={failed}",
     )
     if failed:
         _emit(
@@ -134,6 +147,7 @@ def run_sync(
         "sync_batch_id": batch_id,
         "total": len(symbols),
         "succeeded": succeeded,
+        "skipped": skipped,
         "failed": failed,
         "expected_report_date": resolved_expected_report_date or "",
     }
@@ -162,9 +176,14 @@ def _sync_symbol_with_retries(
                 allow_download=allow_download,
             )
             if expected_report_date is not None and not _has_quarterly_report_date(data, expected_report_date):
-                raise ValueError(f"expected quarterly report_date={expected_report_date} not found in Screener export")
+                raise MissingExpectedQuarterError(
+                    f"expected quarterly report_date={expected_report_date} not found in Screener export"
+                )
             store.save_company_financials(symbol, data, sync_batch_id=sync_batch_id)
             return
+        except MissingExpectedQuarterError as exc:
+            last_exc = exc
+            break
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
             if attempt >= DEFAULT_SYMBOL_ATTEMPTS:
@@ -246,7 +265,7 @@ def main() -> None:
         raise SystemExit(1) from exc
     print(
         f"sync_batch_id={result['sync_batch_id']} total={result['total']} "
-        f"succeeded={result['succeeded']} failed={result['failed']}"
+        f"succeeded={result['succeeded']} skipped={result['skipped']} failed={result['failed']}"
     )
 
 

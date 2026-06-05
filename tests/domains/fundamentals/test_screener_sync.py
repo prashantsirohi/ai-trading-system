@@ -172,7 +172,7 @@ def test_missing_current_results_download_forces_fresh_export_when_allowed(
     assert calls == [("AAA", {"force_download": True, "allow_download": True})]
 
 
-def test_missing_current_results_fails_stale_export_without_expected_quarter(
+def test_missing_current_results_skips_stale_export_without_expected_quarter(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -181,8 +181,10 @@ def test_missing_current_results_fails_stale_export_without_expected_quarter(
             pass
 
         def fetch_company_data(self, _symbol, **_kwargs):
+            calls.append(_symbol)
             return _company_data("2025-09-30")
 
+    calls: list[str] = []
     db_path = tmp_path / "screener_financials.db"
     monkeypatch.setattr(screener_sync, "ScreenerClient", FakeClient)
     monkeypatch.setattr(screener_sync, "_load_symbols", lambda *_args, **_kwargs: ["AAA"])
@@ -197,10 +199,12 @@ def test_missing_current_results_fails_stale_export_without_expected_quarter(
     )
 
     assert result["succeeded"] == 0
-    assert result["failed"] == 1
+    assert result["skipped"] == 1
+    assert result["failed"] == 0
+    assert calls == ["AAA"]
     with sqlite3.connect(db_path) as conn:
-        error = conn.execute("SELECT error FROM screener_sync_error WHERE symbol = 'AAA'").fetchone()[0]
-    assert "expected quarterly report_date=2025-12-31 not found" in error
+        error = conn.execute("SELECT error FROM screener_sync_error WHERE symbol = 'AAA'").fetchone()
+    assert error is None
 
 
 def test_sync_retries_transient_symbol_failure(monkeypatch, tmp_path: Path) -> None:
