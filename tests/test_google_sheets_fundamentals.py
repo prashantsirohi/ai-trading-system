@@ -108,3 +108,42 @@ def test_publish_fundamental_dashboard_writes_single_valuation_tab(monkeypatch) 
     assert "Banks" not in values
     assert "2021-05-26" not in values
     assert "UNIV_TOP1000_MCAP" in values
+
+
+def test_publish_fundamental_watchlist_writes_tracking_tab(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_SPREADSHEET_ID", "sheet-id")
+    monkeypatch.setattr(google_sheets, "GoogleSheetsManager", _FakeManager)
+    _FakeManager.instances.clear()
+
+    ok = google_sheets.publish_fundamental_watchlist(
+        pd.DataFrame(
+            [
+                {
+                    "symbol": "AAA",
+                    "name": "Alpha",
+                    "industry_group": "Capital Goods",
+                    "watchlist_bucket": "F1_FUNDAMENTAL_WATCH",
+                    "final_watchlist_score": 78.5,
+                    "quarterly_result_bucket": "GREAT_RESULT",
+                    "quarterly_result_score": 88,
+                    "valuation_history_bucket": "FAIR_VALUE",
+                    "valuation_history_score": 50,
+                    "valuation_reason": "Fair versus own valuation history",
+                    "composite_score": 82,
+                    "sector_strength": 72,
+                    "pe_ttm": 22,
+                    "ps_ttm": 4,
+                    "pb": 5,
+                    "watchlist_reason": "Great result + fair value",
+                }
+            ]
+        )
+    )
+
+    manager = _FakeManager.instances[0]
+    assert ok is True
+    assert set(manager.written) == {"Fundamental Watchlist"}
+    frame = manager.written["Fundamental Watchlist"]
+    assert frame.loc[0, "symbol"] == "AAA"
+    assert frame.loc[0, "watchlist_bucket"] == "F1_FUNDAMENTAL_WATCH"
+    assert "valuation_reason" in frame.columns

@@ -79,6 +79,7 @@ class PublishStage:
         # to run so the operator gets *some* signal that the pipeline ran.
         "google_sheets_portfolio": "publish_optional",
         "google_sheets_fundamentals": "publish_optional",
+        "google_sheets_fundamental_watchlist": "publish_of_record",
         "google_sheets_dashboard": "publish_of_record",
         "google_sheets_watchlist": "publish_of_record",
         "google_sheets_event_log": "publish_auxiliary",
@@ -225,9 +226,24 @@ class PublishStage:
         if isinstance(watchlist, pd.DataFrame) and not watchlist.empty:
             bucket = watchlist.get("watchlist_bucket", pd.Series("", index=watchlist.index)).astype(str)
             add_rows = watchlist.loc[bucket.eq("ADD_TO_WATCHLIST")].head(10)
+            tracking_rows = watchlist.loc[
+                bucket.isin(
+                    [
+                        "F4_ACTION_CANDIDATE",
+                        "F3_FUND_VALUE_TECH_READY",
+                        "F2_RESULT_VALUE_ACCUMULATION",
+                        "F1_FUNDAMENTAL_WATCH",
+                    ]
+                )
+            ].head(10)
             metadata["fundamentals_top_add_to_watchlist"] = (
                 add_rows.get("symbol", pd.Series(dtype=str)).astype(str).tolist()
                 if not add_rows.empty
+                else []
+            )
+            metadata["fundamentals_top_tracking_watchlist"] = (
+                tracking_rows.get("symbol", pd.Series(dtype=str)).astype(str).tolist()
+                if not tracking_rows.empty
                 else []
             )
         summary_artifact = context.artifact_for("fundamentals", "fundamental_summary")
@@ -476,6 +492,9 @@ class PublishStage:
             handlers["google_sheets_dashboard"] = self._publish_dashboard_payload
         if not datasets.get("watchlist_candidates", pd.DataFrame()).empty:
             handlers["google_sheets_watchlist"] = self._publish_watchlist
+            watchlist = datasets.get("watchlist_candidates", pd.DataFrame())
+            if _has_fundamental_tracking_watchlist(watchlist):
+                handlers["google_sheets_fundamental_watchlist"] = self._publish_fundamental_watchlist
         has_fundamentals = any(
             isinstance(datasets.get(name), pd.DataFrame) and not datasets.get(name).empty
             for name in (
@@ -609,6 +628,18 @@ class PublishStage:
         if not publish_watchlist_candidates(datasets["watchlist_candidates"], decision_bundle=datasets.get("decision_bundle")):
             raise RuntimeError("watchlist publish returned False")
         return {"report_id": "watchlist_candidates_sheet"}
+
+    def _publish_fundamental_watchlist(
+        self,
+        context: StageContext,
+        rank_artifact: StageArtifact,
+        datasets: Dict[str, pd.DataFrame],
+    ) -> Dict[str, Any]:
+        from ai_trading_system.domains.publish.channels.google_sheets import publish_fundamental_watchlist
+
+        if not publish_fundamental_watchlist(datasets["watchlist_candidates"]):
+            raise RuntimeError("fundamental watchlist publish returned False")
+        return {"report_id": "fundamental_watchlist_sheet"}
 
     def _publish_fundamental_dashboard(
         self,
@@ -861,6 +892,15 @@ def _first_frame(datasets: Dict[str, Any], *names: str) -> pd.DataFrame:
         if isinstance(value, pd.DataFrame) and not value.empty:
             return value
     return pd.DataFrame()
+
+
+def _has_fundamental_tracking_watchlist(value: Any) -> bool:
+    if not isinstance(value, pd.DataFrame) or value.empty:
+        return False
+    if "watchlist_bucket" not in value.columns:
+        return False
+    bucket = value["watchlist_bucket"].astype(str)
+    return bool(bucket.str.match(r"^(F[1-4]_|D[12]_)").any())
 
 
 def _latest_frame(value: Any, date_col: str) -> pd.DataFrame:

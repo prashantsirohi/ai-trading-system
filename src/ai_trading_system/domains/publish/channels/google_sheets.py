@@ -64,6 +64,26 @@ _FUNDAMENTAL_FORMATS: dict[str, dict[str, str]] = {
     "index_level_equal_weight": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "index_level_mcap_weight": GoogleSheetsManager.FORMAT_DECIMAL_2,
 }
+_FUNDAMENTAL_WATCHLIST_FORMATS: dict[str, dict[str, str]] = {
+    "report_date": GoogleSheetsManager.FORMAT_DATE,
+    "available_at": GoogleSheetsManager.FORMAT_DATE,
+    "final_watchlist_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "composite_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "quarterly_result_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "valuation_history_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "fundamental_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "sector_strength": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "breakout_pattern_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "pe_ttm": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "ps_ttm": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "pb": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "pe_median_5y": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "ps_median_5y": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "pb_median_5y": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "pe_pctile_5y": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "ps_pctile_5y": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "pb_pctile_5y": GoogleSheetsManager.FORMAT_DECIMAL_2,
+}
 
 
 def _require_spreadsheet_id() -> Optional[str]:
@@ -164,6 +184,97 @@ def publish_watchlist_candidates(watchlist: pd.DataFrame, *, decision_bundle: Pu
     manager.apply_number_formats(sheet_name, _WATCHLIST_FORMATS)
     logger.info("Watchlist candidates updated in Google Sheets (%s rows)", len(frame))
     return True
+
+
+def publish_fundamental_watchlist(watchlist: pd.DataFrame, *, sheet_name: str = "Fundamental Watchlist") -> bool:
+    """Publish the raw fundamental-tracking watchlist to a dedicated worksheet."""
+    spreadsheet_id = _require_spreadsheet_id()
+    if not spreadsheet_id:
+        raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
+
+    manager = GoogleSheetsManager()
+    if not manager.open_spreadsheet():
+        raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
+
+    frame = _fundamental_watchlist_frame(watchlist)
+    sheet = manager.get_or_create_sheet(sheet_name, rows=max(1000, len(frame) + 20), cols=max(24, len(frame.columns) + 2))
+    if not sheet:
+        raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
+    if not manager.write_dataframe(frame.fillna(""), sheet_name, include_header=True, clear_sheet=True):
+        raise RuntimeError(f"Failed writing {sheet_name}: {manager.last_error or 'unknown error'}")
+    manager.apply_number_formats(sheet_name, _FUNDAMENTAL_WATCHLIST_FORMATS)
+    logger.info("Fundamental watchlist updated in Google Sheets (%s rows)", len(frame))
+    return True
+
+
+def _fundamental_watchlist_frame(watchlist: pd.DataFrame) -> pd.DataFrame:
+    if watchlist is None or watchlist.empty:
+        return pd.DataFrame(columns=_FUNDAMENTAL_WATCHLIST_COLUMNS)
+    frame = watchlist.copy()
+    bucket_priority = {
+        "F4_ACTION_CANDIDATE": 0,
+        "F3_FUND_VALUE_TECH_READY": 1,
+        "F2_RESULT_VALUE_ACCUMULATION": 2,
+        "F1_FUNDAMENTAL_WATCH": 3,
+        "D1_RESULT_DOWNTURN": 4,
+        "D2_AVOID_RED_FLAG": 5,
+        "IGNORE_FOR_NOW": 6,
+    }
+    if "watchlist_bucket" in frame.columns:
+        frame.loc[:, "_bucket_priority"] = frame["watchlist_bucket"].astype(str).map(bucket_priority).fillna(99)
+    else:
+        frame.loc[:, "_bucket_priority"] = 99
+    for column in ("final_watchlist_score", "composite_score"):
+        if column not in frame.columns:
+            frame.loc[:, column] = pd.NA
+        frame.loc[:, column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = frame.sort_values(
+        ["_bucket_priority", "final_watchlist_score", "composite_score"],
+        ascending=[True, False, False],
+        na_position="last",
+        kind="stable",
+    )
+    for column in _FUNDAMENTAL_WATCHLIST_COLUMNS:
+        if column not in frame.columns:
+            frame.loc[:, column] = pd.NA
+    return frame[_FUNDAMENTAL_WATCHLIST_COLUMNS].head(100).reset_index(drop=True)
+
+
+_FUNDAMENTAL_WATCHLIST_COLUMNS = [
+    "symbol",
+    "name",
+    "industry_group",
+    "watchlist_bucket",
+    "final_watchlist_score",
+    "quarterly_result_bucket",
+    "quarterly_result_score",
+    "valuation_history_bucket",
+    "valuation_history_score",
+    "valuation_reason",
+    "composite_score",
+    "sector_strength",
+    "breakout_pattern_score",
+    "candidate_tier",
+    "qualified",
+    "fundamental_score",
+    "fundamental_tier",
+    "pe_ttm",
+    "ps_ttm",
+    "pb",
+    "pe_median_5y",
+    "ps_median_5y",
+    "pb_median_5y",
+    "pe_pctile_5y",
+    "ps_pctile_5y",
+    "pb_pctile_5y",
+    "sales_yoy_pct",
+    "operating_profit_yoy_pct",
+    "opm_yoy_change_bps",
+    "watchlist_reason",
+    "next_action",
+    "report_date",
+    "available_at",
+]
 
 
 def publish_event_log_sheet(decision_bundle: PublishDecisionBundle, *, sheet_name: str = "Event_Log") -> bool:
@@ -440,6 +551,7 @@ __all__ = [
     "publish_sector_dashboard",
     "publish_stock_scan",
     "publish_watchlist_candidates",
+    "publish_fundamental_watchlist",
     "publish_event_log_sheet",
     "publish_log_sheet",
     "publish_fundamental_dashboard",
