@@ -41,7 +41,15 @@ def _publish_context(tmp_path: Path, *, with_fundamentals: bool) -> StageContext
         watchlist_path = fund_dir / "watchlist_candidates.csv"
         summary_path = fund_dir / "fundamental_summary.json"
         pd.DataFrame(
-            [{"symbol": "AAA", "watchlist_bucket": "ADD_TO_WATCHLIST", "final_watchlist_score": 82}]
+            [
+                {
+                    "symbol": "AAA",
+                    "watchlist_bucket": "F1_FUNDAMENTAL_WATCH",
+                    "final_watchlist_score": 82,
+                    "quarterly_result_score": 88,
+                    "valuation_history_score": 50,
+                }
+            ]
         ).to_csv(watchlist_path, index=False)
         summary_path.write_text('{"status": "completed"}', encoding="utf-8")
         great_path = fund_dir / "great_results.csv"
@@ -116,7 +124,8 @@ def test_publish_includes_fundamentals_watchlist_when_present(tmp_path: Path) ->
         _publish_context(tmp_path, with_fundamentals=True)
     )
 
-    assert metadata["fundamentals_top_add_to_watchlist"] == ["AAA"]
+    assert metadata["fundamentals_top_add_to_watchlist"] == []
+    assert metadata["fundamentals_top_tracking_watchlist"] == ["AAA"]
     assert metadata["fundamental_summary_uri"].endswith("fundamental_summary.json")
     assert metadata["fundamentals"]["great_results_count"] == 1
     assert metadata["fundamentals"]["turnaround_count"] == 1

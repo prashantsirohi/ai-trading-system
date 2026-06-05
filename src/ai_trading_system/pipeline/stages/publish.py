@@ -121,11 +121,15 @@ class PublishStage:
         rank_artifact = context.require_artifact("rank", "ranked_signals")
         fallback_fundamental_artifacts = self._ensure_fundamental_artifact_fallback(context)
         def _context_artifact_for(artifact_type: str) -> StageArtifact | None:
+            if artifact_type in FUNDAMENTAL_ARTIFACT_TYPES:
+                return (
+                    context.artifact_for("fundamentals", artifact_type)
+                    or fallback_fundamental_artifacts.get(artifact_type)
+                    or context.artifact_for("rank", artifact_type)
+                )
             artifact = context.artifact_for("rank", artifact_type)
             if artifact is not None:
                 return artifact
-            if artifact_type in FUNDAMENTAL_ARTIFACT_TYPES:
-                return context.artifact_for("fundamentals", artifact_type) or fallback_fundamental_artifacts.get(artifact_type)
             return None
 
         datasets = build_publish_datasets(
