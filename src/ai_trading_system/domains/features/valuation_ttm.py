@@ -18,6 +18,7 @@ TTM_METRICS = (
     "net_profit",
     "operating_profit",
     "adjusted_equity_shares_cr",
+    "equity_shares_outstanding",
     "equity_share_capital",
     "reserves",
 )
@@ -242,7 +243,9 @@ def _annual_fallback_events(financials: pd.DataFrame) -> pd.DataFrame:
 
 def _share_book_events(financials: pd.DataFrame) -> pd.DataFrame:
     facts = financials.loc[
-        financials["metric_id"].isin(["adjusted_equity_shares_cr", "equity_share_capital", "reserves"])
+        financials["metric_id"].isin(
+            ["adjusted_equity_shares_cr", "equity_shares_outstanding", "equity_share_capital", "reserves"]
+        )
     ].copy()
     columns = ["symbol", "available_at", "adjusted_equity_shares_cr", "book_value_cr"]
     if facts.empty:
@@ -258,10 +261,28 @@ def _share_book_events(financials: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
         .rename_axis(None, axis=1)
     )
-    for column in ("adjusted_equity_shares_cr", "equity_share_capital", "reserves"):
+    for column in ("adjusted_equity_shares_cr", "equity_shares_outstanding", "equity_share_capital", "reserves"):
         if column not in wide.columns:
             wide.loc[:, column] = pd.NA
         wide.loc[:, column] = pd.to_numeric(wide[column], errors="coerce")
+    shares_from_count = wide["equity_shares_outstanding"] / 10_000_000.0
+    shares_from_capital = wide["equity_share_capital"] / 10.0
+    adjusted = wide["adjusted_equity_shares_cr"]
+    suspicious_adjusted = (
+        adjusted.notna()
+        & shares_from_capital.gt(0)
+        & adjusted.lt(shares_from_capital * 0.1)
+    )
+    wide.loc[:, "adjusted_equity_shares_cr"] = adjusted.where(adjusted.gt(0), shares_from_count)
+    count_repair = suspicious_adjusted & shares_from_count.gt(0)
+    if count_repair.any():
+        wide.loc[count_repair, "adjusted_equity_shares_cr"] = shares_from_count.loc[count_repair]
+    capital_repair = (
+        (wide["adjusted_equity_shares_cr"].isna() | wide["adjusted_equity_shares_cr"].le(0))
+        & shares_from_capital.gt(0)
+    )
+    if capital_repair.any():
+        wide.loc[capital_repair, "adjusted_equity_shares_cr"] = shares_from_capital.loc[capital_repair]
     wide.loc[:, "book_value_cr"] = wide["equity_share_capital"] + wide["reserves"]
     wide.loc[wide[["equity_share_capital", "reserves"]].isna().any(axis=1), "book_value_cr"] = pd.NA
     wide.loc[:, "available_at"] = pd.to_datetime(wide["available_at"])
