@@ -57,6 +57,16 @@ export interface StockRow {
   redFlags?: string | null;
   watchlistBucket?: string | null;
   nextAction?: string | null;
+  candidateTrackerStatus?: string | null;
+  trackingHealthScore?: number | null;
+  technicalHealthScore?: number | null;
+  candidateFundamentalHealthScore?: number | null;
+  returnSinceFirstSeen?: number | null;
+  drawdownFromTrackingHigh?: number | null;
+  candidateResultScoreDelta?: number | null;
+  candidateTrackerAlert?: string | null;
+  candidateFirstSeenDate?: string | null;
+  candidateLastSeenDate?: string | null;
 }
 
 export interface RunStage {

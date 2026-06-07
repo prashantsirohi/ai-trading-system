@@ -49,6 +49,23 @@ function CompactScore({ value }: { value?: number | null }) {
   return <span className="font-mono text-xs text-slate-200">{scoreText(value)}</span>;
 }
 
+function trackerTone(status?: string | null): string {
+  const normalized = (status ?? '').toUpperCase();
+  if (['STRONG_IMPROVING', 'IMPROVING'].includes(normalized)) {
+    return 'border-emerald-500/40 bg-emerald-500/15 text-emerald-200';
+  }
+  if (normalized === 'STABLE') {
+    return 'border-blue-500/40 bg-blue-500/15 text-blue-200';
+  }
+  if (['WATCH_CAREFULLY', 'DETERIORATING'].includes(normalized)) {
+    return 'border-amber-500/40 bg-amber-500/15 text-amber-200';
+  }
+  if (['RESULT_FAILURE', 'TECHNICAL_FAILURE', 'REMOVE_FROM_TRACKING'].includes(normalized)) {
+    return 'border-rose-500/40 bg-rose-500/15 text-rose-200';
+  }
+  return 'border-slate-700 bg-slate-900/60 text-slate-400';
+}
+
 interface Props {
   entries: WatchlistEntry[];
   rankingRows: StockRow[];
@@ -85,10 +102,10 @@ export default function WatchlistTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[1520px] border-collapse text-sm">
+      <table className="w-full min-w-[1880px] border-collapse text-sm">
         <thead>
           <tr className="border-b border-slate-800">
-            {['Symbol', 'Sector', 'Price', 'Δ%', 'Score', 'Fund', 'Q', 'G', 'BS', 'Val', 'Own', 'Flags', 'Bucket', 'Action', 'Rules', 'Last fired', ''].map(
+            {['Symbol', 'Sector', 'Price', 'Δ%', 'Score', 'Fund', 'Q', 'G', 'BS', 'Val', 'Own', 'Flags', 'Bucket', 'Action', 'Tracker', 'Health', 'Ret', 'DD', 'Rules', 'Last fired', ''].map(
               (h) => (
                 <th
                   key={h}
@@ -169,6 +186,35 @@ export default function WatchlistTable({
                 </td>
                 <td className="max-w-[14rem] py-3 pr-4 text-[11px] text-slate-300">
                   {row?.nextAction ? row.nextAction : <span className="text-slate-500">—</span>}
+                </td>
+                <td className="py-3 pr-4 text-[11px] font-semibold text-slate-200">
+                  {row?.candidateTrackerStatus ? (
+                    <span className={cn('inline-flex max-w-[11rem] items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide', trackerTone(row.candidateTrackerStatus))}>
+                      {row.candidateTrackerStatus.split('_').join(' ')}
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">—</span>
+                  )}
+                </td>
+                <td className="py-3 pr-4"><CompactScore value={row?.trackingHealthScore} /></td>
+                <td className="py-3 pr-4 font-mono text-xs">
+                  {row?.returnSinceFirstSeen == null ? (
+                    <span className="text-slate-500">—</span>
+                  ) : (
+                    <span className={row.returnSinceFirstSeen >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                      {row.returnSinceFirstSeen >= 0 ? '+' : ''}
+                      {row.returnSinceFirstSeen.toFixed(1)}%
+                    </span>
+                  )}
+                </td>
+                <td className="py-3 pr-4 font-mono text-xs">
+                  {row?.drawdownFromTrackingHigh == null ? (
+                    <span className="text-slate-500">—</span>
+                  ) : (
+                    <span className={row.drawdownFromTrackingHigh > 15 ? 'text-amber-300' : 'text-slate-300'}>
+                      {row.drawdownFromTrackingHigh.toFixed(1)}%
+                    </span>
+                  )}
                 </td>
                 <td className="py-3 pr-4">
                   <button

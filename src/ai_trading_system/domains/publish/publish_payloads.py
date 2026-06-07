@@ -125,6 +125,7 @@ def build_publish_datasets(
     dashboard_artifact = context_artifact_for("sector_dashboard")
     watchlist_artifact = context_artifact_for("watchlist_candidates") or context_artifact_for("watchlist_final")
     dashboard_payload_artifact = context_artifact_for("dashboard_payload")
+    candidate_tracker_artifact = context_artifact_for("candidate_tracker_current")
 
     ranked_df = read_artifact(ranked_signals_artifact)
     stage2_summary = _build_stage2_summary(ranked_df)
@@ -199,6 +200,7 @@ def build_publish_datasets(
         "stock_scan": read_artifact(scan_artifact) if scan_artifact else pd.DataFrame(),
         "sector_dashboard": read_artifact(dashboard_artifact) if dashboard_artifact else pd.DataFrame(),
         "watchlist_candidates": watchlist_df,
+        "candidate_tracker_current": read_artifact(candidate_tracker_artifact) if candidate_tracker_artifact else pd.DataFrame(),
         "dashboard_payload": dashboard_payload,
         "publish_rows_telegram": telegram_pack["rows"],
         "publish_rows_sheets": sheets_pack["rows"],

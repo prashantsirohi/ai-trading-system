@@ -121,6 +121,13 @@ class PublishStage:
         rank_artifact = context.require_artifact("rank", "ranked_signals")
         fallback_fundamental_artifacts = self._ensure_fundamental_artifact_fallback(context)
         def _context_artifact_for(artifact_type: str) -> StageArtifact | None:
+            if artifact_type in {
+                "candidate_tracker_current",
+                "candidate_tracker_alerts",
+                "candidate_fundamental_reviews",
+                "candidate_tracking_snapshots",
+            }:
+                return context.artifact_for("candidate_tracker", artifact_type)
             if artifact_type in FUNDAMENTAL_ARTIFACT_TYPES:
                 return (
                     context.artifact_for("fundamentals", artifact_type)
@@ -606,6 +613,7 @@ class PublishStage:
             failed_breakouts_df=failed_breakouts_df,
             pattern_df=pattern_df,
             watchlist_df=datasets.get("watchlist_candidates"),
+            candidate_tracker_df=datasets.get("candidate_tracker_current"),
             decision_bundle=datasets.get("decision_bundle"),
         )
         return {
@@ -836,6 +844,7 @@ class PublishStage:
             event_frame=event_frame,
             breadth_frame=breadth_df,
             watchlist_frame=datasets.get("watchlist_candidates"),
+            candidate_tracker_frame=datasets.get("candidate_tracker_current"),
             trust_status=str(datasets.get("publish_trust_status") or "unknown"),
             failed_breakouts=failed_breakouts_df,
             insight_text=str(datasets.get("insight_telegram_summary") or ""),

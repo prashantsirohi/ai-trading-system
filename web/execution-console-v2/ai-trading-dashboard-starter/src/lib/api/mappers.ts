@@ -165,5 +165,15 @@ export function mapBackendStockRow(row: BackendRecord): StockRow {
     redFlags: optionalText(row.red_flags),
     watchlistBucket: optionalText(row.watchlist_bucket),
     nextAction: optionalText(row.next_action),
+    candidateTrackerStatus: optionalText(row.candidate_tracker_status),
+    trackingHealthScore: optionalNumber(row.tracking_health_score),
+    technicalHealthScore: optionalNumber(row.technical_health_score),
+    candidateFundamentalHealthScore: optionalNumber(row.candidate_fundamental_health_score),
+    returnSinceFirstSeen: optionalNumber(row.return_since_first_seen),
+    drawdownFromTrackingHigh: optionalNumber(row.drawdown_from_tracking_high),
+    candidateResultScoreDelta: optionalNumber(row.candidate_result_score_delta),
+    candidateTrackerAlert: optionalText(row.candidate_tracker_alert),
+    candidateFirstSeenDate: optionalText(row.candidate_first_seen_date),
+    candidateLastSeenDate: optionalText(row.candidate_last_seen_date),
   };
 }

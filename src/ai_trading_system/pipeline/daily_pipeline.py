@@ -87,7 +87,7 @@ def _latest_stage_statuses(stage_runs: Iterable[dict]) -> dict[str, str]:
 
 
 def _requested_stages_for_daily(stages: str, *, canary: bool) -> list[str]:
-    if canary and stages == "ingest,features,rank,candidates,events,execute,insight,narrative,publish,perf_tracker":
+    if canary and stages == "ingest,features,rank,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker":
         return ["ingest", "features", "rank"]
     return [stage.strip() for stage in stages.split(",") if stage.strip()]
 
@@ -297,7 +297,7 @@ def main(
     force: bool = False,
     local_publish: bool = False,
     smoke: bool = False,
-    stages: str = "ingest,features,rank,candidates,events,execute,insight,narrative,publish,perf_tracker",
+    stages: str = "ingest,features,rank,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker",
     canary: bool = False,
     symbol_limit: int | None = None,
     skip_preflight: bool = False,
@@ -336,6 +336,10 @@ def main(
     watchlist_llm_enabled: bool = False,
     watchlist_top_n: int = 15,
     watchlist_prefilter_top_n: int = 30,
+    enable_candidate_tracker: bool = True,
+    candidate_tracker_max_age_days: int = 365,
+    candidate_tracker_review_window_days: int = 120,
+    candidate_tracker_archive_failures: bool = False,
 ):
     if smoke:
         raise RuntimeError("Smoke mode has been removed because synthetic pipeline data is no longer allowed.")
@@ -345,6 +349,8 @@ def main(
     run_date = resolve_daily_market_date(now)
     effective_validation_date = bhavcopy_validation_date or run_date
     requested_stages = _requested_stages_for_daily(stages, canary=canary)
+    if not enable_candidate_tracker and stages == "ingest,features,rank,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker":
+        requested_stages = [stage for stage in requested_stages if stage != "candidate_tracker"]
 
     logger.info("=" * 60)
     logger.info(f"DAILY PIPELINE - market_date={run_date} local_date={today}")
@@ -455,6 +461,10 @@ def main(
             "watchlist_llm_enabled": watchlist_llm_enabled,
             "watchlist_top_n": watchlist_top_n,
             "watchlist_prefilter_top_n": watchlist_prefilter_top_n,
+            "enable_candidate_tracker": enable_candidate_tracker,
+            "candidate_tracker_max_age_days": candidate_tracker_max_age_days,
+            "candidate_tracker_review_window_days": candidate_tracker_review_window_days,
+            "candidate_tracker_archive_failures": candidate_tracker_archive_failures,
         },
     )
 
@@ -483,7 +493,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--stages",
-        default="ingest,features,rank,candidates,events,execute,insight,narrative,publish,perf_tracker",
+        default="ingest,features,rank,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker",
         help="Comma-separated stage list. Example: publish",
     )
     parser.add_argument(
@@ -700,6 +710,30 @@ if __name__ == "__main__":
         help="Quant prefilter candidate count before final watchlist.",
     )
     parser.add_argument(
+        "--enable-candidate-tracker",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run live candidate lifecycle tracking after candidates.",
+    )
+    parser.add_argument(
+        "--candidate-tracker-max-age-days",
+        type=int,
+        default=365,
+        help="Maximum age retained for active candidate tracker context.",
+    )
+    parser.add_argument(
+        "--candidate-tracker-review-window-days",
+        type=int,
+        default=120,
+        help="Lookback window for matching fresh quarterly result reviews.",
+    )
+    parser.add_argument(
+        "--candidate-tracker-archive-failures",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Archive episodes when they reach REMOVE_FROM_TRACKING.",
+    )
+    parser.add_argument(
         "--data-domain",
         choices=["operational", "research"],
         default="operational",
@@ -750,4 +784,8 @@ if __name__ == "__main__":
         watchlist_llm_enabled=args.watchlist_llm_enabled,
         watchlist_top_n=args.watchlist_top_n,
         watchlist_prefilter_top_n=args.watchlist_prefilter_top_n,
+        enable_candidate_tracker=args.enable_candidate_tracker,
+        candidate_tracker_max_age_days=args.candidate_tracker_max_age_days,
+        candidate_tracker_review_window_days=args.candidate_tracker_review_window_days,
+        candidate_tracker_archive_failures=args.candidate_tracker_archive_failures,
     )

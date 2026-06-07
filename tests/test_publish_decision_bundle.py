@@ -177,6 +177,22 @@ def test_watchlist_current_sheet_uses_bundle_contract(monkeypatch) -> None:
                 }
             ]
         ),
+        candidate_tracker_frame=pd.DataFrame(
+            [
+                {
+                    "symbol": "AAA",
+                    "status": "STRONG_IMPROVING",
+                    "tracking_health_score": 84.2,
+                    "technical_health_score": 82.5,
+                    "fundamental_health_score": 86.1,
+                    "return_since_first_seen": 12.4,
+                    "drawdown_from_tracking_high": 3.2,
+                    "result_score_delta": 8.0,
+                    "first_seen_date": "2026-05-01",
+                    "last_seen_date": "2026-05-07",
+                }
+            ]
+        ),
         trust_status="trusted",
     )
 
@@ -206,8 +222,19 @@ def test_watchlist_current_sheet_uses_bundle_contract(monkeypatch) -> None:
         "Event Catalyst",
         "LLM Catalyst",
         "Risk Flag",
+        "Tracker Status",
+        "Tracking Health",
+        "Technical Health",
+        "Fundamental Health",
+        "Return Since First Seen",
+        "Drawdown From High",
+        "Result Delta",
+        "Tracker Alert",
         "Last Seen",
         "Added Date",
     ]
     assert manager.frame.iloc[0]["Symbol"] == "AAA"
+    assert manager.frame.iloc[0]["Tracker Status"] == "STRONG_IMPROVING"
+    assert manager.frame.iloc[0]["Tracking Health"] == 84.2
+    assert manager.frame.iloc[0]["Tracker Alert"] == "Improving"
     assert manager.frame.iloc[0]["LLM Catalyst"] == ""

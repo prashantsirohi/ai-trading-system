@@ -19,6 +19,10 @@ def test_frontend_mapper_carries_fundamental_fields() -> None:
         "redFlags: optionalText(row.red_flags)",
         "watchlistBucket: optionalText(row.watchlist_bucket)",
         "nextAction: optionalText(row.next_action)",
+        "candidateTrackerStatus: optionalText(row.candidate_tracker_status)",
+        "trackingHealthScore: optionalNumber(row.tracking_health_score)",
+        "returnSinceFirstSeen: optionalNumber(row.return_since_first_seen)",
+        "drawdownFromTrackingHigh: optionalNumber(row.drawdown_from_tracking_high)",
     ]
     for snippet in expected:
         assert snippet in mapper
@@ -29,9 +33,11 @@ def test_frontend_tables_include_fundamental_columns_and_tier_colors() -> None:
     watchlist = (FRONTEND_ROOT / "components/watchlist/WatchlistTable.tsx").read_text(encoding="utf-8")
     combined = f"{ranking}\n{watchlist}"
 
-    for header in ["'Fund'", "'Q'", "'G'", "'BS'", "'Val'", "'Own'", "'Flags'", "'Bucket'", "'Action'"]:
+    for header in ["'Fund'", "'Q'", "'G'", "'BS'", "'Val'", "'Own'", "'Flags'", "'Bucket'", "'Action'", "'Tracker'", "'Health'", "'Ret'", "'DD'"]:
         assert header in combined
     assert "tier === 'A'" in combined and "emerald" in combined
     assert "tier === 'B'" in combined and "blue" in combined
     assert "tier === 'C'" in combined and "amber" in combined
     assert "tier === 'Reject'" in combined and "rose" in combined
+    assert "candidateTrackerStatus" in watchlist
+    assert "trackerTone" in watchlist

@@ -43,6 +43,12 @@ _WATCHLIST_FORMATS: dict[str, dict[str, str]] = {
     "report_date": GoogleSheetsManager.FORMAT_DATE,
     "score": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "composite_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "Tracking Health": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "Technical Health": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "Fundamental Health": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "Return Since First Seen": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "Drawdown From High": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "Result Delta": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "rank": GoogleSheetsManager.FORMAT_INT,
     "rank_change": GoogleSheetsManager.FORMAT_INT,
 }

@@ -35,6 +35,7 @@ def build_publish_decision_bundle(
     event_frame: pd.DataFrame | None = None,
     breadth_frame: pd.DataFrame | None = None,
     watchlist_frame: pd.DataFrame | None = None,
+    candidate_tracker_frame: pd.DataFrame | None = None,
     trust_status: str = "unknown",
     failed_breakouts: pd.DataFrame | None = None,
     insight_text: str | None = None,
@@ -47,7 +48,8 @@ def build_publish_decision_bundle(
     sectors = _frame(sector_dashboard)
     events = _frame(event_frame)
     breadth = _frame(breadth_frame)
-    watchlist = _shape_watchlist(_frame(watchlist_frame), patterns, ranked, sectors, run_date)
+    candidate_tracker = _frame(candidate_tracker_frame)
+    watchlist = _shape_watchlist(_frame(watchlist_frame), patterns, ranked, sectors, run_date, candidate_tracker)
     sector_leaders = _shape_sector_leaders(sectors)
     top_ranked = _shape_top_ranked(ranked)
     market_moves = _shape_market_moves(ranked)
@@ -170,6 +172,7 @@ def _shape_watchlist(
     ranked: pd.DataFrame,
     sectors: pd.DataFrame,
     run_date: str,
+    candidate_tracker: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     columns = [
         "Status",
@@ -194,6 +197,14 @@ def _shape_watchlist(
         "Event Catalyst",
         "LLM Catalyst",
         "Risk Flag",
+        "Tracker Status",
+        "Tracking Health",
+        "Technical Health",
+        "Fundamental Health",
+        "Return Since First Seen",
+        "Drawdown From High",
+        "Result Delta",
+        "Tracker Alert",
         "Last Seen",
         "Added Date",
     ]
@@ -203,6 +214,7 @@ def _shape_watchlist(
     pattern_lookup = _best_pattern_lookup(patterns)
     ranked_lookup = _ranked_lookup(ranked)
     sector_lookup = _sector_lookup(sectors)
+    tracker_lookup = _candidate_tracker_lookup(candidate_tracker if candidate_tracker is not None else pd.DataFrame())
     rows: list[dict[str, Any]] = []
     sorted_df = df.copy()
     if "rank" in sorted_df.columns:
@@ -213,6 +225,7 @@ def _shape_watchlist(
         symbol = _clean_text(row.get("symbol_id") or row.get("symbol") or row.get("Symbol"))
         pattern = pattern_lookup.get(symbol, {})
         rank_row = ranked_lookup.get(symbol, {})
+        tracker = tracker_lookup.get(symbol, {})
         sector = _clean_text(row.get("sector") or rank_row.get("sector_name") or rank_row.get("sector"))
         sector_status = _sector_status(row.get("sector_status") or sector_lookup.get(sector, ""))
         tags = _clean_text(row.get("momentum_tags")).replace("_", " ").title()
@@ -245,11 +258,60 @@ def _shape_watchlist(
                 "Event Catalyst": _clean_text(row.get("catalyst_tags")),
                 "LLM Catalyst": _clean_text(row.get("bull_case")),
                 "Risk Flag": _clean_text(row.get("risk_flags")),
-                "Last Seen": run_date,
-                "Added Date": run_date,
+                "Tracker Status": _clean_text(tracker.get("status")),
+                "Tracking Health": _blank_number(tracker.get("tracking_health_score")),
+                "Technical Health": _blank_number(tracker.get("technical_health_score")),
+                "Fundamental Health": _blank_number(tracker.get("fundamental_health_score")),
+                "Return Since First Seen": _blank_number(tracker.get("return_since_first_seen")),
+                "Drawdown From High": _blank_number(tracker.get("drawdown_from_tracking_high")),
+                "Result Delta": _blank_number(tracker.get("result_score_delta")),
+                "Tracker Alert": _tracker_alert(tracker),
+                "Last Seen": _clean_text(tracker.get("last_seen_date")) or run_date,
+                "Added Date": _clean_text(tracker.get("first_seen_date")) or run_date,
             }
         )
     return pd.DataFrame(rows, columns=columns).fillna("")
+
+
+def _candidate_tracker_lookup(frame: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    if frame is None or frame.empty:
+        return {}
+    df = frame.copy()
+    if "symbol" not in df.columns:
+        for candidate in ("symbol_id", "Symbol", "ticker"):
+            if candidate in df.columns:
+                df.loc[:, "symbol"] = df[candidate]
+                break
+    if "symbol" not in df.columns:
+        return {}
+    df.loc[:, "_symbol"] = df["symbol"].fillna("").astype(str).str.strip().str.upper()
+    df = df.loc[df["_symbol"].ne("")]
+    if "active" in df.columns:
+        active = df["active"].astype(str).str.strip().str.lower()
+        df.loc[:, "_active_sort"] = active.isin({"true", "1", "yes"}).astype(int)
+    else:
+        df.loc[:, "_active_sort"] = 1
+    if "tracking_health_score" in df.columns:
+        df.loc[:, "_health_sort"] = pd.to_numeric(df["tracking_health_score"], errors="coerce")
+    else:
+        df.loc[:, "_health_sort"] = pd.NA
+    df = df.sort_values(["_symbol", "_active_sort", "_health_sort"], ascending=[True, False, False], na_position="last", kind="stable")
+    return {str(row["_symbol"]): row.to_dict() for _, row in df.drop_duplicates("_symbol", keep="first").iterrows()}
+
+
+def _tracker_alert(row: dict[str, Any]) -> str:
+    status = _clean_text(row.get("status"))
+    if not status:
+        return ""
+    if status in {"REMOVE_FROM_TRACKING", "RESULT_FAILURE", "TECHNICAL_FAILURE"}:
+        return "Review exit"
+    if status == "DETERIORATING":
+        return "Deteriorating"
+    if status == "WATCH_CAREFULLY":
+        return "Watch carefully"
+    if status in {"STRONG_IMPROVING", "IMPROVING"}:
+        return "Improving"
+    return ""
 
 
 def _best_pattern_lookup(patterns: pd.DataFrame) -> dict[str, dict[str, Any]]:

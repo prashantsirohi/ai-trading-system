@@ -20,6 +20,7 @@ __all__ = [
     "DataQualityCriticalError",
     "PublishStageError",
     "compute_file_hash",
+    "CandidateTrackerStage",
     "CandidatesStage",
     "FeaturesStage",
     "FundamentalsStage",
@@ -35,6 +36,7 @@ __all__ = [
 ]
 
 _MODULE_MAP = {
+    "CandidateTrackerStage": (".candidate_tracker", "CandidateTrackerStage"),
     "CandidatesStage": (".candidates", "CandidatesStage"),
     "ExecuteStage": (".execute", "ExecuteStage"),
     "FeaturesStage": (".features", "FeaturesStage"),

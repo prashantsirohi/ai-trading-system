@@ -38,6 +38,19 @@ FUNDAMENTAL_RANK_COLUMNS = [
     "next_action",
 ]
 
+CANDIDATE_TRACKER_RANK_COLUMNS = [
+    "candidate_tracker_status",
+    "tracking_health_score",
+    "technical_health_score",
+    "candidate_fundamental_health_score",
+    "return_since_first_seen",
+    "drawdown_from_tracking_high",
+    "candidate_result_score_delta",
+    "candidate_tracker_alert",
+    "candidate_first_seen_date",
+    "candidate_last_seen_date",
+]
+
 
 def _records(frame: pd.DataFrame, *, limit: Optional[int] = None) -> list[dict[str, Any]]:
     if frame is None or frame.empty:
@@ -274,6 +287,72 @@ def _enrich_rank_with_fundamentals(
     return output.drop(columns=["_fund_symbol"], errors="ignore")
 
 
+def _candidate_tracker_symbol_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=["_tracker_symbol"])
+    output = frame.copy()
+    if "symbol" not in output.columns:
+        for candidate in ("symbol_id", "Symbol", "ticker"):
+            if candidate in output.columns:
+                output.loc[:, "symbol"] = output[candidate]
+                break
+    if "symbol" not in output.columns:
+        return pd.DataFrame(columns=["_tracker_symbol"])
+    output.loc[:, "_tracker_symbol"] = _normalize_symbol_series(output["symbol"])
+    output = output.loc[output["_tracker_symbol"].ne("")]
+    if output.empty:
+        return pd.DataFrame(columns=["_tracker_symbol"])
+    rename_map = {
+        "status": "candidate_tracker_status",
+        "fundamental_health_score": "candidate_fundamental_health_score",
+        "result_score_delta": "candidate_result_score_delta",
+        "first_seen_date": "candidate_first_seen_date",
+        "last_seen_date": "candidate_last_seen_date",
+    }
+    output = output.rename(columns=rename_map)
+    if "candidate_tracker_alert" not in output.columns:
+        output.loc[:, "candidate_tracker_alert"] = output.get("candidate_tracker_status", pd.Series("", index=output.index)).map(
+            _candidate_tracker_alert
+        )
+    columns = ["_tracker_symbol", *[column for column in CANDIDATE_TRACKER_RANK_COLUMNS if column in output.columns]]
+    return output[columns].drop_duplicates("_tracker_symbol", keep="first")
+
+
+def _candidate_tracker_alert(status: object) -> str:
+    text = str(status or "").strip().upper()
+    if text in {"REMOVE_FROM_TRACKING", "RESULT_FAILURE", "TECHNICAL_FAILURE"}:
+        return "Review exit"
+    if text == "DETERIORATING":
+        return "Deteriorating"
+    if text == "WATCH_CAREFULLY":
+        return "Watch carefully"
+    if text in {"STRONG_IMPROVING", "IMPROVING"}:
+        return "Improving"
+    return ""
+
+
+def _enrich_rank_with_candidate_tracker(
+    ranked: pd.DataFrame,
+    *,
+    candidate_tracker_current: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    if ranked is None or ranked.empty:
+        return ranked
+    tracker = _candidate_tracker_symbol_frame(candidate_tracker_current if candidate_tracker_current is not None else pd.DataFrame())
+    if tracker.empty:
+        return ranked
+    output = ranked.copy()
+    if "symbol_id" in output.columns:
+        output.loc[:, "_tracker_symbol"] = _normalize_symbol_series(output["symbol_id"])
+    elif "symbol" in output.columns:
+        output.loc[:, "_tracker_symbol"] = _normalize_symbol_series(output["symbol"])
+    else:
+        return output
+    output = output.drop(columns=[column for column in CANDIDATE_TRACKER_RANK_COLUMNS if column in output.columns], errors="ignore")
+    output = output.merge(tracker, on="_tracker_symbol", how="left")
+    return output.drop(columns=["_tracker_symbol"], errors="ignore")
+
+
 def _as_bool_series(series: pd.Series) -> pd.Series:
     if pd.api.types.is_bool_dtype(series):
         return series.fillna(False)
@@ -444,6 +523,10 @@ def get_ranking_snapshot_read_model(
         project_root=project_root,
         watchlist_candidates=current_snapshot.frames.get("watchlist_candidates", pd.DataFrame()),
     )
+    ranked = _enrich_rank_with_candidate_tracker(
+        ranked,
+        candidate_tracker_current=current_snapshot.frames.get("candidate_tracker_current", pd.DataFrame()),
+    )
     stage2_source = _stage2_source_frame(stock_scan, ranked_universe, ranked)
     stage2_summary = _stage2_summary(stage2_source)
     filtered_ranked, stage2_filter = _apply_stage2_filter(
@@ -502,6 +585,10 @@ def get_pipeline_workspace_snapshot_read_model(
         ranked,
         project_root=project_root,
         watchlist_candidates=current_snapshot.frames.get("watchlist_candidates", pd.DataFrame()),
+    )
+    ranked = _enrich_rank_with_candidate_tracker(
+        ranked,
+        candidate_tracker_current=current_snapshot.frames.get("candidate_tracker_current", pd.DataFrame()),
     )
     filtered_ranked, stage2_filter = _apply_stage2_filter(
         ranked,

@@ -121,6 +121,7 @@ def test_stage_boundaries_and_registry_rows(tmp_path: Path) -> None:
         "features",
         "rank",
         "candidates",
+        "candidate_tracker",
         "events",
         "execute",
         "insight",
@@ -129,7 +130,7 @@ def test_stage_boundaries_and_registry_rows(tmp_path: Path) -> None:
         "perf_tracker",
     ]
     assert registry.count_rows("pipeline_run") == 1
-    assert registry.count_rows("pipeline_stage_run") == 10
+    assert registry.count_rows("pipeline_stage_run") == 11
     assert registry.count_rows("pipeline_artifact") >= 5
     assert registry.count_rows("dq_result") >= 8
     conn = duckdb.connect(str(registry.db_path))

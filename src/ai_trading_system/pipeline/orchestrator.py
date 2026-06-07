@@ -39,7 +39,7 @@ from ai_trading_system.platform.db.paths import (
 from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
-from ai_trading_system.pipeline.stages import CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, NarrativeStage, PerfTrackerStage, PublishStage, RankStage
+from ai_trading_system.pipeline.stages import CandidateTrackerStage, CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, NarrativeStage, PerfTrackerStage, PublishStage, RankStage
 
 load_project_env(__file__)
 
@@ -48,11 +48,11 @@ log_context = logging_module.log_context
 logger = logging_module.logger
 
 
-PIPELINE_ORDER = ["ingest", "features", "rank", "fundamentals", "candidates", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
+PIPELINE_ORDER = ["ingest", "features", "rank", "fundamentals", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
 # Stages dropped from the default order unless explicitly enabled (e.g. by a flag
 # or by a detected input). They remain valid when named in an explicit stage list.
 OPTIONAL_STAGES = frozenset({"fundamentals"})
-DEFAULT_CLI_STAGES = "ingest,features,rank,fundamentals,candidates,events,execute,insight,publish,perf_tracker"
+DEFAULT_CLI_STAGES = "ingest,features,rank,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker"
 
 
 _BANNER_WIDTH = 78
@@ -280,6 +280,7 @@ class PipelineOrchestrator:
             "rank": RankStage(),
             "fundamentals": FundamentalsStage(),
             "candidates": CandidatesStage(),
+            "candidate_tracker": CandidateTrackerStage(),
             "events": EventsStage(),
             "execute": ExecuteStage(),
             "insight": InsightStage(),
@@ -297,6 +298,7 @@ class PipelineOrchestrator:
             "rank": "scoring symbols and building ranked outputs",
             "fundamentals": "enriching ranked candidates with Screener fundamentals",
             "candidates": "selecting deterministic final candidates from rank and enrichment",
+            "candidate_tracker": "updating live candidate lifecycle status",
             "events": "enriching ranked signals with corporate-action context",
             "execute": "evaluating execution actions",
             "insight": "building event-aware market insight",
@@ -429,6 +431,7 @@ class PipelineOrchestrator:
             stage_names,
             enable_fundamentals=bool(params.get("enable_fundamentals", False)),
             fundamental_scores_path=params.get("fundamental_scores_path"),
+            enable_candidate_tracker=bool(params.get("enable_candidate_tracker", True)),
         )
         run_date = run_date or date.today().isoformat()
         run_id = run_id or self._build_run_id(run_date)
@@ -763,6 +766,7 @@ class PipelineOrchestrator:
         *,
         enable_fundamentals: bool = False,
         fundamental_scores_path: object | None = None,
+        enable_candidate_tracker: bool = True,
     ) -> List[str]:
         if stage_names is None:
             fundamentals_enabled = bool(enable_fundamentals) or self._fundamental_scores_available(
@@ -773,6 +777,7 @@ class PipelineOrchestrator:
                 for stage in PIPELINE_ORDER
                 if stage not in OPTIONAL_STAGES
                 or (stage == "fundamentals" and fundamentals_enabled)
+                if stage != "candidate_tracker" or bool(enable_candidate_tracker)
             ]
         requested = list(stage_names)
         invalid = [stage for stage in requested if stage not in PIPELINE_ORDER]
@@ -996,6 +1001,30 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Run fundamentals enrichment after rank and before candidates/publish.",
+    )
+    parser.add_argument(
+        "--enable-candidate-tracker",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run live candidate lifecycle tracking after candidates.",
+    )
+    parser.add_argument(
+        "--candidate-tracker-max-age-days",
+        type=int,
+        default=365,
+        help="Maximum age retained for active candidate tracker context.",
+    )
+    parser.add_argument(
+        "--candidate-tracker-review-window-days",
+        type=int,
+        default=120,
+        help="Lookback window for matching fresh quarterly result reviews.",
+    )
+    parser.add_argument(
+        "--candidate-tracker-archive-failures",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Archive episodes when they reach REMOVE_FROM_TRACKING.",
     )
     parser.add_argument(
         "--fundamental-max-stale-days",
@@ -1438,6 +1467,8 @@ def main() -> None:
         stage_names = ["ingest", "features", "rank"]
     else:
         stage_names = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
+        if not args.enable_candidate_tracker and args.stages == DEFAULT_CLI_STAGES:
+            stage_names = [stage for stage in stage_names if stage != "candidate_tracker"]
     run_id = args.run_id
     if run_id is None and stage_names == ["publish"]:
         resolved_run_id = _resolve_latest_publishable_run_id(project_root, limit=50)
@@ -1461,6 +1492,10 @@ def main() -> None:
         "top_n": args.top_n,
         "min_score": args.min_score,
         "enable_fundamentals": bool(args.enable_fundamentals),
+        "enable_candidate_tracker": bool(args.enable_candidate_tracker),
+        "candidate_tracker_max_age_days": int(args.candidate_tracker_max_age_days),
+        "candidate_tracker_review_window_days": int(args.candidate_tracker_review_window_days),
+        "candidate_tracker_archive_failures": bool(args.candidate_tracker_archive_failures),
         "fundamental_max_stale_days": int(args.fundamental_max_stale_days),
         "fundamental_scores_path": args.fundamental_scores_path,
         "fundamental_watchlist_mode": args.fundamental_watchlist_mode,

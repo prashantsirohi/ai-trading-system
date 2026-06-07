@@ -128,6 +128,7 @@ def _load_frames(rank_dir: Path | None) -> dict[str, pd.DataFrame]:
     if rank_dir is None:
         frames = {key: pd.DataFrame() for key in frame_names}
         frames["watchlist_candidates"] = pd.DataFrame()
+        frames["candidate_tracker_current"] = pd.DataFrame()
         return frames
 
     frames: dict[str, pd.DataFrame] = {}
@@ -141,6 +142,7 @@ def _load_frames(rank_dir: Path | None) -> dict[str, pd.DataFrame]:
         except Exception:
             frames[key] = pd.DataFrame()
     frames["watchlist_candidates"] = _load_same_run_fundamentals_watchlist(rank_dir)
+    frames["candidate_tracker_current"] = _load_same_run_candidate_tracker(rank_dir)
     return frames
 
 
@@ -151,6 +153,24 @@ def _load_same_run_fundamentals_watchlist(rank_dir: Path) -> pd.DataFrame:
         return pd.DataFrame()
     candidates = sorted(
         (run_dir / "fundamentals").glob("attempt_*/watchlist_candidates.csv"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for path in candidates:
+        try:
+            return pd.read_csv(path)
+        except Exception:
+            continue
+    return pd.DataFrame()
+
+
+def _load_same_run_candidate_tracker(rank_dir: Path) -> pd.DataFrame:
+    try:
+        run_dir = rank_dir.parents[1]
+    except IndexError:
+        return pd.DataFrame()
+    candidates = sorted(
+        (run_dir / "candidate_tracker").glob("attempt_*/candidate_tracker_current.csv"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )

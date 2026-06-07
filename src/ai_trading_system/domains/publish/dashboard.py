@@ -566,6 +566,7 @@ def publish_dashboard_payload(
     failed_breakouts_df: pd.DataFrame | None = None,
     pattern_df: pd.DataFrame | None = None,
     watchlist_df: pd.DataFrame | None = None,
+    candidate_tracker_df: pd.DataFrame | None = None,
     decision_bundle: PublishDecisionBundle | None = None,
 ) -> Dict[str, Any]:
     """Write a single compact daily sheet with sector/rank/breakout and breadth chart."""
@@ -603,6 +604,7 @@ def publish_dashboard_payload(
         event_frame=events_index,
         breadth_frame=breadth,
         watchlist_frame=source_watchlist,
+        candidate_tracker_frame=candidate_tracker_df,
         trust_status=str(payload.get("summary", {}).get("data_trust_status") or payload.get("data_trust", {}).get("status") or "unknown"),
         failed_breakouts=failed_breakouts_df,
         market_regime_phase=payload.get("market_regime_phase", {}),
