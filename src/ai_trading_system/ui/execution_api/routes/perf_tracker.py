@@ -180,9 +180,13 @@ def coverage():
                 COUNT(*),
                 COUNT(*) FILTER (
                     WHERE COALESCE(data_quality_status, 'trusted') <> 'trusted'
+                       OR COALESCE(fwd_5d_anomaly, FALSE)
                        OR COALESCE(fwd_return_anomaly, FALSE)
                 ),
-                COUNT(*) FILTER (WHERE COALESCE(fwd_return_anomaly, FALSE))
+                COUNT(*) FILTER (
+                    WHERE COALESCE(fwd_5d_anomaly, FALSE)
+                       OR COALESCE(fwd_return_anomaly, FALSE)
+                )
             FROM rank_cohort_performance
             """
         ).fetchone()

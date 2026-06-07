@@ -26,31 +26,66 @@ def build_tracker_health(
                 trusted_rows,
                 excluded_rows,
                 anomaly_rows,
+                reason_rows,
                 fixture_rows,
                 duplicate_keys,
                 latest_date,
+                watchlist_bucket_rows,
+                known_sector_rows,
+                matured_5d_rows,
+                matured_10d_rows,
+                matured_20d_rows,
+                matured_60d_rows,
             ) = con.execute(
                 f"""
                 SELECT
                     COUNT(*) AS raw_rows,
                     COUNT(*) FILTER (
                         WHERE COALESCE(data_quality_status, 'trusted') = 'trusted'
+                          AND NOT COALESCE(fwd_5d_anomaly, FALSE)
                           AND NOT COALESCE(fwd_return_anomaly, FALSE)
                     ) AS trusted_rows,
                     COUNT(*) FILTER (
                         WHERE COALESCE(data_quality_status, 'trusted') <> 'trusted'
+                           OR COALESCE(fwd_5d_anomaly, FALSE)
                            OR COALESCE(fwd_return_anomaly, FALSE)
                     ) AS excluded_rows,
-                    COUNT(*) FILTER (WHERE COALESCE(fwd_return_anomaly, FALSE)) AS anomaly_rows,
+                    COUNT(*) FILTER (
+                        WHERE COALESCE(fwd_5d_anomaly, FALSE)
+                           OR COALESCE(fwd_return_anomaly, FALSE)
+                    ) AS anomaly_rows,
+                    COUNT(*) FILTER (WHERE data_quality_reason IS NOT NULL AND data_quality_reason <> '') AS reason_rows,
                     COUNT(*) FILTER (
                         WHERE sector_name = 'Test'
                            OR regexp_matches(symbol_id, '{FIXTURE_SYMBOL_SQL}')
                     ) AS fixture_rows,
                     COUNT(*) - COUNT(DISTINCT (run_date, symbol_id, exchange)) AS duplicate_keys,
-                    MAX(run_date) AS latest_date
+                    MAX(run_date) AS latest_date,
+                    COUNT(*) FILTER (WHERE watchlist_bucket IS NOT NULL AND watchlist_bucket <> '') AS watchlist_bucket_rows,
+                    COUNT(*) FILTER (
+                        WHERE sector_name IS NOT NULL
+                          AND sector_name <> ''
+                          AND LOWER(sector_name) <> 'unknown'
+                    ) AS known_sector_rows,
+                    COUNT(*) FILTER (WHERE fwd_5d_return IS NOT NULL) AS matured_5d_rows,
+                    COUNT(*) FILTER (WHERE fwd_10d_return IS NOT NULL) AS matured_10d_rows,
+                    COUNT(*) FILTER (WHERE fwd_20d_return IS NOT NULL) AS matured_20d_rows,
+                    COUNT(*) FILTER (WHERE fwd_60d_return IS NOT NULL) AS matured_60d_rows
                 FROM rank_cohort_performance
                 """
             ).fetchone()
+            reason_counts = con.execute(
+                """
+                SELECT COALESCE(data_quality_reason, 'unspecified') AS reason, COUNT(*) AS rows
+                FROM rank_cohort_performance
+                WHERE COALESCE(data_quality_status, 'trusted') <> 'trusted'
+                   OR COALESCE(fwd_5d_anomaly, FALSE)
+                   OR COALESCE(fwd_return_anomaly, FALSE)
+                GROUP BY 1
+                ORDER BY rows DESC, reason
+                LIMIT 20
+                """
+            ).fetchall()
             recent_pipeline_counts = con.execute(
                 """
                 SELECT run_date, COUNT(*) AS rows
@@ -62,8 +97,11 @@ def build_tracker_health(
                 """
             ).fetchall()
     else:
-        raw_rows = trusted_rows = excluded_rows = anomaly_rows = fixture_rows = duplicate_keys = 0
+        raw_rows = trusted_rows = excluded_rows = anomaly_rows = reason_rows = fixture_rows = duplicate_keys = 0
+        watchlist_bucket_rows = known_sector_rows = 0
+        matured_5d_rows = matured_10d_rows = matured_20d_rows = matured_60d_rows = 0
         latest_date = None
+        reason_counts = []
         recent_pipeline_counts = []
 
     paths = get_domain_paths(project_root=project_root, data_domain="operational")
@@ -96,10 +134,28 @@ def build_tracker_health(
         warning_reasons.append(f"tracker lags latest pipeline artifact by {lag_days} days")
     if excluded_rows:
         warning_reasons.append(f"excluded rows retained for inspection: {int(excluded_rows)}")
+    if anomaly_rows and reason_rows < anomaly_rows:
+        warning_reasons.append("some excluded rows are missing data_quality_reason")
+    if raw_rows:
+        watchlist_coverage = float(watchlist_bucket_rows or 0) / float(raw_rows)
+        sector_coverage = float(known_sector_rows or 0) / float(raw_rows)
+        if watchlist_coverage < 0.50:
+            warning_reasons.append(f"watchlist bucket coverage is sparse: {watchlist_coverage:.1%}")
+        if sector_coverage < 0.50:
+            warning_reasons.append(f"known sector coverage is sparse: {sector_coverage:.1%}")
+    else:
+        watchlist_coverage = 0.0
+        sector_coverage = 0.0
     if cohort_drop:
         warning_reasons.append("latest operational cohort is below 20% of recent median")
 
     status = "critical" if critical_reasons else "warning" if warning_reasons else "ok"
+    maturity = {
+        "5d": int(matured_5d_rows or 0),
+        "10d": int(matured_10d_rows or 0),
+        "20d": int(matured_20d_rows or 0),
+        "60d": int(matured_60d_rows or 0),
+    }
     return {
         "status": status,
         "critical_reasons": critical_reasons,
@@ -108,8 +164,16 @@ def build_tracker_health(
         "trusted_rows": int(trusted_rows or 0),
         "excluded_rows": int(excluded_rows or 0),
         "anomaly_rows": int(anomaly_rows or 0),
+        "data_quality_reason_rows": int(reason_rows or 0),
+        "data_quality_reason_counts": [
+            {"reason": str(reason), "rows": int(rows or 0)}
+            for reason, rows in reason_counts
+        ],
         "fixture_rows": int(fixture_rows or 0),
         "duplicate_keys": int(duplicate_keys or 0),
+        "watchlist_bucket_coverage_pct": round(watchlist_coverage * 100.0, 2),
+        "known_sector_coverage_pct": round(sector_coverage * 100.0, 2),
+        "maturity_rows": maturity,
         "latest_date": latest_date_str,
         "latest_pipeline_artifact_date": latest_artifact_date,
         "lag_days": lag_days,

@@ -21,6 +21,7 @@ import logging
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 from ai_trading_system.research.perf_tracker.backfill import run_backfill
 from ai_trading_system.research.perf_tracker.health import build_tracker_health
+from ai_trading_system.research.perf_tracker.reports import build_research_quality_reports
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,33 @@ class PerfTrackerStage:
             "dates_processed": int(result.get("dates_processed", 0)),
             "rows_upserted": int(result.get("rows_upserted", 0)),
         }
+        reports = build_research_quality_reports(project_root=context.project_root)
         health = build_tracker_health(project_root=context.project_root)
         metadata["tracker_health_status"] = health["status"]
+        metadata["research_quality_status"] = reports["summary"].get("status", health["status"])
         artifact_path = context.write_json("perf_tracker_summary.json", metadata)
         health_path = context.write_json("tracker_health.json", health)
+        research_summary_path = context.write_json("perf_tracker_research_quality_summary.json", reports["summary"])
+        csv_artifacts = []
+        csv_specs = {
+            "perf_tracker_rank_bucket_performance": "rank_bucket_performance",
+            "perf_tracker_sector_performance": "sector_performance",
+            "perf_tracker_repeated_symbol_performance": "repeated_symbol_performance",
+            "perf_tracker_excluded_rows": "excluded_rows",
+        }
+        for artifact_type, frame_name in csv_specs.items():
+            frame = reports["frames"][frame_name]
+            csv_path = context.output_dir() / f"{artifact_type}.csv"
+            frame.to_csv(csv_path, index=False)
+            csv_artifacts.append(
+                StageArtifact.from_file(
+                    artifact_type,
+                    csv_path,
+                    row_count=int(len(frame)),
+                    metadata={"rows": int(len(frame))},
+                    attempt_number=context.attempt_number,
+                )
+            )
         return StageResult(
             artifacts=[
                 StageArtifact.from_file(
@@ -72,6 +96,13 @@ class PerfTrackerStage:
                     metadata=health,
                     attempt_number=context.attempt_number,
                 ),
+                StageArtifact.from_file(
+                    "perf_tracker_research_quality_summary",
+                    research_summary_path,
+                    metadata=reports["summary"],
+                    attempt_number=context.attempt_number,
+                ),
+                *csv_artifacts,
             ],
             metadata=metadata,
         )

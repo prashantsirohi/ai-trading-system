@@ -14,6 +14,8 @@ from ai_trading_system.research.perf_tracker.backfill import (
     _validate_operational_rows,
     build_rows_from_ranked_frame,
 )
+from ai_trading_system.research.perf_tracker.quality import annotate_return_quality
+from ai_trading_system.research.perf_tracker.reports import build_research_quality_reports
 from ai_trading_system.research.perf_tracker.schema import open_research_db
 from tests.research.perf_tracker.conftest import API_HEADERS, insert_perf_rows
 
@@ -73,6 +75,8 @@ def test_ranked_frame_records_provenance() -> None:
         "symbol_id": "RELIANCE",
         "exchange": "NSE",
         "composite_score": 90.0,
+        "watchlist_bucket": "F4_ACTION_CANDIDATE",
+        "sector": "Energy",
     }])
 
     out = build_rows_from_ranked_frame(
@@ -87,6 +91,38 @@ def test_ranked_frame_records_provenance() -> None:
     assert out.loc[0, "source_run_id"] == "pipeline-2026-05-08-example"
     assert out.loc[0, "source_artifact_path"] == "/tmp/ranked_signals.csv"
     assert out.loc[0, "data_quality_status"] == "trusted"
+    assert out.loc[0, "watchlist_bucket"] == "F4_ACTION_CANDIDATE"
+    assert out.loc[0, "sector_name"] == "Energy"
+
+
+def test_extreme_forward_returns_get_reasoned_quarantine() -> None:
+    rows = pd.DataFrame([
+        {
+            "run_date": "2026-05-08",
+            "symbol_id": "RELIANCE",
+            "exchange": "NSE",
+            "fwd_5d_return": 1.0,
+            "fwd_20d_return": 85.0,
+        },
+        {
+            "run_date": "2026-05-08",
+            "symbol_id": "INFY",
+            "exchange": "NSE",
+            "fwd_5d_return": 1.0,
+            "fwd_20d_return": 5.0,
+        },
+    ])
+
+    out = annotate_return_quality(rows)
+
+    quarantined = out.set_index("symbol_id").loc["RELIANCE"]
+    trusted = out.set_index("symbol_id").loc["INFY"]
+    assert quarantined["data_quality_status"] == "quarantined"
+    assert bool(quarantined["fwd_return_anomaly"]) is True
+    assert "extreme_fwd_20d_return" in quarantined["data_quality_reason"]
+    assert "manual_review_extreme_return" in quarantined["data_quality_reason"]
+    assert trusted["data_quality_status"] == "trusted"
+    assert pd.isna(trusted["data_quality_reason"])
 
 
 def test_operational_validation_rejects_fixture_symbols() -> None:
@@ -137,3 +173,64 @@ def test_latest_attempt_accepts_custom_pipeline_run_suffix(tmp_path: Path) -> No
     assert by_date["2026-05-09"]["ranked"].as_posix().endswith(
         "pipeline-2026-05-09-manual-retry/rank/attempt_1/ranked_signals.csv"
     )
+
+
+def test_research_quality_reports_emit_segments_and_excluded_rows(project: Path) -> None:
+    insert_perf_rows(
+        project,
+        [
+            {
+                "run_date": date(2026, 5, 1),
+                "symbol_id": "AAA1",
+                "rank_position": 1,
+                "watchlist_bucket": "F4_ACTION_CANDIDATE",
+                "sector_name": "Pharma",
+                "fwd_5d_return": 2.0,
+                "fwd_10d_return": 3.0,
+                "fwd_20d_return": 5.0,
+            },
+            {
+                "run_date": date(2026, 5, 1),
+                "symbol_id": "BBB1",
+                "rank_position": 18,
+                "watchlist_bucket": "F3_FUND_VALUE_TECH_READY",
+                "sector_name": "IT",
+                "fwd_5d_return": -1.0,
+                "fwd_10d_return": 1.0,
+                "fwd_20d_return": 2.0,
+            },
+            {
+                "run_date": date(2026, 5, 1),
+                "symbol_id": "CCC1",
+                "rank_position": 80,
+                "sector_name": "Industrial",
+                "fwd_5d_return": -90.0,
+                "fwd_20d_return": -95.0,
+            },
+        ],
+    )
+    with open_research_db(project_root=project, read_only=False) as con:
+        con.execute(
+            """
+            UPDATE rank_cohort_performance
+            SET fwd_5d_anomaly = TRUE,
+                fwd_return_anomaly = TRUE,
+                data_quality_status = 'quarantined',
+                data_quality_reason = 'extreme_fwd_5d_return|manual_review_extreme_return'
+            WHERE symbol_id = 'CCC1'
+            """
+        )
+
+    reports = build_research_quality_reports(project_root=project)
+
+    frames = reports["frames"]
+    assert set(frames) == {
+        "rank_bucket_performance",
+        "sector_performance",
+        "repeated_symbol_performance",
+        "excluded_rows",
+    }
+    assert set(frames["rank_bucket_performance"]["rank_bucket"]) >= {"top-10", "rank-11-25"}
+    assert "Pharma" in set(frames["sector_performance"]["sector_name"])
+    assert frames["excluded_rows"].loc[0, "symbol_id"] == "CCC1"
+    assert reports["summary"]["artifact_rows"]["excluded_rows"] == 1

@@ -41,6 +41,7 @@ from ai_trading_system.research.perf_tracker.backfill import (
 from ai_trading_system.research.perf_tracker.forward_returns import (
     compute_forward_returns,
 )
+from ai_trading_system.research.perf_tracker.quality import annotate_return_quality
 from ai_trading_system.research.perf_tracker.schema import open_research_db
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ SCHEMA_COLUMNS: tuple[str, ...] = (
     "factor_sector", "factor_momentum_accel", "factor_above_200dma",
     "factor_liquidity", "factor_delivery_trend", "sector_name",
     "fwd_5d_anomaly", "fwd_return_anomaly", "source_type", "source_run_id",
-    "source_artifact_path", "data_quality_status",
+    "source_artifact_path", "data_quality_status", "data_quality_reason",
 )
 
 VALID_FREQUENCIES = ("daily", "weekly", "quarterly")
@@ -206,6 +207,7 @@ def run_historical_backfill(
         project_root=project_root,
         ohlcv_db_path=research_ohlcv,
     )
+    enriched = annotate_return_quality(enriched)
 
     for col in SCHEMA_COLUMNS:
         if col not in enriched.columns:

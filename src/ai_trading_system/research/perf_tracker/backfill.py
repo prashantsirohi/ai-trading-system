@@ -25,6 +25,7 @@ from ai_trading_system.research.perf_tracker.constants import (
     RANKED_TO_TRACKER,
 )
 from ai_trading_system.research.perf_tracker.forward_returns import compute_forward_returns
+from ai_trading_system.research.perf_tracker.quality import annotate_return_quality
 from ai_trading_system.research.perf_tracker.schema import open_research_db
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,8 @@ def _latest_attempt_per_date(
     the run whose ranked_signals.csv was modified last on disk — that's the
     canonical attempt the publish stage would have shipped that day.
     """
+    if not pipeline_runs_dir.exists():
+        return {}
     by_date: dict[str, list[tuple[float, Path]]] = defaultdict(list)
     for run_dir in sorted(pipeline_runs_dir.iterdir()):
         if not run_dir.is_dir():
@@ -131,8 +134,10 @@ def build_rows_from_ranked_frame(
     out.insert(0, "run_date", run_date)
     out.insert(3, "rank_position", out.index + 1)
     if "exchange" not in out.columns:
-        out["exchange"] = "NSE"
+        out.loc[:, "exchange"] = "NSE"
 
+    if "watchlist_bucket" in ranked.columns:
+        out.loc[:, "watchlist_bucket"] = ranked["watchlist_bucket"].reset_index(drop=True)
     if buckets is not None and not buckets.empty and "symbol_id" in buckets.columns:
         bucket_col = (
             buckets[["symbol_id", "watchlist_bucket"]]
@@ -140,17 +145,20 @@ def build_rows_from_ranked_frame(
         )
         out = out.merge(bucket_col, on="symbol_id", how="left")
     if "watchlist_bucket" not in out.columns:
-        out["watchlist_bucket"] = pd.NA
+        out.loc[:, "watchlist_bucket"] = pd.NA
 
     # Ensure all schema columns exist before insert; missing ones become NULL.
     for col in ("composite_score_adjusted", "rank_mode", "sector_name", *FACTOR_COLUMNS):
         if col not in out.columns:
-            out[col] = pd.NA
-    out["config_id"] = pd.NA  # populated post-Phase-1
-    out["source_type"] = source_type
-    out["source_run_id"] = source_run_id
-    out["source_artifact_path"] = source_artifact_path
-    out["data_quality_status"] = "trusted"
+            out.loc[:, col] = pd.NA
+    if out["sector_name"].isna().all() and "sector" in ranked.columns:
+        out.loc[:, "sector_name"] = ranked["sector"].reset_index(drop=True)
+    out.loc[:, "config_id"] = pd.NA  # populated post-Phase-1
+    out.loc[:, "source_type"] = source_type
+    out.loc[:, "source_run_id"] = source_run_id
+    out.loc[:, "source_artifact_path"] = source_artifact_path
+    out.loc[:, "data_quality_status"] = "trusted"
+    out.loc[:, "data_quality_reason"] = pd.NA
     return out
 
 
@@ -262,6 +270,7 @@ def run_backfill(
 
     # Compute forward returns in one pass (helper batches by symbol internally).
     enriched = compute_forward_returns(combined, project_root=project_root)
+    enriched = annotate_return_quality(enriched)
     _validate_operational_rows(enriched)
 
     # Align to schema column order before insert.
@@ -274,7 +283,7 @@ def run_backfill(
         *FACTOR_COLUMNS,
         "sector_name",
         "fwd_5d_anomaly", "fwd_return_anomaly", "source_type", "source_run_id", "source_artifact_path",
-        "data_quality_status",
+        "data_quality_status", "data_quality_reason",
     ]
     missing_cols = {col: pd.NA for col in schema_cols if col not in enriched.columns}
     if missing_cols:

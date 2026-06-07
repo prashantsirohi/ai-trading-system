@@ -83,9 +83,13 @@ FORWARD_RETURN_ANOMALY_5D_PCT = 50.0
 FORWARD_RETURN_ANOMALY_THRESHOLDS: dict[int, float] = {
     5: 50.0,
     10: 75.0,
-    20: 100.0,
-    60: 200.0,
+    20: 80.0,
+    60: 80.0,
 }
+
+# Any matured forward return at or above this absolute value is retained for
+# manual inspection and excluded from trusted research aggregates.
+FORWARD_RETURN_REVIEW_PCT = 80.0
 
 # Optional composition columns the digest displays per bucket when present.
 COMPOSITION_OPTIONAL_COLUMNS: tuple[str, ...] = (

@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS rank_cohort_performance (
     source_run_id             VARCHAR,
     source_artifact_path      VARCHAR,
     data_quality_status       VARCHAR DEFAULT 'trusted',
+    data_quality_reason       VARCHAR,
     inserted_at               TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (run_date, symbol_id, exchange)
 );
@@ -73,6 +74,7 @@ RANK_COHORT_ALTER_DDLS: tuple[str, ...] = (
     "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS source_run_id VARCHAR",
     "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS source_artifact_path VARCHAR",
     "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS data_quality_status VARCHAR DEFAULT 'trusted'",
+    "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS data_quality_reason VARCHAR",
 )
 
 TRUSTED_COHORT_VIEW_DDL = """
