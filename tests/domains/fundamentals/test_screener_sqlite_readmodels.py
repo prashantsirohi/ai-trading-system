@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 
+from ai_trading_system.domains.fundamentals.analytical_store import mirror_screener_financials
 from ai_trading_system.domains.fundamentals.screener_readmodels import refresh_fundamental_readmodels
 from ai_trading_system.domains.fundamentals.screener_store import ScreenerFinancialsStore
 
@@ -62,3 +64,23 @@ def test_screener_sqlite_refreshes_score_and_trend_readmodels(tmp_path: Path) ->
     assert scores.loc[0, "symbol"] == "AAA"
     assert pd.read_csv(latest_output).loc[0, "screener_snapshot_date"] == "2026-05-25"
     assert {"fundamental_score", "fundamental_tier", "hard_red_flag"}.issubset(scores.columns)
+    with store.connect() as conn:
+        basis = [row["statement_basis"] for row in conn.execute("SELECT DISTINCT statement_basis FROM screener_financials").fetchall()]
+    assert basis == ["standalone"]
+
+
+def test_screener_duckdb_mirror_preserves_standalone_basis(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / "screener_financials.db"
+    duckdb_path = tmp_path / "fundamentals.duckdb"
+    store = ScreenerFinancialsStore(sqlite_path)
+    store.save_company_financials("AAA", _company_data(), as_of_date="2026-05-25")
+
+    rows = mirror_screener_financials(screener_db_path=sqlite_path, fundamentals_db_path=duckdb_path)
+
+    assert rows > 0
+    conn = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        basis = conn.execute("SELECT DISTINCT statement_basis FROM screener_financials").fetchall()
+    finally:
+        conn.close()
+    assert basis == [("standalone",)]

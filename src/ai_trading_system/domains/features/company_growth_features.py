@@ -8,6 +8,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
+from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
 from ai_trading_system.domains.fundamentals.analytical_store import (
     connect_fundamentals_duckdb,
     ensure_fundamentals_analytical_schema,
@@ -27,22 +28,33 @@ def refresh_company_growth_features(
     fundamentals_db_path: str | Path | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    statement_basis: str = DEFAULT_STATEMENT_BASIS,
 ) -> CompanyGrowthFeaturesResult:
     conn = connect_fundamentals_duckdb(fundamentals_db_path)
     try:
         ensure_fundamentals_analytical_schema(conn)
-        facts = _load_quarterly_facts(conn, to_date=to_date)
+        resolved_basis = _normalize_statement_basis(statement_basis)
+        facts = _load_quarterly_facts(conn, to_date=to_date, statement_basis=resolved_basis)
         features_all = compute_company_growth_features(facts)
         features = _filter_dates(features_all, from_date, to_date)
         if not features.empty:
             start, end = str(features["report_date"].min())[:10], str(features["report_date"].max())[:10]
             conn.execute(
-                "DELETE FROM company_growth_features WHERE report_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)",
-                [start, end],
+                """
+                DELETE FROM company_growth_features
+                WHERE report_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                  AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = ?
+                """,
+                [start, end, resolved_basis],
             )
             conn.execute(
-                "DELETE FROM fundamental_period_facts WHERE period_type = 'quarterly' AND report_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)",
-                [start, end],
+                """
+                DELETE FROM fundamental_period_facts
+                WHERE period_type = 'quarterly'
+                  AND report_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                  AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = ?
+                """,
+                [start, end, resolved_basis],
             )
             _insert_frame(conn, "fundamental_period_facts", _filter_dates(facts, from_date, to_date))
             _insert_frame(conn, "company_growth_features", features)
@@ -50,8 +62,12 @@ def refresh_company_growth_features(
             start = str(from_date or to_date)[:10]
             end = str(to_date or from_date)[:10]
             conn.execute(
-                "DELETE FROM company_growth_features WHERE report_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)",
-                [start, end],
+                """
+                DELETE FROM company_growth_features
+                WHERE report_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                  AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = ?
+                """,
+                [start, end, resolved_basis],
             )
         else:
             start = end = None
@@ -70,12 +86,15 @@ def compute_company_growth_features(facts: pd.DataFrame) -> pd.DataFrame:
     if facts.empty:
         return pd.DataFrame(columns=columns)
     q = facts.copy()
+    if "statement_basis" not in q.columns:
+        q.loc[:, "statement_basis"] = DEFAULT_STATEMENT_BASIS
+    q.loc[:, "statement_basis"] = q["statement_basis"].map(_normalize_statement_basis)
     q.loc[:, "report_date"] = pd.to_datetime(q["report_date"]).dt.date
     q.loc[:, "available_at"] = pd.to_datetime(q["available_at"], errors="coerce").dt.date
-    q = q.sort_values(["symbol", "report_date"], kind="stable")
+    q = q.sort_values(["symbol", "statement_basis", "report_date"], kind="stable")
     for column in ("sales_cr", "net_profit_cr", "operating_profit_cr", "opm_pct", "npm_pct"):
         q.loc[:, column] = pd.to_numeric(q[column], errors="coerce")
-    grouped = q.groupby("symbol", sort=False)
+    grouped = q.groupby(["symbol", "statement_basis"], sort=False)
     for column, base_name in (
         ("sales_cr", "sales"),
         ("net_profit_cr", "profit"),
@@ -116,9 +135,19 @@ def compute_company_growth_features(facts: pd.DataFrame) -> pd.DataFrame:
     return q[columns].reset_index(drop=True)
 
 
-def _load_quarterly_facts(conn: duckdb.DuckDBPyConnection, *, to_date: str | None) -> pd.DataFrame:
+def _load_quarterly_facts(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    to_date: str | None,
+    statement_basis: str = DEFAULT_STATEMENT_BASIS,
+) -> pd.DataFrame:
     params: list[str] = []
     filters = ["period_type = 'quarterly'"]
+    has_basis = _has_column(conn, "screener_financials", "statement_basis")
+    basis_expr = "coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone')" if has_basis else "'standalone'"
+    if has_basis:
+        filters.append("coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = ?")
+        params.append(_normalize_statement_basis(statement_basis))
     if to_date:
         filters.append("report_date <= CAST(? AS DATE)")
         params.append(str(to_date)[:10])
@@ -128,6 +157,7 @@ def _load_quarterly_facts(conn: duckdb.DuckDBPyConnection, *, to_date: str | Non
             symbol,
             'quarterly' AS period_type,
             report_date,
+            {basis_expr} AS statement_basis,
             max(available_at) AS available_at,
             max(CASE WHEN metric_id = 'sales' THEN value END) AS sales_cr,
             max(CASE WHEN metric_id = 'net_profit' THEN value END) AS net_profit_cr,
@@ -135,8 +165,8 @@ def _load_quarterly_facts(conn: duckdb.DuckDBPyConnection, *, to_date: str | Non
             max(CASE WHEN metric_id = 'expenses' THEN value END) AS expenses_cr
         FROM screener_financials
         WHERE {' AND '.join(filters)}
-        GROUP BY symbol, report_date
-        ORDER BY symbol, report_date
+        GROUP BY symbol, report_date, {basis_expr}
+        ORDER BY symbol, {basis_expr}, report_date
         """,
         params,
     ).df()
@@ -179,9 +209,10 @@ def _filter_dates(frame: pd.DataFrame, from_date: str | None, to_date: str | Non
 def _insert_frame(conn: duckdb.DuckDBPyConnection, table: str, frame: pd.DataFrame) -> None:
     if frame.empty:
         return
+    columns = list(frame.columns)
     conn.register("_company_growth_frame", frame)
     try:
-        conn.execute(f"INSERT INTO {table} SELECT * FROM _company_growth_frame")
+        conn.execute(f"INSERT INTO {table} ({', '.join(columns)}) SELECT {', '.join(columns)} FROM _company_growth_frame")
     finally:
         conn.unregister("_company_growth_frame")
 
@@ -191,6 +222,7 @@ def _fact_columns() -> list[str]:
         "symbol",
         "period_type",
         "report_date",
+        "statement_basis",
         "available_at",
         "sales_cr",
         "net_profit_cr",
@@ -205,6 +237,7 @@ def _feature_columns() -> list[str]:
     return [
         "symbol",
         "report_date",
+        "statement_basis",
         "available_at",
         "sales_cr",
         "net_profit_cr",
@@ -231,6 +264,24 @@ def _feature_columns() -> list[str]:
         "margin_expansion_quarters_4q",
         "created_at",
     ]
+
+
+def _has_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: str) -> bool:
+    return bool(
+        conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.columns
+            WHERE table_name = ? AND column_name = ?
+            """,
+            [table_name, column_name],
+        ).fetchone()[0]
+    )
+
+
+def _normalize_statement_basis(value: object) -> str:
+    basis = str(value or DEFAULT_STATEMENT_BASIS).strip().lower()
+    return basis or DEFAULT_STATEMENT_BASIS
 
 
 __all__ = ["CompanyGrowthFeaturesResult", "compute_company_growth_features", "refresh_company_growth_features"]

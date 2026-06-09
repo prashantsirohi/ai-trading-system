@@ -90,6 +90,14 @@ _FUNDAMENTAL_WATCHLIST_FORMATS: dict[str, dict[str, str]] = {
     "ps_pctile_5y": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "pb_pctile_5y": GoogleSheetsManager.FORMAT_DECIMAL_2,
 }
+_FUNDAMENTAL_TRACKING_PUBLISH_BUCKETS = frozenset(
+    {
+        "F4_ACTION_CANDIDATE",
+        "F3_FUND_VALUE_TECH_READY",
+        "F2_RESULT_VALUE_ACCUMULATION",
+        "F1_FUNDAMENTAL_WATCH",
+    }
+)
 
 
 def _require_spreadsheet_id() -> Optional[str]:
@@ -217,14 +225,16 @@ def _fundamental_watchlist_frame(watchlist: pd.DataFrame) -> pd.DataFrame:
     if watchlist is None or watchlist.empty:
         return pd.DataFrame(columns=_FUNDAMENTAL_WATCHLIST_COLUMNS)
     frame = watchlist.copy()
+    if "watchlist_bucket" in frame.columns:
+        bucket = frame["watchlist_bucket"].fillna("").astype(str).str.upper()
+        frame = frame.loc[bucket.isin(_FUNDAMENTAL_TRACKING_PUBLISH_BUCKETS)].copy()
+    else:
+        frame = frame.iloc[0:0].copy()
     bucket_priority = {
         "F4_ACTION_CANDIDATE": 0,
         "F3_FUND_VALUE_TECH_READY": 1,
         "F2_RESULT_VALUE_ACCUMULATION": 2,
         "F1_FUNDAMENTAL_WATCH": 3,
-        "D1_RESULT_DOWNTURN": 4,
-        "D2_AVOID_RED_FLAG": 5,
-        "IGNORE_FOR_NOW": 6,
     }
     if "watchlist_bucket" in frame.columns:
         frame.loc[:, "_bucket_priority"] = frame["watchlist_bucket"].astype(str).map(bucket_priority).fillna(99)

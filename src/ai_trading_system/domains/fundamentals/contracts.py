@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+DEFAULT_STATEMENT_BASIS = "standalone"
+
 FUNDAMENTAL_SCORE_COLUMNS = [
     "quality_score",
     "growth_score",
@@ -112,6 +114,7 @@ WATCHLIST_OUTPUT_COLUMNS = [
     "confidence",
     "report_date",
     "available_at",
+    "statement_basis",
     "sales_yoy_pct",
     "sales_qoq_pct",
     "operating_profit_yoy_pct",

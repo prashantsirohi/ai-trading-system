@@ -10,6 +10,7 @@ from typing import Any
 import duckdb
 import pandas as pd
 
+from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
 from ai_trading_system.domains.fundamentals.enrich_rank import (
     DEFAULT_CATALYSTS_PATH,
     DEFAULT_INDUSTRY_SCORES_PATH,
@@ -44,6 +45,7 @@ class FundamentalsStage:
         industry_trends_path = self._resolve_industry_trends_path(context)
         max_stale_days = int(context.params.get("fundamental_max_stale_days", 135) or 135)
         warnings: list[str] = []
+        statement_basis = str(context.params.get("fundamental_statement_basis") or DEFAULT_STATEMENT_BASIS).strip().lower()
 
         if not scores_path.exists():
             db_path = self._resolve_screener_db_path(context)
@@ -255,6 +257,7 @@ class FundamentalsStage:
             quarterly_scores = build_quarterly_result_scores(
                 fundamentals_db_path=fundamentals_db_path,
                 asof_date=context.run_date,
+                statement_basis=statement_basis,
                 output_path=quarterly_output,
             )
         except Exception as exc:  # noqa: BLE001
@@ -330,6 +333,8 @@ class FundamentalsStage:
                 .to_dict()
             ),
             fundamental_watchlist_mode=str(context.params.get("fundamental_watchlist_mode", "legacy") or "legacy"),
+            fundamental_statement_basis=statement_basis,
+            quarterly_result_statement_basis=statement_basis,
         )
         summary_artifact = self._write_summary(context, summary)
         artifacts = [
@@ -473,6 +478,8 @@ class FundamentalsStage:
         valuation_band_rows: int = 0,
         valuation_bucket_counts: dict[str, int] | None = None,
         fundamental_watchlist_mode: str = "legacy",
+        fundamental_statement_basis: str = DEFAULT_STATEMENT_BASIS,
+        quarterly_result_statement_basis: str = DEFAULT_STATEMENT_BASIS,
     ) -> dict[str, Any]:
         return {
             "status": status,
@@ -500,6 +507,8 @@ class FundamentalsStage:
             "valuation_band_rows": int(valuation_band_rows),
             "valuation_bucket_counts": dict(valuation_bucket_counts or {}),
             "fundamental_watchlist_mode": str(fundamental_watchlist_mode or "legacy"),
+            "fundamental_statement_basis": str(fundamental_statement_basis or DEFAULT_STATEMENT_BASIS),
+            "quarterly_result_statement_basis": str(quarterly_result_statement_basis or DEFAULT_STATEMENT_BASIS),
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 

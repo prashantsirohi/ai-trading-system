@@ -135,6 +135,18 @@ def test_publish_fundamental_watchlist_writes_tracking_tab(monkeypatch) -> None:
                     "ps_ttm": 4,
                     "pb": 5,
                     "watchlist_reason": "Great result + fair value",
+                },
+                {
+                    "symbol": "THERMAX",
+                    "name": "Thermax",
+                    "industry_group": "Capital Goods",
+                    "watchlist_bucket": "D1_RESULT_DOWNTURN",
+                    "final_watchlist_score": 64.13,
+                    "quarterly_result_bucket": "DETERIORATING",
+                    "quarterly_result_score": 47,
+                    "valuation_history_bucket": "BELOW_OWN_MEDIAN",
+                    "valuation_history_score": 70,
+                    "watchlist_reason": "Deteriorating quarterly result",
                 }
             ]
         )
@@ -146,4 +158,5 @@ def test_publish_fundamental_watchlist_writes_tracking_tab(monkeypatch) -> None:
     frame = manager.written["Fundamental Watchlist"]
     assert frame.loc[0, "symbol"] == "AAA"
     assert frame.loc[0, "watchlist_bucket"] == "F1_FUNDAMENTAL_WATCH"
+    assert "THERMAX" not in frame["symbol"].astype(str).tolist()
     assert "valuation_reason" in frame.columns

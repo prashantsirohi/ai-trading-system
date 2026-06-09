@@ -38,6 +38,7 @@ def run_sync(
     missing_current_results: bool = False,
     as_of_date: str | None = None,
     expected_report_date: str | None = None,
+    symbols: list[str] | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, int | str]:
     paths = get_domain_paths()
@@ -50,6 +51,14 @@ def run_sync(
         resolved_master_db_path,
         exports_dir=resolved_exports_dir,
     )
+    if symbols:
+        requested_symbols = _normalize_symbols(symbols)
+        available_symbols = set(all_symbols)
+        all_symbols = [
+            symbol
+            for symbol in requested_symbols
+            if symbol in available_symbols or (resolved_exports_dir / f"{symbol}_screener.xlsx").exists()
+        ]
     resolved_expected_report_date = None
     if missing_current_results:
         resolved_expected_report_date = expected_report_date or expected_quarterly_report_date(as_of_date)
@@ -238,6 +247,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Manual quarterly report_date override for --missing-current-results.",
     )
+    parser.add_argument("--symbol", action="append", dest="symbols", help="Limit sync to one symbol; repeatable.")
+    parser.add_argument("--symbols-file", default=None, help="Text file of symbols to sync, one per line.")
     parser.add_argument("--throttle-sec", type=float, default=2.0)
     parser.add_argument("--no-refresh-readmodels", action="store_true")
     return parser
@@ -258,6 +269,7 @@ def main() -> None:
             missing_current_results=args.missing_current_results,
             as_of_date=args.as_of_date,
             expected_report_date=args.expected_report_date,
+            symbols=_requested_symbols(args.symbols, args.symbols_file),
             progress=lambda message: print(message, flush=True),
         )
     except Exception as exc:  # noqa: BLE001
@@ -287,6 +299,28 @@ def _load_symbols(master_db_path: Path, *, exports_dir: Path) -> list[str]:
     finally:
         conn.close()
     return [str(row[0]).upper().strip() for row in rows if str(row[0]).strip()]
+
+
+def _requested_symbols(symbols: list[str] | None, symbols_file: str | Path | None) -> list[str] | None:
+    values: list[str] = []
+    if symbols:
+        values.extend(symbols)
+    if symbols_file:
+        values.extend(Path(symbols_file).read_text(encoding="utf-8").splitlines())
+    normalized = _normalize_symbols(values)
+    return normalized or None
+
+
+def _normalize_symbols(symbols: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for symbol in symbols:
+        clean = str(symbol).strip().upper()
+        if not clean or clean.startswith("#") or clean in seen:
+            continue
+        normalized.append(clean)
+        seen.add(clean)
+    return normalized
 
 
 def expected_quarterly_report_date(as_of_date: str | date | None = None) -> str:

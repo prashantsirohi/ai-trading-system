@@ -8,6 +8,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
+from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
 from ai_trading_system.platform.db.paths import get_domain_paths
 
 
@@ -34,6 +35,7 @@ def ensure_fundamentals_analytical_schema(conn: duckdb.DuckDBPyConnection) -> No
             symbol VARCHAR,
             period_type VARCHAR,
             report_date DATE,
+            statement_basis VARCHAR DEFAULT 'standalone',
             metric_id VARCHAR,
             value DOUBLE,
             available_at DATE,
@@ -49,6 +51,7 @@ def ensure_fundamentals_analytical_schema(conn: duckdb.DuckDBPyConnection) -> No
             symbol VARCHAR NOT NULL,
             period_type VARCHAR NOT NULL,
             report_date DATE NOT NULL,
+            statement_basis VARCHAR NOT NULL DEFAULT 'standalone',
             available_at DATE,
             sales_cr DOUBLE,
             net_profit_cr DOUBLE,
@@ -56,7 +59,7 @@ def ensure_fundamentals_analytical_schema(conn: duckdb.DuckDBPyConnection) -> No
             expenses_cr DOUBLE,
             opm_pct DOUBLE,
             npm_pct DOUBLE,
-            PRIMARY KEY (symbol, period_type, report_date)
+            PRIMARY KEY (symbol, period_type, report_date, statement_basis)
         )
         """
     )
@@ -65,6 +68,7 @@ def ensure_fundamentals_analytical_schema(conn: duckdb.DuckDBPyConnection) -> No
         CREATE TABLE IF NOT EXISTS company_growth_features (
             symbol VARCHAR NOT NULL,
             report_date DATE NOT NULL,
+            statement_basis VARCHAR NOT NULL DEFAULT 'standalone',
             available_at DATE NOT NULL,
             sales_cr DOUBLE,
             net_profit_cr DOUBLE,
@@ -90,10 +94,13 @@ def ensure_fundamentals_analytical_schema(conn: duckdb.DuckDBPyConnection) -> No
             profit_growth_positive_quarters_4q INTEGER,
             margin_expansion_quarters_4q INTEGER,
             created_at TIMESTAMP,
-            PRIMARY KEY (symbol, report_date)
+            PRIMARY KEY (symbol, report_date, statement_basis)
         )
         """
     )
+    _ensure_duckdb_column(conn, "screener_financials", "statement_basis", "VARCHAR DEFAULT 'standalone'")
+    _ensure_duckdb_column(conn, "fundamental_period_facts", "statement_basis", "VARCHAR DEFAULT 'standalone'")
+    _ensure_duckdb_column(conn, "company_growth_features", "statement_basis", "VARCHAR DEFAULT 'standalone'")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS company_insight_tags (
@@ -195,6 +202,19 @@ def ensure_fundamentals_analytical_schema(conn: duckdb.DuckDBPyConnection) -> No
         conn.execute(statement)
 
 
+def _ensure_duckdb_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: str, column_type: str) -> None:
+    exists = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM information_schema.columns
+        WHERE table_name = ? AND column_name = ?
+        """,
+        [table_name, column_name],
+    ).fetchone()[0]
+    if not exists:
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+
 def mirror_screener_financials(
     *,
     screener_db_path: str | Path,
@@ -206,12 +226,19 @@ def mirror_screener_financials(
         return 0
     source = sqlite3.connect(str(sqlite_path))
     try:
+        columns = {row[1] for row in source.execute("PRAGMA table_info(screener_financials)").fetchall()}
+        basis_expr = (
+            "coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone')"
+            if "statement_basis" in columns
+            else "'standalone'"
+        )
         frame = pd.read_sql_query(
             """
             SELECT
                 upper(trim(symbol)) AS symbol,
                 lower(trim(period_type)) AS period_type,
                 date(report_date) AS report_date,
+                {basis_expr} AS statement_basis,
                 lower(trim(metric_id)) AS metric_id,
                 value,
                 date(available_at) AS available_at,
@@ -219,7 +246,7 @@ def mirror_screener_financials(
                 sync_batch_id,
                 synced_at
             FROM screener_financials
-            """,
+            """.format(basis_expr=basis_expr),
             source,
         )
     finally:
@@ -231,7 +258,18 @@ def mirror_screener_financials(
         if not frame.empty:
             conn.register("_screener_financials_frame", frame)
             try:
-                conn.execute("INSERT INTO screener_financials SELECT * FROM _screener_financials_frame")
+                conn.execute(
+                    """
+                    INSERT INTO screener_financials (
+                        symbol, period_type, report_date, statement_basis, metric_id, value,
+                        available_at, source, sync_batch_id, synced_at
+                    )
+                    SELECT
+                        symbol, period_type, report_date, statement_basis, metric_id, value,
+                        available_at, source, sync_batch_id, synced_at
+                    FROM _screener_financials_frame
+                    """
+                )
             finally:
                 conn.unregister("_screener_financials_frame")
     finally:

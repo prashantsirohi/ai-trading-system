@@ -8,11 +8,14 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
+from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
+
 
 OUTPUT_COLUMNS = [
     "symbol",
     "report_date",
     "available_at",
+    "statement_basis",
     "sales_yoy_pct",
     "sales_qoq_pct",
     "operating_profit_yoy_pct",
@@ -40,6 +43,7 @@ def build_quarterly_result_scores(
     fundamentals_db_path: str | Path,
     asof_date: str,
     lookback_days: int = 150,
+    statement_basis: str = DEFAULT_STATEMENT_BASIS,
     output_path: str | Path | None = None,
 ) -> pd.DataFrame:
     """Build latest available quarterly result scores per symbol."""
@@ -66,18 +70,44 @@ def build_quarterly_result_scores(
             frame = pd.DataFrame(columns=OUTPUT_COLUMNS)
             _write(frame, output_path)
             return frame
+        resolved_basis = _normalize_statement_basis(statement_basis)
+        if _has_column(conn, "company_growth_features", "statement_basis"):
+            invalid_basis = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM company_growth_features
+                WHERE available_at <= CAST(? AS DATE)
+                  AND available_at >= CAST(? AS DATE)
+                  AND (
+                    statement_basis IS NULL
+                    OR nullif(lower(trim(statement_basis)), '') IS NULL
+                    OR lower(trim(statement_basis)) = 'unknown'
+                  )
+                """,
+                [str(asof), str(start)],
+            ).fetchone()[0]
+            if invalid_basis:
+                raise ValueError("company_growth_features contains unknown statement_basis rows in scoring window")
+            basis_select = "* EXCLUDE (statement_basis), coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') AS statement_basis"
+            basis_filter = "AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = ?"
+            params = [str(asof), str(start), resolved_basis]
+        else:
+            basis_select = "*, 'standalone' AS statement_basis"
+            basis_filter = ""
+            params = [str(asof), str(start)]
         source = conn.execute(
             """
-            SELECT *
+            SELECT {basis_select}
             FROM company_growth_features
             WHERE available_at <= CAST(? AS DATE)
               AND available_at >= CAST(? AS DATE)
+              {basis_filter}
             QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY symbol
+                PARTITION BY symbol, statement_basis
                 ORDER BY available_at DESC, report_date DESC
             ) = 1
-            """,
-            [str(asof), str(start)],
+            """.format(basis_select=basis_select, basis_filter=basis_filter),
+            params,
         ).df()
     finally:
         conn.close()
@@ -95,6 +125,10 @@ def _score(source: pd.DataFrame) -> pd.DataFrame:
     out.loc[:, "symbol"] = source["symbol"].astype(str).str.upper().str.strip()
     out.loc[:, "report_date"] = pd.to_datetime(source["report_date"]).dt.date.astype(str)
     out.loc[:, "available_at"] = pd.to_datetime(source["available_at"]).dt.date.astype(str)
+    out.loc[:, "statement_basis"] = (
+        source.get("statement_basis", pd.Series(DEFAULT_STATEMENT_BASIS, index=source.index))
+        .map(_normalize_statement_basis)
+    )
     mappings = {
         "sales_yoy_pct": ("sales_yoy_growth", 100.0),
         "sales_qoq_pct": ("sales_qoq_growth", 100.0),
@@ -227,6 +261,24 @@ def _write(frame: pd.DataFrame, output_path: str | Path | None) -> None:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(path, index=False)
+
+
+def _has_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: str) -> bool:
+    return bool(
+        conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.columns
+            WHERE table_name = ? AND column_name = ?
+            """,
+            [table_name, column_name],
+        ).fetchone()[0]
+    )
+
+
+def _normalize_statement_basis(value: object) -> str:
+    basis = str(value or DEFAULT_STATEMENT_BASIS).strip().lower()
+    return basis or DEFAULT_STATEMENT_BASIS
 
 
 __all__ = ["OUTPUT_COLUMNS", "build_quarterly_result_scores"]

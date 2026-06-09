@@ -15,6 +15,7 @@ def _create_db(path: Path, rows: list[tuple]) -> None:
             CREATE TABLE company_growth_features (
                 symbol VARCHAR,
                 report_date DATE,
+                statement_basis VARCHAR,
                 available_at DATE,
                 sales_qoq_growth DOUBLE,
                 sales_yoy_growth DOUBLE,
@@ -33,7 +34,7 @@ def _create_db(path: Path, rows: list[tuple]) -> None:
             """
         )
         conn.executemany(
-            "INSERT INTO company_growth_features VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO company_growth_features VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
     finally:
@@ -56,6 +57,7 @@ def _row(
     return (
         symbol,
         "2026-03-31",
+        "standalone",
         available_at,
         sales_qoq,
         sales_yoy,
@@ -134,3 +136,17 @@ def test_available_after_asof_date_is_excluded(tmp_path: Path) -> None:
     result = build_quarterly_result_scores(fundamentals_db_path=db, asof_date="2026-06-01")
 
     assert set(result["symbol"]) == {"AAA"}
+
+
+def test_quarterly_scoring_filters_to_standalone_basis(tmp_path: Path) -> None:
+    db = tmp_path / "fundamentals.duckdb"
+    standalone = _row("AAA", sales_yoy=0.20, sales_qoq=0.08, op_yoy=0.32, op_qoq=0.15, profit_yoy=0.35, profit_qoq=0.15, opm_yoy=1.5, opm_qoq=0.8)
+    consolidated = list(_row("AAA", sales_yoy=0.90, sales_qoq=0.90, op_yoy=0.90, op_qoq=0.90, profit_yoy=0.90, profit_qoq=0.90, opm_yoy=9.0, opm_qoq=9.0))
+    consolidated[2] = "consolidated"
+    _create_db(db, [standalone, tuple(consolidated)])
+
+    result = build_quarterly_result_scores(fundamentals_db_path=db, asof_date="2026-06-01")
+
+    assert len(result) == 1
+    assert result.iloc[0]["statement_basis"] == "standalone"
+    assert result.iloc[0]["quarterly_result_bucket"] == "GREAT_RESULT"

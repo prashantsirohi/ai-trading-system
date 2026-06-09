@@ -8,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 
+from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
 from ai_trading_system.domains.fundamentals.scoring import compute_fundamental_scores
 from ai_trading_system.domains.fundamentals.screener_store import ScreenerFinancialsStore, default_screener_db_path
 from ai_trading_system.domains.fundamentals.trends import compute_fundamental_trends
@@ -58,6 +59,9 @@ def build_raw_factor_frame(store: ScreenerFinancialsStore) -> pd.DataFrame:
     financials = store.read_financials_frame()
     if financials.empty:
         return pd.DataFrame()
+    if "statement_basis" in financials.columns:
+        basis = financials["statement_basis"].astype("string").str.strip().str.lower()
+        financials = financials.loc[basis.fillna(DEFAULT_STATEMENT_BASIS).replace("", DEFAULT_STATEMENT_BASIS).eq(DEFAULT_STATEMENT_BASIS)].copy()
     valuations = store.read_valuations_frame()
     snapshots = store.read_company_snapshot_frame()
     factors = store.read_factor_snapshot_frame()

@@ -10,6 +10,8 @@ from typing import Any
 import duckdb
 import pandas as pd
 
+from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
+
 FACT_METRICS = ("sales", "net_profit", "operating_profit", "expenses")
 
 
@@ -43,6 +45,7 @@ def ensure_sector_earnings_schema(conn: duckdb.DuckDBPyConnection) -> None:
             symbol VARCHAR NOT NULL,
             period_type VARCHAR NOT NULL,
             report_date DATE NOT NULL,
+            statement_basis VARCHAR NOT NULL DEFAULT 'standalone',
             available_at DATE,
             sales_cr DOUBLE,
             net_profit_cr DOUBLE,
@@ -50,7 +53,7 @@ def ensure_sector_earnings_schema(conn: duckdb.DuckDBPyConnection) -> None:
             expenses_cr DOUBLE,
             opm_pct DOUBLE,
             npm_pct DOUBLE,
-            PRIMARY KEY (symbol, period_type, report_date)
+            PRIMARY KEY (symbol, period_type, report_date, statement_basis)
         )
         """
     )
@@ -60,6 +63,7 @@ def ensure_sector_earnings_schema(conn: duckdb.DuckDBPyConnection) -> None:
             symbol VARCHAR NOT NULL,
             period_type VARCHAR NOT NULL,
             report_date DATE NOT NULL,
+            statement_basis VARCHAR NOT NULL DEFAULT 'standalone',
             available_at DATE,
             sales_cr DOUBLE,
             net_profit_cr DOUBLE,
@@ -70,7 +74,7 @@ def ensure_sector_earnings_schema(conn: duckdb.DuckDBPyConnection) -> None:
             sector_name VARCHAR,
             industry_group VARCHAR,
             industry VARCHAR,
-            PRIMARY KEY (symbol, period_type, report_date)
+            PRIMARY KEY (symbol, period_type, report_date, statement_basis)
         )
         """
     )
@@ -155,6 +159,8 @@ def ensure_sector_earnings_schema(conn: duckdb.DuckDBPyConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_sector_earnings_date ON sector_earnings_leadership(report_date)",
     ):
         conn.execute(statement)
+    _ensure_duckdb_column(conn, "fundamental_period_facts", "statement_basis", "VARCHAR DEFAULT 'standalone'")
+    _ensure_duckdb_column(conn, "fundamental_period_facts_enriched", "statement_basis", "VARCHAR DEFAULT 'standalone'")
 
 
 def refresh_fundamental_period_facts(
@@ -210,12 +216,21 @@ def _load_period_facts(
         if to_date:
             filters.append("date(report_date) <= date(?)")
             params.append(str(to_date)[:10])
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(screener_financials)").fetchall()}
+        basis_expr = (
+            "coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone')"
+            if "statement_basis" in columns
+            else "'standalone'"
+        )
+        filters.append(f"{basis_expr} = ?")
+        params.append(DEFAULT_STATEMENT_BASIS)
         raw = pd.read_sql_query(
             f"""
             SELECT
                 upper(trim(symbol)) AS symbol,
                 lower(trim(period_type)) AS period_type,
                 date(report_date) AS report_date,
+                {basis_expr} AS statement_basis,
                 max(date(available_at)) AS available_at,
                 max(CASE WHEN lower(trim(metric_id)) = 'sales' THEN value END) AS sales_cr,
                 max(CASE WHEN lower(trim(metric_id)) = 'net_profit' THEN value END) AS net_profit_cr,
@@ -223,7 +238,7 @@ def _load_period_facts(
                 max(CASE WHEN lower(trim(metric_id)) = 'expenses' THEN value END) AS expenses_cr
             FROM screener_financials
             WHERE {' AND '.join(filters)}
-            GROUP BY upper(trim(symbol)), lower(trim(period_type)), date(report_date)
+            GROUP BY upper(trim(symbol)), lower(trim(period_type)), date(report_date), {basis_expr}
             """,
             conn,
             params=params,
@@ -367,6 +382,7 @@ def _fact_columns() -> list[str]:
         "symbol",
         "period_type",
         "report_date",
+        "statement_basis",
         "available_at",
         "sales_cr",
         "net_profit_cr",
@@ -383,6 +399,19 @@ def _enriched_columns() -> list[str]:
 
 def _symbol_columns() -> list[str]:
     return ["symbol", "name", "sector_name", "industry_group", "industry", "mcap", "source"]
+
+
+def _ensure_duckdb_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: str, column_type: str) -> None:
+    exists = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM information_schema.columns
+        WHERE table_name = ? AND column_name = ?
+        """,
+        [table_name, column_name],
+    ).fetchone()[0]
+    if not exists:
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
 __all__ = [

@@ -11,6 +11,7 @@ from typing import Any
 
 import pandas as pd
 
+from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
 from ai_trading_system.platform.db.paths import get_domain_paths
 
 logger = logging.getLogger(__name__)
@@ -162,16 +163,23 @@ class ScreenerFinancialsStore:
                     symbol TEXT NOT NULL,
                     period_type TEXT NOT NULL,
                     report_date DATE NOT NULL,
+                    statement_basis TEXT NOT NULL DEFAULT 'standalone',
                     metric_id TEXT NOT NULL,
                     value REAL,
                     available_at DATE NOT NULL,
                     source TEXT DEFAULT 'screener',
                     sync_batch_id TEXT,
                     synced_at TIMESTAMP NOT NULL,
-                    PRIMARY KEY (symbol, period_type, report_date, metric_id, available_at),
+                    PRIMARY KEY (symbol, period_type, report_date, statement_basis, metric_id, available_at),
                     FOREIGN KEY (metric_id) REFERENCES screener_metric_catalog(metric_id)
                 )
                 """
+            )
+            _ensure_sqlite_column(
+                conn,
+                "screener_financials",
+                "statement_basis",
+                "TEXT NOT NULL DEFAULT 'standalone'",
             )
             conn.execute(
                 """
@@ -304,9 +312,9 @@ class ScreenerFinancialsStore:
                 conn.executemany(
                     """
                     INSERT OR REPLACE INTO screener_financials (
-                        symbol, period_type, report_date, metric_id, value, available_at,
+                        symbol, period_type, report_date, statement_basis, metric_id, value, available_at,
                         source, sync_batch_id, synced_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     financial_rows,
                 )
@@ -400,6 +408,7 @@ class ScreenerFinancialsStore:
                             symbol,
                             period_type,
                             str(report_date)[:10],
+                            DEFAULT_STATEMENT_BASIS,
                             metric_id,
                             numeric,
                             _available_at(period_type, str(report_date)[:10]),
@@ -465,6 +474,12 @@ def _ensure_metric(conn: sqlite3.Connection, metric_id: str, display_name: str) 
         """,
         (metric_id, display_name),
     )
+
+
+def _ensure_sqlite_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_type: str) -> None:
+    columns = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    if column_name not in columns:
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
 def _available_at(period_type: str, report_date: str) -> str:

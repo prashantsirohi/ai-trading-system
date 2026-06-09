@@ -287,6 +287,8 @@ class PublishStage:
             "valuation_zone": str(valuation_zone) if valuation_zone is not None and pd.notna(valuation_zone) else None,
             "fundamental_summary_uri": summary_artifact.uri if summary_artifact is not None else None,
             "summary_status": summary.get("status") if isinstance(summary, dict) else None,
+            "fundamental_statement_basis": summary.get("fundamental_statement_basis") if isinstance(summary, dict) else None,
+            "quarterly_result_statement_basis": summary.get("quarterly_result_statement_basis") if isinstance(summary, dict) else None,
         }
         if summary_artifact is not None:
             metadata["fundamental_summary_uri"] = summary_artifact.uri
@@ -917,7 +919,7 @@ def _has_fundamental_tracking_watchlist(value: Any) -> bool:
     if "watchlist_bucket" not in value.columns:
         return False
     bucket = value["watchlist_bucket"].astype(str)
-    return bool(bucket.str.match(r"^(F[1-4]_|D[12]_)").any())
+    return bool(bucket.str.match(r"^F[1-4]_").any())
 
 
 def _latest_frame(value: Any, date_col: str) -> pd.DataFrame:

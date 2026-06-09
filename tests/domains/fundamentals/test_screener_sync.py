@@ -316,6 +316,50 @@ def test_default_sync_still_skips_already_synced_symbols(monkeypatch, tmp_path: 
     assert saved == ["BBB"]
 
 
+def test_sync_can_be_limited_to_requested_symbols(monkeypatch, tmp_path: Path) -> None:
+    class FakeStore:
+        def __init__(self, _db_path):
+            pass
+
+        def get_synced_symbols(self):
+            return set()
+
+        def begin_batch(self, *_args, **_kwargs):
+            return None
+
+        def save_company_financials(self, symbol, *_args, **_kwargs):
+            saved.append(symbol)
+
+        def finish_batch(self, *_args, **_kwargs):
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def fetch_company_data(self, symbol, **_kwargs):
+            fetched.append(symbol)
+            return _company_data("2025-12-31")
+
+    fetched: list[str] = []
+    saved: list[str] = []
+    monkeypatch.setattr(screener_sync, "ScreenerFinancialsStore", FakeStore)
+    monkeypatch.setattr(screener_sync, "ScreenerClient", FakeClient)
+    monkeypatch.setattr(screener_sync, "_load_symbols", lambda *_args, **_kwargs: ["AAA", "BBB", "CCC"])
+
+    result = screener_sync.run_sync(
+        db_path=tmp_path / "screener_financials.db",
+        master_db_path=tmp_path / "masterdata.db",
+        exports_dir=tmp_path / "exports",
+        refresh_readmodels=False,
+        symbols=["bbb", "BBB", "missing"],
+    )
+
+    assert result["succeeded"] == 1
+    assert fetched == ["BBB"]
+    assert saved == ["BBB"]
+
+
 def _company_data(report_date: str) -> dict:
     return {
         "metadata": {"face_value": 10, "market_cap_cr": 1200},

@@ -105,7 +105,7 @@ class ScreenerClient:
             "derived": {},
         }
         current_section: str | None = None
-        section_dates: list[str] = []
+        section_dates: list[tuple[int, str]] = []
         seen_assets = False
 
         def clean(value: Any) -> str:
@@ -170,18 +170,20 @@ class ScreenerClient:
         return result
 
 
-def _section_dates(df: pd.DataFrame, row_index: int) -> list[str]:
+def _section_dates(df: pd.DataFrame, row_index: int) -> list[tuple[int, str]]:
     if row_index >= len(df):
         return []
     row = df.iloc[row_index]
     if str(row[0]).strip() != "Report Date":
         return []
-    return [str(value).split()[0] for value in row[1:] if pd.notnull(value)]
+    return [(idx, str(value).split()[0]) for idx, value in row.iloc[1:].items() if pd.notnull(value)]
 
 
-def _values_by_date(section_dates: list[str], row: pd.Series) -> dict[str, Any]:
-    values = [value if pd.notnull(value) else None for value in row[1:]]
-    return {date: values[idx] for idx, date in enumerate(section_dates) if idx < len(values)}
+def _values_by_date(section_dates: list[tuple[int, str]], row: pd.Series) -> dict[str, Any]:
+    return {
+        date: row.iloc[idx] if idx < len(row) and pd.notnull(row.iloc[idx]) else None
+        for idx, date in section_dates
+    }
 
 
 __all__ = ["ScreenerClient"]

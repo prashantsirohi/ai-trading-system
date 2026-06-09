@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
-from ai_trading_system.pipeline.stages.publish import PublishStage
+from ai_trading_system.pipeline.stages.publish import PublishStage, _has_fundamental_tracking_watchlist
 
 
 class _FakeDeliveryManager:
@@ -133,6 +133,21 @@ def test_publish_includes_fundamentals_watchlist_when_present(tmp_path: Path) ->
     assert metadata["fundamentals"]["top_earnings_sector"] == "Capital Goods"
     assert metadata["fundamentals"]["universe_pe"] == 24.1
     assert metadata["fundamentals"]["valuation_zone"] == "expensive"
+
+
+def test_fundamental_watchlist_channel_ignores_downturn_only_rows() -> None:
+    watchlist = pd.DataFrame(
+        [
+            {
+                "symbol": "THERMAX",
+                "watchlist_bucket": "D1_RESULT_DOWNTURN",
+                "final_watchlist_score": 64.13,
+                "quarterly_result_bucket": "DETERIORATING",
+            }
+        ]
+    )
+
+    assert _has_fundamental_tracking_watchlist(watchlist) is False
 
 
 def test_publish_fundamental_sheet_failure_is_non_blocking(tmp_path: Path) -> None:
