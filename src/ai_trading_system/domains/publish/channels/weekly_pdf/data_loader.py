@@ -52,6 +52,10 @@ class WeeklyReportData:
     universe_valuation_daily: pd.DataFrame = field(default_factory=pd.DataFrame)
     valuation_cycle_features: pd.DataFrame = field(default_factory=pd.DataFrame)
     fundamental_dashboard_payload: Dict[str, Any] = field(default_factory=dict)
+    watchlist_candidates: pd.DataFrame = field(default_factory=pd.DataFrame)
+    quarterly_result_scores: pd.DataFrame = field(default_factory=pd.DataFrame)
+    stock_valuation_bands_latest: pd.DataFrame = field(default_factory=pd.DataFrame)
+    candidate_tracker_current: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def _read_csv_artifact(artifact: Optional[StageArtifact]) -> pd.DataFrame:
@@ -132,6 +136,14 @@ def load_report_data(
         universe_valuation_daily=_first_dataset_frame(datasets, "universe_valuation_latest", "universe_valuation_daily"),
         valuation_cycle_features=_first_dataset_frame(datasets, "valuation_cycle_latest", "valuation_cycle_features"),
         fundamental_dashboard_payload=dict(fundamental_dashboard_payload) if isinstance(fundamental_dashboard_payload, dict) else {},
+        watchlist_candidates=_first_dataset_frame(datasets, "watchlist_candidates_latest", "watchlist_candidates"),
+        quarterly_result_scores=_first_dataset_frame(datasets, "quarterly_result_scores_latest", "quarterly_result_scores"),
+        stock_valuation_bands_latest=_first_dataset_frame(
+            datasets,
+            "stock_valuation_bands_latest",
+            "stock_valuation_bands",
+        ),
+        candidate_tracker_current=_first_dataset_frame(datasets, "candidate_tracker_current"),
     )
     _attach_phase2_inputs(context, data)
     return data

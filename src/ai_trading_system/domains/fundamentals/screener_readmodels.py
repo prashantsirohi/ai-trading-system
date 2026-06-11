@@ -20,7 +20,7 @@ def build_scores_from_screener_db(
     db_path: str | Path | None = None,
     snapshot_date: str | None = None,
 ) -> pd.DataFrame:
-    store = ScreenerFinancialsStore(db_path)
+    store = ScreenerFinancialsStore(db_path, initialize=False)
     raw = build_raw_factor_frame(store)
     resolved_snapshot_date = snapshot_date or _snapshot_date(store)
     return compute_fundamental_scores(raw, snapshot_date=resolved_snapshot_date)
@@ -36,7 +36,7 @@ def refresh_fundamental_readmodels(
     paths = get_domain_paths()
     latest_path = Path(latest_output) if latest_output is not None else paths.fundamentals_dir / "fundamental_scores_latest.csv"
     trends_path = Path(trends_output) if trends_output is not None else paths.fundamentals_dir / "fundamental_trends_latest.csv"
-    store = ScreenerFinancialsStore(db_path)
+    store = ScreenerFinancialsStore(db_path, initialize=False)
     raw = build_raw_factor_frame(store)
     resolved_snapshot_date = snapshot_date or _snapshot_date(store)
     scores = compute_fundamental_scores(raw, snapshot_date=resolved_snapshot_date)
@@ -60,8 +60,15 @@ def build_raw_factor_frame(store: ScreenerFinancialsStore) -> pd.DataFrame:
     if financials.empty:
         return pd.DataFrame()
     if "statement_basis" in financials.columns:
-        basis = financials["statement_basis"].astype("string").str.strip().str.lower()
-        financials = financials.loc[basis.fillna(DEFAULT_STATEMENT_BASIS).replace("", DEFAULT_STATEMENT_BASIS).eq(DEFAULT_STATEMENT_BASIS)].copy()
+        basis = (
+            financials["statement_basis"]
+            .fillna(DEFAULT_STATEMENT_BASIS)
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .replace({"": DEFAULT_STATEMENT_BASIS})
+        )
+        financials = financials.loc[basis.eq(DEFAULT_STATEMENT_BASIS)].copy()
     valuations = store.read_valuations_frame()
     snapshots = store.read_company_snapshot_frame()
     factors = store.read_factor_snapshot_frame()

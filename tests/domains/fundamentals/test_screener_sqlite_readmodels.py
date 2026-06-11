@@ -6,7 +6,7 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.fundamentals.analytical_store import mirror_screener_financials
-from ai_trading_system.domains.fundamentals.screener_readmodels import refresh_fundamental_readmodels
+from ai_trading_system.domains.fundamentals.screener_readmodels import build_scores_from_screener_db, refresh_fundamental_readmodels
 from ai_trading_system.domains.fundamentals.screener_store import ScreenerFinancialsStore
 
 
@@ -84,3 +84,21 @@ def test_screener_duckdb_mirror_preserves_standalone_basis(tmp_path: Path) -> No
     finally:
         conn.close()
     assert basis == [("standalone",)]
+
+
+def test_missing_screener_db_readmodel_returns_empty_without_creating_db(tmp_path: Path) -> None:
+    db_path = tmp_path / "missing" / "screener_financials.db"
+
+    scores = build_scores_from_screener_db(db_path=db_path, snapshot_date="2026-05-25")
+
+    assert scores.empty
+    assert not db_path.exists()
+
+
+def test_schema_less_screener_db_readmodel_returns_empty(tmp_path: Path) -> None:
+    db_path = tmp_path / "screener_financials.db"
+    db_path.touch()
+
+    scores = build_scores_from_screener_db(db_path=db_path, snapshot_date="2026-05-25")
+
+    assert scores.empty

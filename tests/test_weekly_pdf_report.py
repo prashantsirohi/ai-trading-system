@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from ai_trading_system.domains.publish.channels.weekly_pdf import breadth, history, metrics
-from ai_trading_system.domains.publish.channels.weekly_pdf.builder import build_report
+from ai_trading_system.domains.publish.channels.weekly_pdf import breadth, charts, history, metrics
+from ai_trading_system.domains.publish.channels.weekly_pdf.builder import _safe_date, build_report
 from ai_trading_system.domains.publish.channels.weekly_pdf.renderer import render_html
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 
@@ -255,6 +255,250 @@ def test_rank_sector_movers_and_failed_breakouts() -> None:
     assert failed.iloc[0]["drop_pct"] == -10.0
 
 
+def test_stage2_cover_count_includes_strong_and_transition() -> None:
+    ranked = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "stage2_label": "strong_stage2"},
+            {"symbol_id": "BBB", "stage2_label": "stage1_to_stage2"},
+            {"symbol_id": "CCC", "stage2_label": "Stage 2"},
+            {"symbol_id": "DDD", "stage2_label": "base"},
+        ]
+    )
+
+    summary = metrics.stage2_summary_for_report(ranked)
+    empty_summary = metrics.stage2_summary_for_report(pd.DataFrame())
+
+    assert summary["stage2_names"] == 3
+    assert summary["strong_stage2"] == 1
+    assert summary["transition_stage2"] == 1
+    assert empty_summary["stage2_names"] == 0
+
+
+def test_rank_movers_filter_by_sign() -> None:
+    current = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "composite_score": 100.0},
+            {"symbol_id": "BBB", "composite_score": 90.0},
+            {"symbol_id": "CCC", "composite_score": 80.0},
+        ]
+    )
+    prior = pd.DataFrame(
+        [
+            {"symbol_id": "CCC", "composite_score": 100.0},
+            {"symbol_id": "BBB", "composite_score": 90.0},
+            {"symbol_id": "AAA", "composite_score": 80.0},
+        ]
+    )
+
+    improvers, decliners = metrics.compute_rank_movers(current, prior, top_n=10)
+
+    assert improvers["symbol_id"].tolist() == ["AAA"]
+    assert (improvers["rank_change"] > 0).all()
+    assert decliners["symbol_id"].tolist() == ["CCC"]
+    assert (decliners["rank_change"] < 0).all()
+
+
+def test_signed_rank_format_never_outputs_plus_minus() -> None:
+    assert metrics.fmt_signed_int(-1) == "-1"
+    assert metrics.fmt_signed_int(1) == "+1"
+    assert metrics.fmt_signed_int(0) == "0"
+    assert "+-" not in metrics.fmt_signed_int(-1)
+
+
+def test_best_patterns_by_symbol_collapses_duplicates() -> None:
+    patterns = pd.DataFrame(
+        [
+            {"symbol_id": "ADANIGREEN", "pattern_family": "flag", "pattern_score": 70, "pattern_priority_score": 70},
+            {"symbol_id": "ADANIGREEN", "pattern_family": "cup", "pattern_score": 92, "pattern_priority_score": 92},
+            {"symbol_id": "BBB", "pattern_family": "base", "pattern_score": 80, "pattern_priority_score": 80},
+        ]
+    )
+
+    result = metrics.best_patterns_by_symbol(patterns)
+    adani = result[result["symbol_id"] == "ADANIGREEN"].iloc[0]
+
+    assert result["symbol_id"].tolist().count("ADANIGREEN") == 1
+    assert adani["pattern_family"] == "cup"
+    assert adani["pattern_count"] == 2
+    assert "flag" in adani["all_patterns"]
+    assert "cup" in adani["all_patterns"]
+
+
+def test_low_base_fundamentals_flagged() -> None:
+    results = pd.DataFrame(
+        [
+            {"symbol": "SPIKE", "insight_score": 90, "profit_yoy_growth": 1200},
+            {"symbol": "CLEAN", "insight_score": 80, "profit_yoy_growth": 25},
+        ]
+    )
+
+    clean, caution = metrics.split_fundamental_results(results)
+
+    assert caution["symbol"].tolist() == ["SPIKE"]
+    assert clean["symbol"].tolist() == ["CLEAN"]
+    assert "Profit growth" in caution.iloc[0]["quality_warning"]
+
+
+def test_valuation_interpretation_high_pe_low_percentile() -> None:
+    fair = metrics.valuation_cycle_interpretation(
+        pd.DataFrame([{"pe_ttm": 59.3, "pe_percentile_5y": 32, "loss_mcap_pct": 0}])
+    )
+    extreme = metrics.valuation_cycle_interpretation(pd.DataFrame([{"pe_ttm": 200, "pe_percentile_5y": 32}]))
+    lossy = metrics.valuation_cycle_interpretation(
+        pd.DataFrame([{"pe_ttm": 40, "pe_percentile_5y": 32, "loss_mcap_pct": 30}])
+    )
+
+    assert fair["risk_label"] == "fair"
+    assert "Absolute PE is high" in fair["detail"]
+    assert extreme["risk_label"] == "unreliable"
+    assert lossy["risk_label"] == "unreliable"
+
+
+def test_fund_value_tech_overlap_from_watchlist_and_technical_only() -> None:
+    watchlist = pd.DataFrame(
+        [{"symbol": "AAA", "watchlist_bucket": "F4_ACTION_CANDIDATE", "quarterly_result_score": 80}]
+    )
+    ranked = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "sector_name": "IT",
+                "composite_score": 85,
+                "stage2_label": "strong_stage2",
+                "return_5": 4,
+                "return_20": 12,
+                "delivery_pct": 45,
+            },
+            {
+                "symbol_id": "TECH",
+                "sector_name": "IT",
+                "composite_score": 90,
+                "stage2_label": "stage2",
+                "return_5": 3,
+                "delivery_pct": 60,
+            },
+        ]
+    )
+    valuation = pd.DataFrame([{"symbol": "AAA", "valuation_history_score": 70, "valuation_history_bucket": "BELOW_OWN_MEDIAN"}])
+
+    overlap = metrics.fund_value_tech_overlap(ranked=ranked, watchlist=watchlist, valuation=valuation)
+    technical = metrics.fund_value_tech_overlap(ranked=ranked, watchlist=pd.DataFrame())
+
+    assert overlap.iloc[0]["symbol"] == "AAA"
+    assert overlap.iloc[0]["action"] == "ACTION_CANDIDATE"
+    assert set(technical["action"]) == {"INFO_ONLY"}
+    assert technical["technical_only"].all()
+
+
+def test_executive_panel_fallback_and_avoid_rows() -> None:
+    ranked = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "composite_score": 90,
+                "stage2_label": "strong_stage2",
+                "return_5": 2,
+                "delivery_pct": 50,
+            }
+        ]
+    )
+    decliners = pd.DataFrame(
+        [{"symbol_id": "BAD", "rank_change": -3, "return_5": -4, "composite_score": 60, "stage2_label": "weak"}]
+    )
+
+    panel = metrics.build_executive_decision_panel(
+        ranked=ranked,
+        rank_decliners=decliners,
+        breadth_latest={"pct_above_sma20": 70, "pct_above_sma50": 70, "pct_above_sma200": 55},
+    )
+
+    assert panel["top_actionable"][0]["symbol"] == "AAA"
+    assert panel["avoid_or_reduce"][0]["symbol"] == "BAD"
+    assert panel["risk_label"] == "RISK_ON"
+
+
+def test_candidate_tracker_view_and_sector_split() -> None:
+    tracker = pd.DataFrame(
+        [
+            {"symbol": "GOOD", "current_status": "STRONG_IMPROVING", "tracking_health_score": 90},
+            {"symbol": "BAD", "current_status": "DETERIORATING", "tracking_health_score": 20},
+        ]
+    )
+    sectors = pd.DataFrame(
+        [
+            {"Sector": "Pharma", "Quadrant": "Leading", "RS_rank": 1, "RS": 0.9},
+            {"Sector": "Aerospace", "Quadrant": "Weakening", "RS_rank": 3, "RS": 0.8},
+        ]
+    )
+
+    tracker_view = metrics.candidate_tracker_weekly_view(tracker)
+    sector_view = metrics.split_sector_leadership(sectors)
+
+    assert tracker_view["strong_improving"]["symbol"].tolist() == ["GOOD"]
+    assert tracker_view["deteriorating"]["symbol"].tolist() == ["BAD"]
+    assert sector_view["fresh_leaders"]["Sector"].tolist() == ["Pharma"]
+    assert sector_view["weakening_leaders"]["Sector"].tolist() == ["Aerospace"]
+
+
+def test_candidate_tracker_view_accepts_real_status_column() -> None:
+    tracker = pd.DataFrame(
+        [
+            {"symbol": "GOOD", "status": "IMPROVING", "tracking_health_score": 80},
+            {"symbol": "BAD", "status": "DETERIORATING", "tracking_health_score": 20},
+        ]
+    )
+
+    tracker_view = metrics.candidate_tracker_weekly_view(tracker)
+
+    assert tracker_view["strong_improving"]["current_status"].tolist() == ["IMPROVING"]
+    assert tracker_view["deteriorating"]["current_status"].tolist() == ["DETERIORATING"]
+
+
+def test_candle_targets_dedupe_include_pattern_and_cap() -> None:
+    ranked = pd.DataFrame([{"symbol_id": "AAA", "composite_score": 99}, {"symbol_id": "BBB", "composite_score": 98}])
+    improvers = pd.DataFrame([{"symbol_id": "AAA"}, {"symbol_id": "CCC"}])
+    patterns = pd.DataFrame([{"symbol_id": "PATTERN", "breakout_level": 123}])
+    overlap = pd.DataFrame([{"symbol": "FVT"}])
+    tracker = pd.DataFrame([{"symbol": "BAD", "current_status": "DETERIORATING"}])
+
+    targets = charts.pick_candle_targets(
+        ranked,
+        improvers,
+        pd.DataFrame(),
+        patterns_best=patterns,
+        fund_value_tech_overlap=overlap,
+        candidate_tracker_current=tracker,
+        n_each=3,
+        cap=5,
+    )
+    symbols = [row["symbol_id"] for row in targets]
+
+    assert len(symbols) == len(set(symbols))
+    assert "PATTERN" in symbols
+    assert len(symbols) == 5
+
+
+def test_candle_targets_accept_status_alias_and_skip_invalid_symbols() -> None:
+    ranked = pd.DataFrame([{"symbol_id": None, "composite_score": 99}, {"symbol_id": "nan", "composite_score": 98}])
+    tracker = pd.DataFrame([{"symbol": "BAD", "status": "DETERIORATING"}, {"symbol": None, "status": "DETERIORATING"}])
+
+    targets = charts.pick_candle_targets(
+        ranked,
+        pd.DataFrame([{"symbol_id": pd.NA}]),
+        pd.DataFrame([{"candidate_tier": "A", "symbol_id": float("nan")}]),
+        candidate_tracker_current=tracker,
+        n_each=3,
+        cap=5,
+    )
+
+    assert targets == [{"symbol_id": "BAD", "breakout_level": None, "source": "tracker_deteriorating"}]
+
+
+def test_safe_date_parses_iso_string_for_stock_charts() -> None:
+    assert _safe_date("2026-04-29") == date(2026, 4, 29)
+    assert _safe_date("bad-date") is None
+
+
 def test_market_breadth_date_normalization_has_no_chained_assignment_warning(tmp_path: Path) -> None:
     import duckdb
 
@@ -398,13 +642,133 @@ def test_build_report_writes_html_manifest_and_tables(tmp_path: Path) -> None:
     assert Path(manifest["tables"]["weekly_volume_delivery_movers"]).exists()
     assert Path(manifest["tables"]["weekly_price_movers"]).exists()
     assert Path(manifest["tables"]["weekly_unusual_volume_shockers"]).exists()
+    assert Path(manifest["tables"]["weekly_patterns_best_by_symbol"]).exists()
+    assert "stage2_report_summary" in manifest
+    assert "executive_panel" in manifest
+    assert "empty_sections" in manifest
+    assert "valuation_interpretation" in manifest
     assert manifest["counts"]["top_ranked"] == 1
     assert manifest["counts"]["volume_delivery"] == 1
     assert manifest["counts"]["weekly_price"] == 1
     assert manifest["counts"]["volume_shockers"] == 1
-    assert "24.8%" in Path(manifest["html_path"]).read_text(encoding="utf-8")
-    assert "Market Moves Snapshot" in Path(manifest["html_path"]).read_text(encoding="utf-8")
-    assert 'class="pattern-table"' in Path(manifest["html_path"]).read_text(encoding="utf-8")
+    html = Path(manifest["html_path"]).read_text(encoding="utf-8")
+    assert "24.8%" in html
+    assert "1. Executive Decision Panel" in html
+    assert "Market Moves Snapshot" in html
+    assert 'class="pattern-table"' in html
+    assert "Watchlist intersection is deferred to Phase 4" not in html
+
+
+def test_empty_sections_added_to_manifest_and_html(tmp_path: Path) -> None:
+    rank_dir = tmp_path / "data" / "pipeline_runs" / "pipeline-2026-04-29-abcdef12" / "rank" / "attempt_1"
+    rank_dir.mkdir(parents=True)
+    pattern_path = rank_dir / "pattern_scan.csv"
+    summary_path = rank_dir / "rank_summary.json"
+    pd.DataFrame([{"symbol_id": "AAA", "pattern_family": "flag", "pattern_score": 91.0}]).to_csv(pattern_path, index=False)
+    summary_path.write_text(json.dumps({"data_trust_status": "trusted"}), encoding="utf-8")
+
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="pipeline-2026-04-29-abcdef12",
+        run_date="2026-04-29",
+        stage_name="publish",
+        attempt_number=1,
+        params={"data_domain": "operational"},
+        artifacts={
+            "rank": {
+                "pattern_scan": StageArtifact.from_file("pattern_scan", pattern_path, row_count=1),
+                "rank_summary": StageArtifact.from_file("rank_summary", summary_path, row_count=1),
+            }
+        },
+    )
+    datasets = {
+        "ranked_signals": pd.DataFrame(
+            [
+                {
+                    "symbol_id": "AAA",
+                    "composite_score": 70.0,
+                    "return_5": 1.0,
+                    "delivery_pct": 10.0,
+                    "stage2_label": "base",
+                }
+            ]
+        ),
+        "breakout_scan": pd.DataFrame(),
+        "sector_dashboard": pd.DataFrame(),
+        "stock_scan": pd.DataFrame(),
+        "dashboard_payload": {},
+    }
+
+    manifest = build_report(context, datasets, tmp_path / "report")
+    html = Path(manifest["html_path"]).read_text(encoding="utf-8")
+
+    assert manifest["empty_sections"]["weekly_volume_delivery_movers"].startswith("No stock met return_5")
+    assert "No stock met return_5 &gt;= 5%, delivery &gt;= 40%, and volume expansion rule." in html
+
+
+def test_rendered_html_section_numbering_and_phase4_note_removed() -> None:
+    html = render_html(
+        {
+            "week_ending": "2026-05-07",
+            "run_date": "2026-05-07",
+            "run_id": "pipeline-2026-05-07-abcdef12",
+            "regime": {
+                "trust_status": "trusted",
+                "trust_confidence": None,
+                "ml_status": None,
+                "market_stage": "risk_on",
+                "universe_count": 1,
+                "stage2_count": 0,
+                "sector_quadrant_counts": {},
+            },
+            "stage2_report_summary": {"stage2_names": 2, "strong_stage2": 1, "transition_stage2": 1},
+            "executive_panel": {
+                "risk_label": "UNKNOWN",
+                "market_message": "Breadth unavailable.",
+                "top_actionable": [],
+                "track_next": [],
+                "avoid_or_reduce": [],
+            },
+            "sectors": [],
+            "sector_groups": {"fresh_leaders": [], "improving_sectors": [], "weakening_leaders": []},
+            "top_ranked": [],
+            "volume_delivery": [],
+            "weekly_price": [],
+            "volume_shockers": [],
+            "tier_a": [],
+            "tier_b": [],
+            "patterns": [],
+            "fund_value_tech_overlap": [],
+            "prior_run_id": None,
+            "prior_run_date": None,
+            "rank_improvers": [],
+            "rank_decliners": [],
+            "sector_movers": [],
+            "failed_breakouts": [],
+            "breadth_latest": {},
+            "breadth_rows": [],
+            "events_of_week": {},
+            "charts": {},
+            "clean_great_results": [],
+            "low_base_results": [],
+            "turnarounds": [],
+            "compounders": [],
+            "sector_earnings": [],
+            "valuation_cycle": [],
+            "fundamental_universe": [],
+            "valuation_interpretation": {"risk_label": "unknown", "headline": "Valuation data unavailable.", "detail": ""},
+            "empty_sections": {},
+            "candidate_tracker_enabled": False,
+        }
+    )
+
+    headings = [line.strip() for line in html.splitlines() if line.strip().startswith("<h2>")]
+    expected = [f"<h2>{idx}." for idx in range(1, 16)]
+
+    assert all(any(heading.startswith(prefix) for heading in headings) for prefix in expected)
+    assert sum(1 for heading in headings if heading.startswith("<h2>7.")) == 1
+    assert "Watchlist intersection is deferred to Phase 4" not in html
 
 
 def _write_rank_attempt(root: Path, run_id: str) -> None:

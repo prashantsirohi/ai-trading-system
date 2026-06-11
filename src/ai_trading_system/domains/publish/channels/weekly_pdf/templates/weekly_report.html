@@ -7,6 +7,84 @@
 </head>
 <body>
 
+{% macro decision_table(title, rows, empty) -%}
+<div class="move-card">
+  <h3>{{ title }}</h3>
+  <table class="compact">
+    <thead><tr><th>Symbol</th><th>Reason</th><th class="num">Score</th><th>Stage</th><th class="num">5d</th><th>Pattern</th><th>Action</th></tr></thead>
+    <tbody>
+      {% for row in rows %}{% if loop.index <= 8 %}
+      <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.reason }}</td><td class="num">{{ row.score|fmt_num(1) }}</td><td>{{ row.stage or "—" }}</td><td class="num">{{ row.return_5|fmt_pct_points }}</td><td>{{ row.pattern or "—" }}</td><td>{{ row.action }}</td></tr>
+      {% endif %}{% else %}<tr><td colspan="7" class="muted">{{ empty }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{%- endmacro %}
+
+{% macro sector_table(title, rows) -%}
+<div class="move-card">
+  <h3>{{ title }}</h3>
+  <table class="compact">
+    <thead><tr><th>Sector</th><th class="num">RS</th><th>Quadrant</th><th class="num">Rank</th></tr></thead>
+    <tbody>
+      {% for row in rows %}{% if loop.index <= 8 %}
+      <tr><td><strong>{{ row.Sector }}</strong></td><td class="num">{{ row.RS|fmt_num }}</td><td>{{ row.Quadrant }}</td><td class="num">{{ row.RS_rank|fmt_num(0) }}</td></tr>
+      {% endif %}{% else %}<tr><td colspan="4" class="muted">No rows.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{%- endmacro %}
+
+{% macro breakout_table(rows, show_extra) -%}
+<table>
+  <thead><tr><th>Symbol</th><th>Sector</th><th class="num">Close</th><th class="num">Trigger</th><th>State</th><th class="num">Score</th><th class="num">Vol&nbsp;Ratio</th>{% if show_extra %}<th class="num">52W&nbsp;Hi&nbsp;%</th><th>SMA200</th>{% endif %}</tr></thead>
+  <tbody>
+    {% for row in rows %}
+    <tr><td><strong>{{ row.symbol_id }}</strong></td><td>{{ row.sector or "—" }}</td><td class="num">{{ row.close|fmt_num(2) }}</td><td class="num">{{ row.prior_range_high|fmt_num(2) }}</td><td>{{ row.breakout_state or "—" }}</td><td class="num">{{ row.breakout_score|fmt_num(1) }}</td><td class="num">{{ row.volume_ratio|fmt_num(2) }}</td>{% if show_extra %}<td class="num">{{ row.near_52w_high_pct|fmt_num(1) }}</td><td>{{ "Y" if row.above_sma200 else "N" }}</td>{% endif %}</tr>
+    {% endfor %}
+  </tbody>
+</table>
+{%- endmacro %}
+
+{% macro mover_table(rows) -%}
+<table>
+  <thead><tr><th>Symbol</th><th>Sector</th><th class="num">Rank&nbsp;Δ</th><th class="num">Now</th><th class="num">Prev</th><th class="num">Score&nbsp;Δ</th><th class="num">Ret&nbsp;5d</th><th>Stage</th></tr></thead>
+  <tbody>
+    {% for row in rows %}
+    <tr><td><strong>{{ row.symbol_id }}</strong></td><td>{{ row.sector_name or "—" }}</td><td class="num">{{ row.rank_change|fmt_signed_int }}</td><td class="num">{{ row.rank_position|fmt_num(0) }}</td><td class="num">{{ row.prev_rank_position|fmt_num(0) }}</td><td class="num">{{ row.score_change|fmt_num(2) }}</td><td class="num">{{ row.return_5|fmt_pct_points }}</td><td>{{ row.stage2_label or "—" }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{%- endmacro %}
+
+{% macro result_table(title, rows, empty) -%}
+<div class="move-card">
+  <h3>{{ title }}</h3>
+  <table class="compact">
+    <thead><tr><th>Symbol</th><th>Insight</th><th class="num">Score</th><th class="num">Sales YoY</th><th class="num">Profit YoY</th><th class="num">OPM Δ</th><th>Warning</th></tr></thead>
+    <tbody>
+      {% for row in rows %}{% if loop.index <= 8 %}
+      <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.insight_type or "great_result" }}</td><td class="num">{{ row.insight_score|fmt_num(1) }}</td><td class="num">{{ (row.sales_yoy_growth or row.sales_yoy_pct)|fmt_num(1) }}</td><td class="num">{{ (row.profit_yoy_growth or row.profit_yoy_pct or row.pat_yoy_growth or row.pat_yoy_pct)|fmt_num(1) }}</td><td class="num">{{ (row.opm_yoy_change or row.opm_yoy_change_bps)|fmt_num(1) }}</td><td>{{ row.quality_warning or "—" }}</td></tr>
+      {% endif %}{% else %}<tr><td colspan="7" class="muted">{{ empty }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{%- endmacro %}
+
+{% macro tracker_table(title, rows) -%}
+<div class="move-card">
+  <h3>{{ title }}</h3>
+  <table class="compact">
+    <thead><tr><th>Symbol</th><th>Status</th><th class="num">Health</th><th class="num">Return</th><th>Next</th></tr></thead>
+    <tbody>
+      {% for row in rows %}{% if loop.index <= 8 %}
+      <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.current_status }}</td><td class="num">{{ row.tracking_health_score|fmt_num(1) }}</td><td class="num">{{ row.return_since_first_seen|fmt_pct_points }}</td><td>{{ row.next_action or row.status_reason or "—" }}</td></tr>
+      {% endif %}{% else %}<tr><td colspan="5" class="muted">No rows.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{%- endmacro %}
+
 <section class="cover" data-week="{{ week_ending }}">
   <h1>Weekly Market Report</h1>
   <div class="subtitle">Week ending {{ week_ending }} · run <span class="muted">{{ run_id }}</span></div>
@@ -21,7 +99,11 @@
   <div class="kpi-grid">
     <div class="kpi"><div class="label">Market Stage</div><div class="value">{{ regime.market_stage or "—" }}</div></div>
     <div class="kpi"><div class="label">Universe</div><div class="value">{{ regime.universe_count or "—" }}</div></div>
-    <div class="kpi"><div class="label">Stage 2 names</div><div class="value">{{ regime.stage2_count }}</div></div>
+    <div class="kpi">
+      <div class="label">Stage 2 names</div>
+      <div class="value">{{ stage2_report_summary.stage2_names|default(regime.stage2_count) }}</div>
+      <div class="small muted">Strong: {{ stage2_report_summary.strong_stage2|default(0) }} · Transition: {{ stage2_report_summary.transition_stage2|default(0) }}</div>
+    </div>
     <div class="kpi"><div class="label">Tier-A breakouts</div><div class="value">{{ tier_a|length }}</div></div>
     <div class="kpi"><div class="label">Tier-B breakouts</div><div class="value">{{ tier_b|length }}</div></div>
     <div class="kpi"><div class="label">Pattern setups</div><div class="value">{{ patterns|length }}</div></div>
@@ -52,51 +134,72 @@
   </table>
 
   <p class="small muted">
-    Compact weekly snapshot of breadth, sector leadership, price-volume-delivery moves,
-    unusual volume accumulation, breakouts, failed moves, rank rotation, and pattern setups.
+    Compact weekly operator snapshot of breadth, sector leadership, price-volume-delivery moves,
+    breakouts, failed moves, rank rotation, patterns, fundamentals, valuation, and decision candidates.
   </p>
 </section>
 
 <section class="section">
-  <h2>1. Sector Leaders</h2>
-  {% if charts and charts.sectors %}
-  <div class="chart"><img src="{{ charts.sectors }}" alt="Sector RS bars" /></div>
-  {% endif %}
-  {% if sectors|length %}
+  <h2>1. Executive Decision Panel</h2>
+  <div class="banner {{ executive_panel.risk_label|default('unknown')|lower }}">
+    <strong>{{ executive_panel.risk_label|default("UNKNOWN") }}:</strong>
+    {{ executive_panel.market_message|default("Breadth unavailable.") }}
+    <span class="small muted"> {{ executive_panel.data_quality_message|default("") }}</span>
+  </div>
+  <div class="move-grid">
+    {{ decision_table("Top Actionable", executive_panel.top_actionable|default([]), "No actionable candidates yet.") }}
+    {{ decision_table("Track Next", executive_panel.track_next|default([]), "No track-next candidates yet.") }}
+    {{ decision_table("Avoid / Reduce", executive_panel.avoid_or_reduce|default([]), "No avoid/reduce candidates flagged.") }}
+  </div>
+</section>
+
+<section class="section">
+  <h2>2. Fund + Value + Tech Ready</h2>
+  {% if fund_value_tech_overlap|length %}
   <table>
-    <thead>
-      <tr>
-        <th>Sector</th><th class="num">RS</th><th class="num">RS&nbsp;20</th><th class="num">RS&nbsp;50</th>
-        <th class="num">Momentum</th><th>Quadrant</th><th class="num">RS&nbsp;rank</th>
-      </tr>
-    </thead>
+    <thead><tr><th>Symbol</th><th>Action</th><th class="num">Overlap</th><th>Bucket</th><th class="num">Result</th><th class="num">Value</th><th class="num">Composite</th><th>Pattern</th><th>Reason</th></tr></thead>
     <tbody>
-      {% for row in sectors %}
+      {% for row in fund_value_tech_overlap %}
       <tr>
-        <td>{{ row.Sector }}</td>
-        <td class="num">{{ row.RS|fmt_num }}</td>
-        <td class="num">{{ row.RS_20|fmt_num }}</td>
-        <td class="num">{{ row.RS_50|fmt_num }}</td>
-        <td class="num">{{ row.Momentum|fmt_num }}</td>
-        <td>{{ row.Quadrant or "—" }}</td>
-        <td class="num">{{ row.RS_rank|fmt_num(0) }}</td>
+        <td><strong>{{ row.symbol }}</strong></td>
+        <td>{{ row.action }}</td>
+        <td class="num">{{ row.overlap_score|fmt_num(1) }}</td>
+        <td>{{ row.watchlist_bucket or "—" }}</td>
+        <td class="num">{{ row.quarterly_result_score|fmt_num(1) }}</td>
+        <td class="num">{{ row.valuation_history_score|fmt_num(1) }}</td>
+        <td class="num">{{ row.composite_score|fmt_num(1) }}</td>
+        <td>{{ row.pattern_family or "—" }}</td>
+        <td>{{ row.reason }}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
-  {% else %}<p class="muted">No sector dashboard available.</p>{% endif %}
+  {% else %}<p class="muted">{{ empty_sections.fund_value_tech_overlap|default("No fund+value+tech overlap yet. Enable fundamental_tracking and stock valuation bands.") }}</p>{% endif %}
 </section>
 
 <section class="section">
-  <h2>2. Top Ranked Stocks</h2>
+  <h2>3. Sector Leaders</h2>
+  {% if charts and charts.sectors %}
+  <div class="chart"><img src="{{ charts.sectors }}" alt="Sector RS bars" /></div>
+  {% endif %}
+  <div class="move-grid">
+    {{ sector_table("Fresh Leadership", sector_groups.fresh_leaders|default([])) }}
+    {{ sector_table("Improving Sectors", sector_groups.improving_sectors|default([])) }}
+    {{ sector_table("Strong but Weakening", sector_groups.weakening_leaders|default([])) }}
+  </div>
+  {% if not sector_groups.fresh_leaders and not sector_groups.improving_sectors and not sector_groups.weakening_leaders %}
+  <p class="muted">No sector dashboard available.</p>
+  {% endif %}
+</section>
+
+<section class="section">
+  <h2>4. Top Ranked Stocks</h2>
   {% if top_ranked|length %}
   <table>
     <thead>
       <tr>
-        <th>#</th><th>Symbol</th><th>Sector</th>
-        <th class="num">Composite</th><th class="num">Confidence</th>
-        <th>Stage</th><th class="num">Ret&nbsp;5d</th><th class="num">Ret&nbsp;20d</th>
-        <th class="num">Delivery%</th><th>DQ</th>
+        <th>#</th><th>Symbol</th><th>Sector</th><th class="num">Composite</th><th class="num">Confidence</th>
+        <th>Stage</th><th class="num">Ret&nbsp;5d</th><th class="num">Ret&nbsp;20d</th><th class="num">Delivery%</th><th>DQ</th>
       </tr>
     </thead>
     <tbody>
@@ -111,10 +214,7 @@
         <td class="num">{{ row.return_5|fmt_pct_points }}</td>
         <td class="num">{{ row.return_20|fmt_pct_points }}</td>
         <td class="num">{{ row.delivery_pct|fmt_num(1) }}</td>
-        <td>
-          {% if row.delivery_pct_imputed %}<span class="tag imputed">IMPUTED</span>
-          {% else %}<span class="tag real">REAL</span>{% endif %}
-        </td>
+        <td>{% if row.delivery_pct_imputed %}<span class="tag imputed">IMPUTED</span>{% else %}<span class="tag real">REAL</span>{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -123,8 +223,7 @@
 </section>
 
 <section class="section">
-  <h2>3. Market Moves Snapshot</h2>
-  <p class="small muted">One-page scan for price, volume, delivery, accumulation shocks, rotation, and failed moves.</p>
+  <h2>5. Market Moves Snapshot</h2>
   <div class="move-grid">
     <div class="move-card">
       <h3>Price + Volume + Delivery</h3>
@@ -133,7 +232,7 @@
         <tbody>
           {% for row in volume_delivery %}{% if loop.index <= 8 %}
           <tr><td><strong>{{ row.symbol_id }}</strong></td><td class="num">{{ row.return_5|fmt_pct_points }}</td><td class="num">{{ row.delivery_pct|fmt_num(0) }}</td><td class="num">{{ row.volume_zscore_20|fmt_num(1) }}</td></tr>
-          {% endif %}{% else %}<tr><td colspan="4" class="muted">No qualifying names.</td></tr>{% endfor %}
+          {% endif %}{% else %}<tr><td colspan="4" class="muted">{{ empty_sections.weekly_volume_delivery_movers|default("No qualifying names.") }}</td></tr>{% endfor %}
         </tbody>
       </table>
     </div>
@@ -144,7 +243,7 @@
         <tbody>
           {% for row in volume_shockers %}{% if loop.index <= 8 %}
           <tr><td><strong>{{ row.symbol_id }}</strong></td><td class="num">{{ row.volume_zscore_20|fmt_num(1) }}</td><td class="num">{{ row.delivery_pct|fmt_num(0) }}</td><td class="num">{{ row.return_5|fmt_pct_points }}</td></tr>
-          {% endif %}{% else %}<tr><td colspan="4" class="muted">No accumulation shocks.</td></tr>{% endfor %}
+          {% endif %}{% else %}<tr><td colspan="4" class="muted">{{ empty_sections.weekly_unusual_volume_shockers|default("No accumulation shocks.") }}</td></tr>{% endfor %}
         </tbody>
       </table>
     </div>
@@ -154,8 +253,8 @@
         <thead><tr><th>Symbol</th><th class="num">Rank&nbsp;Δ</th><th class="num">Score&nbsp;Δ</th><th class="num">5d</th></tr></thead>
         <tbody>
           {% for row in rank_improvers %}{% if loop.index <= 8 %}
-          <tr><td><strong>{{ row.symbol_id }}</strong></td><td class="num">+{{ row.rank_change|fmt_num(0) }}</td><td class="num">{{ row.score_change|fmt_num(1) }}</td><td class="num">{{ row.return_5|fmt_pct_points }}</td></tr>
-          {% endif %}{% else %}<tr><td colspan="4" class="muted">No prior-week comparison.</td></tr>{% endfor %}
+          <tr><td><strong>{{ row.symbol_id }}</strong></td><td class="num">{{ row.rank_change|fmt_signed_int }}</td><td class="num">{{ row.score_change|fmt_num(1) }}</td><td class="num">{{ row.return_5|fmt_pct_points }}</td></tr>
+          {% endif %}{% else %}<tr><td colspan="4" class="muted">No prior-week climbers.</td></tr>{% endfor %}
         </tbody>
       </table>
     </div>
@@ -166,28 +265,21 @@
         <tbody>
           {% for row in failed_breakouts %}{% if loop.index <= 8 %}
           <tr><td><strong>{{ row.symbol_id }}</strong></td><td class="num">{{ row.drop_pct|fmt_num(1) }}%</td><td class="num">{{ row.current_close|fmt_num(1) }}</td><td>{{ row.trigger_tier or "—" }}</td></tr>
-          {% endif %}{% else %}<tr><td colspan="4" class="muted">No failed breakouts.</td></tr>{% endfor %}
+          {% endif %}{% else %}<tr><td colspan="4" class="muted">{{ empty_sections.weekly_failed_breakouts|default("No failed breakouts.") }}</td></tr>{% endfor %}
         </tbody>
       </table>
     </div>
   </div>
-  <p class="small muted">Unusual volume shockers are a proxy for institutional accumulation: unusual volume, high delivery, non-negative 5d return, and no exhaustion flag.</p>
 </section>
 
 <section class="section">
-  <h2>4. Events of the Week</h2>
+  <h2>6. Events of the Week</h2>
   {% if events_of_week and events_of_week.top_events|length %}
   <table>
     <thead><tr><th>Symbol</th><th>Category</th><th>Severity</th><th>Materiality</th><th>Headline</th></tr></thead>
     <tbody>
       {% for row in events_of_week.top_events %}
-      <tr>
-        <td><strong>{{ row.symbol }}</strong></td>
-        <td>{{ row.category }}</td>
-        <td>{{ row.severity }}</td>
-        <td>{{ row.materiality_label or "neutral" }}</td>
-        <td>{{ row.headline }}</td>
-      </tr>
+      <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.category }}</td><td>{{ row.severity }}</td><td>{{ row.materiality_label or "neutral" }}</td><td>{{ row.headline }}</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -195,70 +287,31 @@
 </section>
 
 <section class="section">
-  <h2>5. Tier-A Breakouts (actionable)</h2>
+  <h2>7. Breakouts</h2>
+  <h3>Tier-A Breakouts (actionable)</h3>
   {% if tier_a|length %}
-  <table>
-    <thead>
-      <tr><th>Symbol</th><th>Sector</th><th class="num">Close</th><th class="num">Trigger</th>
-          <th>State</th><th class="num">Score</th><th class="num">Vol&nbsp;Ratio</th>
-          <th class="num">52W&nbsp;Hi&nbsp;%</th><th>SMA200</th></tr>
-    </thead>
-    <tbody>
-      {% for row in tier_a %}
-      <tr>
-        <td><strong>{{ row.symbol_id }}</strong> <span class="tag tier-a">A</span></td>
-        <td>{{ row.sector or "—" }}</td>
-        <td class="num">{{ row.close|fmt_num(2) }}</td>
-        <td class="num">{{ row.prior_range_high|fmt_num(2) }}</td>
-        <td>{{ row.breakout_state or "—" }}</td>
-        <td class="num">{{ row.breakout_score|fmt_num(1) }}</td>
-        <td class="num">{{ row.volume_ratio|fmt_num(2) }}</td>
-        <td class="num">{{ row.near_52w_high_pct|fmt_num(1) }}</td>
-        <td>{{ "Y" if row.above_sma200 else "N" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}<p class="muted">No Tier-A breakouts this run.</p>{% endif %}
+  {{ breakout_table(tier_a, true) }}
+  {% else %}<p class="muted">{{ empty_sections.weekly_breakouts_tier_a|default("No Tier-A breakouts this run.") }}</p>{% endif %}
 
   <h3>Tier-B Breakouts (watchlist)</h3>
   {% if tier_b|length %}
-  <table>
-    <thead>
-      <tr><th>Symbol</th><th>Sector</th><th class="num">Close</th><th class="num">Trigger</th>
-          <th>State</th><th class="num">Score</th><th class="num">Vol&nbsp;Ratio</th></tr>
-    </thead>
-    <tbody>
-      {% for row in tier_b %}
-      <tr>
-        <td><strong>{{ row.symbol_id }}</strong> <span class="tag tier-b">B</span></td>
-        <td>{{ row.sector or "—" }}</td>
-        <td class="num">{{ row.close|fmt_num(2) }}</td>
-        <td class="num">{{ row.prior_range_high|fmt_num(2) }}</td>
-        <td>{{ row.breakout_state or "—" }}</td>
-        <td class="num">{{ row.breakout_score|fmt_num(1) }}</td>
-        <td class="num">{{ row.volume_ratio|fmt_num(2) }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}<p class="muted">No Tier-B breakouts.</p>{% endif %}
+  {{ breakout_table(tier_b, false) }}
+  {% else %}<p class="muted">{{ empty_sections.weekly_breakouts_tier_b|default("No Tier-B breakouts.") }}</p>{% endif %}
 </section>
 
 <section class="section">
-  <h2>6. Pattern Setups</h2>
+  <h2>8. Pattern Setups — Best by Symbol</h2>
+  <p class="small muted">Detailed duplicate pattern rows are available in weekly_patterns.csv.</p>
   {% if patterns|length %}
   <table class="pattern-table">
-    <thead>
-      <tr><th>Symbol</th><th>Pattern</th><th>State</th>
-          <th>Tier</th><th class="num">Score</th>
-          <th class="num">Trigger</th><th class="num">Vol&nbsp;Ratio</th><th>Stage</th></tr>
-    </thead>
+    <thead><tr><th>Symbol</th><th>Best Pattern</th><th>All Patterns</th><th class="num">Count</th><th>State</th><th>Tier</th><th class="num">Score</th><th class="num">Trigger</th><th class="num">Vol&nbsp;Ratio</th><th>Stage</th></tr></thead>
     <tbody>
       {% for row in patterns %}
       <tr>
         <td><strong>{{ row.symbol_id }}</strong></td>
         <td>{{ row.pattern_family }}</td>
+        <td>{{ row.all_patterns }}</td>
+        <td class="num">{{ row.pattern_count }}</td>
         <td>{{ row.pattern_state }}</td>
         <td>{{ row.pattern_operational_tier or "—" }}</td>
         <td class="num">{{ row.pattern_score|fmt_num }}</td>
@@ -273,34 +326,22 @@
 </section>
 
 <section class="section">
-  <h2>7. Failed Breakouts (lookback)</h2>
+  <h2>9. Failed Breakouts</h2>
   <p class="small muted">Symbols that triggered a breakout in the last 10 days but now sit below the trigger level.</p>
   {% if failed_breakouts|length %}
   <table>
-    <thead>
-      <tr><th>Symbol</th><th>Sector</th><th>Trigger Run</th>
-          <th class="num">Trigger</th><th class="num">Close</th>
-          <th class="num">Drop&nbsp;%</th><th>Tier</th></tr>
-    </thead>
+    <thead><tr><th>Symbol</th><th>Sector</th><th>Trigger Run</th><th class="num">Trigger</th><th class="num">Close</th><th class="num">Drop&nbsp;%</th><th>Tier</th></tr></thead>
     <tbody>
       {% for row in failed_breakouts %}
-      <tr>
-        <td><strong>{{ row.symbol_id }}</strong></td>
-        <td>{{ row.sector_name or "—" }}</td>
-        <td class="small muted">{{ row.trigger_run_id }}</td>
-        <td class="num">{{ row.trigger_level|fmt_num(2) }}</td>
-        <td class="num">{{ row.current_close|fmt_num(2) }}</td>
-        <td class="num">{{ row.drop_pct|fmt_num(2) }}%</td>
-        <td>{{ row.trigger_tier or "—" }}</td>
-      </tr>
+      <tr><td><strong>{{ row.symbol_id }}</strong></td><td>{{ row.sector_name or "—" }}</td><td class="small muted">{{ row.trigger_run_id }}</td><td class="num">{{ row.trigger_level|fmt_num(2) }}</td><td class="num">{{ row.current_close|fmt_num(2) }}</td><td class="num">{{ row.drop_pct|fmt_num(2) }}%</td><td>{{ row.trigger_tier or "—" }}</td></tr>
       {% endfor %}
     </tbody>
   </table>
-  {% else %}<p class="muted">No failed breakouts in lookback window.</p>{% endif %}
+  {% else %}<p class="muted">{{ empty_sections.weekly_failed_breakouts|default("No failed breakouts in lookback window.") }}</p>{% endif %}
 </section>
 
 <section class="section">
-  <h2>7. Rank Movers (week-over-week)</h2>
+  <h2>10. Rank Movers</h2>
   {% if charts and charts.movers %}
   <div class="chart"><img src="{{ charts.movers }}" alt="Top rank movers" /></div>
   {% endif %}
@@ -312,75 +353,19 @@
 
   {% if rank_improvers|length %}
   <h3>Top Improvers</h3>
-  <table>
-    <thead>
-      <tr><th>Symbol</th><th>Sector</th>
-          <th class="num">Rank&nbsp;Δ</th><th class="num">Now</th><th class="num">Prev</th>
-          <th class="num">Score&nbsp;Δ</th><th class="num">Ret&nbsp;5d</th><th>Stage</th></tr>
-    </thead>
-    <tbody>
-      {% for row in rank_improvers %}
-      <tr>
-        <td><strong>{{ row.symbol_id }}</strong></td>
-        <td>{{ row.sector_name or "—" }}</td>
-        <td class="num">+{{ row.rank_change|fmt_num(0) }}</td>
-        <td class="num">{{ row.rank_position|fmt_num(0) }}</td>
-        <td class="num">{{ row.prev_rank_position|fmt_num(0) }}</td>
-        <td class="num">{{ row.score_change|fmt_num(2) }}</td>
-        <td class="num">{{ row.return_5|fmt_pct_points }}</td>
-        <td>{{ row.stage2_label or "—" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  {{ mover_table(rank_improvers) }}
   {% endif %}
-
   {% if rank_decliners|length %}
   <h3>Top Decliners</h3>
-  <table>
-    <thead>
-      <tr><th>Symbol</th><th>Sector</th>
-          <th class="num">Rank&nbsp;Δ</th><th class="num">Now</th><th class="num">Prev</th>
-          <th class="num">Score&nbsp;Δ</th><th class="num">Ret&nbsp;5d</th><th>Stage</th></tr>
-    </thead>
-    <tbody>
-      {% for row in rank_decliners %}
-      <tr>
-        <td><strong>{{ row.symbol_id }}</strong></td>
-        <td>{{ row.sector_name or "—" }}</td>
-        <td class="num">{{ row.rank_change|fmt_num(0) }}</td>
-        <td class="num">{{ row.rank_position|fmt_num(0) }}</td>
-        <td class="num">{{ row.prev_rank_position|fmt_num(0) }}</td>
-        <td class="num">{{ row.score_change|fmt_num(2) }}</td>
-        <td class="num">{{ row.return_5|fmt_pct_points }}</td>
-        <td>{{ row.stage2_label or "—" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  {{ mover_table(rank_decliners) }}
   {% endif %}
-
   {% if sector_movers|length %}
   <h3>Sector Rank Movers</h3>
   <table>
-    <thead>
-      <tr><th>Sector</th>
-          <th class="num">RS</th><th class="num">Prev&nbsp;RS</th><th class="num">RS&nbsp;Δ</th>
-          <th class="num">Rank</th><th class="num">Prev&nbsp;Rank</th><th class="num">Rank&nbsp;Δ</th>
-          <th>Quadrant</th></tr>
-    </thead>
+    <thead><tr><th>Sector</th><th class="num">RS</th><th class="num">Prev&nbsp;RS</th><th class="num">RS&nbsp;Δ</th><th class="num">Rank</th><th class="num">Prev&nbsp;Rank</th><th class="num">Rank&nbsp;Δ</th><th>Quadrant</th></tr></thead>
     <tbody>
       {% for row in sector_movers %}
-      <tr>
-        <td>{{ row.Sector }}</td>
-        <td class="num">{{ row.RS|fmt_num }}</td>
-        <td class="num">{{ row.prev_RS|fmt_num }}</td>
-        <td class="num">{{ row.rs_change|fmt_num(2) }}</td>
-        <td class="num">{{ row.RS_rank|fmt_num(0) }}</td>
-        <td class="num">{{ row.prev_RS_rank|fmt_num(0) }}</td>
-        <td class="num">{{ row.rank_change|fmt_num(0) }}</td>
-        <td>{{ row.Quadrant or "—" }}</td>
-      </tr>
+      <tr><td>{{ row.Sector }}</td><td class="num">{{ row.RS|fmt_num }}</td><td class="num">{{ row.prev_RS|fmt_num }}</td><td class="num">{{ row.rs_change|fmt_num(2) }}</td><td class="num">{{ row.RS_rank|fmt_num(0) }}</td><td class="num">{{ row.prev_RS_rank|fmt_num(0) }}</td><td class="num">{{ row.rank_change|fmt_signed_int }}</td><td>{{ row.Quadrant or "—" }}</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -388,108 +373,83 @@
 </section>
 
 <section class="section">
-  <h2>8. Market Breadth</h2>
+  <h2>11. Market Breadth</h2>
   {% if charts and charts.breadth %}
-  <div class="chart">
-    <img src="{{ charts.breadth }}" alt="Market breadth above SMAs" />
-    <div class="caption">26-week trend of % stocks above SMA20 / SMA50 / SMA200 (NSE universe).</div>
-  </div>
+  <div class="chart"><img src="{{ charts.breadth }}" alt="Market breadth above SMAs" /><div class="caption">26-week trend of % stocks above SMA20 / SMA50 / SMA200 (NSE universe).</div></div>
   {% endif %}
   {% if breadth_rows|length %}
   <h3>Last 10 sessions</h3>
   <table>
-    <thead>
-      <tr><th>Date</th>
-          <th class="num">% &gt; SMA20</th><th class="num">% &gt; SMA50</th><th class="num">% &gt; SMA200</th>
-          <th class="num">52W&nbsp;Hi</th><th class="num">52W&nbsp;Lo</th>
-          <th class="num">Adv</th><th class="num">Decl</th></tr>
-    </thead>
+    <thead><tr><th>Date</th><th class="num">% &gt; SMA20</th><th class="num">% &gt; SMA50</th><th class="num">% &gt; SMA200</th><th class="num">52W&nbsp;Hi</th><th class="num">52W&nbsp;Lo</th><th class="num">Adv</th><th class="num">Decl</th></tr></thead>
     <tbody>
       {% for row in breadth_rows %}
-      <tr>
-        <td>{{ row.trade_date }}</td>
-        <td class="num">{{ row.pct_above_sma20|fmt_num(1) }}</td>
-        <td class="num">{{ row.pct_above_sma50|fmt_num(1) }}</td>
-        <td class="num">{{ row.pct_above_sma200|fmt_num(1) }}</td>
-        <td class="num">{{ row.new_52w_highs }}</td>
-        <td class="num">{{ row.new_52w_lows }}</td>
-        <td class="num">{{ row.advancers }}</td>
-        <td class="num">{{ row.decliners }}</td>
-      </tr>
+      <tr><td>{{ row.trade_date }}</td><td class="num">{{ row.pct_above_sma20|fmt_num(1) }}</td><td class="num">{{ row.pct_above_sma50|fmt_num(1) }}</td><td class="num">{{ row.pct_above_sma200|fmt_num(1) }}</td><td class="num">{{ row.new_52w_highs }}</td><td class="num">{{ row.new_52w_lows }}</td><td class="num">{{ row.advancers }}</td><td class="num">{{ row.decliners }}</td></tr>
       {% endfor %}
     </tbody>
   </table>
   {% else %}<p class="muted">Market breadth unavailable (ohlcv DB not reachable from this run).</p>{% endif %}
 </section>
 
-{% if charts and charts.stocks and charts.stocks|length %}
 <section class="section">
-  <h2>9. Stock Snapshots</h2>
-  <p class="small muted">6-month OHLCV for top-ranked, top rank improvers, and Tier-A breakouts. Lines: SMA20 (blue), SMA50 (green), SMA200 (red), 52W high (gray dash). Orange dotted = breakout trigger.</p>
+  <h2>12. Stock Snapshots</h2>
+  <p class="small muted">6-month OHLCV for ranked leaders, improvers, pattern setups, fund+value+tech candidates, and tracker deterioration.</p>
+  {% if charts and charts.stocks and charts.stocks|length %}
   <div class="stock-grid">
     {% for s in charts.stocks %}
-    <div class="stock-card">
-      <div class="label">{{ s.symbol_id }}</div>
-      <div class="source">{{ s.source }}</div>
-      <img src="{{ s.path }}" alt="{{ s.symbol_id }} candlestick" />
-    </div>
+    <div class="stock-card"><div class="label">{{ s.symbol_id }}</div><div class="source">{{ s.source }}</div><img src="{{ s.path }}" alt="{{ s.symbol_id }} candlestick" /></div>
     {% endfor %}
   </div>
+  {% else %}<p class="muted">Stock snapshot charts unavailable for this run.</p>{% endif %}
 </section>
-{% endif %}
 
 <section class="section">
-  <h2>10. Fundamental Insight Stories</h2>
+  <h2>13. Fundamental Insight Stories</h2>
   <div class="move-grid">
-    <div class="move-card">
-      <h3>Great Results</h3>
-      <table class="compact">
-        <thead><tr><th>Symbol</th><th>Insight</th><th class="num">Score</th></tr></thead>
-        <tbody>
-          {% for row in great_results %}{% if loop.index <= 8 %}
-          <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.insight_type or "great_result" }}</td><td class="num">{{ row.insight_score|fmt_num(1) }}</td></tr>
-          {% endif %}{% else %}<tr><td colspan="3" class="muted">No great-result stories available.</td></tr>{% endfor %}
-        </tbody>
-      </table>
-    </div>
+    {{ result_table("Clean Great Results", clean_great_results if clean_great_results|length else great_results|default([]), "No clean great-result stories available.") }}
+    {{ result_table("Low-base / One-off Caution", low_base_results|default([]), "No low-base result cautions flagged.") }}
     <div class="move-card">
       <h3>Turnaround Stories</h3>
-      <table class="compact">
-        <thead><tr><th>Symbol</th><th>Stage</th><th class="num">Score</th></tr></thead>
-        <tbody>
-          {% for row in turnarounds %}{% if loop.index <= 8 %}
-          <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.insight_type or "turnaround" }}</td><td class="num">{{ row.insight_score|fmt_num(1) }}</td></tr>
-          {% endif %}{% else %}<tr><td colspan="3" class="muted">No turnaround stories available.</td></tr>{% endfor %}
-        </tbody>
-      </table>
+      <table class="compact"><thead><tr><th>Symbol</th><th>Stage</th><th class="num">Score</th></tr></thead><tbody>
+        {% for row in turnarounds %}{% if loop.index <= 8 %}
+        <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.insight_type or "turnaround" }}</td><td class="num">{{ row.insight_score|fmt_num(1) }}</td></tr>
+        {% endif %}{% else %}<tr><td colspan="3" class="muted">No turnaround stories available.</td></tr>{% endfor %}
+      </tbody></table>
     </div>
     <div class="move-card">
       <h3>Compounders</h3>
-      <table class="compact">
-        <thead><tr><th>Symbol</th><th>Label</th><th class="num">Score</th></tr></thead>
-        <tbody>
-          {% for row in compounders %}{% if loop.index <= 8 %}
-          <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.insight_type or "compounder" }}</td><td class="num">{{ row.insight_score|fmt_num(1) }}</td></tr>
-          {% endif %}{% else %}<tr><td colspan="3" class="muted">No compounder candidates available.</td></tr>{% endfor %}
-        </tbody>
-      </table>
+      <table class="compact"><thead><tr><th>Symbol</th><th>Label</th><th class="num">Score</th></tr></thead><tbody>
+        {% for row in compounders %}{% if loop.index <= 8 %}
+        <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.insight_type or "compounder" }}</td><td class="num">{{ row.insight_score|fmt_num(1) }}</td></tr>
+        {% endif %}{% else %}<tr><td colspan="3" class="muted">No compounder candidates available.</td></tr>{% endfor %}
+      </tbody></table>
     </div>
     <div class="move-card">
       <h3>Sector Earnings Leadership</h3>
-      <table class="compact">
-        <thead><tr><th>Sector</th><th class="num">Score</th><th class="num">Great</th><th class="num">Turn</th></tr></thead>
-        <tbody>
-          {% for row in sector_earnings %}{% if loop.index <= 8 %}
-          <tr><td><strong>{{ row.sector_name or row.sector }}</strong></td><td class="num">{{ row.sector_fundamental_score|fmt_num(1) }}</td><td class="num">{{ row.great_result_count }}</td><td class="num">{{ row.turnaround_count }}</td></tr>
-          {% endif %}{% else %}<tr><td colspan="4" class="muted">No sector earnings leadership available.</td></tr>{% endfor %}
-        </tbody>
-      </table>
+      <table class="compact"><thead><tr><th>Sector</th><th class="num">Score</th><th class="num">Great</th><th class="num">Turn</th></tr></thead><tbody>
+        {% for row in sector_earnings %}{% if loop.index <= 8 %}
+        <tr><td><strong>{{ row.sector_name or row.sector }}</strong></td><td class="num">{{ row.sector_fundamental_score|fmt_num(1) }}</td><td class="num">{{ row.great_result_count }}</td><td class="num">{{ row.turnaround_count }}</td></tr>
+        {% endif %}{% else %}<tr><td colspan="4" class="muted">No sector earnings leadership available.</td></tr>{% endfor %}
+      </tbody></table>
     </div>
   </div>
+
+  <h3>Candidate Tracker — Improving / Deteriorating</h3>
+  {% if candidate_tracker_enabled %}
+  <div class="move-grid">
+    {{ tracker_table("Strong / Improving", candidate_tracker_view.strong_improving|default([])) }}
+    {{ tracker_table("Watch Carefully", candidate_tracker_view.watch_carefully|default([])) }}
+    {{ tracker_table("Deteriorating", candidate_tracker_view.deteriorating|default([])) }}
+  </div>
+  {% else %}<p class="muted">Candidate tracker not enabled for this run.</p>{% endif %}
 </section>
 
 <section class="section">
-  <h2>11. Valuation Cycle</h2>
+  <h2>14. Valuation Cycle</h2>
+  <div class="banner {{ valuation_interpretation.risk_label|default('unknown') }}">
+    <strong>{{ valuation_interpretation.risk_label|default("unknown")|upper }}:</strong>
+    {{ valuation_interpretation.headline|default("Valuation data unavailable.") }}
+    {% if valuation_interpretation.detail %}<span class="small muted">{{ valuation_interpretation.detail }}</span>{% endif %}
+  </div>
   {% if charts and charts.valuation_cycle %}
   <div class="chart"><img src="{{ charts.valuation_cycle }}" alt="Universe valuation cycle" /></div>
   {% endif %}
@@ -509,16 +469,7 @@
     <thead><tr><th>Date</th><th>Entity</th><th class="num">PE</th><th class="num">PE 200DMA</th><th class="num">5Y %ile</th><th class="num">5Y z</th><th>Zone</th><th>Signal</th></tr></thead>
     <tbody>
       {% for row in valuation_cycle %}
-      <tr>
-        <td>{{ row.date }}</td>
-        <td>{{ row.entity_id or row.universe_id }}</td>
-        <td class="num">{{ row.pe_ttm|fmt_num(1) }}</td>
-        <td class="num">{{ row.pe_200dma|fmt_num(1) }}</td>
-        <td class="num">{{ row.pe_percentile_5y|fmt_num(0) }}</td>
-        <td class="num">{{ row.pe_zscore_5y|fmt_num(2) }}</td>
-        <td>{{ row.valuation_zone or "—" }}</td>
-        <td>{{ row.cycle_signal or "—" }}</td>
-      </tr>
+      <tr><td>{{ row.date }}</td><td>{{ row.entity_id or row.universe_id }}</td><td class="num">{{ row.pe_ttm|fmt_num(1) }}</td><td class="num">{{ row.pe_200dma|fmt_num(1) }}</td><td class="num">{{ row.pe_percentile_5y|fmt_num(0) }}</td><td class="num">{{ row.pe_zscore_5y|fmt_num(2) }}</td><td>{{ row.valuation_zone or "—" }}</td><td>{{ row.cycle_signal or "—" }}</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -526,7 +477,7 @@
 </section>
 
 <section class="section appendix">
-  <h2>Appendix · Data Quality &amp; Methodology</h2>
+  <h2>15. Appendix</h2>
   <p>
     <strong>Trust status:</strong> {{ regime.trust_status }} ·
     <strong>Confidence:</strong> {{ regime.trust_confidence|fmt_num(2) }} ·
@@ -543,7 +494,11 @@
     sector-median → universe-median fallback.
   </p>
   <p class="small muted">
-    Watchlist intersection is deferred to Phase 4.
+    {% if fund_value_tech_overlap|length %}
+    Watchlist intersection uses quarterly result score, valuation history, RS/sector confirmation, and pattern evidence where available.
+    {% else %}
+    Fund+value+tech overlap requires fundamental_tracking and stock valuation bands.
+    {% endif %}
   </p>
 </section>
 

@@ -57,6 +57,8 @@ def build_report(
     tier_a = metrics.tier_a_breakouts(data.breakout_scan)
     tier_b = metrics.tier_b_breakouts(data.breakout_scan)
     patterns = metrics.top_patterns(data.pattern_scan)
+    patterns_best = metrics.best_patterns_by_symbol(data.pattern_scan)
+    stage2_report_summary = metrics.stage2_summary_for_report(data.ranked_signals)
     regime = metrics.regime_summary(
         data.rank_summary,
         data.dashboard_payload,
@@ -78,6 +80,24 @@ def build_report(
     )
     breadth_latest = data.market_breadth.iloc[-1].to_dict() if not data.market_breadth.empty else {}
     events_of_week = _events_of_week(data)
+    fund_value_tech = metrics.fund_value_tech_overlap(
+        ranked=data.ranked_signals,
+        watchlist=data.watchlist_candidates,
+        quarterly=data.quarterly_result_scores,
+        valuation=data.stock_valuation_bands_latest,
+        patterns_best=patterns_best,
+    )
+    candidate_tracker_view = metrics.candidate_tracker_weekly_view(data.candidate_tracker_current)
+    executive_panel = metrics.build_executive_decision_panel(
+        ranked=data.ranked_signals,
+        watchlist=data.watchlist_candidates,
+        rank_improvers=rank_improvers,
+        rank_decliners=rank_decliners,
+        patterns_best=patterns_best,
+        breadth_latest=breadth_latest,
+        trust_status=data.trust_status,
+    )
+    sector_groups = metrics.split_sector_leadership(data.sector_dashboard)
 
     chart_paths = _render_charts(
         output_dir=output_dir,
@@ -91,26 +111,50 @@ def build_report(
         breakouts=data.breakout_scan,
         universe_valuation=data.universe_valuation_daily,
         valuation_cycle=data.valuation_cycle_features,
+        patterns_best=patterns_best,
+        fund_value_tech_overlap=fund_value_tech,
+        candidate_tracker_current=data.candidate_tracker_current,
     )
     latest_universe = _latest_by_date(data.universe_valuation_daily, "date")
     latest_valuation_cycle = _latest_by_date(data.valuation_cycle_features, "date")
     top_sector_earnings = _sort_desc(data.sector_earnings_leadership, "sector_fundamental_score").head(12)
+    clean_great_results, low_base_results = metrics.split_fundamental_results(data.great_results)
     great_results = _sort_desc(data.great_results, "insight_score").head(12)
+    clean_great_results = _sort_desc(clean_great_results, "insight_score").head(12)
+    low_base_results = _sort_desc(low_base_results, "insight_score").head(12)
     turnarounds = _sort_desc(data.turnaround_candidates, "insight_score").head(12)
     compounders = _sort_desc(data.compounder_candidates, "insight_score").head(12)
+    valuation_source = latest_valuation_cycle if not latest_valuation_cycle.empty else latest_universe
+    valuation_interpretation = metrics.valuation_cycle_interpretation(valuation_source)
+    empty_sections = _empty_sections(
+        volume_delivery=volume_delivery,
+        volume_shockers=volume_shockers,
+        tier_a=tier_a,
+        tier_b=tier_b,
+        failed_breakouts=failed_breakouts,
+        fund_value_tech=fund_value_tech,
+    )
 
     template_context = {
         "week_ending": data.run_date,
+        "run_date": data.run_date,
         "run_id": data.run_id,
         "regime": regime,
+        "stage2_report_summary": stage2_report_summary,
+        "executive_panel": executive_panel,
         "sectors": _df_to_records(sectors),
+        "sector_groups": {key: _df_to_records(value) for key, value in sector_groups.items()},
         "top_ranked": _df_to_records(top_ranked),
         "volume_delivery": _df_to_records(volume_delivery),
         "weekly_price": _df_to_records(weekly_price),
         "volume_shockers": _df_to_records(volume_shockers),
         "tier_a": _df_to_records(tier_a),
         "tier_b": _df_to_records(tier_b),
-        "patterns": _df_to_records(patterns),
+        "patterns": _df_to_records(patterns_best),
+        "patterns_detailed": _df_to_records(patterns),
+        "fund_value_tech_overlap": _df_to_records(fund_value_tech),
+        "candidate_tracker_view": {key: _df_to_records(value) for key, value in candidate_tracker_view.items()},
+        "candidate_tracker_enabled": not data.candidate_tracker_current.empty,
         "prior_run_id": data.prior_run_id,
         "prior_run_date": data.prior_run_date,
         "rank_improvers": _df_to_records(rank_improvers),
@@ -124,11 +168,15 @@ def build_report(
         "fundamental_summary": data.fundamental_dashboard_payload.get("summary", {}),
         "fundamental_universe": _df_to_records(latest_universe.head(1)),
         "great_results": _df_to_records(great_results),
+        "clean_great_results": _df_to_records(clean_great_results),
+        "low_base_results": _df_to_records(low_base_results),
         "turnarounds": _df_to_records(turnarounds),
         "compounders": _df_to_records(compounders),
         "sector_earnings": _df_to_records(top_sector_earnings),
         "sector_valuation": _df_to_records(_latest_by_date(data.sector_valuation_daily, "date").head(20)),
         "valuation_cycle": _df_to_records(latest_valuation_cycle.head(20)),
+        "valuation_interpretation": valuation_interpretation,
+        "empty_sections": empty_sections,
     }
 
     html_path, pdf_path, pdf_error = render(template_context, output_dir)
@@ -143,13 +191,21 @@ def build_report(
             "weekly_unusual_volume_shockers": volume_shockers,
             "weekly_breakouts_tier_a": tier_a,
             "weekly_breakouts_tier_b": tier_b,
-            "weekly_patterns": patterns,
+            "weekly_patterns": data.pattern_scan,
+            "weekly_patterns_best_by_symbol": patterns_best,
             "weekly_rank_improvers": rank_improvers,
             "weekly_rank_decliners": rank_decliners,
             "weekly_sector_movers": sector_movers,
+            "weekly_sector_fresh_leaders": sector_groups["fresh_leaders"],
+            "weekly_sector_improving": sector_groups["improving_sectors"],
+            "weekly_sector_weakening_leaders": sector_groups["weakening_leaders"],
             "weekly_failed_breakouts": failed_breakouts,
+            "weekly_fund_value_tech_overlap": fund_value_tech,
+            "weekly_candidate_tracker_current": data.candidate_tracker_current,
             "market_breadth": data.market_breadth,
             "fundamental_great_results": great_results,
+            "fundamental_clean_great_results": clean_great_results,
+            "fundamental_low_base_caution": low_base_results,
             "fundamental_turnarounds": turnarounds,
             "fundamental_compounders": compounders,
             "fundamental_sector_earnings": top_sector_earnings,
@@ -165,6 +221,10 @@ def build_report(
         "run_id": data.run_id,
         "trust_status": data.trust_status,
         "regime": regime,
+        "stage2_report_summary": stage2_report_summary,
+        "executive_panel": executive_panel,
+        "empty_sections": empty_sections,
+        "valuation_interpretation": valuation_interpretation,
         "html_path": str(html_path),
         "pdf_path": str(pdf_path) if pdf_path else None,
         "pdf_error": pdf_error,
@@ -178,13 +238,18 @@ def build_report(
             "tier_a": len(tier_a),
             "tier_b": len(tier_b),
             "patterns": len(patterns),
+            "patterns_best_by_symbol": len(patterns_best),
             "rank_improvers": len(rank_improvers),
             "rank_decliners": len(rank_decliners),
             "sector_movers": len(sector_movers),
             "failed_breakouts": len(failed_breakouts),
+            "fund_value_tech_overlap": len(fund_value_tech),
+            "candidate_tracker_rows": len(data.candidate_tracker_current),
             "breadth_rows": int(len(data.market_breadth)),
             "events": int(events_of_week.get("headline_count", 0)),
             "great_results": int(len(great_results)),
+            "clean_great_results": int(len(clean_great_results)),
+            "low_base_caution_results": int(len(low_base_results)),
             "turnarounds": int(len(turnarounds)),
             "compounders": int(len(compounders)),
             "sector_earnings": int(len(top_sector_earnings)),
@@ -244,6 +309,9 @@ def _render_charts(
     breakouts: pd.DataFrame,
     universe_valuation: pd.DataFrame,
     valuation_cycle: pd.DataFrame,
+    patterns_best: pd.DataFrame,
+    fund_value_tech_overlap: pd.DataFrame,
+    candidate_tracker_current: pd.DataFrame,
 ) -> Dict[str, Any]:
     """Generate all charts. Each is independently optional."""
     chart_dir = output_dir / "charts"
@@ -280,7 +348,14 @@ def _render_charts(
     if end_date is None:
         return out
 
-    targets = charts.pick_candle_targets(ranked, improvers, breakouts)
+    targets = charts.pick_candle_targets(
+        ranked,
+        improvers,
+        breakouts,
+        patterns_best=patterns_best,
+        fund_value_tech_overlap=fund_value_tech_overlap,
+        candidate_tracker_current=candidate_tracker_current,
+    )
     stocks_dir = chart_dir / "stocks"
     stocks_dir.mkdir(parents=True, exist_ok=True)
     rendered: List[Dict[str, Any]] = []
@@ -330,3 +405,31 @@ def _safe_date(value: Any) -> Optional[date]:
         return date.fromisoformat(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _empty_sections(
+    *,
+    volume_delivery: pd.DataFrame,
+    volume_shockers: pd.DataFrame,
+    tier_a: pd.DataFrame,
+    tier_b: pd.DataFrame,
+    failed_breakouts: pd.DataFrame,
+    fund_value_tech: pd.DataFrame,
+) -> Dict[str, str]:
+    reasons = {
+        "weekly_volume_delivery_movers": "No stock met return_5 >= 5%, delivery >= 40%, and volume expansion rule.",
+        "weekly_unusual_volume_shockers": "No stock met high-delivery + unusual-volume + non-negative return rule.",
+        "weekly_breakouts_tier_a": "No Tier-A breakout candidates in this run.",
+        "weekly_breakouts_tier_b": "No Tier-B breakout candidates in this run.",
+        "weekly_failed_breakouts": "No failed breakout detected in the 10-day lookback.",
+        "fund_value_tech_overlap": "No overlap between fundamental result winners, valuation support, and technical confirmation.",
+    }
+    frames = {
+        "weekly_volume_delivery_movers": volume_delivery,
+        "weekly_unusual_volume_shockers": volume_shockers,
+        "weekly_breakouts_tier_a": tier_a,
+        "weekly_breakouts_tier_b": tier_b,
+        "weekly_failed_breakouts": failed_breakouts,
+        "fund_value_tech_overlap": fund_value_tech,
+    }
+    return {key: reasons[key] for key, frame in frames.items() if frame is None or frame.empty}

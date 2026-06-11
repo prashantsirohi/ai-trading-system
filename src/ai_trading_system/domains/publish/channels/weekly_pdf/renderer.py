@@ -11,7 +11,9 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from jinja2 import Environment, FileSystemLoader, Undefined, select_autoescape
+from jinja2 import ChainableUndefined, Environment, FileSystemLoader, Undefined, select_autoescape
+
+from ai_trading_system.domains.publish.channels.weekly_pdf.metrics import fmt_signed_int
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +25,12 @@ def _build_env() -> Environment:
     env = Environment(
         loader=FileSystemLoader(str(_TEMPLATE_DIR)),
         autoescape=select_autoescape(["html", "xml"]),
+        undefined=ChainableUndefined,
     )
     env.filters["fmt_num"] = _fmt_num
     env.filters["fmt_pct"] = _fmt_pct
     env.filters["fmt_pct_points"] = _fmt_pct_points
+    env.filters["fmt_signed_int"] = fmt_signed_int
     return env
 
 

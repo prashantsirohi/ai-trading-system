@@ -23,6 +23,64 @@ _RANK_DISPLAY_COLS = [
     "delivery_pct_imputed",
 ]
 
+_STAGE2_LABELS = {"stage2", "strong_stage2", "stage1_to_stage2", "stage_2", "stage 2"}
+
+
+def _normalized_stage2_label(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _is_stage2_like(value: Any) -> bool:
+    return _normalized_stage2_label(value) in _STAGE2_LABELS
+
+
+def _numeric_series(df: pd.DataFrame, column: str, default: float | None = None) -> pd.Series:
+    if column in df.columns:
+        return pd.to_numeric(df[column], errors="coerce")
+    return pd.Series(default, index=df.index, dtype="float64")
+
+
+def _symbol_col(df: pd.DataFrame) -> str | None:
+    for col in ("symbol", "symbol_id", "ticker"):
+        if col in df.columns:
+            return col
+    return None
+
+
+def _normalize_symbol_frame(df: pd.DataFrame | None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    col = _symbol_col(out)
+    if col is None:
+        return out
+    out.loc[:, "symbol"] = out[col].astype(str)
+    return out
+
+
+def fmt_signed_int(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    try:
+        number = int(round(float(value)))
+    except (TypeError, ValueError):
+        return str(value)
+    if number > 0:
+        return f"+{number}"
+    return str(number)
+
+
+def stage2_summary_for_report(ranked: pd.DataFrame) -> dict[str, int]:
+    if ranked is None or ranked.empty or "stage2_label" not in ranked.columns:
+        return {"stage2_names": 0, "strong_stage2": 0, "transition_stage2": 0, "raw_stage2": 0}
+    labels = ranked["stage2_label"].map(_normalized_stage2_label)
+    return {
+        "stage2_names": int(labels.isin(_STAGE2_LABELS).sum()),
+        "strong_stage2": int(labels.eq("strong_stage2").sum()),
+        "transition_stage2": int(labels.eq("stage1_to_stage2").sum()),
+        "raw_stage2": int(labels.eq("stage2").sum()),
+    }
+
 
 def _select_existing(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
     keep = [c for c in cols if c in df.columns]
@@ -234,9 +292,7 @@ def regime_summary(
     if not sector_df.empty and "Quadrant" in sector_df.columns:
         quadrant_counts = sector_df["Quadrant"].value_counts().to_dict()
 
-    stage2_count = 0
-    if not ranked.empty and "stage2_label" in ranked.columns:
-        stage2_count = int((ranked["stage2_label"].astype(str).str.lower() == "stage2").sum())
+    stage2_count = stage2_summary_for_report(ranked)["stage2_names"]
 
     trust_status = str(
         rank_summary.get("data_trust_status")
@@ -323,8 +379,25 @@ def compute_rank_movers(
     ]
     out = _select_existing(merged, keep_cols)
 
-    improvers = out.sort_values("rank_change", ascending=False).head(top_n).reset_index(drop=True)
-    decliners = out.sort_values("rank_change", ascending=True).head(top_n).reset_index(drop=True)
+    rank_change_num = pd.to_numeric(out["rank_change"], errors="coerce")
+    score_change_num = pd.to_numeric(out["score_change"], errors="coerce")
+
+    improvers = (
+        out.loc[rank_change_num > 0]
+        .assign(_rank_change_num=rank_change_num, _score_change_num=score_change_num)
+        .sort_values(["_rank_change_num", "_score_change_num"], ascending=[False, False])
+        .drop(columns=["_rank_change_num", "_score_change_num"])
+        .head(top_n)
+        .reset_index(drop=True)
+    )
+    decliners = (
+        out.loc[rank_change_num < 0]
+        .assign(_rank_change_num=rank_change_num, _score_change_num=score_change_num)
+        .sort_values(["_rank_change_num", "_score_change_num"], ascending=[True, True])
+        .drop(columns=["_rank_change_num", "_score_change_num"])
+        .head(top_n)
+        .reset_index(drop=True)
+    )
     return improvers, decliners
 
 
@@ -432,6 +505,510 @@ def detect_failed_breakouts(
         return pd.DataFrame()
     out = pd.DataFrame(rows).sort_values("drop_pct", ascending=True)
     return out.head(top_n).reset_index(drop=True)
+
+
+def best_patterns_by_symbol(patterns: pd.DataFrame, n: int = 25) -> pd.DataFrame:
+    if patterns is None or patterns.empty or "symbol_id" not in patterns.columns:
+        return pd.DataFrame()
+    df = patterns.copy()
+    score_col = next(
+        (c for c in ("pattern_priority_score", "pattern_score", "setup_quality") if c in df.columns),
+        None,
+    )
+    df.loc[:, "_ranking_score"] = _numeric_series(df, score_col, 0).fillna(0) if score_col else 0
+    grouped = df.groupby("symbol_id", dropna=False)
+    counts = grouped.size().rename("pattern_count")
+    if "pattern_family" in df.columns:
+        all_patterns = grouped["pattern_family"].agg(
+            lambda s: ", ".join(sorted({str(x) for x in s.dropna() if str(x)}))
+        ).rename("all_patterns")
+    else:
+        all_patterns = pd.Series("", index=counts.index, name="all_patterns")
+    best_idx = grouped["_ranking_score"].idxmax()
+    best = df.loc[best_idx.dropna()].copy()
+    best = best.merge(counts, on="symbol_id", how="left").merge(all_patterns, on="symbol_id", how="left")
+    cols = [
+        "symbol_id",
+        "pattern_family",
+        "all_patterns",
+        "pattern_count",
+        "pattern_state",
+        "pattern_operational_tier",
+        "pattern_score",
+        "pattern_priority_score",
+        "breakout_level",
+        "volume_ratio_20",
+        "stage2_label",
+        "setup_quality",
+    ]
+    out = _select_existing(best.sort_values("_ranking_score", ascending=False), cols)
+    return out.head(n).reset_index(drop=True)
+
+
+def build_executive_decision_panel(
+    *,
+    ranked: pd.DataFrame,
+    watchlist: pd.DataFrame | None = None,
+    rank_improvers: pd.DataFrame | None = None,
+    rank_decliners: pd.DataFrame | None = None,
+    patterns_best: pd.DataFrame | None = None,
+    breadth_latest: dict | None = None,
+    trust_status: str = "unknown",
+) -> dict[str, object]:
+    breadth = breadth_latest or {}
+    sma20 = _safe_float(breadth.get("pct_above_sma20"))
+    sma50 = _safe_float(breadth.get("pct_above_sma50"))
+    sma200 = _safe_float(breadth.get("pct_above_sma200"))
+    if sma20 is None or sma50 is None:
+        risk_label = "UNKNOWN"
+        market_message = "Breadth unavailable."
+    elif sma20 < 40 and sma50 < 55:
+        risk_label = "RISK_OFF"
+        market_message = "Short-term breadth weak; avoid chasing."
+    elif 40 <= sma20 <= 55 and sma50 > 55:
+        risk_label = "NARROWING"
+        market_message = "Constructive but narrowing; prefer RS leaders."
+    elif sma50 > 65 and (sma200 or 0) > 50:
+        risk_label = "RISK_ON"
+        market_message = "Broad participation supportive."
+    else:
+        risk_label = "CAUTIOUS"
+        market_message = "Mixed breadth; keep position sizing selective."
+
+    patterns_lookup = _pattern_lookup(patterns_best)
+    action_rows = _actionable_from_watchlist(watchlist, patterns_lookup)
+    if not action_rows:
+        action_rows = _actionable_from_ranked(ranked, patterns_lookup)
+
+    track_rows = _track_rows(ranked, rank_improvers, patterns_best, patterns_lookup)
+    avoid_rows = _avoid_rows(rank_decliners)
+    quality = (
+        "Data quality trusted."
+        if str(trust_status).lower() == "trusted"
+        else f"Data trust is {trust_status}; verify candidates before execution."
+    )
+    return {
+        "market_message": market_message,
+        "risk_label": risk_label,
+        "top_actionable": action_rows[:8],
+        "track_next": track_rows[:8],
+        "avoid_or_reduce": avoid_rows[:8],
+        "data_quality_message": quality,
+    }
+
+
+def fund_value_tech_overlap(
+    *,
+    ranked: pd.DataFrame,
+    watchlist: pd.DataFrame | None = None,
+    quarterly: pd.DataFrame | None = None,
+    valuation: pd.DataFrame | None = None,
+    patterns_best: pd.DataFrame | None = None,
+    n: int = 20,
+) -> pd.DataFrame:
+    ranked_n = _normalize_symbol_frame(ranked)
+    watch_n = _normalize_symbol_frame(watchlist)
+    quarterly_n = _normalize_symbol_frame(quarterly)
+    valuation_n = _normalize_symbol_frame(valuation)
+    patterns_n = _normalize_symbol_frame(patterns_best)
+
+    if not watch_n.empty and any(c in watch_n.columns for c in ("quarterly_result_score", "watchlist_bucket")):
+        base = watch_n.copy()
+    elif not ranked_n.empty:
+        base = ranked_n.copy()
+    else:
+        return pd.DataFrame()
+
+    for other, suffix in (
+        (ranked_n, "_ranked"),
+        (quarterly_n, "_quarterly"),
+        (valuation_n, "_valuation"),
+        (patterns_n, "_pattern"),
+    ):
+        if other.empty or "symbol" not in other.columns:
+            continue
+        add = other.drop_duplicates("symbol")
+        add_cols = [c for c in add.columns if c == "symbol" or c not in base.columns]
+        base = base.merge(add.loc[:, add_cols], on="symbol", how="left", suffixes=("", suffix))
+
+    q_score = _numeric_series(base, "quarterly_result_score", 50).fillna(50)
+    v_score = _numeric_series(base, "valuation_history_score", 50).fillna(50)
+    composite = _numeric_series(base, "composite_score", 50).fillna(50)
+    delivery = _numeric_series(base, "delivery_pct", 0).fillna(0).clip(0, 100)
+    pattern_bonus = pd.Series(50, index=base.index, dtype="float64")
+    if "pattern_operational_tier" in base.columns:
+        tiers = base["pattern_operational_tier"].astype(str).str.lower()
+        pattern_bonus = pattern_bonus.mask(tiers.str.contains("tier_1|tier-1|confirmed", regex=True), 100)
+        has_pattern = base.get("pattern_family", pd.Series(pd.NA, index=base.index)).notna()
+        pattern_bonus = pattern_bonus.mask(has_pattern & pattern_bonus.lt(100), 75)
+
+    base.loc[:, "overlap_score"] = (
+        0.35 * q_score + 0.20 * v_score + 0.25 * composite + 0.10 * delivery + 0.10 * pattern_bonus
+    ).round(2)
+    buckets = base.get("watchlist_bucket", pd.Series("", index=base.index)).astype(str)
+    base.loc[:, "technical_only"] = q_score.eq(50) & ~buckets.str.startswith("F", na=False)
+
+    def _action(row: pd.Series) -> str:
+        bucket = str(row.get("watchlist_bucket") or "")
+        score = _safe_float(row.get("overlap_score")) or 0
+        if bucket.startswith("F4") or score >= 80:
+            return "ACTION_CANDIDATE"
+        if row.get("technical_only"):
+            return "INFO_ONLY"
+        if score >= 70:
+            return "TRACK_CLOSELY"
+        if score >= 60:
+            return "WATCHLIST"
+        return "INFO_ONLY"
+
+    base.loc[:, "action"] = base.apply(_action, axis=1)
+    preferred = q_score.ge(70) | buckets.str.startswith("F", na=False)
+    filtered = base.loc[preferred].copy()
+    if filtered.empty:
+        filtered = base.copy()
+
+    filtered.loc[:, "reason"] = filtered.apply(_overlap_reason, axis=1)
+    cols = [
+        "symbol",
+        "sector_name",
+        "overlap_score",
+        "action",
+        "watchlist_bucket",
+        "quarterly_result_score",
+        "quarterly_result_bucket",
+        "valuation_history_score",
+        "valuation_history_bucket",
+        "composite_score",
+        "stage2_label",
+        "return_5",
+        "return_20",
+        "delivery_pct",
+        "pattern_family",
+        "pattern_count",
+        "technical_only",
+        "reason",
+    ]
+    out = _select_existing(filtered.sort_values("overlap_score", ascending=False), cols)
+    return out.head(n).reset_index(drop=True)
+
+
+def candidate_tracker_weekly_view(tracker: pd.DataFrame, n: int = 20) -> dict[str, pd.DataFrame]:
+    if tracker is None or tracker.empty:
+        empty = pd.DataFrame()
+        return {"strong_improving": empty, "watch_carefully": empty, "deteriorating": empty}
+    df = _normalize_symbol_frame(tracker)
+    if "current_status" not in df.columns and "status" in df.columns:
+        df.loc[:, "current_status"] = df["status"]
+    status = df.get("current_status", pd.Series("", index=df.index)).astype(str).str.upper()
+    cols = [
+        "symbol",
+        "current_status",
+        "tracking_health_score",
+        "return_since_first_seen",
+        "drawdown_from_tracking_high",
+        "quarterly_result_score",
+        "quarterly_result_score_delta",
+        "valuation_history_bucket",
+        "relative_strength",
+        "relative_strength_delta",
+        "next_action",
+        "status_reason",
+    ]
+    return {
+        "strong_improving": _select_existing(df.loc[status.isin({"STRONG_IMPROVING", "IMPROVING"})], cols).head(n).reset_index(drop=True),
+        "watch_carefully": _select_existing(df.loc[status.eq("WATCH_CAREFULLY")], cols).head(n).reset_index(drop=True),
+        "deteriorating": _select_existing(
+            df.loc[status.isin({"DETERIORATING", "RESULT_FAILURE", "TECHNICAL_FAILURE", "REMOVE_FROM_TRACKING"})],
+            cols,
+        ).head(n).reset_index(drop=True),
+    }
+
+
+def flag_low_base_fundamentals(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    sales_growth = _first_numeric(out, ("sales_yoy_growth", "sales_yoy_pct"))
+    profit_growth = _first_numeric(out, ("profit_yoy_growth", "profit_yoy_pct", "pat_yoy_growth", "pat_yoy_pct"))
+    opm_change = _first_numeric(out, ("opm_yoy_change",))
+    opm_bps = _first_numeric(out, ("opm_yoy_change_bps",))
+    prior_sales = _first_numeric(out, ("prior_sales", "sales_prior", "previous_sales"))
+    prior_profit = _first_numeric(out, ("prior_profit", "profit_prior", "previous_profit", "prior_pat"))
+
+    flag = pd.Series(False, index=out.index)
+    warnings: list[list[str]] = [[] for _ in range(len(out))]
+
+    def _mark(mask: pd.Series, message: str) -> None:
+        nonlocal flag
+        mask = mask.fillna(False)
+        flag |= mask
+        for pos, value in enumerate(mask.tolist()):
+            if value:
+                warnings[pos].append(message)
+
+    _mark(_growth_spike(sales_growth, ratio_threshold=3.0, percent_threshold=300), "Sales growth may be low-base.")
+    _mark(_growth_spike(profit_growth, ratio_threshold=5.0, percent_threshold=500), "Profit growth may be low-base.")
+    _mark(opm_change > 10.0, "OPM jump is unusually large.")
+    _mark(opm_bps > 1000, "OPM jump exceeds 1000 bps.")
+    _mark(prior_sales.notna() & (prior_sales.abs() < 1), "Prior sales base is very small.")
+    _mark(prior_profit.notna() & (prior_profit.abs() < 1), "Prior profit was near zero.")
+    out.loc[:, "low_base_flag"] = flag
+    out.loc[:, "quality_warning"] = [" ".join(items) if items else "" for items in warnings]
+    return out
+
+
+def split_fundamental_results(great_results: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    flagged = flag_low_base_fundamentals(great_results)
+    if flagged.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    sort_col = "insight_score" if "insight_score" in flagged.columns else None
+    clean = flagged.loc[~flagged["low_base_flag"]].copy()
+    caution = flagged.loc[flagged["low_base_flag"]].copy()
+    if sort_col:
+        clean = clean.sort_values(sort_col, ascending=False)
+        caution = caution.sort_values(sort_col, ascending=False)
+    return clean.reset_index(drop=True), caution.reset_index(drop=True)
+
+
+def split_sector_leadership(sector_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    empty = pd.DataFrame()
+    if sector_df is None or sector_df.empty or "Quadrant" not in sector_df.columns:
+        return {"fresh_leaders": empty, "improving_sectors": empty, "weakening_leaders": empty, "lagging": empty}
+    df = sector_df.copy()
+    quad = df["Quadrant"].astype(str).str.lower()
+    cols = ["Sector", "RS", "RS_20", "RS_50", "Momentum", "Quadrant", "RS_rank", "rank_change"]
+    fresh = df.loc[quad.eq("leading")].copy()
+    if "RS_rank" in fresh.columns:
+        fresh = fresh.sort_values("RS_rank", ascending=True)
+    improving = df.loc[quad.eq("improving")].copy()
+    sort_col = "rank_change" if "rank_change" in improving.columns else ("RS" if "RS" in improving.columns else None)
+    if sort_col:
+        improving = improving.sort_values(sort_col, ascending=False)
+    weakening = df.loc[quad.eq("weakening")].copy()
+    if "RS_rank" in weakening.columns:
+        weakening = weakening.loc[pd.to_numeric(weakening["RS_rank"], errors="coerce") <= 10].sort_values("RS_rank")
+    lagging = df.loc[quad.eq("lagging")].copy()
+    return {
+        "fresh_leaders": _select_existing(fresh, cols).reset_index(drop=True),
+        "improving_sectors": _select_existing(improving, cols).reset_index(drop=True),
+        "weakening_leaders": _select_existing(weakening, cols).reset_index(drop=True),
+        "lagging": _select_existing(lagging, cols).reset_index(drop=True),
+    }
+
+
+def valuation_cycle_interpretation(latest_valuation: pd.DataFrame) -> dict[str, str]:
+    if latest_valuation is None or latest_valuation.empty:
+        return {"headline": "Valuation data unavailable.", "detail": "", "risk_label": "unknown"}
+    row = latest_valuation.iloc[0]
+    pe = _safe_float(row.get("pe_ttm"))
+    percentile = _safe_float(row.get("pe_percentile_5y"))
+    loss_mcap = _safe_float(row.get("loss_mcap_pct"))
+    if pe is None:
+        return {"headline": "Valuation data unavailable.", "detail": "", "risk_label": "unknown"}
+    if pe <= 0 or pe > 150 or (loss_mcap is not None and loss_mcap > 25):
+        return {
+            "headline": "Universe PE is unreliable due to loss-making/extreme constituents.",
+            "detail": "Use percentile and valuation zones cautiously until the loss-making share normalizes.",
+            "risk_label": "unreliable",
+        }
+    if percentile is not None and percentile >= 80:
+        label = "expensive"
+        headline = "Valuation is expensive versus own history."
+    elif percentile is not None and percentile <= 20:
+        label = "cheap"
+        headline = "Valuation is cheap versus own history."
+    else:
+        label = "fair"
+        headline = "Valuation is fair versus own history."
+    detail = ""
+    if pe > 50 and percentile is not None and percentile < 50:
+        detail = "Absolute PE is high, but own-history percentile is moderate; model classifies valuation as fair vs history."
+    return {"headline": headline, "detail": detail, "risk_label": label}
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pattern_lookup(patterns_best: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
+    if patterns_best is None or patterns_best.empty or "symbol_id" not in patterns_best.columns:
+        return {}
+    return {str(row["symbol_id"]): row.to_dict() for _, row in patterns_best.iterrows()}
+
+
+def _actionable_from_watchlist(watchlist: pd.DataFrame | None, patterns_lookup: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    df = _normalize_symbol_frame(watchlist)
+    if df.empty or "watchlist_bucket" not in df.columns:
+        return []
+    buckets = df["watchlist_bucket"].astype(str)
+    chosen = df.loc[buckets.isin({"F4_ACTION_CANDIDATE", "F3_FUND_VALUE_TECH_READY"})].copy()
+    score_col = next((c for c in ("final_watchlist_score", "overlap_score", "composite_score") if c in chosen.columns), None)
+    if score_col:
+        chosen = chosen.sort_values(score_col, ascending=False)
+    rows = []
+    for _, row in chosen.iterrows():
+        sym = str(row.get("symbol") or row.get("symbol_id") or "")
+        pat = patterns_lookup.get(sym, {})
+        rows.append({
+            "symbol": sym,
+            "reason": row.get("watchlist_bucket") or "Watchlist candidate",
+            "score": row.get(score_col) if score_col else row.get("composite_score"),
+            "stage": row.get("stage2_label"),
+            "return_5": row.get("return_5"),
+            "pattern": pat.get("pattern_family") or row.get("pattern_family"),
+            "action": "Review for entry",
+        })
+    return rows
+
+
+def _actionable_from_ranked(ranked: pd.DataFrame, patterns_lookup: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    if ranked is None or ranked.empty:
+        return []
+    df = ranked.copy()
+    mask = _numeric_series(df, "composite_score", 0).ge(85)
+    if "stage2_label" in df.columns:
+        mask &= df["stage2_label"].map(_is_stage2_like)
+    if "return_5" in df.columns:
+        mask &= _numeric_series(df, "return_5", 0).ge(0)
+    if "delivery_pct" in df.columns:
+        mask &= _numeric_series(df, "delivery_pct", 0).ge(35)
+    chosen = df.loc[mask].sort_values("composite_score", ascending=False) if "composite_score" in df.columns else df.loc[mask]
+    rows = []
+    for _, row in chosen.iterrows():
+        sym = str(row.get("symbol_id") or row.get("symbol") or "")
+        pat = patterns_lookup.get(sym, {})
+        rows.append({
+            "symbol": sym,
+            "reason": "High score Stage 2 candidate",
+            "score": row.get("composite_score"),
+            "stage": row.get("stage2_label"),
+            "return_5": row.get("return_5"),
+            "pattern": pat.get("pattern_family"),
+            "action": "Review for entry",
+        })
+    return rows
+
+
+def _track_rows(
+    ranked: pd.DataFrame,
+    rank_improvers: pd.DataFrame | None,
+    patterns_best: pd.DataFrame | None,
+    patterns_lookup: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if patterns_best is not None and not patterns_best.empty:
+        for _, row in patterns_best.head(10).iterrows():
+            sym = str(row.get("symbol_id") or "")
+            delivery = None
+            if ranked is not None and not ranked.empty and "symbol_id" in ranked.columns and "delivery_pct" in ranked.columns:
+                match = ranked.loc[ranked["symbol_id"].astype(str).eq(sym)]
+                if not match.empty:
+                    delivery = match.iloc[0].get("delivery_pct")
+            if delivery is None or (_safe_float(delivery) or 0) < 35:
+                rows.append({
+                    "symbol": sym,
+                    "reason": "Pattern setup needs delivery confirmation",
+                    "score": row.get("pattern_score") or row.get("pattern_priority_score"),
+                    "stage": row.get("stage2_label"),
+                    "return_5": None,
+                    "pattern": row.get("pattern_family"),
+                    "action": "Track next",
+                })
+    if rank_improvers is not None and not rank_improvers.empty:
+        for _, row in rank_improvers.iterrows():
+            if (_safe_float(row.get("score_change")) or 0) <= 0:
+                sym = str(row.get("symbol_id") or "")
+                pat = patterns_lookup.get(sym, {})
+                rows.append({
+                    "symbol": sym,
+                    "reason": "Rank improved but score did not confirm",
+                    "score": row.get("composite_score"),
+                    "stage": row.get("stage2_label"),
+                    "return_5": row.get("return_5"),
+                    "pattern": pat.get("pattern_family"),
+                    "action": "Track next",
+                })
+    if ranked is not None and not ranked.empty and "stage2_label" in ranked.columns:
+        trans = ranked.loc[ranked["stage2_label"].map(_normalized_stage2_label).eq("stage1_to_stage2")]
+        for _, row in trans.head(10).iterrows():
+            sym = str(row.get("symbol_id") or "")
+            pat = patterns_lookup.get(sym, {})
+            rows.append({
+                "symbol": sym,
+                "reason": "Transitioning into Stage 2",
+                "score": row.get("composite_score"),
+                "stage": row.get("stage2_label"),
+                "return_5": row.get("return_5"),
+                "pattern": pat.get("pattern_family"),
+                "action": "Track next",
+            })
+    return _dedupe_decision_rows(rows)
+
+
+def _avoid_rows(rank_decliners: pd.DataFrame | None) -> list[dict[str, Any]]:
+    if rank_decliners is None or rank_decliners.empty:
+        return []
+    rows = []
+    for _, row in rank_decliners.iterrows():
+        if (_safe_float(row.get("return_5")) or 0) < 0:
+            rows.append({
+                "symbol": str(row.get("symbol_id") or ""),
+                "reason": "Rank deterioration with negative 5d return",
+                "score": row.get("composite_score"),
+                "stage": row.get("stage2_label"),
+                "return_5": row.get("return_5"),
+                "pattern": None,
+                "action": "Avoid or reduce",
+            })
+    return rows
+
+
+def _dedupe_decision_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    seen = set()
+    for row in rows:
+        sym = row.get("symbol")
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        out.append(row)
+    return out
+
+
+def _overlap_reason(row: pd.Series) -> str:
+    if row.get("technical_only"):
+        return "Technical candidate; fundamental tracking not available."
+    parts = []
+    bucket = row.get("watchlist_bucket")
+    if bucket:
+        parts.append(str(bucket))
+    if row.get("quarterly_result_score") is not None and pd.notna(row.get("quarterly_result_score")):
+        parts.append("result support")
+    if row.get("valuation_history_score") is not None and pd.notna(row.get("valuation_history_score")):
+        parts.append("valuation support")
+    if row.get("pattern_family"):
+        parts.append("technical pattern")
+    return ", ".join(parts) or "Composite technical/fundamental overlap."
+
+
+def _first_numeric(df: pd.DataFrame, cols: tuple[str, ...]) -> pd.Series:
+    for col in cols:
+        if col in df.columns:
+            return pd.to_numeric(df[col], errors="coerce")
+    return pd.Series(float("nan"), index=df.index, dtype="float64")
+
+
+def _growth_spike(series: pd.Series, *, ratio_threshold: float, percent_threshold: float) -> pd.Series:
+    values = pd.to_numeric(series, errors="coerce")
+    max_abs = values.abs().max(skipna=True)
+    if pd.notna(max_abs) and max_abs > 20:
+        return values > percent_threshold
+    return values > ratio_threshold
 
 
 def serialize_for_json(data: Dict[str, Any]) -> Dict[str, Any]:

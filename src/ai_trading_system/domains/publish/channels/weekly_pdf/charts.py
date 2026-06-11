@@ -305,30 +305,43 @@ def pick_candle_targets(
     ranked: pd.DataFrame,
     improvers: pd.DataFrame,
     breakouts: pd.DataFrame,
+    patterns_best: pd.DataFrame | None = None,
+    fund_value_tech_overlap: pd.DataFrame | None = None,
+    candidate_tracker_current: pd.DataFrame | None = None,
     n_each: int = 3,
-    cap: int = 8,
+    cap: int = 12,
 ) -> List[Dict[str, Any]]:
     """Compose a deduped list of (symbol_id, breakout_level, source_tag).
 
-    Pulls top-N from ranked composite_score, top improvers, and Tier-A breakouts.
+    Pulls top-N from ranked composite_score, rank improvers, Tier-A breakouts,
+    pattern setups, fund/value/tech overlap, and deteriorating tracker rows.
     """
     out: List[Dict[str, Any]] = []
     seen: set = set()
 
-    def _add(symbol: Optional[str], level: Optional[float], tag: str) -> None:
-        if not symbol or symbol in seen:
+    def _normalize_symbol(symbol: Any) -> str:
+        if symbol is None or pd.isna(symbol):
+            return ""
+        normalized = str(symbol).strip().upper()
+        if normalized.lower() in {"", "none", "nan", "<na>"}:
+            return ""
+        return normalized
+
+    def _add(symbol: Any, level: Optional[float], tag: str) -> None:
+        symbol_id = _normalize_symbol(symbol)
+        if not symbol_id or symbol_id in seen:
             return
-        seen.add(symbol)
-        out.append({"symbol_id": symbol, "breakout_level": level, "source": tag})
+        seen.add(symbol_id)
+        out.append({"symbol_id": symbol_id, "breakout_level": level, "source": tag})
 
     if isinstance(ranked, pd.DataFrame) and not ranked.empty and "composite_score" in ranked.columns:
         top = ranked.sort_values("composite_score", ascending=False).head(n_each)
         for _, r in top.iterrows():
-            _add(str(r.get("symbol_id")), None, "top_ranked")
+            _add(r.get("symbol_id"), None, "top_ranked")
 
     if isinstance(improvers, pd.DataFrame) and not improvers.empty:
         for _, r in improvers.head(n_each).iterrows():
-            _add(str(r.get("symbol_id")), None, "rank_improver")
+            _add(r.get("symbol_id"), None, "rank_improver")
 
     if isinstance(breakouts, pd.DataFrame) and not breakouts.empty and "candidate_tier" in breakouts.columns:
         tier_a = breakouts[breakouts["candidate_tier"] == "A"]
@@ -338,6 +351,27 @@ def pick_candle_targets(
                 level_f = float(level) if level is not None and pd.notna(level) else None
             except (TypeError, ValueError):
                 level_f = None
-            _add(str(r.get("symbol_id")), level_f, "tier_a_breakout")
+            _add(r.get("symbol_id"), level_f, "tier_a_breakout")
+
+    if isinstance(patterns_best, pd.DataFrame) and not patterns_best.empty:
+        for _, r in patterns_best.head(n_each).iterrows():
+            level = r.get("breakout_level")
+            try:
+                level_f = float(level) if level is not None and pd.notna(level) else None
+            except (TypeError, ValueError):
+                level_f = None
+            _add(r.get("symbol_id"), level_f, "pattern_setup")
+
+    if isinstance(fund_value_tech_overlap, pd.DataFrame) and not fund_value_tech_overlap.empty:
+        for _, r in fund_value_tech_overlap.head(2).iterrows():
+            _add(r.get("symbol") if pd.notna(r.get("symbol")) else r.get("symbol_id"), None, "fund_value_tech")
+
+    if isinstance(candidate_tracker_current, pd.DataFrame) and not candidate_tracker_current.empty:
+        tracker = candidate_tracker_current.copy()
+        status_col = "current_status" if "current_status" in tracker.columns else "status"
+        status = tracker.get(status_col, pd.Series("", index=tracker.index)).astype(str).str.upper()
+        tracker = tracker.loc[status.isin({"DETERIORATING", "RESULT_FAILURE", "TECHNICAL_FAILURE", "REMOVE_FROM_TRACKING"})]
+        for _, r in tracker.head(2).iterrows():
+            _add(r.get("symbol") if pd.notna(r.get("symbol")) else r.get("symbol_id"), None, "tracker_deteriorating")
 
     return out[:cap]

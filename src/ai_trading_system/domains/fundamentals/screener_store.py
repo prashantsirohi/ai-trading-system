@@ -53,6 +53,13 @@ PREDEFINED_METRICS = {
     "net_cash_flow": ("Net Cash Flow", "Cash Flow", "cash_flow", "INR", "cr", True),
 }
 
+_READMODEL_TABLES = {
+    "screener_financials",
+    "screener_market_valuation",
+    "screener_company_snapshot",
+    "screener_factor_snapshot",
+}
+
 
 RAW_LABEL_MAPPING = {
     "sales": "sales",
@@ -98,10 +105,11 @@ def default_screener_db_path(project_root: Path | str | None = None) -> Path:
 class ScreenerFinancialsStore:
     """Repository for Screener Excel financials stored in SQLite."""
 
-    def __init__(self, db_path: str | Path | None = None):
+    def __init__(self, db_path: str | Path | None = None, *, initialize: bool = True):
         self.db_path = Path(db_path) if db_path is not None else default_screener_db_path()
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.init_db()
+        if initialize:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self.init_db()
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -322,20 +330,30 @@ class ScreenerFinancialsStore:
         logger.info("Saved Screener financials for %s (%d metrics)", symbol, len(financial_rows))
 
     def read_financials_frame(self) -> pd.DataFrame:
-        with self.connect() as conn:
-            return pd.read_sql_query("SELECT * FROM screener_financials", conn)
+        return self._read_table_frame("screener_financials")
 
     def read_valuations_frame(self) -> pd.DataFrame:
-        with self.connect() as conn:
-            return pd.read_sql_query("SELECT * FROM screener_market_valuation", conn)
+        return self._read_table_frame("screener_market_valuation")
 
     def read_company_snapshot_frame(self) -> pd.DataFrame:
-        with self.connect() as conn:
-            return pd.read_sql_query("SELECT * FROM screener_company_snapshot", conn)
+        return self._read_table_frame("screener_company_snapshot")
 
     def read_factor_snapshot_frame(self) -> pd.DataFrame:
+        return self._read_table_frame("screener_factor_snapshot")
+
+    def _read_table_frame(self, table_name: str) -> pd.DataFrame:
+        if table_name not in _READMODEL_TABLES:
+            raise ValueError(f"Unsupported Screener table: {table_name}")
+        if not self.db_path.exists():
+            return pd.DataFrame()
         with self.connect() as conn:
-            return pd.read_sql_query("SELECT * FROM screener_factor_snapshot", conn)
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table_name,),
+            ).fetchone()
+            if row is None:
+                return pd.DataFrame()
+            return pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
 
     def get_company_data(self, symbol: str) -> dict[str, Any] | None:
         symbol = symbol.upper().strip()
