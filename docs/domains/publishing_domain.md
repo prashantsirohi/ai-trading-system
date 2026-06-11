@@ -16,7 +16,7 @@ Be the **single egress** to external destinations. Pipeline artifacts → channe
 | Module | Role |
 |---|---|
 | `delivery_manager.py::PublisherDeliveryManager` | Dispatch, dedup, retry, role enforcement. |
-| `channels/google_sheets.py` + `google_sheets_manager.py` | Dashboard, watchlist, portfolio, event log, publish log sheets. OAuth flow. |
+| `channels/google_sheets.py` + `google_sheets_manager.py` | Dashboard, watchlist, portfolio, publish log sheets. OAuth flow. |
 | `channels/telegram.py` | Summary digest. |
 | `channels/quantstats.py` | Performance tearsheet PDF. |
 | `channels/weekly_pdf/` | HTML→PDF weekly report (weasyprint). |

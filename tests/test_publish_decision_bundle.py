@@ -219,7 +219,6 @@ def test_watchlist_current_sheet_uses_bundle_contract(monkeypatch) -> None:
         "Entry Zone",
         "Stop Zone",
         "Reason",
-        "Event Catalyst",
         "LLM Catalyst",
         "Risk Flag",
         "Tracker Status",

@@ -48,7 +48,7 @@ External side effects (per channel role, see below):
 - [`domains/publish/decision_bundle.py`](../../src/ai_trading_system/domains/publish/decision_bundle.py) — `build_publish_decision_bundle` (per-symbol decision rationale + telegram digest)
 - [`domains/publish/watchlist_buckets.py`](../../src/ai_trading_system/domains/publish/watchlist_buckets.py) — `assign_watchlist_buckets`, `summarize_buckets`
 - [`domains/publish/dashboard.py`](../../src/ai_trading_system/domains/publish/dashboard.py) — `publish_dashboard_payload`
-- [`domains/publish/channels/google_sheets.py`](../../src/ai_trading_system/domains/publish/channels/google_sheets.py) — multiple sheet writers (dashboard, watchlist, event log, publish log, stock scan, sector dashboard)
+- [`domains/publish/channels/google_sheets.py`](../../src/ai_trading_system/domains/publish/channels/google_sheets.py) — multiple sheet writers (dashboard, watchlist, publish log, stock scan, sector dashboard)
 - [`domains/publish/channels/google_sheets_manager.py`](../../src/ai_trading_system/domains/publish/channels/google_sheets_manager.py) — OAuth client, env: `GOOGLE_SPREADSHEET_ID`, `GOOGLE_TOKEN_PATH`, `GOOGLE_SHEETS_CREDENTIALS` (legacy)
 - [`domains/publish/channels/telegram.py`](../../src/ai_trading_system/domains/publish/channels/telegram.py) — `TelegramReporter`, env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optional `TELEGRAM_CONNECT_TIMEOUT_SECONDS`, `TELEGRAM_READ_TIMEOUT_SECONDS`, `TELEGRAM_WRITE_TIMEOUT_SECONDS`, `TELEGRAM_SEND_ATTEMPTS`
 - [`domains/publish/channels/quantstats.py`](../../src/ai_trading_system/domains/publish/channels/quantstats.py) — `publish_dashboard_quantstats_tearsheet`
@@ -63,7 +63,7 @@ From [`publish.py:30-61`](../../src/ai_trading_system/pipeline/stages/publish.py
 | Role string | Blocking on failure? | Channels (default) |
 |---|---|---|
 | `publish_of_record` | yes | `google_sheets_dashboard`, `google_sheets_watchlist`, `quantstats_dashboard_tearsheet` |
-| `publish_auxiliary` | yes (default for unknown channels) | `google_sheets_event_log`, `google_sheets_publish_log` |
+| `publish_auxiliary` | yes (default for unknown channels) | `google_sheets_publish_log` |
 | `publish_optional` | **no** (recorded in `non_blocking_failures`) | `google_sheets_portfolio` |
 | `informational` | yes | `telegram_summary`, `weekly_pdf` |
 | `diagnostic` | yes | `local_summary` (used only when `local_publish=true`) |

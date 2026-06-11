@@ -82,7 +82,6 @@ class PublishStage:
         "google_sheets_fundamental_watchlist": "publish_of_record",
         "google_sheets_dashboard": "publish_of_record",
         "google_sheets_watchlist": "publish_of_record",
-        "google_sheets_event_log": "publish_auxiliary",
         "google_sheets_publish_log": "publish_auxiliary",
         "quantstats_dashboard_tearsheet": "publish_of_record",
         "telegram_summary": "informational",
@@ -534,7 +533,6 @@ class PublishStage:
         if has_fundamentals:
             handlers["google_sheets_fundamentals"] = self._publish_fundamental_dashboard
         if datasets.get("decision_bundle") is not None:
-            handlers["google_sheets_event_log"] = self._publish_event_log
             handlers["google_sheets_publish_log"] = self._publish_publish_log
         if bool(context.params.get("publish_quantstats", True)):
             handlers["quantstats_dashboard_tearsheet"] = self._publish_quantstats_dashboard
@@ -675,21 +673,6 @@ class PublishStage:
         if not publish_fundamental_dashboard(datasets):
             raise RuntimeError("fundamental dashboard publish returned False")
         return {"report_id": "fundamental_dashboard_sheet"}
-
-    def _publish_event_log(
-        self,
-        context: StageContext,
-        rank_artifact: StageArtifact,
-        datasets: Dict[str, pd.DataFrame],
-    ) -> Dict[str, Any]:
-        from ai_trading_system.domains.publish.channels.google_sheets import publish_event_log_sheet
-
-        bundle = datasets.get("decision_bundle")
-        if bundle is None:
-            return {"report_id": "event_log_sheet", "status": "skipped", "reason": "decision_bundle_missing"}
-        if not publish_event_log_sheet(bundle):
-            raise RuntimeError("event log publish returned False")
-        return {"report_id": "event_log_sheet"}
 
     def _publish_publish_log(
         self,

@@ -46,17 +46,27 @@ def _resolve_unique_sheet_name(manager: GoogleSheetsManager, base_name: str) -> 
     return f"{base_name} {datetime.now().strftime('%H%M%S')}"[:95]
 
 
-def _event_summary_frame(bundle: PublishDecisionBundle) -> pd.DataFrame:
-    frame = bundle.event_summary.get("summary_frame")
-    if isinstance(frame, pd.DataFrame):
-        return frame
+def _compact_summary_frame(summary: pd.DataFrame) -> pd.DataFrame:
+    if summary is None or summary.empty:
+        return pd.DataFrame(columns=["Metric", "Value"])
+    row = summary.iloc[0].to_dict()
+    metrics = [
+        ("Run Date", row.get("Daily Market Insight")),
+        ("Trust", row.get("Trust")),
+        ("Breadth > 200DMA", row.get("Breadth > 200DMA")),
+        ("Market State", row.get("Market State")),
+        ("Direction Bias", row.get("Direction Bias")),
+        ("Allowed Exposure", row.get("Allowed Exposure")),
+        ("Regime Phase", row.get("Regime Phase")),
+        ("Qualified Breakouts", row.get("Qualified breakouts")),
+        ("Pattern Setups", row.get("Pattern setups")),
+        ("Watchlist Candidates", row.get("Watchlist candidates")),
+    ]
     return pd.DataFrame(
         [
-            {"Metric": "Events", "Value": int(bundle.event_summary.get("total_events", 0))},
-            {"Metric": "Material events", "Value": int(bundle.event_summary.get("material_events", 0))},
-            {"Metric": "Medium events", "Value": int(bundle.event_summary.get("medium_events", 0))},
-            {"Metric": "Low-info events", "Value": int(bundle.event_summary.get("low_info_events", 0))},
-            {"Metric": "Symbols with event + technical overlap", "Value": ", ".join(bundle.event_summary.get("overlap_symbols") or [])},
+            {"Metric": metric, "Value": "" if pd.isna(value) else value}
+            for metric, value in metrics
+            if value is not None and not (isinstance(value, str) and not value.strip())
         ]
     )
 
@@ -619,10 +629,10 @@ def publish_dashboard_payload(
     breadth_header_row: int | None = None
     breadth_rows = 0
     sections = [
+        ("DAILY SUMMARY", _compact_summary_frame(summary)),
         ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
         ("SECTOR CONTEXT — Leading/Improving only; Rank = absolute RS rank across all sectors", bundle.sector_leaders),
         ("PATTERN SETUPS", bundle.pattern_setups),
-        ("EVENTS SUMMARY", _event_summary_frame(bundle)),
         ("MARKET MOVES SNAPSHOT", bundle.market_moves if not bundle.market_moves.empty else weekly_moves),
         ("FAILED BREAKOUTS", bundle.failed_breakouts if not bundle.failed_breakouts.empty else failed_breakouts),
         ("TOP RANKED", bundle.top_ranked if not bundle.top_ranked.empty else rank_min),

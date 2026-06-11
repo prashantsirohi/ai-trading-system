@@ -194,7 +194,6 @@ def _shape_watchlist(
         "Entry Zone",
         "Stop Zone",
         "Reason",
-        "Event Catalyst",
         "LLM Catalyst",
         "Risk Flag",
         "Tracker Status",
@@ -255,7 +254,6 @@ def _shape_watchlist(
                 "Entry Zone": "",
                 "Stop Zone": _blank_number(pattern.get("invalidation_price")),
                 "Reason": reason,
-                "Event Catalyst": _clean_text(row.get("catalyst_tags")),
                 "LLM Catalyst": _clean_text(row.get("bull_case")),
                 "Risk Flag": _clean_text(row.get("risk_flags")),
                 "Tracker Status": _clean_text(tracker.get("status")),
@@ -624,7 +622,6 @@ def _shape_run_summary(
                 "Qualified breakouts": _qualified_breakout_count(breakout),
                 "Pattern setups": int(len(patterns)),
                 "Watchlist candidates": int(len(watchlist)),
-                "Events": f"{int(len(events))} total / {int(event_summary.get('material_events', 0))} material shown",
             }
         ]
     )

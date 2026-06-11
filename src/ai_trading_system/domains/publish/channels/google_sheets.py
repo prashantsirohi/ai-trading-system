@@ -293,25 +293,6 @@ _FUNDAMENTAL_WATCHLIST_COLUMNS = [
 ]
 
 
-def publish_event_log_sheet(decision_bundle: PublishDecisionBundle, *, sheet_name: str = "Event_Log") -> bool:
-    """Publish raw event rows to a non-user-facing event log worksheet."""
-    spreadsheet_id = _require_spreadsheet_id()
-    if not spreadsheet_id:
-        raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
-
-    manager = GoogleSheetsManager()
-    if not manager.open_spreadsheet():
-        raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
-    sheet = manager.get_or_create_sheet(sheet_name, rows=5000, cols=12)
-    if not sheet:
-        raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
-    frame = decision_bundle.event_log.fillna("")
-    if not manager.write_dataframe(frame, sheet_name, include_header=True, clear_sheet=True):
-        raise RuntimeError(f"Failed writing event log rows: {manager.last_error or 'unknown error'}")
-    logger.info("Event log updated in Google Sheets (%s rows)", len(frame))
-    return True
-
-
 def publish_log_sheet(decision_bundle: PublishDecisionBundle, *, sheet_name: str = "Publish_Log") -> bool:
     """Publish internal publish diagnostics to a non-user-facing log worksheet."""
     spreadsheet_id = _require_spreadsheet_id()
@@ -568,7 +549,6 @@ __all__ = [
     "publish_stock_scan",
     "publish_watchlist_candidates",
     "publish_fundamental_watchlist",
-    "publish_event_log_sheet",
     "publish_log_sheet",
     "publish_fundamental_dashboard",
     "publish_fundamental_valuation_dashboard",

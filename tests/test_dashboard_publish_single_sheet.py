@@ -280,6 +280,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
 
     summary_frames = [write[2] for write in manager.writes if "Breadth > 200DMA" in write[2].columns]
     assert summary_frames
+    assert "Events" not in summary_frames[0].columns
     assert float(summary_frames[0].iloc[0]["Breadth > 200DMA"]) == 54.1
     assert summary_frames[0].iloc[0]["Regime Phase"] == "Base forming (S1)"
     assert summary_frames[0].iloc[0]["Regime Phase Emoji"] == "🟡"
@@ -289,6 +290,19 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
 
     shortlist_frames = [write[2] for write in manager.writes if "Watchlist Score" in write[2].columns and "Composite Score" in write[2].columns]
     assert shortlist_frames == []
+
+    compact_summary_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Metric", "Value"]]
+    assert compact_summary_frames
+    assert compact_summary_frames[0]["Metric"].tolist() == [
+        "Run Date",
+        "Trust",
+        "Breadth > 200DMA",
+        "Regime Phase",
+        "Qualified Breakouts",
+        "Pattern Setups",
+        "Watchlist Candidates",
+    ]
+    assert "Events" not in compact_summary_frames[0]["Metric"].tolist()
 
     move_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "market_move_score", "Return5", "Return20", "Delivery", "VolZ"]]
     assert move_frames
@@ -301,6 +315,14 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     pattern_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Pattern", "State", "Tier", "Trigger", "VolRatio", "Stage", "Sector", "pattern_score", "Use"]]
     assert pattern_frames
     assert pattern_frames[0].iloc[0]["Pattern"] == "cup_handle"
+    section_titles = [
+        values[0][0]
+        for worksheet in manager.sheets.values()
+        for range_name, values in worksheet.updates
+        if range_name.startswith("A") and values and values[0]
+    ]
+    assert "DAILY SUMMARY" in section_titles
+    assert "EVENTS SUMMARY" not in section_titles
 
     breakout_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Setup", "State", "Tier", "Score", "TradingView"]]
     assert breakout_frames
