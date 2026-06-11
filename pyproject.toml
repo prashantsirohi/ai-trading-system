@@ -51,6 +51,7 @@ ai-trading-bootstrap-data = "ai_trading_system.interfaces.cli.bootstrap_runtime_
 ai-trading-repair-ingest-schema = "ai_trading_system.interfaces.cli.repair_ingest_schema:main"
 ai-trading-repair-control-plane-timestamps = "ai_trading_system.interfaces.cli.repair_control_plane_timestamps:main"
 ai-trading-daily-gainers-report = "ai_trading_system.domains.publish.channels.daily_gainers.cli:main"
+ai-trading-fundamental-opportunity-report = "ai_trading_system.domains.publish.channels.fundamental_opportunities.cli:main"
 ai-trading-optimize = "ai_trading_system.research.optimization.cli:main"
 ai-trading-optimize-promote = "ai_trading_system.research.optimization.promote:main"
 ai-trading-fundamentals-sync = "ai_trading_system.domains.fundamentals.screener_sync:main"
@@ -82,6 +83,9 @@ ai_trading_system = [
   "domains/publish/channels/weekly_pdf/static/*.css",
   "domains/publish/channels/daily_gainers/templates/*.html",
   "domains/publish/channels/daily_gainers/static/*.css",
+  "domains/publish/channels/fundamental_opportunities/templates/*.html",
+  "domains/publish/channels/fundamental_opportunities/templates/partials/*.html",
+  "domains/publish/channels/fundamental_opportunities/static/*.css",
   "research/optimization/templates/*.tmpl",
 ]
 

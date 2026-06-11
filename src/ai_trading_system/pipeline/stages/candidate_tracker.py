@@ -36,6 +36,7 @@ class CandidateTrackerStage:
             watchlist_candidates=_read_optional(context.artifact_for("fundamentals", "watchlist_candidates")),
             quarterly_result_scores=_read_optional(context.artifact_for("fundamentals", "quarterly_result_scores")),
             stock_valuation_bands_latest=_read_optional(context.artifact_for("fundamentals", "stock_valuation_bands_latest")),
+            fundamental_bucket_shortlist=_read_optional(context.artifact_for("fundamentals", "fundamental_bucket_shortlist")),
             ranked_signals=_read_optional(context.artifact_for("rank", "ranked_signals")),
             sector_dashboard=_read_optional(
                 context.artifact_for("rank", "sector_dashboard")
@@ -48,11 +49,13 @@ class CandidateTrackerStage:
         alerts_path = output_dir / "candidate_tracker_alerts.csv"
         summary_path = output_dir / "candidate_tracker_summary.json"
         reviews_path = output_dir / "candidate_fundamental_reviews.csv"
+        bucket_reviews_path = output_dir / "candidate_fundamental_bucket_reviews.csv"
         snapshots_path = output_dir / "candidate_tracking_snapshots.csv"
 
         result.current.to_csv(current_path, index=False)
         result.alerts.to_csv(alerts_path, index=False)
         result.fundamental_reviews.to_csv(reviews_path, index=False)
+        result.bucket_reviews.to_csv(bucket_reviews_path, index=False)
         result.snapshots.to_csv(snapshots_path, index=False)
         context.write_json("candidate_tracker_summary.json", result.summary)
 
@@ -86,6 +89,13 @@ class CandidateTrackerStage:
                 attempt_number=context.attempt_number,
             ),
             StageArtifact.from_file(
+                "candidate_fundamental_bucket_reviews",
+                bucket_reviews_path,
+                row_count=len(result.bucket_reviews),
+                metadata={"columns": list(result.bucket_reviews.columns)},
+                attempt_number=context.attempt_number,
+            ),
+            StageArtifact.from_file(
                 "candidate_tracking_snapshots",
                 snapshots_path,
                 row_count=len(result.snapshots),
@@ -100,4 +110,3 @@ def _read_optional(artifact: StageArtifact | None) -> pd.DataFrame:
     if artifact is None:
         return pd.DataFrame()
     return read_csv_optional(artifact.uri)
-

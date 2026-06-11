@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Fundamental Opportunities {{ as_of }}</title>
+  <style>{{ inline_css }}</style>
+</head>
+<body>
+  <header class="decision-page page-break">
+    <div class="title-row">
+      <div>
+        <p class="eyebrow">Executive Decision Page</p>
+        <h1>Fundamental Opportunities</h1>
+        <p class="subtle">
+          {{ executive_summary.as_of or as_of }} · {{ executive_summary.universe_id or universe_id }}
+          · {{ executive_summary.data_sources or "fundamentals + valuation + tracker" }}
+        </p>
+      </div>
+      <div class="status-card">
+        <span>Report status</span>
+        <strong>{{ executive_summary.run_id or "fundamental_opportunities" }}</strong>
+      </div>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi"><span>Classified</span><strong>{{ executive_summary.classified_count or total_rows }}</strong></div>
+      <div class="kpi"><span>Shortlisted</span><strong>{{ executive_summary.shortlist_count or shortlist_rows }}</strong></div>
+      <div class="kpi"><span>Manual Review</span><strong>{{ data_quality.manual_review or 0 }}</strong></div>
+      <div class="kpi warning"><span>Data Warnings</span><strong>{{ (data_quality.warnings or warnings or [])|length }}</strong></div>
+    </div>
+
+    <div class="decision-grid">
+      <section class="panel">
+        <h2>Opportunity Summary</h2>
+        <div class="mini-grid">
+          <div><span>High Growth</span><strong>{{ bucket_counts.get("HIGH_GROWTH", 0) }}</strong></div>
+          <div><span>Turnaround</span><strong>{{ bucket_counts.get("TURNAROUND_CANDIDATE", 0) }}</strong></div>
+          <div><span>Cyclical</span><strong>{{ bucket_counts.get("CYCLICAL_COMMODITY", 0) }}</strong></div>
+          <div><span>Avoid</span><strong>{{ bucket_counts.get("AVOID_WATCH", 0) }}</strong></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Data Quality</h2>
+        <div class="quality-list">
+          <div><span>Industry missing</span><strong>{{ data_quality.missing_industry or 0 }}</strong></div>
+          <div><span>Valuation missing</span><strong>{{ data_quality.missing_valuation or 0 }}</strong></div>
+          <div><span>Result failures</span><strong>{{ data_quality.result_failures or 0 }}</strong></div>
+          <div><span>Limited history</span><strong>{{ data_quality.insufficient_history or 0 }}</strong></div>
+        </div>
+      </section>
+    </div>
+  </header>
+
+  <section class="page-break">
+    <div class="section-heading">
+      <p class="eyebrow">Actionable shortlist</p>
+      <h2>Top Opportunities Today</h2>
+    </div>
+    {% if top_opportunities %}
+      <table class="decision-table">
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Symbol</th>
+            <th>Bucket</th>
+            <th>Score</th>
+            <th>Growth</th>
+            <th>Margin</th>
+            <th>Valuation</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in top_opportunities %}
+          {% include "partials/decision_row.html" %}
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">No actionable opportunities found for this run.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <div class="section-heading">
+      <p class="eyebrow">Opportunity dashboard</p>
+      <h2>Bucket-Wise Opportunities</h2>
+    </div>
+    {% if no_candidate_buckets %}
+      <div class="no-candidates">
+        <span>No current candidates</span>
+        <strong>{{ no_candidate_buckets|join(" · ") }}</strong>
+      </div>
+    {% endif %}
+
+    {% for bucket in main_buckets %}
+      {% set rows = bucket_tables.get(bucket, []) %}
+      {% if rows %}
+      <section class="bucket-section">
+        <h3>{{ rows[0].bucket_display.split(" + ")[0] }}</h3>
+        <table class="decision-table">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Symbol</th>
+              <th>Bucket</th>
+              <th>Score</th>
+              <th>Growth</th>
+              <th>Margin</th>
+              <th>Valuation</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for row in rows %}
+            {% include "partials/decision_row.html" %}
+          {% endfor %}
+          </tbody>
+        </table>
+      </section>
+      {% endif %}
+    {% endfor %}
+
+    {% if manual_review_rows %}
+      <section class="bucket-section">
+        <h3>Manual Review Candidates</h3>
+        <table class="decision-table">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Symbol</th>
+              <th>Bucket</th>
+              <th>Score</th>
+              <th>Growth</th>
+              <th>Margin</th>
+              <th>Valuation</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for row in manual_review_rows %}
+            {% include "partials/decision_row.html" %}
+          {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    {% endif %}
+  </section>
+
+  <section class="page-break">
+    <div class="section-heading">
+      <p class="eyebrow">Sector context</p>
+      <h2>Sector Opportunity Map</h2>
+    </div>
+    {% if sector_map %}
+      <table>
+        <thead>
+          <tr>
+            <th>Sector</th>
+            <th>High Growth</th>
+            <th>Turnaround</th>
+            <th>Cyclical</th>
+            <th>Avoid</th>
+            <th>Best Names</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in sector_map %}
+          <tr>
+            <td><strong>{{ row.sector }}</strong></td>
+            <td>{{ row.high_growth }}</td>
+            <td>{{ row.turnaround }}</td>
+            <td>{{ row.cyclical }}</td>
+            <td>{{ row.avoid }}</td>
+            <td>{{ row.best_names }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">No sector aggregation available.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <div class="section-heading">
+      <p class="eyebrow">Tracker handoff</p>
+      <h2>Watchlist Output</h2>
+    </div>
+    <p class="subtle">The full tracker-compatible output is written to <strong>fundamental_bucket_shortlist.csv</strong>. Avoid / Watch rows stay in the classified CSV and are summarized here only.</p>
+    <div class="appendix-counts">
+      {% for bucket, count in appendix_bucket_counts.items() %}
+        <div><span>{{ bucket }}</span><strong>{{ count }}</strong></div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section>
+    <div class="section-heading">
+      <p class="eyebrow">Exceptions</p>
+      <h2>Data Quality &amp; Exceptions</h2>
+    </div>
+    <div class="quality-grid">
+      <div><span>Industry missing</span><strong>{{ data_quality.missing_industry or 0 }}</strong></div>
+      <div><span>Valuation missing</span><strong>{{ data_quality.missing_valuation or 0 }}</strong></div>
+      <div><span>Result failures</span><strong>{{ data_quality.result_failures or 0 }}</strong></div>
+      <div><span>Limited history</span><strong>{{ data_quality.insufficient_history or 0 }}</strong></div>
+    </div>
+    {% if warnings %}
+      <ul class="warnings">
+        {% for warning in warnings %}
+        <li>{{ warning }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+
+  <section class="appendix page-break">
+    <div class="section-heading">
+      <p class="eyebrow">Methodology appendix</p>
+      <h2>Bucket Definitions</h2>
+    </div>
+    <div class="bucket-cards">
+      {% for card in cards %}
+      <article class="bucket-card tone-{{ card.tone }}">
+        <div class="dot"></div>
+        <h3>{{ card.label }}</h3>
+        <p class="subtitle">{{ card.subtitle }}</p>
+        <p>{{ card.description }}</p>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="appendix">
+    <h2>Classification Flow</h2>
+    <ol class="flow">
+      <li><strong>Collect inputs</strong><span>Sales, EBITDA/OPM, PAT, debt, equity, CFO, capex, dividends, ROCE, ROE, and valuation fields.</span></li>
+      <li><strong>Compute derived metrics</strong><span>Revenue CAGR, PAT CAGR, D/E, FCF/PAT, OPM trend, and valuation versus history.</span></li>
+      <li><strong>Apply exclusion filter first</strong><span>Red flags are routed before bucket classification.</span></li>
+      <li><strong>Apply bucket rules in priority order</strong><span>Quality, High Growth, Dividend/Cash Cow, Turnaround, Deep Value, then Cyclical.</span></li>
+      <li><strong>Resolve overlap</strong><span>Primary signal dominates; secondary buckets become tags.</span></li>
+      <li><strong>Review edge cases</strong><span>Cyclicals, low-base recoveries, and insufficient valuation history require manual review.</span></li>
+    </ol>
+  </section>
+
+  <section class="appendix">
+    <h2>Metric Definitions &amp; Threshold Rationale</h2>
+    <table class="definition-table">
+      <tbody>
+      {% for item in metric_definitions %}
+        <tr>
+          <td><strong>{{ item.metric }}</strong><br><span>{{ item.rationale }}</span></td>
+          <td class="tag">{{ item.type }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="appendix">
+    <h2>Bucket Matrix Appendix</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Bucket</th>
+          <th>Rev Growth</th>
+          <th>OPM</th>
+          <th>ROCE</th>
+          <th>D/E</th>
+          <th>PAT Trend</th>
+          <th>FCF Quality</th>
+          <th>Valuation Anchor</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for row in bucket_matrix %}
+        <tr>
+          <td><strong>{{ row.bucket }}</strong></td>
+          <td>{{ row.rev_growth }}</td>
+          <td>{{ row.opm }}</td>
+          <td>{{ row.roce }}</td>
+          <td>{{ row.debt }}</td>
+          <td>{{ row.pat_trend }}</td>
+          <td>{{ row.fcf }}</td>
+          <td>{{ row.valuation }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</body>
+</html>

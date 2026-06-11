@@ -55,12 +55,14 @@ def test_candidate_tracker_stage_writes_expected_artifacts(tmp_path: Path) -> No
     assert (output_dir / "candidate_tracker_alerts.csv").exists()
     assert (output_dir / "candidate_tracker_summary.json").exists()
     assert (output_dir / "candidate_fundamental_reviews.csv").exists()
+    assert (output_dir / "candidate_fundamental_bucket_reviews.csv").exists()
     assert (output_dir / "candidate_tracking_snapshots.csv").exists()
     assert {artifact.artifact_type for artifact in result.artifacts} == {
         "candidate_tracker_current",
         "candidate_tracker_alerts",
         "candidate_tracker_summary",
         "candidate_fundamental_reviews",
+        "candidate_fundamental_bucket_reviews",
         "candidate_tracking_snapshots",
     }
 

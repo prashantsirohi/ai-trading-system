@@ -1,0 +1,412 @@
+@page {
+  size: A4 landscape;
+  margin: 12mm;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: #f3f0e8;
+  background: #151614;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  line-height: 1.38;
+}
+
+.decision-page,
+section {
+  padding: 18px 22px;
+  border-bottom: 1px solid #2f332f;
+}
+
+.page-break {
+  break-before: page;
+}
+
+.decision-page:first-child {
+  break-before: auto;
+}
+
+.title-row {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 18px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+
+.eyebrow {
+  margin: 0 0 5px;
+  color: #9fb7a8;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 7px;
+  font-size: 30px;
+  line-height: 1.05;
+}
+
+h2 {
+  margin-bottom: 12px;
+  font-size: 18px;
+}
+
+h3 {
+  margin: 14px 0 8px;
+  font-size: 14px;
+}
+
+.subtle,
+small,
+.subtitle,
+.empty {
+  color: #bcb8ad;
+}
+
+small {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+}
+
+.status-card,
+.kpi,
+.panel,
+.no-candidates,
+.bucket-card,
+.quality-grid > div,
+.appendix-counts > div {
+  background: #22241f;
+  border: 1px solid #383d36;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+}
+
+.status-card {
+  padding: 13px 15px;
+}
+
+.status-card span,
+.kpi span,
+.mini-grid span,
+.quality-list span,
+.quality-grid span,
+.appendix-counts span {
+  display: block;
+  color: #aaa69b;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.status-card strong {
+  display: block;
+  margin-top: 5px;
+  font-size: 13px;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.kpi {
+  padding: 12px;
+}
+
+.kpi strong {
+  display: block;
+  margin-top: 4px;
+  color: #f7f3e9;
+  font-size: 26px;
+}
+
+.kpi.warning {
+  border-color: #9c6a2f;
+}
+
+.decision-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.panel {
+  padding: 14px;
+}
+
+.mini-grid,
+.quality-list,
+.quality-grid,
+.appendix-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mini-grid > div,
+.quality-list > div {
+  padding: 10px;
+  background: #191b18;
+  border-radius: 6px;
+}
+
+.mini-grid strong,
+.quality-list strong,
+.quality-grid strong,
+.appendix-counts strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 18px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #1e201d;
+  border: 1px solid #343932;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+thead {
+  display: table-header-group;
+}
+
+tr {
+  break-inside: avoid;
+}
+
+th,
+td {
+  padding: 8px 9px;
+  border-bottom: 1px solid #30352f;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: #aaa69b;
+  background: #252821;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.decision-table th:nth-child(1),
+.decision-table td:nth-child(1) {
+  width: 44px;
+}
+
+.decision-table th:nth-child(4),
+.decision-table td:nth-child(4) {
+  width: 180px;
+}
+
+.rank {
+  color: #9fb7a8;
+  font-weight: 800;
+}
+
+.pill,
+.action,
+.tag,
+.score-label {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pill {
+  color: #082118;
+  background: #bde8d8;
+}
+
+.action {
+  color: #e7f1ff;
+  background: #29415f;
+}
+
+.tag {
+  color: #171915;
+  background: #dce7d2;
+}
+
+.score-cell strong {
+  font-size: 15px;
+}
+
+.score-top {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.score-label.tone-strong {
+  color: #082118;
+  background: #50d098;
+}
+
+.score-label.tone-watch {
+  color: #201607;
+  background: #efbd58;
+}
+
+.score-label.tone-review {
+  color: #111827;
+  background: #a8c7ff;
+}
+
+.score-label.tone-weak {
+  color: #2a0c0c;
+  background: #ef8d85;
+}
+
+.score-bar {
+  height: 6px;
+  margin-top: 6px;
+  overflow: hidden;
+  background: #111310;
+  border-radius: 999px;
+}
+
+.score-bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #70d49b, #efbd58);
+  border-radius: inherit;
+}
+
+.reason-row td {
+  padding-top: 0;
+  color: #bcb8ad;
+  background: #1a1c19;
+  font-size: 10px;
+}
+
+.no-candidates {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 11px 13px;
+  border-color: #525247;
+}
+
+.bucket-section {
+  padding: 0 0 14px;
+  border-bottom: 0;
+}
+
+.quality-grid,
+.appendix-counts {
+  margin-bottom: 12px;
+}
+
+.quality-grid > div,
+.appendix-counts > div {
+  padding: 11px;
+}
+
+.bucket-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.bucket-card {
+  min-height: 116px;
+  padding: 12px;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  margin-bottom: 8px;
+  border-radius: 50%;
+}
+
+.tone-green { border-color: #2da773; }
+.tone-green .dot { background: #50d098; }
+.tone-amber { border-color: #9d702d; }
+.tone-amber .dot { background: #efbd58; }
+.tone-blue { border-color: #416d9f; }
+.tone-blue .dot { background: #6fa8ee; }
+.tone-violet { border-color: #6960a7; }
+.tone-violet .dot { background: #9b8df4; }
+.tone-orange { border-color: #9c6040; }
+.tone-orange .dot { background: #ec835e; }
+.tone-gray { border-color: #666861; }
+.tone-gray .dot { background: #9a9b93; }
+.tone-red { border-color: #9c4d4d; }
+.tone-red .dot { background: #ef746e; }
+
+.flow {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.flow li {
+  padding: 8px 0;
+  border-bottom: 1px solid #30352f;
+}
+
+.flow span {
+  display: block;
+  color: #bcb8ad;
+}
+
+.definition-table td:first-child {
+  width: 78%;
+}
+
+.warnings {
+  margin: 8px 0 0;
+  padding-left: 17px;
+  color: #efbd58;
+}
+
+.appendix {
+  background: #171916;
+}
+
+@media screen {
+  body {
+    max-width: 1320px;
+    margin: 0 auto;
+  }
+}
+
+@media print {
+  body {
+    background: #151614;
+  }
+}

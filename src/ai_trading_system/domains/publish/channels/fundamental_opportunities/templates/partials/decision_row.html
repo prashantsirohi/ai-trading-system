@@ -1,0 +1,29 @@
+<tr>
+  <td class="rank">{{ row.rank }}</td>
+  <td>
+    <strong>{{ row.symbol_display }}</strong>
+    <small>{{ row.industry_display }}</small>
+  </td>
+  <td>
+    <span class="pill">{{ row.bucket_display }}</span>
+    <small>{{ row.opportunity_display }}</small>
+  </td>
+  <td class="score-cell">
+    <div class="score-top">
+      <strong>{{ row.score_display }}</strong>
+      <span class="score-label tone-{{ row.score_tone }}">{{ row.score_band }}</span>
+    </div>
+    <div class="score-bar"><span style="width: {{ row.score_width }}%"></span></div>
+  </td>
+  <td>{{ row.growth_display }}</td>
+  <td>{{ row.margin_display }}</td>
+  <td>{{ row.valuation_display }}<small>{{ row.valuation_score_display }}</small></td>
+  <td>
+    <span class="action">{{ row.action_display }}</span>
+    <small>{{ row.tracker_display }}</small>
+  </td>
+</tr>
+<tr class="reason-row">
+  <td></td>
+  <td colspan="7">{{ row.reason_display }}</td>
+</tr>

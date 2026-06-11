@@ -63,6 +63,13 @@ CURRENT_COLUMNS = [
     "profit_yoy_delta",
     "opm_yoy_change_delta_bps",
     "valuation_history_score_delta",
+    "business_bucket",
+    "secondary_bucket_tags",
+    "opportunity_label",
+    "manual_review_flag",
+    "final_watchlist_score",
+    "business_bucket_changed",
+    "final_watchlist_score_delta",
     "active",
 ]
 
@@ -130,6 +137,24 @@ ALERT_COLUMNS = [
 ]
 
 
+BUCKET_REVIEW_COLUMNS = [
+    "episode_id",
+    "symbol",
+    "bucket_as_of",
+    "business_bucket",
+    "secondary_bucket_tags",
+    "opportunity_label",
+    "bucket_reason",
+    "manual_review_flag",
+    "watchlist_bucket",
+    "final_watchlist_score",
+    "prior_business_bucket",
+    "bucket_changed",
+    "final_watchlist_score_delta",
+    "created_at",
+]
+
+
 @dataclass(frozen=True)
 class CandidateTrackerConfig:
     db_path: Path
@@ -146,6 +171,7 @@ class CandidateTrackerResult:
     current: pd.DataFrame
     snapshots: pd.DataFrame
     fundamental_reviews: pd.DataFrame
+    bucket_reviews: pd.DataFrame
     alerts: pd.DataFrame
     summary: dict[str, Any]
 
@@ -157,6 +183,7 @@ def run_candidate_tracker(
     watchlist_candidates: pd.DataFrame | None = None,
     quarterly_result_scores: pd.DataFrame | None = None,
     stock_valuation_bands_latest: pd.DataFrame | None = None,
+    fundamental_bucket_shortlist: pd.DataFrame | None = None,
     ranked_signals: pd.DataFrame | None = None,
     sector_dashboard: pd.DataFrame | None = None,
 ) -> CandidateTrackerResult:
@@ -167,7 +194,7 @@ def run_candidate_tracker(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     warnings: list[str] = []
 
-    candidates = _build_candidate_universe(final_candidates, watchlist_candidates)
+    candidates = _build_candidate_universe(final_candidates, watchlist_candidates, fundamental_bucket_shortlist)
     if candidates.empty:
         with _connect(db_path) as conn:
             ensure_schema(conn)
@@ -176,6 +203,7 @@ def run_candidate_tracker(
             current=empty_current,
             snapshots=pd.DataFrame(columns=SNAPSHOT_COLUMNS),
             fundamental_reviews=pd.DataFrame(columns=REVIEW_COLUMNS),
+            bucket_reviews=pd.DataFrame(columns=BUCKET_REVIEW_COLUMNS),
             alerts=pd.DataFrame(columns=ALERT_COLUMNS),
             summary={
                 "status": "completed_empty",
@@ -185,6 +213,7 @@ def run_candidate_tracker(
                 "updated_episodes": 0,
                 "snapshots": 0,
                 "fundamental_reviews": 0,
+                "bucket_reviews": 0,
                 "alerts": 0,
                 "warnings": ["no candidates found"],
             },
@@ -200,12 +229,14 @@ def run_candidate_tracker(
     )
     valuation = _valuation_scores(stock_valuation_bands_latest)
     result_scores = _latest_results(quarterly_result_scores, run_date=run_date, window_days=config.review_window_days)
+    bucket_shortlist = _latest_bucket_shortlist(fundamental_bucket_shortlist, run_date=run_date)
 
     now = _utc_now()
     new_episodes = 0
     updated_episodes = 0
     snapshots: list[dict[str, Any]] = []
     reviews: list[dict[str, Any]] = []
+    bucket_reviews: list[dict[str, Any]] = []
     alerts: list[dict[str, Any]] = []
     current_rows: list[dict[str, Any]] = []
 
@@ -255,6 +286,20 @@ def run_candidate_tracker(
             if review is not None:
                 reviews.append(review)
             latest_review = review or _latest_review(conn, episode_id)
+            bucket_review = _maybe_build_bucket_review(
+                conn=conn,
+                episode_id=episode_id,
+                symbol=symbol,
+                run_date=run_date,
+                bucket_row=bucket_shortlist.get(symbol),
+                now=now,
+            )
+            if bucket_review is not None:
+                bucket_reviews.append(bucket_review)
+                for alert in _bucket_review_alerts(bucket_review, run_date, now):
+                    alerts.append(alert)
+                    _insert_alert(conn, alert)
+            latest_bucket_review = bucket_review or _latest_bucket_review(conn, episode_id)
 
             snapshot = _build_snapshot(
                 episode_id=episode_id,
@@ -295,6 +340,7 @@ def run_candidate_tracker(
                     candidate=candidate,
                     snapshot=snapshot,
                     latest_review=latest_review,
+                    latest_bucket_review=latest_bucket_review,
                     status=status,
                     active=not archive,
                 )
@@ -305,6 +351,7 @@ def run_candidate_tracker(
             current = current.reindex(columns=CURRENT_COLUMNS)
         snapshots_df = pd.DataFrame(snapshots).reindex(columns=SNAPSHOT_COLUMNS)
         reviews_df = pd.DataFrame(reviews).reindex(columns=REVIEW_COLUMNS)
+        bucket_reviews_df = pd.DataFrame(bucket_reviews).reindex(columns=BUCKET_REVIEW_COLUMNS)
         alerts_df = pd.DataFrame(alerts).reindex(columns=ALERT_COLUMNS)
 
     summary = {
@@ -316,11 +363,19 @@ def run_candidate_tracker(
         "updated_episodes": int(updated_episodes),
         "snapshots": int(len(snapshots_df)),
         "fundamental_reviews": int(len(reviews_df)),
+        "bucket_reviews": int(len(bucket_reviews_df)),
         "alerts": int(len(alerts_df)),
         "status_counts": current["status"].fillna("UNKNOWN").value_counts().to_dict() if not current.empty else {},
         "warnings": warnings,
     }
-    return CandidateTrackerResult(current=current, snapshots=snapshots_df, fundamental_reviews=reviews_df, alerts=alerts_df, summary=summary)
+    return CandidateTrackerResult(
+        current=current,
+        snapshots=snapshots_df,
+        fundamental_reviews=reviews_df,
+        bucket_reviews=bucket_reviews_df,
+        alerts=alerts_df,
+        summary=summary,
+    )
 
 
 def ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
@@ -400,6 +455,27 @@ def ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_candidate_reviews_episode_available ON candidate_fundamental_reviews(episode_id, available_at)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS candidate_fundamental_bucket_reviews (
+            episode_id VARCHAR,
+            symbol VARCHAR,
+            bucket_as_of DATE,
+            business_bucket VARCHAR,
+            secondary_bucket_tags VARCHAR,
+            opportunity_label VARCHAR,
+            bucket_reason VARCHAR,
+            manual_review_flag BOOLEAN,
+            watchlist_bucket VARCHAR,
+            final_watchlist_score DOUBLE,
+            prior_business_bucket VARCHAR,
+            bucket_changed BOOLEAN,
+            final_watchlist_score_delta DOUBLE,
+            created_at TIMESTAMP
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_candidate_bucket_reviews_episode_date ON candidate_fundamental_bucket_reviews(episode_id, bucket_as_of)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS candidate_tracker_alerts (
@@ -505,21 +581,46 @@ def _connect(db_path: Path):
     return _ConnectionContext()
 
 
-def _build_candidate_universe(final_candidates: pd.DataFrame | None, watchlist_candidates: pd.DataFrame | None) -> pd.DataFrame:
+def _build_candidate_universe(
+    final_candidates: pd.DataFrame | None,
+    watchlist_candidates: pd.DataFrame | None,
+    fundamental_bucket_shortlist: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     final = _symbol_frame(final_candidates)
     watch = _symbol_frame(watchlist_candidates)
+    bucket = _symbol_frame(fundamental_bucket_shortlist)
     if not final.empty:
         final.loc[:, "in_final_candidates"] = True
     if not watch.empty:
         watch.loc[:, "in_watchlist_candidates"] = True
-    merged = pd.concat([final, watch], ignore_index=True, sort=False)
+    if not bucket.empty:
+        bucket.loc[:, "in_fundamental_bucket_shortlist"] = True
+    merged = pd.concat([final, watch, bucket], ignore_index=True, sort=False)
     if merged.empty:
         return pd.DataFrame(columns=["symbol"])
-    merged.loc[:, "_source_rank"] = _bool_series(merged, "in_final_candidates").map({True: 0, False: 1})
+    merged.loc[:, "_source_rank"] = (
+        _bool_series(merged, "in_final_candidates").map({True: 0, False: 10})
+        .combine(_bool_series(merged, "in_watchlist_candidates").map({True: 1, False: 10}), min)
+        .combine(_bool_series(merged, "in_fundamental_bucket_shortlist").map({True: 2, False: 10}), min)
+    )
     merged = merged.sort_values(["_source_rank", "symbol"], kind="stable").drop_duplicates("symbol", keep="first")
     merged.loc[:, "in_final_candidates"] = _bool_series(merged, "in_final_candidates")
     merged.loc[:, "in_watchlist_candidates"] = _bool_series(merged, "in_watchlist_candidates")
-    for column in ("candidate_group", "watchlist_bucket", "industry_group", "sector", "sector_name", "name"):
+    merged.loc[:, "in_fundamental_bucket_shortlist"] = _bool_series(merged, "in_fundamental_bucket_shortlist")
+    for column in (
+        "candidate_group",
+        "watchlist_bucket",
+        "industry_group",
+        "sector",
+        "sector_name",
+        "name",
+        "business_bucket",
+        "secondary_bucket_tags",
+        "opportunity_label",
+        "bucket_reason",
+        "manual_review_flag",
+        "final_watchlist_score",
+    ):
         if column not in merged.columns:
             merged.loc[:, column] = ""
     return merged.drop(columns=["_source_rank"], errors="ignore").reset_index(drop=True)
@@ -674,6 +775,22 @@ def _latest_results(frame: pd.DataFrame | None, *, run_date: str, window_days: i
     return {str(row["symbol"]): row.drop(labels=["_available_at"], errors="ignore").to_dict() for _, row in data.iterrows()}
 
 
+def _latest_bucket_shortlist(frame: pd.DataFrame | None, *, run_date: str) -> dict[str, dict[str, Any]]:
+    data = _symbol_frame(frame)
+    if data.empty:
+        return {}
+    if "bucket_as_of" not in data.columns:
+        data.loc[:, "bucket_as_of"] = data.get("as_of", run_date)
+    data.loc[:, "_bucket_as_of"] = pd.to_datetime(data["bucket_as_of"], errors="coerce")
+    run_ts = pd.Timestamp(run_date)
+    data = data.loc[data["_bucket_as_of"].isna() | data["_bucket_as_of"].le(run_ts)].copy()
+    if data.empty:
+        return {}
+    data.loc[:, "_bucket_as_of_sort"] = data["_bucket_as_of"].fillna(run_ts)
+    data = data.sort_values(["symbol", "_bucket_as_of_sort"], ascending=[True, False], kind="stable").drop_duplicates("symbol", keep="first")
+    return {str(row["symbol"]): row.drop(labels=["_bucket_as_of", "_bucket_as_of_sort"], errors="ignore").to_dict() for _, row in data.iterrows()}
+
+
 def _active_episode(conn: duckdb.DuckDBPyConnection, symbol: str) -> dict[str, Any] | None:
     row = conn.execute(
         """
@@ -789,6 +906,22 @@ def _latest_review(conn: duckdb.DuckDBPyConnection, episode_id: str) -> dict[str
     return rows.iloc[0].to_dict()
 
 
+def _latest_bucket_review(conn: duckdb.DuckDBPyConnection, episode_id: str) -> dict[str, Any] | None:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM candidate_fundamental_bucket_reviews
+        WHERE episode_id = ?
+        ORDER BY bucket_as_of DESC, created_at DESC
+        LIMIT 1
+        """,
+        [episode_id],
+    ).fetchdf()
+    if rows.empty:
+        return None
+    return rows.iloc[0].to_dict()
+
+
 def _maybe_build_review(
     *,
     conn: duckdb.DuckDBPyConnection,
@@ -854,6 +987,53 @@ def _maybe_build_review(
         "created_at": now,
     }
     _insert_frame(conn, "candidate_fundamental_reviews", pd.DataFrame([review])[REVIEW_COLUMNS])
+    return review
+
+
+def _maybe_build_bucket_review(
+    *,
+    conn: duckdb.DuckDBPyConnection,
+    episode_id: str,
+    symbol: str,
+    run_date: str,
+    bucket_row: dict[str, Any] | None,
+    now: str,
+) -> dict[str, Any] | None:
+    if not bucket_row:
+        return None
+    bucket_as_of = str(bucket_row.get("bucket_as_of") or bucket_row.get("as_of") or run_date)[:10]
+    existing = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM candidate_fundamental_bucket_reviews
+        WHERE episode_id = ? AND CAST(bucket_as_of AS DATE) = CAST(? AS DATE)
+        """,
+        [episode_id, bucket_as_of],
+    ).fetchone()[0]
+    if int(existing or 0) > 0:
+        return None
+    prior = _latest_bucket_review(conn, episode_id)
+    business_bucket = str(bucket_row.get("business_bucket") or "")
+    prior_bucket = str((prior or {}).get("business_bucket") or "")
+    score = _float(bucket_row.get("final_watchlist_score"), 0.0)
+    score_delta = score - _float((prior or {}).get("final_watchlist_score"), score)
+    review = {
+        "episode_id": episode_id,
+        "symbol": symbol,
+        "bucket_as_of": bucket_as_of,
+        "business_bucket": business_bucket,
+        "secondary_bucket_tags": str(bucket_row.get("secondary_bucket_tags") or ""),
+        "opportunity_label": str(bucket_row.get("opportunity_label") or ""),
+        "bucket_reason": str(bucket_row.get("bucket_reason") or ""),
+        "manual_review_flag": _truthy(bucket_row.get("manual_review_flag")),
+        "watchlist_bucket": str(bucket_row.get("watchlist_bucket") or ""),
+        "final_watchlist_score": score,
+        "prior_business_bucket": prior_bucket,
+        "bucket_changed": bool(prior_bucket and business_bucket and prior_bucket != business_bucket),
+        "final_watchlist_score_delta": round(score_delta, 4),
+        "created_at": now,
+    }
+    _insert_frame(conn, "candidate_fundamental_bucket_reviews", pd.DataFrame([review])[BUCKET_REVIEW_COLUMNS])
     return review
 
 
@@ -980,6 +1160,99 @@ def _insert_alert(conn: duckdb.DuckDBPyConnection, alert: dict[str, Any]) -> Non
     _insert_frame(conn, "candidate_tracker_alerts", pd.DataFrame([alert])[ALERT_COLUMNS])
 
 
+def _bucket_review_alerts(bucket_review: dict[str, Any], run_date: str, now: str) -> list[dict[str, Any]]:
+    alerts: list[dict[str, Any]] = []
+    episode_id = str(bucket_review["episode_id"])
+    symbol = str(bucket_review["symbol"])
+    business_bucket = str(bucket_review.get("business_bucket") or "")
+    prior_bucket = str(bucket_review.get("prior_business_bucket") or "")
+    if bool(bucket_review.get("bucket_changed")):
+        alerts.append(
+            _custom_alert(
+                episode_id=episode_id,
+                symbol=symbol,
+                run_date=run_date,
+                alert_type="BUCKET_CHANGE",
+                prior=prior_bucket,
+                new=business_bucket,
+                severity="medium",
+                message=f"{symbol}: bucket changed {prior_bucket} -> {business_bucket}",
+                now=now,
+            )
+        )
+    score_delta = _float(bucket_review.get("final_watchlist_score_delta"), 0.0)
+    if score_delta <= -10:
+        alerts.append(
+            _custom_alert(
+                episode_id=episode_id,
+                symbol=symbol,
+                run_date=run_date,
+                alert_type="FUNDAMENTAL_SCORE_DROP",
+                prior="",
+                new=business_bucket,
+                severity="high",
+                message=f"{symbol}: fundamental bucket score dropped {score_delta:.1f}",
+                now=now,
+            )
+        )
+    opportunity = str(bucket_review.get("opportunity_label") or "").upper()
+    if opportunity == "MANUAL_REVIEW" or bool(bucket_review.get("manual_review_flag")):
+        alerts.append(
+            _custom_alert(
+                episode_id=episode_id,
+                symbol=symbol,
+                run_date=run_date,
+                alert_type="MANUAL_REVIEW_REQUIRED",
+                prior=prior_bucket,
+                new=business_bucket,
+                severity="medium",
+                message=f"{symbol}: manual review required for {business_bucket or 'bucket review'}",
+                now=now,
+            )
+        )
+    if business_bucket == "AVOID_WATCH" or prior_bucket == "AVOID_WATCH":
+        alerts.append(
+            _custom_alert(
+                episode_id=episode_id,
+                symbol=symbol,
+                run_date=run_date,
+                alert_type="BUCKET_CHANGE",
+                prior=prior_bucket,
+                new=business_bucket,
+                severity="high",
+                message=f"{symbol}: moved {'to' if business_bucket == 'AVOID_WATCH' else 'from'} AVOID_WATCH",
+                now=now,
+            )
+        )
+    return alerts
+
+
+def _custom_alert(
+    *,
+    episode_id: str,
+    symbol: str,
+    run_date: str,
+    alert_type: str,
+    prior: str,
+    new: str,
+    severity: str,
+    message: str,
+    now: str,
+) -> dict[str, Any]:
+    return {
+        "alert_id": f"{episode_id}-{run_date}-{alert_type}",
+        "episode_id": episode_id,
+        "symbol": symbol,
+        "alert_date": run_date,
+        "alert_type": alert_type,
+        "prior_status": prior,
+        "new_status": new,
+        "severity": severity,
+        "message": message,
+        "created_at": now,
+    }
+
+
 def _insert_frame(conn: duckdb.DuckDBPyConnection, table: str, frame: pd.DataFrame) -> None:
     if frame.empty:
         return
@@ -1050,10 +1323,12 @@ def _current_row(
     candidate: pd.Series,
     snapshot: dict[str, Any],
     latest_review: dict[str, Any] | None,
+    latest_bucket_review: dict[str, Any] | None,
     status: str,
     active: bool,
 ) -> dict[str, Any]:
     review = latest_review or {}
+    bucket_review = latest_bucket_review or {}
     return {
         "episode_id": snapshot["episode_id"],
         "symbol": snapshot["symbol"],
@@ -1085,6 +1360,13 @@ def _current_row(
         "profit_yoy_delta": review.get("profit_yoy_delta"),
         "opm_yoy_change_delta_bps": review.get("opm_yoy_change_delta_bps"),
         "valuation_history_score_delta": review.get("valuation_history_score_delta"),
+        "business_bucket": bucket_review.get("business_bucket"),
+        "secondary_bucket_tags": bucket_review.get("secondary_bucket_tags"),
+        "opportunity_label": bucket_review.get("opportunity_label"),
+        "manual_review_flag": bucket_review.get("manual_review_flag"),
+        "final_watchlist_score": bucket_review.get("final_watchlist_score"),
+        "business_bucket_changed": bucket_review.get("bucket_changed"),
+        "final_watchlist_score_delta": bucket_review.get("final_watchlist_score_delta"),
         "active": active,
     }
 
@@ -1107,6 +1389,8 @@ def _source_label(candidate: pd.Series) -> str:
         sources.append("final_candidates")
     if bool(candidate.get("in_watchlist_candidates", False)):
         sources.append("watchlist_candidates")
+    if bool(candidate.get("in_fundamental_bucket_shortlist", False)):
+        sources.append("fundamental_bucket_shortlist")
     return ",".join(sources) if sources else "candidate"
 
 
@@ -1120,6 +1404,18 @@ def _bool_series(frame: pd.DataFrame, column: str) -> pd.Series:
     text = object_values.where(object_values.notna(), "").astype(str).str.strip().str.lower()
     numeric = pd.to_numeric(object_values, errors="coerce")
     return text.isin({"1", "true", "t", "yes", "y"}) | numeric.gt(0).fillna(False)
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "t", "yes", "y"}
 
 
 def _first_value(row: dict[str, Any], columns: list[str], default: Any = "") -> Any:
