@@ -71,6 +71,96 @@ def _compact_summary_frame(summary: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _ranking_feedback_frame(feedback: dict[str, Any] | None) -> pd.DataFrame:
+    columns = ["Signal", "Subject", "Evidence", "Action"]
+    if not isinstance(feedback, dict) or feedback.get("status") in {None, "missing", "empty"}:
+        return pd.DataFrame(
+            [{"Signal": "tracker", "Subject": "ranking_feedback", "Evidence": "No mature trusted tracker data available", "Action": "insufficient_sample"}],
+            columns=columns,
+        )
+
+    rows: list[dict[str, object]] = []
+    rank_rows = [
+        row for row in list(feedback.get("rank_bucket_rows") or [])
+        if row.get("horizon") == "20d"
+    ]
+    by_bucket = {str(row.get("rank_bucket")): row for row in rank_rows}
+    top10 = by_bucket.get("top-10", {}).get("avg_return")
+    lower = by_bucket.get("rank-51-plus", {}).get("avg_return")
+    if top10 is not None and lower is not None:
+        edge = round(float(top10) - float(lower), 3)
+        rows.append({
+            "Signal": "rank_edge",
+            "Subject": "top-10 vs rank-51-plus",
+            "Evidence": f"20d avg edge {edge} pp",
+            "Action": "backtest_required" if edge > 0 else "reduce_candidate",
+        })
+
+    factor_rows = [
+        row for row in list(feedback.get("factor_ic_rows") or [])
+        if row.get("horizon") == "20d" and row.get("ic") is not None
+    ]
+    factor_rows = sorted(factor_rows, key=lambda row: float(row.get("ic") or 0), reverse=True)
+    for factor_row in factor_rows[:2]:
+        rows.append({
+            "Signal": "best_factor_ic",
+            "Subject": factor_row.get("factor"),
+            "Evidence": f"20d IC {factor_row.get('ic')} over {factor_row.get('rows')} rows",
+            "Action": "backtest_required",
+        })
+    for factor_row in factor_rows[-2:]:
+        if factor_row.get("signal") == "negative":
+            rows.append({
+                "Signal": "weak_factor_ic",
+                "Subject": factor_row.get("factor"),
+                "Evidence": f"20d IC {factor_row.get('ic')} over {factor_row.get('rows')} rows",
+                "Action": "reduce_candidate",
+            })
+
+    for bucket_row in list(feedback.get("bucket_rows") or []):
+        if bucket_row.get("horizon") == "20d" and bucket_row.get("interpretation") == "weak":
+            rows.append({
+                "Signal": "weak_bucket",
+                "Subject": bucket_row.get("bucket"),
+                "Evidence": f"20d avg {bucket_row.get('avg_return')}; win {bucket_row.get('win_rate_pct')}%",
+                "Action": "gate_candidate",
+            })
+
+    for drift_row in list(feedback.get("drift_rows") or []):
+        if drift_row.get("status") in {"warning", "critical"}:
+            rows.append({
+                "Signal": f"drift_{drift_row.get('status')}",
+                "Subject": drift_row.get("factor"),
+                "Evidence": f"recent IC {drift_row.get('recent_ic')} vs baseline {drift_row.get('baseline_ic')}",
+                "Action": "reduce_candidate",
+            })
+
+    for recommendation in list(feedback.get("recommendations") or []):
+        if len(rows) >= 8:
+            break
+        rows.append({
+            "Signal": recommendation.get("category"),
+            "Subject": recommendation.get("subject"),
+            "Evidence": recommendation.get("evidence"),
+            "Action": recommendation.get("decision"),
+        })
+
+    if not rows:
+        rows.append({
+            "Signal": "tracker",
+            "Subject": "ranking_feedback",
+            "Evidence": "No mature trusted tracker data available",
+            "Action": "insufficient_sample",
+        })
+    rows.append({
+        "Signal": "guardrail",
+        "Subject": "production weights",
+        "Evidence": "Observational only",
+        "Action": "backtest before changing weights",
+    })
+    return pd.DataFrame(rows[:10], columns=columns)
+
+
 def _to_numeric(df: pd.DataFrame, columns: list[str], places: int) -> pd.DataFrame:
     out = df.copy()
     for col in columns:
@@ -578,6 +668,7 @@ def publish_dashboard_payload(
     watchlist_df: pd.DataFrame | None = None,
     candidate_tracker_df: pd.DataFrame | None = None,
     decision_bundle: PublishDecisionBundle | None = None,
+    ranking_feedback: dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Write a single compact daily sheet with sector/rank/breakout and breadth chart."""
     manager = GoogleSheetsManager()
@@ -630,6 +721,7 @@ def publish_dashboard_payload(
     breadth_rows = 0
     sections = [
         ("DAILY SUMMARY", _compact_summary_frame(summary)),
+        ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
         ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
         ("SECTOR CONTEXT — Leading/Improving only; Rank = absolute RS rank across all sectors", bundle.sector_leaders),
         ("PATTERN SETUPS", bundle.pattern_setups),

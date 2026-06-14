@@ -615,11 +615,35 @@ class PublishStage:
             watchlist_df=datasets.get("watchlist_candidates"),
             candidate_tracker_df=datasets.get("candidate_tracker_current"),
             decision_bundle=datasets.get("decision_bundle"),
+            ranking_feedback=self._load_ranking_feedback(context),
         )
         return {
             "report_id": "dashboard_sheet",
             "sheet_name": result.get("sheet_name") if isinstance(result, dict) else None,
         }
+
+    def _load_ranking_feedback(self, context: StageContext) -> Dict[str, Any]:
+        artifact = context.artifact_for("perf_tracker", "perf_tracker_ranking_feedback_summary")
+        if artifact is not None:
+            payload = self._read_json_artifact_safe(artifact)
+            if payload:
+                return payload
+        try:
+            from ai_trading_system.research.perf_tracker.reports import build_ranking_feedback_summary
+
+            return build_ranking_feedback_summary(project_root=context.project_root)
+        except Exception as exc:
+            return {
+                "status": "missing",
+                "as_of": None,
+                "lookback_days": 180,
+                "rank_bucket_rows": [],
+                "factor_ic_rows": [],
+                "bucket_rows": [],
+                "drift_rows": [],
+                "recommendations": [],
+                "warnings": [f"ranking feedback unavailable: {exc}"],
+            }
 
     def _publish_sector_dashboard(
         self,

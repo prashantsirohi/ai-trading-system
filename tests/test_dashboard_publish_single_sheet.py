@@ -271,6 +271,25 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         prior_ranked_df=prior_ranked_df,
         failed_breakouts_df=failed_breakouts_df,
         pattern_df=pattern_df,
+        ranking_feedback={
+            "status": "ok",
+            "rank_bucket_rows": [
+                {"horizon": "20d", "rank_bucket": "top-10", "avg_return": 4.2},
+                {"horizon": "20d", "rank_bucket": "rank-51-plus", "avg_return": 1.0},
+            ],
+            "factor_ic_rows": [
+                {"horizon": "20d", "factor": "rs", "ic": 0.12, "rows": 120, "signal": "positive"},
+                {"horizon": "20d", "factor": "vol", "ic": -0.05, "rows": 120, "signal": "negative"},
+            ],
+            "bucket_rows": [
+                {"horizon": "20d", "bucket": "AVOID_WEAK_CONFIRMATION", "avg_return": -2.0, "win_rate_pct": 30.0, "interpretation": "weak"},
+            ],
+            "drift_rows": [
+                {"factor": "trend", "status": "warning", "recent_ic": -0.01, "baseline_ic": 0.08},
+            ],
+            "recommendations": [],
+            "warnings": [],
+        },
     )
 
     manager = _FakeManager.last_instance
@@ -322,7 +341,13 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         if range_name.startswith("A") and values and values[0]
     ]
     assert "DAILY SUMMARY" in section_titles
+    assert "RANKING FEEDBACK" in section_titles
     assert "EVENTS SUMMARY" not in section_titles
+
+    feedback_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Signal", "Subject", "Evidence", "Action"]]
+    assert feedback_frames
+    assert feedback_frames[0].iloc[0]["Subject"] == "top-10 vs rank-51-plus"
+    assert "backtest before changing weights" in set(feedback_frames[0]["Action"])
 
     breakout_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Setup", "State", "Tier", "Score", "TradingView"]]
     assert breakout_frames

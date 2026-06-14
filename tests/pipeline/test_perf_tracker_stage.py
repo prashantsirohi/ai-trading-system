@@ -44,6 +44,21 @@ def test_perf_tracker_stage_writes_research_quality_artifacts(
             },
         },
     )
+    monkeypatch.setattr(
+        perf_tracker_stage,
+        "build_ranking_feedback_summary",
+        lambda *, project_root: {
+            "status": "ok",
+            "as_of": "2026-05-08",
+            "lookback_days": 180,
+            "rank_bucket_rows": [],
+            "factor_ic_rows": [],
+            "bucket_rows": [],
+            "drift_rows": [],
+            "recommendations": [{"decision": "backtest_required"}],
+            "warnings": [],
+        },
+    )
     context = StageContext(
         project_root=tmp_path,
         db_path=tmp_path / "data" / "operational" / "operational.duckdb",
@@ -58,8 +73,10 @@ def test_perf_tracker_stage_writes_research_quality_artifacts(
     artifact_types = {artifact.artifact_type for artifact in result.artifacts}
     assert "perf_tracker_summary" in artifact_types
     assert "perf_tracker_research_quality_summary" in artifact_types
+    assert "perf_tracker_ranking_feedback_summary" in artifact_types
     assert "perf_tracker_rank_bucket_performance" in artifact_types
     assert "perf_tracker_sector_performance" in artifact_types
     assert "perf_tracker_repeated_symbol_performance" in artifact_types
     assert "perf_tracker_excluded_rows" in artifact_types
     assert result.metadata["research_quality_status"] == "warning"
+    assert result.metadata["ranking_feedback_status"] == "ok"

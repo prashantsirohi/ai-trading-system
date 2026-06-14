@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -15,7 +15,10 @@ from ai_trading_system.research.perf_tracker.backfill import (
     build_rows_from_ranked_frame,
 )
 from ai_trading_system.research.perf_tracker.quality import annotate_return_quality
-from ai_trading_system.research.perf_tracker.reports import build_research_quality_reports
+from ai_trading_system.research.perf_tracker.reports import (
+    build_ranking_feedback_summary,
+    build_research_quality_reports,
+)
 from ai_trading_system.research.perf_tracker.schema import open_research_db
 from tests.research.perf_tracker.conftest import API_HEADERS, insert_perf_rows
 
@@ -234,3 +237,105 @@ def test_research_quality_reports_emit_segments_and_excluded_rows(project: Path)
     assert "Pharma" in set(frames["sector_performance"]["sector_name"])
     assert frames["excluded_rows"].loc[0, "symbol_id"] == "CCC1"
     assert reports["summary"]["artifact_rows"]["excluded_rows"] == 1
+
+
+def test_ranking_feedback_summary_detects_rank_edge_and_factor_ic(project: Path) -> None:
+    base_date = date(2026, 5, 1)
+    rows = []
+    for idx in range(80):
+        rank_position = idx + 1
+        factor_score = float(100 - idx)
+        fwd_20d = 8.0 - idx * 0.1
+        rows.append({
+            "run_date": base_date - timedelta(days=idx % 10),
+            "symbol_id": f"EDGE{idx:03d}",
+            "rank_position": rank_position,
+            "watchlist_bucket": "CORE_MOMENTUM" if rank_position <= 25 else "UNASSIGNED",
+            "fwd_5d_return": fwd_20d / 2,
+            "fwd_10d_return": fwd_20d * 0.75,
+            "fwd_20d_return": fwd_20d,
+            "fwd_60d_return": fwd_20d * 1.5,
+            "factor_rs": factor_score,
+            "factor_vol": -factor_score,
+            "factor_trend": factor_score,
+        })
+    insert_perf_rows(project, rows)
+
+    summary = build_ranking_feedback_summary(project_root=project)
+
+    assert summary["status"] == "ok"
+    top10_20d = next(
+        row for row in summary["rank_bucket_rows"]
+        if row["rank_bucket"] == "top-10" and row["horizon"] == "20d"
+    )
+    lower_20d = next(
+        row for row in summary["rank_bucket_rows"]
+        if row["rank_bucket"] == "rank-51-plus" and row["horizon"] == "20d"
+    )
+    assert top10_20d["avg_return"] > lower_20d["avg_return"]
+    rs_20d = next(
+        row for row in summary["factor_ic_rows"]
+        if row["factor"] == "rs" and row["horizon"] == "20d"
+    )
+    vol_20d = next(
+        row for row in summary["factor_ic_rows"]
+        if row["factor"] == "vol" and row["horizon"] == "20d"
+    )
+    assert rs_20d["signal"] == "positive"
+    assert vol_20d["signal"] == "negative"
+    assert any(row["decision"] == "increase_candidate" and row["subject"] == "rs" for row in summary["recommendations"])
+
+
+def test_ranking_feedback_summary_flags_failed_top_bucket_and_excludes_untrusted(project: Path) -> None:
+    base_date = date(2026, 5, 1)
+    rows = []
+    for idx in range(70):
+        rank_position = idx + 1
+        rows.append({
+            "run_date": base_date - timedelta(days=idx % 8),
+            "symbol_id": f"FAIL{idx:03d}",
+            "rank_position": rank_position,
+            "watchlist_bucket": "AVOID_WEAK_CONFIRMATION" if rank_position <= 10 else "CORE_MOMENTUM",
+            "fwd_5d_return": -2.0 if rank_position <= 10 else 2.0,
+            "fwd_10d_return": -2.5 if rank_position <= 10 else 2.5,
+            "fwd_20d_return": -3.0 if rank_position <= 10 else 3.0,
+            "fwd_60d_return": -4.0 if rank_position <= 10 else 4.0,
+            "factor_rs": float(idx),
+        })
+    rows.append({
+        "run_date": base_date,
+        "symbol_id": "QUARANTINED_WINNER",
+        "rank_position": 1,
+        "watchlist_bucket": "CORE_MOMENTUM",
+        "fwd_20d_return": 99.0,
+        "factor_rs": 99.0,
+    })
+    insert_perf_rows(project, rows)
+    with open_research_db(project_root=project, read_only=False) as con:
+        con.execute(
+            """
+            UPDATE rank_cohort_performance
+            SET data_quality_status = 'quarantined',
+                fwd_return_anomaly = TRUE
+            WHERE symbol_id = 'QUARANTINED_WINNER'
+            """
+        )
+
+    summary = build_ranking_feedback_summary(project_root=project)
+
+    top10_20d = next(
+        row for row in summary["rank_bucket_rows"]
+        if row["rank_bucket"] == "top-10" and row["horizon"] == "20d"
+    )
+    assert top10_20d["avg_return"] == pytest.approx(-3.0)
+    assert any(row["decision"] == "reduce_candidate" for row in summary["recommendations"])
+    assert all("QUARANTINED_WINNER" not in str(row) for row in summary["rank_bucket_rows"])
+
+
+def test_ranking_feedback_summary_missing_db_is_graceful(project: Path) -> None:
+    summary = build_ranking_feedback_summary(project_root=project)
+
+    assert summary["status"] == "missing"
+    assert summary["rank_bucket_rows"] == []
+    assert summary["recommendations"] == []
+    assert summary["warnings"]

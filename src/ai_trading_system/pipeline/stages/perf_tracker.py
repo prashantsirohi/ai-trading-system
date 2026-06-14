@@ -21,7 +21,10 @@ import logging
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 from ai_trading_system.research.perf_tracker.backfill import run_backfill
 from ai_trading_system.research.perf_tracker.health import build_tracker_health
-from ai_trading_system.research.perf_tracker.reports import build_research_quality_reports
+from ai_trading_system.research.perf_tracker.reports import (
+    build_ranking_feedback_summary,
+    build_research_quality_reports,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +61,12 @@ class PerfTrackerStage:
         health = build_tracker_health(project_root=context.project_root)
         metadata["tracker_health_status"] = health["status"]
         metadata["research_quality_status"] = reports["summary"].get("status", health["status"])
+        ranking_feedback = build_ranking_feedback_summary(project_root=context.project_root)
+        metadata["ranking_feedback_status"] = ranking_feedback.get("status", "unknown")
         artifact_path = context.write_json("perf_tracker_summary.json", metadata)
         health_path = context.write_json("tracker_health.json", health)
         research_summary_path = context.write_json("perf_tracker_research_quality_summary.json", reports["summary"])
+        ranking_feedback_path = context.write_json("perf_tracker_ranking_feedback_summary.json", ranking_feedback)
         csv_artifacts = []
         csv_specs = {
             "perf_tracker_rank_bucket_performance": "rank_bucket_performance",
@@ -100,6 +106,15 @@ class PerfTrackerStage:
                     "perf_tracker_research_quality_summary",
                     research_summary_path,
                     metadata=reports["summary"],
+                    attempt_number=context.attempt_number,
+                ),
+                StageArtifact.from_file(
+                    "perf_tracker_ranking_feedback_summary",
+                    ranking_feedback_path,
+                    metadata={
+                        "status": ranking_feedback.get("status"),
+                        "recommendations": len(ranking_feedback.get("recommendations") or []),
+                    },
                     attempt_number=context.attempt_number,
                 ),
                 *csv_artifacts,
