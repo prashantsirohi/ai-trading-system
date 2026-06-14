@@ -33,6 +33,7 @@ import {
   type RunArtifacts,
 } from '@/lib/api/runs';
 import { getSectors } from '@/lib/api/sectors';
+import { getSectorRotation, type SectorRotationResponse } from '@/lib/api/sectorRotation';
 import {
   getPerfCoverage,
   getPerfCohorts,
@@ -261,6 +262,17 @@ export function useSectors(
   return useQuery<SectorResponse, Error>({
     queryKey: queryKeys.sectors(),
     queryFn: getSectors,
+    ...options,
+  });
+}
+
+export function useSectorRotation(
+  options: QueryOverrides<SectorRotationResponse> = {},
+): UseQueryResult<SectorRotationResponse, Error> {
+  return useQuery<SectorRotationResponse, Error>({
+    queryKey: queryKeys.sectorRotation(),
+    queryFn: getSectorRotation,
+    ...LIVE_QUERY_DEFAULTS,
     ...options,
   });
 }

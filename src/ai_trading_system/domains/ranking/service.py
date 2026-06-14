@@ -46,6 +46,7 @@ TASK_FILE_MAP = {
     "pattern_scan": ("pattern_scan", "csv"),
     "stock_scan": ("stock_scan", "csv"),
     "sector_dashboard": ("sector_dashboard", "csv"),
+    "sector_rotation": ("sector_rotation", "csv"),
     "watchlist_prefilter": ("watchlist_prefilter", "csv"),
     "watchlist_rejections": ("watchlist_rejections", "csv"),
     "watchlist_catalyst": ("watchlist_catalyst", "json"),
@@ -439,6 +440,7 @@ class RankOrchestrationService:
                 )
             )
         for artifact_type, filename in (
+            ("sector_rotation_payload", "sector_rotation_payload.json"),
             ("watchlist_candidates_json", "watchlist_candidates.json"),
             ("watchlist_rejections_json", "watchlist_rejections.json"),
             ("watchlist_digest", "watchlist_digest.md"),
@@ -495,7 +497,13 @@ class RankOrchestrationService:
         from ai_trading_system.analytics.patterns import PatternScanConfig, build_pattern_signals
         from ai_trading_system.analytics.patterns.data import load_pattern_frame
         from ai_trading_system.analytics.ranker import StockRanker
-        from ai_trading_system.domains.ranking import sector_dashboard, stock_scan, watchlist, watchlist_catalyst
+        from ai_trading_system.domains.ranking import (
+            sector_dashboard,
+            sector_rotation,
+            stock_scan,
+            watchlist,
+            watchlist_catalyst,
+        )
         from ai_trading_system.domains.publish.channels.watchlist_digest import render_watchlist_markdown
         from ai_trading_system.domains.ranking.breakout import scan_breakouts
         from ai_trading_system.domains.ranking.patterns.universe import (
@@ -1092,6 +1100,49 @@ class RankOrchestrationService:
                 f"sector_dashboard unavailable: {sector_status.get('error_message', sector_status.get('detail'))}"
             )
 
+        rotation_frames, rotation_status = self.execute_rank_task(
+            context=context,
+            task_name="sector_rotation",
+            label="Build sector_rotation",
+            fingerprint_payload={
+                "task": "sector_rotation",
+                "run_date": context.run_date,
+                "data_domain": context.params.get("data_domain", "operational"),
+                "exchange": str(context.params.get("exchange", "NSE")),
+                "ranked_universe_fingerprint": self.dataframe_fingerprint(ranked_universe),
+            },
+            task_status=task_status,
+            previous_attempt=previous_attempt,
+            previous_statuses=previous_statuses,
+            builder=lambda: sector_rotation.run_sector_rotation(
+                ohlcv_db_path=context.db_path,
+                master_db_path=paths.master_db_path,
+                run_date=context.run_date,
+                output_dir=context.output_dir(),
+                ranked_df=ranked_universe if not ranked_universe.empty else ranked,
+                exchange=str(context.params.get("exchange", "NSE")),
+            ),
+            optional=True,
+        )
+        if isinstance(rotation_frames, dict):
+            for artifact_type in (
+                "sector_rotation",
+                "stock_rotation",
+                "accumulation_distribution",
+                "sector_custom_indices",
+            ):
+                frame = rotation_frames.get(artifact_type)
+                outputs[artifact_type] = frame if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+        else:
+            outputs["sector_rotation"] = rotation_frames if isinstance(rotation_frames, pd.DataFrame) else pd.DataFrame()
+            outputs.setdefault("stock_rotation", pd.DataFrame())
+            outputs.setdefault("accumulation_distribution", pd.DataFrame())
+            outputs.setdefault("sector_custom_indices", pd.DataFrame())
+        if rotation_status["status"] in {"failed", "timed_out", "degraded"}:
+            warnings.append(
+                f"sector_rotation unavailable: {rotation_status.get('error_message', rotation_status.get('detail'))}"
+            )
+
         watchlist_enabled = bool(context.params.get("watchlist_enabled", True))
         watchlist_blocked = trust_summary.get("status") == "blocked" and not bool(
             context.params.get("allow_untrusted_rank", False)
@@ -1321,6 +1372,11 @@ class RankOrchestrationService:
                 "pattern_fingerprint": self.dataframe_fingerprint(pattern_df),
                 "stock_scan_fingerprint": self.dataframe_fingerprint(stock_scan_df),
                 "sector_dashboard_fingerprint": self.dataframe_fingerprint(sector_dashboard_df),
+                "sector_rotation_fingerprint": self.dataframe_fingerprint(outputs.get("sector_rotation", pd.DataFrame())),
+                "stock_rotation_fingerprint": self.dataframe_fingerprint(outputs.get("stock_rotation", pd.DataFrame())),
+                "accumulation_distribution_fingerprint": self.dataframe_fingerprint(
+                    outputs.get("accumulation_distribution", pd.DataFrame())
+                ),
                 "phase1_market_breadth_fingerprint": self.dataframe_fingerprint(phase1_breadth),
                 "warnings": list(warnings),
                 "market_stage": stage_info,
@@ -1341,6 +1397,7 @@ class RankOrchestrationService:
                 pattern_df=pattern_df,
                 stock_scan_df=stock_scan_df,
                 sector_dashboard_df=sector_dashboard_df,
+                sector_rotation_payload=self._load_sector_rotation_payload(context),
                 warnings=warnings,
                 trust_summary=trust_summary,
                 task_status=task_status,
@@ -1591,6 +1648,16 @@ class RankOrchestrationService:
     def build_dashboard_payload(self, **kwargs) -> Dict[str, object]:
         return build_dashboard_payload(**kwargs)
 
+    def _load_sector_rotation_payload(self, context: StageContext) -> dict[str, Any]:
+        payload_path = context.output_dir() / "sector_rotation_payload.json"
+        if not payload_path.exists():
+            return {}
+        try:
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
     def task_status_path(self, context: StageContext) -> Path:
         return context.output_dir() / "task_status.json"
 
@@ -1718,6 +1785,26 @@ class RankOrchestrationService:
             return False, None
         _, suffix = TASK_FILE_MAP[task_name]
         try:
+            if task_name == "sector_rotation":
+                base_dir = previous_path.parent
+                frames: dict[str, pd.DataFrame] = {}
+                for artifact_type in (
+                    "sector_rotation",
+                    "stock_rotation",
+                    "accumulation_distribution",
+                    "sector_custom_indices",
+                ):
+                    candidate = base_dir / f"{artifact_type}.csv"
+                    frames[artifact_type] = pd.read_csv(candidate) if candidate.exists() else pd.DataFrame()
+                payload_path = base_dir / "sector_rotation_payload.json"
+                if payload_path.exists():
+                    try:
+                        frames["__sector_rotation_payload__"] = json.loads(
+                            payload_path.read_text(encoding="utf-8")
+                        )
+                    except Exception:
+                        pass
+                return True, frames
             if suffix == "json":
                 return True, json.loads(previous_path.read_text(encoding="utf-8"))
             return True, pd.read_csv(previous_path)
@@ -1735,6 +1822,24 @@ class RankOrchestrationService:
         _, suffix = TASK_FILE_MAP[task_name]
         if suffix == "json":
             output_path.write_text(json.dumps(result, indent=2, sort_keys=True, default=str), encoding="utf-8")
+        elif task_name == "sector_rotation" and isinstance(result, dict):
+            for artifact_type in (
+                "sector_rotation",
+                "stock_rotation",
+                "accumulation_distribution",
+                "sector_custom_indices",
+            ):
+                frame = result.get(artifact_type)
+                if not isinstance(frame, pd.DataFrame):
+                    frame = pd.DataFrame()
+                (context.output_dir() / f"{artifact_type}.csv").parent.mkdir(parents=True, exist_ok=True)
+                frame.to_csv(context.output_dir() / f"{artifact_type}.csv", index=False)
+            payload = result.get("__sector_rotation_payload__")
+            if isinstance(payload, dict):
+                (context.output_dir() / "sector_rotation_payload.json").write_text(
+                    json.dumps(payload, indent=2, sort_keys=True, default=str),
+                    encoding="utf-8",
+                )
         else:
             frame = result if isinstance(result, pd.DataFrame) else pd.DataFrame()
             frame.to_csv(output_path, index=False)
@@ -1824,6 +1929,10 @@ class RankOrchestrationService:
             rows = None
             if isinstance(result, pd.DataFrame):
                 rows = int(len(result))
+                if rows == 0:
+                    status = "completed_empty"
+            elif task_name == "sector_rotation" and isinstance(result, dict):
+                rows = int(len(result.get("sector_rotation", pd.DataFrame())))
                 if rows == 0:
                     status = "completed_empty"
             record = {

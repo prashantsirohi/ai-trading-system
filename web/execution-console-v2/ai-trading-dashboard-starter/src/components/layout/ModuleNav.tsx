@@ -22,6 +22,7 @@ const primaryItems = [
   { to: '/pipeline', label: 'Pipeline', icon: ViewColumnsIcon, end: false, match: ['/pipeline'] },
   { to: '/ranking', label: 'Ranking', icon: ChartBarIcon, end: false, match: ['/ranking', '/symbol'] },
   { to: '/sectors', label: 'Sectors', icon: Squares2X2Icon, end: false, match: ['/sectors'] },
+  { to: '/sector-rotation', label: 'Rotation', icon: PresentationChartLineIcon, end: false, match: ['/sector-rotation'] },
   { to: '/fundamentals', label: 'Fundamentals', icon: BanknotesIcon, end: false, match: ['/fundamentals'] },
   { to: '/patterns', label: 'Patterns', icon: PresentationChartLineIcon, end: false, match: ['/patterns'] },
   { to: '/research', label: 'Research', icon: BeakerIcon, end: false, match: ['/research'] },

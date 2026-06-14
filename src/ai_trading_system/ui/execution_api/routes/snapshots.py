@@ -16,12 +16,23 @@ from ai_trading_system.ui.execution_api.services.execution_operator import (
 from ai_trading_system.ui.execution_api.services.readmodels.ranking_detail import (
     get_workspace_snapshot_compact,
 )
+from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_snapshot import (
+    load_latest_operational_snapshot,
+)
 from ai_trading_system.ui.execution_api.services.readmodels.market_breadth import (
     get_market_breadth_history,
 )
 
 
 router = APIRouter(prefix="/api/execution", tags=["snapshots"])
+
+
+def _records(frame, limit: int | None = None) -> list[dict[str, Any]]:
+    if frame is None or frame.empty:
+        return []
+    safe = frame.head(limit).copy() if limit else frame.copy()
+    safe = safe.where(safe.notna(), None)
+    return safe.to_dict(orient="records")
 
 
 @router.get("/ranking")
@@ -93,3 +104,34 @@ def execution_workspace_snapshot(
     """
 
     return get_workspace_snapshot_compact(project_root(), top_n=top_n)
+
+
+@router.get("/workspace/sector-rotation")
+def execution_workspace_sector_rotation() -> dict[str, Any]:
+    snapshot = load_latest_operational_snapshot(project_root())
+    payload_summary = snapshot.payload.get("summary", {}) if isinstance(snapshot.payload, dict) else {}
+    run_id = payload_summary.get("run_id")
+    if not run_id and snapshot.rank_attempt_dir is not None:
+        try:
+            run_id = snapshot.rank_attempt_dir.parents[1].name
+        except IndexError:
+            run_id = None
+    run_date = payload_summary.get("run_date") or snapshot.payload.get("run_date")
+    frames = snapshot.frames
+    accumulation = frames.get("accumulation_distribution")
+    if accumulation is None or accumulation.empty:
+        accumulation_rows = []
+        distribution_rows = []
+    else:
+        signal = accumulation.get("delivery_signal")
+        accumulation_rows = _records(accumulation.loc[signal == "Accumulation"] if signal is not None else accumulation.iloc[0:0])
+        distribution_rows = _records(accumulation.loc[signal == "Distribution"] if signal is not None else accumulation.iloc[0:0])
+    return {
+        "run_id": run_id,
+        "run_date": run_date,
+        "sectors": _records(frames.get("sector_rotation")),
+        "stocks": _records(frames.get("stock_rotation")),
+        "accumulation": accumulation_rows,
+        "distribution": distribution_rows,
+        "custom_indices": _records(frames.get("sector_custom_indices"), limit=500),
+    }

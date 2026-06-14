@@ -66,6 +66,7 @@ class RankStage:
         stock_scan_df: pd.DataFrame,
         sector_dashboard_df: pd.DataFrame,
         warnings: list[str],
+        sector_rotation_payload: Dict[str, Any] | None = None,
         trust_summary: Dict[str, Any] | None = None,
         task_status: Dict[str, Any] | None = None,
     ) -> Dict[str, object]:
@@ -76,6 +77,7 @@ class RankStage:
             pattern_df=pattern_df,
             stock_scan_df=stock_scan_df,
             sector_dashboard_df=sector_dashboard_df,
+            sector_rotation_payload=sector_rotation_payload,
             warnings=warnings,
             trust_summary=trust_summary,
             task_status=task_status,

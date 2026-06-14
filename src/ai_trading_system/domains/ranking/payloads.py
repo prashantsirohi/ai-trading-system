@@ -282,6 +282,7 @@ def build_dashboard_payload(
     stock_scan_df: pd.DataFrame,
     sector_dashboard_df: pd.DataFrame,
     warnings: list[str],
+    sector_rotation_payload: Optional[Dict[str, Any]] = None,
     trust_summary: Optional[Dict[str, Any]] = None,
     task_status: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, object]:
@@ -373,6 +374,11 @@ def build_dashboard_payload(
         pattern_discoveries=pattern_discoveries,
         breakout_candidates=breakout_candidates,
     )
+    sector_rotation_payload = sector_rotation_payload or {}
+    rotation_sections = {
+        key: sector_rotation_payload.get(key, [])
+        for key in ("top_leading", "top_improving", "weakening", "lagging", "accumulation", "distribution")
+    }
 
     return {
         "summary": {
@@ -413,6 +419,10 @@ def build_dashboard_payload(
             "latest_trade_date": (trust_summary or {}).get("latest_trade_date"),
             "latest_validated_date": (trust_summary or {}).get("latest_validated_date"),
             "task_status_counts": summarize_task_statuses(task_status or {}),
+            "sector_rotation_leading_count": len(rotation_sections["top_leading"]),
+            "sector_rotation_improving_count": len(rotation_sections["top_improving"]),
+            "sector_rotation_accumulation_count": len(rotation_sections["accumulation"]),
+            "sector_rotation_distribution_count": len(rotation_sections["distribution"]),
         },
         "ranked_signals": _records(ranked_df, limit=10),
         "breakout_scan": _records(breakout_df, limit=10),
@@ -423,6 +433,11 @@ def build_dashboard_payload(
         "pattern_discoveries": pattern_discoveries,
         "breakout_candidates": breakout_candidates,
         "sector_dashboard": _records(sector_dashboard_df, limit=10),
+        "sector_rotation": {
+            **rotation_sections,
+            "benchmark_name": sector_rotation_payload.get("benchmark_name"),
+            "watchlist_candidates": sector_rotation_payload.get("watchlist_candidates", []),
+        },
         "task_status": task_status or {},
         "data_trust": trust_summary or {},
         "warnings": warnings,

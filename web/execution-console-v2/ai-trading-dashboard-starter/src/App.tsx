@@ -6,6 +6,7 @@ import PipelinePage from '@/pages/PipelinePage';
 import RankingPage from '@/pages/RankingPage';
 import PatternsPage from '@/pages/PatternsPage';
 import SectorsPage from '@/pages/SectorsPage';
+import SectorRotationPage from '@/pages/SectorRotationPage';
 import ExecutionPage from '@/pages/ExecutionPage';
 import RunsPage from '@/pages/RunsPage';
 import ShadowPage from '@/pages/ShadowPage';
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="/ranking" element={<RankingPage />} />
           <Route path="/patterns" element={<PatternsPage />} />
           <Route path="/sectors" element={<SectorsPage />} />
+          <Route path="/sector-rotation" element={<SectorRotationPage />} />
           <Route path="/fundamentals" element={<FundamentalsPage />} />
           <Route path="/sectors/:sector" element={<SectorDetailPage />} />
           <Route path="/execution" element={<ExecutionPage />} />
