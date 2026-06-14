@@ -206,6 +206,7 @@ def _compute_stock_rrg(
         return pd.DataFrame(columns=columns)
     sector_pivot = custom_indices.pivot_table(index="date", columns="industry", values="sector_index", aggfunc="last")
     sector_pivot.index = pd.to_datetime(sector_pivot.index, errors="coerce").normalize()
+    sector_pivot = sector_pivot.loc[~sector_pivot.index.duplicated(keep="last")]
     data = enriched_ohlcv.copy()
     data.loc[:, "date"] = pd.to_datetime(data["date"], errors="coerce").dt.normalize()
     records = []

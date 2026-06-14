@@ -85,6 +85,34 @@
 </div>
 {%- endmacro %}
 
+{% macro stock_rotation_table(title, rows) -%}
+<div class="move-card">
+  <h3>{{ title }}</h3>
+  <table class="compact">
+    <thead><tr><th>Symbol</th><th>Industry</th><th class="num">Mcap</th><th class="num">1W</th><th class="num">1M</th><th class="num">Rot Score</th><th>Delivery</th></tr></thead>
+    <tbody>
+      {% for row in rows %}{% if loop.index <= 8 %}
+      <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.industry or "—" }}</td><td class="num">{{ row.market_cap|fmt_num(0) }}</td><td class="num">{{ row.return_1w|fmt_pct }}</td><td class="num">{{ row.return_1m|fmt_pct }}</td><td class="num">{{ row.rotation_adjusted_score|fmt_num(1) }}</td><td>{{ row.delivery_signal or "—" }}</td></tr>
+      {% endif %}{% else %}<tr><td colspan="7" class="muted">No rows.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{%- endmacro %}
+
+{% macro delivery_signal_table(title, rows) -%}
+<div class="move-card">
+  <h3>{{ title }}</h3>
+  <table class="compact">
+    <thead><tr><th>Symbol</th><th class="num">Close</th><th class="num">Del%</th><th class="num">Del Z</th><th class="num">Vol Z</th><th class="num">5d</th><th class="num">Score</th></tr></thead>
+    <tbody>
+      {% for row in rows %}{% if loop.index <= 8 %}
+      <tr><td><strong>{{ row.symbol }}</strong></td><td class="num">{{ row.close|fmt_num(1) }}</td><td class="num">{{ row.delivery_pct|fmt_num(1) }}</td><td class="num">{{ row.delivery_pct_z20|fmt_num(2) }}</td><td class="num">{{ row.volume_z20|fmt_num(2) }}</td><td class="num">{{ row.price_return_5d|fmt_pct }}</td><td class="num">{{ row.accumulation_score|fmt_num(1) }}</td></tr>
+      {% endif %}{% else %}<tr><td colspan="7" class="muted">No rows.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{%- endmacro %}
+
 <section class="cover" data-week="{{ week_ending }}">
   <h1>Weekly Market Report</h1>
   <div class="subtitle">Week ending {{ week_ending }} · run <span class="muted">{{ run_id }}</span></div>
@@ -179,6 +207,7 @@
 
 <section class="section">
   <h2>3. Sector Leaders</h2>
+  <p class="small muted">Legacy sector-dashboard view using sector RS and momentum from the rank stage.</p>
   {% if charts and charts.sectors %}
   <div class="chart"><img src="{{ charts.sectors }}" alt="Sector RS bars" /></div>
   {% endif %}
@@ -190,6 +219,78 @@
   {% if not sector_groups.fresh_leaders and not sector_groups.improving_sectors and not sector_groups.weakening_leaders %}
   <p class="muted">No sector dashboard available.</p>
   {% endif %}
+</section>
+
+<section class="section">
+  <h2>3A. Sector Rotation</h2>
+  <p class="small muted">
+    RRG-style sector view from custom sector indices. Leading means relative strength and momentum are both above the benchmark;
+    Improving means momentum has turned up before relative strength fully confirms.
+  </p>
+
+  {% if sector_rotation_summary|length %}
+  <h3>Sector Rotation Quadrants</h3>
+  <table>
+    <thead><tr><th>Industry</th><th>Quadrant</th><th class="num">RS Ratio</th><th class="num">RS Momentum</th><th class="num">20d Alpha</th><th class="num">60d Alpha</th><th>Bucket</th></tr></thead>
+    <tbody>
+      {% for row in sector_rotation_summary %}
+      <tr><td><strong>{{ row.industry }}</strong></td><td>{{ row.quadrant }}</td><td class="num">{{ row.rs_ratio|fmt_num(1) }}</td><td class="num">{{ row.rs_momentum|fmt_num(1) }}</td><td class="num">{{ row.alpha_20d|fmt_pct }}</td><td class="num">{{ row.alpha_60d|fmt_pct }}</td><td>{{ row.outperformance_bucket or "—" }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>Sector Information</h3>
+  <table>
+    <thead><tr><th>Industry</th><th>Quadrant</th><th>Momentum Category</th><th>Relative Strength Category</th><th>Bucket</th></tr></thead>
+    <tbody>
+      {% for row in sector_rotation_information %}
+      <tr><td><strong>{{ row.industry }}</strong></td><td>{{ row.quadrant }}</td><td>{{ row.momentum_category }}</td><td>{{ row.relative_strength_category }}</td><td>{{ row.outperformance_bucket or "—" }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No sector rotation artifacts available for this run.</p>
+  {% endif %}
+
+  <h3>Stock Rotation</h3>
+  <p class="small muted">Stocks are split by their own stock-vs-sector quadrant, then ranked by rotation-adjusted score.</p>
+  <div class="move-grid">
+    {{ stock_rotation_table("Improving", stock_rotation_groups.improving|default([])) }}
+    {{ stock_rotation_table("Leading", stock_rotation_groups.leading|default([])) }}
+    {{ stock_rotation_table("Lagging", stock_rotation_groups.lagging|default([])) }}
+    {{ stock_rotation_table("Weakening", stock_rotation_groups.weakening|default([])) }}
+  </div>
+
+  <h3>Accumulation vs Distribution</h3>
+  <p class="small muted">Delivery labels combine delivery z-score, volume z-score, and recent price action.</p>
+  <div class="move-grid">
+    {{ delivery_signal_table("Accumulation", accumulation_distribution.accumulation|default([])) }}
+    {{ delivery_signal_table("Distribution", accumulation_distribution.distribution|default([])) }}
+  </div>
+
+  <h3>Delivery Data Trends</h3>
+  {% if delivery_trends|length %}
+  <table>
+    <thead><tr><th>Symbol</th><th>Signal</th><th class="num">Del%</th><th class="num">Del Z</th><th class="num">Vol Z</th><th class="num">5d</th><th class="num">Score</th></tr></thead>
+    <tbody>
+      {% for row in delivery_trends %}
+      <tr><td><strong>{{ row.symbol }}</strong></td><td>{{ row.delivery_signal or "—" }}</td><td class="num">{{ row.delivery_pct|fmt_num(1) }}</td><td class="num">{{ row.delivery_pct_z20|fmt_num(2) }}</td><td class="num">{{ row.volume_z20|fmt_num(2) }}</td><td class="num">{{ row.price_return_5d|fmt_pct }}</td><td class="num">{{ row.accumulation_score|fmt_num(1) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No delivery trend rows available.</p>{% endif %}
+
+  <h3>Custom Indices</h3>
+  {% if custom_indices|length %}
+  <table>
+    <thead><tr><th>Industry</th><th class="num">Index</th><th>Weighting</th><th class="num">Companies</th><th>Quadrant</th><th class="num">20d Alpha</th><th>Bucket</th></tr></thead>
+    <tbody>
+      {% for row in custom_indices %}
+      <tr><td><strong>{{ row.industry }}</strong></td><td class="num">{{ row.sector_index|fmt_num(1) }}</td><td>{{ row.weighting_method or "—" }}</td><td class="num">{{ row.constituent_count|fmt_num(0) }}</td><td>{{ row.quadrant or "—" }}</td><td class="num">{{ row.alpha_20d|fmt_pct }}</td><td>{{ row.outperformance_bucket or "—" }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No custom sector index rows available.</p>{% endif %}
 </section>
 
 <section class="section">

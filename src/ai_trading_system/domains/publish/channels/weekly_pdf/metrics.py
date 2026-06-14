@@ -172,6 +172,252 @@ def sector_leaders(sector_df: pd.DataFrame, n: int = 10) -> pd.DataFrame:
     return _select_existing(out, cols).reset_index(drop=True)
 
 
+def sector_rotation_summary(sector_rotation: pd.DataFrame, n: int = 30) -> pd.DataFrame:
+    """Latest RRG-style sector rotation rows for the weekly report."""
+    if sector_rotation is None or sector_rotation.empty:
+        return pd.DataFrame()
+    df = sector_rotation.copy()
+    if "date" in df.columns:
+        parsed_date = pd.to_datetime(df["date"], errors="coerce")
+        latest = parsed_date.max()
+        if pd.notna(latest):
+            df = df.loc[parsed_date.eq(latest)].copy()
+            parsed_date = parsed_date.loc[df.index]
+        df.loc[:, "date"] = parsed_date.dt.date.astype(str)
+    if "industry" not in df.columns and "Sector" in df.columns:
+        df.loc[:, "industry"] = df["Sector"]
+    if "quadrant" not in df.columns and "Quadrant" in df.columns:
+        df.loc[:, "quadrant"] = df["Quadrant"]
+    if "quadrant" in df.columns:
+        order = {"Leading": 0, "Improving": 1, "Weakening": 2, "Lagging": 3}
+        df.loc[:, "_quadrant_order"] = df["quadrant"].map(order).fillna(9)
+    else:
+        df.loc[:, "_quadrant_order"] = 9
+    for col in ("rs_ratio", "rs_momentum", "alpha_20d", "alpha_60d", "sector_return_20d"):
+        if col in df.columns:
+            df.loc[:, col] = pd.to_numeric(df[col], errors="coerce")
+    sort_cols = ["_quadrant_order"]
+    ascending = [True]
+    if "rs_ratio" in df.columns:
+        sort_cols.append("rs_ratio")
+        ascending.append(False)
+    if "rs_momentum" in df.columns:
+        sort_cols.append("rs_momentum")
+        ascending.append(False)
+    out = df.sort_values(sort_cols, ascending=ascending, kind="stable").head(n)
+    cols = [
+        "date",
+        "industry",
+        "quadrant",
+        "rs_ratio",
+        "rs_momentum",
+        "sector_return_20d",
+        "alpha_20d",
+        "alpha_60d",
+        "outperformance_bucket",
+    ]
+    return _select_existing(out, cols).reset_index(drop=True)
+
+
+def sector_rotation_information(sector_rotation: pd.DataFrame, n: int = 50) -> pd.DataFrame:
+    """Operator-friendly sector table with momentum and RS buckets."""
+    summary = sector_rotation_summary(sector_rotation, n=n)
+    if summary.empty:
+        return pd.DataFrame()
+    out = summary.copy()
+    out.loc[:, "momentum_category"] = out.get("rs_momentum", pd.Series(index=out.index)).map(_momentum_category)
+    out.loc[:, "relative_strength_category"] = out.get("rs_ratio", pd.Series(index=out.index)).map(_relative_strength_category)
+    cols = [
+        "industry",
+        "quadrant",
+        "momentum_category",
+        "relative_strength_category",
+        "rs_ratio",
+        "rs_momentum",
+        "outperformance_bucket",
+    ]
+    return _select_existing(out, cols).reset_index(drop=True)
+
+
+def split_stock_rotation(stock_rotation: pd.DataFrame, n: int = 12) -> dict[str, pd.DataFrame]:
+    """Split stock rotation candidates into the four RRG quadrants."""
+    empty = pd.DataFrame()
+    keys = {"improving": empty, "leading": empty, "lagging": empty, "weakening": empty}
+    if stock_rotation is None or stock_rotation.empty:
+        return keys
+    df = stock_rotation.copy()
+    if "quadrant" not in df.columns and "Quadrant" in df.columns:
+        df.loc[:, "quadrant"] = df["Quadrant"]
+    if "symbol" not in df.columns and "symbol_id" in df.columns:
+        df.loc[:, "symbol"] = df["symbol_id"]
+    sort_col = "rotation_adjusted_score" if "rotation_adjusted_score" in df.columns else "composite_score"
+    if sort_col in df.columns:
+        df.loc[:, sort_col] = pd.to_numeric(df[sort_col], errors="coerce")
+    cols = [
+        "symbol",
+        "company_name",
+        "industry",
+        "market_cap",
+        "return_1d",
+        "return_1w",
+        "return_1m",
+        "rs_ratio",
+        "rs_momentum",
+        "quadrant",
+        "sector_quadrant",
+        "composite_score",
+        "rotation_adjusted_score",
+        "near_52w_high_pct",
+        "delivery_signal",
+        "watchlist_candidate",
+    ]
+    out: dict[str, pd.DataFrame] = {}
+    for key, label in (
+        ("improving", "Improving"),
+        ("leading", "Leading"),
+        ("lagging", "Lagging"),
+        ("weakening", "Weakening"),
+    ):
+        frame = df.loc[df["quadrant"].astype(str).str.casefold().eq(label.casefold())].copy()
+        if sort_col in frame.columns:
+            frame = frame.sort_values(sort_col, ascending=False, na_position="last", kind="stable")
+        out[key] = _select_existing(frame, cols).head(n).reset_index(drop=True)
+    return out
+
+
+def accumulation_distribution_tables(accumulation_distribution: pd.DataFrame, n: int = 12) -> dict[str, pd.DataFrame]:
+    """Split delivery-based accumulation and distribution signals."""
+    empty = pd.DataFrame()
+    if accumulation_distribution is None or accumulation_distribution.empty or "delivery_signal" not in accumulation_distribution.columns:
+        return {"accumulation": empty, "distribution": empty}
+    df = accumulation_distribution.copy()
+    score_col = "accumulation_score" if "accumulation_score" in df.columns else None
+    if score_col:
+        df.loc[:, score_col] = pd.to_numeric(df[score_col], errors="coerce")
+    cols = [
+        "symbol",
+        "date",
+        "close",
+        "delivery_pct",
+        "delivery_pct_z20",
+        "volume_z20",
+        "price_return_5d",
+        "delivery_signal",
+        "accumulation_score",
+    ]
+    result: dict[str, pd.DataFrame] = {}
+    for key, label in (("accumulation", "Accumulation"), ("distribution", "Distribution")):
+        frame = df.loc[df["delivery_signal"].astype(str).str.casefold().eq(label.casefold())].copy()
+        if score_col:
+            frame = frame.sort_values(score_col, ascending=False, na_position="last", kind="stable")
+        result[key] = _select_existing(frame, cols).head(n).reset_index(drop=True)
+    return result
+
+
+def delivery_trend_summary(accumulation_distribution: pd.DataFrame, n: int = 12) -> pd.DataFrame:
+    """Compact latest delivery trend rows ranked by delivery/volume signal strength."""
+    if accumulation_distribution is None or accumulation_distribution.empty:
+        return pd.DataFrame()
+    df = accumulation_distribution.copy()
+    for column in ("delivery_pct_z20", "volume_z20", "price_return_5d", "accumulation_score", "delivery_pct"):
+        if column in df.columns:
+            df.loc[:, column] = pd.to_numeric(df[column], errors="coerce")
+    if "delivery_pct_z20" in df.columns:
+        df.loc[:, "_signal_abs"] = df["delivery_pct_z20"].abs()
+    elif "accumulation_score" in df.columns:
+        df.loc[:, "_signal_abs"] = (df["accumulation_score"] - 50).abs()
+    else:
+        df.loc[:, "_signal_abs"] = 0
+    sort_cols = ["_signal_abs"]
+    ascending = [False]
+    if "accumulation_score" in df.columns:
+        sort_cols.append("accumulation_score")
+        ascending.append(False)
+    df = df.sort_values(sort_cols, ascending=ascending, na_position="last", kind="stable")
+    cols = [
+        "symbol",
+        "date",
+        "delivery_signal",
+        "delivery_pct",
+        "delivery_pct_z20",
+        "volume_z20",
+        "price_return_5d",
+        "accumulation_score",
+    ]
+    return _select_existing(df, cols).head(n).reset_index(drop=True)
+
+
+def custom_indices_summary(
+    sector_custom_indices: pd.DataFrame,
+    sector_rotation: pd.DataFrame,
+    n: int = 20,
+) -> pd.DataFrame:
+    """Latest custom sector index state with sector-vs-benchmark context."""
+    if sector_custom_indices is None or sector_custom_indices.empty:
+        return pd.DataFrame()
+    idx = sector_custom_indices.copy()
+    if "date" in idx.columns:
+        idx.loc[:, "_parsed_date"] = pd.to_datetime(idx["date"], errors="coerce")
+        idx = idx.sort_values(["industry", "_parsed_date"], kind="stable").drop_duplicates("industry", keep="last")
+        idx.loc[:, "date"] = idx["_parsed_date"].dt.date.astype(str)
+        idx = idx.drop(columns=["_parsed_date"])
+    if sector_rotation is not None and not sector_rotation.empty and "industry" in sector_rotation.columns:
+        rot = sector_rotation_summary(sector_rotation, n=1000)
+        merge_cols = [
+            col
+            for col in ("industry", "quadrant", "alpha_20d", "alpha_60d", "outperformance_bucket")
+            if col in rot.columns
+        ]
+        if "industry" in merge_cols:
+            idx = idx.merge(rot.loc[:, merge_cols].drop_duplicates("industry"), on="industry", how="left")
+    for col in ("sector_index", "alpha_20d", "alpha_60d", "constituent_count"):
+        if col in idx.columns:
+            idx.loc[:, col] = pd.to_numeric(idx[col], errors="coerce")
+    sort_col = "alpha_20d" if "alpha_20d" in idx.columns else "sector_index"
+    if sort_col in idx.columns:
+        idx = idx.sort_values(sort_col, ascending=False, na_position="last", kind="stable")
+    cols = [
+        "date",
+        "industry",
+        "sector_index",
+        "weighting_method",
+        "constituent_count",
+        "quadrant",
+        "alpha_20d",
+        "alpha_60d",
+        "outperformance_bucket",
+    ]
+    return _select_existing(idx, cols).head(n).reset_index(drop=True)
+
+
+def _momentum_category(value: Any) -> str:
+    number = _safe_float(value)
+    if number is None:
+        return "Unknown"
+    if number >= 105:
+        return "Very High Momentum"
+    if number >= 101:
+        return "High Momentum"
+    if number >= 99:
+        return "Medium Momentum"
+    if number >= 95:
+        return "Low Momentum"
+    return "Very Low Momentum"
+
+
+def _relative_strength_category(value: Any) -> str:
+    number = _safe_float(value)
+    if number is None:
+        return "Unknown"
+    if number >= 105:
+        return "Very High Relative Strength"
+    if number >= 101:
+        return "High Relative Strength"
+    if number >= 99:
+        return "Medium Relative Strength"
+    return "Low Relative Strength"
+
+
 def volume_delivery_movers(ranked: pd.DataFrame, n: int = 25) -> pd.DataFrame:
     """Weekly price movers backed by volume activity and high delivery.
 

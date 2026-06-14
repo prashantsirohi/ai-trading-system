@@ -133,12 +133,15 @@ def build_sector_custom_indices(enriched_ohlcv: pd.DataFrame) -> tuple[pd.DataFr
     """Build one 100-based custom index per industry."""
     if enriched_ohlcv is None or enriched_ohlcv.empty:
         return pd.DataFrame(columns=["date", "industry", "sector_index", "weighting_method", "constituent_count"]), {}
+    enriched_ohlcv = enriched_ohlcv.copy()
+    enriched_ohlcv.loc[:, "date"] = pd.to_datetime(enriched_ohlcv["date"], errors="coerce").astype("datetime64[ns]")
+    enriched_ohlcv = enriched_ohlcv.dropna(subset=["date"])
+    if enriched_ohlcv.empty:
+        return pd.DataFrame(columns=["date", "industry", "sector_index", "weighting_method", "constituent_count"]), {}
+    enriched_ohlcv.loc[:, "_date_order"] = enriched_ohlcv["date"].astype("int64")
 
-    latest_caps = (
-        enriched_ohlcv.sort_values("date", kind="stable")
-        .drop_duplicates(subset=["symbol"], keep="last")
-        .set_index("symbol")["market_cap"]
-    )
+    latest_idx = enriched_ohlcv.groupby("symbol", sort=False)["_date_order"].idxmax()
+    latest_caps = enriched_ohlcv.loc[latest_idx].set_index("symbol")["market_cap"]
     records: list[dict[str, object]] = []
     methods: dict[str, str] = {}
     for industry, sector_rows in enriched_ohlcv.groupby("industry", dropna=False):
@@ -284,7 +287,14 @@ def _universe_equal_weight_benchmark(
     metadata: pd.DataFrame | None,
     max_symbols: int,
 ) -> pd.DataFrame:
-    latest_symbols = ohlcv.sort_values("date", kind="stable").drop_duplicates(subset=["symbol"], keep="last")
+    ohlcv = ohlcv.copy()
+    ohlcv.loc[:, "date"] = pd.to_datetime(ohlcv["date"], errors="coerce").astype("datetime64[ns]")
+    ohlcv = ohlcv.dropna(subset=["date"])
+    if ohlcv.empty:
+        return pd.DataFrame(columns=["date", "benchmark_index"])
+    ohlcv.loc[:, "_date_order"] = ohlcv["date"].astype("int64")
+    latest_idx = ohlcv.groupby("symbol", sort=False)["_date_order"].idxmax()
+    latest_symbols = ohlcv.loc[latest_idx].copy()
     if metadata is not None and not metadata.empty and "market_cap" in metadata.columns:
         cap_lookup = metadata.set_index("symbol")["market_cap"]
         latest_symbols = latest_symbols.assign(_market_cap=latest_symbols["symbol"].map(cap_lookup))

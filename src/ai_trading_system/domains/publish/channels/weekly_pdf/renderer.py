@@ -8,6 +8,7 @@ skipped with a warning surfaced to the caller.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -62,7 +63,14 @@ def _fmt_pct_points(value: Any, digits: int = 1) -> str:
 
 
 def _is_blank(value: Any) -> bool:
-    return value is None or value == "" or isinstance(value, Undefined)
+    if value is None or isinstance(value, Undefined):
+        return True
+    if isinstance(value, str):
+        return value.strip() == "" or value.strip().casefold() in {"nan", "nat", "none"}
+    try:
+        return bool(math.isnan(float(value)))
+    except (TypeError, ValueError):
+        return False
 
 
 def render_html(context: Dict[str, Any]) -> str:

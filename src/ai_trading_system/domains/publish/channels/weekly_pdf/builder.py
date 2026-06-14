@@ -98,6 +98,12 @@ def build_report(
         trust_status=data.trust_status,
     )
     sector_groups = metrics.split_sector_leadership(data.sector_dashboard)
+    sector_rotation_summary = metrics.sector_rotation_summary(data.sector_rotation)
+    sector_rotation_information = metrics.sector_rotation_information(data.sector_rotation)
+    stock_rotation_groups = metrics.split_stock_rotation(data.stock_rotation)
+    accumulation_distribution = metrics.accumulation_distribution_tables(data.accumulation_distribution)
+    delivery_trends = metrics.delivery_trend_summary(data.accumulation_distribution)
+    custom_indices = metrics.custom_indices_summary(data.sector_custom_indices, data.sector_rotation)
 
     chart_paths = _render_charts(
         output_dir=output_dir,
@@ -144,6 +150,13 @@ def build_report(
         "executive_panel": executive_panel,
         "sectors": _df_to_records(sectors),
         "sector_groups": {key: _df_to_records(value) for key, value in sector_groups.items()},
+        "sector_rotation_summary": _df_to_records(sector_rotation_summary),
+        "sector_rotation_information": _df_to_records(sector_rotation_information),
+        "stock_rotation_groups": {key: _df_to_records(value) for key, value in stock_rotation_groups.items()},
+        "accumulation_distribution": {key: _df_to_records(value) for key, value in accumulation_distribution.items()},
+        "delivery_trends": _df_to_records(delivery_trends),
+        "custom_indices": _df_to_records(custom_indices),
+        "sector_rotation_payload": data.sector_rotation_payload,
         "top_ranked": _df_to_records(top_ranked),
         "volume_delivery": _df_to_records(volume_delivery),
         "weekly_price": _df_to_records(weekly_price),
@@ -199,6 +212,16 @@ def build_report(
             "weekly_sector_fresh_leaders": sector_groups["fresh_leaders"],
             "weekly_sector_improving": sector_groups["improving_sectors"],
             "weekly_sector_weakening_leaders": sector_groups["weakening_leaders"],
+            "weekly_sector_rotation_summary": sector_rotation_summary,
+            "weekly_sector_rotation_information": sector_rotation_information,
+            "weekly_stock_rotation_improving": stock_rotation_groups["improving"],
+            "weekly_stock_rotation_leading": stock_rotation_groups["leading"],
+            "weekly_stock_rotation_lagging": stock_rotation_groups["lagging"],
+            "weekly_stock_rotation_weakening": stock_rotation_groups["weakening"],
+            "weekly_accumulation": accumulation_distribution["accumulation"],
+            "weekly_distribution": accumulation_distribution["distribution"],
+            "weekly_delivery_trends": delivery_trends,
+            "weekly_custom_indices": custom_indices,
             "weekly_failed_breakouts": failed_breakouts,
             "weekly_fund_value_tech_overlap": fund_value_tech,
             "weekly_candidate_tracker_current": data.candidate_tracker_current,
@@ -254,6 +277,11 @@ def build_report(
             "compounders": int(len(compounders)),
             "sector_earnings": int(len(top_sector_earnings)),
             "valuation_cycle": int(len(data.valuation_cycle_features)),
+            "sector_rotation": int(len(sector_rotation_summary)),
+            "stock_rotation": int(sum(len(frame) for frame in stock_rotation_groups.values())),
+            "accumulation": int(len(accumulation_distribution["accumulation"])),
+            "distribution": int(len(accumulation_distribution["distribution"])),
+            "custom_indices": int(len(custom_indices)),
         },
         "prior_run_id": data.prior_run_id,
         "prior_run_date": data.prior_run_date,

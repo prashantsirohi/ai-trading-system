@@ -60,6 +60,11 @@ def test_build_publish_datasets_loads_optional_artifacts_with_defaults(tmp_path:
     assert not datasets["breakout_scan"].empty
     assert datasets["stock_scan"].empty
     assert datasets["sector_dashboard"].empty
+    assert datasets["sector_rotation"].empty
+    assert datasets["stock_rotation"].empty
+    assert datasets["accumulation_distribution"].empty
+    assert datasets["sector_custom_indices"].empty
+    assert datasets["sector_rotation_payload"] == {}
     assert datasets["dashboard_payload"] == {}
     assert datasets["publish_trust_status"] == "unknown"
     assert datasets["publish_mode_telegram"] == "concise"
@@ -69,6 +74,38 @@ def test_build_publish_datasets_loads_optional_artifacts_with_defaults(tmp_path:
     assert datasets["publish_rows_telegram"][0]["publish_confidence"] is None
     assert datasets["stage2_summary"]["uptrend_count"] == 0
     assert datasets["stage2_breakdown_symbols"] == ["AAA"]
+
+
+def test_build_publish_datasets_loads_sector_rotation_artifacts(tmp_path: Path) -> None:
+    ranked_path = tmp_path / "ranked_signals.csv"
+    ranked_path.write_text("symbol_id,composite_score\nAAA,90\n", encoding="utf-8")
+    ranked_artifact = StageArtifact.from_file("ranked_signals", ranked_path, row_count=1)
+    artifacts: dict[str, StageArtifact] = {"ranked_signals": ranked_artifact}
+    for artifact_type, body in {
+        "sector_rotation": "industry,quadrant,rs_ratio\nBanks,Leading,104\n",
+        "stock_rotation": "symbol,quadrant,rotation_adjusted_score\nAAA,Leading,82\n",
+        "accumulation_distribution": "symbol,delivery_signal,accumulation_score\nAAA,Accumulation,78\n",
+        "sector_custom_indices": "date,industry,sector_index,weighting_method,constituent_count\n2026-04-30,Banks,110,market_cap,12\n",
+    }.items():
+        path = tmp_path / f"{artifact_type}.csv"
+        path.write_text(body, encoding="utf-8")
+        artifacts[artifact_type] = StageArtifact.from_file(artifact_type, path, row_count=1)
+    payload_path = tmp_path / "sector_rotation_payload.json"
+    payload_path.write_text('{"benchmark_name":"UNIV_TOP1000"}', encoding="utf-8")
+    artifacts["sector_rotation_payload"] = StageArtifact.from_file("sector_rotation_payload", payload_path, row_count=1)
+
+    datasets = build_publish_datasets(
+        context_artifact_for=lambda name: artifacts.get(name),
+        read_artifact=lambda artifact: pd.read_csv(Path(artifact.uri)),
+        read_json_artifact=lambda artifact: json.loads(Path(artifact.uri).read_text(encoding="utf-8")),
+        ranked_signals_artifact=ranked_artifact,
+    )
+
+    assert datasets["sector_rotation"]["industry"].tolist() == ["Banks"]
+    assert datasets["stock_rotation"]["symbol"].tolist() == ["AAA"]
+    assert datasets["accumulation_distribution"]["delivery_signal"].tolist() == ["Accumulation"]
+    assert datasets["sector_custom_indices"]["weighting_method"].tolist() == ["market_cap"]
+    assert datasets["sector_rotation_payload"]["benchmark_name"] == "UNIV_TOP1000"
 
 
 def test_build_publish_datasets_loads_fundamental_artifacts_and_dashboard_payload(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ import pandas as pd
 
 from ai_trading_system.domains.publish.channels.weekly_pdf import breadth, charts, history, metrics
 from ai_trading_system.domains.publish.channels.weekly_pdf.builder import _safe_date, build_report
+from ai_trading_system.domains.publish.channels.weekly_pdf.data_loader import load_report_data
 from ai_trading_system.domains.publish.channels.weekly_pdf.renderer import render_html
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 
@@ -454,6 +455,87 @@ def test_candidate_tracker_view_accepts_real_status_column() -> None:
     assert tracker_view["deteriorating"]["current_status"].tolist() == ["DETERIORATING"]
 
 
+def test_sector_rotation_weekly_helpers_split_report_sections() -> None:
+    sector_rotation = pd.DataFrame(
+        [
+            {"date": "2026-04-30", "industry": "Banks", "quadrant": "Leading", "rs_ratio": 104, "rs_momentum": 103, "alpha_20d": 0.05, "alpha_60d": 0.08, "outperformance_bucket": "Significant Outperformance"},
+            {"date": "2026-04-30", "industry": "Auto", "quadrant": "Improving", "rs_ratio": 98, "rs_momentum": 102, "alpha_20d": 0.02, "alpha_60d": 0.03, "outperformance_bucket": "Minor Outperformance"},
+        ]
+    )
+    stock_rotation = pd.DataFrame(
+        [
+            {"symbol": "LEAD", "industry": "Banks", "quadrant": "Leading", "rotation_adjusted_score": 90, "delivery_signal": "Accumulation"},
+            {"symbol": "IMPR", "industry": "Auto", "quadrant": "Improving", "rotation_adjusted_score": 85, "delivery_signal": "Neutral"},
+            {"symbol": "LAG", "industry": "IT", "quadrant": "Lagging", "rotation_adjusted_score": 50, "delivery_signal": "Neutral"},
+            {"symbol": "WEAK", "industry": "Pharma", "quadrant": "Weakening", "rotation_adjusted_score": 45, "delivery_signal": "Distribution"},
+        ]
+    )
+    accumulation = pd.DataFrame(
+        [
+            {"symbol": "LEAD", "delivery_signal": "Accumulation", "accumulation_score": 80, "delivery_pct_z20": 2.0},
+            {"symbol": "WEAK", "delivery_signal": "Distribution", "accumulation_score": 72, "delivery_pct_z20": 1.5},
+        ]
+    )
+    custom_indices = pd.DataFrame(
+        [{"date": "2026-04-30", "industry": "Banks", "sector_index": 110, "weighting_method": "market_cap", "constituent_count": 12}]
+    )
+
+    info = metrics.sector_rotation_information(sector_rotation)
+    stocks = metrics.split_stock_rotation(stock_rotation)
+    delivery = metrics.accumulation_distribution_tables(accumulation)
+    indices = metrics.custom_indices_summary(custom_indices, sector_rotation)
+
+    assert info["industry"].tolist() == ["Banks", "Auto"]
+    assert stocks["leading"]["symbol"].tolist() == ["LEAD"]
+    assert stocks["improving"]["symbol"].tolist() == ["IMPR"]
+    assert stocks["lagging"]["symbol"].tolist() == ["LAG"]
+    assert stocks["weakening"]["symbol"].tolist() == ["WEAK"]
+    assert delivery["accumulation"]["symbol"].tolist() == ["LEAD"]
+    assert delivery["distribution"]["symbol"].tolist() == ["WEAK"]
+    assert indices.iloc[0]["weighting_method"] == "market_cap"
+    assert indices.iloc[0]["constituent_count"] == 12
+
+
+def test_weekly_data_loader_accepts_sector_rotation_artifacts(tmp_path: Path) -> None:
+    rank_dir = tmp_path / "data" / "pipeline_runs" / "pipeline-2026-04-30-abcdef12" / "rank" / "attempt_1"
+    rank_dir.mkdir(parents=True)
+    artifacts: dict[str, StageArtifact] = {}
+    for artifact_type, body in {
+        "pattern_scan": "symbol_id,pattern_family\nAAA,flag\n",
+        "sector_rotation": "industry,quadrant,rs_ratio\nBanks,Leading,104\n",
+        "stock_rotation": "symbol,quadrant,rotation_adjusted_score\nAAA,Leading,82\n",
+        "accumulation_distribution": "symbol,delivery_signal,accumulation_score\nAAA,Accumulation,78\n",
+        "sector_custom_indices": "date,industry,sector_index,weighting_method,constituent_count\n2026-04-30,Banks,110,market_cap,12\n",
+    }.items():
+        path = rank_dir / f"{artifact_type}.csv"
+        path.write_text(body, encoding="utf-8")
+        artifacts[artifact_type] = StageArtifact.from_file(artifact_type, path, row_count=1)
+    summary_path = rank_dir / "rank_summary.json"
+    summary_path.write_text(json.dumps({"data_trust_status": "trusted"}), encoding="utf-8")
+    payload_path = rank_dir / "sector_rotation_payload.json"
+    payload_path.write_text(json.dumps({"benchmark_name": "UNIV_TOP1000"}), encoding="utf-8")
+    artifacts["rank_summary"] = StageArtifact.from_file("rank_summary", summary_path, row_count=1)
+    artifacts["sector_rotation_payload"] = StageArtifact.from_file("sector_rotation_payload", payload_path, row_count=1)
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id="pipeline-2026-04-30-abcdef12",
+        run_date="2026-04-30",
+        stage_name="publish",
+        attempt_number=1,
+        params={"data_domain": "operational"},
+        artifacts={"rank": artifacts},
+    )
+
+    data = load_report_data(context, {"ranked_signals": pd.DataFrame(), "breakout_scan": pd.DataFrame(), "sector_dashboard": pd.DataFrame()})
+
+    assert data.sector_rotation["industry"].tolist() == ["Banks"]
+    assert data.stock_rotation["symbol"].tolist() == ["AAA"]
+    assert data.accumulation_distribution["delivery_signal"].tolist() == ["Accumulation"]
+    assert data.sector_custom_indices["weighting_method"].tolist() == ["market_cap"]
+    assert data.sector_rotation_payload["benchmark_name"] == "UNIV_TOP1000"
+
+
 def test_candle_targets_dedupe_include_pattern_and_cap() -> None:
     ranked = pd.DataFrame([{"symbol_id": "AAA", "composite_score": 99}, {"symbol_id": "BBB", "composite_score": 98}])
     improvers = pd.DataFrame([{"symbol_id": "AAA"}, {"symbol_id": "CCC"}])
@@ -630,6 +712,27 @@ def test_build_report_writes_html_manifest_and_tables(tmp_path: Path) -> None:
         "sector_dashboard": pd.DataFrame(
             [{"Sector": "IT", "RS": 0.8, "RS_20": 0.7, "RS_50": 0.6, "Momentum": 0.2, "RS_rank": 1}]
         ),
+        "sector_rotation": pd.DataFrame(
+            [
+                {"date": "2026-04-29", "industry": "Banks", "quadrant": "Leading", "rs_ratio": 104.0, "rs_momentum": 103.0, "alpha_20d": 0.05, "alpha_60d": 0.08, "outperformance_bucket": "Significant Outperformance"},
+                {"date": "2026-04-29", "industry": "Auto", "quadrant": "Improving", "rs_ratio": 98.0, "rs_momentum": 102.0, "alpha_20d": 0.02, "alpha_60d": 0.03, "outperformance_bucket": "Minor Outperformance"},
+            ]
+        ),
+        "stock_rotation": pd.DataFrame(
+            [
+                {"symbol": "AAA", "industry": "Banks", "quadrant": "Leading", "market_cap": 1000.0, "return_1w": 0.04, "return_1m": 0.12, "rotation_adjusted_score": 82.0, "delivery_signal": "Accumulation"},
+                {"symbol": "BBB", "industry": "Auto", "quadrant": "Improving", "market_cap": 500.0, "return_1w": 0.03, "return_1m": 0.08, "rotation_adjusted_score": 78.0, "delivery_signal": "Neutral"},
+            ]
+        ),
+        "accumulation_distribution": pd.DataFrame(
+            [
+                {"symbol": "AAA", "close": 105.0, "delivery_pct": 55.0, "delivery_pct_z20": 1.8, "volume_z20": 1.2, "price_return_5d": 0.04, "delivery_signal": "Accumulation", "accumulation_score": 78.0},
+                {"symbol": "CCC", "close": 90.0, "delivery_pct": 60.0, "delivery_pct_z20": 1.4, "volume_z20": 0.8, "price_return_5d": -0.03, "delivery_signal": "Distribution", "accumulation_score": 70.0},
+            ]
+        ),
+        "sector_custom_indices": pd.DataFrame(
+            [{"date": "2026-04-29", "industry": "Banks", "sector_index": 110.0, "weighting_method": "market_cap", "constituent_count": 12}]
+        ),
         "stock_scan": pd.DataFrame(),
         "dashboard_payload": {"summary": {"market_stage": "risk_on"}},
     }
@@ -643,6 +746,10 @@ def test_build_report_writes_html_manifest_and_tables(tmp_path: Path) -> None:
     assert Path(manifest["tables"]["weekly_price_movers"]).exists()
     assert Path(manifest["tables"]["weekly_unusual_volume_shockers"]).exists()
     assert Path(manifest["tables"]["weekly_patterns_best_by_symbol"]).exists()
+    assert Path(manifest["tables"]["weekly_sector_rotation_summary"]).exists()
+    assert Path(manifest["tables"]["weekly_stock_rotation_leading"]).exists()
+    assert Path(manifest["tables"]["weekly_accumulation"]).exists()
+    assert Path(manifest["tables"]["weekly_custom_indices"]).exists()
     assert "stage2_report_summary" in manifest
     assert "executive_panel" in manifest
     assert "empty_sections" in manifest
@@ -651,9 +758,21 @@ def test_build_report_writes_html_manifest_and_tables(tmp_path: Path) -> None:
     assert manifest["counts"]["volume_delivery"] == 1
     assert manifest["counts"]["weekly_price"] == 1
     assert manifest["counts"]["volume_shockers"] == 1
+    assert manifest["counts"]["sector_rotation"] == 2
+    assert manifest["counts"]["stock_rotation"] == 2
+    assert manifest["counts"]["accumulation"] == 1
+    assert manifest["counts"]["distribution"] == 1
+    assert manifest["counts"]["custom_indices"] == 1
     html = Path(manifest["html_path"]).read_text(encoding="utf-8")
     assert "24.8%" in html
     assert "1. Executive Decision Panel" in html
+    assert "3A. Sector Rotation" in html
+    assert "Stock Rotation" in html
+    assert "Accumulation vs Distribution" in html
+    assert "Delivery Data Trends" in html
+    assert "Custom Indices" in html
+    assert "Significant Outperformance" in html
+    assert "market_cap" in html
     assert "Market Moves Snapshot" in html
     assert 'class="pattern-table"' in html
     assert "Watchlist intersection is deferred to Phase 4" not in html

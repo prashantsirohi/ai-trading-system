@@ -123,6 +123,11 @@ def build_publish_datasets(
     breakout_artifact = context_artifact_for("breakout_scan")
     pattern_artifact = context_artifact_for("pattern_scan")
     dashboard_artifact = context_artifact_for("sector_dashboard")
+    sector_rotation_artifact = context_artifact_for("sector_rotation")
+    stock_rotation_artifact = context_artifact_for("stock_rotation")
+    accumulation_distribution_artifact = context_artifact_for("accumulation_distribution")
+    sector_custom_indices_artifact = context_artifact_for("sector_custom_indices")
+    sector_rotation_payload_artifact = context_artifact_for("sector_rotation_payload")
     watchlist_artifact = context_artifact_for("watchlist_candidates") or context_artifact_for("watchlist_final")
     dashboard_payload_artifact = context_artifact_for("dashboard_payload")
     candidate_tracker_artifact = context_artifact_for("candidate_tracker_current")
@@ -199,6 +204,11 @@ def build_publish_datasets(
         "pattern_scan": read_artifact(pattern_artifact) if pattern_artifact else pd.DataFrame(),
         "stock_scan": read_artifact(scan_artifact) if scan_artifact else pd.DataFrame(),
         "sector_dashboard": read_artifact(dashboard_artifact) if dashboard_artifact else pd.DataFrame(),
+        "sector_rotation": read_artifact(sector_rotation_artifact) if sector_rotation_artifact else pd.DataFrame(),
+        "stock_rotation": read_artifact(stock_rotation_artifact) if stock_rotation_artifact else pd.DataFrame(),
+        "accumulation_distribution": read_artifact(accumulation_distribution_artifact) if accumulation_distribution_artifact else pd.DataFrame(),
+        "sector_custom_indices": read_artifact(sector_custom_indices_artifact) if sector_custom_indices_artifact else pd.DataFrame(),
+        "sector_rotation_payload": read_json_artifact(sector_rotation_payload_artifact) if sector_rotation_payload_artifact else {},
         "watchlist_candidates": watchlist_df,
         "candidate_tracker_current": read_artifact(candidate_tracker_artifact) if candidate_tracker_artifact else pd.DataFrame(),
         "dashboard_payload": dashboard_payload,

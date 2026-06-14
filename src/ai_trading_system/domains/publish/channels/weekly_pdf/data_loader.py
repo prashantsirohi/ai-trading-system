@@ -33,6 +33,11 @@ class WeeklyReportData:
     pattern_scan: pd.DataFrame
     sector_dashboard: pd.DataFrame
     stock_scan: pd.DataFrame
+    sector_rotation: pd.DataFrame = field(default_factory=pd.DataFrame)
+    stock_rotation: pd.DataFrame = field(default_factory=pd.DataFrame)
+    accumulation_distribution: pd.DataFrame = field(default_factory=pd.DataFrame)
+    sector_custom_indices: pd.DataFrame = field(default_factory=pd.DataFrame)
+    sector_rotation_payload: Dict[str, Any] = field(default_factory=dict)
     dashboard_payload: Dict[str, Any] = field(default_factory=dict)
     rank_summary: Dict[str, Any] = field(default_factory=dict)
     trust_status: str = "unknown"
@@ -104,6 +109,21 @@ def load_report_data(
 
     pattern_scan = _read_csv_artifact(context.artifact_for("rank", "pattern_scan"))
     rank_summary = _read_json_artifact(context.artifact_for("rank", "rank_summary"))
+    sector_rotation = _first_dataset_frame(datasets, "sector_rotation")
+    if sector_rotation.empty:
+        sector_rotation = _read_csv_artifact(context.artifact_for("rank", "sector_rotation"))
+    stock_rotation = _first_dataset_frame(datasets, "stock_rotation")
+    if stock_rotation.empty:
+        stock_rotation = _read_csv_artifact(context.artifact_for("rank", "stock_rotation"))
+    accumulation_distribution = _first_dataset_frame(datasets, "accumulation_distribution")
+    if accumulation_distribution.empty:
+        accumulation_distribution = _read_csv_artifact(context.artifact_for("rank", "accumulation_distribution"))
+    sector_custom_indices = _first_dataset_frame(datasets, "sector_custom_indices")
+    if sector_custom_indices.empty:
+        sector_custom_indices = _read_csv_artifact(context.artifact_for("rank", "sector_custom_indices"))
+    sector_rotation_payload = datasets.get("sector_rotation_payload") or _read_json_artifact(
+        context.artifact_for("rank", "sector_rotation_payload")
+    )
     dashboard_payload = datasets.get("dashboard_payload") or {}
     market_events_snapshot = datasets.get("market_events_snapshot") or {}
     enriched_event_signals = list(datasets.get("enriched_event_signals") or [])
@@ -123,6 +143,11 @@ def load_report_data(
         pattern_scan=pattern_scan,
         sector_dashboard=sector_dashboard,
         stock_scan=stock_scan,
+        sector_rotation=sector_rotation,
+        stock_rotation=stock_rotation,
+        accumulation_distribution=accumulation_distribution,
+        sector_custom_indices=sector_custom_indices,
+        sector_rotation_payload=dict(sector_rotation_payload) if isinstance(sector_rotation_payload, dict) else {},
         dashboard_payload=dict(dashboard_payload),
         rank_summary=dict(rank_summary),
         trust_status=str(trust_status),
@@ -145,8 +170,54 @@ def load_report_data(
         ),
         candidate_tracker_current=_first_dataset_frame(datasets, "candidate_tracker_current"),
     )
+    _attach_sector_rotation_fallback(context, data)
     _attach_phase2_inputs(context, data)
     return data
+
+
+def _attach_sector_rotation_fallback(context: StageContext, data: WeeklyReportData) -> None:
+    """Compute sector-rotation frames in-memory when older rank attempts lack them.
+
+    Recent rank runs write these sidecar artifacts directly. Older runs can be
+    publish-retried without them, so the weekly report fills the gap
+    best-effort from the same OHLCV/master inputs without mutating live stores.
+    """
+    if not (
+        data.sector_rotation.empty
+        or data.stock_rotation.empty
+        or data.accumulation_distribution.empty
+        or data.sector_custom_indices.empty
+    ):
+        return
+    project_root = getattr(context, "project_root", None)
+    if project_root is None:
+        return
+    try:
+        from ai_trading_system.analytics.sector_rotation.compute import compute_sector_rotation
+
+        data_domain = (context.params or {}).get("data_domain", "operational")
+        paths = get_domain_paths(project_root=project_root, data_domain=data_domain)
+        result = compute_sector_rotation(
+            ohlcv_db_path=context.db_path or paths.ohlcv_db_path,
+            master_db_path=paths.master_db_path,
+            run_date=data.run_date,
+            ranked_df=data.ranked_signals,
+            exchange=str((context.params or {}).get("exchange", "NSE")),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("weekly_pdf: sector rotation fallback failed: %s", exc)
+        return
+
+    if data.sector_rotation.empty:
+        data.sector_rotation = result.sector_rotation
+    if data.stock_rotation.empty:
+        data.stock_rotation = result.stock_rotation
+    if data.accumulation_distribution.empty:
+        data.accumulation_distribution = result.accumulation_distribution
+    if data.sector_custom_indices.empty:
+        data.sector_custom_indices = result.sector_custom_indices
+    if not data.sector_rotation_payload:
+        data.sector_rotation_payload = dict(result.payload)
 
 
 def _attach_phase2_inputs(context: StageContext, data: WeeklyReportData) -> None:
