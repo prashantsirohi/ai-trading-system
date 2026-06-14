@@ -17,7 +17,7 @@ class PipelineRunRequest(BaseModel):
 
     label: str = "Execution API pipeline run"
     stages: list[str] = Field(
-        default_factory=lambda: ["ingest", "features", "rank", "publish", "perf_tracker"]
+        default_factory=lambda: ["ingest", "features", "rank", "investigator", "publish", "perf_tracker"]
     )
     params: dict[str, Any] = Field(default_factory=dict)
     run_id: str | None = None

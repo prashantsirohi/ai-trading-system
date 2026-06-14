@@ -87,7 +87,7 @@ def _latest_stage_statuses(stage_runs: Iterable[dict]) -> dict[str, str]:
 
 
 def _requested_stages_for_daily(stages: str, *, canary: bool) -> list[str]:
-    if canary and stages == "ingest,features,rank,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker":
+    if canary and stages == "ingest,features,rank,investigator,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker":
         return ["ingest", "features", "rank"]
     return [stage.strip() for stage in stages.split(",") if stage.strip()]
 
@@ -297,7 +297,7 @@ def main(
     force: bool = False,
     local_publish: bool = False,
     smoke: bool = False,
-    stages: str = "ingest,features,rank,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker",
+    stages: str = "ingest,features,rank,investigator,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker",
     canary: bool = False,
     symbol_limit: int | None = None,
     skip_preflight: bool = False,
@@ -349,7 +349,7 @@ def main(
     run_date = resolve_daily_market_date(now)
     effective_validation_date = bhavcopy_validation_date or run_date
     requested_stages = _requested_stages_for_daily(stages, canary=canary)
-    if not enable_candidate_tracker and stages == "ingest,features,rank,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker":
+    if not enable_candidate_tracker and stages == "ingest,features,rank,investigator,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker":
         requested_stages = [stage for stage in requested_stages if stage != "candidate_tracker"]
 
     logger.info("=" * 60)
@@ -493,7 +493,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--stages",
-        default="ingest,features,rank,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker",
+        default="ingest,features,rank,investigator,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker",
         help="Comma-separated stage list. Example: publish",
     )
     parser.add_argument(

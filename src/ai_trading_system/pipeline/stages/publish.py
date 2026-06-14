@@ -79,6 +79,7 @@ class PublishStage:
         # to run so the operator gets *some* signal that the pipeline ran.
         "google_sheets_portfolio": "publish_optional",
         "google_sheets_fundamentals": "publish_optional",
+        "google_sheets_investigator": "publish_optional",
         "google_sheets_fundamental_watchlist": "publish_of_record",
         "google_sheets_dashboard": "publish_of_record",
         "google_sheets_watchlist": "publish_of_record",
@@ -149,6 +150,7 @@ class PublishStage:
         )
         self._attach_event_datasets(context, datasets)
         self._attach_insight_datasets(context, datasets)
+        self._attach_investigator_datasets(context, datasets)
         self._attach_decision_bundle(context, datasets)
         ranked_df = datasets.get("ranked_signals", pd.DataFrame())
 
@@ -351,6 +353,29 @@ class PublishStage:
             if datasets.get("latest_insight"):
                 dashboard_payload["latest_insight"] = datasets["latest_insight"]
 
+    def _attach_investigator_datasets(self, context: StageContext, datasets: Dict[str, Any]) -> None:
+        artifact_map = {
+            "daily_gainer_log": "investigator_today_gainers",
+            "investigator_scores": "investigator_scores",
+            "repeat_tracker": "investigator_repeat_tracker",
+            "active_watchlist": "investigator_active_watchlist",
+            "trap_log": "investigator_trap_log",
+            "archived_investigator": "investigator_archive",
+            "final_3q_gate": "investigator_final_3q_gate",
+        }
+        for artifact_type, dataset_name in artifact_map.items():
+            artifact = context.artifact_for("investigator", artifact_type)
+            datasets[dataset_name] = self._read_artifact(artifact) if artifact is not None else pd.DataFrame()
+        summary_artifact = context.artifact_for("investigator", "investigator_summary")
+        datasets["investigator_summary"] = self._read_json_artifact_safe(summary_artifact)
+        scores = datasets.get("investigator_scores")
+        if isinstance(scores, pd.DataFrame) and not scores.empty and "verdict" in scores.columns:
+            datasets["investigator_high_conviction"] = scores.loc[
+                scores["verdict"].astype(str).eq("HIGH_CONVICTION")
+            ].copy()
+        else:
+            datasets["investigator_high_conviction"] = pd.DataFrame()
+
     def _read_json_artifact_safe(self, artifact: StageArtifact | None) -> Dict[str, Any]:
         if artifact is None:
             return {}
@@ -532,6 +557,9 @@ class PublishStage:
         ) or bool(datasets.get("fundamental_dashboard_payload"))
         if has_fundamentals:
             handlers["google_sheets_fundamentals"] = self._publish_fundamental_dashboard
+        investigator_scores = datasets.get("investigator_scores")
+        if isinstance(investigator_scores, pd.DataFrame) and not investigator_scores.empty:
+            handlers["google_sheets_investigator"] = self._publish_investigator
         if datasets.get("decision_bundle") is not None:
             handlers["google_sheets_publish_log"] = self._publish_publish_log
         if bool(context.params.get("publish_quantstats", True)):
@@ -697,6 +725,27 @@ class PublishStage:
         if not publish_fundamental_dashboard(datasets):
             raise RuntimeError("fundamental dashboard publish returned False")
         return {"report_id": "fundamental_dashboard_sheet"}
+
+    def _publish_investigator(
+        self,
+        context: StageContext,
+        rank_artifact: StageArtifact,
+        datasets: Dict[str, pd.DataFrame],
+    ) -> Dict[str, Any]:
+        from ai_trading_system.domains.publish.channels.google_sheets import publish_investigator
+
+        if not publish_investigator(
+            {
+                "Investigator Today": datasets.get("investigator_scores", pd.DataFrame()),
+                "Repeat Tracker": datasets.get("investigator_repeat_tracker", pd.DataFrame()),
+                "High Conviction": datasets.get("investigator_high_conviction", pd.DataFrame()),
+                "Trap Log": datasets.get("investigator_trap_log", pd.DataFrame()),
+                "Final 3Q Gate": datasets.get("investigator_final_3q_gate", pd.DataFrame()),
+                "Archive": datasets.get("investigator_archive", pd.DataFrame()),
+            }
+        ):
+            raise RuntimeError("investigator publish returned False")
+        return {"report_id": "investigator_sheets"}
 
     def _publish_publish_log(
         self,

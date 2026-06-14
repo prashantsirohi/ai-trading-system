@@ -39,7 +39,7 @@ from ai_trading_system.platform.db.paths import (
 from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
-from ai_trading_system.pipeline.stages import CandidateTrackerStage, CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, NarrativeStage, PerfTrackerStage, PublishStage, RankStage
+from ai_trading_system.pipeline.stages import CandidateTrackerStage, CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, InvestigatorStage, NarrativeStage, PerfTrackerStage, PublishStage, RankStage
 
 load_project_env(__file__)
 
@@ -48,11 +48,11 @@ log_context = logging_module.log_context
 logger = logging_module.logger
 
 
-PIPELINE_ORDER = ["ingest", "features", "rank", "fundamentals", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
+PIPELINE_ORDER = ["ingest", "features", "rank", "investigator", "fundamentals", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
 # Stages dropped from the default order unless explicitly enabled (e.g. by a flag
 # or by a detected input). They remain valid when named in an explicit stage list.
 OPTIONAL_STAGES = frozenset({"fundamentals"})
-DEFAULT_CLI_STAGES = "ingest,features,rank,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker"
+DEFAULT_CLI_STAGES = "ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker"
 
 
 _BANNER_WIDTH = 78
@@ -278,6 +278,7 @@ class PipelineOrchestrator:
             "ingest": IngestStage(),
             "features": FeaturesStage(),
             "rank": RankStage(),
+            "investigator": InvestigatorStage(),
             "fundamentals": FundamentalsStage(),
             "candidates": CandidatesStage(),
             "candidate_tracker": CandidateTrackerStage(),
@@ -296,6 +297,7 @@ class PipelineOrchestrator:
             "ingest": "fetching OHLCV and validating source data",
             "features": "computing technical features and writing feature store",
             "rank": "scoring symbols and building ranked outputs",
+            "investigator": "investigating daily gainers and ageing active watchlist",
             "fundamentals": "enriching ranked candidates with Screener fundamentals",
             "candidates": "selecting deterministic final candidates from rank and enrichment",
             "candidate_tracker": "updating live candidate lifecycle status",
@@ -525,7 +527,7 @@ class PipelineOrchestrator:
                     continue
 
                 artifacts = self.registry.get_artifact_map(run_id)
-                if stage_name in {"events", "execute", "insight", "publish"}:
+                if stage_name in {"investigator", "events", "execute", "insight", "publish"}:
                     self._attach_latest_rank_artifacts(artifacts, run_id=run_id)
 
                 input_hash = compute_stage_input_hash(

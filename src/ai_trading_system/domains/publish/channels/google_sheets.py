@@ -90,6 +90,21 @@ _FUNDAMENTAL_WATCHLIST_FORMATS: dict[str, dict[str, str]] = {
     "ps_pctile_5y": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "pb_pctile_5y": GoogleSheetsManager.FORMAT_DECIMAL_2,
 }
+_INVESTIGATOR_FORMATS: dict[str, dict[str, str]] = {
+    "trade_date": GoogleSheetsManager.FORMAT_DATE,
+    "first_seen_date": GoogleSheetsManager.FORMAT_DATE,
+    "last_seen_date": GoogleSheetsManager.FORMAT_DATE,
+    "archived_at": GoogleSheetsManager.FORMAT_DATE,
+    "daily_return_pct": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "volume_ratio_20": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "delivery_pct": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "composite_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "final_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "repeat_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "price_progression_pct": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "price_vs_first_trigger_pct": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "rank_change_20d": GoogleSheetsManager.FORMAT_DECIMAL_2,
+}
 _FUNDAMENTAL_TRACKING_PUBLISH_BUCKETS = frozenset(
     {
         "F4_ACTION_CANDIDATE",
@@ -218,6 +233,30 @@ def publish_fundamental_watchlist(watchlist: pd.DataFrame, *, sheet_name: str = 
         raise RuntimeError(f"Failed writing {sheet_name}: {manager.last_error or 'unknown error'}")
     manager.apply_number_formats(sheet_name, _FUNDAMENTAL_WATCHLIST_FORMATS)
     logger.info("Fundamental watchlist updated in Google Sheets (%s rows)", len(frame))
+    return True
+
+
+def publish_investigator(sheets: dict[str, pd.DataFrame]) -> bool:
+    """Publish investigator outputs to dedicated worksheets."""
+    spreadsheet_id = _require_spreadsheet_id()
+    if not spreadsheet_id:
+        raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
+
+    manager = GoogleSheetsManager()
+    if not manager.open_spreadsheet():
+        raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
+    for sheet_name, frame in sheets.items():
+        safe = frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+        safe = safe.fillna("")
+        rows = max(1000, len(safe) + 20)
+        cols = max(12, len(safe.columns) + 2)
+        sheet = manager.get_or_create_sheet(sheet_name, rows=rows, cols=cols)
+        if not sheet:
+            raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
+        if not manager.write_dataframe(safe, sheet_name, include_header=True, clear_sheet=True):
+            raise RuntimeError(f"Failed writing {sheet_name}: {manager.last_error or 'unknown error'}")
+        manager.apply_number_formats(sheet_name, _INVESTIGATOR_FORMATS)
+    logger.info("Investigator sheets updated (%s tabs)", len(sheets))
     return True
 
 
@@ -549,6 +588,7 @@ __all__ = [
     "publish_stock_scan",
     "publish_watchlist_candidates",
     "publish_fundamental_watchlist",
+    "publish_investigator",
     "publish_log_sheet",
     "publish_fundamental_dashboard",
     "publish_fundamental_valuation_dashboard",

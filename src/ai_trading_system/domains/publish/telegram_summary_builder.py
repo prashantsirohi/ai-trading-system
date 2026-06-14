@@ -85,6 +85,9 @@ def build_telegram_summary(*, run_date: str, datasets: Mapping[str, Any]) -> str
     if event_lines:
         lines.extend(["", "<b>Important Events</b>"])
         lines.extend(event_lines)
+    investigator_lines = _format_investigator_sections(datasets)
+    if investigator_lines:
+        lines.extend(["", *investigator_lines])
     if not watchlist_df.empty:
         lines.extend(["", render_watchlist_telegram(watchlist_df, top_n=10)])
     lines.extend(["", "<b>Top 10 Sectors</b>"])
@@ -153,6 +156,52 @@ def _append_fundamental_pulse(message: str, datasets: Mapping[str, Any]) -> str:
     if "Fundamental Pulse" in message:
         return message
     return message.rstrip() + "\n\n" + pulse
+
+
+def _format_investigator_sections(datasets: Mapping[str, Any]) -> list[str]:
+    scores = _as_frame(datasets.get("investigator_scores"))
+    repeat = _as_frame(datasets.get("investigator_repeat_tracker"))
+    traps = _as_frame(datasets.get("investigator_trap_log"))
+    archive = _as_frame(datasets.get("investigator_archive"))
+    if scores.empty and repeat.empty and traps.empty and archive.empty:
+        return []
+    lines = ["<b>Stock Investigator</b>"]
+    high = scores.loc[scores.get("verdict", pd.Series(dtype=str)).astype(str).eq("HIGH_CONVICTION")] if not scores.empty else pd.DataFrame()
+    if high.empty:
+        lines.append("High Conviction: none")
+    else:
+        lines.append("High Conviction: " + ", ".join(_symbol_score_items(high, "final_score", 5)))
+    if not repeat.empty and "high_priority_repeat" in repeat.columns:
+        repeat_rows = repeat.loc[repeat["high_priority_repeat"].astype(str).str.lower().isin({"true", "1"})]
+    else:
+        repeat_rows = pd.DataFrame()
+    lines.append("Repeat Accumulation: " + (", ".join(_symbol_score_items(repeat_rows, "repeat_score", 5)) if not repeat_rows.empty else "none"))
+    sector_rows = scores.loc[scores.get("sector_rotation_active", pd.Series(False, index=scores.index)).astype(str).str.lower().isin({"true", "1"})] if not scores.empty else pd.DataFrame()
+    lines.append("Sector Rotation: " + (", ".join(_top_symbols(sector_rows, 5)) if not sector_rows.empty else "none"))
+    lines.append("Trap List: " + (", ".join(_top_symbols(traps, 5)) if not traps.empty else "none"))
+    lines.append(f"Dropped/Archived: <b>{len(archive)}</b>")
+    return lines
+
+
+def _symbol_score_items(frame: pd.DataFrame, score_column: str, limit: int) -> list[str]:
+    if frame.empty:
+        return []
+    df = frame.copy()
+    if score_column in df.columns:
+        df.loc[:, score_column] = pd.to_numeric(df[score_column], errors="coerce")
+        df = df.sort_values(score_column, ascending=False, na_position="last", kind="stable")
+    symbol_col = next((col for col in ("symbol_id", "symbol") if col in df.columns), None)
+    if symbol_col is None:
+        return []
+    items = []
+    for _, row in df.head(limit).iterrows():
+        symbol = escape(str(row.get(symbol_col) or ""))
+        score = row.get(score_column)
+        try:
+            items.append(f"{symbol}({float(score):.0f})")
+        except (TypeError, ValueError):
+            items.append(symbol)
+    return items
 
 
 def _as_frame(value: Any) -> pd.DataFrame:
