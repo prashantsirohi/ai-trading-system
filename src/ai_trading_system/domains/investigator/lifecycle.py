@@ -70,7 +70,8 @@ def _decide_row(row: pd.Series) -> dict[str, object]:
     long_upper = bool(row.get("long_upper_wick_trap", False))
     low_delivery = bool(row.get("low_delivery_flag", False))
     appearance = int(_num(row.get("appearance_count_20d"), 1))
-    rank_score = _num(row.get("composite_score"), 0)
+    rank_score = _num(row.get("composite_score"), pd.NA)
+    rank_known = not pd.isna(rank_score)
     credible = bool(row.get("credible_trigger", False))
     sector_support = _num(row.get("sector_support_score"), 0) > 0 or bool(row.get("sector_rotation_active", False))
     price_vs_trigger = _num(row.get("price_progression_pct"), 0)
@@ -93,9 +94,9 @@ def _decide_row(row: pd.Series) -> dict[str, object]:
         return _archive("ARCHIVED", "NOISE_TRAP", now)
     if long_upper:
         return _archive("ARCHIVED", "LONG_UPPER_WICK_TRAP", now)
-    if low_delivery and appearance <= 1:
+    if low_delivery and appearance <= 1 and days > 0:
         return _archive("ARCHIVED", "LOW_DELIVERY_NO_REPEAT", now)
-    if rank_score < 35 and not credible:
+    if rank_known and rank_score < 35 and not credible:
         return _archive("ARCHIVED", "LOW_RANK_NO_NEWS", now)
     if days >= 5 and appearance <= 1 and price_vs_trigger < 0 and not credible and not sector_support:
         return _archive("DROPPED", "ONE_CANDLE_DRAMA", now)

@@ -68,8 +68,8 @@ def _rank_artifacts(project_root: Path, run_id: str) -> dict[str, dict[str, Stag
     pd.DataFrame(
         [
             {
-                "symbol_id": "AAA",
-                "composite_score": 82,
+                "symbol_id": "TOP",
+                "composite_score": 90,
                 "relative_strength": 70,
                 "trend_persistence": 80,
                 "volume_intensity": 90,
@@ -80,12 +80,29 @@ def _rank_artifacts(project_root: Path, run_id: str) -> dict[str, dict[str, Stag
             {"symbol_id": "BBB", "composite_score": 25, "sector": "IT", "market_cap_cr": 1000},
         ]
     ).to_csv(rank_dir / "ranked_signals.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "composite_score": 82,
+                "rank": 42,
+                "relative_strength": 70,
+                "trend_persistence": 80,
+                "volume_intensity": 90,
+                "sector_strength": 65,
+                "sector": "Finance",
+                "market_cap_cr": 1000,
+            },
+            {"symbol_id": "BBB", "composite_score": 25, "rank": 1200, "sector": "IT", "market_cap_cr": 1000},
+        ]
+    ).to_csv(rank_dir / "stock_scan.csv", index=False)
     pd.DataFrame([{"symbol_id": "AAA", "breakout_positive": True, "qualified": True}]).to_csv(rank_dir / "breakout_scan.csv", index=False)
     pd.DataFrame([{"symbol_id": "AAA", "Sector": "Finance", "RS_rank_pct": 80, "Quadrant": "Leading"}]).to_csv(rank_dir / "sector_dashboard.csv", index=False)
     (rank_dir / "dashboard_payload.json").write_text(json.dumps({"summary": {"run_date": "2026-05-07"}}), encoding="utf-8")
     return {
         "rank": {
             "ranked_signals": StageArtifact.from_file("ranked_signals", rank_dir / "ranked_signals.csv", row_count=2, attempt_number=1),
+            "stock_scan": StageArtifact.from_file("stock_scan", rank_dir / "stock_scan.csv", row_count=2, attempt_number=1),
             "breakout_scan": StageArtifact.from_file("breakout_scan", rank_dir / "breakout_scan.csv", row_count=1, attempt_number=1),
             "sector_dashboard": StageArtifact.from_file("sector_dashboard", rank_dir / "sector_dashboard.csv", row_count=1, attempt_number=1),
             "dashboard_payload": StageArtifact.from_file("dashboard_payload", rank_dir / "dashboard_payload.json", row_count=1, attempt_number=1),
@@ -128,6 +145,8 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     }
     with registry._reader() as conn:  # noqa: SLF001
         assert conn.execute("SELECT COUNT(*) FROM investigator_scores").fetchone()[0] == 1
+        row = conn.execute("SELECT composite_score, rank_position FROM investigator_scores WHERE symbol_id = 'AAA'").fetchone()
+        assert row == (82.0, 42.0)
 
 
 def test_pipeline_order_places_investigator_after_rank() -> None:

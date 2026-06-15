@@ -7,8 +7,9 @@ import pandas as pd
 
 def apply_rank_overlay(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
-    composite = pd.to_numeric(_series(out, "composite_score"), errors="coerce").fillna(0)
-    overlay = pd.Series(-10, index=out.index, dtype=float)
+    composite = pd.to_numeric(_series(out, "composite_score"), errors="coerce")
+    overlay = pd.Series(0, index=out.index, dtype=float)
+    overlay = overlay.mask(composite.lt(35), -10)
     overlay = overlay.mask(composite.ge(45) & composite.lt(60), 3)
     overlay = overlay.mask(composite.ge(60) & composite.lt(75), 8)
     overlay = overlay.mask(composite.ge(75), 15)
@@ -33,12 +34,13 @@ def finalize_scores(frame: pd.DataFrame) -> pd.DataFrame:
     score = sum(pd.to_numeric(out[column], errors="coerce").fillna(0) for column in components)
     out.loc[:, "final_score"] = score.clip(lower=0, upper=100)
     out.loc[:, "verdict"] = out["final_score"].map(_verdict)
-    composite = pd.to_numeric(_series(out, "composite_score"), errors="coerce").fillna(0)
+    composite = pd.to_numeric(_series(out, "composite_score"), errors="coerce")
+    rank_known = composite.notna()
     credible = out.get("credible_trigger", pd.Series(False, index=out.index)).fillna(False).astype(bool)
     hard_trap = out.get("hard_trap_flag", pd.Series(False, index=out.index)).fillna(False).astype(bool)
     fa_missing = out.get("fa_missing", pd.Series(False, index=out.index)).fillna(False).astype(bool)
-    out.loc[composite.lt(45) & ~out["verdict"].eq("NOISE_TRAP"), "verdict"] = "WATCH_ONLY"
-    out.loc[composite.lt(35) & ~credible, "verdict"] = "NOISE_TRAP"
+    out.loc[rank_known & composite.lt(45) & ~out["verdict"].eq("NOISE_TRAP"), "verdict"] = "WATCH_ONLY"
+    out.loc[rank_known & composite.lt(35) & ~credible, "verdict"] = "NOISE_TRAP"
     out.loc[hard_trap, "verdict"] = "NOISE_TRAP"
     out.loc[fa_missing & out["verdict"].eq("HIGH_CONVICTION"), "verdict"] = "MEDIUM_CONVICTION"
     out.loc[:, "execution_eligible"] = False

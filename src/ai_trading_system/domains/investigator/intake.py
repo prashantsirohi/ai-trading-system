@@ -131,7 +131,10 @@ def _attach_rank(gainers: pd.DataFrame, ranked: pd.DataFrame) -> pd.DataFrame:
     rank = ranked.copy()
     rank.loc[:, "symbol_id"] = rank[sym_col].map(as_symbol)
     if "rank_position" not in rank.columns:
-        rank.loc[:, "rank_position"] = range(1, len(rank) + 1)
+        if "rank" in rank.columns:
+            rank.loc[:, "rank_position"] = pd.to_numeric(rank["rank"], errors="coerce")
+        else:
+            rank.loc[:, "rank_position"] = range(1, len(rank) + 1)
     desired = [
         "symbol_id",
         "composite_score",

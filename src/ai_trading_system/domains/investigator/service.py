@@ -29,16 +29,18 @@ class InvestigatorService:
         ranked = _read_csv(Path(ranked_artifact.uri))
         breakout = _read_optional(context.artifact_for("rank", "breakout_scan"))
         stock_scan = _read_optional(context.artifact_for("rank", "stock_scan"))
+        rank_context = stock_scan if not stock_scan.empty else ranked
         sector_dashboard = _read_optional(context.artifact_for("rank", "sector_dashboard"))
         gainers = load_daily_gainers(
             ohlcv_db_path=context.db_path,
-            ranked_signals=ranked,
+            ranked_signals=rank_context,
             as_of=context.params.get("investigator_as_of") or None,
             min_return_pct=float(context.params.get("investigator_min_return_pct", 5.0)),
             min_volume_ratio=float(context.params.get("investigator_min_volume_ratio", 2.0)),
             min_market_cap_cr=float(context.params.get("investigator_min_market_cap_cr", 500.0)),
         )
-        candidates = _merge_optional(gainers, breakout, stock_scan)
+        candidates = _merge_optional(gainers, breakout, ranked, stock_scan)
+        candidates = _mark_top_ranked_context(candidates, ranked)
         candidates = score_price_structure(candidates)
         candidates = score_volume_anatomy(candidates)
         fundamentals = load_fundamental_snapshot(
@@ -90,8 +92,9 @@ class InvestigatorService:
                     SELECT symbol_id, trade_date, close, volume_ratio_20, composite_score, rank_position, final_score, sector
                     FROM investigator_scores
                     WHERE trade_date >= CAST(? AS DATE) - INTERVAL 60 DAY
+                      AND trade_date < CAST(? AS DATE)
                     """,
-                    [context.run_date],
+                    [context.run_date, context.run_date],
                 ).fetchdf()
         except Exception:
             return pd.DataFrame()
@@ -185,13 +188,23 @@ class InvestigatorService:
         }
 
 
-def _merge_optional(gainers: pd.DataFrame, breakout: pd.DataFrame | None, stock_scan: pd.DataFrame | None) -> pd.DataFrame:
+def _merge_optional(gainers: pd.DataFrame, *frames: pd.DataFrame | None) -> pd.DataFrame:
     out = gainers.copy()
-    for frame in (breakout, stock_scan):
+    for frame in frames:
         if frame is None or frame.empty or "symbol_id" not in frame.columns:
             continue
         cols = ["symbol_id"] + [col for col in frame.columns if col != "symbol_id" and col not in out.columns]
         out = out.merge(frame[cols], on="symbol_id", how="left")
+    return out
+
+
+def _mark_top_ranked_context(candidates: pd.DataFrame, ranked: pd.DataFrame | None) -> pd.DataFrame:
+    out = candidates.copy()
+    out.loc[:, "in_ranked_signals"] = False
+    if ranked is None or ranked.empty or "symbol_id" not in ranked.columns:
+        return out
+    ranked_symbols = set(ranked["symbol_id"].astype(str).str.upper())
+    out.loc[:, "in_ranked_signals"] = out["symbol_id"].astype(str).str.upper().isin(ranked_symbols)
     return out
 
 

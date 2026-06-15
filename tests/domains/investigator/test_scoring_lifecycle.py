@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from ai_trading_system.domains.investigator.lifecycle import apply_lifecycle
+from ai_trading_system.domains.investigator.repeat_tracker import build_repeat_tracker
 from ai_trading_system.domains.investigator.scoring import finalize_scores
 
 
@@ -53,6 +54,57 @@ def test_hard_trap_forces_noise_trap() -> None:
     scored = finalize_scores(frame)
 
     assert scored.iloc[0]["verdict"] == "NOISE_TRAP"
+
+
+def test_missing_rank_is_neutral_not_low_rank_trap() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "NORANK",
+                "price_structure_score": 8,
+                "volume_delivery_score": 12,
+                "fundamental_score": 12,
+                "trigger_quality_score": 5,
+                "sector_support_score": 0,
+                "buyer_fingerprint_score": 7,
+                "composite_score": pd.NA,
+                "credible_trigger": False,
+                "hard_trap_flag": False,
+                "fa_missing": False,
+            }
+        ]
+    )
+
+    scored = finalize_scores(frame)
+
+    assert scored.iloc[0]["ranking_overlay_score"] == 0
+    assert scored.iloc[0]["final_score"] == 44
+    assert scored.iloc[0]["verdict"] == "WATCH_ONLY"
+
+
+def test_repeat_tracker_counts_current_trade_date_once_when_history_excludes_today() -> None:
+    current = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "trade_date": "2026-05-07",
+                "close": 110,
+                "volume_ratio_20": 2.5,
+                "composite_score": 70,
+                "rank_position": 42,
+                "final_score": 48,
+                "sector": "Finance",
+            }
+        ]
+    )
+    prior_history = pd.DataFrame(
+        columns=["symbol_id", "trade_date", "close", "volume_ratio_20", "composite_score", "rank_position", "final_score", "sector"]
+    )
+
+    repeat = build_repeat_tracker(current_scores=current, historical_daily_log=prior_history)
+
+    assert repeat.iloc[0]["appearance_count_20d"] == 1
+    assert repeat.iloc[0]["repeat_score"] == 8
 
 
 def test_lifecycle_one_candle_drama_archive_reason() -> None:
