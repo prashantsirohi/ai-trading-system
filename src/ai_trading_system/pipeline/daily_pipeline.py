@@ -235,7 +235,7 @@ def run_portfolio_analysis():
 
         # Read portfolio from Google Sheets
         try:
-            ws = gs.get_worksheet("PORTFOLIO")
+            ws = gs.get_worksheet("03_Portfolio") or gs.get_worksheet("PORTFOLIO")
             if ws:
                 # Use get_all_values to read raw data (first 3 columns only)
                 values = ws.get_all_values()
@@ -268,11 +268,10 @@ def run_portfolio_analysis():
                 pm = PortfolioManager()
                 if not pm.sheets_client:
                     raise RuntimeError("Portfolio manager could not authenticate with Google Sheets")
-                saved_portfolio = pm.save_portfolio_to_sheet(portfolio, "PORTFOLIO")
-                saved_swot = pm.save_swot_analysis(portfolio, "Portfolio Analysis")
-                if not saved_portfolio or not saved_swot:
-                    raise RuntimeError("Portfolio or SWOT write failed")
-                logger.info("Portfolio and SWOT analysis saved to Google Sheets")
+                saved_portfolio = pm.save_portfolio_to_sheet(portfolio, "03_Portfolio")
+                if not saved_portfolio:
+                    raise RuntimeError("Portfolio write failed")
+                logger.info("Portfolio saved to Google Sheets")
             else:
                 logger.info("No PORTFOLIO sheet found, skipping analysis")
         except Exception as e:

@@ -7,13 +7,13 @@
 
 ## Delivery manager and channel roles
 
-`PublisherDeliveryManager` (`delivery_manager.py:12`) handles dedupe + retry for every channel. Roles are assigned in `PublishStage.CHANNEL_ROLES` (`publish.py:46-61`):
+`PublisherDeliveryManager` (`delivery_manager.py:12`) handles dedupe + retry for every channel. Roles are assigned in `PublishStage.CHANNEL_ROLES` (`publish.py:46-61`). Rank artifacts remain the source of truth; Google Sheets is an operator workbook only and should not be treated as the warehouse.
 
 | Role string | Blocking? | Notes |
 |---|---|---|
-| `publish_of_record` | **Blocking** — failure raises `PublishStageError` | Primary outputs (`publish.py:32-33`) |
+| `publish_of_record` | **Blocking** — failure raises `PublishStageError` | Primary non-Sheets publish outputs |
 | `publish_auxiliary` | **Blocking** | Secondary outputs (`publish.py:34`) |
-| `publish_optional` | Non-blocking — logged in `non_blocking_failures` (`publish.py:45`) | Best-effort live external IO (`publish.py:35-39`) |
+| `publish_optional` | Non-blocking — logged in `non_blocking_failures` (`publish.py:45`) | Best-effort live external IO and Google Sheets operator summaries (`publish.py:35-39`) |
 | `informational` | **Blocking** | Notification channels (`publish.py:40`) |
 | `diagnostic` | **Blocking** (but only fires in `local_publish` mode) | Local-only artifacts (`publish.py:41`) |
 
@@ -37,10 +37,10 @@ Telegram has its own retry layer on top: `TELEGRAM_SEND_ATTEMPTS` (default `1`, 
 
 | Channel key | Module | Input artifact(s) | External destination | Role (blocking) | Dedupe key | Retry | Failure behavior |
 |---|---|---|---|---|---|---|---|
-| `google_sheets_dashboard` | `domains/publish/channels/google_sheets.py` + `dashboard.py` (handler `publish.py:394-434`) | `dashboard_payload` JSON + `ranked_signals`, `breakout_scan`, `sector_dashboard`, `pattern_scan`, `watchlist_candidates`, `decision_bundle` | Google Sheet (`GOOGLE_SPREADSHEET_ID`) | `publish_of_record` (**blocking**) | sha256(channel + rank artifact hash + event_hashes) | 3 attempts, exponential backoff | Raises `PublishStageError` |
-| `google_sheets_watchlist` | `channels/google_sheets.py::publish_watchlist_candidates` (`publish.py:448-458`) | `watchlist_candidates` + `decision_bundle` | Google Sheet | `publish_of_record` (**blocking**) | sha256(channel + rank hash) | 3, expo | Raises |
-| `google_sheets_portfolio` | `pipeline/daily_pipeline.run_portfolio_analysis` (`publish.py:490-501`) | Live YF lookups + `PORTFOLIO` sheet | Google Sheet (`PORTFOLIO` tab) | `publish_optional` (**non-blocking**) | sha256(channel + rank hash) | 3, expo | Logged in `metadata["non_blocking_failures"]`; stage continues (`publish.py:155-160`) |
-| `google_sheets_publish_log` | `channels/google_sheets.py::publish_log_sheet` (`publish.py:475-488`) | `decision_bundle` (publish log) | Google Sheet | `publish_auxiliary` (**blocking**) | sha256(channel + rank hash) | 3, expo | Raises; skipped if `decision_bundle` is missing |
+| `google_sheets_dashboard` | `domains/publish/channels/google_sheets.py` + `dashboard.py` | `dashboard_payload` JSON + compact views from rank artifacts | Google Sheet fixed tabs: `01_Daily_Report`, `04_Sector_Leadership`, `05_Market_Breadth`, `06_Investigator` | `publish_optional` (**non-blocking**) | sha256(channel + rank artifact hash + event_hashes) | 3 attempts, exponential backoff | Logged in `metadata["non_blocking_failures"]`; artifacts remain authoritative |
+| `google_sheets_watchlist` | `channels/google_sheets.py::publish_watchlist_candidates` | `watchlist_candidates` + `decision_bundle` | Google Sheet `02_Watchlist_Current` | `publish_optional` (**non-blocking**) | sha256(channel + rank hash) | 3, expo | Logged in `metadata["non_blocking_failures"]` |
+| `google_sheets_portfolio` | `pipeline/daily_pipeline.run_portfolio_analysis` | Live YF lookups + portfolio input rows | Google Sheet `03_Portfolio` | `publish_optional` (**non-blocking**) | sha256(channel + rank hash) | 3, expo | Logged in `metadata["non_blocking_failures"]`; stage continues |
+| `google_sheets_publish_log` | `channels/google_sheets.py::publish_run_log_sheet` | Completed channel delivery targets | Google Sheet `99_Run_Log` | `publish_optional` (**non-blocking**) | not delivery-managed; appended after channel deliveries | best effort | Logged in `metadata["non_blocking_failures"]` |
 | `quantstats_dashboard_tearsheet` | `channels/quantstats.py::publish_dashboard_quantstats_tearsheet` (`publish.py:503-542`) | Historical rank artifacts under `pipeline_runs/`, latest rank/breakout/sector DFs | Local HTML/PDF tear sheet under reports dir | `publish_of_record` (**blocking**) | sha256(channel + rank hash) | 3, expo | Raises unless error is one of `{insufficient_rank_history_for_tearsheet, pipeline_runs_dir_missing, quantstats_not_available}` and `quantstats_required=False` (default) — then `status="skipped"` (`publish.py:524-537`) |
 | `telegram_summary` | `channels/telegram.py::TelegramReporter.send_message` (`publish.py:554-593`) | `ranked_signals`, `decision_bundle.telegram_digest` or `insight_telegram_summary`, `watchlist_candidates`, weekly intel | Telegram chat (`TELEGRAM_CHAT_ID`) via Bot API | `informational` (**blocking**) | sha256(channel + rank hash + event_hashes) | Outer: 3 attempts; inner Telegram client: `TELEGRAM_SEND_ATTEMPTS` per call | Raises on final failure; precheck failure (DNS) reported in `last_health_check` |
 | `weekly_pdf` | `channels/weekly_pdf/channel.py::publish_weekly_pdf` (`publish.py:544-552`) | Weekly intel + rank/breakout/sector/pattern history (`weekly_pdf/data_loader.py`) | Local HTML + optional PDF under `<attempt_dir>/weekly_pdf/` | `informational` (**blocking**) | bypasses dedupe (`publish.py:356-360`) | 3, expo | Raises on hard error; PDF-only failure recorded in `pdf_error` without raising (`channel.py:24-36`) |
@@ -65,7 +65,7 @@ Authentication order in `_authenticate` (`google_sheets_manager.py:61-100`):
 
 Scopes (`google_sheets_manager.py:28-31`): `https://www.googleapis.com/auth/spreadsheets`, `https://www.googleapis.com/auth/drive`.
 
-The spreadsheet ID comes from `GOOGLE_SPREADSHEET_ID` (`google_sheets.py:20-25`, `runtime_config.py:79`).
+The spreadsheet ID comes from `GOOGLE_SPREADSHEET_ID` (`google_sheets.py:20-25`, `runtime_config.py:79`). The visible operator workbook is pruned to `01_Daily_Report`, `02_Watchlist_Current`, `03_Portfolio`, `04_Sector_Leadership`, `05_Market_Breadth`, `06_Investigator`, and `99_Run_Log`; legacy raw/date tabs are deleted when dashboard publish succeeds.
 
 ### Telegram (`channels/telegram.py`)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import duckdb
 import pandas as pd
@@ -19,6 +20,9 @@ class _FakeWorksheet:
 
     def format(self, range_name, cell_format):
         self.updates.append((f"format:{range_name}", [cell_format]))
+
+    def clear(self):
+        self.updates.append(("clear", [[]]))
 
 
 class _FakeSpreadsheet:
@@ -83,6 +87,24 @@ class _FakeManager:
     ) -> bool:
         _ = include_index, include_header
         self.writes.append((sheet_name, start_cell, df.copy(), clear_sheet))
+        return True
+
+    def delete_worksheets(self, titles):
+        deleted = []
+        for title in titles:
+            ws = self.sheets.get(title)
+            if ws is None:
+                continue
+            self.spreadsheet.del_worksheet(ws)
+            deleted.append(title)
+        return {"deleted": deleted, "failed": []}
+
+    def prune_date_named_worksheets(self, keep=0):
+        date_titles = sorted([title for title in self.sheets if re.fullmatch(r"\d{4}-\d{2}-\d{2}", title)], reverse=True)
+        return self.delete_worksheets(date_titles[keep:])
+
+    def reorder_worksheets(self, ordered_titles):
+        self.spreadsheet.batch_update({"requests": [{"reorder": ordered_titles}]})
         return True
 
 
@@ -299,44 +321,55 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             },
         },
     }
-    result = publish_dashboard_payload(
-        payload,
-        project_root=tmp_path,
-        run_date="2026-04-09",
-        ranked_df=ranked_df,
-        breakout_df=breakout_df,
-        sector_df=sector_df,
-        prior_ranked_df=prior_ranked_df,
-        failed_breakouts_df=failed_breakouts_df,
-        pattern_df=pattern_df,
-        investigator_scores_df=investigator_scores,
-        investigator_repeat_df=investigator_repeat,
-        investigator_trap_df=investigator_traps,
-        ranking_feedback={
-            "status": "ok",
-            "rank_bucket_rows": [
-                {"horizon": "20d", "rank_bucket": "top-10", "avg_return": 4.2},
-                {"horizon": "20d", "rank_bucket": "rank-51-plus", "avg_return": 1.0},
-            ],
-            "factor_ic_rows": [
-                {"horizon": "20d", "factor": "rs", "ic": 0.12, "rows": 120, "signal": "positive"},
-                {"horizon": "20d", "factor": "vol", "ic": -0.05, "rows": 120, "signal": "negative"},
-            ],
-            "bucket_rows": [
-                {"horizon": "20d", "bucket": "AVOID_WEAK_CONFIRMATION", "avg_return": -2.0, "win_rate_pct": 30.0, "interpretation": "weak"},
-            ],
-            "drift_rows": [
-                {"factor": "trend", "status": "warning", "recent_ic": -0.01, "baseline_ic": 0.08},
-            ],
-            "recommendations": [],
-            "warnings": [],
-        },
-    )
+    _FakeManager.preexisting_titles = {"DATA", "FILTER", "Publish_Log", "2026-04-08"}
+    try:
+        result = publish_dashboard_payload(
+            payload,
+            project_root=tmp_path,
+            run_date="2026-04-09",
+            ranked_df=ranked_df,
+            breakout_df=breakout_df,
+            sector_df=sector_df,
+            prior_ranked_df=prior_ranked_df,
+            failed_breakouts_df=failed_breakouts_df,
+            pattern_df=pattern_df,
+            investigator_scores_df=investigator_scores,
+            investigator_repeat_df=investigator_repeat,
+            investigator_trap_df=investigator_traps,
+            ranking_feedback={
+                "status": "ok",
+                "rank_bucket_rows": [
+                    {"horizon": "20d", "rank_bucket": "top-10", "avg_return": 4.2},
+                    {"horizon": "20d", "rank_bucket": "rank-51-plus", "avg_return": 1.0},
+                ],
+                "factor_ic_rows": [
+                    {"horizon": "20d", "factor": "rs", "ic": 0.12, "rows": 120, "signal": "positive"},
+                    {"horizon": "20d", "factor": "vol", "ic": -0.05, "rows": 120, "signal": "negative"},
+                ],
+                "bucket_rows": [
+                    {"horizon": "20d", "bucket": "AVOID_WEAK_CONFIRMATION", "avg_return": -2.0, "win_rate_pct": 30.0, "interpretation": "weak"},
+                ],
+                "drift_rows": [
+                    {"factor": "trend", "status": "warning", "recent_ic": -0.01, "baseline_ic": 0.08},
+                ],
+                "recommendations": [],
+                "warnings": [],
+            },
+        )
+    finally:
+        _FakeManager.preexisting_titles = set()
 
     manager = _FakeManager.last_instance
     assert manager is not None
-    assert result["sheet_name"] == "2026-04-09"
-    assert all(write[0] == "2026-04-09" for write in manager.writes)
+    assert result["sheet_name"] == "01_Daily_Report"
+    assert result["base_sheet_name"] == "2026-04-09"
+    assert result["sector_sheet_name"] == "04_Sector_Leadership"
+    assert result["breadth_sheet_name"] == "05_Market_Breadth"
+    assert result["investigator_sheet_name"] == "06_Investigator"
+    assert {"01_Daily_Report", "04_Sector_Leadership", "05_Market_Breadth", "06_Investigator"}.issubset(
+        {write[0] for write in manager.writes}
+    )
+    assert {"DATA", "FILTER", "Publish_Log", "2026-04-08"}.issubset(set(manager.spreadsheet.deleted))
 
     summary_frames = [write[2] for write in manager.writes if "Breadth > 200DMA" in write[2].columns]
     assert summary_frames
@@ -478,5 +511,5 @@ def test_publish_dashboard_payload_keeps_existing_same_date_sheet(monkeypatch, t
     manager = _FakeManager.last_instance
     assert manager is not None
     assert result["base_sheet_name"] == "2026-04-09"
-    assert result["sheet_name"] == "2026-04-09"
-    assert manager.spreadsheet.deleted == []
+    assert result["sheet_name"] == "01_Daily_Report"
+    assert manager.spreadsheet.deleted == ["2026-04-09"]

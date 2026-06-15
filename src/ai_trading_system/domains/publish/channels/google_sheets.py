@@ -21,6 +21,21 @@ from ai_trading_system.domains.fundamentals.presentation_payloads import (
 from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
 
+WATCHLIST_CURRENT_SHEET = "02_Watchlist_Current"
+PORTFOLIO_SHEET = "03_Portfolio"
+RUN_LOG_SHEET = "99_Run_Log"
+RAW_VALUATION_SHEET = "_RAW_VALUATION_DASHBOARD"
+RAW_FUNDAMENTAL_WATCHLIST_SHEET = "_RAW_Fundamental_Watchlist"
+OPERATOR_TAB_ORDER = [
+    "01_Daily_Report",
+    WATCHLIST_CURRENT_SHEET,
+    PORTFOLIO_SHEET,
+    "04_Sector_Leadership",
+    "05_Market_Breadth",
+    "06_Investigator",
+    RUN_LOG_SHEET,
+]
+
 
 # Per-sheet column → number-format spec. Applied after every successful
 # write so the sheet renders numerics/dates correctly even if the sheet was
@@ -124,62 +139,14 @@ def _require_spreadsheet_id() -> Optional[str]:
 
 
 def publish_stock_scan(stocks: pd.DataFrame) -> bool:
-    """Publish stock scan results to the Stock Scan worksheet."""
-    spreadsheet_id = _require_spreadsheet_id()
-    if not spreadsheet_id:
-        raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
-
-    manager = GoogleSheetsManager()
-    if not manager.open_spreadsheet():
-        raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
-    stocks_rows = format_rows_for_channel(stocks.to_dict(orient="records"), "sheets")["rows"]
-    stocks_with_index = pd.DataFrame(stocks_rows).reset_index()
-    stocks_with_index.rename(columns={"index": "Symbol"}, inplace=True)
-    stocks_with_index["report_date"] = pd.Timestamp.now().strftime("%Y-%m-%d")
-
-    sheet = manager.get_or_create_sheet("Stock Scan")
-    if not sheet:
-        raise RuntimeError(f"Could not get/create 'Stock Scan' sheet: {manager.last_error or 'unknown error'}")
-
-    worksheet = manager.get_worksheet("Stock Scan")
-    if worksheet is None:
-        raise RuntimeError(f"Could not open 'Stock Scan' worksheet: {manager.last_error or 'unknown error'}")
-    worksheet.clear()
-    if not manager.append_rows(stocks_with_index, "Stock Scan", include_header=True):
-        raise RuntimeError(f"Failed writing stock scan rows: {manager.last_error or 'unknown error'}")
-    manager.apply_number_formats("Stock Scan", _STOCK_SCAN_FORMATS)
-    logger.info("Stock scan updated in Google Sheets (%s stocks)", len(stocks))
+    """Deprecated: stock scan artifacts are no longer published as raw tabs."""
+    logger.info("Skipping legacy Stock Scan sheet publish; rank artifacts are the source of truth (%s rows)", len(stocks))
     return True
 
 
 def publish_sector_dashboard(dashboard: pd.DataFrame) -> bool:
-    """Append sector dashboard rows to the Sector Dashboard worksheet."""
-    spreadsheet_id = _require_spreadsheet_id()
-    if not spreadsheet_id:
-        raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
-
-    manager = GoogleSheetsManager()
-    if not manager.open_spreadsheet():
-        raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
-    dashboard_rows = format_rows_for_channel(dashboard.to_dict(orient="records"), "sheets")["rows"]
-    dashboard_with_index = pd.DataFrame(dashboard_rows).reset_index()
-    dashboard_with_index.rename(columns={"index": "Sector"}, inplace=True)
-
-    sheet = manager.get_or_create_sheet("Sector Dashboard")
-    if not sheet:
-        raise RuntimeError(f"Could not get/create 'Sector Dashboard' sheet: {manager.last_error or 'unknown error'}")
-
-    existing = sheet.get_all_values()
-    is_empty = not existing or existing == [[]]
-    ok = manager.append_rows(
-        dashboard_with_index,
-        "Sector Dashboard",
-        include_header=is_empty,
-    )
-    if not ok:
-        raise RuntimeError(f"Failed writing sector dashboard rows: {manager.last_error or 'unknown error'}")
-    manager.apply_number_formats("Sector Dashboard", _SECTOR_DASHBOARD_FORMATS)
-    logger.info("Dashboard appended to Google Sheets (%s sectors)", len(dashboard))
+    """Deprecated: sector dashboard artifacts are no longer published as raw tabs."""
+    logger.info("Skipping legacy Sector Dashboard sheet publish; rank artifacts are the source of truth (%s rows)", len(dashboard))
     return True
 
 
@@ -200,7 +167,7 @@ def publish_watchlist_candidates(watchlist: pd.DataFrame, *, decision_bundle: Pu
         frame["report_date"] = pd.Timestamp.now().strftime("%Y-%m-%d")
     frame = frame.fillna("")
 
-    sheet_name = "Watchlist Current"
+    sheet_name = WATCHLIST_CURRENT_SHEET
     sheet = manager.get_or_create_sheet(sheet_name)
     if not sheet:
         raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
@@ -215,8 +182,8 @@ def publish_watchlist_candidates(watchlist: pd.DataFrame, *, decision_bundle: Pu
     return True
 
 
-def publish_fundamental_watchlist(watchlist: pd.DataFrame, *, sheet_name: str = "Fundamental Watchlist") -> bool:
-    """Publish the raw fundamental-tracking watchlist to a dedicated worksheet."""
+def publish_fundamental_watchlist(watchlist: pd.DataFrame, *, sheet_name: str = RAW_FUNDAMENTAL_WATCHLIST_SHEET) -> bool:
+    """Publish the raw fundamental-tracking watchlist to an archive worksheet."""
     spreadsheet_id = _require_spreadsheet_id()
     if not spreadsheet_id:
         raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
@@ -332,22 +299,36 @@ _FUNDAMENTAL_WATCHLIST_COLUMNS = [
 ]
 
 
-def publish_log_sheet(decision_bundle: PublishDecisionBundle, *, sheet_name: str = "Publish_Log") -> bool:
-    """Publish internal publish diagnostics to a non-user-facing log worksheet."""
+def publish_log_sheet(decision_bundle: PublishDecisionBundle, *, sheet_name: str = RUN_LOG_SHEET) -> bool:
+    """Deprecated: per-run/channel status now appends to 99_Run_Log."""
+    _ = decision_bundle, sheet_name
+    logger.info("Skipping legacy Publish_Log sheet publish; use %s", RUN_LOG_SHEET)
+    return True
+
+
+def publish_run_log_sheet(rows: list[dict[str, object]], *, sheet_name: str = RUN_LOG_SHEET) -> bool:
+    """Append one row per run/channel delivery to the operator run log."""
     spreadsheet_id = _require_spreadsheet_id()
     if not spreadsheet_id:
         raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
+    if not rows:
+        return True
 
     manager = GoogleSheetsManager()
     if not manager.open_spreadsheet():
         raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
-    sheet = manager.get_or_create_sheet(sheet_name, rows=1000, cols=8)
+    sheet = manager.get_or_create_sheet(sheet_name, rows=max(1000, len(rows) + 20), cols=14)
     if not sheet:
         raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
-    frame = decision_bundle.publish_log.fillna("")
-    if not manager.write_dataframe(frame, sheet_name, include_header=True, clear_sheet=True):
-        raise RuntimeError(f"Failed writing publish log rows: {manager.last_error or 'unknown error'}")
-    logger.info("Publish log updated in Google Sheets (%s rows)", len(frame))
+
+    frame = pd.DataFrame(rows).fillna("")
+    existing = sheet.get_all_values() if hasattr(sheet, "get_all_values") else []
+    include_header = not existing or existing == [[]]
+    if not manager.append_rows(frame, sheet_name, include_header=include_header):
+        raise RuntimeError(f"Failed appending run log rows: {manager.last_error or 'unknown error'}")
+    if hasattr(manager, "reorder_worksheets"):
+        manager.reorder_worksheets(OPERATOR_TAB_ORDER)
+    logger.info("Run log appended in Google Sheets (%s rows)", len(frame))
     return True
 
 
@@ -370,9 +351,9 @@ def publish_fundamental_dashboard(datasets: dict[str, object]) -> bool:
 def publish_fundamental_valuation_dashboard(
     *,
     payload: dict[str, object],
-    sheet_name: str = "VALUATION_DASHBOARD",
+    sheet_name: str = RAW_VALUATION_SHEET,
 ) -> bool:
-    """Publish one operator-facing valuation worksheet."""
+    """Publish valuation details to a raw/archive worksheet."""
     spreadsheet_id = _require_spreadsheet_id()
     if not spreadsheet_id:
         raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")

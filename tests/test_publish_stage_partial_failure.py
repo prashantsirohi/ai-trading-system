@@ -11,6 +11,7 @@ from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 from ai_trading_system.domains.publish.delivery_manager import PublisherDeliveryManager
 from ai_trading_system.pipeline.contracts import PublishStageError
 from ai_trading_system.pipeline.stages.publish import PublishStage
+from ai_trading_system.pipeline.orchestrator import build_parser
 
 
 def test_publish_stage_continues_other_channels_when_telegram_fails(tmp_path: Path) -> None:
@@ -175,3 +176,103 @@ def test_publish_stage_does_not_raise_when_optional_channel_fails(tmp_path: Path
         log for log in delivery_logs if log["channel"] == "telegram_summary"
     )
     assert telegram_log["status"] == "delivered"
+
+
+def test_publish_run_log_appends_one_row_per_channel(monkeypatch, tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "operational" / "ohlcv.duckdb",
+        run_id="pipeline-2026-04-10-run-log",
+        run_date="2026-04-10",
+        stage_name="publish",
+        attempt_number=1,
+        registry=registry,
+        params={"data_domain": "operational"},
+    )
+    artifact = StageArtifact(
+        artifact_type="ranked_signals",
+        uri=str(tmp_path / "ranked_signals.csv"),
+        content_hash="rank-hash",
+        row_count=1,
+    )
+    captured_rows: list[dict[str, object]] = []
+
+    def _capture_run_log(rows):
+        captured_rows.extend(rows)
+        return True
+
+    monkeypatch.setattr(
+        "ai_trading_system.domains.publish.channels.google_sheets.publish_run_log_sheet",
+        _capture_run_log,
+    )
+
+    failure = PublishStage()._publish_run_log(
+        context,
+        artifact,
+        [
+            {
+                "channel": "google_sheets_dashboard",
+                "delivery_role": "publish_optional",
+                "status": "delivered",
+                "dedupe_key": "dash-key",
+                "attempt_number": 1,
+            },
+            {
+                "channel": "telegram_summary",
+                "delivery_role": "informational",
+                "status": "failed",
+                "dedupe_key": "telegram-key",
+                "attempt_number": 1,
+                "error_message": "telegram offline",
+            },
+        ],
+    )
+
+    assert failure is None
+    assert [row["channel"] for row in captured_rows] == ["google_sheets_dashboard", "telegram_summary"]
+    assert captured_rows[0]["run_id"] == context.run_id
+    assert captured_rows[0]["run_date"] == context.run_date
+    assert captured_rows[0]["status"] == "delivered"
+    assert captured_rows[0]["delivery_role"] == "publish_optional"
+    assert captured_rows[0]["artifact_hash"] == "rank-hash"
+    assert captured_rows[0]["dedupe_key"] == "dash-key"
+    assert captured_rows[1]["status"] == "failed"
+    assert captured_rows[1]["error_message"] == "telegram offline"
+
+
+def test_publish_stage_does_not_register_legacy_investigator_tabs(tmp_path: Path) -> None:
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "operational" / "ohlcv.duckdb",
+        run_id="pipeline-2026-04-10-handlers",
+        run_date="2026-04-10",
+        stage_name="publish",
+        attempt_number=1,
+        registry=RegistryStore(tmp_path),
+        params={"data_domain": "operational"},
+    )
+    handlers = PublishStage()._build_handlers(
+        context,
+        {
+            "ranked_signals": pd.DataFrame([{"symbol_id": "AAA", "composite_score": 90.0}]),
+            "dashboard_payload": {"summary": {"run_date": "2026-04-10"}},
+            "investigator_scores": pd.DataFrame([{"symbol_id": "AAA", "final_score": 90.0}]),
+        },
+    )
+
+    assert "google_sheets_dashboard" in handlers
+    assert "google_sheets_investigator" not in handlers
+
+
+def test_orchestrator_accepts_bypass_dedupe_channels_flag() -> None:
+    args = build_parser().parse_args(
+        [
+            "--stages",
+            "publish",
+            "--bypass-dedupe-channels",
+            "google_sheets_dashboard,google_sheets_watchlist",
+        ]
+    )
+
+    assert args.bypass_dedupe_channels == "google_sheets_dashboard,google_sheets_watchlist"

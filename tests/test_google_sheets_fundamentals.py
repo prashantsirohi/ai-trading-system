@@ -101,8 +101,8 @@ def test_publish_fundamental_dashboard_writes_single_valuation_tab(monkeypatch) 
 
     manager = _FakeManager.instances[0]
     assert ok is True
-    assert set(manager.written) == {"VALUATION_DASHBOARD"}
-    values = manager.written["VALUATION_DASHBOARD"].astype(str).values.flatten().tolist()
+    assert set(manager.written) == {"_RAW_VALUATION_DASHBOARD"}
+    values = manager.written["_RAW_VALUATION_DASHBOARD"].astype(str).values.flatten().tolist()
     assert "SECTOR CONTEXT - Leading/Improving only; Rank = absolute RS rank across all sectors" in values
     assert "Pharma" in values
     assert "Banks" not in values
@@ -154,8 +154,8 @@ def test_publish_fundamental_watchlist_writes_tracking_tab(monkeypatch) -> None:
 
     manager = _FakeManager.instances[0]
     assert ok is True
-    assert set(manager.written) == {"Fundamental Watchlist"}
-    frame = manager.written["Fundamental Watchlist"]
+    assert set(manager.written) == {"_RAW_Fundamental_Watchlist"}
+    frame = manager.written["_RAW_Fundamental_Watchlist"]
     assert frame.loc[0, "symbol"] == "AAA"
     assert frame.loc[0, "watchlist_bucket"] == "F1_FUNDAMENTAL_WATCH"
     assert "THERMAX" not in frame["symbol"].astype(str).tolist()

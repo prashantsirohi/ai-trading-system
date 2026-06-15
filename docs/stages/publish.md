@@ -9,7 +9,7 @@
 
 ## Purpose
 
-Take rank/event/insight/narrative artifacts, attach 4-bucket watchlist, build channel datasets and a publish decision bundle, then dispatch each channel through `PublisherDeliveryManager` (which handles idempotency, dedup, retry, and delivery logging). Channel failures are gated by per-channel role.
+Take rank/event/insight/narrative artifacts, attach 4-bucket watchlist, build channel datasets and a publish decision bundle, then dispatch each channel through `PublisherDeliveryManager` (which handles idempotency, dedup, retry, and delivery logging). Rank CSV/JSON artifacts remain the source of truth; Google Sheets is only an operator-facing summary workbook, not a warehouse.
 
 ## Entrypoints
 
@@ -36,7 +36,7 @@ Under `data/pipeline_runs/<run_id>/publish/attempt_<n>/`:
 | `watchlist_buckets` | `watchlist_buckets.csv` (Phase-5 4-bucket taxonomy) |
 
 External side effects (per channel role, see below):
-- Google Sheets writes
+- Google Sheets operator-summary writes
 - Telegram message
 - QuantStats tearsheet HTML (under `data/pipeline_runs/.../publish/.../`)
 - Weekly PDF (when enabled)
@@ -62,13 +62,13 @@ From [`publish.py:30-61`](../../src/ai_trading_system/pipeline/stages/publish.py
 
 | Role string | Blocking on failure? | Channels (default) |
 |---|---|---|
-| `publish_of_record` | yes | `google_sheets_dashboard`, `google_sheets_watchlist`, `quantstats_dashboard_tearsheet` |
-| `publish_auxiliary` | yes (default for unknown channels) | `google_sheets_publish_log` |
-| `publish_optional` | **no** (recorded in `non_blocking_failures`) | `google_sheets_portfolio` |
+| `publish_of_record` | yes | `quantstats_dashboard_tearsheet` |
+| `publish_auxiliary` | yes (default for unknown channels) | none by default |
+| `publish_optional` | **no** (recorded in `non_blocking_failures`) | Google Sheets operator tabs: dashboard, watchlist, portfolio, fundamentals/raw archive if explicitly enabled, investigator, run log |
 | `informational` | yes | `telegram_summary`, `weekly_pdf` |
 | `diagnostic` | yes | `local_summary` (used only when `local_publish=true`) |
 
-`NON_BLOCKING_ROLES = {"publish_optional"}` ([`publish.py:45`](../../src/ai_trading_system/pipeline/stages/publish.py)). Any channel whose role is `publish_optional` (currently only `google_sheets_portfolio`) is treated as best-effort: failures are appended to `publish_summary.non_blocking_failures` but do not raise `PublishStageError`. All other roles, including `informational`, retain blocking semantics.
+`NON_BLOCKING_ROLES = {"publish_optional"}` ([`publish.py:45`](../../src/ai_trading_system/pipeline/stages/publish.py)). Any channel whose role is `publish_optional` is treated as best-effort: failures are appended to `publish_summary.non_blocking_failures` but do not raise `PublishStageError`. Google Sheets channels are optional because full rank artifacts remain authoritative. All other roles, including `informational`, retain blocking semantics.
 
 ## Process flow
 
@@ -76,7 +76,7 @@ From [`publish.py:30-61`](../../src/ai_trading_system/pipeline/stages/publish.py
 2. Require `rank.ranked_signals`. Build datasets via `build_publish_datasets`.
 3. Attach event datasets (snapshot + enrichment + summary), insight datasets (telegram summary + confluence + latest insight), and decision bundle.
 4. Compute watchlist buckets; persist `watchlist_buckets.csv`; attach to datasets.
-5. Select channel handlers in `_build_handlers`. `local_publish=true` overrides to a single `local_summary` channel. `quantstats_dashboard_tearsheet` is enabled by default; `weekly_pdf` requires `publish_weekly_pdf=true` and bypasses delivery dedup.
+5. Select channel handlers in `_build_handlers`. `local_publish=true` overrides to a single `local_summary` channel. Google Sheets writes fixed operator tabs: `01_Daily_Report`, `02_Watchlist_Current`, `03_Portfolio`, `04_Sector_Leadership`, `05_Market_Breadth`, `06_Investigator`, and `99_Run_Log`. `quantstats_dashboard_tearsheet` is enabled by default; `weekly_pdf` requires `publish_weekly_pdf=true` and bypasses delivery dedup.
 6. For each channel: `delivery_manager.deliver(...)` runs idempotency check, then up to `max_attempts=3` retries with exponential backoff, records every attempt in the delivery log, and returns one of `delivered` / `duplicate` / `failed`.
 7. Build `publish_summary` metadata + fundamentals adds.
 8. If any blocking-role channel failed → raise `PublishStageError` with concatenated messages.
@@ -94,7 +94,7 @@ From [`publish.py:30-61`](../../src/ai_trading_system/pipeline/stages/publish.py
 - **Channel error (blocking role):** `PublishStageError` after retries exhausted.
 - **Channel error (`publish_optional`):** recorded only.
 - **Telegram precheck failure:** raised with `precheck=<kind>` detail; blocking (`informational` role).
-- **Sheets auth expiry:** OAuth refresh handled by `google_sheets_manager`; persistent failure is raised by the handler.
+- **Sheets auth expiry:** OAuth refresh handled by `google_sheets_manager`; persistent failure is recorded as a non-blocking publish failure.
 - **EmptyDataError on CSV artifact with non-zero expected rows:** raises `PublishStageError` ([`publish.py:317-322`](../../src/ai_trading_system/pipeline/stages/publish.py)).
 
 ## Retry behavior

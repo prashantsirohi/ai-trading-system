@@ -1,6 +1,7 @@
 import os
 import logging
 import math
+import re
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
 
@@ -23,6 +24,8 @@ except ImportError:
     Spreadsheet = Worksheet = object
 
 logger = logging.getLogger(__name__)
+
+_DATE_SHEET_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _to_cell(value: Any) -> Any:
@@ -312,6 +315,69 @@ class GoogleSheetsManager:
             return []
 
         return [ws.title for ws in self.spreadsheet.worksheets()]
+
+    def delete_worksheets(self, titles: List[str]) -> Dict[str, Any]:
+        """Delete worksheets by title, returning a non-throwing summary."""
+        if not self.spreadsheet:
+            self.open_spreadsheet()
+        if not self.spreadsheet:
+            return {"deleted": [], "failed": list(titles), "error": self.last_error or "spreadsheet unavailable"}
+
+        requested = {title.lower() for title in titles}
+        deleted: List[str] = []
+        failed: List[str] = []
+        for worksheet in list(self.spreadsheet.worksheets()):
+            if worksheet.title.lower() not in requested:
+                continue
+            try:
+                self.spreadsheet.del_worksheet(worksheet)
+                deleted.append(worksheet.title)
+            except Exception as e:
+                failed.append(worksheet.title)
+                self._set_error(f"Failed deleting worksheet '{worksheet.title}': {e}")
+                logger.warning(self.last_error)
+        return {"deleted": deleted, "failed": failed}
+
+    def prune_date_named_worksheets(self, *, keep: int = 0) -> Dict[str, Any]:
+        """Delete date-named report tabs, keeping the newest ``keep`` by title."""
+        if not self.spreadsheet:
+            self.open_spreadsheet()
+        if not self.spreadsheet:
+            return {"deleted": [], "failed": [], "error": self.last_error or "spreadsheet unavailable"}
+        date_tabs = sorted([ws.title for ws in self.spreadsheet.worksheets() if _DATE_SHEET_RE.fullmatch(ws.title)], reverse=True)
+        to_delete = date_tabs[max(0, keep):]
+        return self.delete_worksheets(to_delete)
+
+    def reorder_worksheets(self, ordered_titles: List[str]) -> bool:
+        """Best-effort reorder of known worksheets into the operator tab order."""
+        if not self.spreadsheet:
+            self.open_spreadsheet()
+        if not self.spreadsheet:
+            return False
+        try:
+            by_title = {ws.title: ws for ws in self.spreadsheet.worksheets()}
+            requests: List[Dict[str, Any]] = []
+            for index, title in enumerate(ordered_titles):
+                worksheet = by_title.get(title)
+                if worksheet is None:
+                    continue
+                requests.append(
+                    {
+                        "updateSheetProperties": {
+                            "properties": {"sheetId": int(worksheet.id), "index": index},
+                            "fields": "index",
+                        }
+                    }
+                )
+            if requests:
+                self.spreadsheet.batch_update({"requests": requests})
+            self.last_error = None
+            return True
+        except Exception as e:
+            message = f"Failed reordering worksheets: {e}"
+            self._set_error(message)
+            logger.warning(message)
+            return False
 
     # Number-format pattern strings used by ``apply_number_formats``. These
     # match Google Sheets' format mini-language so callers can stay agnostic

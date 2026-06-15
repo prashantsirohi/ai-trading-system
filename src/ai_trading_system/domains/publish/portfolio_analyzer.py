@@ -500,7 +500,7 @@ class PortfolioManager:
             logger.warning(f"Could not authenticate: {e}")
 
     def save_portfolio_to_sheet(
-        self, portfolio: Portfolio, sheet_name: str = "PORTFOLIO"
+        self, portfolio: Portfolio, sheet_name: str = "03_Portfolio"
     ) -> bool:
         if not self.sheets_client:
             return False
@@ -521,25 +521,11 @@ class PortfolioManager:
             return False
 
     def save_swot_analysis(
-        self, portfolio: Portfolio, sheet_name: str = "Portfolio Analysis"
+        self, portfolio: Portfolio, sheet_name: str = "03_Portfolio"
     ) -> bool:
-        if not self.sheets_client:
-            return False
-
-        try:
-            ws = self.sheets_client.get_or_create_sheet(sheet_name, rows=100, cols=20)
-            if not ws:
-                return False
-
-            ws.clear()
-            data = portfolio.to_swot_google_sheet_data()
-            ws.update(data, "A1")
-
-            logger.info(f"Saved SWOT analysis to '{sheet_name}'")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save SWOT analysis: {e}")
-            return False
+        _ = portfolio, sheet_name
+        logger.info("Skipping legacy Portfolio Analysis sheet publish; diagnostics belong in 03_Portfolio")
+        return True
 
     def create_sample_portfolio(self) -> Portfolio:
         portfolio = Portfolio(name="Sample Portfolio", initial_cash=100000)
@@ -618,10 +604,10 @@ if __name__ == "__main__":
             print(f"  Momentum: {swot.momentum} ({swot.momentum_20d:+.1%} 20d)")
 
         print("\nSaving to Google Sheets...")
-        if pm.save_portfolio_to_sheet(portfolio, "PORTFOLIO"):
+        if pm.save_portfolio_to_sheet(portfolio, "03_Portfolio"):
             print("Portfolio saved!")
 
-        if pm.save_swot_analysis(portfolio, "Portfolio Analysis"):
-            print("SWOT Analysis saved!")
+        if pm.save_swot_analysis(portfolio, "03_Portfolio"):
+            print("Portfolio diagnostics skipped; use 03_Portfolio")
     else:
         print("Not connected to Google Sheets")

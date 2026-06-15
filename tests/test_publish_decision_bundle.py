@@ -198,7 +198,7 @@ def test_watchlist_current_sheet_uses_bundle_contract(monkeypatch) -> None:
 
     assert publish_watchlist_candidates(pd.DataFrame(), decision_bundle=bundle) is True
     manager = _FakeSheetManager.last_instance
-    assert manager.sheet_name == "Watchlist Current"
+    assert manager.sheet_name == "02_Watchlist_Current"
     assert list(manager.frame.columns) == [
         "Status",
         "Priority",

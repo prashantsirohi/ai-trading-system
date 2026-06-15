@@ -20,6 +20,33 @@ from ai_trading_system.ui.execution_api.services.readmodels.market_breadth impor
     load_operational_breadth_frame,
 )
 
+DAILY_REPORT_SHEET = "01_Daily_Report"
+SECTOR_LEADERSHIP_SHEET = "04_Sector_Leadership"
+MARKET_BREADTH_SHEET = "05_Market_Breadth"
+INVESTIGATOR_SHEET = "06_Investigator"
+OPERATOR_TAB_ORDER = [
+    DAILY_REPORT_SHEET,
+    "02_Watchlist_Current",
+    "03_Portfolio",
+    SECTOR_LEADERSHIP_SHEET,
+    MARKET_BREADTH_SHEET,
+    INVESTIGATOR_SHEET,
+    "99_Run_Log",
+]
+LEGACY_OPERATOR_TABS = [
+    "DATA",
+    "FILTER",
+    "DAILY_GAINER",
+    "SECTOR",
+    "Stock Scan",
+    "Sector Dashboard",
+    "Portfolio Analysis",
+    "Fundamental Watchlist",
+    "Watchlist Current",
+    "Publish_Log",
+    "VALUATION_DASHBOARD",
+]
+
 
 def _frame(records: Iterable[Dict[str, Any]]) -> pd.DataFrame:
     rows = list(records)
@@ -706,6 +733,62 @@ def _add_breadth_charts(
     manager.spreadsheet.batch_update({"requests": requests})
 
 
+def _write_section_group(
+    *,
+    manager: GoogleSheetsManager,
+    sheet_name: str,
+    sections: list[tuple[str, pd.DataFrame]],
+    rows: int = 2000,
+    cols: int = 20,
+    start_row: int = 1,
+) -> tuple[Any, list[dict[str, int | None]]]:
+    worksheet = manager.get_or_create_sheet(sheet_name, rows=rows, cols=cols)
+    if worksheet is None:
+        raise RuntimeError(f"Dashboard publish failed creating sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
+    if hasattr(worksheet, "clear"):
+        worksheet.clear()
+    row = start_row
+    section_layouts: list[dict[str, int | None]] = []
+    for title, frame in sections:
+        section_title_row = row
+        row, header_row, row_count = _write_section(
+            manager=manager,
+            worksheet=worksheet,
+            sheet_name=sheet_name,
+            start_row=row,
+            title=title,
+            frame=frame,
+        )
+        section_layouts.append(
+            {
+                "title_row": section_title_row,
+                "header_row": int(header_row) if header_row is not None else None,
+                "row_count": int(row_count),
+                "col_count": int(len(frame.columns)),
+            }
+        )
+    try:
+        _apply_sheet_readability_layout(
+            manager=manager,
+            worksheet=worksheet,
+            section_layouts=section_layouts,
+        )
+    except Exception as exc:
+        logger.warning("Sheet readability styling failed on '%s': %s", sheet_name, exc)
+    return worksheet, section_layouts
+
+
+def _cleanup_operator_workbook(manager: GoogleSheetsManager) -> dict[str, Any]:
+    cleanup: dict[str, Any] = {}
+    if hasattr(manager, "delete_worksheets"):
+        cleanup["legacy_tabs"] = manager.delete_worksheets(LEGACY_OPERATOR_TABS)
+    if hasattr(manager, "prune_date_named_worksheets"):
+        cleanup["date_tabs"] = manager.prune_date_named_worksheets(keep=0)
+    if hasattr(manager, "reorder_worksheets"):
+        cleanup["reordered"] = manager.reorder_worksheets(OPERATOR_TAB_ORDER)
+    return cleanup
+
+
 def publish_dashboard_payload(
     payload: Dict[str, Any],
     *,
@@ -725,15 +808,15 @@ def publish_dashboard_payload(
     decision_bundle: PublishDecisionBundle | None = None,
     ranking_feedback: dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Write a single compact daily sheet with sector/rank/breakout and breadth chart."""
+    """Write compact operator workbook tabs without using Sheets as storage."""
     manager = GoogleSheetsManager()
     if not manager.open_spreadsheet():
         message = manager.last_error or "spreadsheet unavailable"
         raise RuntimeError(f"Dashboard publish failed: {message}")
 
     base_sheet_name = _resolve_sheet_name(payload, run_date=run_date)
-    sheet_name = base_sheet_name
-    worksheet = manager.get_or_create_sheet(sheet_name, rows=5000, cols=20)
+    sheet_name = DAILY_REPORT_SHEET
+    worksheet = manager.get_or_create_sheet(sheet_name, rows=2000, cols=20)
     if worksheet is None:
         raise RuntimeError(f"Dashboard publish failed creating sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
 
@@ -775,22 +858,15 @@ def publish_dashboard_payload(
 
     row = 4
     section_layouts: list[dict[str, int | None]] = []
-    breadth_header_row: int | None = None
-    breadth_rows = 0
     sections = [
         ("DAILY SUMMARY", _compact_summary_frame(summary)),
         ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
-        ("STOCK INVESTIGATOR — conviction and lifecycle", investigator_today),
-        ("INVESTIGATOR REPEAT ACCUMULATION", investigator_repeat),
-        ("INVESTIGATOR TRAP LIST", investigator_traps),
         ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
-        ("SECTOR CONTEXT — Leading/Improving only; Rank = absolute RS rank across all sectors", bundle.sector_leaders),
         ("PATTERN SETUPS", bundle.pattern_setups),
         ("MARKET MOVES SNAPSHOT", bundle.market_moves if not bundle.market_moves.empty else weekly_moves),
         ("FAILED BREAKOUTS", bundle.failed_breakouts if not bundle.failed_breakouts.empty else failed_breakouts),
         ("TOP RANKED", bundle.top_ranked if not bundle.top_ranked.empty else rank_min),
         ("BREAKOUTS (all, unfiltered)", breakout_min),
-        ("LONG-TERM BREADTH (operational, since 2020)", breadth),
     ]
     for title, frame in sections:
         section_title_row = row
@@ -802,9 +878,6 @@ def publish_dashboard_payload(
             title=title,
             frame=frame,
         )
-        if title.startswith("LONG-TERM BREADTH"):
-            breadth_header_row = int(header_row) if header_row is not None else None
-            breadth_rows = int(row_count)
         section_layouts.append(
             {
                 "title_row": section_title_row,
@@ -823,19 +896,66 @@ def publish_dashboard_payload(
     except Exception as exc:
         logger.warning("Sheet readability styling failed on '%s': %s", sheet_name, exc)
 
+    sector_worksheet, _sector_layouts = _write_section_group(
+        manager=manager,
+        sheet_name=SECTOR_LEADERSHIP_SHEET,
+        rows=1000,
+        cols=12,
+        sections=[
+            ("SECTOR LEADERSHIP", bundle.sector_leaders),
+            ("SECTOR CONTEXT — Leading/Improving only; Rank = absolute RS rank across all sectors", _minimal_sector_frame(source_sector)),
+        ],
+    )
+    _ = sector_worksheet
+
+    investigator_worksheet, _investigator_layouts = _write_section_group(
+        manager=manager,
+        sheet_name=INVESTIGATOR_SHEET,
+        rows=2000,
+        cols=16,
+        sections=[
+            ("STOCK INVESTIGATOR — conviction and lifecycle", investigator_today),
+            ("INVESTIGATOR REPEAT ACCUMULATION", investigator_repeat),
+            ("INVESTIGATOR TRAP LIST", investigator_traps),
+        ],
+    )
+    _ = investigator_worksheet
+
+    breadth_worksheet, breadth_layouts = _write_section_group(
+        manager=manager,
+        sheet_name=MARKET_BREADTH_SHEET,
+        rows=5000,
+        cols=24,
+        sections=[("LONG-TERM BREADTH (operational, since 2020)", breadth)],
+    )
+    breadth_header_row = None
+    breadth_rows = 0
+    if breadth_layouts:
+        breadth_header_row = int(breadth_layouts[0]["header_row"]) if breadth_layouts[0].get("header_row") else None
+        breadth_rows = int(breadth_layouts[0].get("row_count") or 0)
     if breadth_header_row is not None and breadth_rows >= 2:
         try:
             _add_breadth_charts(
                 manager=manager,
-                worksheet=worksheet,
+                worksheet=breadth_worksheet,
                 header_row=breadth_header_row,
                 data_rows=breadth_rows,
             )
         except Exception as exc:
-            logger.warning("Breadth chart creation failed on sheet %s: %s", sheet_name, exc)
+            logger.warning("Breadth chart creation failed on sheet %s: %s", MARKET_BREADTH_SHEET, exc)
 
-    logger.info("Dashboard payload published to single dated sheet '%s'", sheet_name)
-    return {"sheet_name": sheet_name, "base_sheet_name": base_sheet_name, "rows_written": int(row)}
+    cleanup = _cleanup_operator_workbook(manager)
+
+    logger.info("Dashboard payload published to operator workbook tab '%s'", sheet_name)
+    return {
+        "sheet_name": sheet_name,
+        "base_sheet_name": base_sheet_name,
+        "rows_written": int(row),
+        "sector_sheet_name": SECTOR_LEADERSHIP_SHEET,
+        "breadth_sheet_name": MARKET_BREADTH_SHEET,
+        "investigator_sheet_name": INVESTIGATOR_SHEET,
+        "cleanup": cleanup,
+    }
 
 
 __all__ = ["publish_dashboard_payload"]

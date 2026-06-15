@@ -1173,6 +1173,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable QuantStats dashboard tear sheet generation in publish stage.",
     )
     parser.add_argument(
+        "--bypass-dedupe-channels",
+        default="",
+        help="Comma-separated publish channels to force past delivery dedupe, e.g. google_sheets_dashboard,google_sheets_watchlist.",
+    )
+    parser.add_argument(
         "--publish-quantstats",
         action="store_true",
         help="Legacy alias (QuantStats publish is enabled by default).",
@@ -1521,6 +1526,11 @@ def main() -> None:
         "preflight_publish_network_checks": not args.skip_publish_network_checks,
         "include_delivery": not args.skip_delivery_collect,
         "publish_quantstats": not args.skip_quantstats,
+        "bypass_dedupe_channels": [
+            channel.strip()
+            for channel in str(args.bypass_dedupe_channels or "").split(",")
+            if channel.strip()
+        ],
         "quantstats_top_n": args.quantstats_top_n,
         "quantstats_min_overlap": args.quantstats_min_overlap,
         "quantstats_max_runs": args.quantstats_max_runs,

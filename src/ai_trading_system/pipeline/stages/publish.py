@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Optional
 import pandas as pd
 from pandas.errors import EmptyDataError
 import json
+from datetime import datetime, timezone
 
 from ai_trading_system.domains.publish.delivery_manager import PublisherDeliveryManager
 from ai_trading_system.pipeline.contracts import PublishStageError, StageArtifact, StageContext, StageResult
@@ -80,10 +81,10 @@ class PublishStage:
         "google_sheets_portfolio": "publish_optional",
         "google_sheets_fundamentals": "publish_optional",
         "google_sheets_investigator": "publish_optional",
-        "google_sheets_fundamental_watchlist": "publish_of_record",
-        "google_sheets_dashboard": "publish_of_record",
-        "google_sheets_watchlist": "publish_of_record",
-        "google_sheets_publish_log": "publish_auxiliary",
+        "google_sheets_fundamental_watchlist": "publish_optional",
+        "google_sheets_dashboard": "publish_optional",
+        "google_sheets_watchlist": "publish_optional",
+        "google_sheets_publish_log": "publish_optional",
         "quantstats_dashboard_tearsheet": "publish_of_record",
         "telegram_summary": "informational",
         "weekly_pdf": "informational",
@@ -205,6 +206,10 @@ class PublishStage:
                     non_blocking_failures.append(failure_msg)
                 else:
                     failures.append(failure_msg)
+
+        run_log_failure = self._publish_run_log(context, rank_artifact, targets)
+        if run_log_failure:
+            non_blocking_failures.append(run_log_failure)
 
         metadata = build_publish_metadata(
             rank_artifact=rank_artifact,
@@ -529,13 +534,8 @@ class PublishStage:
             handlers["google_sheets_dashboard"] = self._publish_dashboard_payload
         if not datasets.get("watchlist_candidates", pd.DataFrame()).empty:
             handlers["google_sheets_watchlist"] = self._publish_watchlist
-            watchlist = datasets.get("watchlist_candidates", pd.DataFrame())
-            if _has_fundamental_tracking_watchlist(watchlist):
-                handlers["google_sheets_fundamental_watchlist"] = self._publish_fundamental_watchlist
-                existing = list(context.params.get("bypass_dedupe_channels") or [])
-                if "google_sheets_fundamental_watchlist" not in existing:
-                    existing.append("google_sheets_fundamental_watchlist")
-                    context.params["bypass_dedupe_channels"] = existing
+            # Raw fundamental tracking rows stay in artifacts/DuckDB. Sheets
+            # exposes only the operator watchlist summary.
         has_fundamentals = any(
             isinstance(datasets.get(name), pd.DataFrame) and not datasets.get(name).empty
             for name in (
@@ -555,13 +555,10 @@ class PublishStage:
                 "valuation_cycle_latest",
             )
         ) or bool(datasets.get("fundamental_dashboard_payload"))
-        if has_fundamentals:
+        if has_fundamentals and bool(context.params.get("publish_raw_fundamental_sheets", False)):
             handlers["google_sheets_fundamentals"] = self._publish_fundamental_dashboard
-        investigator_scores = datasets.get("investigator_scores")
-        if isinstance(investigator_scores, pd.DataFrame) and not investigator_scores.empty:
-            handlers["google_sheets_investigator"] = self._publish_investigator
-        if datasets.get("decision_bundle") is not None:
-            handlers["google_sheets_publish_log"] = self._publish_publish_log
+        # Investigator rows are rendered inside the fixed 06_Investigator tab by
+        # google_sheets_dashboard. Do not register the legacy multi-tab channel.
         if bool(context.params.get("publish_quantstats", True)):
             handlers["quantstats_dashboard_tearsheet"] = self._publish_quantstats_dashboard
         if bool(context.params.get("publish_weekly_pdf", False)):
@@ -764,6 +761,44 @@ class PublishStage:
         if not publish_log_sheet(bundle):
             raise RuntimeError("publish log publish returned False")
         return {"report_id": "publish_log_sheet"}
+
+    def _publish_run_log(
+        self,
+        context: StageContext,
+        rank_artifact: StageArtifact,
+        targets: list[dict[str, Any]],
+    ) -> str | None:
+        if bool(context.params.get("disable_google_sheets_run_log", False)):
+            return None
+        if not targets:
+            return None
+        try:
+            from ai_trading_system.domains.publish.channels.google_sheets import publish_run_log_sheet
+
+            logged_at = datetime.now(timezone.utc).isoformat()
+            rows = [
+                {
+                    "logged_at": logged_at,
+                    "run_id": context.run_id,
+                    "run_date": context.run_date,
+                    "channel": target.get("channel"),
+                    "delivery_role": target.get("delivery_role"),
+                    "status": target.get("status"),
+                    "attempt_number": target.get("attempt_number"),
+                    "artifact_hash": target.get("artifact_hash") or rank_artifact.content_hash,
+                    "dedupe_key": target.get("dedupe_key"),
+                    "artifact_uri": target.get("artifact_uri") or rank_artifact.uri,
+                    "external_message_id": target.get("external_message_id"),
+                    "external_report_id": target.get("external_report_id"),
+                    "error_message": target.get("error_message"),
+                }
+                for target in targets
+            ]
+            if not publish_run_log_sheet(rows):
+                return "google_sheets_publish_log: run log publish returned False"
+        except Exception as exc:
+            return f"google_sheets_publish_log: {exc}"
+        return None
 
     def _publish_portfolio(
         self,
