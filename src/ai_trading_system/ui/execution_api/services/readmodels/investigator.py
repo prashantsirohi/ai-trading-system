@@ -6,14 +6,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import pandas as pd
 
-from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.platform.db.paths import get_domain_paths, resolve_artifact_path
 
 
 def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
-    registry = RegistryStore(project_root)
-    artifacts = _latest_artifacts(registry)
+    artifacts = _latest_artifacts(project_root)
     frames = {
         "today_gainers": _read_csv(artifacts.get("daily_gainer_log")),
         "scores": _read_csv(artifacts.get("investigator_scores")),
@@ -46,7 +46,7 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
     }
 
 
-def _latest_artifacts(registry: RegistryStore) -> dict[str, Path | None]:
+def _latest_artifacts(project_root: Path) -> dict[str, Path | None]:
     out: dict[str, Path | None] = {}
     for artifact_type in (
         "daily_gainer_log",
@@ -57,9 +57,51 @@ def _latest_artifacts(registry: RegistryStore) -> dict[str, Path | None]:
         "archived_investigator",
         "investigator_summary",
     ):
-        latest = registry.get_latest_artifact(stage_name="investigator", artifact_type=artifact_type, limit=1)
-        out[artifact_type] = Path(latest[0].uri) if latest else None
+        out[artifact_type] = _latest_artifact_from_registry(project_root, artifact_type) or _latest_artifact_from_disk(
+            project_root,
+            artifact_type,
+        )
     return out
+
+
+def _latest_artifact_from_registry(project_root: Path, artifact_type: str) -> Path | None:
+    paths = get_domain_paths(project_root=project_root, data_domain="operational")
+    db_path = paths.root_dir / "control_plane.duckdb"
+    if not db_path.exists():
+        return None
+    try:
+        conn = duckdb.connect(str(db_path), read_only=True)
+        row = conn.execute(
+            """
+            SELECT a.uri
+            FROM pipeline_artifact a
+            JOIN pipeline_run r ON r.run_id = a.run_id
+            WHERE a.stage_name = 'investigator'
+              AND a.artifact_type = ?
+              AND r.status = 'completed'
+            ORDER BY r.started_at DESC NULLS LAST, a.created_at DESC NULLS LAST
+            LIMIT 1
+            """,
+            [artifact_type],
+        ).fetchone()
+    except Exception:
+        return None
+    finally:
+        if "conn" in locals():
+            conn.close()
+    if not row:
+        return None
+    path = resolve_artifact_path(str(row[0]), project_root=project_root)
+    return path if path.exists() else None
+
+
+def _latest_artifact_from_disk(project_root: Path, artifact_type: str) -> Path | None:
+    paths = get_domain_paths(project_root=project_root, data_domain="operational")
+    filename = "investigator_summary.json" if artifact_type == "investigator_summary" else f"{artifact_type}.csv"
+    candidates = list(paths.pipeline_runs_dir.glob(f"*/investigator/attempt_*/{filename}"))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
 def _read_csv(path: Path | None) -> pd.DataFrame:
