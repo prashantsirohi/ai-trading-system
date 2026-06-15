@@ -90,6 +90,7 @@ import {
 import { getWorkspaceSnapshot } from '@/lib/api/workspace';
 import type { WorkspaceSnapshot } from '@/lib/api/workspace';
 import { getFundamentalsDashboard, type FundamentalsDashboard } from '@/lib/api/fundamentals';
+import { getInvestigatorSnapshot, type InvestigatorSnapshot } from '@/lib/api/investigator';
 import type {
   PatternResponse,
   PipelineWorkspaceResponse,
@@ -284,6 +285,17 @@ export function useFundamentalsDashboard(
     queryKey: queryKeys.fundamentalsDashboard(),
     queryFn: getFundamentalsDashboard,
     staleTime: 5 * 60_000,
+    ...options,
+  });
+}
+
+export function useInvestigatorSnapshot(
+  options: QueryOverrides<InvestigatorSnapshot> = {},
+): UseQueryResult<InvestigatorSnapshot, Error> {
+  return useQuery<InvestigatorSnapshot, Error>({
+    queryKey: queryKeys.investigator(),
+    queryFn: getInvestigatorSnapshot,
+    ...LIVE_QUERY_DEFAULTS,
     ...options,
   });
 }

@@ -233,6 +233,44 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             }
         ]
     )
+    investigator_scores = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "verdict": "HIGH_CONVICTION",
+                "final_score": 88,
+                "status": "HIGH_CONVICTION",
+                "move_tag": "SECTOR_ROTATION",
+                "delivery_pct": 64,
+                "volume_ratio_20": 3.2,
+                "rank_position": 3,
+            }
+        ]
+    )
+    investigator_repeat = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "appearance_count_20d": 4,
+                "repeat_score": 72,
+                "price_progression_pct": 11.5,
+                "rank_change_20d": -8,
+                "volume_escalation": True,
+            }
+        ]
+    )
+    investigator_traps = pd.DataFrame(
+        [
+            {
+                "symbol_id": "TRAP",
+                "verdict": "NOISE_TRAP",
+                "final_score": 21,
+                "drop_reason": "LOW_DELIVERY_NO_REPEAT",
+                "delivery_pct": 12,
+                "rank_position": 120,
+            }
+        ]
+    )
     pattern_df = pd.DataFrame(
         [
             {
@@ -271,6 +309,9 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         prior_ranked_df=prior_ranked_df,
         failed_breakouts_df=failed_breakouts_df,
         pattern_df=pattern_df,
+        investigator_scores_df=investigator_scores,
+        investigator_repeat_df=investigator_repeat,
+        investigator_trap_df=investigator_traps,
         ranking_feedback={
             "status": "ok",
             "rank_bucket_rows": [
@@ -342,7 +383,22 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     ]
     assert "DAILY SUMMARY" in section_titles
     assert "RANKING FEEDBACK" in section_titles
+    assert "STOCK INVESTIGATOR — conviction and lifecycle" in section_titles
+    assert "INVESTIGATOR REPEAT ACCUMULATION" in section_titles
+    assert "INVESTIGATOR TRAP LIST" in section_titles
     assert "EVENTS SUMMARY" not in section_titles
+
+    investigator_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Verdict", "Score", "Status", "Move", "Delivery", "VolRatio", "Rank"]]
+    assert investigator_frames
+    assert investigator_frames[0].iloc[0]["Symbol"] == "AAA"
+
+    repeat_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Appear20D", "RepeatScore", "PriceProgress", "RankChange", "VolumeEscalation"]]
+    assert repeat_frames
+    assert repeat_frames[0].iloc[0]["RepeatScore"] == 72
+
+    trap_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Verdict", "Score", "Trap", "Delivery", "Rank"]]
+    assert trap_frames
+    assert trap_frames[0].iloc[0]["Symbol"] == "TRAP"
 
     feedback_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Signal", "Subject", "Evidence", "Action"]]
     assert feedback_frames

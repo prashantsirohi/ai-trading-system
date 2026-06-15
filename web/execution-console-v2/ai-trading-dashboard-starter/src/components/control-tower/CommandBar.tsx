@@ -47,6 +47,7 @@ const TAB_DESTINATIONS: Array<{
   { id: 'ranking', label: 'Open Ranking', hint: 'top symbols · factors', to: '/ranking', keywords: ['ranking', 'rank', 'symbols', 'factors', 'composite'] },
   { id: 'patterns', label: 'Open Patterns', hint: 'cup · vcp · htf', to: '/patterns', keywords: ['patterns', 'cup', 'handle', 'vcp', 'flag'] },
   { id: 'sectors', label: 'Open Sectors', hint: 'leadership · rotation', to: '/sectors', keywords: ['sectors', 'leadership', 'rotation', 'heatmap'] },
+  { id: 'investigator', label: 'Open Investigator', hint: 'conviction · traps', to: '/investigator', keywords: ['investigator', 'conviction', 'gainers', 'traps', 'repeat'] },
   { id: 'execution', label: 'Open Execution', hint: 'orders · risk', to: '/execution', keywords: ['execution', 'orders', 'eligible', 'blocked', 'risk'] },
   { id: 'runs', label: 'Open Runs Audit', hint: 'history · DQ · artifacts', to: '/runs', keywords: ['runs', 'history', 'dq', 'artifacts', 'audit'] },
   { id: 'shadow', label: 'Open Shadow', hint: 'drift · agreement', to: '/shadow', keywords: ['shadow', 'drift', 'agreement'] },

@@ -642,6 +642,9 @@ class PublishStage:
             pattern_df=pattern_df,
             watchlist_df=datasets.get("watchlist_candidates"),
             candidate_tracker_df=datasets.get("candidate_tracker_current"),
+            investigator_scores_df=datasets.get("investigator_scores"),
+            investigator_repeat_df=datasets.get("investigator_repeat_tracker"),
+            investigator_trap_df=datasets.get("investigator_trap_log"),
             decision_bundle=datasets.get("decision_bundle"),
             ranking_feedback=self._load_ranking_feedback(context),
         )

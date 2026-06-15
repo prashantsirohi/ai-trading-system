@@ -286,6 +286,58 @@ def _failed_breakout_frame(failed: pd.DataFrame | None) -> pd.DataFrame:
     return _to_numeric(out, ["Trigger", "Close", "DropPct"], 2)
 
 
+def _investigator_frame(scores: pd.DataFrame | None) -> pd.DataFrame:
+    if scores is None or scores.empty:
+        return pd.DataFrame(columns=["Symbol", "Verdict", "Score", "Status", "Move", "Delivery", "VolRatio", "Rank"])
+    out = pd.DataFrame(
+        {
+            "Symbol": scores.get("symbol_id", ""),
+            "Verdict": scores.get("verdict", ""),
+            "Score": scores.get("final_score", ""),
+            "Status": scores.get("status", ""),
+            "Move": scores.get("move_tag", ""),
+            "Delivery": scores.get("delivery_pct", ""),
+            "VolRatio": scores.get("volume_ratio_20", ""),
+            "Rank": scores.get("rank_position", ""),
+        }
+    )
+    out = _to_numeric(out, ["Score", "Delivery", "VolRatio", "Rank"], 2)
+    return out.sort_values(["Score", "Symbol"], ascending=[False, True], na_position="last").head(25).reset_index(drop=True)
+
+
+def _investigator_repeat_frame(repeat: pd.DataFrame | None) -> pd.DataFrame:
+    if repeat is None or repeat.empty:
+        return pd.DataFrame(columns=["Symbol", "Appear20D", "RepeatScore", "PriceProgress", "RankChange", "VolumeEscalation"])
+    out = pd.DataFrame(
+        {
+            "Symbol": repeat.get("symbol_id", ""),
+            "Appear20D": repeat.get("appearance_count_20d", ""),
+            "RepeatScore": repeat.get("repeat_score", ""),
+            "PriceProgress": repeat.get("price_progression_pct", ""),
+            "RankChange": repeat.get("rank_change_20d", ""),
+            "VolumeEscalation": repeat.get("volume_escalation", ""),
+        }
+    )
+    out = _to_numeric(out, ["Appear20D", "RepeatScore", "PriceProgress", "RankChange"], 2)
+    return out.sort_values(["RepeatScore", "Symbol"], ascending=[False, True], na_position="last").head(25).reset_index(drop=True)
+
+
+def _investigator_trap_frame(traps: pd.DataFrame | None) -> pd.DataFrame:
+    if traps is None or traps.empty:
+        return pd.DataFrame(columns=["Symbol", "Verdict", "Score", "Trap", "Delivery", "Rank"])
+    out = pd.DataFrame(
+        {
+            "Symbol": traps.get("symbol_id", ""),
+            "Verdict": traps.get("verdict", ""),
+            "Score": traps.get("final_score", ""),
+            "Trap": traps.get("drop_reason", traps.get("move_tag", "")),
+            "Delivery": traps.get("delivery_pct", ""),
+            "Rank": traps.get("rank_position", ""),
+        }
+    )
+    return _to_numeric(out, ["Score", "Delivery", "Rank"], 2).head(25).reset_index(drop=True)
+
+
 def _pattern_frame(df: pd.DataFrame | None) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=["Symbol", "Pattern", "State", "Tier", "Score", "Trigger", "VolRatio", "Stage"])
@@ -667,6 +719,9 @@ def publish_dashboard_payload(
     pattern_df: pd.DataFrame | None = None,
     watchlist_df: pd.DataFrame | None = None,
     candidate_tracker_df: pd.DataFrame | None = None,
+    investigator_scores_df: pd.DataFrame | None = None,
+    investigator_repeat_df: pd.DataFrame | None = None,
+    investigator_trap_df: pd.DataFrame | None = None,
     decision_bundle: PublishDecisionBundle | None = None,
     ranking_feedback: dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
@@ -694,6 +749,9 @@ def publish_dashboard_payload(
     breakout_min = _minimal_breakout_frame(source_breakout)
     weekly_moves = _weekly_move_frame(source_ranked)
     failed_breakouts = _failed_breakout_frame(failed_breakouts_df)
+    investigator_today = _investigator_frame(investigator_scores_df)
+    investigator_repeat = _investigator_repeat_frame(investigator_repeat_df)
+    investigator_traps = _investigator_trap_frame(investigator_trap_df)
     events_index = _frame(payload.get("events_index", []))
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
     bundle = decision_bundle or build_publish_decision_bundle(
@@ -722,6 +780,9 @@ def publish_dashboard_payload(
     sections = [
         ("DAILY SUMMARY", _compact_summary_frame(summary)),
         ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
+        ("STOCK INVESTIGATOR — conviction and lifecycle", investigator_today),
+        ("INVESTIGATOR REPEAT ACCUMULATION", investigator_repeat),
+        ("INVESTIGATOR TRAP LIST", investigator_traps),
         ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
         ("SECTOR CONTEXT — Leading/Improving only; Rank = absolute RS rank across all sectors", bundle.sector_leaders),
         ("PATTERN SETUPS", bundle.pattern_setups),

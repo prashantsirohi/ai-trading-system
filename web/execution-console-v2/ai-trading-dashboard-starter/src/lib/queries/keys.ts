@@ -33,6 +33,7 @@ export const queryKeys = {
   sectors: () => ['execution', 'sectors'] as const,
   sectorRotation: () => ['execution', 'sector-rotation'] as const,
   fundamentalsDashboard: () => ['execution', 'fundamentals-dashboard'] as const,
+  investigator: () => ['execution', 'investigator'] as const,
   shadow: () => ['execution', 'shadow'] as const,
   riskProfiles: () => ['execution', 'risk-profiles'] as const,
   backtestRun: (profile: string, fromDate: string | null, toDate: string | null, equity: number) =>
