@@ -12,7 +12,9 @@ def score_volume_anatomy(frame: pd.DataFrame) -> pd.DataFrame:
         out["volume_unusual"] = []
         out["low_delivery_flag"] = []
         return out
-    volume_ratio = pd.to_numeric(_series(out, "volume_ratio_20"), errors="coerce").fillna(0)
+    volume_ratio_20 = pd.to_numeric(_series(out, "volume_ratio_20"), errors="coerce")
+    volume_ratio_5d = pd.to_numeric(_series(out, "volume_ratio_5d"), errors="coerce")
+    volume_ratio = pd.concat([volume_ratio_20, volume_ratio_5d], axis=1).max(axis=1).fillna(0)
     delivery = pd.to_numeric(_series(out, "delivery_pct"), errors="coerce")
     volume_trend_source = _series(out, "volume_trend_10d")
     if volume_trend_source.isna().all():

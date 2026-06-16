@@ -79,6 +79,8 @@ def _decide_row(row: pd.Series) -> dict[str, object]:
     volume_declining = bool(row.get("volume_ratio_declining", False)) and not bool(row.get("volume_escalation", False))
     rank_change = _num(row.get("rank_change_20d"), 0)
     rank_not_improving = rank_change >= 0
+    trigger_reason = str(row.get("trigger_reason") or "").upper()
+    multi_day_trigger = trigger_reason in {"WEEKLY_GAINER", "STEALTH_ACCUMULATION"}
     fa_improvement = bool(row.get("fa_improvement", False))
     sector_cluster = bool(row.get("sector_clustering", False)) or _num(row.get("sector_cluster_count"), 0) >= 3
     current_score = _num(row.get("final_score", row.get("score_current")), 0)
@@ -98,7 +100,7 @@ def _decide_row(row: pd.Series) -> dict[str, object]:
         return _archive("ARCHIVED", "LOW_DELIVERY_NO_REPEAT", now)
     if rank_known and rank_score < 35 and not credible:
         return _archive("ARCHIVED", "LOW_RANK_NO_NEWS", now)
-    if days >= 5 and appearance <= 1 and price_vs_trigger < 0 and not credible and not sector_support:
+    if days >= 5 and appearance <= 1 and price_vs_trigger < 0 and not credible and not sector_support and not multi_day_trigger:
         return _archive("DROPPED", "ONE_CANDLE_DRAMA", now)
     if days >= 10 and appearance < 2 and volume_declining and rank_not_improving:
         return _archive("DROPPED", "STALE_NO_REPEAT", now)

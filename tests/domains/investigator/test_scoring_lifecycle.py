@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from ai_trading_system.domains.investigator.lifecycle import apply_lifecycle
+from ai_trading_system.domains.investigator.move_classifier import classify_move
 from ai_trading_system.domains.investigator.repeat_tracker import build_repeat_tracker
 from ai_trading_system.domains.investigator.scoring import finalize_scores
 
@@ -107,6 +108,52 @@ def test_repeat_tracker_counts_current_trade_date_once_when_history_excludes_tod
     assert repeat.iloc[0]["repeat_score"] == 8
 
 
+def test_repeat_tracker_counts_trigger_types_over_20d() -> None:
+    current = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "trade_date": "2026-05-21",
+                "close": 112,
+                "volume_ratio_20": 2.5,
+                "trigger_reason": "STEALTH_ACCUMULATION",
+                "final_score": 48,
+            }
+        ]
+    )
+    history = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "trade_date": "2026-05-05", "close": 100, "volume_ratio_20": 2.0, "trigger_reason": "DAILY_GAINER"},
+            {"symbol_id": "AAA", "trade_date": "2026-05-10", "close": 105, "volume_ratio_20": 2.1, "trigger_reason": "WEEKLY_GAINER"},
+        ]
+    )
+
+    repeat = build_repeat_tracker(current_scores=current, historical_daily_log=history)
+
+    row = repeat.iloc[0]
+    assert row["daily_gainer_count_20d"] == 1
+    assert row["weekly_gainer_count_20d"] == 1
+    assert row["stealth_count_20d"] == 1
+
+
+def test_weekly_and_stealth_survive_move_classifier_as_credible_triggers() -> None:
+    frame = pd.DataFrame(
+        [
+            {"symbol_id": "WWW", "trigger_reason": "WEEKLY_GAINER"},
+            {"symbol_id": "STEALTH", "trigger_reason": "STEALTH_ACCUMULATION"},
+        ]
+    )
+
+    classified = classify_move(frame)
+
+    assert classified.loc[classified["symbol_id"].eq("WWW"), "move_tag"].iloc[0] == "WEEKLY_MOMENTUM"
+    assert classified.loc[classified["symbol_id"].eq("WWW"), "trigger_quality_score"].iloc[0] == 14
+    assert classified.loc[classified["symbol_id"].eq("WWW"), "credible_trigger"].iloc[0]
+    assert classified.loc[classified["symbol_id"].eq("STEALTH"), "move_tag"].iloc[0] == "STEALTH_ACCUMULATION"
+    assert classified.loc[classified["symbol_id"].eq("STEALTH"), "trigger_quality_score"].iloc[0] == 13
+    assert classified.loc[classified["symbol_id"].eq("STEALTH"), "credible_trigger"].iloc[0]
+
+
 def test_lifecycle_one_candle_drama_archive_reason() -> None:
     scores = pd.DataFrame(
         [
@@ -150,6 +197,80 @@ def test_lifecycle_one_candle_drama_archive_reason() -> None:
     assert active.empty
     assert archived.iloc[0]["status"] == "DROPPED"
     assert archived.iloc[0]["drop_reason"] == "ONE_CANDLE_DRAMA"
+
+
+def test_lifecycle_does_not_drop_weekly_or_stealth_as_one_candle_drama() -> None:
+    scores = pd.DataFrame(
+        [
+            {
+                "symbol_id": "WWW",
+                "trade_date": "2026-05-01",
+                "verdict": "WATCH_ONLY",
+                "final_score": 42,
+                "composite_score": 50,
+                "credible_trigger": False,
+                "sector_support_score": 0,
+                "sector_rotation_active": False,
+                "long_upper_wick_trap": False,
+                "low_delivery_flag": False,
+                "fa_improvement": False,
+                "sector_clustering": False,
+                "trigger_reason": "WEEKLY_GAINER",
+            },
+            {
+                "symbol_id": "STEALTH",
+                "trade_date": "2026-05-01",
+                "verdict": "WATCH_ONLY",
+                "final_score": 42,
+                "composite_score": 50,
+                "credible_trigger": False,
+                "sector_support_score": 0,
+                "sector_rotation_active": False,
+                "long_upper_wick_trap": False,
+                "low_delivery_flag": False,
+                "fa_improvement": False,
+                "sector_clustering": False,
+                "trigger_reason": "STEALTH_ACCUMULATION",
+            },
+        ]
+    )
+    repeat = pd.DataFrame(
+        [
+            {
+                "symbol_id": "WWW",
+                "first_seen_date": "2026-05-01",
+                "last_seen_date": "2026-05-01",
+                "days_since_last_seen": 5,
+                "appearance_count_20d": 1,
+                "score_current": 42,
+                "score_peak": 42,
+                "rank_current": 80,
+                "rank_change_20d": 0,
+                "price_progression_pct": -4.5,
+                "volume_escalation": False,
+                "sector_cluster_count": 0,
+            },
+            {
+                "symbol_id": "STEALTH",
+                "first_seen_date": "2026-05-01",
+                "last_seen_date": "2026-05-01",
+                "days_since_last_seen": 5,
+                "appearance_count_20d": 1,
+                "score_current": 42,
+                "score_peak": 42,
+                "rank_current": 80,
+                "rank_change_20d": 0,
+                "price_progression_pct": -4.5,
+                "volume_escalation": False,
+                "sector_cluster_count": 0,
+            },
+        ]
+    )
+
+    active, archived = apply_lifecycle(scores, repeat)
+
+    assert set(active["symbol_id"]) == {"WWW", "STEALTH"}
+    assert archived.empty
 
 
 def test_lifecycle_keeps_repeat_accumulation_beyond_window() -> None:

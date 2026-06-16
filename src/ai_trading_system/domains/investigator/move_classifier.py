@@ -15,6 +15,9 @@ def classify_move(frame: pd.DataFrame) -> pd.DataFrame:
     event_text = _joined_text(out, ["event_category", "top_event", "news", "trigger_type", "catalyst", "summary"])
     sector_rotation = _boolish(out, "sector_rotation_active") | pd.to_numeric(_series(out, "peer_gainers_count"), errors="coerce").ge(5).fillna(False)
     tags = pd.Series("RANDOM_NOISE", index=out.index, dtype=object)
+    trigger_reason = _series(out, "trigger_reason").fillna("").astype(str).str.upper()
+    tags = tags.mask(trigger_reason.eq("WEEKLY_GAINER"), "WEEKLY_MOMENTUM")
+    tags = tags.mask(trigger_reason.eq("STEALTH_ACCUMULATION"), "STEALTH_ACCUMULATION")
     tags = tags.mask(event_text.str.contains("earn|result|profit|revenue", case=False, na=False), "EARNINGS_RERATING")
     tags = tags.mask(event_text.str.contains("order|contract|tender", case=False, na=False), "ORDER_WIN")
     tags = tags.mask(sector_rotation, "SECTOR_ROTATION")
@@ -26,6 +29,8 @@ def classify_move(frame: pd.DataFrame) -> pd.DataFrame:
         "ORDER_WIN": 18,
         "SECTOR_ROTATION": 15,
         "SMART_MONEY_EVENT": 16,
+        "WEEKLY_MOMENTUM": 14,
+        "STEALTH_ACCUMULATION": 13,
         "SHORT_COVERING": 10,
         "OPERATOR_SPIKE": 3,
         "RANDOM_NOISE": 5,

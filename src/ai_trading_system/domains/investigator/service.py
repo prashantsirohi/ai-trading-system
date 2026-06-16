@@ -10,7 +10,7 @@ from pandas.errors import EmptyDataError
 
 from ai_trading_system.domains.investigator.buyer_fingerprint import score_buyer_fingerprint
 from ai_trading_system.domains.investigator.fundamentals import load_fundamental_snapshot, score_fundamentals
-from ai_trading_system.domains.investigator.intake import load_daily_gainers
+from ai_trading_system.domains.investigator.intake import load_investigator_intake
 from ai_trading_system.domains.investigator.lifecycle import apply_lifecycle
 from ai_trading_system.domains.investigator.move_classifier import classify_move
 from ai_trading_system.domains.investigator.price_structure import score_price_structure
@@ -31,12 +31,16 @@ class InvestigatorService:
         stock_scan = _read_optional(context.artifact_for("rank", "stock_scan"))
         rank_context = stock_scan if not stock_scan.empty else ranked
         sector_dashboard = _read_optional(context.artifact_for("rank", "sector_dashboard"))
-        gainers = load_daily_gainers(
+        gainers = load_investigator_intake(
             ohlcv_db_path=context.db_path,
             ranked_signals=rank_context,
             as_of=context.params.get("investigator_as_of") or None,
             min_return_pct=float(context.params.get("investigator_min_return_pct", 5.0)),
             min_volume_ratio=float(context.params.get("investigator_min_volume_ratio", 2.0)),
+            weekly_return_pct=float(context.params.get("investigator_weekly_return_pct", 8.0)),
+            stealth_5d_pct=float(context.params.get("investigator_stealth_5d_pct", 3.0)),
+            stealth_20d_pct=float(context.params.get("investigator_stealth_20d_pct", 8.0)),
+            min_green_days_5d=int(context.params.get("investigator_min_green_days_5d", 3)),
             min_market_cap_cr=float(context.params.get("investigator_min_market_cap_cr", 500.0)),
         )
         candidates = _merge_optional(gainers, breakout, ranked, stock_scan)
@@ -89,7 +93,20 @@ class InvestigatorService:
             with context.registry._reader() as conn:  # noqa: SLF001
                 return conn.execute(
                     """
-                    SELECT symbol_id, trade_date, close, volume_ratio_20, composite_score, rank_position, final_score, sector
+                    SELECT
+                        symbol_id,
+                        trade_date,
+                        close,
+                        volume_ratio_20,
+                        volume_ratio_5d,
+                        daily_return_pct,
+                        return_5d,
+                        return_20d,
+                        composite_score,
+                        rank_position,
+                        final_score,
+                        sector,
+                        trigger_reason
                     FROM investigator_scores
                     WHERE trade_date >= CAST(? AS DATE) - INTERVAL 60 DAY
                       AND trade_date < CAST(? AS DATE)
@@ -170,11 +187,15 @@ class InvestigatorService:
     ) -> dict[str, Any]:
         verdict_counts = scores.get("verdict", pd.Series(dtype=str)).value_counts().to_dict() if not scores.empty else {}
         status_counts = active.get("status", pd.Series(dtype=str)).value_counts().to_dict() if not active.empty else {}
+        trigger_counts = gainers.get("trigger_reason", pd.Series(dtype=str)).value_counts().to_dict() if not gainers.empty else {}
         return {
             "status": "completed",
             "run_id": context.run_id,
             "run_date": context.run_date,
-            "daily_gainer_count": int(len(gainers)),
+            "trigger_counts": {str(k): int(v) for k, v in trigger_counts.items()},
+            "daily_gainer_count": int(trigger_counts.get("DAILY_GAINER", 0)),
+            "weekly_gainer_count": int(trigger_counts.get("WEEKLY_GAINER", 0)),
+            "stealth_accumulation_count": int(trigger_counts.get("STEALTH_ACCUMULATION", 0)),
             "scored_count": int(len(scores)),
             "active_count": int(len(active)),
             "trap_count": int(len(traps)),

@@ -47,14 +47,52 @@ def _seed_ohlcv(path: Path) -> None:
             INSERT INTO _catalog VALUES
             ('AAA', 'NSE', '2026-05-06', 98, 101, 97, 100, 1000, false, 'equity'),
             ('AAA', 'NSE', '2026-05-07', 101, 112, 100, 110, 3000, false, 'equity'),
+            ('WWW', 'NSE', '2026-05-02', 100, 100, 100, 100, 1000, false, 'equity'),
+            ('WWW', 'NSE', '2026-05-03', 101.5, 101.5, 101.5, 101.5, 1000, false, 'equity'),
+            ('WWW', 'NSE', '2026-05-04', 103, 103, 103, 103, 1000, false, 'equity'),
+            ('WWW', 'NSE', '2026-05-05', 104.5, 104.5, 104.5, 104.5, 1000, false, 'equity'),
+            ('WWW', 'NSE', '2026-05-06', 106, 106, 106, 106, 1000, false, 'equity'),
+            ('WWW', 'NSE', '2026-05-07', 108.5, 108.5, 108.5, 108.5, 1000, false, 'equity'),
             ('BBB', 'NSE', '2026-05-06', 100, 101, 99, 100, 1000, false, 'equity'),
             ('BBB', 'NSE', '2026-05-07', 100, 103, 99, 102, 3000, false, 'equity')
             """
         )
+        stealth_rows = [
+            ("STEALTH", "NSE", f"2026-04-{day:02d}", close, close, close, close, 1000.0, False, "equity")
+            for day, close in enumerate(
+                [
+                    100.0,
+                    100.2,
+                    100.4,
+                    100.6,
+                    100.8,
+                    101.0,
+                    101.2,
+                    101.4,
+                    101.6,
+                    101.8,
+                    102.0,
+                    102.2,
+                    102.4,
+                    102.6,
+                    102.8,
+                    105.0,
+                    105.7,
+                    106.4,
+                    107.1,
+                    107.8,
+                    108.5,
+                ],
+                start=10,
+            )
+        ]
+        conn.executemany("INSERT INTO _catalog VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", stealth_rows)
         conn.execute(
             """
             INSERT INTO _delivery VALUES
             ('AAA', 'NSE', '2026-05-07', 65),
+            ('WWW', 'NSE', '2026-05-07', 55),
+            ('STEALTH', 'NSE', '2026-04-30', 58),
             ('BBB', 'NSE', '2026-05-07', 30)
             """
         )
@@ -138,13 +176,20 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     assert (output_dir / "final_3q_gate.csv").exists()
     assert (output_dir / "investigator_summary.json").exists()
     assert result.metadata["daily_gainer_count"] == 1
+    assert result.metadata["weekly_gainer_count"] == 1
+    assert result.metadata["stealth_accumulation_count"] == 1
+    assert result.metadata["trigger_counts"] == {
+        "DAILY_GAINER": 1,
+        "WEEKLY_GAINER": 1,
+        "STEALTH_ACCUMULATION": 1,
+    }
     assert {artifact.artifact_type for artifact in result.artifacts} >= {
         "daily_gainer_log",
         "investigator_scores",
         "investigator_summary",
     }
     with registry._reader() as conn:  # noqa: SLF001
-        assert conn.execute("SELECT COUNT(*) FROM investigator_scores").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM investigator_scores").fetchone()[0] == 3
         row = conn.execute("SELECT composite_score, rank_position FROM investigator_scores WHERE symbol_id = 'AAA'").fetchone()
         assert row == (82.0, 42.0)
 

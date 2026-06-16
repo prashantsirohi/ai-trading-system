@@ -24,10 +24,15 @@ def build_repeat_tracker(
                     "trade_date",
                     "close",
                     "volume_ratio_20",
+                    "volume_ratio_5d",
+                    "daily_return_pct",
+                    "return_5d",
+                    "return_20d",
                     "composite_score",
                     "rank_position",
                     "final_score",
                     "sector",
+                    "trigger_reason",
                 )
                 if col in current.columns
             ]
@@ -58,6 +63,9 @@ def build_repeat_tracker(
                 "appearance_count_10d": _count_since(group, latest_date, 10),
                 "appearance_count_15d": _count_since(group, latest_date, 15),
                 "appearance_count_20d": _count_since(group, latest_date, 20),
+                "daily_gainer_count_20d": _count_trigger_since(group, latest_date, 20, "DAILY_GAINER"),
+                "weekly_gainer_count_20d": _count_trigger_since(group, latest_date, 20, "WEEKLY_GAINER"),
+                "stealth_count_20d": _count_trigger_since(group, latest_date, 20, "STEALTH_ACCUMULATION"),
                 "avg_volume_ratio": _mean(group.get("volume_ratio_20")),
                 "volume_escalation": _is_rising(group.get("volume_ratio_20")),
                 "price_progression_pct": _pct_change(first.get("close"), last.get("close")),
@@ -88,6 +96,14 @@ def build_repeat_tracker(
 
 def _count_since(group: pd.DataFrame, latest_date: pd.Timestamp, days: int) -> int:
     return int((group["trade_date"] >= latest_date - pd.Timedelta(days=int(days))).sum())
+
+
+def _count_trigger_since(group: pd.DataFrame, latest_date: pd.Timestamp, days: int, trigger_reason: str) -> int:
+    if "trigger_reason" not in group.columns:
+        return 0
+    in_window = group["trade_date"] >= latest_date - pd.Timedelta(days=int(days))
+    triggers = group["trigger_reason"].fillna("").astype(str).str.upper().eq(trigger_reason)
+    return int((in_window & triggers).sum())
 
 
 def _is_rising(series: pd.Series | None) -> bool:
@@ -145,6 +161,9 @@ def _empty() -> pd.DataFrame:
             "appearance_count_10d",
             "appearance_count_15d",
             "appearance_count_20d",
+            "daily_gainer_count_20d",
+            "weekly_gainer_count_20d",
+            "stealth_count_20d",
             "avg_volume_ratio",
             "volume_escalation",
             "price_progression_pct",
