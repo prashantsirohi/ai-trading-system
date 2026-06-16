@@ -22,6 +22,10 @@ from ai_trading_system.domains.publish.watchlist_buckets import (
     assign_watchlist_buckets,
     summarize_buckets,
 )
+from ai_trading_system.domains.publish.channels.google_sheets_manager import (
+    is_google_sheets_quota_error,
+    is_google_sheets_retryable_error,
+)
 
 
 FUNDAMENTAL_ARTIFACT_TYPES = frozenset(
@@ -189,6 +193,11 @@ class PublishStage:
         failures = []
         non_blocking_failures = []
         targets = []
+        sheets_requests_attempted = 0
+        sheets_rows_written = 0
+        google_sheets_quota_limited = False
+        retry_recommended_after_seconds = None
+        google_sheets_errors: list[str] = []
         for channel, handler in self._build_handlers(context, datasets).items():
             delivery = self.delivery_manager.deliver(
                 context=context,
@@ -198,9 +207,27 @@ class PublishStage:
             )
             role = self.CHANNEL_ROLES.get(channel, "publish_auxiliary")
             delivery["delivery_role"] = role
+            if channel.startswith("google_sheets"):
+                sheet_meta = delivery.get("metadata") if isinstance(delivery.get("metadata"), dict) else {}
+                sheets_requests_attempted += int(sheet_meta.get("sheets_requests_attempted") or 0)
+                sheets_rows_written += int(sheet_meta.get("sheets_rows_written") or 0)
+                google_sheets_quota_limited = google_sheets_quota_limited or bool(sheet_meta.get("google_sheets_quota_limited"))
+                if sheet_meta.get("retry_recommended_after_seconds") is not None:
+                    retry_recommended_after_seconds = sheet_meta.get("retry_recommended_after_seconds")
             targets.append(delivery)
             if delivery["status"] == "failed":
                 failure_msg = f"{channel}: {delivery.get('error_message', 'delivery failed')}"
+                if channel.startswith("google_sheets"):
+                    error_message = str(delivery.get("error_message") or "")
+                    retryable = is_google_sheets_retryable_error(RuntimeError(error_message))
+                    quota_limited = is_google_sheets_quota_error(RuntimeError(error_message))
+                    google_sheets_quota_limited = google_sheets_quota_limited or quota_limited
+                    if retryable:
+                        delivery["status"] = "retry_later" if quota_limited else "failed_non_blocking"
+                        delivery["retryable"] = True
+                        delivery["google_sheets_quota_limited"] = quota_limited
+                        targets[-1] = delivery
+                    google_sheets_errors.append(error_message)
                 if role in self.NON_BLOCKING_ROLES:
                     # Recorded in metadata for visibility but does not raise.
                     non_blocking_failures.append(failure_msg)
@@ -219,6 +246,12 @@ class PublishStage:
             stage2_breakdown_symbols=list(datasets.get("stage2_breakdown_symbols") or []),
         )
         metadata["watchlist_buckets"] = bucket_counts
+        metadata["google_sheets_quota_limited"] = bool(google_sheets_quota_limited)
+        metadata["retry_recommended_after_seconds"] = retry_recommended_after_seconds
+        metadata["sheets_requests_attempted"] = int(sheets_requests_attempted)
+        metadata["sheets_rows_written"] = int(sheets_rows_written)
+        if google_sheets_errors:
+            metadata["google_sheets_errors"] = google_sheets_errors
         if fallback_fundamental_artifacts:
             metadata["fundamental_publish_fallback"] = {
                 "artifact_types": sorted(fallback_fundamental_artifacts),
@@ -648,6 +681,11 @@ class PublishStage:
         return {
             "report_id": "dashboard_sheet",
             "sheet_name": result.get("sheet_name") if isinstance(result, dict) else None,
+            "google_sheets_quota_limited": result.get("google_sheets_quota_limited") if isinstance(result, dict) else False,
+            "retry_recommended_after_seconds": result.get("retry_recommended_after_seconds") if isinstance(result, dict) else None,
+            "sheets_requests_attempted": result.get("sheets_requests_attempted", 0) if isinstance(result, dict) else 0,
+            "sheets_rows_written": result.get("sheets_rows_written", 0) if isinstance(result, dict) else 0,
+            "google_sheets_error": result.get("google_sheets_error") if isinstance(result, dict) else None,
         }
 
     def _load_ranking_feedback(self, context: StageContext) -> Dict[str, Any]:

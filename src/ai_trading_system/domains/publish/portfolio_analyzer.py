@@ -510,9 +510,15 @@ class PortfolioManager:
             if not ws:
                 return False
 
-            ws.clear()
             data = portfolio.to_google_sheet_data()
-            ws.update(data, "A1")
+            if hasattr(self.sheets_client, "clear_worksheet"):
+                self.sheets_client.clear_worksheet(sheet_name)
+            if hasattr(self.sheets_client, "update_worksheet_values"):
+                self.sheets_client.update_worksheet_values(ws, data, range_name="A1")
+            else:
+                frame = pd.DataFrame(data)
+                if not self.sheets_client.write_dataframe(frame, sheet_name=sheet_name, include_header=False, clear_sheet=True):
+                    return False
 
             logger.info(f"Saved portfolio to '{sheet_name}'")
             return True

@@ -214,26 +214,8 @@ def test_watchlist_current_sheet_uses_bundle_contract(monkeypatch) -> None:
         "New Entry",
         "Tags",
         "Setup",
-        "Trigger Price",
-        "Current Close",
-        "Entry Zone",
-        "Stop Zone",
-        "Reason",
-        "LLM Catalyst",
-        "Risk Flag",
-        "Tracker Status",
-        "Tracking Health",
-        "Technical Health",
-        "Fundamental Health",
-        "Return Since First Seen",
-        "Drawdown From High",
-        "Result Delta",
-        "Tracker Alert",
-        "Last Seen",
-        "Added Date",
     ]
     assert manager.frame.iloc[0]["Symbol"] == "AAA"
-    assert manager.frame.iloc[0]["Tracker Status"] == "STRONG_IMPROVING"
-    assert manager.frame.iloc[0]["Tracking Health"] == 84.2
-    assert manager.frame.iloc[0]["Tracker Alert"] == "Improving"
-    assert manager.frame.iloc[0]["LLM Catalyst"] == ""
+    assert manager.frame.iloc[0]["Sector"] == "Pharma"
+    assert manager.frame.iloc[0]["Setup"] == "Darvas"
+    assert manager.frame.iloc[0]["Watchlist Score"] == 86.8

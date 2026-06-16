@@ -2,8 +2,11 @@ import os
 import logging
 import math
 import re
+import random
+import threading
+import time
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union
+from typing import Callable, Optional, List, Dict, Any, Union
 
 import pandas as pd
 from ai_trading_system.platform.utils.runtime_config import GoogleSheetsRuntimeConfig
@@ -26,6 +29,65 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _DATE_SHEET_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_RETRYABLE_STATUS_CODES = {429, 500, 503}
+_RETRYABLE_ERROR_PATTERNS = (
+    "resource_exhausted",
+    "quota exceeded",
+    "rate limit",
+    "rate_limit",
+    "timeout",
+    "timed out",
+    "temporarily unavailable",
+)
+_HELPER_PREFIXES = ("_DATA_", "_RAW_")
+
+
+class GoogleSheetsTransientError(RuntimeError):
+    """Raised when a Google Sheets API error is retryable/transient."""
+
+
+class GoogleSheetsQuotaLimitedError(GoogleSheetsTransientError):
+    """Raised when Google Sheets quota/cooldown is the likely failure cause."""
+
+
+def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
+    try:
+        return max(int(os.getenv(name, str(default))), minimum)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
+    try:
+        return max(float(os.getenv(name, str(default))), minimum)
+    except (TypeError, ValueError):
+        return default
+
+
+def is_google_sheets_retryable_error(exc: BaseException) -> bool:
+    return _google_sheets_error_kind(exc) is not None
+
+
+def is_google_sheets_quota_error(exc: BaseException) -> bool:
+    return _google_sheets_error_kind(exc) == "quota"
+
+
+def _google_sheets_error_kind(exc: BaseException) -> str | None:
+    status = getattr(getattr(exc, "resp", None), "status", None) or getattr(exc, "status_code", None)
+    try:
+        status_int = int(status) if status is not None else None
+    except (TypeError, ValueError):
+        status_int = None
+    text = str(exc).lower()
+    if status_int in _RETRYABLE_STATUS_CODES:
+        if status_int == 429:
+            return "quota"
+        return "transient"
+    if "resource_exhausted" in text or "quota exceeded" in text or "rate limit" in text or "rate_limit" in text:
+        return "quota"
+    if any(pattern in text for pattern in _RETRYABLE_ERROR_PATTERNS):
+        return "transient"
+    return None
 
 
 def _to_cell(value: Any) -> Any:
@@ -51,6 +113,8 @@ class GoogleSheetsManager:
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
+    _write_lock = threading.Lock()
+    _last_write_at = 0.0
 
     def __init__(
         self,
@@ -75,10 +139,70 @@ class GoogleSheetsManager:
         self.client = None
         self.spreadsheet = None
         self.last_error: Optional[str] = None
+        self.max_retries = _env_int("GOOGLE_SHEETS_MAX_RETRIES", 5, minimum=0)
+        self.max_backoff_seconds = _env_float("GOOGLE_SHEETS_MAX_BACKOFF_SECONDS", 64.0, minimum=1.0)
+        self.write_interval_seconds = _env_float("GOOGLE_SHEETS_WRITE_INTERVAL_SECONDS", 1.2, minimum=0.0)
+        self.requests_attempted = 0
+        self.rows_written = 0
+        self.quota_limited = False
+        self.retry_recommended_after_seconds: Optional[float] = None
+        self.last_retryable_error: Optional[str] = None
         self._authenticate()
 
     def _set_error(self, message: str) -> None:
         self.last_error = message
+
+    def _execute_with_backoff(self, call: Callable[[], Any], *, is_write: bool = False) -> Any:
+        """Execute a Google API call with rate limiting and retry backoff."""
+        attempts = max(1, self.max_retries + 1)
+        last_exc: BaseException | None = None
+        for attempt in range(attempts):
+            if is_write:
+                self._wait_for_write_slot()
+            self.requests_attempted += 1
+            try:
+                result = call()
+                if is_write:
+                    with self._write_lock:
+                        type(self)._last_write_at = time.monotonic()
+                return result
+            except Exception as exc:
+                kind = _google_sheets_error_kind(exc)
+                if kind is None:
+                    raise
+                last_exc = exc
+                self.last_retryable_error = str(exc)
+                if kind == "quota":
+                    self.quota_limited = True
+                if attempt >= attempts - 1:
+                    break
+                delay = min(2**attempt, self.max_backoff_seconds)
+                delay = min(delay + random.uniform(0, min(1.0, delay * 0.25)), self.max_backoff_seconds)
+                self.retry_recommended_after_seconds = delay
+                time.sleep(delay)
+        message = str(last_exc or "Google Sheets retryable error")
+        self._set_error(message)
+        if self.quota_limited:
+            raise GoogleSheetsQuotaLimitedError(message) from last_exc
+        raise GoogleSheetsTransientError(message) from last_exc
+
+    def _wait_for_write_slot(self) -> None:
+        if self.write_interval_seconds <= 0:
+            return
+        with self._write_lock:
+            elapsed = time.monotonic() - type(self)._last_write_at
+            wait_seconds = self.write_interval_seconds - elapsed
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+
+    def quota_metadata(self) -> Dict[str, Any]:
+        return {
+            "google_sheets_quota_limited": bool(self.quota_limited),
+            "retry_recommended_after_seconds": self.retry_recommended_after_seconds,
+            "sheets_requests_attempted": int(self.requests_attempted),
+            "sheets_rows_written": int(self.rows_written),
+            "google_sheets_error": self.last_retryable_error or self.last_error,
+        }
 
     def _authenticate(self):
         if not GOOGLE_AVAILABLE:
@@ -175,7 +299,7 @@ class GoogleSheetsManager:
             return None
 
         try:
-            self.spreadsheet = self.client.open_by_key(sheet_id)
+            self.spreadsheet = self._execute_with_backoff(lambda: self.client.open_by_key(sheet_id))
             logger.info(f"Opened spreadsheet: {self.spreadsheet.title}")
             self.last_error = None
             return self.spreadsheet
@@ -193,7 +317,7 @@ class GoogleSheetsManager:
             return None
 
         try:
-            return self.spreadsheet.worksheet(sheet_name)
+            return self._execute_with_backoff(lambda: self.spreadsheet.worksheet(sheet_name))
         except Exception:
             message = f"Worksheet '{sheet_name}' not found"
             self._set_error(message)
@@ -206,7 +330,7 @@ class GoogleSheetsManager:
             return None
 
         try:
-            data = worksheet.get_all_records()
+            data = self._execute_with_backoff(lambda: worksheet.get_all_records())
             df = pd.DataFrame(data)
             logger.info(f"Read {len(df)} rows from '{sheet_name}'")
             self.last_error = None
@@ -239,7 +363,7 @@ class GoogleSheetsManager:
 
         try:
             if clear_sheet:
-                worksheet.clear()
+                self._execute_with_backoff(lambda: worksheet.clear(), is_write=True)
 
             data = []
             if include_header:
@@ -254,7 +378,7 @@ class GoogleSheetsManager:
                 data.extend([_to_cell(v) for v in row.tolist()] for _, row in df.iterrows())
 
             if data:
-                worksheet.update(data, range_name=start_cell)
+                self.update_worksheet_values(worksheet, data, range_name=start_cell)
 
             logger.info(f"Wrote {len(df)} rows to '{sheet_name}'")
             self.last_error = None
@@ -281,9 +405,10 @@ class GoogleSheetsManager:
                 data.append(df.columns.tolist())
             data.extend([_to_cell(v) for v in row.tolist()] for _, row in df.iterrows())
 
-            worksheet.append_rows(data)
+            self._execute_with_backoff(lambda: worksheet.append_rows(data), is_write=True)
             logger.info(f"Appended {len(df)} rows to '{sheet_name}'")
             self.last_error = None
+            self.rows_written += len(data)
             return True
         except Exception as e:
             message = f"Failed to append rows: {e}"
@@ -297,7 +422,7 @@ class GoogleSheetsManager:
             return False
 
         try:
-            worksheet.clear()
+            self._execute_with_backoff(lambda: worksheet.clear(), is_write=True)
             logger.info(f"Cleared worksheet '{sheet_name}'")
             self.last_error = None
             return True
@@ -314,7 +439,7 @@ class GoogleSheetsManager:
         if not self.spreadsheet:
             return []
 
-        return [ws.title for ws in self.spreadsheet.worksheets()]
+        return [ws.title for ws in self._execute_with_backoff(lambda: self.spreadsheet.worksheets())]
 
     def delete_worksheets(self, titles: List[str]) -> Dict[str, Any]:
         """Delete worksheets by title, returning a non-throwing summary."""
@@ -326,11 +451,11 @@ class GoogleSheetsManager:
         requested = {title.lower() for title in titles}
         deleted: List[str] = []
         failed: List[str] = []
-        for worksheet in list(self.spreadsheet.worksheets()):
+        for worksheet in list(self._execute_with_backoff(lambda: self.spreadsheet.worksheets())):
             if worksheet.title.lower() not in requested:
                 continue
             try:
-                self.spreadsheet.del_worksheet(worksheet)
+                self._execute_with_backoff(lambda worksheet=worksheet: self.spreadsheet.del_worksheet(worksheet), is_write=True)
                 deleted.append(worksheet.title)
             except Exception as e:
                 failed.append(worksheet.title)
@@ -344,7 +469,8 @@ class GoogleSheetsManager:
             self.open_spreadsheet()
         if not self.spreadsheet:
             return {"deleted": [], "failed": [], "error": self.last_error or "spreadsheet unavailable"}
-        date_tabs = sorted([ws.title for ws in self.spreadsheet.worksheets() if _DATE_SHEET_RE.fullmatch(ws.title)], reverse=True)
+        worksheets = self._execute_with_backoff(lambda: self.spreadsheet.worksheets())
+        date_tabs = sorted([ws.title for ws in worksheets if _DATE_SHEET_RE.fullmatch(ws.title)], reverse=True)
         to_delete = date_tabs[max(0, keep):]
         return self.delete_worksheets(to_delete)
 
@@ -355,7 +481,7 @@ class GoogleSheetsManager:
         if not self.spreadsheet:
             return False
         try:
-            by_title = {ws.title: ws for ws in self.spreadsheet.worksheets()}
+            by_title = {ws.title: ws for ws in self._execute_with_backoff(lambda: self.spreadsheet.worksheets())}
             requests: List[Dict[str, Any]] = []
             for index, title in enumerate(ordered_titles):
                 worksheet = by_title.get(title)
@@ -370,7 +496,7 @@ class GoogleSheetsManager:
                     }
                 )
             if requests:
-                self.spreadsheet.batch_update({"requests": requests})
+                self.batch_update({"requests": requests})
             self.last_error = None
             return True
         except Exception as e:
@@ -405,7 +531,7 @@ class GoogleSheetsManager:
         if worksheet is None:
             return False
         try:
-            header_values = worksheet.row_values(header_row)
+            header_values = self._execute_with_backoff(lambda: worksheet.row_values(header_row))
         except Exception as e:
             self._set_error(f"Failed reading header row: {e}")
             logger.warning(self.last_error)
@@ -429,7 +555,7 @@ class GoogleSheetsManager:
                 col_idx = header_values.index(header_name)
                 letter = _col_letter(col_idx)
                 range_ref = f"{letter}{header_row + 1}:{letter}"
-                worksheet.format(range_ref, {"numberFormat": fmt})
+                self._execute_with_backoff(lambda range_ref=range_ref, fmt=fmt: worksheet.format(range_ref, {"numberFormat": fmt}), is_write=True)
             self.last_error = None
             return True
         except Exception as e:
@@ -450,7 +576,7 @@ class GoogleSheetsManager:
             return False
         try:
             sheet_id = worksheet.id
-            metadata = self.spreadsheet.fetch_sheet_metadata()
+            metadata = self.fetch_sheet_metadata()
             existing = []
             for sheet in metadata.get("sheets", []):
                 if sheet.get("properties", {}).get("sheetId") != sheet_id:
@@ -461,7 +587,7 @@ class GoogleSheetsManager:
             for spec in chart_specs:
                 requests.append(_line_chart_request(sheet_id=sheet_id, **spec))
             if requests:
-                self.spreadsheet.batch_update({"requests": requests})
+                self.batch_update({"requests": requests})
             self.last_error = None
             return True
         except Exception as e:
@@ -480,13 +606,13 @@ class GoogleSheetsManager:
             return None
 
         title_lower = title.lower()
-        for ws in self.spreadsheet.worksheets():
+        for ws in self._execute_with_backoff(lambda: self.spreadsheet.worksheets()):
             if ws.title.lower() == title_lower:
                 logger.info(f"Found existing worksheet: {ws.title}")
                 return ws
 
         try:
-            worksheet = self.spreadsheet.add_worksheet(title, rows, cols)
+            worksheet = self._execute_with_backoff(lambda: self.spreadsheet.add_worksheet(title, rows, cols), is_write=True)
             logger.info(f"Created worksheet: {title}")
             self.last_error = None
             return worksheet
@@ -495,6 +621,72 @@ class GoogleSheetsManager:
             self._set_error(message)
             logger.error(message)
             return None
+
+    def update_worksheet_values(
+        self,
+        worksheet: Worksheet,
+        values: List[List[Any]],
+        *,
+        range_name: str = "A1",
+    ) -> None:
+        normalized = [[_to_cell(value) for value in row] for row in values]
+        self._execute_with_backoff(lambda: worksheet.update(normalized, range_name=range_name), is_write=True)
+        self.rows_written += len(normalized)
+
+    def batch_update(self, body: Dict[str, Any]) -> Any:
+        if not self.spreadsheet:
+            self.open_spreadsheet()
+        if not self.spreadsheet:
+            return None
+        return self._execute_with_backoff(lambda: self.spreadsheet.batch_update(body), is_write=True)
+
+    def fetch_sheet_metadata(self) -> Dict[str, Any]:
+        if not self.spreadsheet:
+            self.open_spreadsheet()
+        if not self.spreadsheet:
+            return {}
+        return self._execute_with_backoff(lambda: self.spreadsheet.fetch_sheet_metadata())
+
+    def write_hidden_data_sheet(
+        self,
+        sheet_name: str,
+        dataframe: pd.DataFrame,
+        max_rows: int,
+        max_cols: int,
+    ) -> bool:
+        if not sheet_name.startswith(_HELPER_PREFIXES):
+            raise ValueError("Hidden helper sheet names must start with _DATA_ or _RAW_")
+        frame = dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
+        frame = frame.iloc[:max_rows, :max_cols].fillna("")
+        sheet = self.get_or_create_sheet(sheet_name, rows=max(max_rows + 5, len(frame) + 5), cols=max(max_cols, len(frame.columns), 1))
+        if sheet is None:
+            return False
+        if not self.write_dataframe(frame, sheet_name=sheet_name, include_header=True, clear_sheet=True):
+            return False
+        return self.hide_worksheet(sheet_name)
+
+    def hide_worksheet(self, sheet_name: str) -> bool:
+        return self._set_hidden(sheet_name, hidden=True)
+
+    def unhide_worksheet(self, sheet_name: str) -> bool:
+        return self._set_hidden(sheet_name, hidden=False)
+
+    def _set_hidden(self, sheet_name: str, *, hidden: bool) -> bool:
+        if not sheet_name.startswith(_HELPER_PREFIXES):
+            raise ValueError("Hidden helper sheet names must start with _DATA_ or _RAW_")
+        worksheet = self.get_worksheet(sheet_name)
+        if worksheet is None:
+            return False
+        requests = [
+            {
+                "updateSheetProperties": {
+                    "properties": {"sheetId": int(worksheet.id), "hidden": hidden},
+                    "fields": "hidden",
+                }
+            }
+        ]
+        self.batch_update({"requests": requests})
+        return True
 
 
 def _dimension_range(sheet_id: int, start_row: int, end_row: int, col: int) -> Dict[str, int]:

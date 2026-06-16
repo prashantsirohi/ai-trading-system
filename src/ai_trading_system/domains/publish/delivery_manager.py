@@ -85,6 +85,7 @@ class PublisherDeliveryManager:
                     "attempt_number": attempt_number,
                     "external_message_id": payload.get("message_id"),
                     "external_report_id": payload.get("report_id"),
+                    "metadata": payload,
                 }
             except Exception as exc:
                 final_attempt = retry_index == self.max_attempts - 1

@@ -24,14 +24,20 @@ DAILY_REPORT_SHEET = "01_Daily_Report"
 SECTOR_LEADERSHIP_SHEET = "04_Sector_Leadership"
 MARKET_BREADTH_SHEET = "05_Market_Breadth"
 INVESTIGATOR_SHEET = "06_Investigator"
+DATA_BREADTH_SHEET = "_DATA_BREADTH"
+DATA_SECTOR_HISTORY_SHEET = "_DATA_SECTOR_HISTORY"
+DATA_INVESTIGATOR_SHEET = "_DATA_INVESTIGATOR"
+VISIBLE_SHEET_MAX_ROWS = 60
+VISIBLE_SHEET_MAX_COLS = 14
+DATA_BREADTH_MAX_ROWS = 250
+DATA_SECTOR_HISTORY_MAX_ROWS = 500
+DATA_INVESTIGATOR_MAX_ROWS = 300
 OPERATOR_TAB_ORDER = [
     DAILY_REPORT_SHEET,
     "02_Watchlist_Current",
     "03_Portfolio",
     SECTOR_LEADERSHIP_SHEET,
     MARKET_BREADTH_SHEET,
-    INVESTIGATOR_SHEET,
-    "99_Run_Log",
 ]
 LEGACY_OPERATOR_TABS = [
     "DATA",
@@ -45,6 +51,8 @@ LEGACY_OPERATOR_TABS = [
     "Watchlist Current",
     "Publish_Log",
     "VALUATION_DASHBOARD",
+    INVESTIGATOR_SHEET,
+    "99_Run_Log",
 ]
 
 
@@ -194,6 +202,185 @@ def _to_numeric(df: pd.DataFrame, columns: list[str], places: int) -> pd.DataFra
         if col in out.columns:
             out.loc[:, col] = pd.to_numeric(out[col], errors="coerce").round(places)
     return out
+
+
+def _sheet_cell(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    if pd.isna(value):
+        return ""
+    if isinstance(value, (int, float)):
+        return value
+    return str(value)
+
+
+def _cap_visible_frame(frame: pd.DataFrame, *, rows: int | None = None) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return pd.DataFrame()
+    row_limit = rows if rows is not None else VISIBLE_SHEET_MAX_ROWS
+    return frame.iloc[:row_limit, :VISIBLE_SHEET_MAX_COLS].copy()
+
+
+def _normalise_grid(rows: list[list[Any]], *, max_rows: int = VISIBLE_SHEET_MAX_ROWS, max_cols: int = VISIBLE_SHEET_MAX_COLS) -> list[list[Any]]:
+    clipped = [row[:max_cols] for row in rows[:max_rows]]
+    if not clipped:
+        clipped = [[]]
+    normalized = [[_sheet_cell(value) for value in row] + [""] * max(0, max_cols - len(row)) for row in clipped]
+    while len(normalized) < max_rows:
+        normalized.append([""] * max_cols)
+    return normalized
+
+
+def _sections_to_grid(sections: list[tuple[str, pd.DataFrame]]) -> tuple[list[list[Any]], list[dict[str, int | None]]]:
+    rows: list[list[Any]] = []
+    layouts: list[dict[str, int | None]] = []
+    for title, frame in sections:
+        if len(rows) >= VISIBLE_SHEET_MAX_ROWS:
+            break
+        title_row = len(rows) + 1
+        rows.append([title])
+        safe = _cap_visible_frame(frame, rows=max(0, VISIBLE_SHEET_MAX_ROWS - len(rows) - 1))
+        if safe.empty:
+            rows.append(["No data available"])
+            layouts.append({"title_row": title_row, "header_row": None, "row_count": 0, "col_count": 1})
+        else:
+            header_row = len(rows) + 1
+            rows.append(list(safe.columns))
+            for row in safe.itertuples(index=False, name=None):
+                if len(rows) >= VISIBLE_SHEET_MAX_ROWS:
+                    break
+                rows.append(list(row))
+            layouts.append(
+                {
+                    "title_row": title_row,
+                    "header_row": header_row,
+                    "row_count": int(min(len(safe), max(0, len(rows) - header_row))),
+                    "col_count": int(min(len(safe.columns), VISIBLE_SHEET_MAX_COLS)),
+                }
+            )
+        if len(rows) < VISIBLE_SHEET_MAX_ROWS:
+            rows.append([])
+    return _normalise_grid(rows), layouts
+
+
+def _write_visible_grid_sheet(
+    *,
+    manager: GoogleSheetsManager,
+    sheet_name: str,
+    sections: list[tuple[str, pd.DataFrame]],
+    extra_requests: list[dict[str, Any]] | None = None,
+) -> tuple[Any, list[dict[str, int | None]], int]:
+    worksheet = manager.get_or_create_sheet(sheet_name, rows=VISIBLE_SHEET_MAX_ROWS, cols=VISIBLE_SHEET_MAX_COLS)
+    if worksheet is None:
+        raise RuntimeError(f"Dashboard publish failed creating sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
+    grid, layouts = _sections_to_grid(sections)
+    if hasattr(manager, "update_worksheet_values"):
+        manager.update_worksheet_values(worksheet, grid, range_name="A1")
+    else:
+        raise RuntimeError("GoogleSheetsManager.update_worksheet_values is required")
+    requests = _grid_layout_requests(worksheet, layouts)
+    requests.extend(extra_requests or [])
+    if requests and hasattr(manager, "batch_update"):
+        manager.batch_update({"requests": requests})
+    non_empty_rows = sum(1 for row in grid if any(str(value).strip() for value in row))
+    return worksheet, layouts, non_empty_rows
+
+
+def _grid_layout_requests(worksheet: Any, section_layouts: list[dict[str, int | None]]) -> list[dict[str, Any]]:
+    sheet_id = int(worksheet.id)
+    requests: list[dict[str, Any]] = [
+        {
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": sheet_id,
+                    "gridProperties": {
+                        "rowCount": VISIBLE_SHEET_MAX_ROWS,
+                        "columnCount": VISIBLE_SHEET_MAX_COLS,
+                        "frozenRowCount": 1,
+                    },
+                },
+                "fields": "gridProperties(rowCount,columnCount,frozenRowCount)",
+            }
+        },
+    ]
+    widths = [190, 130, 110, 110, 120, 160, 220, 180, 130, 130, 130, 130, 130, 130]
+    for idx, width in enumerate(widths[:VISIBLE_SHEET_MAX_COLS]):
+        requests.append(
+            {
+                "updateDimensionProperties": {
+                    "range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": idx, "endIndex": idx + 1},
+                    "properties": {"pixelSize": width},
+                    "fields": "pixelSize",
+                }
+            }
+        )
+    for layout in section_layouts:
+        title_idx = int(layout["title_row"] or 1) - 1
+        requests.append(
+            {
+                "repeatCell": {
+                    "range": {"sheetId": sheet_id, "startRowIndex": title_idx, "endRowIndex": title_idx + 1, "startColumnIndex": 0, "endColumnIndex": VISIBLE_SHEET_MAX_COLS},
+                    "cell": {
+                        "userEnteredFormat": {
+                            "textFormat": {"bold": True, "fontSize": 11, "foregroundColor": {"red": 0.11, "green": 0.16, "blue": 0.26}},
+                            "backgroundColor": {"red": 0.91, "green": 0.95, "blue": 0.99},
+                        }
+                    },
+                    "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                }
+            }
+        )
+        if layout.get("header_row"):
+            header_idx = int(layout["header_row"]) - 1
+            requests.append(
+                {
+                    "repeatCell": {
+                        "range": {"sheetId": sheet_id, "startRowIndex": header_idx, "endRowIndex": header_idx + 1, "startColumnIndex": 0, "endColumnIndex": int(layout.get("col_count") or VISIBLE_SHEET_MAX_COLS)},
+                        "cell": {
+                            "userEnteredFormat": {
+                                "textFormat": {"bold": True},
+                                "backgroundColor": {"red": 0.95, "green": 0.95, "blue": 0.95},
+                            }
+                        },
+                        "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                    }
+                }
+            )
+    return requests
+
+
+def _write_hidden_data_sheet(
+    manager: GoogleSheetsManager,
+    sheet_name: str,
+    frame: pd.DataFrame,
+    *,
+    max_rows: int,
+    max_cols: int,
+) -> Any | None:
+    safe = frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+    safe = safe.iloc[:max_rows, :max_cols]
+    if hasattr(manager, "write_hidden_data_sheet"):
+        if not manager.write_hidden_data_sheet(sheet_name, safe, max_rows=max_rows, max_cols=max_cols):
+            return None
+        return manager.get_worksheet(sheet_name)
+    worksheet = manager.get_or_create_sheet(sheet_name, rows=max_rows + 5, cols=max_cols)
+    if worksheet is None:
+        return None
+    manager.write_dataframe(safe.fillna(""), sheet_name, include_header=True, clear_sheet=True)
+    return worksheet
+
+
+def _combine_frames(frames: list[tuple[str, pd.DataFrame]]) -> pd.DataFrame:
+    combined: list[pd.DataFrame] = []
+    for section, frame in frames:
+        safe = frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+        if safe.empty:
+            safe = pd.DataFrame([{"note": "No data available"}])
+        safe.insert(0, "section", section)
+        combined.append(safe)
+    return pd.concat(combined, ignore_index=True, sort=False) if combined else pd.DataFrame()
 
 
 def _minimal_sector_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -490,130 +677,6 @@ def _load_operational_breadth(project_root: Path) -> pd.DataFrame:
     ].reset_index(drop=True)
 
 
-def _write_section(
-    *,
-    manager: GoogleSheetsManager,
-    worksheet: Any,
-    sheet_name: str,
-    start_row: int,
-    title: str,
-    frame: pd.DataFrame,
-) -> tuple[int, int | None, int]:
-    worksheet.update([[title]], range_name=f"A{start_row}")
-    header_row = start_row + 1
-    if frame.empty:
-        worksheet.update([["No data available"]], range_name=f"A{header_row}")
-        return header_row + 2, None, 0
-    if not manager.write_dataframe(frame, sheet_name, start_cell=f"A{header_row}", include_header=True, clear_sheet=False):
-        raise RuntimeError(f"Failed writing section '{title}': {manager.last_error or 'write error'}")
-    return header_row + len(frame) + 2, header_row, len(frame)
-
-
-def _style_section(
-    *,
-    worksheet: Any,
-    title_row: int,
-    header_row: int | None,
-    row_count: int,
-    col_count: int,
-) -> None:
-    if not hasattr(worksheet, "format"):
-        return
-    worksheet.format(
-        f"A{title_row}:F{title_row}",
-        {
-            "textFormat": {"bold": True, "fontSize": 11, "foregroundColor": {"red": 0.11, "green": 0.16, "blue": 0.26}},
-            "backgroundColor": {"red": 0.91, "green": 0.95, "blue": 0.99},
-        },
-    )
-    if header_row is None or row_count <= 0:
-        return
-    last_col = chr(ord("A") + max(col_count - 1, 0))
-    worksheet.format(
-        f"A{header_row}:{last_col}{header_row}",
-        {
-            "textFormat": {"bold": True},
-            "backgroundColor": {"red": 0.95, "green": 0.95, "blue": 0.95},
-        },
-    )
-
-
-def _apply_sheet_readability_layout(
-    *,
-    manager: GoogleSheetsManager,
-    worksheet: Any,
-    section_layouts: list[dict[str, int | None]],
-) -> None:
-    if manager.spreadsheet is None:
-        return
-
-    sheet_id = int(worksheet.id)
-    requests = [
-        {
-            "updateSheetProperties": {
-                "properties": {
-                    "sheetId": sheet_id,
-                    "gridProperties": {
-                        "frozenRowCount": 1,
-                    },
-                },
-                "fields": "gridProperties.frozenRowCount",
-            }
-        },
-    ]
-    widths = [180, 110, 90, 110, 150, 420]
-    for idx, width in enumerate(widths):
-        requests.append(
-            {
-                "updateDimensionProperties": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "dimension": "COLUMNS",
-                        "startIndex": idx,
-                        "endIndex": idx + 1,
-                    },
-                    "properties": {"pixelSize": width},
-                    "fields": "pixelSize",
-                }
-            }
-        )
-    manager.spreadsheet.batch_update({"requests": requests})
-
-    if hasattr(worksheet, "format"):
-        worksheet.format(
-            "A1:F1",
-            {
-                "textFormat": {"bold": True},
-                "backgroundColor": {"red": 0.88, "green": 0.93, "blue": 0.98},
-            },
-        )
-    for layout in section_layouts:
-        _style_section(
-            worksheet=worksheet,
-            title_row=int(layout["title_row"]),
-            header_row=int(layout["header_row"]) if layout.get("header_row") else None,
-            row_count=int(layout["row_count"] or 0),
-            col_count=int(layout["col_count"] or 1),
-        )
-
-
-def _delete_existing_charts(manager: GoogleSheetsManager, sheet_id: int) -> None:
-    if manager.spreadsheet is None:
-        return
-    metadata = manager.spreadsheet.fetch_sheet_metadata()
-    requests = []
-    for sheet in metadata.get("sheets", []):
-        properties = sheet.get("properties", {})
-        if int(properties.get("sheetId", -1)) != int(sheet_id):
-            continue
-        for chart in sheet.get("charts", []):
-            chart_id = chart.get("chartId")
-            if chart_id is not None:
-                requests.append({"deleteEmbeddedObject": {"objectId": chart_id}})
-    if requests:
-        manager.spreadsheet.batch_update({"requests": requests})
-
-
 def _chart_range(sheet_id: int, start_idx: int, end_idx: int, column: int) -> dict[str, Any]:
     return {
         "sourceRange": {
@@ -637,20 +700,39 @@ def _chart_series(sheet_id: int, start_idx: int, end_idx: int, column: int, axis
     }
 
 
-def _add_breadth_charts(
+def _existing_chart_delete_requests(manager: GoogleSheetsManager, sheet_id: int) -> list[dict[str, Any]]:
+    if manager.spreadsheet is None:
+        return []
+    try:
+        metadata = manager.fetch_sheet_metadata() if hasattr(manager, "fetch_sheet_metadata") else {}
+    except Exception:
+        return []
+    requests: list[dict[str, Any]] = []
+    for sheet in metadata.get("sheets", []):
+        properties = sheet.get("properties", {})
+        if int(properties.get("sheetId", -1)) != int(sheet_id):
+            continue
+        for chart in sheet.get("charts", []):
+            chart_id = chart.get("chartId")
+            if chart_id is not None:
+                requests.append({"deleteEmbeddedObject": {"objectId": chart_id}})
+    return requests
+
+
+def _breadth_chart_requests(
     *,
     manager: GoogleSheetsManager,
-    worksheet: Any,
-    header_row: int,
+    visible_worksheet: Any,
+    data_worksheet: Any | None,
     data_rows: int,
-) -> None:
-    if data_rows < 2 or manager.spreadsheet is None:
-        return
-    sheet_id = int(worksheet.id)
-    start_idx = header_row - 1
-    end_idx = header_row + data_rows
-    _delete_existing_charts(manager, sheet_id)
-    domain = [{"domain": _chart_range(sheet_id, start_idx, end_idx, 0)}]
+) -> list[dict[str, Any]]:
+    if data_worksheet is None or data_rows < 2:
+        return []
+    visible_sheet_id = int(visible_worksheet.id)
+    data_sheet_id = int(data_worksheet.id)
+    start_idx = 0
+    end_idx = min(data_rows + 1, DATA_BREADTH_MAX_ROWS + 1)
+    domain = [{"domain": _chart_range(data_sheet_id, start_idx, end_idx, 0)}]
 
     def request(
         *,
@@ -683,26 +765,26 @@ def _add_breadth_charts(
                     },
                     "position": {
                         "overlayPosition": {
-                            "anchorCell": {"sheetId": sheet_id, "rowIndex": anchor_row, "columnIndex": 12},
+                            "anchorCell": {"sheetId": visible_sheet_id, "rowIndex": anchor_row, "columnIndex": 7},
                             "offsetXPixels": 16,
                             "offsetYPixels": 8,
-                            "widthPixels": 860,
-                            "heightPixels": 300,
+                            "widthPixels": 760,
+                            "heightPixels": 260,
                         }
                     },
                 }
             }
         }
 
-    requests = [
+    return _existing_chart_delete_requests(manager, visible_sheet_id) + [
         request(
             title="Operational Long-Term Breadth (% Above SMA200 and PE 5Y Percentile SMA20)",
             chart_type="LINE",
             series=[
-                _chart_series(sheet_id, start_idx, end_idx, 1),
-                _chart_series(sheet_id, start_idx, end_idx, 11, "RIGHT_AXIS"),
+                _chart_series(data_sheet_id, start_idx, end_idx, 1),
+                _chart_series(data_sheet_id, start_idx, end_idx, 11, "RIGHT_AXIS"),
             ],
-            anchor_row=start_idx,
+            anchor_row=2,
             left_title="% Above SMA200",
             right_title="PE 5Y percentile SMA20",
         ),
@@ -710,72 +792,15 @@ def _add_breadth_charts(
             title="New 52W Highs / Lows and Ratio SMA10",
             chart_type="COLUMN",
             series=[
-                _chart_series(sheet_id, start_idx, end_idx, 2),
-                _chart_series(sheet_id, start_idx, end_idx, 3),
-                {**_chart_series(sheet_id, start_idx, end_idx, 5, "RIGHT_AXIS"), "type": "LINE"},
+                _chart_series(data_sheet_id, start_idx, end_idx, 2),
+                _chart_series(data_sheet_id, start_idx, end_idx, 3),
+                {**_chart_series(data_sheet_id, start_idx, end_idx, 5, "RIGHT_AXIS"), "type": "LINE"},
             ],
-            anchor_row=start_idx + 16,
+            anchor_row=20,
             left_title="New highs / lows",
             right_title="High / low ratio SMA10",
         ),
-        request(
-            title="A/D Divergence and TOP1000 Index",
-            chart_type="LINE",
-            series=[
-                _chart_series(sheet_id, start_idx, end_idx, 8),
-                _chart_series(sheet_id, start_idx, end_idx, 9, "RIGHT_AXIS"),
-            ],
-            anchor_row=start_idx + 32,
-            left_title="A/D line",
-            right_title="Index level",
-        ),
     ]
-    manager.spreadsheet.batch_update({"requests": requests})
-
-
-def _write_section_group(
-    *,
-    manager: GoogleSheetsManager,
-    sheet_name: str,
-    sections: list[tuple[str, pd.DataFrame]],
-    rows: int = 2000,
-    cols: int = 20,
-    start_row: int = 1,
-) -> tuple[Any, list[dict[str, int | None]]]:
-    worksheet = manager.get_or_create_sheet(sheet_name, rows=rows, cols=cols)
-    if worksheet is None:
-        raise RuntimeError(f"Dashboard publish failed creating sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
-    if hasattr(worksheet, "clear"):
-        worksheet.clear()
-    row = start_row
-    section_layouts: list[dict[str, int | None]] = []
-    for title, frame in sections:
-        section_title_row = row
-        row, header_row, row_count = _write_section(
-            manager=manager,
-            worksheet=worksheet,
-            sheet_name=sheet_name,
-            start_row=row,
-            title=title,
-            frame=frame,
-        )
-        section_layouts.append(
-            {
-                "title_row": section_title_row,
-                "header_row": int(header_row) if header_row is not None else None,
-                "row_count": int(row_count),
-                "col_count": int(len(frame.columns)),
-            }
-        )
-    try:
-        _apply_sheet_readability_layout(
-            manager=manager,
-            worksheet=worksheet,
-            section_layouts=section_layouts,
-        )
-    except Exception as exc:
-        logger.warning("Sheet readability styling failed on '%s': %s", sheet_name, exc)
-    return worksheet, section_layouts
 
 
 def _cleanup_operator_workbook(manager: GoogleSheetsManager) -> dict[str, Any]:
@@ -816,9 +841,6 @@ def publish_dashboard_payload(
 
     base_sheet_name = _resolve_sheet_name(payload, run_date=run_date)
     sheet_name = DAILY_REPORT_SHEET
-    worksheet = manager.get_or_create_sheet(sheet_name, rows=2000, cols=20)
-    if worksheet is None:
-        raise RuntimeError(f"Dashboard publish failed creating sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
 
     source_ranked = ranked_df if isinstance(ranked_df, pd.DataFrame) and not ranked_df.empty else _frame(payload.get("ranked_signals", []))
     source_ranked = pd.DataFrame(
@@ -853,108 +875,112 @@ def publish_dashboard_payload(
     )
 
     summary = bundle.run_summary
-    if not manager.write_dataframe(summary, sheet_name, clear_sheet=True, start_cell="A1", include_header=True):
-        raise RuntimeError(f"Dashboard publish failed writing summary: {manager.last_error or 'unknown error'}")
-
-    row = 4
-    section_layouts: list[dict[str, int | None]] = []
-    sections = [
+    daily_sections = [
+        ("RUN SUMMARY", summary),
         ("DAILY SUMMARY", _compact_summary_frame(summary)),
         ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
         ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
         ("PATTERN SETUPS", bundle.pattern_setups),
+        ("BREAKOUTS (all, unfiltered)", breakout_min),
         ("MARKET MOVES SNAPSHOT", bundle.market_moves if not bundle.market_moves.empty else weekly_moves),
         ("FAILED BREAKOUTS", bundle.failed_breakouts if not bundle.failed_breakouts.empty else failed_breakouts),
         ("TOP RANKED", bundle.top_ranked if not bundle.top_ranked.empty else rank_min),
-        ("BREAKOUTS (all, unfiltered)", breakout_min),
     ]
-    for title, frame in sections:
-        section_title_row = row
-        row, header_row, row_count = _write_section(
-            manager=manager,
-            worksheet=worksheet,
-            sheet_name=sheet_name,
-            start_row=row,
-            title=title,
-            frame=frame,
-        )
-        section_layouts.append(
-            {
-                "title_row": section_title_row,
-                "header_row": int(header_row) if header_row is not None else None,
-                "row_count": int(row_count),
-                "col_count": int(len(frame.columns)),
-            }
-        )
+    _daily_worksheet, _daily_layouts, daily_rows = _write_visible_grid_sheet(
+        manager=manager,
+        sheet_name=sheet_name,
+        sections=daily_sections,
+    )
 
-    try:
-        _apply_sheet_readability_layout(
-            manager=manager,
-            worksheet=worksheet,
-            section_layouts=section_layouts,
-        )
-    except Exception as exc:
-        logger.warning("Sheet readability styling failed on '%s': %s", sheet_name, exc)
-
-    sector_worksheet, _sector_layouts = _write_section_group(
+    sector_min = _minimal_sector_frame(source_sector)
+    _write_hidden_data_sheet(
+        manager=manager,
+        sheet_name=DATA_SECTOR_HISTORY_SHEET,
+        frame=source_sector,
+        max_rows=DATA_SECTOR_HISTORY_MAX_ROWS,
+        max_cols=VISIBLE_SHEET_MAX_COLS,
+    )
+    _sector_worksheet, _sector_layouts, _sector_rows = _write_visible_grid_sheet(
         manager=manager,
         sheet_name=SECTOR_LEADERSHIP_SHEET,
-        rows=1000,
-        cols=12,
         sections=[
             ("SECTOR LEADERSHIP", bundle.sector_leaders),
-            ("SECTOR CONTEXT — Leading/Improving only; Rank = absolute RS rank across all sectors", _minimal_sector_frame(source_sector)),
+            ("SECTOR CONTEXT", sector_min),
         ],
     )
-    _ = sector_worksheet
 
-    investigator_worksheet, _investigator_layouts = _write_section_group(
-        manager=manager,
-        sheet_name=INVESTIGATOR_SHEET,
-        rows=2000,
-        cols=16,
-        sections=[
-            ("STOCK INVESTIGATOR — conviction and lifecycle", investigator_today),
+    investigator_detail = _combine_frames(
+        [
+            ("STOCK INVESTIGATOR", investigator_today),
             ("INVESTIGATOR REPEAT ACCUMULATION", investigator_repeat),
             ("INVESTIGATOR TRAP LIST", investigator_traps),
-        ],
+        ]
     )
-    _ = investigator_worksheet
+    _write_hidden_data_sheet(
+        manager=manager,
+        sheet_name=DATA_INVESTIGATOR_SHEET,
+        frame=investigator_detail,
+        max_rows=DATA_INVESTIGATOR_MAX_ROWS,
+        max_cols=VISIBLE_SHEET_MAX_COLS,
+    )
 
-    breadth_worksheet, breadth_layouts = _write_section_group(
+    breadth_cols = [
+        "Date",
+        "PctAbove200",
+        "New52WHighs",
+        "New52WLows",
+        "HighLowRatio",
+        "HighLowRatioSMA10",
+        "Advancers",
+        "Decliners",
+        "ADLine",
+        "IndexLevel",
+        "PEPctile5Y",
+        "PEPctile5YSMA20",
+    ]
+    breadth_summary = breadth[[col for col in breadth_cols if col in breadth.columns]].tail(DATA_BREADTH_MAX_ROWS).reset_index(drop=True)
+    breadth_data_worksheet = _write_hidden_data_sheet(
+        manager=manager,
+        sheet_name=DATA_BREADTH_SHEET,
+        frame=breadth_summary,
+        max_rows=DATA_BREADTH_MAX_ROWS,
+        max_cols=VISIBLE_SHEET_MAX_COLS,
+    )
+    breadth_recent = breadth_summary.tail(20).reset_index(drop=True)
+    breadth_preview = breadth_summary.tail(10).reset_index(drop=True)
+    breadth_worksheet = manager.get_or_create_sheet(MARKET_BREADTH_SHEET, rows=VISIBLE_SHEET_MAX_ROWS, cols=VISIBLE_SHEET_MAX_COLS)
+    if breadth_worksheet is None:
+        raise RuntimeError(f"Dashboard publish failed creating sheet '{MARKET_BREADTH_SHEET}': {manager.last_error or 'unknown error'}")
+    chart_requests = _breadth_chart_requests(
+        manager=manager,
+        visible_worksheet=breadth_worksheet,
+        data_worksheet=breadth_data_worksheet,
+        data_rows=len(breadth_summary),
+    )
+    _breadth_worksheet, _breadth_layouts, _breadth_rows = _write_visible_grid_sheet(
         manager=manager,
         sheet_name=MARKET_BREADTH_SHEET,
-        rows=5000,
-        cols=24,
-        sections=[("LONG-TERM BREADTH (operational, since 2020)", breadth)],
+        sections=[
+            ("BREADTH SUMMARY", breadth_recent),
+            ("BREADTH RECENT ROWS", breadth_preview),
+        ],
+        extra_requests=chart_requests,
     )
-    breadth_header_row = None
-    breadth_rows = 0
-    if breadth_layouts:
-        breadth_header_row = int(breadth_layouts[0]["header_row"]) if breadth_layouts[0].get("header_row") else None
-        breadth_rows = int(breadth_layouts[0].get("row_count") or 0)
-    if breadth_header_row is not None and breadth_rows >= 2:
-        try:
-            _add_breadth_charts(
-                manager=manager,
-                worksheet=breadth_worksheet,
-                header_row=breadth_header_row,
-                data_rows=breadth_rows,
-            )
-        except Exception as exc:
-            logger.warning("Breadth chart creation failed on sheet %s: %s", MARKET_BREADTH_SHEET, exc)
 
     cleanup = _cleanup_operator_workbook(manager)
 
     logger.info("Dashboard payload published to operator workbook tab '%s'", sheet_name)
+    quota_meta = manager.quota_metadata() if hasattr(manager, "quota_metadata") else {}
     return {
         "sheet_name": sheet_name,
         "base_sheet_name": base_sheet_name,
-        "rows_written": int(row),
+        "rows_written": int(daily_rows),
         "sector_sheet_name": SECTOR_LEADERSHIP_SHEET,
         "breadth_sheet_name": MARKET_BREADTH_SHEET,
-        "investigator_sheet_name": INVESTIGATOR_SHEET,
+        "investigator_sheet_name": DATA_INVESTIGATOR_SHEET,
+        "hidden_data_sheets": [DATA_BREADTH_SHEET, DATA_SECTOR_HISTORY_SHEET, DATA_INVESTIGATOR_SHEET],
         "cleanup": cleanup,
+        **quota_meta,
     }
 
 

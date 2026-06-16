@@ -61,6 +61,12 @@ class _FakeManager:
             for idx, title in enumerate(sorted(_FakeManager.preexisting_titles))
         }
         self.writes: list[tuple[str, str, pd.DataFrame, bool]] = []
+        self.hidden_writes: list[tuple[str, pd.DataFrame, int, int]] = []
+        self.hidden: set[str] = set()
+        self.requests_attempted = 0
+        self.rows_written = 0
+        self.quota_limited = False
+        self.retry_recommended_after_seconds = None
 
     def open_spreadsheet(self):
         return True
@@ -88,6 +94,37 @@ class _FakeManager:
         _ = include_index, include_header
         self.writes.append((sheet_name, start_cell, df.copy(), clear_sheet))
         return True
+
+    def update_worksheet_values(self, worksheet, values, range_name="A1"):
+        self.requests_attempted += 1
+        self.rows_written += len(values)
+        worksheet.update(values, range_name=range_name)
+
+    def batch_update(self, request):
+        self.spreadsheet.batch_update(request)
+
+    def fetch_sheet_metadata(self):
+        return self.spreadsheet.fetch_sheet_metadata()
+
+    def write_hidden_data_sheet(self, sheet_name, dataframe, max_rows, max_cols):
+        safe = dataframe.iloc[:max_rows, :max_cols].copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
+        self.hidden_writes.append((sheet_name, safe, max_rows, max_cols))
+        self.hidden.add(sheet_name)
+        self.get_or_create_sheet(sheet_name, rows=max_rows + 5, cols=max_cols)
+        return True
+
+    def hide_worksheet(self, sheet_name):
+        self.hidden.add(sheet_name)
+        return True
+
+    def quota_metadata(self):
+        return {
+            "google_sheets_quota_limited": self.quota_limited,
+            "retry_recommended_after_seconds": self.retry_recommended_after_seconds,
+            "sheets_requests_attempted": self.requests_attempted,
+            "sheets_rows_written": self.rows_written,
+            "google_sheets_error": None,
+        }
 
     def delete_worksheets(self, titles):
         deleted = []
@@ -365,113 +402,40 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert result["base_sheet_name"] == "2026-04-09"
     assert result["sector_sheet_name"] == "04_Sector_Leadership"
     assert result["breadth_sheet_name"] == "05_Market_Breadth"
-    assert result["investigator_sheet_name"] == "06_Investigator"
-    assert {"01_Daily_Report", "04_Sector_Leadership", "05_Market_Breadth", "06_Investigator"}.issubset(
-        {write[0] for write in manager.writes}
-    )
+    assert result["investigator_sheet_name"] == "_DATA_INVESTIGATOR"
     assert {"DATA", "FILTER", "Publish_Log", "2026-04-08"}.issubset(set(manager.spreadsheet.deleted))
 
-    summary_frames = [write[2] for write in manager.writes if "Breadth > 200DMA" in write[2].columns]
-    assert summary_frames
-    assert "Events" not in summary_frames[0].columns
-    assert float(summary_frames[0].iloc[0]["Breadth > 200DMA"]) == 54.1
-    assert summary_frames[0].iloc[0]["Regime Phase"] == "Base forming (S1)"
-    assert summary_frames[0].iloc[0]["Regime Phase Emoji"] == "🟡"
-    assert summary_frames[0].iloc[0]["Regime Phase S2 Breadth"] == "20%"
-    assert summary_frames[0].iloc[0]["Regime Phase Market Stage"] == "MIXED"
-    assert summary_frames[0].iloc[0]["Regime Phase Velocity"] == "positive"
+    visible_titles = {"01_Daily_Report", "04_Sector_Leadership", "05_Market_Breadth"}
+    visible_updates = {
+        title: [update for update in manager.sheets[title].updates if update[0] == "A1"]
+        for title in visible_titles
+    }
+    assert all(len(updates) == 1 for updates in visible_updates.values())
+    for updates in visible_updates.values():
+        grid = updates[0][1]
+        assert len(grid) == 60
+        assert all(len(row) == 14 for row in grid)
 
-    shortlist_frames = [write[2] for write in manager.writes if "Watchlist Score" in write[2].columns and "Composite Score" in write[2].columns]
-    assert shortlist_frames == []
+    daily_grid = visible_updates["01_Daily_Report"][0][1]
+    daily_text = "\n".join(str(cell) for row in daily_grid for cell in row if cell != "")
+    assert "DAILY SUMMARY" in daily_text
+    assert "RANKING FEEDBACK" in daily_text
+    assert "BREAKOUTS (all, unfiltered)" in daily_text
+    assert "Base forming (S1)" in daily_text
+    assert "cup_handle" in daily_text
+    assert "filtered_by_regime" in daily_text
+    assert "S029" not in daily_text
 
-    compact_summary_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Metric", "Value"]]
-    assert compact_summary_frames
-    assert compact_summary_frames[0]["Metric"].tolist() == [
-        "Run Date",
-        "Trust",
-        "Breadth > 200DMA",
-        "Regime Phase",
-        "Qualified Breakouts",
-        "Pattern Setups",
-        "Watchlist Candidates",
-    ]
-    assert "Events" not in compact_summary_frames[0]["Metric"].tolist()
+    assert "EVENTS SUMMARY" not in daily_text
 
-    move_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "market_move_score", "Return5", "Return20", "Delivery", "VolZ"]]
-    assert move_frames
-    assert move_frames[0].iloc[0]["Symbol"] == "S000"
-
-    failed_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "Trigger", "Close", "DropPct", "Tier"]]
-    assert failed_frames
-    assert failed_frames[0].iloc[0]["Symbol"] == "S001"
-
-    pattern_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Pattern", "State", "Tier", "Trigger", "VolRatio", "Stage", "Sector", "pattern_score", "Use"]]
-    assert pattern_frames
-    assert pattern_frames[0].iloc[0]["Pattern"] == "cup_handle"
-    section_titles = [
-        values[0][0]
-        for worksheet in manager.sheets.values()
-        for range_name, values in worksheet.updates
-        if range_name.startswith("A") and values and values[0]
-    ]
-    assert "DAILY SUMMARY" in section_titles
-    assert "RANKING FEEDBACK" in section_titles
-    assert "STOCK INVESTIGATOR — conviction and lifecycle" in section_titles
-    assert "INVESTIGATOR REPEAT ACCUMULATION" in section_titles
-    assert "INVESTIGATOR TRAP LIST" in section_titles
-    assert "EVENTS SUMMARY" not in section_titles
-
-    investigator_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Verdict", "Score", "Status", "Move", "Delivery", "VolRatio", "Rank"]]
-    assert investigator_frames
-    assert investigator_frames[0].iloc[0]["Symbol"] == "AAA"
-
-    repeat_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Appear20D", "RepeatScore", "PriceProgress", "RankChange", "VolumeEscalation"]]
-    assert repeat_frames
-    assert repeat_frames[0].iloc[0]["RepeatScore"] == 72
-
-    trap_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Verdict", "Score", "Trap", "Delivery", "Rank"]]
-    assert trap_frames
-    assert trap_frames[0].iloc[0]["Symbol"] == "TRAP"
-
-    feedback_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Signal", "Subject", "Evidence", "Action"]]
-    assert feedback_frames
-    assert feedback_frames[0].iloc[0]["Subject"] == "top-10 vs rank-51-plus"
-    assert "backtest before changing weights" in set(feedback_frames[0]["Action"])
-
-    breakout_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Setup", "State", "Tier", "Score", "TradingView"]]
-    assert breakout_frames
-    assert len(breakout_frames[0]) == 2
-    assert set(breakout_frames[0]["State"]) == {"qualified", "filtered_by_regime"}
-    assert breakout_frames[0]["TradingView"].str.startswith("https://www.tradingview.com/chart/?symbol=NSE:").all()
-
-    sector_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Rank", "Sector", "RS", "Momentum", "Quadrant"]]
-    assert sector_frames
-    assert set(sector_frames[0]["Quadrant"]) == {"Leading"}
-
-    rank_frames = [write[2] for write in manager.writes if list(write[2].columns) == ["Symbol", "Sector", "composite_score", "Close", "Stage"]]
-    assert rank_frames
-    assert len(rank_frames[0]) == 25
-
-    breadth_frames = [write[2] for write in manager.writes if "PEPctile5Y" in write[2].columns]
-    assert breadth_frames
-    assert list(breadth_frames[0].columns) == [
-        "Date",
-        "PctAbove200",
-        "New52WHighs",
-        "New52WLows",
-        "HighLowRatio",
-        "HighLowRatioSMA10",
-        "Advancers",
-        "Decliners",
-        "ADLine",
-        "IndexLevel",
-        "PEPctile5Y",
-        "PEPctile5YSMA20",
-    ]
-    assert pd.isna(breadth_frames[0].iloc[0]["HighLowRatio"])
-    assert breadth_frames[0].iloc[0]["ADLine"] == 0
-    assert breadth_frames[0].iloc[-1]["PEPctile5Y"] == 74.0
-    assert breadth_frames[0].iloc[-1]["PEPctile5YSMA20"] == 73.0
+    hidden = {name: frame for name, frame, _max_rows, _max_cols in manager.hidden_writes}
+    assert {"_DATA_BREADTH", "_DATA_SECTOR_HISTORY", "_DATA_INVESTIGATOR"}.issubset(hidden)
+    assert len(hidden["_DATA_BREADTH"]) <= 250
+    assert len(hidden["_DATA_SECTOR_HISTORY"]) <= 500
+    assert len(hidden["_DATA_INVESTIGATOR"]) <= 300
+    assert "AAA" in set(hidden["_DATA_INVESTIGATOR"]["Symbol"].astype(str))
+    assert hidden["_DATA_BREADTH"].iloc[-1]["PEPctile5Y"] == 74.0
+    assert hidden["_DATA_BREADTH"].iloc[-1]["PEPctile5YSMA20"] == 73.0
 
     assert manager.spreadsheet.batch_requests
     chart_requests = [
@@ -480,12 +444,10 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         for req in call.get("requests", [])
         if "addChart" in req
     ]
-    assert len(chart_requests) == 3
+    assert len(chart_requests) == 2
     chart_specs = [request["addChart"]["chart"]["spec"] for request in chart_requests]
     assert chart_specs[0]["title"] == "Operational Long-Term Breadth (% Above SMA200 and PE 5Y Percentile SMA20)"
     assert len(chart_specs[0]["basicChart"]["series"]) == 2
-    assert chart_specs[2]["title"] == "A/D Divergence and TOP1000 Index"
-    assert len(chart_specs[2]["basicChart"]["series"]) == 2
     assert any("updateDimensionProperties" in req for call in manager.spreadsheet.batch_requests for req in call.get("requests", []))
 
 

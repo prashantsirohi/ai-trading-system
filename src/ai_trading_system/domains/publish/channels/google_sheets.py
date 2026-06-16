@@ -23,17 +23,17 @@ from ai_trading_system.domains.publish.publish_payloads import format_rows_for_c
 
 WATCHLIST_CURRENT_SHEET = "02_Watchlist_Current"
 PORTFOLIO_SHEET = "03_Portfolio"
-RUN_LOG_SHEET = "99_Run_Log"
+RUN_LOG_SHEET = "_RAW_RUN_LOG"
 RAW_VALUATION_SHEET = "_RAW_VALUATION_DASHBOARD"
 RAW_FUNDAMENTAL_WATCHLIST_SHEET = "_RAW_Fundamental_Watchlist"
+VISIBLE_SHEET_MAX_ROWS = 60
+VISIBLE_SHEET_MAX_COLS = 14
 OPERATOR_TAB_ORDER = [
     "01_Daily_Report",
     WATCHLIST_CURRENT_SHEET,
     PORTFOLIO_SHEET,
     "04_Sector_Leadership",
     "05_Market_Breadth",
-    "06_Investigator",
-    RUN_LOG_SHEET,
 ]
 
 
@@ -130,6 +130,11 @@ _FUNDAMENTAL_TRACKING_PUBLISH_BUCKETS = frozenset(
 )
 
 
+def _cap_visible_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    safe = frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+    return safe.iloc[: VISIBLE_SHEET_MAX_ROWS - 1, :VISIBLE_SHEET_MAX_COLS].copy()
+
+
 def _require_spreadsheet_id() -> Optional[str]:
     spreadsheet_id = os.getenv("GOOGLE_SPREADSHEET_ID")
     if not spreadsheet_id:
@@ -165,18 +170,22 @@ def publish_watchlist_candidates(watchlist: pd.DataFrame, *, decision_bundle: Pu
         rows = format_rows_for_channel(watchlist.to_dict(orient="records"), "sheets")["rows"]
         frame = pd.DataFrame(rows).head(15)
         frame["report_date"] = pd.Timestamp.now().strftime("%Y-%m-%d")
-    frame = frame.fillna("")
+    frame = _cap_visible_frame(frame).fillna("")
 
     sheet_name = WATCHLIST_CURRENT_SHEET
-    sheet = manager.get_or_create_sheet(sheet_name)
+    sheet = manager.get_or_create_sheet(sheet_name, rows=VISIBLE_SHEET_MAX_ROWS, cols=VISIBLE_SHEET_MAX_COLS)
     if not sheet:
         raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
-    worksheet = manager.get_worksheet(sheet_name)
-    if worksheet is None:
-        raise RuntimeError(f"Could not open '{sheet_name}' worksheet: {manager.last_error or 'unknown error'}")
-    worksheet.clear()
-    if not manager.append_rows(frame, sheet_name, include_header=True):
-        raise RuntimeError(f"Failed writing watchlist rows: {manager.last_error or 'unknown error'}")
+    grid = [frame.columns.tolist()] + frame.values.tolist()
+    grid = [row[:VISIBLE_SHEET_MAX_COLS] + [""] * max(0, VISIBLE_SHEET_MAX_COLS - len(row)) for row in grid[:VISIBLE_SHEET_MAX_ROWS]]
+    while len(grid) < VISIBLE_SHEET_MAX_ROWS:
+        grid.append([""] * VISIBLE_SHEET_MAX_COLS)
+    if hasattr(manager, "update_worksheet_values"):
+        manager.update_worksheet_values(sheet, grid, range_name="A1")
+    else:
+        fallback = pd.DataFrame(grid[1:], columns=grid[0])
+        if not manager.write_dataframe(fallback, sheet_name=sheet_name, include_header=True, clear_sheet=True):
+            raise RuntimeError(f"Failed writing watchlist rows: {manager.last_error or 'unknown error'}")
     manager.apply_number_formats(sheet_name, _WATCHLIST_FORMATS)
     logger.info("Watchlist candidates updated in Google Sheets (%s rows)", len(frame))
     return True
@@ -196,7 +205,11 @@ def publish_fundamental_watchlist(watchlist: pd.DataFrame, *, sheet_name: str = 
     sheet = manager.get_or_create_sheet(sheet_name, rows=max(1000, len(frame) + 20), cols=max(24, len(frame.columns) + 2))
     if not sheet:
         raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
-    if not manager.write_dataframe(frame.fillna(""), sheet_name, include_header=True, clear_sheet=True):
+    if hasattr(manager, "write_hidden_data_sheet"):
+        wrote = manager.write_hidden_data_sheet(sheet_name, frame.fillna(""), max_rows=100, max_cols=max(1, min(24, len(frame.columns))))
+    else:
+        wrote = manager.write_dataframe(frame.fillna(""), sheet_name, include_header=True, clear_sheet=True)
+    if not wrote:
         raise RuntimeError(f"Failed writing {sheet_name}: {manager.last_error or 'unknown error'}")
     manager.apply_number_formats(sheet_name, _FUNDAMENTAL_WATCHLIST_FORMATS)
     logger.info("Fundamental watchlist updated in Google Sheets (%s rows)", len(frame))
@@ -307,7 +320,7 @@ def publish_log_sheet(decision_bundle: PublishDecisionBundle, *, sheet_name: str
 
 
 def publish_run_log_sheet(rows: list[dict[str, object]], *, sheet_name: str = RUN_LOG_SHEET) -> bool:
-    """Append one row per run/channel delivery to the operator run log."""
+    """Append one row per run/channel delivery to the hidden raw run log."""
     spreadsheet_id = _require_spreadsheet_id()
     if not spreadsheet_id:
         raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
@@ -322,10 +335,15 @@ def publish_run_log_sheet(rows: list[dict[str, object]], *, sheet_name: str = RU
         raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
 
     frame = pd.DataFrame(rows).fillna("")
-    existing = sheet.get_all_values() if hasattr(sheet, "get_all_values") else []
+    if hasattr(sheet, "get_all_values") and hasattr(manager, "_execute_with_backoff"):
+        existing = manager._execute_with_backoff(lambda: sheet.get_all_values())
+    else:
+        existing = []
     include_header = not existing or existing == [[]]
     if not manager.append_rows(frame, sheet_name, include_header=include_header):
         raise RuntimeError(f"Failed appending run log rows: {manager.last_error or 'unknown error'}")
+    if hasattr(manager, "hide_worksheet"):
+        manager.hide_worksheet(sheet_name)
     if hasattr(manager, "reorder_worksheets"):
         manager.reorder_worksheets(OPERATOR_TAB_ORDER)
     logger.info("Run log appended in Google Sheets (%s rows)", len(frame))
@@ -366,7 +384,11 @@ def publish_fundamental_valuation_dashboard(
     sheet = manager.get_or_create_sheet(sheet_name, rows=max(1000, len(frame) + 20), cols=max(12, len(frame.columns) + 2))
     if not sheet:
         raise RuntimeError(f"Could not get/create '{sheet_name}' sheet: {manager.last_error or 'unknown error'}")
-    if not manager.write_dataframe(frame.fillna(""), sheet_name, include_header=False, clear_sheet=True):
+    if hasattr(manager, "write_hidden_data_sheet"):
+        wrote = manager.write_hidden_data_sheet(sheet_name, frame.fillna(""), max_rows=max(1, min(500, len(frame))), max_cols=max(1, min(14, len(frame.columns))))
+    else:
+        wrote = manager.write_dataframe(frame.fillna(""), sheet_name, include_header=False, clear_sheet=True)
+    if not wrote:
         raise RuntimeError(f"Failed writing {sheet_name}: {manager.last_error or 'unknown error'}")
     manager.apply_number_formats(sheet_name, _FUNDAMENTAL_FORMATS, header_row=_chart_header_row(payload))
     _write_valuation_charts(manager, sheet_name, payload)
