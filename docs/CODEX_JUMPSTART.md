@@ -32,6 +32,16 @@ Never assume live data is in repo-local `data/`.
 
 Use `$DATA_ROOT`.
 
+## Branching rule
+
+Work on `main` by default.
+
+Do not create or use a separate `codex/*` feature branch unless the operator explicitly asks for it.
+
+When the operator says to push, push `main` to `origin/main` unless another branch is named explicitly.
+
+Before coding, check `git status --short --branch`. If the checkout is not on `main`, stop and ask.
+
 ## Fast path rules for Codex
 
 Before coding:

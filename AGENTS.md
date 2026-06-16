@@ -16,6 +16,16 @@ Before scanning the full repo, read these files first:
 
 Do not waste time rediscovering DB paths, artifact paths, run commands, stage order, or data-source contracts.
 
+## Branching rule
+
+Default work branch is `main`.
+
+Do not create, switch to, or push a separate feature branch unless the operator explicitly asks for a separate branch or PR workflow.
+
+When asked to push, push the current `main` branch to `origin/main` unless the operator explicitly names another branch.
+
+Before making code changes, run `git status --short --branch` and confirm the checkout is on `main`. If it is not on `main`, stop and ask before continuing.
+
 ## Most important path rule
 
 Runtime data is external.
