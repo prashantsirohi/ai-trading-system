@@ -333,15 +333,24 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     pattern_df = pd.DataFrame(
         [
             {
-                "symbol_id": "S002",
+                "symbol_id": f"P{i:03d}",
                 "pattern_family": "cup_handle",
                 "pattern_state": "ready",
                 "pattern_operational_tier": "tier_1",
-                "pattern_score": 91.5,
-                "breakout_level": 125.0,
+                "pattern_score": 100.0 - i,
+                "breakout_level": 125.0 + i,
                 "volume_ratio_20": 2.4,
                 "stage2_label": "strong_stage2",
             }
+            for i in range(30)
+        ]
+    )
+    sector_rotation_df = pd.DataFrame(
+        [
+            {"date": "2026-04-08", "industry": "Banks", "rs_ratio": 104.2, "rs_momentum": 101.5, "quadrant": "Leading", "alpha_20d": 0.08},
+            {"date": "2026-04-08", "industry": "Power", "rs_ratio": 102.1, "rs_momentum": 97.4, "quadrant": "Weakening", "alpha_20d": 0.02},
+            {"date": "2026-04-08", "industry": "Chemicals", "rs_ratio": 98.3, "rs_momentum": 103.2, "quadrant": "Improving", "alpha_20d": -0.01},
+            {"date": "2026-04-07", "industry": "Banks", "rs_ratio": 103.4, "rs_momentum": 100.8, "quadrant": "Leading", "alpha_20d": 0.06},
         ]
     )
 
@@ -358,7 +367,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             },
         },
     }
-    _FakeManager.preexisting_titles = {"DATA", "FILTER", "Publish_Log", "2026-04-08"}
+    _FakeManager.preexisting_titles = {"DATA", "FILTER", "Publish_Log", "02_Watchlist_Current", "05_Market_Breadth", "2026-04-08"}
     try:
         result = publish_dashboard_payload(
             payload,
@@ -373,6 +382,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             investigator_scores_df=investigator_scores,
             investigator_repeat_df=investigator_repeat,
             investigator_trap_df=investigator_traps,
+            sector_rotation_df=sector_rotation_df,
             ranking_feedback={
                 "status": "ok",
                 "rank_bucket_rows": [
@@ -401,30 +411,40 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert result["sheet_name"] == "01_Daily_Report"
     assert result["base_sheet_name"] == "2026-04-09"
     assert result["sector_sheet_name"] == "04_Sector_Leadership"
-    assert result["breadth_sheet_name"] == "05_Market_Breadth"
+    assert result["breadth_sheet_name"] == "01_Daily_Report"
     assert result["investigator_sheet_name"] == "_DATA_INVESTIGATOR"
-    assert {"DATA", "FILTER", "Publish_Log", "2026-04-08"}.issubset(set(manager.spreadsheet.deleted))
+    assert {"DATA", "FILTER", "Publish_Log", "02_Watchlist_Current", "05_Market_Breadth", "2026-04-08"}.issubset(set(manager.spreadsheet.deleted))
 
-    visible_titles = {"01_Daily_Report", "04_Sector_Leadership", "05_Market_Breadth"}
+    visible_titles = {"01_Daily_Report", "04_Sector_Leadership"}
     visible_updates = {
         title: [update for update in manager.sheets[title].updates if update[0] == "A1"]
         for title in visible_titles
     }
     assert all(len(updates) == 1 for updates in visible_updates.values())
-    for updates in visible_updates.values():
-        grid = updates[0][1]
-        assert len(grid) == 60
-        assert all(len(row) == 14 for row in grid)
-
     daily_grid = visible_updates["01_Daily_Report"][0][1]
+    sector_grid = visible_updates["04_Sector_Leadership"][0][1]
+    assert len(daily_grid) == 140
+    assert len(sector_grid) == 60
+    assert all(len(row) == 14 for row in daily_grid)
+    assert all(len(row) == 14 for row in sector_grid)
+    assert not [update for update in manager.sheets["05_Market_Breadth"].updates if update[0] == "A1"]
+
     daily_text = "\n".join(str(cell) for row in daily_grid for cell in row if cell != "")
     assert "DAILY SUMMARY" in daily_text
+    assert "TODAY'S DECISION SHORTLIST" in daily_text
+    assert "MARKET BREADTH SNAPSHOT" in daily_text
+    assert "% Above SMA200" in daily_text
+    assert "PE 5Y Percentile" in daily_text
+    assert "New High / Low" in daily_text
+    assert "PATTERN SETUPS" in daily_text
+    assert "TOP RANKED" in daily_text
     assert "RANKING FEEDBACK" in daily_text
     assert "BREAKOUTS (all, unfiltered)" in daily_text
     assert "Base forming (S1)" in daily_text
     assert "cup_handle" in daily_text
+    assert "P024" in daily_text
     assert "filtered_by_regime" in daily_text
-    assert "S029" not in daily_text
+    assert "S000" in daily_text
 
     assert "EVENTS SUMMARY" not in daily_text
 
@@ -434,6 +454,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert len(hidden["_DATA_SECTOR_HISTORY"]) <= 500
     assert len(hidden["_DATA_INVESTIGATOR"]) <= 300
     assert "AAA" in set(hidden["_DATA_INVESTIGATOR"]["Symbol"].astype(str))
+    assert "Banks" in set(hidden["_DATA_SECTOR_HISTORY"]["industry"].astype(str))
     assert hidden["_DATA_BREADTH"].iloc[-1]["PEPctile5Y"] == 74.0
     assert hidden["_DATA_BREADTH"].iloc[-1]["PEPctile5YSMA20"] == 73.0
 
@@ -444,10 +465,11 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         for req in call.get("requests", [])
         if "addChart" in req
     ]
-    assert len(chart_requests) == 2
+    assert len(chart_requests) == 1
     chart_specs = [request["addChart"]["chart"]["spec"] for request in chart_requests]
-    assert chart_specs[0]["title"] == "Operational Long-Term Breadth (% Above SMA200 and PE 5Y Percentile SMA20)"
-    assert len(chart_specs[0]["basicChart"]["series"]) == 2
+    assert chart_specs[0]["title"] == "Sector Rotation: Relative Strength vs Momentum"
+    assert chart_specs[0]["basicChart"]["chartType"] == "SCATTER"
+    assert len(chart_specs[0]["basicChart"]["series"]) == 1
     assert any("updateDimensionProperties" in req for call in manager.spreadsheet.batch_requests for req in call.get("requests", []))
 
 

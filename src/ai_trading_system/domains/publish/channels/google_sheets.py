@@ -30,10 +30,8 @@ VISIBLE_SHEET_MAX_ROWS = 60
 VISIBLE_SHEET_MAX_COLS = 14
 OPERATOR_TAB_ORDER = [
     "01_Daily_Report",
-    WATCHLIST_CURRENT_SHEET,
     PORTFOLIO_SHEET,
     "04_Sector_Leadership",
-    "05_Market_Breadth",
 ]
 
 

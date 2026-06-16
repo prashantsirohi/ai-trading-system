@@ -241,7 +241,7 @@ def test_publish_run_log_appends_one_row_per_channel(monkeypatch, tmp_path: Path
     assert captured_rows[1]["error_message"] == "telegram offline"
 
 
-def test_publish_stage_does_not_register_legacy_investigator_tabs(tmp_path: Path) -> None:
+def test_publish_stage_registers_compact_operator_sheet_channels(tmp_path: Path) -> None:
     context = StageContext(
         project_root=tmp_path,
         db_path=tmp_path / "data" / "operational" / "ohlcv.duckdb",
@@ -257,11 +257,14 @@ def test_publish_stage_does_not_register_legacy_investigator_tabs(tmp_path: Path
         {
             "ranked_signals": pd.DataFrame([{"symbol_id": "AAA", "composite_score": 90.0}]),
             "dashboard_payload": {"summary": {"run_date": "2026-04-10"}},
+            "watchlist_candidates": pd.DataFrame([{"symbol_id": "AAA", "score": 90.0}]),
             "investigator_scores": pd.DataFrame([{"symbol_id": "AAA", "final_score": 90.0}]),
         },
     )
 
+    assert "google_sheets_portfolio" in handlers
     assert "google_sheets_dashboard" in handlers
+    assert "google_sheets_watchlist" not in handlers
     assert "google_sheets_investigator" not in handlers
 
 

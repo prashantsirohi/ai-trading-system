@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable
+from typing import Any, Callable, Dict, Iterable
 
 import pandas as pd
 
@@ -28,16 +28,15 @@ DATA_BREADTH_SHEET = "_DATA_BREADTH"
 DATA_SECTOR_HISTORY_SHEET = "_DATA_SECTOR_HISTORY"
 DATA_INVESTIGATOR_SHEET = "_DATA_INVESTIGATOR"
 VISIBLE_SHEET_MAX_ROWS = 60
+DAILY_REPORT_MAX_ROWS = 140
 VISIBLE_SHEET_MAX_COLS = 14
 DATA_BREADTH_MAX_ROWS = 250
 DATA_SECTOR_HISTORY_MAX_ROWS = 500
 DATA_INVESTIGATOR_MAX_ROWS = 300
 OPERATOR_TAB_ORDER = [
     DAILY_REPORT_SHEET,
-    "02_Watchlist_Current",
     "03_Portfolio",
     SECTOR_LEADERSHIP_SHEET,
-    MARKET_BREADTH_SHEET,
 ]
 LEGACY_OPERATOR_TABS = [
     "DATA",
@@ -49,6 +48,8 @@ LEGACY_OPERATOR_TABS = [
     "Portfolio Analysis",
     "Fundamental Watchlist",
     "Watchlist Current",
+    "02_Watchlist_Current",
+    MARKET_BREADTH_SHEET,
     "Publish_Log",
     "VALUATION_DASHBOARD",
     INVESTIGATOR_SHEET,
@@ -233,36 +234,42 @@ def _normalise_grid(rows: list[list[Any]], *, max_rows: int = VISIBLE_SHEET_MAX_
     return normalized
 
 
-def _sections_to_grid(sections: list[tuple[str, pd.DataFrame]]) -> tuple[list[list[Any]], list[dict[str, int | None]]]:
+def _sections_to_grid(
+    sections: list[tuple[str, pd.DataFrame]],
+    *,
+    max_rows: int = VISIBLE_SHEET_MAX_ROWS,
+    max_cols: int = VISIBLE_SHEET_MAX_COLS,
+) -> tuple[list[list[Any]], list[dict[str, int | str | None]]]:
     rows: list[list[Any]] = []
-    layouts: list[dict[str, int | None]] = []
+    layouts: list[dict[str, int | str | None]] = []
     for title, frame in sections:
-        if len(rows) >= VISIBLE_SHEET_MAX_ROWS:
+        if len(rows) >= max_rows:
             break
         title_row = len(rows) + 1
         rows.append([title])
-        safe = _cap_visible_frame(frame, rows=max(0, VISIBLE_SHEET_MAX_ROWS - len(rows) - 1))
+        safe = _cap_visible_frame(frame, rows=max(0, max_rows - len(rows) - 1))
         if safe.empty:
             rows.append(["No data available"])
-            layouts.append({"title_row": title_row, "header_row": None, "row_count": 0, "col_count": 1})
+            layouts.append({"title": title, "title_row": title_row, "header_row": None, "row_count": 0, "col_count": 1})
         else:
             header_row = len(rows) + 1
             rows.append(list(safe.columns))
             for row in safe.itertuples(index=False, name=None):
-                if len(rows) >= VISIBLE_SHEET_MAX_ROWS:
+                if len(rows) >= max_rows:
                     break
                 rows.append(list(row))
             layouts.append(
                 {
                     "title_row": title_row,
+                    "title": title,
                     "header_row": header_row,
                     "row_count": int(min(len(safe), max(0, len(rows) - header_row))),
-                    "col_count": int(min(len(safe.columns), VISIBLE_SHEET_MAX_COLS)),
+                    "col_count": int(min(len(safe.columns), max_cols)),
                 }
             )
-        if len(rows) < VISIBLE_SHEET_MAX_ROWS:
+        if len(rows) < max_rows:
             rows.append([])
-    return _normalise_grid(rows), layouts
+    return _normalise_grid(rows, max_rows=max_rows, max_cols=max_cols), layouts
 
 
 def _write_visible_grid_sheet(
@@ -271,24 +278,35 @@ def _write_visible_grid_sheet(
     sheet_name: str,
     sections: list[tuple[str, pd.DataFrame]],
     extra_requests: list[dict[str, Any]] | None = None,
-) -> tuple[Any, list[dict[str, int | None]], int]:
-    worksheet = manager.get_or_create_sheet(sheet_name, rows=VISIBLE_SHEET_MAX_ROWS, cols=VISIBLE_SHEET_MAX_COLS)
+    extra_request_builder: Callable[[Any, list[dict[str, int | str | None]]], list[dict[str, Any]]] | None = None,
+    max_rows: int = VISIBLE_SHEET_MAX_ROWS,
+    max_cols: int = VISIBLE_SHEET_MAX_COLS,
+) -> tuple[Any, list[dict[str, int | str | None]], int]:
+    worksheet = manager.get_or_create_sheet(sheet_name, rows=max_rows, cols=max_cols)
     if worksheet is None:
         raise RuntimeError(f"Dashboard publish failed creating sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
-    grid, layouts = _sections_to_grid(sections)
+    grid, layouts = _sections_to_grid(sections, max_rows=max_rows, max_cols=max_cols)
     if hasattr(manager, "update_worksheet_values"):
         manager.update_worksheet_values(worksheet, grid, range_name="A1")
     else:
         raise RuntimeError("GoogleSheetsManager.update_worksheet_values is required")
-    requests = _grid_layout_requests(worksheet, layouts)
+    requests = _grid_layout_requests(worksheet, layouts, max_rows=max_rows, max_cols=max_cols)
     requests.extend(extra_requests or [])
+    if extra_request_builder is not None:
+        requests.extend(extra_request_builder(worksheet, layouts))
     if requests and hasattr(manager, "batch_update"):
         manager.batch_update({"requests": requests})
     non_empty_rows = sum(1 for row in grid if any(str(value).strip() for value in row))
     return worksheet, layouts, non_empty_rows
 
 
-def _grid_layout_requests(worksheet: Any, section_layouts: list[dict[str, int | None]]) -> list[dict[str, Any]]:
+def _grid_layout_requests(
+    worksheet: Any,
+    section_layouts: list[dict[str, int | str | None]],
+    *,
+    max_rows: int = VISIBLE_SHEET_MAX_ROWS,
+    max_cols: int = VISIBLE_SHEET_MAX_COLS,
+) -> list[dict[str, Any]]:
     sheet_id = int(worksheet.id)
     requests: list[dict[str, Any]] = [
         {
@@ -296,8 +314,8 @@ def _grid_layout_requests(worksheet: Any, section_layouts: list[dict[str, int | 
                 "properties": {
                     "sheetId": sheet_id,
                     "gridProperties": {
-                        "rowCount": VISIBLE_SHEET_MAX_ROWS,
-                        "columnCount": VISIBLE_SHEET_MAX_COLS,
+                        "rowCount": max_rows,
+                        "columnCount": max_cols,
                         "frozenRowCount": 1,
                     },
                 },
@@ -306,7 +324,7 @@ def _grid_layout_requests(worksheet: Any, section_layouts: list[dict[str, int | 
         },
     ]
     widths = [190, 130, 110, 110, 120, 160, 220, 180, 130, 130, 130, 130, 130, 130]
-    for idx, width in enumerate(widths[:VISIBLE_SHEET_MAX_COLS]):
+    for idx, width in enumerate(widths[:max_cols]):
         requests.append(
             {
                 "updateDimensionProperties": {
@@ -321,7 +339,7 @@ def _grid_layout_requests(worksheet: Any, section_layouts: list[dict[str, int | 
         requests.append(
             {
                 "repeatCell": {
-                    "range": {"sheetId": sheet_id, "startRowIndex": title_idx, "endRowIndex": title_idx + 1, "startColumnIndex": 0, "endColumnIndex": VISIBLE_SHEET_MAX_COLS},
+                    "range": {"sheetId": sheet_id, "startRowIndex": title_idx, "endRowIndex": title_idx + 1, "startColumnIndex": 0, "endColumnIndex": max_cols},
                     "cell": {
                         "userEnteredFormat": {
                             "textFormat": {"bold": True, "fontSize": 11, "foregroundColor": {"red": 0.11, "green": 0.16, "blue": 0.26}},
@@ -381,6 +399,218 @@ def _combine_frames(frames: list[tuple[str, pd.DataFrame]]) -> pd.DataFrame:
         safe.insert(0, "section", section)
         combined.append(safe)
     return pd.concat(combined, ignore_index=True, sort=False) if combined else pd.DataFrame()
+
+
+def _last_5y(frame: pd.DataFrame, date_col: str = "Date") -> pd.DataFrame:
+    if frame.empty or date_col not in frame.columns:
+        return frame.copy()
+    out = frame.copy()
+    out.loc[:, date_col] = pd.to_datetime(out[date_col], errors="coerce")
+    latest = out[date_col].max()
+    if pd.isna(latest):
+        return out
+    cutoff = latest - pd.DateOffset(years=5)
+    return out.loc[out[date_col].ge(cutoff)].reset_index(drop=True)
+
+
+def _market_breadth_snapshot_frame(breadth: pd.DataFrame) -> pd.DataFrame:
+    columns = ["Metric", "Min", "Current", "Max", "Percentile", "Low", "Mid", "High", "Marker"]
+    if breadth is None or breadth.empty:
+        return pd.DataFrame(columns=columns)
+    recent = _last_5y(breadth)
+    specs = [
+        ("% Above SMA200", ["PctAbove200"]),
+        ("PE 5Y Percentile", ["PEPctile5YSMA20", "PEPctile5Y"]),
+        ("New High / Low", ["HighLowRatioSMA10", "HighLowRatio", "NetNewHighs", "NetNewHighsPct"]),
+    ]
+    rows: list[dict[str, Any]] = []
+    for metric, candidates in specs:
+        column = next((name for name in candidates if name in recent.columns), None)
+        if column is None:
+            continue
+        series = pd.to_numeric(recent[column], errors="coerce").dropna()
+        if series.empty:
+            continue
+        current = float(series.iloc[-1])
+        min_value = float(series.min())
+        max_value = float(series.max())
+        span = max_value - min_value
+        pct = 50.0 if span == 0 else max(0.0, min(100.0, ((current - min_value) / span) * 100.0))
+        marker = "Low" if pct < 33 else "Mid" if pct < 67 else "High"
+        rows.append(
+            {
+                "Metric": metric,
+                "Min": round(min_value, 2),
+                "Current": round(current, 2),
+                "Max": round(max_value, 2),
+                "Percentile": round(pct, 1),
+                "Low": "*" if marker == "Low" else "",
+                "Mid": "*" if marker == "Mid" else "",
+                "High": "*" if marker == "High" else "",
+                "Marker": marker,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _breadth_snapshot_format_requests(worksheet: Any, section_layouts: list[dict[str, int | str | None]]) -> list[dict[str, Any]]:
+    layout = next((item for item in section_layouts if item.get("title") == "MARKET BREADTH SNAPSHOT"), None)
+    if not layout or not layout.get("header_row"):
+        return []
+    sheet_id = int(worksheet.id)
+    header_row = int(layout["header_row"])
+    row_count = int(layout.get("row_count") or 0)
+    start = header_row
+    end = header_row + row_count
+    marker_col = 5
+    requests = []
+    colors = [
+        {"red": 0.95, "green": 0.55, "blue": 0.52},
+        {"red": 0.98, "green": 0.86, "blue": 0.40},
+        {"red": 0.42, "green": 0.76, "blue": 0.50},
+    ]
+    for idx, color in enumerate(colors):
+        requests.append(
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": start,
+                        "endRowIndex": end,
+                        "startColumnIndex": marker_col + idx,
+                        "endColumnIndex": marker_col + idx + 1,
+                    },
+                    "cell": {"userEnteredFormat": {"backgroundColor": color}},
+                    "fields": "userEnteredFormat.backgroundColor",
+                }
+            }
+        )
+    requests.append(
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": start,
+                    "endRowIndex": end,
+                    "startColumnIndex": marker_col,
+                    "endColumnIndex": marker_col + 3,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "horizontalAlignment": "CENTER",
+                        "textFormat": {"bold": True},
+                    }
+                },
+                "fields": "userEnteredFormat(horizontalAlignment,textFormat)",
+            }
+        }
+    )
+    return requests
+
+
+def _sector_rotation_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    columns = ["date", "industry", "rs_ratio", "rs_momentum", "quadrant", "alpha_20d"]
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=columns)
+    out = pd.DataFrame(
+        {
+            "date": frame.get("date", ""),
+            "industry": frame.get("industry", frame.get("Sector", frame.get("sector", ""))),
+            "rs_ratio": pd.to_numeric(frame.get("rs_ratio", frame.get("RS", "")), errors="coerce"),
+            "rs_momentum": pd.to_numeric(frame.get("rs_momentum", frame.get("Momentum", "")), errors="coerce"),
+            "quadrant": frame.get("quadrant", frame.get("Quadrant", "")),
+            "alpha_20d": pd.to_numeric(frame.get("alpha_20d", pd.Series(pd.NA, index=frame.index)), errors="coerce"),
+        }
+    )
+    out = out.dropna(subset=["rs_ratio", "rs_momentum"]).copy()
+    if "date" in out.columns:
+        out.loc[:, "date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        out = out.sort_values(["date", "industry"], ascending=[False, True], na_position="last", kind="stable")
+    return out[columns].reset_index(drop=True)
+
+
+def _sector_rotation_latest(frame: pd.DataFrame) -> pd.DataFrame:
+    columns = ["Industry", "RS Ratio", "RS Momentum", "Quadrant", "Alpha20D"]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    source = frame.copy()
+    latest_date = source["date"].dropna().max() if "date" in source.columns else None
+    if latest_date:
+        source = source.loc[source["date"].eq(latest_date)].copy()
+    out = pd.DataFrame(
+        {
+            "Industry": source.get("industry", ""),
+            "RS Ratio": pd.to_numeric(source.get("rs_ratio", ""), errors="coerce").round(2),
+            "RS Momentum": pd.to_numeric(source.get("rs_momentum", ""), errors="coerce").round(2),
+            "Quadrant": source.get("quadrant", ""),
+            "Alpha20D": pd.to_numeric(source.get("alpha_20d", ""), errors="coerce").round(3),
+        }
+    )
+    return out.sort_values(["Quadrant", "RS Ratio"], ascending=[True, False], na_position="last", kind="stable").head(25).reset_index(drop=True)
+
+
+def _sector_quadrant_guide_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"Quadrant": "Leading", "Relative Strength": "Above 100", "Momentum": "Above 100", "Operator Read": "Leadership with positive momentum"},
+            {"Quadrant": "Weakening", "Relative Strength": "Above 100", "Momentum": "Below 100", "Operator Read": "Leadership losing momentum"},
+            {"Quadrant": "Improving", "Relative Strength": "Below 100", "Momentum": "Above 100", "Operator Read": "Early rotation candidate"},
+            {"Quadrant": "Lagging", "Relative Strength": "Below 100", "Momentum": "Below 100", "Operator Read": "Avoid until strength improves"},
+        ]
+    )
+
+
+def _sector_rotation_chart_requests(
+    *,
+    manager: GoogleSheetsManager,
+    visible_worksheet: Any,
+    data_worksheet: Any | None,
+    rotation_frame: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    if data_worksheet is None or rotation_frame.empty:
+        return []
+    latest = _sector_rotation_latest(rotation_frame)
+    if latest.empty:
+        return []
+    visible_sheet_id = int(visible_worksheet.id)
+    data_sheet_id = int(data_worksheet.id)
+    latest_date = rotation_frame["date"].dropna().max() if "date" in rotation_frame.columns else None
+    latest_rows = rotation_frame.loc[rotation_frame["date"].eq(latest_date)].copy() if latest_date else rotation_frame.copy()
+    latest_rows = latest_rows.head(60)
+    start_idx = 0
+    end_idx = min(len(latest_rows) + 1, DATA_SECTOR_HISTORY_MAX_ROWS + 1)
+    return _existing_chart_delete_requests(manager, visible_sheet_id) + [
+        {
+            "addChart": {
+                "chart": {
+                    "spec": {
+                        "title": "Sector Rotation: Relative Strength vs Momentum",
+                        "subtitle": f"Latest sector points{f' as of {latest_date}' if latest_date else ''}",
+                        "basicChart": {
+                            "chartType": "SCATTER",
+                            "legendPosition": "NO_LEGEND",
+                            "headerCount": 1,
+                            "axis": [
+                                {"position": "BOTTOM_AXIS", "title": "Relative Strength / RS Ratio"},
+                                {"position": "LEFT_AXIS", "title": "Momentum / RS Momentum"},
+                            ],
+                            "domains": [{"domain": _chart_range(data_sheet_id, start_idx, end_idx, 2)}],
+                            "series": [_chart_series(data_sheet_id, start_idx, end_idx, 3)],
+                        },
+                    },
+                    "position": {
+                        "overlayPosition": {
+                            "anchorCell": {"sheetId": visible_sheet_id, "rowIndex": 8, "columnIndex": 0},
+                            "offsetXPixels": 8,
+                            "offsetYPixels": 8,
+                            "widthPixels": 900,
+                            "heightPixels": 430,
+                        }
+                    },
+                }
+            }
+        }
+    ]
 
 
 def _minimal_sector_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -830,6 +1060,7 @@ def publish_dashboard_payload(
     investigator_scores_df: pd.DataFrame | None = None,
     investigator_repeat_df: pd.DataFrame | None = None,
     investigator_trap_df: pd.DataFrame | None = None,
+    sector_rotation_df: pd.DataFrame | None = None,
     decision_bundle: PublishDecisionBundle | None = None,
     ranking_feedback: dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
@@ -848,10 +1079,12 @@ def publish_dashboard_payload(
     )
     source_breakout = breakout_df if isinstance(breakout_df, pd.DataFrame) and not breakout_df.empty else _frame(payload.get("breakout_scan", []))
     source_sector = sector_df if isinstance(sector_df, pd.DataFrame) and not sector_df.empty else _frame(payload.get("sector_dashboard", []))
+    source_sector_rotation = sector_rotation_df if isinstance(sector_rotation_df, pd.DataFrame) and not sector_rotation_df.empty else pd.DataFrame()
     source_watchlist = watchlist_df if isinstance(watchlist_df, pd.DataFrame) and not watchlist_df.empty else _frame(payload.get("watchlist", []))
 
     rank_min = _minimal_rank_frame(source_ranked)
     breakout_min = _minimal_breakout_frame(source_breakout)
+    pattern_min = _pattern_frame(pattern_df)
     weekly_moves = _weekly_move_frame(source_ranked)
     failed_breakouts = _failed_breakout_frame(failed_breakouts_df)
     investigator_today = _investigator_frame(investigator_scores_df)
@@ -875,38 +1108,59 @@ def publish_dashboard_payload(
     )
 
     summary = bundle.run_summary
+    breadth_snapshot = _market_breadth_snapshot_frame(breadth)
     daily_sections = [
         ("RUN SUMMARY", summary),
         ("DAILY SUMMARY", _compact_summary_frame(summary)),
-        ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
         ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
-        ("PATTERN SETUPS", bundle.pattern_setups),
+        ("MARKET BREADTH SNAPSHOT", breadth_snapshot),
+        ("PATTERN SETUPS", bundle.pattern_setups if not bundle.pattern_setups.empty else pattern_min),
+        ("TOP RANKED", bundle.top_ranked if not bundle.top_ranked.empty else rank_min),
+        ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
         ("BREAKOUTS (all, unfiltered)", breakout_min),
         ("MARKET MOVES SNAPSHOT", bundle.market_moves if not bundle.market_moves.empty else weekly_moves),
         ("FAILED BREAKOUTS", bundle.failed_breakouts if not bundle.failed_breakouts.empty else failed_breakouts),
-        ("TOP RANKED", bundle.top_ranked if not bundle.top_ranked.empty else rank_min),
     ]
     _daily_worksheet, _daily_layouts, daily_rows = _write_visible_grid_sheet(
         manager=manager,
         sheet_name=sheet_name,
         sections=daily_sections,
+        extra_request_builder=_breadth_snapshot_format_requests,
+        max_rows=DAILY_REPORT_MAX_ROWS,
     )
 
-    sector_min = _minimal_sector_frame(source_sector)
-    _write_hidden_data_sheet(
+    sector_rotation = _sector_rotation_frame(source_sector_rotation)
+    sector_hidden_frame = sector_rotation if not sector_rotation.empty else source_sector
+    sector_data_worksheet = _write_hidden_data_sheet(
         manager=manager,
         sheet_name=DATA_SECTOR_HISTORY_SHEET,
-        frame=source_sector,
+        frame=sector_hidden_frame,
         max_rows=DATA_SECTOR_HISTORY_MAX_ROWS,
         max_cols=VISIBLE_SHEET_MAX_COLS,
     )
+    sector_min = _minimal_sector_frame(source_sector)
+    sector_sections = (
+        [
+            ("SECTOR ROTATION", _sector_rotation_latest(sector_rotation)),
+            ("QUADRANT GUIDE", _sector_quadrant_guide_frame()),
+        ]
+        if not sector_rotation.empty
+        else [
+            ("SECTOR LEADERSHIP", bundle.sector_leaders),
+            ("SECTOR CONTEXT", sector_min),
+        ]
+    )
+    sector_chart_requests = _sector_rotation_chart_requests(
+        manager=manager,
+        visible_worksheet=manager.get_or_create_sheet(SECTOR_LEADERSHIP_SHEET, rows=VISIBLE_SHEET_MAX_ROWS, cols=VISIBLE_SHEET_MAX_COLS),
+        data_worksheet=sector_data_worksheet,
+        rotation_frame=sector_rotation,
+    ) if not sector_rotation.empty else []
     _sector_worksheet, _sector_layouts, _sector_rows = _write_visible_grid_sheet(
         manager=manager,
         sheet_name=SECTOR_LEADERSHIP_SHEET,
-        sections=[
-            ("SECTOR LEADERSHIP", bundle.sector_leaders),
-            ("SECTOR CONTEXT", sector_min),
-        ],
+        sections=sector_sections,
+        extra_requests=sector_chart_requests,
     )
 
     investigator_detail = _combine_frames(
@@ -946,26 +1200,7 @@ def publish_dashboard_payload(
         max_rows=DATA_BREADTH_MAX_ROWS,
         max_cols=VISIBLE_SHEET_MAX_COLS,
     )
-    breadth_recent = breadth_summary.tail(20).reset_index(drop=True)
-    breadth_preview = breadth_summary.tail(10).reset_index(drop=True)
-    breadth_worksheet = manager.get_or_create_sheet(MARKET_BREADTH_SHEET, rows=VISIBLE_SHEET_MAX_ROWS, cols=VISIBLE_SHEET_MAX_COLS)
-    if breadth_worksheet is None:
-        raise RuntimeError(f"Dashboard publish failed creating sheet '{MARKET_BREADTH_SHEET}': {manager.last_error or 'unknown error'}")
-    chart_requests = _breadth_chart_requests(
-        manager=manager,
-        visible_worksheet=breadth_worksheet,
-        data_worksheet=breadth_data_worksheet,
-        data_rows=len(breadth_summary),
-    )
-    _breadth_worksheet, _breadth_layouts, _breadth_rows = _write_visible_grid_sheet(
-        manager=manager,
-        sheet_name=MARKET_BREADTH_SHEET,
-        sections=[
-            ("BREADTH SUMMARY", breadth_recent),
-            ("BREADTH RECENT ROWS", breadth_preview),
-        ],
-        extra_requests=chart_requests,
-    )
+    _ = breadth_data_worksheet
 
     cleanup = _cleanup_operator_workbook(manager)
 
@@ -976,7 +1211,7 @@ def publish_dashboard_payload(
         "base_sheet_name": base_sheet_name,
         "rows_written": int(daily_rows),
         "sector_sheet_name": SECTOR_LEADERSHIP_SHEET,
-        "breadth_sheet_name": MARKET_BREADTH_SHEET,
+        "breadth_sheet_name": DAILY_REPORT_SHEET,
         "investigator_sheet_name": DATA_INVESTIGATOR_SHEET,
         "hidden_data_sheets": [DATA_BREADTH_SHEET, DATA_SECTOR_HISTORY_SHEET, DATA_INVESTIGATOR_SHEET],
         "cleanup": cleanup,

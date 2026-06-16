@@ -87,7 +87,6 @@ class PublishStage:
         "google_sheets_investigator": "publish_optional",
         "google_sheets_fundamental_watchlist": "publish_optional",
         "google_sheets_dashboard": "publish_optional",
-        "google_sheets_watchlist": "publish_optional",
         "google_sheets_publish_log": "publish_optional",
         "quantstats_dashboard_tearsheet": "publish_of_record",
         "telegram_summary": "informational",
@@ -565,10 +564,6 @@ class PublishStage:
         }
         if datasets.get("dashboard_payload") or not datasets.get("ranked_signals", pd.DataFrame()).empty:
             handlers["google_sheets_dashboard"] = self._publish_dashboard_payload
-        if not datasets.get("watchlist_candidates", pd.DataFrame()).empty:
-            handlers["google_sheets_watchlist"] = self._publish_watchlist
-            # Raw fundamental tracking rows stay in artifacts/DuckDB. Sheets
-            # exposes only the operator watchlist summary.
         has_fundamentals = any(
             isinstance(datasets.get(name), pd.DataFrame) and not datasets.get(name).empty
             for name in (
@@ -590,8 +585,9 @@ class PublishStage:
         ) or bool(datasets.get("fundamental_dashboard_payload"))
         if has_fundamentals and bool(context.params.get("publish_raw_fundamental_sheets", False)):
             handlers["google_sheets_fundamentals"] = self._publish_fundamental_dashboard
-        # Investigator rows are rendered inside the fixed 06_Investigator tab by
-        # google_sheets_dashboard. Do not register the legacy multi-tab channel.
+        # Watchlist and investigator rows are rendered inside the fixed
+        # operator workbook by google_sheets_dashboard. Do not register legacy
+        # multi-tab channels during normal publish.
         if bool(context.params.get("publish_quantstats", True)):
             handlers["quantstats_dashboard_tearsheet"] = self._publish_quantstats_dashboard
         if bool(context.params.get("publish_weekly_pdf", False)):
@@ -675,6 +671,7 @@ class PublishStage:
             investigator_scores_df=datasets.get("investigator_scores"),
             investigator_repeat_df=datasets.get("investigator_repeat_tracker"),
             investigator_trap_df=datasets.get("investigator_trap_log"),
+            sector_rotation_df=datasets.get("sector_rotation"),
             decision_bundle=datasets.get("decision_bundle"),
             ranking_feedback=self._load_ranking_feedback(context),
         )
