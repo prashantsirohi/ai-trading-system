@@ -751,7 +751,7 @@ def _investigator_frame(scores: pd.DataFrame | None) -> pd.DataFrame:
 
 def _investigator_repeat_frame(repeat: pd.DataFrame | None) -> pd.DataFrame:
     if repeat is None or repeat.empty:
-        return pd.DataFrame(columns=["Symbol", "Appear20D", "RepeatScore", "PriceProgress", "RankChange", "VolumeEscalation"])
+        return pd.DataFrame(columns=["Symbol", "Appear20D", "RepeatScore", "PriceProgress", "RankChange", "VolumeEscalation", "Priority"])
     out = pd.DataFrame(
         {
             "Symbol": repeat.get("symbol_id", ""),
@@ -760,10 +760,44 @@ def _investigator_repeat_frame(repeat: pd.DataFrame | None) -> pd.DataFrame:
             "PriceProgress": repeat.get("price_progression_pct", ""),
             "RankChange": repeat.get("rank_change_20d", ""),
             "VolumeEscalation": repeat.get("volume_escalation", ""),
+            "Priority": repeat.get("high_priority_repeat", ""),
         }
     )
     out = _to_numeric(out, ["Appear20D", "RepeatScore", "PriceProgress", "RankChange"], 2)
-    return out.sort_values(["RepeatScore", "Symbol"], ascending=[False, True], na_position="last").head(25).reset_index(drop=True)
+    priority = out["Priority"].fillna("").astype(str).str.lower().isin({"true", "1", "yes"}).astype(int)
+    out = out.assign(_PrioritySort=priority)
+    return (
+        out.sort_values(["_PrioritySort", "RepeatScore", "Symbol"], ascending=[False, False, True], na_position="last")
+        .drop(columns=["_PrioritySort"])
+        .head(25)
+        .reset_index(drop=True)
+    )
+
+
+def _investigator_active_frame(active: pd.DataFrame | None) -> pd.DataFrame:
+    if active is None or active.empty:
+        return pd.DataFrame(columns=["Symbol", "Status", "Verdict", "Current", "Peak", "Appear20D", "DaysStale", "PriceVsFirst"])
+    out = pd.DataFrame(
+        {
+            "Symbol": active.get("symbol_id", ""),
+            "Status": active.get("status", ""),
+            "Verdict": active.get("verdict", ""),
+            "Current": active.get("score_current", ""),
+            "Peak": active.get("score_peak", ""),
+            "Appear20D": active.get("appearance_count_20d", ""),
+            "DaysStale": active.get("days_since_last_seen", ""),
+            "PriceVsFirst": active.get("price_vs_first_trigger_pct", ""),
+        }
+    )
+    out = _to_numeric(out, ["Current", "Peak", "Appear20D", "DaysStale", "PriceVsFirst"], 2)
+    verdict_order = {"HIGH_CONVICTION": 0, "MEDIUM_CONVICTION": 1, "WATCH_ONLY": 2, "NOISE_TRAP": 3}
+    out = out.assign(_VerdictSort=out["Verdict"].fillna("").astype(str).str.upper().map(verdict_order).fillna(99))
+    return (
+        out.sort_values(["_VerdictSort", "Current", "Peak", "Appear20D", "Symbol"], ascending=[True, False, False, False, True], na_position="last")
+        .drop(columns=["_VerdictSort"])
+        .head(25)
+        .reset_index(drop=True)
+    )
 
 
 def _investigator_trap_frame(traps: pd.DataFrame | None) -> pd.DataFrame:
@@ -1059,6 +1093,7 @@ def publish_dashboard_payload(
     candidate_tracker_df: pd.DataFrame | None = None,
     investigator_scores_df: pd.DataFrame | None = None,
     investigator_repeat_df: pd.DataFrame | None = None,
+    investigator_active_df: pd.DataFrame | None = None,
     investigator_trap_df: pd.DataFrame | None = None,
     sector_rotation_df: pd.DataFrame | None = None,
     decision_bundle: PublishDecisionBundle | None = None,
@@ -1089,6 +1124,7 @@ def publish_dashboard_payload(
     failed_breakouts = _failed_breakout_frame(failed_breakouts_df)
     investigator_today = _investigator_frame(investigator_scores_df)
     investigator_repeat = _investigator_repeat_frame(investigator_repeat_df)
+    investigator_active = _investigator_active_frame(investigator_active_df)
     investigator_traps = _investigator_trap_frame(investigator_trap_df)
     events_index = _frame(payload.get("events_index", []))
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
@@ -1115,6 +1151,7 @@ def publish_dashboard_payload(
         ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
         ("MARKET BREADTH SNAPSHOT", breadth_snapshot),
         ("PATTERN SETUPS", bundle.pattern_setups if not bundle.pattern_setups.empty else pattern_min),
+        ("ACTIVE INVESTIGATOR LIST", investigator_active),
         ("TOP RANKED", bundle.top_ranked if not bundle.top_ranked.empty else rank_min),
         ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
         ("BREAKOUTS (all, unfiltered)", breakout_min),
@@ -1167,6 +1204,7 @@ def publish_dashboard_payload(
         [
             ("STOCK INVESTIGATOR", investigator_today),
             ("INVESTIGATOR REPEAT ACCUMULATION", investigator_repeat),
+            ("ACTIVE INVESTIGATOR LIST", investigator_active),
             ("INVESTIGATOR TRAP LIST", investigator_traps),
         ]
     )

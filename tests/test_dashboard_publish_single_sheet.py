@@ -309,13 +309,47 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     investigator_repeat = pd.DataFrame(
         [
             {
+                "symbol_id": "LOWPRI",
+                "appearance_count_20d": 6,
+                "repeat_score": 88,
+                "price_progression_pct": 4.0,
+                "rank_change_20d": -2,
+                "volume_escalation": False,
+                "high_priority_repeat": False,
+            },
+            {
                 "symbol_id": "AAA",
                 "appearance_count_20d": 4,
                 "repeat_score": 72,
                 "price_progression_pct": 11.5,
                 "rank_change_20d": -8,
                 "volume_escalation": True,
+                "high_priority_repeat": True,
             }
+        ]
+    )
+    investigator_active = pd.DataFrame(
+        [
+            {
+                "symbol_id": "WATCH",
+                "status": "Watchlist",
+                "verdict": "WATCH_ONLY",
+                "score_current": 80,
+                "score_peak": 80,
+                "appearance_count_20d": 1,
+                "days_since_last_seen": 0,
+                "price_vs_first_trigger_pct": 0.0,
+            },
+            {
+                "symbol_id": "MED",
+                "status": "Active Research",
+                "verdict": "MEDIUM_CONVICTION",
+                "score_current": 61,
+                "score_peak": 61,
+                "appearance_count_20d": 1,
+                "days_since_last_seen": 0,
+                "price_vs_first_trigger_pct": 0.0,
+            },
         ]
     )
     investigator_traps = pd.DataFrame(
@@ -381,6 +415,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             pattern_df=pattern_df,
             investigator_scores_df=investigator_scores,
             investigator_repeat_df=investigator_repeat,
+            investigator_active_df=investigator_active,
             investigator_trap_df=investigator_traps,
             sector_rotation_df=sector_rotation_df,
             ranking_feedback={
@@ -437,6 +472,8 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "PE 5Y Percentile" in daily_text
     assert "New High / Low" in daily_text
     assert "PATTERN SETUPS" in daily_text
+    assert "ACTIVE INVESTIGATOR LIST" in daily_text
+    assert daily_text.index("MED") < daily_text.index("WATCH")
     assert "TOP RANKED" in daily_text
     assert "RANKING FEEDBACK" in daily_text
     assert "BREAKOUTS (all, unfiltered)" in daily_text
@@ -454,6 +491,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert len(hidden["_DATA_SECTOR_HISTORY"]) <= 500
     assert len(hidden["_DATA_INVESTIGATOR"]) <= 300
     assert "AAA" in set(hidden["_DATA_INVESTIGATOR"]["Symbol"].astype(str))
+    assert "MED" in set(hidden["_DATA_INVESTIGATOR"]["Symbol"].astype(str))
     assert "Banks" in set(hidden["_DATA_SECTOR_HISTORY"]["industry"].astype(str))
     assert hidden["_DATA_BREADTH"].iloc[-1]["PEPctile5Y"] == 74.0
     assert hidden["_DATA_BREADTH"].iloc[-1]["PEPctile5YSMA20"] == 73.0

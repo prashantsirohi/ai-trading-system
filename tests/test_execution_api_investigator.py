@@ -25,8 +25,18 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     files = {
         "daily_gainer_log": pd.DataFrame([{"symbol_id": "AAA", "daily_return_pct": 8.0}]),
         "investigator_scores": pd.DataFrame([{"symbol_id": "AAA", "verdict": "HIGH_CONVICTION", "final_score": 88}]),
-        "repeat_tracker": pd.DataFrame([{"symbol_id": "AAA", "high_priority_repeat": True}]),
-        "active_watchlist": pd.DataFrame([{"symbol_id": "AAA", "status": "HIGH_CONVICTION"}]),
+        "repeat_tracker": pd.DataFrame(
+            [
+                {"symbol_id": "LOWPRI", "repeat_score": 99, "appearance_count_20d": 6, "high_priority_repeat": False},
+                {"symbol_id": "AAA", "repeat_score": 60, "appearance_count_20d": 4, "high_priority_repeat": True},
+            ]
+        ),
+        "active_watchlist": pd.DataFrame(
+            [
+                {"symbol_id": "WATCH", "status": "Watchlist", "verdict": "WATCH_ONLY", "score_current": 95},
+                {"symbol_id": "AAA", "status": "Active Research", "verdict": "MEDIUM_CONVICTION", "score_current": 70},
+            ]
+        ),
         "trap_log": pd.DataFrame([{"symbol_id": "TRAP", "verdict": "NOISE_TRAP"}]),
         "archived_investigator": pd.DataFrame([{"symbol_id": "XYZ", "drop_reason": "ONE_CANDLE_DRAMA"}]),
     }
@@ -45,4 +55,6 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     assert body["summary"]["active_count"] == 1
     assert body["today_gainers"][0]["symbol_id"] == "AAA"
     assert body["high_conviction"][0]["symbol_id"] == "AAA"
+    assert body["repeat_tracker"][0]["symbol_id"] == "AAA"
+    assert body["active_watchlist"][0]["symbol_id"] == "AAA"
     assert body["archive_summary"]["by_reason"]["ONE_CANDLE_DRAMA"] == 1

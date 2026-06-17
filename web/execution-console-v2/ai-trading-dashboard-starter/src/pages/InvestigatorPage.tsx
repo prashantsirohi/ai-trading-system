@@ -76,6 +76,33 @@ function verdictTone(value: string): 'good' | 'warn' | 'bad' | 'neutral' {
   return 'neutral';
 }
 
+function isTruthy(value: unknown): boolean {
+  return ['true', '1', 'yes'].includes(String(value ?? '').toLowerCase());
+}
+
+function sortRepeatRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return [...rows].sort((left, right) => {
+    const priorityDelta = Number(isTruthy(right.high_priority_repeat)) - Number(isTruthy(left.high_priority_repeat));
+    if (priorityDelta !== 0) return priorityDelta;
+    return Number(right.repeat_score ?? -Infinity) - Number(left.repeat_score ?? -Infinity);
+  });
+}
+
+function sortActiveRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const verdictOrder: Record<string, number> = {
+    HIGH_CONVICTION: 0,
+    MEDIUM_CONVICTION: 1,
+    WATCH_ONLY: 2,
+    NOISE_TRAP: 3,
+  };
+  return [...rows].sort((left, right) => {
+    const leftVerdict = verdictOrder[String(left.verdict ?? '').toUpperCase()] ?? 99;
+    const rightVerdict = verdictOrder[String(right.verdict ?? '').toUpperCase()] ?? 99;
+    if (leftVerdict !== rightVerdict) return leftVerdict - rightVerdict;
+    return Number(right.score_current ?? -Infinity) - Number(left.score_current ?? -Infinity);
+  });
+}
+
 function Metric({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-3">
@@ -139,6 +166,9 @@ export default function InvestigatorPage() {
   const data = query.data;
   const summary = data?.summary ?? {};
   const archive = data?.archive_summary ?? { count: 0, by_reason: {}, rows: [] };
+  const repeatRows = sortRepeatRows(data?.repeat_tracker ?? []);
+  const priorityRepeatRows = repeatRows.filter((row) => isTruthy(row.high_priority_repeat));
+  const activeRows = sortActiveRows(data?.active_watchlist ?? []);
 
   return (
     <PageFrame title="Investigator" description="Post-rank daily gainer conviction, repeat tracking, traps, and status ageing." compactHeader>
@@ -164,10 +194,10 @@ export default function InvestigatorPage() {
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <DataTable title="High Conviction" rows={data.high_conviction.slice(0, 20)} columns={SCORE_COLUMNS} />
-            <DataTable title="Repeat Tracker" rows={data.repeat_tracker.slice(0, 25)} columns={REPEAT_COLUMNS} />
+            <DataTable title={`Repeat Tracker${priorityRepeatRows.length ? ` (${priorityRepeatRows.length} priority)` : ''}`} rows={repeatRows.slice(0, 25)} columns={REPEAT_COLUMNS} />
           </div>
 
-          <DataTable title="Active Investigator List" rows={data.active_watchlist.slice(0, 50)} columns={ACTIVE_COLUMNS} />
+          <DataTable title="Active Investigator List" rows={activeRows.slice(0, 50)} columns={ACTIVE_COLUMNS} />
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <DataTable title="Trap Log" rows={data.trap_log.slice(0, 25)} columns={SCORE_COLUMNS} />

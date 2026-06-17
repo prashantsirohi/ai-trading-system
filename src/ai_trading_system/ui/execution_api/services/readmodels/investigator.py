@@ -34,9 +34,9 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         "summary": summary,
         "today_gainers": _records(frames["today_gainers"]),
         "high_conviction": _records(high),
-        "repeat_tracker": _records(frames["repeat_tracker"]),
+        "repeat_tracker": _records(_sort_repeat_tracker(frames["repeat_tracker"])),
         "trap_log": _records(frames["trap_log"]),
-        "active_watchlist": _records(frames["active_watchlist"]),
+        "active_watchlist": _records(_sort_active_watchlist(frames["active_watchlist"])),
         "archive_summary": {
             "count": int(len(archive)),
             "by_reason": _counts(archive, "drop_reason"),
@@ -134,3 +134,50 @@ def _counts(frame: pd.DataFrame, column: str) -> dict[str, int]:
     if frame.empty or column not in frame.columns:
         return {}
     return {str(key): int(value) for key, value in frame[column].fillna("").astype(str).value_counts().to_dict().items()}
+
+
+def _sort_repeat_tracker(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    safe = frame.copy()
+    priority_sort = (
+        safe.get("high_priority_repeat", pd.Series(False, index=safe.index))
+        .fillna(False)
+        .astype(str)
+        .str.lower()
+        .isin({"true", "1", "yes"})
+        .astype(int)
+    )
+    for column in ("repeat_score", "appearance_count_20d", "price_progression_pct"):
+        safe.loc[:, column] = pd.to_numeric(safe[column], errors="coerce") if column in safe.columns else pd.NA
+    safe = safe.assign(_priority_sort=priority_sort)
+    safe = safe.sort_values(
+        ["_priority_sort", "repeat_score", "appearance_count_20d", "price_progression_pct", "symbol_id"],
+        ascending=[False, False, False, False, True],
+        na_position="last",
+        kind="stable",
+    )
+    return safe.drop(columns=["_priority_sort"]).reset_index(drop=True)
+
+
+def _sort_active_watchlist(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    safe = frame.copy()
+    verdict_order = {
+        "HIGH_CONVICTION": 0,
+        "MEDIUM_CONVICTION": 1,
+        "WATCH_ONLY": 2,
+        "NOISE_TRAP": 3,
+    }
+    verdict_sort = safe.get("verdict", pd.Series("", index=safe.index)).fillna("").astype(str).str.upper().map(verdict_order).fillna(99)
+    for column in ("score_current", "score_peak", "appearance_count_20d"):
+        safe.loc[:, column] = pd.to_numeric(safe[column], errors="coerce") if column in safe.columns else pd.NA
+    safe = safe.assign(_verdict_sort=verdict_sort)
+    safe = safe.sort_values(
+        ["_verdict_sort", "score_current", "score_peak", "appearance_count_20d", "symbol_id"],
+        ascending=[True, False, False, False, True],
+        na_position="last",
+        kind="stable",
+    )
+    return safe.drop(columns=["_verdict_sort"]).reset_index(drop=True)

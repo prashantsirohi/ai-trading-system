@@ -670,6 +670,7 @@ class PublishStage:
             candidate_tracker_df=datasets.get("candidate_tracker_current"),
             investigator_scores_df=datasets.get("investigator_scores"),
             investigator_repeat_df=datasets.get("investigator_repeat_tracker"),
+            investigator_active_df=datasets.get("investigator_active_watchlist"),
             investigator_trap_df=datasets.get("investigator_trap_log"),
             sector_rotation_df=datasets.get("sector_rotation"),
             decision_bundle=datasets.get("decision_bundle"),
@@ -773,6 +774,7 @@ class PublishStage:
             {
                 "Investigator Today": datasets.get("investigator_scores", pd.DataFrame()),
                 "Repeat Tracker": datasets.get("investigator_repeat_tracker", pd.DataFrame()),
+                "Active Investigator List": datasets.get("investigator_active_watchlist", pd.DataFrame()),
                 "High Conviction": datasets.get("investigator_high_conviction", pd.DataFrame()),
                 "Trap Log": datasets.get("investigator_trap_log", pd.DataFrame()),
                 "Final 3Q Gate": datasets.get("investigator_final_3q_gate", pd.DataFrame()),
