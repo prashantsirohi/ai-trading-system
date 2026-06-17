@@ -124,6 +124,7 @@ def build_publish_datasets(
     pattern_artifact = context_artifact_for("pattern_scan")
     dashboard_artifact = context_artifact_for("sector_dashboard")
     sector_rotation_artifact = context_artifact_for("sector_rotation")
+    industry_rotation_artifact = context_artifact_for("industry_rotation")
     stock_rotation_artifact = context_artifact_for("stock_rotation")
     accumulation_distribution_artifact = context_artifact_for("accumulation_distribution")
     sector_custom_indices_artifact = context_artifact_for("sector_custom_indices")
@@ -205,6 +206,7 @@ def build_publish_datasets(
         "stock_scan": read_artifact(scan_artifact) if scan_artifact else pd.DataFrame(),
         "sector_dashboard": read_artifact(dashboard_artifact) if dashboard_artifact else pd.DataFrame(),
         "sector_rotation": read_artifact(sector_rotation_artifact) if sector_rotation_artifact else pd.DataFrame(),
+        "industry_rotation": read_artifact(industry_rotation_artifact) if industry_rotation_artifact else pd.DataFrame(),
         "stock_rotation": read_artifact(stock_rotation_artifact) if stock_rotation_artifact else pd.DataFrame(),
         "accumulation_distribution": read_artifact(accumulation_distribution_artifact) if accumulation_distribution_artifact else pd.DataFrame(),
         "sector_custom_indices": read_artifact(sector_custom_indices_artifact) if sector_custom_indices_artifact else pd.DataFrame(),

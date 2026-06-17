@@ -22,8 +22,10 @@ from ai_trading_system.ui.execution_api.services.readmodels.market_breadth impor
 
 DAILY_REPORT_SHEET = "01_Daily_Report"
 SECTOR_LEADERSHIP_SHEET = "04_Sector_Leadership"
+INDUSTRY_ROTATION_SHEET = "industry rotation"
 MARKET_BREADTH_SHEET = "05_Market_Breadth"
 INVESTIGATOR_SHEET = "06_Investigator"
+INVESTIGATOR_ACTION_QUEUE_SHEET = "investigator"
 DATA_BREADTH_SHEET = "_DATA_BREADTH"
 DATA_SECTOR_HISTORY_SHEET = "_DATA_SECTOR_HISTORY"
 DATA_INVESTIGATOR_SHEET = "_DATA_INVESTIGATOR"
@@ -37,6 +39,8 @@ OPERATOR_TAB_ORDER = [
     DAILY_REPORT_SHEET,
     "03_Portfolio",
     SECTOR_LEADERSHIP_SHEET,
+    INDUSTRY_ROTATION_SHEET,
+    INVESTIGATOR_ACTION_QUEUE_SHEET,
 ]
 LEGACY_OPERATOR_TABS = [
     "DATA",
@@ -390,6 +394,44 @@ def _write_hidden_data_sheet(
     return worksheet
 
 
+def _write_table_sheet(
+    *,
+    manager: GoogleSheetsManager,
+    sheet_name: str,
+    frame: pd.DataFrame,
+    min_rows: int = VISIBLE_SHEET_MAX_ROWS,
+    max_cols: int = VISIBLE_SHEET_MAX_COLS,
+) -> tuple[Any, int]:
+    safe = frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+    safe = safe.iloc[:, :max_cols].copy()
+    rows = max(min_rows, len(safe) + 1)
+    cols = max(1, min(max_cols, len(safe.columns)))
+    worksheet = manager.get_or_create_sheet(sheet_name, rows=rows, cols=cols)
+    if worksheet is None:
+        raise RuntimeError(f"Dashboard publish failed creating sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
+    grid = [list(safe.columns)] + safe.where(safe.notna(), "").values.tolist()
+    if not grid[0]:
+        grid = [["No data available"]]
+    grid = [[_sheet_cell(value) for value in row[:cols]] + [""] * max(0, cols - len(row)) for row in grid]
+    if hasattr(manager, "update_worksheet_values"):
+        manager.update_worksheet_values(worksheet, grid, range_name="A1")
+    else:
+        if not manager.write_dataframe(safe.fillna(""), sheet_name, include_header=True, clear_sheet=True):
+            raise RuntimeError(f"Dashboard publish failed writing sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
+    if hasattr(manager, "batch_update"):
+        manager.batch_update(
+            {
+                "requests": _grid_layout_requests(
+                    worksheet,
+                    [{"title": sheet_name, "title_row": 1, "header_row": 1, "row_count": len(safe), "col_count": cols}],
+                    max_rows=rows,
+                    max_cols=cols,
+                )
+            }
+        )
+    return worksheet, len(grid)
+
+
 def _combine_frames(frames: list[tuple[str, pd.DataFrame]]) -> pd.DataFrame:
     combined: list[pd.DataFrame] = []
     for section, frame in frames:
@@ -546,7 +588,51 @@ def _sector_rotation_latest(frame: pd.DataFrame) -> pd.DataFrame:
             "Alpha20D": pd.to_numeric(source.get("alpha_20d", ""), errors="coerce").round(3),
         }
     )
-    return out.sort_values(["Quadrant", "RS Ratio"], ascending=[True, False], na_position="last", kind="stable").head(25).reset_index(drop=True)
+    return (
+        out.sort_values(["Quadrant", "RS Ratio"], ascending=[True, False], na_position="last", kind="stable")
+        .head(25)
+        .reset_index(drop=True)
+    )
+
+
+def _industry_rotation_full_frame(frame: pd.DataFrame | None) -> pd.DataFrame:
+    base_columns = ["Date", "Industry", "Sector", "Quadrant", "RS Ratio", "RS Momentum", "Alpha20D", "Rotation Index", "Benchmark Index"]
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=base_columns)
+    source = frame.copy()
+    if "date" in source.columns:
+        parsed_dates = pd.to_datetime(source["date"], errors="coerce")
+        latest_date = parsed_dates.max()
+        if pd.notna(latest_date):
+            source = source.loc[parsed_dates.eq(latest_date)].copy()
+            source.loc[:, "date"] = latest_date.strftime("%Y-%m-%d")
+    industry = source.get("rotation_group_name", source.get("industry", ""))
+    sector = source.get("parent_sector", source.get("sector", ""))
+    out = pd.DataFrame(
+        {
+            "Date": source.get("date", ""),
+            "Industry": industry,
+            "Sector": sector,
+            "Quadrant": source.get("quadrant", ""),
+            "RS Ratio": pd.to_numeric(source.get("rs_ratio", ""), errors="coerce"),
+            "RS Momentum": pd.to_numeric(source.get("rs_momentum", ""), errors="coerce"),
+            "Alpha20D": pd.to_numeric(source.get("alpha_20d", ""), errors="coerce"),
+            "Rotation Index": pd.to_numeric(source.get("rotation_index", ""), errors="coerce"),
+            "Benchmark Index": pd.to_numeric(source.get("benchmark_index", ""), errors="coerce"),
+        }
+    )
+    if "constituent_count" in source.columns:
+        out.loc[:, "Constituent Count"] = pd.to_numeric(source["constituent_count"], errors="coerce")
+    out = _to_numeric(out, ["RS Ratio", "RS Momentum", "Alpha20D", "Rotation Index", "Benchmark Index"], 2)
+    if "Constituent Count" in out.columns:
+        out = _to_numeric(out, ["Constituent Count"], 0)
+    quadrant_priority = {"Leading": 0, "Improving": 1, "Weakening": 2, "Lagging": 3}
+    out = out.assign(_QuadrantSort=out["Quadrant"].astype(str).map(quadrant_priority).fillna(99))
+    return (
+        out.sort_values(["_QuadrantSort", "RS Ratio", "Industry"], ascending=[True, False, True], na_position="last", kind="stable")
+        .drop(columns=["_QuadrantSort"])
+        .reset_index(drop=True)
+    )
 
 
 def _sector_quadrant_guide_frame() -> pd.DataFrame:
@@ -798,6 +884,68 @@ def _investigator_active_frame(active: pd.DataFrame | None) -> pd.DataFrame:
         .head(25)
         .reset_index(drop=True)
     )
+
+
+def _investigator_action_queue_frame(
+    *,
+    payload: dict[str, Any] | None,
+    active: pd.DataFrame | None,
+    repeat: pd.DataFrame | None,
+) -> pd.DataFrame:
+    columns = ["Symbol", "Verdict", "Reason", "Score", "Repeat", "Price vs First", "Rank Delta", "Vol", "Action"]
+    queue = payload.get("decision_queue") if isinstance(payload, dict) else None
+    if isinstance(queue, list) and queue:
+        source = pd.DataFrame([row for row in queue if isinstance(row, dict)])
+    else:
+        source = _investigator_action_queue_fallback(active=active, repeat=repeat)
+    if source.empty:
+        return pd.DataFrame(columns=columns)
+    out = pd.DataFrame(
+        {
+            "Symbol": source.get("symbol", source.get("symbol_id", "")),
+            "Verdict": source.get("decision_verdict", source.get("verdict", "")),
+            "Reason": source.get("decision_reason", source.get("move_tag", source.get("trigger_reason", ""))),
+            "Score": source.get(
+                "investigator_score",
+                source.get("score_current", source.get("final_score", source.get("score", ""))),
+            ),
+            "Repeat": source.get("appearance_count_20d", source.get("repeat_count", "")),
+            "Price vs First": source.get("price_progression_pct", source.get("price_vs_first_trigger_pct", "")),
+            "Rank Delta": source.get("rank_change_20d", source.get("rank_delta", "")),
+            "Vol": source.get("volume_signal", source.get("volume_escalation", source.get("volume_trend", ""))),
+            "Action": source.get("action", source.get("next_action", "Open")),
+        }
+    )
+    out = _to_numeric(out, ["Score", "Repeat", "Price vs First", "Rank Delta"], 2)
+    return out.sort_values(["Score", "Symbol"], ascending=[False, True], na_position="last", kind="stable").reset_index(drop=True)
+
+
+def _investigator_action_queue_fallback(*, active: pd.DataFrame | None, repeat: pd.DataFrame | None) -> pd.DataFrame:
+    out = active.copy() if isinstance(active, pd.DataFrame) else pd.DataFrame()
+    if out.empty:
+        return out
+    if isinstance(repeat, pd.DataFrame) and not repeat.empty and "symbol_id" in out.columns and "symbol_id" in repeat.columns:
+        repeat_cols = [
+            "symbol_id",
+            "appearance_count_20d",
+            "price_progression_pct",
+            "rank_change_20d",
+            "volume_escalation",
+        ]
+        available = [col for col in repeat_cols if col in repeat.columns]
+        out = out.merge(repeat[available], on="symbol_id", how="left", suffixes=("", "_repeat"))
+    if "investigator_score" not in out.columns:
+        out.loc[:, "investigator_score"] = pd.to_numeric(out.get("score_current", out.get("final_score", "")), errors="coerce")
+    if "decision_verdict" not in out.columns:
+        out.loc[:, "decision_verdict"] = out.get("verdict", "")
+    if "decision_reason" not in out.columns:
+        out.loc[:, "decision_reason"] = out.get("move_tag", out.get("trigger_reason", "Needs review"))
+    if "volume_signal" not in out.columns:
+        volume = out.get("volume_escalation", pd.Series("", index=out.index)).fillna("").astype(str).str.lower()
+        out.loc[:, "volume_signal"] = volume.map(lambda value: "Rising" if value in {"true", "1", "yes"} else "Flat")
+    if "action" not in out.columns:
+        out.loc[:, "action"] = "Open"
+    return out
 
 
 def _investigator_trap_frame(traps: pd.DataFrame | None) -> pd.DataFrame:
@@ -1096,6 +1244,8 @@ def publish_dashboard_payload(
     investigator_active_df: pd.DataFrame | None = None,
     investigator_trap_df: pd.DataFrame | None = None,
     sector_rotation_df: pd.DataFrame | None = None,
+    industry_rotation_df: pd.DataFrame | None = None,
+    investigator_payload: dict[str, Any] | None = None,
     decision_bundle: PublishDecisionBundle | None = None,
     ranking_feedback: dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
@@ -1115,6 +1265,7 @@ def publish_dashboard_payload(
     source_breakout = breakout_df if isinstance(breakout_df, pd.DataFrame) and not breakout_df.empty else _frame(payload.get("breakout_scan", []))
     source_sector = sector_df if isinstance(sector_df, pd.DataFrame) and not sector_df.empty else _frame(payload.get("sector_dashboard", []))
     source_sector_rotation = sector_rotation_df if isinstance(sector_rotation_df, pd.DataFrame) and not sector_rotation_df.empty else pd.DataFrame()
+    source_industry_rotation = industry_rotation_df if isinstance(industry_rotation_df, pd.DataFrame) and not industry_rotation_df.empty else pd.DataFrame()
     source_watchlist = watchlist_df if isinstance(watchlist_df, pd.DataFrame) and not watchlist_df.empty else _frame(payload.get("watchlist", []))
 
     rank_min = _minimal_rank_frame(source_ranked)
@@ -1125,6 +1276,11 @@ def publish_dashboard_payload(
     investigator_today = _investigator_frame(investigator_scores_df)
     investigator_repeat = _investigator_repeat_frame(investigator_repeat_df)
     investigator_active = _investigator_active_frame(investigator_active_df)
+    investigator_action_queue = _investigator_action_queue_frame(
+        payload=investigator_payload,
+        active=investigator_active_df,
+        repeat=investigator_repeat_df,
+    )
     investigator_traps = _investigator_trap_frame(investigator_trap_df)
     events_index = _frame(payload.get("events_index", []))
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
@@ -1199,6 +1355,17 @@ def publish_dashboard_payload(
         sections=sector_sections,
         extra_requests=sector_chart_requests,
     )
+    _industry_rotation_worksheet, industry_rotation_rows = _write_table_sheet(
+        manager=manager,
+        sheet_name=INDUSTRY_ROTATION_SHEET,
+        frame=_industry_rotation_full_frame(source_industry_rotation),
+    )
+
+    _investigator_queue_worksheet, investigator_queue_rows = _write_table_sheet(
+        manager=manager,
+        sheet_name=INVESTIGATOR_ACTION_QUEUE_SHEET,
+        frame=investigator_action_queue,
+    )
 
     investigator_detail = _combine_frames(
         [
@@ -1249,8 +1416,12 @@ def publish_dashboard_payload(
         "base_sheet_name": base_sheet_name,
         "rows_written": int(daily_rows),
         "sector_sheet_name": SECTOR_LEADERSHIP_SHEET,
+        "industry_rotation_sheet_name": INDUSTRY_ROTATION_SHEET,
+        "industry_rotation_rows_written": int(industry_rotation_rows),
         "breadth_sheet_name": DAILY_REPORT_SHEET,
-        "investigator_sheet_name": DATA_INVESTIGATOR_SHEET,
+        "investigator_sheet_name": INVESTIGATOR_ACTION_QUEUE_SHEET,
+        "investigator_rows_written": int(investigator_queue_rows),
+        "investigator_data_sheet_name": DATA_INVESTIGATOR_SHEET,
         "hidden_data_sheets": [DATA_BREADTH_SHEET, DATA_SECTOR_HISTORY_SHEET, DATA_INVESTIGATOR_SHEET],
         "cleanup": cleanup,
         **quota_meta,

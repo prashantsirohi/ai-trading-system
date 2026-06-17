@@ -387,6 +387,62 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             {"date": "2026-04-07", "industry": "Banks", "rs_ratio": 103.4, "rs_momentum": 100.8, "quadrant": "Leading", "alpha_20d": 0.06},
         ]
     )
+    industry_rotation_df = pd.DataFrame(
+        [
+            {
+                "date": "2026-04-08",
+                "rotation_group_name": f"Industry {i:02d}",
+                "parent_sector": "Banks" if i % 2 == 0 else "Power",
+                "quadrant": "Leading" if i < 20 else "Improving",
+                "rs_ratio": 130.0 - i,
+                "rs_momentum": 101.0 + i / 10,
+                "alpha_20d": 0.08 - i / 1000,
+                "rotation_index": 110.0 + i,
+                "benchmark_index": 100.0,
+                "constituent_count": 5 + i,
+            }
+            for i in range(30)
+        ]
+        + [
+            {
+                "date": "2026-04-07",
+                "rotation_group_name": "Old Industry",
+                "parent_sector": "Old",
+                "quadrant": "Leading",
+                "rs_ratio": 150.0,
+                "rs_momentum": 120.0,
+                "alpha_20d": 0.12,
+                "rotation_index": 125.0,
+                "benchmark_index": 100.0,
+            }
+        ]
+    )
+    investigator_payload = {
+        "decision_queue": [
+            {
+                "symbol_id": "LOW",
+                "decision_verdict": "Watch",
+                "decision_reason": "Repeat + price holding",
+                "investigator_score": 51,
+                "appearance_count_20d": 4,
+                "price_vs_first_trigger_pct": 7.1,
+                "rank_change_20d": 2,
+                "volume_signal": "Rising",
+                "action": "Open",
+            },
+            {
+                "symbol_id": "HIGH",
+                "decision_verdict": "Investigate",
+                "decision_reason": "Sector Rotation",
+                "investigator_score": 79,
+                "appearance_count_20d": 2,
+                "price_vs_first_trigger_pct": 3.6,
+                "rank_change_20d": -121,
+                "volume_signal": "Flat",
+                "action": "Open",
+            },
+        ]
+    }
 
     payload = {
         "summary": {"run_date": "2026-04-09", "data_trust_status": "trusted"},
@@ -418,6 +474,8 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             investigator_active_df=investigator_active,
             investigator_trap_df=investigator_traps,
             sector_rotation_df=sector_rotation_df,
+            industry_rotation_df=industry_rotation_df,
+            investigator_payload=investigator_payload,
             ranking_feedback={
                 "status": "ok",
                 "rank_bucket_rows": [
@@ -446,11 +504,13 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert result["sheet_name"] == "01_Daily_Report"
     assert result["base_sheet_name"] == "2026-04-09"
     assert result["sector_sheet_name"] == "04_Sector_Leadership"
+    assert result["industry_rotation_sheet_name"] == "industry rotation"
     assert result["breadth_sheet_name"] == "01_Daily_Report"
-    assert result["investigator_sheet_name"] == "_DATA_INVESTIGATOR"
+    assert result["investigator_sheet_name"] == "investigator"
+    assert result["investigator_data_sheet_name"] == "_DATA_INVESTIGATOR"
     assert {"DATA", "FILTER", "Publish_Log", "02_Watchlist_Current", "05_Market_Breadth", "2026-04-08"}.issubset(set(manager.spreadsheet.deleted))
 
-    visible_titles = {"01_Daily_Report", "04_Sector_Leadership"}
+    visible_titles = {"01_Daily_Report", "04_Sector_Leadership", "industry rotation", "investigator"}
     visible_updates = {
         title: [update for update in manager.sheets[title].updates if update[0] == "A1"]
         for title in visible_titles
@@ -458,10 +518,21 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert all(len(updates) == 1 for updates in visible_updates.values())
     daily_grid = visible_updates["01_Daily_Report"][0][1]
     sector_grid = visible_updates["04_Sector_Leadership"][0][1]
+    industry_grid = visible_updates["industry rotation"][0][1]
+    investigator_grid = visible_updates["investigator"][0][1]
     assert len(daily_grid) == 140
     assert len(sector_grid) == 60
     assert all(len(row) == 14 for row in daily_grid)
     assert all(len(row) == 14 for row in sector_grid)
+    assert industry_grid[0][:6] == ["Date", "Industry", "Sector", "Quadrant", "RS Ratio", "RS Momentum"]
+    industry_text = "\n".join(str(cell) for row in industry_grid for cell in row if cell != "")
+    assert "Industry 00" in industry_text
+    assert "Industry 29" in industry_text
+    assert "Old Industry" not in industry_text
+    assert len([row for row in industry_grid[1:] if row and row[1] != ""]) == 30
+    assert investigator_grid[0] == ["Symbol", "Verdict", "Reason", "Score", "Repeat", "Price vs First", "Rank Delta", "Vol", "Action"]
+    assert investigator_grid[1][0] == "HIGH"
+    assert investigator_grid[2][0] == "LOW"
     assert not [update for update in manager.sheets["05_Market_Breadth"].updates if update[0] == "A1"]
 
     daily_text = "\n".join(str(cell) for row in daily_grid for cell in row if cell != "")

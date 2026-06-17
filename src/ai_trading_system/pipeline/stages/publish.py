@@ -405,6 +405,8 @@ class PublishStage:
             datasets[dataset_name] = self._read_artifact(artifact) if artifact is not None else pd.DataFrame()
         summary_artifact = context.artifact_for("investigator", "investigator_summary")
         datasets["investigator_summary"] = self._read_json_artifact_safe(summary_artifact)
+        payload_artifact = context.artifact_for("investigator", "investigator_payload")
+        datasets["investigator_payload"] = self._read_json_artifact_safe(payload_artifact)
         scores = datasets.get("investigator_scores")
         if isinstance(scores, pd.DataFrame) and not scores.empty and "verdict" in scores.columns:
             datasets["investigator_high_conviction"] = scores.loc[
@@ -673,6 +675,8 @@ class PublishStage:
             investigator_active_df=datasets.get("investigator_active_watchlist"),
             investigator_trap_df=datasets.get("investigator_trap_log"),
             sector_rotation_df=datasets.get("sector_rotation"),
+            industry_rotation_df=datasets.get("industry_rotation"),
+            investigator_payload=datasets.get("investigator_payload"),
             decision_bundle=datasets.get("decision_bundle"),
             ranking_feedback=self._load_ranking_feedback(context),
         )

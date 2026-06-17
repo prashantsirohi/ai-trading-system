@@ -61,6 +61,7 @@ def test_build_publish_datasets_loads_optional_artifacts_with_defaults(tmp_path:
     assert datasets["stock_scan"].empty
     assert datasets["sector_dashboard"].empty
     assert datasets["sector_rotation"].empty
+    assert datasets["industry_rotation"].empty
     assert datasets["stock_rotation"].empty
     assert datasets["accumulation_distribution"].empty
     assert datasets["sector_custom_indices"].empty
@@ -83,6 +84,7 @@ def test_build_publish_datasets_loads_sector_rotation_artifacts(tmp_path: Path) 
     artifacts: dict[str, StageArtifact] = {"ranked_signals": ranked_artifact}
     for artifact_type, body in {
         "sector_rotation": "industry,quadrant,rs_ratio\nBanks,Leading,104\n",
+        "industry_rotation": "rotation_group_name,quadrant,rs_ratio\nPSU Bank,Leading,106\n",
         "stock_rotation": "symbol,quadrant,rotation_adjusted_score\nAAA,Leading,82\n",
         "accumulation_distribution": "symbol,delivery_signal,accumulation_score\nAAA,Accumulation,78\n",
         "sector_custom_indices": "date,industry,sector_index,weighting_method,constituent_count\n2026-04-30,Banks,110,market_cap,12\n",
@@ -102,6 +104,7 @@ def test_build_publish_datasets_loads_sector_rotation_artifacts(tmp_path: Path) 
     )
 
     assert datasets["sector_rotation"]["industry"].tolist() == ["Banks"]
+    assert datasets["industry_rotation"]["rotation_group_name"].tolist() == ["PSU Bank"]
     assert datasets["stock_rotation"]["symbol"].tolist() == ["AAA"]
     assert datasets["accumulation_distribution"]["delivery_signal"].tolist() == ["Accumulation"]
     assert datasets["sector_custom_indices"]["weighting_method"].tolist() == ["market_cap"]
