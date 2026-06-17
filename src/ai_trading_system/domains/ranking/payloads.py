@@ -379,6 +379,10 @@ def build_dashboard_payload(
         key: sector_rotation_payload.get(key, [])
         for key in ("top_leading", "top_improving", "weakening", "lagging", "accumulation", "distribution")
     }
+    industry_rotation_sections = {
+        key: sector_rotation_payload.get(key, [])
+        for key in ("industry_top_leading", "industry_top_improving")
+    }
 
     return {
         "summary": {
@@ -421,6 +425,8 @@ def build_dashboard_payload(
             "task_status_counts": summarize_task_statuses(task_status or {}),
             "sector_rotation_leading_count": len(rotation_sections["top_leading"]),
             "sector_rotation_improving_count": len(rotation_sections["top_improving"]),
+            "industry_rotation_leading_count": len(industry_rotation_sections["industry_top_leading"]),
+            "industry_rotation_improving_count": len(industry_rotation_sections["industry_top_improving"]),
             "sector_rotation_accumulation_count": len(rotation_sections["accumulation"]),
             "sector_rotation_distribution_count": len(rotation_sections["distribution"]),
         },
@@ -435,8 +441,10 @@ def build_dashboard_payload(
         "sector_dashboard": _records(sector_dashboard_df, limit=10),
         "sector_rotation": {
             **rotation_sections,
+            **industry_rotation_sections,
             "benchmark_name": sector_rotation_payload.get("benchmark_name"),
             "watchlist_candidates": sector_rotation_payload.get("watchlist_candidates", []),
+            "top_industry_watchlist_candidates": sector_rotation_payload.get("top_industry_watchlist_candidates", []),
         },
         "task_status": task_status or {},
         "data_trust": trust_summary or {},

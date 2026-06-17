@@ -21,6 +21,7 @@ from ai_trading_system.analytics.sector_rotation.contracts import (
 from ai_trading_system.analytics.sector_rotation.custom_indices import (
     attach_metadata,
     build_benchmark_index,
+    build_rotation_indices,
     build_sector_custom_indices,
     load_ohlcv_catalog,
     load_symbol_metadata,
@@ -42,8 +43,15 @@ def compute_sector_rotation(
     ohlcv = load_ohlcv_catalog(ohlcv_db_path, run_date=run_date, exchange=exchange)
     metadata = load_symbol_metadata(master_db_path, exchange=exchange)
     enriched = attach_metadata(ohlcv, metadata)
-    custom_indices, weighting_methods = build_sector_custom_indices(enriched)
-    benchmark, benchmark_name = build_benchmark_index(ohlcv, custom_indices, metadata=metadata)
+    sector_indices, sector_weighting_methods = build_rotation_indices(
+        enriched,
+        group_col="sector",
+        group_type="sector",
+    )
+    industry_indices, industry_weighting_methods = build_sector_custom_indices(enriched)
+    rotation_indices = pd.concat([sector_indices, industry_indices], ignore_index=True, sort=False)
+    custom_indices = industry_indices
+    benchmark, benchmark_name = build_benchmark_index(ohlcv, rotation_indices, metadata=metadata)
     accumulation = compute_accumulation_distribution(
         ohlcv_db_path,
         ohlcv,
@@ -51,16 +59,21 @@ def compute_sector_rotation(
         exchange=exchange,
     )
 
-    sector_rotation = _compute_sector_rrg(custom_indices, benchmark)
+    sector_rotation_history = _compute_rotation_rrg_history(sector_indices, benchmark)
+    sector_rotation = _compute_rotation_rrg_latest(sector_rotation_history)
+    industry_rotation_history = _compute_rotation_rrg_history(industry_indices, benchmark)
+    industry_rotation = _compute_rotation_rrg_latest(industry_rotation_history)
     stock_rotation = _compute_stock_rrg(
         enriched,
-        custom_indices,
+        industry_indices,
         sector_rotation,
+        industry_rotation,
         accumulation,
         ranked_df=ranked_df,
     )
     payload = build_sector_rotation_payload(
         sector_rotation=sector_rotation,
+        industry_rotation=industry_rotation,
         stock_rotation=stock_rotation,
         accumulation_distribution=accumulation,
         custom_indices=custom_indices,
@@ -69,16 +82,24 @@ def compute_sector_rotation(
     )
     metadata_payload: dict[str, Any] = {
         "benchmark_name": benchmark_name,
-        "sector_count": int(sector_rotation["industry"].nunique()) if "industry" in sector_rotation.columns else 0,
+        "sector_count": int(sector_rotation["rotation_group_name"].nunique()) if "rotation_group_name" in sector_rotation.columns else 0,
+        "industry_count": int(industry_rotation["rotation_group_name"].nunique()) if "rotation_group_name" in industry_rotation.columns else 0,
         "stock_count": int(len(stock_rotation)),
         "accumulation_count": int((accumulation.get("delivery_signal") == ACCUMULATION_LABEL).sum()) if not accumulation.empty else 0,
         "distribution_count": int((accumulation.get("delivery_signal") == DISTRIBUTION_LABEL).sum()) if not accumulation.empty else 0,
-        "weighting_methods": weighting_methods,
+        "weighting_methods": {
+            "sector": sector_weighting_methods,
+            "industry": industry_weighting_methods,
+        },
     }
     return SectorRotationResult(
         sector_rotation=sector_rotation,
+        sector_rotation_history=sector_rotation_history,
+        industry_rotation=industry_rotation,
+        industry_rotation_history=industry_rotation_history,
         stock_rotation=stock_rotation,
         accumulation_distribution=accumulation,
+        rotation_indices=rotation_indices,
         sector_custom_indices=custom_indices,
         payload=payload,
         metadata=metadata_payload,
@@ -88,6 +109,7 @@ def compute_sector_rotation(
 def build_sector_rotation_payload(
     *,
     sector_rotation: pd.DataFrame,
+    industry_rotation: pd.DataFrame | None = None,
     stock_rotation: pd.DataFrame,
     accumulation_distribution: pd.DataFrame,
     custom_indices: pd.DataFrame,
@@ -96,14 +118,17 @@ def build_sector_rotation_payload(
 ) -> dict[str, Any]:
     """Build compact frontend/operator payload."""
     sector_rotation = _ensure_frame(sector_rotation)
+    industry_rotation = _ensure_frame(industry_rotation)
     stock_rotation = _ensure_frame(stock_rotation)
     accumulation_distribution = _ensure_frame(accumulation_distribution)
 
-    def sector_records(quadrant: str, limit: int = 10) -> list[dict[str, Any]]:
-        if sector_rotation.empty:
+    def rotation_records(frame: pd.DataFrame, quadrant: str, limit: int = 10) -> list[dict[str, Any]]:
+        if frame.empty:
             return []
-        focused = sector_rotation.loc[sector_rotation["quadrant"] == quadrant].copy()
-        return _records(focused.sort_values(["rs_ratio", "rs_momentum"], ascending=[False, False], kind="stable"), limit)
+        focused = frame.loc[frame["quadrant"] == quadrant].copy()
+        sort_columns = [column for column in ("rs_ratio", "rs_momentum", "rotation_group_name") if column in focused.columns]
+        ascending = [False, False, True][: len(sort_columns)]
+        return _records(focused.sort_values(sort_columns, ascending=ascending, kind="stable") if sort_columns else focused, limit)
 
     accumulation = accumulation_distribution.loc[
         accumulation_distribution.get("delivery_signal", pd.Series([], dtype=str)) == ACCUMULATION_LABEL
@@ -118,10 +143,14 @@ def build_sector_rotation_payload(
     return {
         "run_date": run_date,
         "benchmark_name": benchmark_name,
-        "top_leading": sector_records(LEADING),
-        "top_improving": sector_records(IMPROVING),
-        "weakening": sector_records("Weakening"),
-        "lagging": sector_records("Lagging"),
+        "top_leading": rotation_records(sector_rotation, LEADING),
+        "top_improving": rotation_records(sector_rotation, IMPROVING),
+        "weakening": rotation_records(sector_rotation, "Weakening"),
+        "lagging": rotation_records(sector_rotation, "Lagging"),
+        "industry_top_leading": rotation_records(industry_rotation, LEADING),
+        "industry_top_improving": rotation_records(industry_rotation, IMPROVING),
+        "industry_weakening": rotation_records(industry_rotation, "Weakening"),
+        "industry_lagging": rotation_records(industry_rotation, "Lagging"),
         "accumulation": _records(accumulation, 20),
         "distribution": _records(distribution, 20),
         "watchlist_candidates": _records(
@@ -130,55 +159,108 @@ def build_sector_rotation_payload(
             else stock_rotation,
             25,
         ),
-        "custom_indices_tail": _records(custom_indices.sort_values(["date", "industry"], kind="stable").tail(120), 120),
+        "top_industry_watchlist_candidates": _records(
+            stock_rotation.loc[stock_rotation.get("watchlist_candidate", pd.Series(False, index=stock_rotation.index)).astype(bool)]
+            if not stock_rotation.empty
+            else stock_rotation,
+            25,
+        ),
+        "custom_indices_tail": _records(custom_indices.sort_values(["date", "rotation_group_name"], kind="stable").tail(120), 120),
     }
 
 
-def _compute_sector_rrg(custom_indices: pd.DataFrame, benchmark: pd.DataFrame) -> pd.DataFrame:
+def _compute_rotation_rrg_history(rotation_indices: pd.DataFrame, benchmark: pd.DataFrame) -> pd.DataFrame:
     columns = [
         "date",
-        "industry",
-        "sector_index",
+        "rotation_group_type",
+        "rotation_group_name",
+        "parent_sector",
+        "rotation_index",
         "benchmark_index",
+        "rs_line",
         "rs_ratio",
         "rs_momentum",
         "quadrant",
-        "sector_return_5d",
-        "sector_return_20d",
-        "sector_return_60d",
+        "return_5d",
+        "return_20d",
+        "return_60d",
         "benchmark_return_20d",
         "alpha_20d",
         "alpha_60d",
         "outperformance_bucket",
+        "weighting_method",
+        "constituent_count",
     ]
-    if custom_indices is None or custom_indices.empty or benchmark is None or benchmark.empty:
+    if rotation_indices is None or rotation_indices.empty or benchmark is None or benchmark.empty:
         return pd.DataFrame(columns=columns)
     bench = benchmark.copy()
-    bench.loc[:, "date"] = pd.to_datetime(bench["date"], errors="coerce").dt.normalize()
-    data = custom_indices.copy()
-    data.loc[:, "date"] = pd.to_datetime(data["date"], errors="coerce").dt.normalize()
-    data = data.merge(bench, on="date", how="left").sort_values(["industry", "date"], kind="stable")
-    data.loc[:, "rs_line"] = data["sector_index"] / data["benchmark_index"]
-    grouped = data.groupby("industry", group_keys=False)
-    data.loc[:, "rs_ratio"] = 100.0 * data["rs_line"] / grouped["rs_line"].rolling(63, min_periods=20).mean().reset_index(level=0, drop=True)
-    data.loc[:, "rs_momentum"] = 100.0 * data["rs_ratio"] / grouped["rs_ratio"].rolling(20, min_periods=5).mean().reset_index(level=0, drop=True)
-    data.loc[:, "sector_return_5d"] = grouped["sector_index"].pct_change(5)
-    data.loc[:, "sector_return_20d"] = grouped["sector_index"].pct_change(20)
-    data.loc[:, "sector_return_60d"] = grouped["sector_index"].pct_change(60)
-    data.loc[:, "benchmark_return_20d"] = data.groupby("industry")["benchmark_index"].pct_change(20)
-    data.loc[:, "alpha_20d"] = data["sector_return_20d"] - data["benchmark_return_20d"]
-    data.loc[:, "alpha_60d"] = data["sector_return_60d"] - data.groupby("industry")["benchmark_index"].pct_change(60)
-    latest = data.dropna(subset=["industry"]).sort_values(["industry", "date"], kind="stable").drop_duplicates(subset=["industry"], keep="last")
-    latest.loc[:, "quadrant"] = latest.apply(lambda row: classify_quadrant(row["rs_ratio"], row["rs_momentum"]), axis=1)
-    latest.loc[:, "outperformance_bucket"] = latest["alpha_20d"].map(bucket_outperformance)
-    latest.loc[:, "date"] = pd.to_datetime(latest["date"], errors="coerce").dt.date.astype(str)
-    return latest[columns].sort_values(["quadrant", "rs_ratio", "industry"], ascending=[True, False, True], kind="stable").reset_index(drop=True)
+    bench = bench.assign(date=pd.to_datetime(bench["date"], errors="coerce").dt.normalize().astype("datetime64[ns]"))
+    bench = bench.dropna(subset=["date"]).sort_values("date", kind="stable")
+    data = rotation_indices.copy()
+    if "rotation_group_name" not in data.columns and "industry" in data.columns:
+        data.loc[:, "rotation_group_type"] = "industry"
+        data.loc[:, "rotation_group_name"] = data["industry"]
+        data.loc[:, "parent_sector"] = data.get("sector", data["industry"])
+        data.loc[:, "rotation_index"] = data["sector_index"]
+    data = data.assign(date=pd.to_datetime(data["date"], errors="coerce").dt.normalize().astype("datetime64[ns]"))
+    data = data.dropna(subset=["date"]).sort_values(["rotation_group_type", "rotation_group_name", "date"], kind="stable")
+    data = data.assign(date=pd.to_datetime(data["date"], errors="coerce").dt.normalize().astype("datetime64[ns]"))
+    if not bench.empty:
+        date_index = pd.DatetimeIndex(sorted(set(data["date"].dropna()) | set(bench["date"].dropna())))
+        aligned_benchmark = (
+            bench.drop_duplicates(subset=["date"], keep="last")
+            .set_index("date")
+            .reindex(date_index)
+            .ffill()
+            .bfill()
+            .rename_axis("date")
+            .reset_index()
+        )
+        aligned_benchmark = aligned_benchmark.assign(
+            date=pd.to_datetime(aligned_benchmark["date"], errors="coerce").dt.normalize().astype("datetime64[ns]")
+        )
+    else:
+        aligned_benchmark = bench
+    data = data.merge(aligned_benchmark, on="date", how="left").sort_values(["rotation_group_type", "rotation_group_name", "date"], kind="stable")
+    data.loc[:, "rs_line"] = data["rotation_index"] / data["benchmark_index"]
+    grouped = data.groupby(["rotation_group_type", "rotation_group_name"], group_keys=False)
+    data.loc[:, "rs_ratio"] = 100.0 * data["rs_line"] / grouped["rs_line"].rolling(63, min_periods=20).mean().reset_index(level=[0, 1], drop=True)
+    data.loc[:, "rs_momentum"] = 100.0 * data["rs_ratio"] / grouped["rs_ratio"].rolling(20, min_periods=5).mean().reset_index(level=[0, 1], drop=True)
+    data.loc[:, "return_5d"] = grouped["rotation_index"].pct_change(5)
+    data.loc[:, "return_20d"] = grouped["rotation_index"].pct_change(20)
+    data.loc[:, "return_60d"] = grouped["rotation_index"].pct_change(60)
+    data.loc[:, "benchmark_return_20d"] = grouped["benchmark_index"].pct_change(20)
+    data.loc[:, "alpha_20d"] = data["return_20d"] - data["benchmark_return_20d"]
+    data.loc[:, "alpha_60d"] = data["return_60d"] - grouped["benchmark_index"].pct_change(60)
+    data.loc[:, "quadrant"] = data.apply(lambda row: classify_quadrant(row["rs_ratio"], row["rs_momentum"]), axis=1)
+    data.loc[:, "outperformance_bucket"] = data["alpha_20d"].map(bucket_outperformance)
+    data.loc[:, "date"] = pd.to_datetime(data["date"], errors="coerce").dt.date.astype(str)
+    if "industry" not in data.columns:
+        data.loc[:, "industry"] = data["rotation_group_name"].where(data["rotation_group_type"].eq("industry"), data["rotation_group_name"])
+    if "sector" not in data.columns:
+        data.loc[:, "sector"] = data["parent_sector"].where(data["rotation_group_type"].eq("industry"), data["rotation_group_name"])
+    data.loc[:, "sector_index"] = data["rotation_index"]
+    columns_with_compat = columns + ["industry", "sector", "sector_index"]
+    return data[columns_with_compat].sort_values(["rotation_group_type", "rotation_group_name", "date"], kind="stable").reset_index(drop=True)
+
+
+def _compute_rotation_rrg_latest(history: pd.DataFrame) -> pd.DataFrame:
+    if history is None or history.empty:
+        return pd.DataFrame(columns=list(_compute_rotation_rrg_history(pd.DataFrame(), pd.DataFrame()).columns))
+    latest = (
+        history.dropna(subset=["rotation_group_name"])
+        .sort_values(["rotation_group_type", "rotation_group_name", "date"], kind="stable")
+        .drop_duplicates(subset=["rotation_group_type", "rotation_group_name"], keep="last")
+        .copy()
+    )
+    return latest.sort_values(["quadrant", "rs_ratio", "rotation_group_name"], ascending=[True, False, True], kind="stable").reset_index(drop=True)
 
 
 def _compute_stock_rrg(
     enriched_ohlcv: pd.DataFrame,
-    custom_indices: pd.DataFrame,
+    industry_indices: pd.DataFrame,
     sector_rotation: pd.DataFrame,
+    industry_rotation: pd.DataFrame,
     accumulation: pd.DataFrame,
     *,
     ranked_df: pd.DataFrame | None,
@@ -186,6 +268,7 @@ def _compute_stock_rrg(
     columns = [
         "symbol",
         "company_name",
+        "sector",
         "industry",
         "market_cap",
         "close",
@@ -196,32 +279,45 @@ def _compute_stock_rrg(
         "rs_momentum",
         "quadrant",
         "sector_quadrant",
+        "industry_quadrant",
         "composite_score",
+        "sector_rotation_score",
+        "industry_rotation_score",
+        "stock_rotation_score",
+        "accumulation_score",
         "rotation_adjusted_score",
         "near_52w_high_pct",
         "delivery_signal",
         "watchlist_candidate",
     ]
-    if enriched_ohlcv is None or enriched_ohlcv.empty or custom_indices is None or custom_indices.empty:
+    if enriched_ohlcv is None or enriched_ohlcv.empty or industry_indices is None or industry_indices.empty:
         return pd.DataFrame(columns=columns)
-    sector_pivot = custom_indices.pivot_table(index="date", columns="industry", values="sector_index", aggfunc="last")
-    sector_pivot.index = pd.to_datetime(sector_pivot.index, errors="coerce").normalize()
-    sector_pivot = sector_pivot.loc[~sector_pivot.index.duplicated(keep="last")]
+    group_column = "rotation_group_name" if "rotation_group_name" in industry_indices.columns else "industry"
+    value_column = "rotation_index" if "rotation_index" in industry_indices.columns else "sector_index"
+    industry_pivot = industry_indices.pivot_table(index="date", columns=group_column, values=value_column, aggfunc="last")
+    industry_pivot.index = pd.to_datetime(industry_pivot.index, errors="coerce").normalize()
+    industry_pivot = industry_pivot.loc[~industry_pivot.index.duplicated(keep="last")]
     data = enriched_ohlcv.copy()
     data.loc[:, "date"] = pd.to_datetime(data["date"], errors="coerce").dt.normalize()
     records = []
     sector_quadrants = (
-        sector_rotation.set_index("industry")["quadrant"].astype(str).to_dict()
-        if sector_rotation is not None and not sector_rotation.empty and "industry" in sector_rotation.columns
+        sector_rotation.set_index("rotation_group_name")["quadrant"].astype(str).to_dict()
+        if sector_rotation is not None and not sector_rotation.empty and "rotation_group_name" in sector_rotation.columns
+        else {}
+    )
+    industry_quadrants = (
+        industry_rotation.set_index("rotation_group_name")["quadrant"].astype(str).to_dict()
+        if industry_rotation is not None and not industry_rotation.empty and "rotation_group_name" in industry_rotation.columns
         else {}
     )
     for symbol, rows in data.groupby("symbol", dropna=False):
         rows = rows.sort_values("date", kind="stable").copy()
+        sector = str(rows["sector"].dropna().iloc[-1] if "sector" in rows.columns and rows["sector"].notna().any() else "Other")
         industry = str(rows["industry"].dropna().iloc[-1] if rows["industry"].notna().any() else "Other")
-        if industry not in sector_pivot.columns:
+        if industry not in industry_pivot.columns:
             continue
-        sector_series = sector_pivot[industry].reindex(rows["date"]).ffill()
-        stock_rs_line = rows["close"].to_numpy(dtype=float) / sector_series.to_numpy(dtype=float)
+        industry_series = industry_pivot[industry].reindex(rows["date"]).ffill()
+        stock_rs_line = rows["close"].to_numpy(dtype=float) / industry_series.to_numpy(dtype=float)
         stock_frame = rows.assign(stock_rs_line=stock_rs_line)
         stock_frame.loc[:, "rs_ratio"] = 100.0 * stock_frame["stock_rs_line"] / stock_frame["stock_rs_line"].rolling(63, min_periods=20).mean()
         stock_frame.loc[:, "rs_momentum"] = 100.0 * stock_frame["rs_ratio"] / stock_frame["rs_ratio"].rolling(20, min_periods=5).mean()
@@ -238,6 +334,7 @@ def _compute_stock_rrg(
             {
                 "symbol": str(symbol),
                 "company_name": latest.get("company_name") or str(symbol),
+                "sector": sector,
                 "industry": industry,
                 "market_cap": latest.get("market_cap"),
                 "close": close,
@@ -247,7 +344,8 @@ def _compute_stock_rrg(
                 "rs_ratio": latest.get("rs_ratio"),
                 "rs_momentum": latest.get("rs_momentum"),
                 "quadrant": quadrant,
-                "sector_quadrant": sector_quadrants.get(industry, "Lagging"),
+                "sector_quadrant": sector_quadrants.get(sector, "Lagging"),
+                "industry_quadrant": industry_quadrants.get(industry, "Lagging"),
                 "near_52w_high_pct": near_high,
             }
         )
@@ -265,16 +363,19 @@ def _compute_stock_rrg(
     output.loc[:, "delivery_signal"] = output["delivery_signal"].fillna(NEUTRAL_LABEL)
     output.loc[:, "accumulation_score"] = pd.to_numeric(output["accumulation_score"], errors="coerce").fillna(50.0)
     output.loc[:, "sector_rotation_score"] = output["sector_quadrant"].map(score_quadrant).fillna(20.0)
+    output.loc[:, "industry_rotation_score"] = output["industry_quadrant"].map(score_quadrant).fillna(20.0)
     output.loc[:, "stock_rotation_score"] = output["quadrant"].map(score_quadrant).fillna(20.0)
     output.loc[:, "composite_score"] = pd.to_numeric(output["composite_score"], errors="coerce").fillna(0.0)
     output.loc[:, "rotation_adjusted_score"] = (
-        output["composite_score"] * 0.70
-        + output["sector_rotation_score"] * 0.15
-        + output["stock_rotation_score"] * 0.10
+        output["composite_score"] * 0.65
+        + output["sector_rotation_score"] * 0.10
+        + output["industry_rotation_score"] * 0.15
+        + output["stock_rotation_score"] * 0.05
         + output["accumulation_score"] * 0.05
     ).round(4)
     output.loc[:, "watchlist_candidate"] = (
         output["sector_quadrant"].isin([LEADING, IMPROVING])
+        & output["industry_quadrant"].isin([LEADING, IMPROVING])
         & output["quadrant"].isin([LEADING, IMPROVING])
         & (output["composite_score"] >= 70)
         & (pd.to_numeric(output["near_52w_high_pct"], errors="coerce") <= 15)

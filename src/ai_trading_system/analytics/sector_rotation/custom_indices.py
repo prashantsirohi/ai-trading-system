@@ -25,7 +25,17 @@ MARKET_CAP_COLUMNS = (
     "mcap",
 )
 COMPANY_COLUMNS = ("company_name", "Company Name", "Company", "name", "security_name")
-INDUSTRY_COLUMNS = ("industry", "Industry", "Sector", "sector", "industry_group", "system_sector")
+SECTOR_COLUMNS = ("sector", "Sector", "system_sector", "broad_sector", "macro_sector")
+INDUSTRY_COLUMNS = (
+    "industry",
+    "Industry",
+    "industry_group",
+    "sub_sector",
+    "Sub Sector",
+    "nse_industry",
+    "business_group",
+)
+THEME_COLUMNS = ("theme", "Theme", "basket_theme", "custom_theme")
 
 
 def load_ohlcv_catalog(
@@ -114,43 +124,73 @@ def load_symbol_metadata(master_db_path: str | Path, *, exchange: str = "NSE") -
 
 
 def attach_metadata(ohlcv: pd.DataFrame, metadata: pd.DataFrame) -> pd.DataFrame:
-    """Attach metadata and fill missing industries with ``Other``."""
+    """Attach metadata and fill missing sector/industry values with ``Other``."""
     frame = ohlcv.copy()
     if metadata is None or metadata.empty:
         frame.loc[:, "company_name"] = frame["symbol"]
+        frame.loc[:, "sector"] = "Other"
         frame.loc[:, "industry"] = "Other"
         frame.loc[:, "market_cap"] = pd.NA
-        return frame
+        return frame[["symbol", "date", "close", "volume", "exchange", "company_name", "sector", "industry", "market_cap"]]
     merged = frame.merge(metadata, on="symbol", how="left")
     merged.loc[:, "company_name"] = merged["company_name"].fillna(merged["symbol"])
-    merged.loc[:, "industry"] = merged["industry"].fillna("Other").astype(str).str.strip()
-    merged.loc[merged["industry"] == "", "industry"] = "Other"
+    for column in ("sector", "industry"):
+        if column not in merged.columns:
+            merged.loc[:, column] = "Other"
+        merged.loc[:, column] = _clean_group_label(merged[column])
+    sector_missing = merged["sector"].eq("Other") & merged["industry"].ne("Other")
+    industry_missing = merged["industry"].eq("Other") & merged["sector"].ne("Other")
+    merged.loc[sector_missing, "sector"] = merged.loc[sector_missing, "industry"]
+    merged.loc[industry_missing, "industry"] = merged.loc[industry_missing, "sector"]
     merged.loc[:, "market_cap"] = pd.to_numeric(merged["market_cap"], errors="coerce")
-    return merged
+    columns = ["symbol", "date", "close", "volume", "exchange", "company_name", "sector", "industry", "market_cap"]
+    if "theme" in merged.columns:
+        merged.loc[:, "theme"] = _clean_group_label(merged["theme"])
+        columns.append("theme")
+    return merged[columns]
 
 
-def build_sector_custom_indices(enriched_ohlcv: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
-    """Build one 100-based custom index per industry."""
-    if enriched_ohlcv is None or enriched_ohlcv.empty:
-        return pd.DataFrame(columns=["date", "industry", "sector_index", "weighting_method", "constituent_count"]), {}
-    enriched_ohlcv = enriched_ohlcv.copy()
-    enriched_ohlcv.loc[:, "date"] = pd.to_datetime(enriched_ohlcv["date"], errors="coerce").astype("datetime64[ns]")
-    enriched_ohlcv = enriched_ohlcv.dropna(subset=["date"])
-    if enriched_ohlcv.empty:
-        return pd.DataFrame(columns=["date", "industry", "sector_index", "weighting_method", "constituent_count"]), {}
-    enriched_ohlcv.loc[:, "_date_order"] = enriched_ohlcv["date"].astype("int64")
+def build_rotation_indices(
+    enriched_ohlcv: pd.DataFrame,
+    *,
+    group_col: str,
+    group_type: str,
+    parent_col: str | None = None,
+) -> tuple[pd.DataFrame, dict[str, str]]:
+    """Build 100-based custom indices for any rotation grouping level."""
+    columns = [
+        "date",
+        "rotation_group_type",
+        "rotation_group_name",
+        "parent_sector",
+        "rotation_index",
+        "weighting_method",
+        "constituent_count",
+    ]
+    if enriched_ohlcv is None or enriched_ohlcv.empty or group_col not in enriched_ohlcv.columns:
+        return pd.DataFrame(columns=columns), {}
 
-    latest_idx = enriched_ohlcv.groupby("symbol", sort=False)["_date_order"].idxmax()
-    latest_caps = enriched_ohlcv.loc[latest_idx].set_index("symbol")["market_cap"]
+    data = enriched_ohlcv.copy()
+    data.loc[:, "date"] = pd.to_datetime(data["date"], errors="coerce").astype("datetime64[ns]")
+    data = data.dropna(subset=["date", "symbol", "close"])
+    if data.empty:
+        return pd.DataFrame(columns=columns), {}
+    data.loc[:, group_col] = _clean_group_label(data[group_col])
+    if parent_col and parent_col in data.columns:
+        data.loc[:, parent_col] = _clean_group_label(data[parent_col])
+    data.loc[:, "_date_order"] = data["date"].astype("int64")
+
+    latest_idx = data.groupby("symbol", sort=False)["_date_order"].idxmax()
+    latest_caps = pd.to_numeric(data.loc[latest_idx].set_index("symbol").get("market_cap"), errors="coerce")
     records: list[dict[str, object]] = []
     methods: dict[str, str] = {}
-    for industry, sector_rows in enriched_ohlcv.groupby("industry", dropna=False):
-        industry_text = str(industry or "Other")
-        pivot = sector_rows.pivot_table(index="date", columns="symbol", values="close", aggfunc="last").sort_index()
+    for group_name, group_rows in data.groupby(group_col, dropna=False):
+        group_text = str(group_name or "Other").strip() or "Other"
+        pivot = group_rows.pivot_table(index="date", columns="symbol", values="close", aggfunc="last").sort_index()
         if pivot.empty:
             continue
         symbols = [str(symbol) for symbol in pivot.columns]
-        caps = pd.to_numeric(latest_caps.reindex(symbols), errors="coerce")
+        caps = pd.to_numeric(latest_caps.reindex(symbols), errors="coerce") if latest_caps is not None else pd.Series(dtype=float)
         if caps.notna().any() and float(caps.fillna(0).sum()) > 0:
             weights = (caps.fillna(0) / caps.fillna(0).sum()).astype(float)
             method = "market_cap"
@@ -161,19 +201,42 @@ def build_sector_custom_indices(enriched_ohlcv: pd.DataFrame) -> tuple[pd.DataFr
         base = _first_positive(weighted_close)
         if base is None:
             continue
+        parent_sector = group_text
+        if parent_col and parent_col in group_rows.columns:
+            parents = _clean_group_label(group_rows[parent_col]).dropna()
+            if not parents.empty:
+                parent_sector = str(parents.mode().iloc[0] if not parents.mode().empty else parents.iloc[-1])
         index_values = 100.0 * weighted_close / base
-        methods[industry_text] = method
-        for date_value, sector_index in index_values.dropna().items():
-            records.append(
-                {
-                    "date": pd.Timestamp(date_value).date().isoformat(),
-                    "industry": industry_text,
-                    "sector_index": float(sector_index),
-                    "weighting_method": method,
-                    "constituent_count": len(symbols),
-                }
-            )
-    return pd.DataFrame.from_records(records), methods
+        methods[group_text] = method
+        for date_value, rotation_index in index_values.dropna().items():
+            record = {
+                "date": pd.Timestamp(date_value).date().isoformat(),
+                "rotation_group_type": group_type,
+                "rotation_group_name": group_text,
+                "parent_sector": parent_sector,
+                "rotation_index": float(rotation_index),
+                "weighting_method": method,
+                "constituent_count": len(symbols),
+            }
+            if group_type == "industry":
+                record["industry"] = group_text
+                record["sector_index"] = float(rotation_index)
+            if group_type == "sector":
+                record["sector"] = group_text
+                record["sector_index"] = float(rotation_index)
+            records.append(record)
+    output = pd.DataFrame.from_records(records)
+    return output.sort_values(["rotation_group_type", "rotation_group_name", "date"], kind="stable").reset_index(drop=True), methods
+
+
+def build_sector_custom_indices(enriched_ohlcv: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
+    """Build one 100-based custom index per industry."""
+    return build_rotation_indices(
+        enriched_ohlcv,
+        group_col="industry",
+        group_type="industry",
+        parent_col="sector",
+    )
 
 
 def build_benchmark_index(
@@ -199,7 +262,9 @@ def build_benchmark_index(
         return univ, "UNIV_TOP1000"
 
     if custom_indices is not None and not custom_indices.empty:
-        pivot = custom_indices.pivot_table(index="date", columns="industry", values="sector_index", aggfunc="last")
+        group_column = "rotation_group_name" if "rotation_group_name" in custom_indices.columns else "industry"
+        value_column = "rotation_index" if "rotation_index" in custom_indices.columns else "sector_index"
+        pivot = custom_indices.pivot_table(index="date", columns=group_column, values=value_column, aggfunc="last")
         series = pivot.sort_index().ffill().mean(axis=1)
         bench = pd.DataFrame({"date": pd.to_datetime(series.index), "benchmark_index": series.to_numpy(dtype=float)})
         bench.loc[:, "date"] = bench["date"].dt.date.astype(str)
@@ -210,18 +275,23 @@ def build_benchmark_index(
 def _load_stock_details(conn: sqlite3.Connection, *, exchange: str) -> pd.DataFrame:
     columns = _sqlite_columns(conn, "stock_details")
     symbol_col = _first_existing(columns, SYMBOL_COLUMNS)
+    sector_col = _first_existing(columns, SECTOR_COLUMNS)
     industry_col = _first_existing(columns, INDUSTRY_COLUMNS)
     company_col = _first_existing(columns, COMPANY_COLUMNS)
     market_cap_col = _first_existing(columns, MARKET_CAP_COLUMNS)
+    theme_col = _first_existing(columns, THEME_COLUMNS)
     exchange_col = _first_existing(columns, EXCHANGE_COLUMNS)
     if not symbol_col:
         return _empty_metadata()
     select_parts = [
         f'"{symbol_col}" AS symbol',
+        f'"{sector_col}" AS sector' if sector_col else "NULL AS sector",
         f'"{industry_col}" AS industry' if industry_col else "'Other' AS industry",
         f'"{company_col}" AS company_name' if company_col else f'"{symbol_col}" AS company_name',
         f'"{market_cap_col}" AS market_cap' if market_cap_col else "NULL AS market_cap",
     ]
+    if theme_col:
+        select_parts.append(f'"{theme_col}" AS theme')
     filters = []
     params: list[object] = []
     if exchange_col and exchange:
@@ -239,27 +309,40 @@ def _load_symbols_metadata(
 ) -> pd.DataFrame:
     columns = _sqlite_columns(conn, "symbols")
     symbol_col = _first_existing(columns, SYMBOL_COLUMNS)
-    sector_col = _first_existing(columns, ("sector", "Sector", "industry", "Industry"))
+    sector_col = _first_existing(columns, SECTOR_COLUMNS)
+    industry_col = _first_existing(columns, INDUSTRY_COLUMNS)
+    legacy_group_col = _first_existing(columns, ("sector", "Sector", "industry", "Industry"))
     company_col = _first_existing(columns, COMPANY_COLUMNS)
     market_cap_col = _first_existing(columns, MARKET_CAP_COLUMNS)
+    theme_col = _first_existing(columns, THEME_COLUMNS)
     exchange_col = _first_existing(columns, EXCHANGE_COLUMNS)
     if not symbol_col:
         return _empty_metadata()
-    if sector_col and has_sector_mapping:
-        industry_expr = f"COALESCE(sm.system_sector, s.\"{sector_col}\", 'Other') AS industry"
-        join = f' LEFT JOIN sector_mapping sm ON s."{sector_col}" = sm.industry'
-    elif sector_col:
-        industry_expr = f'COALESCE(s."{sector_col}", \'Other\') AS industry'
+    mapping_col = legacy_group_col or industry_col or sector_col
+    if mapping_col and has_sector_mapping:
+        sector_expr = f"COALESCE(sm.system_sector, s.\"{sector_col}\", s.\"{mapping_col}\", 'Other') AS sector" if sector_col else f"COALESCE(sm.system_sector, s.\"{mapping_col}\", 'Other') AS sector"
+        industry_source = industry_col or legacy_group_col or sector_col
+        industry_expr = f'COALESCE(s."{industry_source}", sm.system_sector, \'Other\') AS industry'
+        join = f' LEFT JOIN sector_mapping sm ON s."{mapping_col}" = sm.industry'
+    elif sector_col or industry_col or legacy_group_col:
+        sector_source = sector_col or legacy_group_col or industry_col
+        industry_source = industry_col or legacy_group_col or sector_col
+        sector_expr = f'COALESCE(s."{sector_source}", \'Other\') AS sector'
+        industry_expr = f'COALESCE(s."{industry_source}", \'Other\') AS industry'
         join = ""
     else:
+        sector_expr = "'Other' AS sector"
         industry_expr = "'Other' AS industry"
         join = ""
     select_parts = [
         f's."{symbol_col}" AS symbol',
+        sector_expr,
         industry_expr,
         f's."{company_col}" AS company_name' if company_col else f's."{symbol_col}" AS company_name',
         f's."{market_cap_col}" AS market_cap' if market_cap_col else "NULL AS market_cap",
     ]
+    if theme_col:
+        select_parts.append(f's."{theme_col}" AS theme')
     filters = []
     params: list[object] = []
     if exchange_col and exchange:
@@ -275,10 +358,28 @@ def _normalize_metadata(frame: pd.DataFrame) -> pd.DataFrame:
     output = frame.copy()
     output.loc[:, "symbol"] = output["symbol"].astype(str).str.strip()
     output.loc[:, "company_name"] = output["company_name"].fillna(output["symbol"]).astype(str)
-    output.loc[:, "industry"] = output["industry"].fillna("Other").astype(str).str.strip()
-    output.loc[output["industry"] == "", "industry"] = "Other"
+    if "sector" not in output.columns:
+        output.loc[:, "sector"] = "Other"
+    if "industry" not in output.columns:
+        output.loc[:, "industry"] = "Other"
+    output.loc[:, "sector"] = _clean_group_label(output["sector"])
+    output.loc[:, "industry"] = _clean_group_label(output["industry"])
+    sector_missing = output["sector"].eq("Other") & output["industry"].ne("Other")
+    industry_missing = output["industry"].eq("Other") & output["sector"].ne("Other")
+    output.loc[sector_missing, "sector"] = output.loc[sector_missing, "industry"]
+    output.loc[industry_missing, "industry"] = output.loc[industry_missing, "sector"]
     output.loc[:, "market_cap"] = pd.to_numeric(output["market_cap"], errors="coerce")
-    return output.drop_duplicates(subset=["symbol"], keep="last")[["symbol", "company_name", "industry", "market_cap"]]
+    columns = ["symbol", "company_name", "sector", "industry", "market_cap"]
+    if "theme" in output.columns:
+        output.loc[:, "theme"] = _clean_group_label(output["theme"])
+        columns.append("theme")
+    return output.drop_duplicates(subset=["symbol"], keep="last")[columns]
+
+
+def _clean_group_label(series: pd.Series) -> pd.Series:
+    cleaned = series.fillna("Other").astype(str).str.strip()
+    cleaned = cleaned.mask(cleaned.eq("") | cleaned.str.lower().isin({"nan", "none", "null"}), "Other")
+    return cleaned
 
 
 def _universe_equal_weight_benchmark(
@@ -365,4 +466,4 @@ def _empty_ohlcv() -> pd.DataFrame:
 
 
 def _empty_metadata() -> pd.DataFrame:
-    return pd.DataFrame(columns=["symbol", "company_name", "industry", "market_cap"])
+    return pd.DataFrame(columns=["symbol", "company_name", "sector", "industry", "market_cap"])

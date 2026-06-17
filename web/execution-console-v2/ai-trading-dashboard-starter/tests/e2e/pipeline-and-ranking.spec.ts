@@ -36,4 +36,63 @@ test.describe('execution-console-v2 smoke', () => {
     await page.getByRole('button', { name: /Add to compare/i }).click();
     await expect(page.getByText(/Compare \(1\/3\)/)).toBeVisible();
   });
+
+  test('renders RRG-style sector rotation chart controls and drawer', async ({ page }) => {
+    await page.goto('/sector-rotation');
+
+    await expect(page.getByRole('heading', { name: 'RRG-style Sector Rotation' })).toBeVisible();
+    await expect(page.getByTestId('rrg-chart')).toBeVisible();
+    await expect(page.getByText('Leading').first()).toBeVisible();
+    await expect(page.getByText('Improving').first()).toBeVisible();
+    await expect(page.getByText('Weakening').first()).toBeVisible();
+    await expect(page.getByText('Lagging').first()).toBeVisible();
+    await expect(page.getByTestId('rrg-crosshair-x')).toHaveAttribute('stroke-dasharray', '6 5');
+    await expect(page.getByTestId('rrg-crosshair-y')).toHaveAttribute('stroke-dasharray', '6 5');
+    await expect(page.getByText('Right = stronger than benchmark')).toBeVisible();
+    await expect(page.getByText('Up = improving momentum')).toBeVisible();
+    const chartBox = await page.getByTestId('rrg-chart').boundingBox();
+    expect(chartBox?.height ?? 0).toBeGreaterThan(520);
+
+    await expect(page.getByTestId('rrg-point-PSU Bank')).toBeVisible();
+    await page.getByLabel('Scale mode').selectOption('wide');
+    await page.getByLabel('Label mode').selectOption('off');
+    await expect(page.getByTestId('rrg-chart').locator('text').filter({ hasText: 'PSU Bank' })).toHaveCount(0);
+    await page.getByLabel('Label mode').selectOption('top');
+    await page.getByRole('button', { name: 'Sector' }).click();
+    await expect(page.getByTestId('rrg-point-Banks')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Industry' }).click();
+    await page.getByTestId('rrg-point-PSU Bank').click();
+    await expect(page.getByRole('heading', { name: 'PSU Bank', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Stock Confirmations', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Watchlist Candidates' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Delivery Signals', exact: true }).first()).toBeVisible();
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Full view' }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Play' }).click();
+    await expect(page.getByText('2026-04-06')).toBeVisible({ timeout: 2500 });
+    await page.getByRole('button', { name: 'Pause' }).click();
+  });
+
+  test('renders investigator decision board and symbol drawer', async ({ page }) => {
+    await page.goto('/investigator');
+
+    await expect(page.getByRole('heading', { name: 'Investigator', exact: true })).toBeVisible();
+    await expect(page.getByText('Trust: trusted')).toBeVisible();
+    await expect(page.getByText('Daily Gainers').first()).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Action Queue' })).toBeVisible();
+    await expect(page.getByText('No high conviction today. Closest candidates are shown.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Repeat Quality' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Trap Radar' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Investigator Funnel' })).toBeVisible();
+
+    await page.locator('section').filter({ has: page.getByRole('heading', { name: 'Action Queue' }) }).getByRole('button', { name: 'Open' }).first().click();
+    await expect(page.getByRole('heading', { name: 'KICL', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Timeline' })).toBeVisible();
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+  });
 });

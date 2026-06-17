@@ -1127,8 +1127,12 @@ class RankOrchestrationService:
         if isinstance(rotation_frames, dict):
             for artifact_type in (
                 "sector_rotation",
+                "sector_rotation_history",
+                "industry_rotation",
+                "industry_rotation_history",
                 "stock_rotation",
                 "accumulation_distribution",
+                "rotation_indices",
                 "sector_custom_indices",
             ):
                 frame = rotation_frames.get(artifact_type)
@@ -1137,6 +1141,10 @@ class RankOrchestrationService:
             outputs["sector_rotation"] = rotation_frames if isinstance(rotation_frames, pd.DataFrame) else pd.DataFrame()
             outputs.setdefault("stock_rotation", pd.DataFrame())
             outputs.setdefault("accumulation_distribution", pd.DataFrame())
+            outputs.setdefault("sector_rotation_history", pd.DataFrame())
+            outputs.setdefault("industry_rotation", pd.DataFrame())
+            outputs.setdefault("industry_rotation_history", pd.DataFrame())
+            outputs.setdefault("rotation_indices", pd.DataFrame())
             outputs.setdefault("sector_custom_indices", pd.DataFrame())
         if rotation_status["status"] in {"failed", "timed_out", "degraded"}:
             warnings.append(
@@ -1790,8 +1798,12 @@ class RankOrchestrationService:
                 frames: dict[str, pd.DataFrame] = {}
                 for artifact_type in (
                     "sector_rotation",
+                    "sector_rotation_history",
+                    "industry_rotation",
+                    "industry_rotation_history",
                     "stock_rotation",
                     "accumulation_distribution",
+                    "rotation_indices",
                     "sector_custom_indices",
                 ):
                     candidate = base_dir / f"{artifact_type}.csv"
@@ -1825,8 +1837,12 @@ class RankOrchestrationService:
         elif task_name == "sector_rotation" and isinstance(result, dict):
             for artifact_type in (
                 "sector_rotation",
+                "sector_rotation_history",
+                "industry_rotation",
+                "industry_rotation_history",
                 "stock_rotation",
                 "accumulation_distribution",
+                "rotation_indices",
                 "sector_custom_indices",
             ):
                 frame = result.get(artifact_type)

@@ -31,7 +31,7 @@ export const queryKeys = {
     ['execution', 'stock-ohlcv', symbol, limit] as const,
   patterns: () => ['execution', 'patterns'] as const,
   sectors: () => ['execution', 'sectors'] as const,
-  sectorRotation: () => ['execution', 'sector-rotation'] as const,
+  sectorRotation: (params: unknown = {}) => ['execution', 'sector-rotation', params] as const,
   fundamentalsDashboard: () => ['execution', 'fundamentals-dashboard'] as const,
   investigator: () => ['execution', 'investigator'] as const,
   shadow: () => ['execution', 'shadow'] as const,

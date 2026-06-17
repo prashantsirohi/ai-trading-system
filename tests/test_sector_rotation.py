@@ -14,6 +14,12 @@ from ai_trading_system.analytics.sector_rotation.contracts import (
     bucket_outperformance,
     classify_quadrant,
 )
+from ai_trading_system.analytics.sector_rotation.custom_indices import (
+    attach_metadata,
+    build_rotation_indices,
+    load_ohlcv_catalog,
+    load_symbol_metadata,
+)
 from ai_trading_system.domains.ranking.sector_rotation import run_sector_rotation
 from ai_trading_system.ui.execution_api.app import create_app
 from tests.smoke.test_execution_api_smoke import API_HEADERS, _seed_execution_project
@@ -56,6 +62,82 @@ def test_equal_weight_fallback_when_market_cap_missing(tmp_path: Path) -> None:
     assert set(result.sector_custom_indices["weighting_method"]) == {"equal_weight"}
 
 
+def test_market_cap_weighting_when_market_cap_available(tmp_path: Path) -> None:
+    ohlcv_db, master_db = _seed_rotation_datastores(tmp_path, include_market_cap=True, include_delivery=True)
+
+    result = compute_sector_rotation(
+        ohlcv_db_path=ohlcv_db,
+        master_db_path=master_db,
+        run_date="2026-04-30",
+        ranked_df=_ranked_fixture(),
+    )
+
+    assert not result.sector_custom_indices.empty
+    assert set(result.sector_custom_indices["weighting_method"]) == {"market_cap"}
+
+
+def test_metadata_normalization_preserves_sector_and_industry(tmp_path: Path) -> None:
+    ohlcv_db, master_db = _seed_rotation_datastores(tmp_path, include_market_cap=True, include_delivery=True)
+
+    metadata = load_symbol_metadata(master_db)
+    ohlcv = load_ohlcv_catalog(ohlcv_db, run_date="2026-04-30")
+    enriched = attach_metadata(ohlcv, metadata)
+
+    assert {"symbol", "company_name", "sector", "industry", "market_cap"}.issubset(metadata.columns)
+    assert enriched.loc[enriched["symbol"] == "AAA", "sector"].iloc[-1] == "Banks"
+    assert enriched.loc[enriched["symbol"] == "AAA", "industry"].iloc[-1] == "PSU Bank"
+
+
+def test_build_rotation_indices_for_sector_and_industry(tmp_path: Path) -> None:
+    ohlcv_db, master_db = _seed_rotation_datastores(tmp_path, include_market_cap=True, include_delivery=True)
+    enriched = attach_metadata(
+        load_ohlcv_catalog(ohlcv_db, run_date="2026-04-30"),
+        load_symbol_metadata(master_db),
+    )
+
+    sector_indices, _ = build_rotation_indices(enriched, group_col="sector", group_type="sector")
+    industry_indices, _ = build_rotation_indices(
+        enriched,
+        group_col="industry",
+        group_type="industry",
+        parent_col="sector",
+    )
+
+    assert set(sector_indices["rotation_group_type"]) == {"sector"}
+    assert set(industry_indices["rotation_group_type"]) == {"industry"}
+    assert "sector_index" in industry_indices.columns
+    assert industry_indices.loc[industry_indices["rotation_group_name"] == "PSU Bank", "parent_sector"].iloc[0] == "Banks"
+
+
+def test_attach_metadata_falls_back_when_industry_missing() -> None:
+    ohlcv = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "date": "2026-04-10",
+                "close": 100.0,
+                "volume": 1000.0,
+                "exchange": "NSE",
+            }
+        ]
+    )
+    metadata = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "company_name": "AAA Bank",
+                "sector": "Banks",
+                "market_cap": 1000.0,
+            }
+        ]
+    )
+
+    enriched = attach_metadata(ohlcv, metadata)
+
+    assert enriched["sector"].iloc[0] == "Banks"
+    assert enriched["industry"].iloc[0] == "Banks"
+
+
 def test_no_crash_when_delivery_missing(tmp_path: Path) -> None:
     ohlcv_db, master_db = _seed_rotation_datastores(tmp_path, include_market_cap=True, include_delivery=False)
 
@@ -82,6 +164,9 @@ def test_benchmark_fallback_from_nifty500_to_univ_top1000(tmp_path: Path) -> Non
 
     assert result.metadata["benchmark_name"] == "UNIV_TOP1000"
     assert not result.sector_rotation.empty
+    assert not result.sector_rotation_history.empty
+    assert not result.industry_rotation.empty
+    assert not result.industry_rotation_history.empty
 
 
 def test_sector_rotation_artifact_creation(tmp_path: Path) -> None:
@@ -97,15 +182,23 @@ def test_sector_rotation_artifact_creation(tmp_path: Path) -> None:
     )
     for artifact_type in (
         "sector_rotation",
+        "sector_rotation_history",
+        "industry_rotation",
+        "industry_rotation_history",
         "stock_rotation",
         "accumulation_distribution",
+        "rotation_indices",
         "sector_custom_indices",
     ):
         frames[artifact_type].to_csv(output_dir / f"{artifact_type}.csv", index=False)
 
     assert (output_dir / "sector_rotation.csv").exists()
+    assert (output_dir / "sector_rotation_history.csv").exists()
+    assert (output_dir / "industry_rotation.csv").exists()
+    assert (output_dir / "industry_rotation_history.csv").exists()
     assert (output_dir / "stock_rotation.csv").exists()
     assert (output_dir / "accumulation_distribution.csv").exists()
+    assert (output_dir / "rotation_indices.csv").exists()
     assert (output_dir / "sector_custom_indices.csv").exists()
     assert (output_dir / "sector_rotation_payload.json").exists()
 
@@ -117,8 +210,13 @@ def test_sector_rotation_workspace_endpoint(monkeypatch, tmp_path: Path) -> None
         [
             {
                 "date": "2026-04-10",
+                "rotation_group_type": "sector",
+                "rotation_group_name": "Banks",
+                "parent_sector": "Banks",
                 "industry": "Banks",
+                "sector": "Banks",
                 "sector_index": 110.0,
+                "rotation_index": 110.0,
                 "benchmark_index": 100.0,
                 "rs_ratio": 101.0,
                 "rs_momentum": 102.0,
@@ -130,10 +228,65 @@ def test_sector_rotation_workspace_endpoint(monkeypatch, tmp_path: Path) -> None
     pd.DataFrame(
         [
             {
+                "date": "2026-04-08",
+                "rotation_group_type": "industry",
+                "rotation_group_name": "PSU Bank",
+                "parent_sector": "Banks",
+                "industry": "PSU Bank",
+                "sector": "Banks",
+                "rotation_index": 108.0,
+                "sector_index": 108.0,
+                "benchmark_index": 100.0,
+                "rs_ratio": 99.0,
+                "rs_momentum": 101.0,
+                "quadrant": "Improving",
+                "alpha_20d": 0.03,
+            },
+            {
+                "date": "2026-04-10",
+                "rotation_group_type": "industry",
+                "rotation_group_name": "PSU Bank",
+                "parent_sector": "Banks",
+                "industry": "PSU Bank",
+                "sector": "Banks",
+                "rotation_index": 112.0,
+                "sector_index": 112.0,
+                "benchmark_index": 100.0,
+                "rs_ratio": 102.0,
+                "rs_momentum": 103.0,
+                "quadrant": "Leading",
+                "alpha_20d": 0.05,
+            },
+        ]
+    ).to_csv(rank_dir / "industry_rotation_history.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "date": "2026-04-10",
+                "rotation_group_type": "industry",
+                "rotation_group_name": "PSU Bank",
+                "parent_sector": "Banks",
+                "industry": "PSU Bank",
+                "sector": "Banks",
+                "rotation_index": 112.0,
+                "sector_index": 112.0,
+                "benchmark_index": 100.0,
+                "rs_ratio": 102.0,
+                "rs_momentum": 103.0,
+                "quadrant": "Leading",
+                "alpha_20d": 0.05,
+            },
+        ]
+    ).to_csv(rank_dir / "industry_rotation.csv", index=False)
+    pd.DataFrame(
+        [
+            {
                 "symbol": "AAA",
+                "sector": "Banks",
                 "industry": "Banks",
                 "quadrant": "Leading",
                 "sector_quadrant": "Leading",
+                "industry_quadrant": "Leading",
                 "rotation_adjusted_score": 82.0,
                 "delivery_signal": "Accumulation",
                 "watchlist_candidate": True,
@@ -170,10 +323,82 @@ def test_sector_rotation_workspace_endpoint(monkeypatch, tmp_path: Path) -> None
     assert response.status_code == 200
     payload = response.json()
     assert payload["run_id"] == run_id
+    assert payload["group_type"] == "industry"
+    assert payload["selected_date"] == "2026-04-10"
+    assert payload["available_dates"] == ["2026-04-08", "2026-04-10"]
+    assert payload["groups"][0]["rotation_group_name"] == "PSU Bank"
+    assert len(payload["history"]) == 2
     assert payload["sectors"][0]["industry"] == "Banks"
     assert payload["stocks"][0]["symbol"] == "AAA"
     assert payload["accumulation"][0]["symbol"] == "AAA"
     assert payload["distribution"] == []
+
+
+def test_sector_rotation_workspace_endpoint_supports_sector_date_and_lookback(monkeypatch, tmp_path: Path) -> None:
+    run_id = _seed_execution_project(tmp_path)
+    rank_dir = tmp_path / "data" / "pipeline_runs" / run_id / "rank" / "attempt_1"
+    pd.DataFrame(
+        [
+            {
+                "date": "2026-04-01",
+                "rotation_group_type": "sector",
+                "rotation_group_name": "Banks",
+                "parent_sector": "Banks",
+                "sector": "Banks",
+                "industry": "Banks",
+                "rotation_index": 100.0,
+                "sector_index": 100.0,
+                "rs_ratio": 99.0,
+                "rs_momentum": 101.0,
+                "quadrant": "Improving",
+            },
+            {
+                "date": "2026-04-10",
+                "rotation_group_type": "sector",
+                "rotation_group_name": "Banks",
+                "parent_sector": "Banks",
+                "sector": "Banks",
+                "industry": "Banks",
+                "rotation_index": 110.0,
+                "sector_index": 110.0,
+                "rs_ratio": 102.0,
+                "rs_momentum": 103.0,
+                "quadrant": "Leading",
+            },
+        ]
+    ).to_csv(rank_dir / "sector_rotation_history.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "date": "2026-04-10",
+                "rotation_group_type": "sector",
+                "rotation_group_name": "Banks",
+                "parent_sector": "Banks",
+                "sector": "Banks",
+                "industry": "Banks",
+                "rotation_index": 110.0,
+                "sector_index": 110.0,
+                "rs_ratio": 102.0,
+                "rs_momentum": 103.0,
+                "quadrant": "Leading",
+            }
+        ]
+    ).to_csv(rank_dir / "sector_rotation.csv", index=False)
+    monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("EXECUTION_API_KEY", API_HEADERS["x-api-key"])
+    client = TestClient(create_app())
+
+    response = client.get(
+        "/api/execution/workspace/sector-rotation?group_type=sector&lookback=5&date=2026-04-01",
+        headers=API_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["group_type"] == "sector"
+    assert payload["selected_date"] == "2026-04-01"
+    assert payload["groups"][0]["quadrant"] == "Improving"
+    assert [row["date"] for row in payload["history"]] == ["2026-04-01"]
 
 
 def _seed_rotation_datastores(
@@ -229,20 +454,20 @@ def _seed_rotation_datastores(
     try:
         market_cap_column = ", market_cap_cr REAL" if include_market_cap else ""
         sqlite_conn.execute(
-            f'CREATE TABLE stock_details (Symbol TEXT, exchange TEXT, Sector TEXT, "Company Name" TEXT{market_cap_column})'
+            f'CREATE TABLE stock_details (Symbol TEXT, exchange TEXT, Sector TEXT, Industry TEXT, "Company Name" TEXT{market_cap_column})'
         )
         values = [
-            ("AAA", "NSE", "Banks", "AAA Bank", 1000.0),
-            ("BBB", "NSE", "Banks", "BBB Bank", 900.0),
-            ("CCC", "NSE", "IT", "CCC Tech", 800.0),
-            ("DDD", "NSE", "IT", "DDD Tech", 700.0),
+            ("AAA", "NSE", "Banks", "PSU Bank", "AAA Bank", 1000.0),
+            ("BBB", "NSE", "Banks", "Private Bank", "BBB Bank", 900.0),
+            ("CCC", "NSE", "IT", "IT Services", "CCC Tech", 800.0),
+            ("DDD", "NSE", "IT", "EMS", "DDD Tech", 700.0),
         ]
         if include_market_cap:
-            sqlite_conn.executemany("INSERT INTO stock_details VALUES (?, ?, ?, ?, ?)", values)
+            sqlite_conn.executemany("INSERT INTO stock_details VALUES (?, ?, ?, ?, ?, ?)", values)
         else:
             sqlite_conn.executemany(
-                "INSERT INTO stock_details VALUES (?, ?, ?, ?)",
-                [row[:4] for row in values],
+                "INSERT INTO stock_details VALUES (?, ?, ?, ?, ?)",
+                [row[:5] for row in values],
             )
         sqlite_conn.commit()
     finally:

@@ -20,8 +20,12 @@ NEUTRAL_LABEL = "Neutral"
 
 ROTATION_ARTIFACTS = {
     "sector_rotation": "sector_rotation.csv",
+    "sector_rotation_history": "sector_rotation_history.csv",
+    "industry_rotation": "industry_rotation.csv",
+    "industry_rotation_history": "industry_rotation_history.csv",
     "stock_rotation": "stock_rotation.csv",
     "accumulation_distribution": "accumulation_distribution.csv",
+    "rotation_indices": "rotation_indices.csv",
     "sector_custom_indices": "sector_custom_indices.csv",
     "sector_rotation_payload": "sector_rotation_payload.json",
 }
@@ -32,8 +36,12 @@ class SectorRotationResult:
     """All artifacts produced by the sector rotation sidecar."""
 
     sector_rotation: pd.DataFrame
+    sector_rotation_history: pd.DataFrame
+    industry_rotation: pd.DataFrame
+    industry_rotation_history: pd.DataFrame
     stock_rotation: pd.DataFrame
     accumulation_distribution: pd.DataFrame
+    rotation_indices: pd.DataFrame
     sector_custom_indices: pd.DataFrame
     payload: dict[str, Any]
     metadata: dict[str, Any]

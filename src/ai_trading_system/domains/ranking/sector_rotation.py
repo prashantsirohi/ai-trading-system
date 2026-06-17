@@ -37,12 +37,18 @@ def run_sector_rotation(
         )
     frames = {
         "sector_rotation": result.sector_rotation,
+        "sector_rotation_history": result.sector_rotation_history,
+        "industry_rotation": result.industry_rotation,
+        "industry_rotation_history": result.industry_rotation_history,
         "stock_rotation": result.stock_rotation,
         "accumulation_distribution": result.accumulation_distribution,
+        "rotation_indices": result.rotation_indices,
         "sector_custom_indices": result.sector_custom_indices,
+        "__sector_rotation_payload__": result.payload,
     }
     for frame in frames.values():
-        frame.attrs["sector_rotation_metadata"] = result.metadata
+        if isinstance(frame, pd.DataFrame):
+            frame.attrs["sector_rotation_metadata"] = result.metadata
     return frames
 
 

@@ -125,8 +125,12 @@ def _load_frames(rank_dir: Path | None) -> dict[str, pd.DataFrame]:
         "stock_scan": "stock_scan.csv",
         "sector_dashboard": "sector_dashboard.csv",
         "sector_rotation": "sector_rotation.csv",
+        "sector_rotation_history": "sector_rotation_history.csv",
+        "industry_rotation": "industry_rotation.csv",
+        "industry_rotation_history": "industry_rotation_history.csv",
         "stock_rotation": "stock_rotation.csv",
         "accumulation_distribution": "accumulation_distribution.csv",
+        "rotation_indices": "rotation_indices.csv",
         "sector_custom_indices": "sector_custom_indices.csv",
     }
     if rank_dir is None:
