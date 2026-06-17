@@ -13,6 +13,7 @@ from ai_trading_system.domains.investigator.fundamentals import load_fundamental
 from ai_trading_system.domains.investigator.intake import load_investigator_intake
 from ai_trading_system.domains.investigator.lifecycle import apply_lifecycle
 from ai_trading_system.domains.investigator.move_classifier import classify_move
+from ai_trading_system.domains.investigator.payload import build_investigator_payload
 from ai_trading_system.domains.investigator.price_structure import score_price_structure
 from ai_trading_system.domains.investigator.repeat_tracker import build_repeat_tracker
 from ai_trading_system.domains.investigator.scoring import final_gate, finalize_scores
@@ -72,6 +73,19 @@ class InvestigatorService:
             archived=archived,
             gate=gate,
         )
+        payload = build_investigator_payload(
+            run_id=context.run_id,
+            run_date=context.run_date,
+            summary=summary,
+            today_gainers=gainers,
+            scores=scores,
+            repeat_tracker=repeat,
+            active_watchlist=active,
+            trap_log=traps,
+            archive=archived,
+            data_trust_status=str(context.params.get("data_trust_status", "unknown")),
+            stage_status={"rank": "completed", "investigator": "completed", "publish": "pending"},
+        )
         artifacts = self._write_artifacts(
             context=context,
             daily_gainer_log=gainers,
@@ -82,6 +96,7 @@ class InvestigatorService:
             archived_investigator=archived,
             final_3q_gate=gate,
             investigator_summary=summary,
+            investigator_payload=payload,
         )
         self._persist_tables(context, artifacts)
         return StageResult(artifacts=artifacts, metadata=summary)
@@ -120,8 +135,9 @@ class InvestigatorService:
         output_dir = context.output_dir()
         artifacts: list[StageArtifact] = []
         for artifact_type, value in frames_and_summary.items():
-            if artifact_type == "investigator_summary":
-                path = context.write_json("investigator_summary.json", value)
+            if artifact_type in {"investigator_summary", "investigator_payload"}:
+                filename = "investigator_summary.json" if artifact_type == "investigator_summary" else "investigator_payload.json"
+                path = context.write_json(filename, value)
                 artifacts.append(StageArtifact.from_file(artifact_type, path, row_count=1, metadata=value, attempt_number=context.attempt_number))
                 continue
             assert isinstance(value, pd.DataFrame)

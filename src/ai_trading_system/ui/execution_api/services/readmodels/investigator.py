@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+from datetime import date, datetime
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pandas as pd
 
+from ai_trading_system.domains.investigator.payload import build_investigator_payload
 from ai_trading_system.platform.db.paths import get_domain_paths, resolve_artifact_path
 
 
@@ -30,7 +33,29 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         else pd.DataFrame()
     )
     archive = frames["archive"]
-    return {
+    previous_summary = _read_json(_previous_artifact_from_disk(project_root, "investigator_summary", artifacts.get("investigator_summary")))
+    payload = _read_json(artifacts.get("investigator_payload"))
+    if not payload:
+        payload = build_investigator_payload(
+            run_id=str(summary.get("run_id") or _run_id_from_artifact(artifacts.get("investigator_summary")) or ""),
+            run_date=str(summary.get("run_date") or ""),
+            summary=summary,
+            today_gainers=frames["today_gainers"],
+            scores=scores,
+            repeat_tracker=frames["repeat_tracker"],
+            active_watchlist=frames["active_watchlist"],
+            trap_log=frames["trap_log"],
+            archive=archive,
+            previous_summary=previous_summary,
+            stage_status=_stage_status_from_artifacts(artifacts),
+        )
+    else:
+        payload = dict(payload)
+        if not payload.get("summary_deltas"):
+            payload["summary_deltas"] = _summary_deltas_from_payload(payload, previous_summary)
+        payload.setdefault("stage_status", _stage_status_from_artifacts(artifacts))
+
+    compatible = {
         "summary": summary,
         "today_gainers": _records(frames["today_gainers"]),
         "high_conviction": _records(high),
@@ -44,6 +69,7 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         },
         "source_artifacts": {key: str(value) for key, value in artifacts.items() if value is not None},
     }
+    return _json_safe({**compatible, **payload, "raw_summary": summary, "decision_payload": payload})
 
 
 def _latest_artifacts(project_root: Path) -> dict[str, Path | None]:
@@ -56,6 +82,7 @@ def _latest_artifacts(project_root: Path) -> dict[str, Path | None]:
         "trap_log",
         "archived_investigator",
         "investigator_summary",
+        "investigator_payload",
     ):
         out[artifact_type] = _latest_artifact_from_registry(project_root, artifact_type) or _latest_artifact_from_disk(
             project_root,
@@ -97,11 +124,22 @@ def _latest_artifact_from_registry(project_root: Path, artifact_type: str) -> Pa
 
 def _latest_artifact_from_disk(project_root: Path, artifact_type: str) -> Path | None:
     paths = get_domain_paths(project_root=project_root, data_domain="operational")
-    filename = "investigator_summary.json" if artifact_type == "investigator_summary" else f"{artifact_type}.csv"
+    filename = f"{artifact_type}.json" if artifact_type in {"investigator_summary", "investigator_payload"} else f"{artifact_type}.csv"
     candidates = list(paths.pipeline_runs_dir.glob(f"*/investigator/attempt_*/{filename}"))
     if not candidates:
         return None
     return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _previous_artifact_from_disk(project_root: Path, artifact_type: str, current: Path | None) -> Path | None:
+    paths = get_domain_paths(project_root=project_root, data_domain="operational")
+    filename = f"{artifact_type}.json" if artifact_type in {"investigator_summary", "investigator_payload"} else f"{artifact_type}.csv"
+    candidates = sorted(
+        (path for path in paths.pipeline_runs_dir.glob(f"*/investigator/attempt_*/{filename}") if path != current),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
 
 
 def _read_csv(path: Path | None) -> pd.DataFrame:
@@ -122,18 +160,86 @@ def _read_json(path: Path | None) -> dict[str, Any]:
         return {}
 
 
+def _run_id_from_artifact(path: Path | None) -> str:
+    if path is None:
+        return ""
+    try:
+        return path.parts[-4]
+    except IndexError:
+        return ""
+
+
+def _stage_status_from_artifacts(artifacts: dict[str, Path | None]) -> dict[str, str]:
+    return {
+        "rank": "completed",
+        "investigator": "completed" if artifacts.get("investigator_summary") else "missing",
+        "publish": "unknown",
+    }
+
+
+def _summary_deltas_from_payload(payload: dict[str, Any], previous_summary: dict[str, Any]) -> dict[str, int]:
+    summary = payload.get("summary", {})
+    if not isinstance(summary, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, value in summary.items():
+        if key == "trap_rate":
+            continue
+        try:
+            out[str(key)] = int(value) - int(previous_summary.get(key, previous_summary.get(_legacy_summary_key(str(key)), 0)) or 0)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _legacy_summary_key(key: str) -> str:
+    return {
+        "daily_gainers": "daily_gainer_count",
+        "active_queue": "active_count",
+        "high_conviction": "high_conviction_count",
+        "traps": "trap_count",
+        "archived": "archived_count",
+    }.get(key, key)
+
+
 def _records(frame: pd.DataFrame, limit: int | None = None) -> list[dict[str, Any]]:
     if frame.empty:
         return []
     safe = frame.head(limit).copy() if limit else frame.copy()
+    safe = safe.loc[:, ~safe.columns.duplicated()].copy()
     safe = safe.where(safe.notna(), None)
-    return safe.to_dict(orient="records")
+    return [_json_safe(row) for row in safe.to_dict(orient="records")]
 
 
 def _counts(frame: pd.DataFrame, column: str) -> dict[str, int]:
     if frame.empty or column not in frame.columns:
         return {}
     return {str(key): int(value) for key, value in frame[column].fillna("").astype(str).value_counts().to_dict().items()}
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if value is pd.NA or value is pd.NaT:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, float) and not isfinite(value):
+        return None
+    return value
 
 
 def _sort_repeat_tracker(frame: pd.DataFrame) -> pd.DataFrame:

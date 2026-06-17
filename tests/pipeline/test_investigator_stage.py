@@ -175,6 +175,7 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     assert (output_dir / "archived_investigator.csv").exists()
     assert (output_dir / "final_3q_gate.csv").exists()
     assert (output_dir / "investigator_summary.json").exists()
+    assert (output_dir / "investigator_payload.json").exists()
     assert result.metadata["daily_gainer_count"] == 1
     assert result.metadata["weekly_gainer_count"] == 1
     assert result.metadata["stealth_accumulation_count"] == 1
@@ -187,6 +188,7 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
         "daily_gainer_log",
         "investigator_scores",
         "investigator_summary",
+        "investigator_payload",
     }
     with registry._reader() as conn:  # noqa: SLF001
         assert conn.execute("SELECT COUNT(*) FROM investigator_scores").fetchone()[0] == 3
