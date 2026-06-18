@@ -543,8 +543,9 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "PE 5Y Percentile" in daily_text
     assert "New High / Low" in daily_text
     assert "PATTERN SETUPS" in daily_text
-    assert "ACTIVE INVESTIGATOR LIST" in daily_text
-    assert daily_text.index("MED") < daily_text.index("WATCH")
+    assert "INVESTIGATOR ACTION QUEUE" in daily_text
+    assert "ACTIVE INVESTIGATOR LIST" not in daily_text
+    assert daily_text.index("HIGH") < daily_text.index("LOW")
     assert "TOP RANKED" in daily_text
     assert "RANKING FEEDBACK" in daily_text
     assert "BREAKOUTS (all, unfiltered)" in daily_text

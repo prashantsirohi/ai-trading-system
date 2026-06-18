@@ -1307,7 +1307,7 @@ def publish_dashboard_payload(
         ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
         ("MARKET BREADTH SNAPSHOT", breadth_snapshot),
         ("PATTERN SETUPS", bundle.pattern_setups if not bundle.pattern_setups.empty else pattern_min),
-        ("ACTIVE INVESTIGATOR LIST", investigator_active),
+        ("INVESTIGATOR ACTION QUEUE", investigator_action_queue),
         ("TOP RANKED", bundle.top_ranked if not bundle.top_ranked.empty else rank_min),
         ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
         ("BREAKOUTS (all, unfiltered)", breakout_min),
