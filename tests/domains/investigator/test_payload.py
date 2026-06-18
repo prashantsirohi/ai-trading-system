@@ -37,7 +37,17 @@ def test_payload_derives_decision_scores_and_trap_categories() -> None:
             }
         ]
     )
-    traps = pd.DataFrame([{"symbol_id": "TRAP", "drop_reason": "ONE_CANDLE_DRAMA", "verdict": "NOISE_TRAP"}])
+    traps = pd.DataFrame(
+        [
+            {
+                "symbol_id": "TRAP",
+                "trade_date": "2026-05-07",
+                "drop_reason": "ONE_CANDLE_DRAMA",
+                "verdict": "NOISE_TRAP",
+                "appearance_count_20d": 2,
+            }
+        ]
+    )
 
     payload = build_investigator_payload(
         run_id="run-1",
@@ -57,3 +67,11 @@ def test_payload_derives_decision_scores_and_trap_categories() -> None:
     assert payload["trap_radar"][0]["trap_category"] == "One-day spike"
     assert payload["summary_deltas"]["daily_gainers"] == 1
     assert payload["summary"]["repeat_ge3"] == 1
+    assert payload["summary"]["new_in_window"] == payload["summary"]["new_candidates"]
+    assert payload["summary"]["trap_count"] == 1
+    assert payload["summary"]["fresh_trap_today"] == 1
+    assert payload["summary"]["repeat_trap"] == 1
+    assert payload["charts"]["funnel_today"][0]["label"] == "Daily Gainers (today)"
+    assert payload["charts"]["funnel_window"][0]["key"] == "new_window"
+    assert payload["charts"]["trend"][0]["date"] == "2026-05-07"
+    assert payload["charts"]["trend"][0]["traps"] == 1

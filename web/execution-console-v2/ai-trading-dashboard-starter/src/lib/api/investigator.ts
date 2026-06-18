@@ -17,6 +17,9 @@ export interface InvestigatorSnapshot {
     funnel?: Array<Record<string, unknown>>;
     repeat_price_scatter?: Array<Record<string, unknown>>;
     four_week_trend?: Array<Record<string, unknown>>;
+    funnel_today?: Array<Record<string, unknown>>;
+    funnel_window?: Array<Record<string, unknown>>;
+    trend?: Array<Record<string, unknown>>;
   };
   row_details?: Record<string, Record<string, unknown>>;
   decision_payload?: Record<string, unknown>;
@@ -41,16 +44,20 @@ const FALLBACK: InvestigatorSnapshot = {
   summary: {
     daily_gainers: 51,
     new_candidates: 12,
+    new_in_window: 12,
     active_queue: 42,
     repeat_ge3: 8,
     improving_repeats: 4,
     high_conviction: 0,
     trap_rate: 0.31,
     traps: 16,
+    trap_count: 16,
+    fresh_trap_today: 3,
+    repeat_trap: 5,
     archived: 9,
   },
   raw_summary: { daily_gainer_count: 51, active_count: 42, trap_count: 16 },
-  summary_deltas: { daily_gainers: 5, new_candidates: 2, active_queue: 7, repeat_ge3: 3, improving_repeats: 1, high_conviction: -1, traps: 4, archived: 2 },
+  summary_deltas: { daily_gainers: 5, new_candidates: 2, new_in_window: 2, active_queue: 7, repeat_ge3: 3, improving_repeats: 1, high_conviction: -1, traps: 4, trap_count: 4, fresh_trap_today: 1, repeat_trap: 2, archived: 2 },
   decision_queue: [
     {
       symbol_id: 'KICL',
@@ -110,10 +117,24 @@ const FALLBACK: InvestigatorSnapshot = {
   charts: {
     funnel: [
       { key: 'daily', label: 'Daily Gainers', count: 51 },
-      { key: 'active', label: 'Active', count: 42 },
+      { key: 'active', label: 'Active Queue', count: 42 },
       { key: 'repeat', label: 'Repeat >=3x', count: 8 },
+      { key: 'improving', label: 'Improving', count: 4 },
       { key: 'high', label: 'High Conviction', count: 0 },
-      { key: 'traps', label: 'Traps', count: 16 },
+      { key: 'traps', label: 'Trap Count', count: 16 },
+      { key: 'archived', label: 'Archived', count: 9 },
+    ],
+    funnel_today: [
+      { key: 'daily', label: 'Daily Gainers (today)', count: 51 },
+      { key: 'fresh_traps', label: 'Fresh Traps (today)', count: 3 },
+      { key: 'high', label: 'High Conviction (today)', count: 0 },
+    ],
+    funnel_window: [
+      { key: 'new_window', label: 'New In Window', count: 12 },
+      { key: 'active', label: 'Active Queue', count: 42 },
+      { key: 'repeat', label: 'Repeat >=3x', count: 8 },
+      { key: 'improving', label: 'Improving', count: 4 },
+      { key: 'repeat_trap', label: 'Repeat Trap', count: 5 },
       { key: 'archived', label: 'Archived', count: 9 },
     ],
     repeat_price_scatter: [
@@ -125,6 +146,11 @@ const FALLBACK: InvestigatorSnapshot = {
       { week: '2026-W22', active: 20, traps: 7, archived: 5 },
       { week: '2026-W23', active: 28, traps: 11, archived: 7 },
       { week: '2026-W24', active: 42, traps: 16, archived: 9 },
+    ],
+    trend: [
+      { date: '2026-06-15', new: 4, repeat: 11, improving: 2, traps: 4, archived: 2, high_conviction: 1 },
+      { date: '2026-06-16', new: 5, repeat: 14, improving: 3, traps: 5, archived: 3, high_conviction: 0 },
+      { date: '2026-06-17', new: 3, repeat: 17, improving: 4, traps: 7, archived: 4, high_conviction: 0 },
     ],
   },
   row_details: {

@@ -51,8 +51,18 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
                 {"symbol_id": "AAA", "status": "Active Research", "verdict": "MEDIUM_CONVICTION", "score_current": 70, "volume_delivery_score": 12},
             ]
         ),
-        "trap_log": pd.DataFrame([{"symbol_id": "TRAP", "verdict": "NOISE_TRAP", "drop_reason": "ONE_CANDLE_DRAMA"}]),
-        "archived_investigator": pd.DataFrame([{"symbol_id": "XYZ", "drop_reason": "ONE_CANDLE_DRAMA"}]),
+        "trap_log": pd.DataFrame(
+            [
+                {
+                    "symbol_id": "TRAP",
+                    "trade_date": "2026-05-07",
+                    "verdict": "NOISE_TRAP",
+                    "drop_reason": "ONE_CANDLE_DRAMA",
+                    "appearance_count_20d": 2,
+                }
+            ]
+        ),
+        "archived_investigator": pd.DataFrame([{"symbol_id": "XYZ", "archived_at": "2026-05-07", "drop_reason": "ONE_CANDLE_DRAMA"}]),
     }
     for artifact_type, frame in files.items():
         path = attempt_dir / f"{artifact_type}.csv"
@@ -67,6 +77,10 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     assert response.status_code == 200
     body = response.json()
     assert body["summary"]["active_queue"] == 2
+    assert body["summary"]["new_in_window"] == body["summary"]["new_candidates"]
+    assert body["summary"]["trap_count"] == 1
+    assert body["summary"]["fresh_trap_today"] == 2
+    assert body["summary"]["repeat_trap"] == 1
     assert body["raw_summary"]["active_count"] == 2
     assert body["summary_deltas"]["active_queue"] == 1
     assert body["today_gainers"][0]["symbol_id"] == "AAA"
@@ -74,6 +88,9 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     assert body["decision_queue"][0]["symbol_id"] == "AAA"
     assert body["closest_to_high_conviction"][0]["symbol_id"] == "AAA"
     assert body["trap_radar"][0]["trap_category"] == "One-day spike"
+    assert body["decision_payload"]["charts"]["funnel_today"][0]["label"] == "Daily Gainers (today)"
+    assert body["decision_payload"]["charts"]["funnel_window"][0]["key"] == "new_window"
+    assert body["decision_payload"]["charts"]["trend"][0]["date"] == "2026-05-07"
     assert body["active_watchlist"][0]["symbol_id"] == "AAA"
     assert body["archive_summary"]["by_reason"]["ONE_CANDLE_DRAMA"] == 1
     assert body["decision_payload"]["charts"]["funnel"]

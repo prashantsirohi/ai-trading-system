@@ -4,6 +4,8 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
+  Line,
   ResponsiveContainer,
   Scatter,
   ScatterChart,
@@ -22,7 +24,8 @@ import { useInvestigatorSnapshot } from '@/lib/queries';
 import { cn } from '@/lib/utils/cn';
 
 type Row = Record<string, unknown>;
-type DrawerTab = 'summary' | 'timeline' | 'chart' | 'factors' | 'trap' | 'actions';
+type DrawerTab = 'thesis' | 'timeline' | 'price' | 'repeat' | 'trap' | 'factors' | 'actions';
+type TrapFilter = { category: string; symbols: string[] } | null;
 
 const FILTERS = [
   { key: 'repeat', label: 'Repeat >=3x' },
@@ -67,6 +70,10 @@ function fixed(value: unknown, digits = 0): string {
   return Number.isFinite(parsed) ? parsed.toFixed(digits) : '-';
 }
 
+function hasValue(row: Row, key: string): boolean {
+  return row[key] !== undefined && row[key] !== null && row[key] !== '';
+}
+
 function delta(value: unknown): string {
   const parsed = num(value);
   if (parsed === 0) return '0';
@@ -102,6 +109,28 @@ function Metric({ label, value, deltaValue }: { label: string; value: unknown; d
   );
 }
 
+function scoreParts(row: Row): Array<{ label: string; value: number }> {
+  return [
+    { label: 'Repeat', value: Math.max(0, Math.min(100, num(row.repeat_score ?? row.repeat_strength))) },
+    { label: 'Price', value: Math.max(0, Math.min(100, (num(row.price_progression_pct ?? row.price_vs_first_trigger_pct) + 20) * 2.5)) },
+    { label: 'Rank', value: Math.max(0, Math.min(100, 50 - num(row.rank_change_20d) * 1.5)) },
+    { label: 'Volume/Delivery', value: Math.max(0, Math.min(100, num(row.volume_delivery_score) * 5)) },
+    { label: 'Sector', value: Math.max(0, Math.min(100, num(row.sector_support_score) * 10)) },
+    { label: 'Setup', value: Math.max(0, Math.min(100, num(row.trigger_quality_score) * 5)) },
+    { label: 'Trap Penalty', value: Math.max(0, Math.min(100, bool(row.hard_trap_flag) ? 100 : bool(row.low_delivery_flag) ? 55 : num(row.price_progression_pct) < 0 ? 40 : 0)) },
+  ];
+}
+
+function ScoreCell({ row }: { row: Row }) {
+  const parts = scoreParts(row);
+  const title = parts.map((part) => `${part.label}: ${part.value.toFixed(0)}`).join('\n');
+  return (
+    <span className="cursor-help border-b border-dotted border-slate-500 tabular-nums" title={title}>
+      {fixed(row.investigator_score)}
+    </span>
+  );
+}
+
 function HealthRibbon({ data }: { data: Row }) {
   const stage = (data.stage_status ?? {}) as Record<string, unknown>;
   const rawSummary = (data.raw_summary ?? {}) as Row;
@@ -126,11 +155,12 @@ function ActionQueue({ rows, fallback, highConvictionCount, onOpen }: { rows: Ro
   return (
     <SectionCard
       title="Action Queue"
-      description={rows.length > 0 ? 'Top Investigator decisions ranked by score.' : 'No high conviction today. Closest candidates are shown.'}
+      description={rows.length > 0 ? 'Top Investigator decisions ranked by score.' : 'No High Conviction today. Showing nearest watchlist candidates ranked by investigator score.'}
     >
       {highConvictionCount <= 0 ? (
-        <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-          No high conviction today. Closest candidates are shown.
+        <div className="mb-3 space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          <p className="font-semibold">No High Conviction today. Showing nearest watchlist candidates ranked by investigator score.</p>
+          <p>Reason: no candidate passed score &gt;=80 + volume confirmation + rank improvement.</p>
         </div>
       ) : null}
       {display.length === 0 ? (
@@ -157,7 +187,7 @@ function ActionQueue({ rows, fallback, highConvictionCount, onOpen }: { rows: Ro
                   <td className="px-3 py-2 font-semibold">{symbolOf(row)}</td>
                   <td className="px-3 py-2"><VerdictBadge value={row.decision_verdict} /></td>
                   <td className="px-3 py-2 text-slate-300">{text(row.decision_reason)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.investigator_score)}</td>
+                  <td className="px-3 py-2 text-right"><ScoreCell row={row} /></td>
                   <td className="px-3 py-2 text-right tabular-nums">{fixed(row.appearance_count_20d)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{pct(row.price_progression_pct ?? row.price_vs_first_trigger_pct)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fixed(row.rank_change_20d)}</td>
@@ -181,9 +211,9 @@ function QualityBar({ label, value }: { label: string; value: unknown }) {
   const width = Math.max(0, Math.min(100, num(value)));
   return (
     <div>
-      <div className="mb-1 flex justify-between text-[10px] uppercase text-slate-500">
+      <div className="mb-1 flex justify-between text-[11px] font-semibold uppercase text-slate-300">
         <span>{label}</span>
-        <span className="tabular-nums">{width.toFixed(0)}</span>
+        <span className="tabular-nums text-slate-100">{width.toFixed(0)}</span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
         <div className="h-full rounded-full bg-emerald-400" style={{ width: `${width}%` }} />
@@ -212,9 +242,9 @@ function RepeatQualityPanel({ rows, onOpen }: { rows: Row[]; onOpen: (row: Row) 
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <QualityBar label="Repeat" value={row.repeat_strength ?? row.repeat_score} />
-                <QualityBar label="Price" value={row.price_sustain} />
-                <QualityBar label="Rank" value={row.rank_momentum} />
-                <QualityBar label="Volume" value={row.volume_confirmation} />
+                <QualityBar label="Price Sustain" value={row.price_sustain} />
+                <QualityBar label="Rank Momentum" value={row.rank_momentum} />
+                <QualityBar label="Volume Confirmation" value={row.volume_confirmation} />
               </div>
             </button>
           ))}
@@ -224,22 +254,32 @@ function RepeatQualityPanel({ rows, onOpen }: { rows: Row[]; onOpen: (row: Row) 
   );
 }
 
-function TrapRadar({ rows }: { rows: Row[] }) {
+function TrapRadar({ rows, activeFilter, onFilter }: { rows: Row[]; activeFilter: TrapFilter; onFilter: (filter: TrapFilter) => void }) {
   return (
     <SectionCard title="Trap Radar" description="What the Investigator is rejecting or flagging today.">
       {rows.length === 0 ? (
         <EmptyState message="No trap evidence available." />
       ) : (
         <div className="space-y-2">
-          {rows.slice(0, 8).map((row) => (
-            <div key={text(row.trap_category)} className="grid grid-cols-[1fr_auto] gap-3 rounded-lg border border-slate-800 bg-slate-950/45 p-3">
+          {rows.slice(0, 8).map((row) => {
+            const category = text(row.trap_category);
+            const symbols = Array.isArray(row.examples) ? row.examples.map(String) : [];
+            const active = activeFilter?.category === category;
+            return (
+            <button
+              key={category}
+              type="button"
+              className={cn('grid w-full grid-cols-[1fr_auto] gap-3 rounded-lg border p-3 text-left', active ? 'border-rose-400 bg-rose-500/10' : 'border-slate-800 bg-slate-950/45 hover:border-slate-600')}
+              onClick={() => onFilter(active ? null : { category, symbols })}
+            >
               <div>
-                <div className="text-sm font-semibold text-slate-100">{text(row.trap_category)}</div>
-                <div className="mt-1 text-xs text-slate-400">Examples: {Array.isArray(row.examples) && row.examples.length ? row.examples.join(', ') : '-'}</div>
+                <div className="text-sm font-semibold text-slate-100">{category}</div>
+                <div className="mt-1 text-xs text-slate-400">Examples: {symbols.length ? symbols.join(', ') : '-'}</div>
               </div>
               <div className="text-2xl font-semibold tabular-nums text-rose-300">{fixed(row.count)}</div>
-            </div>
-          ))}
+            </button>
+          );
+          })}
         </div>
       )}
     </SectionCard>
@@ -251,13 +291,17 @@ function FunnelChart({ rows }: { rows: Row[] }) {
   const max = Math.max(...rows.map((row) => num(row.count)), 1);
   return (
     <div className="space-y-2">
-      {rows.map((row) => {
+      {rows.map((row, index) => {
         const width = Math.max(5, (num(row.count) / max) * 100);
+        const first = num(rows[0]?.count);
+        const previous = index > 0 ? num(rows[index - 1]?.count) : first;
+        const ofStart = first > 0 ? `${((num(row.count) / first) * 100).toFixed(0)}% of start` : '-';
+        const fromPrevious = index > 0 && previous > 0 ? `${((num(row.count) / previous) * 100).toFixed(0)}% prev` : 'start';
         return (
           <div key={text(row.key)} className="space-y-1">
             <div className="flex justify-between text-xs">
               <span className="font-medium text-slate-300">{text(row.label)}</span>
-              <span className="tabular-nums text-slate-400">{fixed(row.count)}</span>
+              <span className="tabular-nums text-slate-400">{fixed(row.count)} | {ofStart} | {fromPrevious}</span>
             </div>
             <div className="h-6 overflow-hidden rounded bg-slate-950">
               <div className="h-full rounded bg-sky-500/70" style={{ width: `${width}%` }} />
@@ -277,15 +321,37 @@ function ScatterPanel({ rows }: { rows: Row[] }) {
     price: num(row.price_progression_pct ?? row.price_vs_first_trigger_pct),
     score: num(row.investigator_score),
     verdict: text(row.decision_verdict),
+    rankChange: num(row.rank_change_20d),
+    volume: text(row.volume_signal),
   }));
+  const tooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload?: Record<string, unknown> }> }) => {
+    const point = payload?.[0]?.payload;
+    if (!active || !point) return null;
+    return (
+      <div className="rounded-lg border border-slate-700 bg-slate-950 p-3 text-xs text-slate-200 shadow-xl">
+        <div className="font-semibold text-white">{text(point.symbol)}</div>
+        <div>Repeat: {fixed(point.repeat)}x</div>
+        <div>Price vs first: {pct(point.price)}</div>
+        <div>Rank change: {fixed(point.rankChange)}</div>
+        <div>Volume: {text(point.volume)}</div>
+        <div>Verdict: {text(point.verdict)}</div>
+      </div>
+    );
+  };
   return (
-    <div className="h-64">
+    <div className="relative h-64">
+      <div className="pointer-events-none absolute inset-3 z-10 grid grid-cols-2 grid-rows-2 text-[10px] font-semibold uppercase text-slate-500">
+        <div className="self-start">Early momentum</div>
+        <div className="justify-self-end self-start text-emerald-300">Best candidates</div>
+        <div className="self-end">Ignore</div>
+        <div className="justify-self-end self-end text-rose-300">Trap / distribution risk</div>
+      </div>
       <ResponsiveContainer width="100%" height="100%">
         <ScatterChart margin={{ left: 0, right: 16, top: 12, bottom: 8 }}>
           <CartesianGrid stroke="#1e293b" />
           <XAxis dataKey="repeat" name="Repeat" tick={{ fill: '#94a3b8', fontSize: 11 }} />
           <YAxis dataKey="price" name="Price sustain" tick={{ fill: '#94a3b8', fontSize: 11 }} />
-          <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8 }} formatter={(value, name) => [String(value), name]} labelFormatter={(_, payload) => payload?.[0]?.payload?.symbol ?? ''} />
+          <Tooltip content={tooltip} />
           <Scatter data={data} fill="#38bdf8" isAnimationActive={false}>
             {data.map((point) => (
               <Cell key={point.symbol} fill={point.verdict === 'Trap Risk' ? '#fb7185' : point.verdict === 'High Conviction' ? '#34d399' : '#38bdf8'} />
@@ -299,27 +365,37 @@ function ScatterPanel({ rows }: { rows: Row[] }) {
 
 function TrendBars({ rows }: { rows: Row[] }) {
   if (rows.length === 0) return <EmptyState message="No four-week trend data available." />;
+  const data = rows.map((row) => ({ ...row, label: text(row.date ?? row.week) }));
   return (
     <div className="h-64">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={rows} margin={{ left: 0, right: 16, top: 12, bottom: 8 }}>
+        <ComposedChart data={data} margin={{ left: 0, right: 16, top: 12, bottom: 8 }}>
           <CartesianGrid stroke="#1e293b" />
-          <XAxis dataKey="week" tick={{ fill: '#94a3b8', fontSize: 10 }} />
+          <XAxis dataKey="label" tick={{ fill: '#94a3b8', fontSize: 10 }} />
           <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
           <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8 }} />
+          <Bar dataKey="new" stackId="a" fill="#22c55e" isAnimationActive={false} />
+          <Bar dataKey="repeat" stackId="a" fill="#38bdf8" isAnimationActive={false} />
+          <Bar dataKey="improving" stackId="a" fill="#a78bfa" isAnimationActive={false} />
           <Bar dataKey="active" stackId="a" fill="#38bdf8" isAnimationActive={false} />
           <Bar dataKey="traps" stackId="a" fill="#fb7185" isAnimationActive={false} />
           <Bar dataKey="archived" stackId="a" fill="#64748b" isAnimationActive={false} />
-        </BarChart>
+          <Line type="monotone" dataKey="high_conviction" stroke="#facc15" strokeWidth={2} dot={false} isAnimationActive={false} />
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );
 }
 
-function ActiveTable({ rows, filters, onToggleFilter, onOpen }: { rows: Row[]; filters: Set<string>; onToggleFilter: (key: string) => void; onOpen: (row: Row) => void }) {
+function ActiveTable({ rows, filters, trapFilter, onClearTrapFilter, onToggleFilter, onOpen }: { rows: Row[]; filters: Set<string>; trapFilter: TrapFilter; onClearTrapFilter: () => void; onToggleFilter: (key: string) => void; onOpen: (row: Row) => void }) {
   return (
     <SectionCard title="Active Investigator List" description="Top 50 by Investigator score; use filters to narrow the queue.">
       <div className="mb-3 flex flex-wrap gap-2">
+        {trapFilter ? (
+          <button type="button" className="rounded-md border border-rose-500 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-100" onClick={onClearTrapFilter}>
+            Trap: {trapFilter.category} x
+          </button>
+        ) : null}
         {FILTERS.map((filter) => (
           <button
             key={filter.key}
@@ -350,7 +426,7 @@ function ActiveTable({ rows, filters, onToggleFilter, onOpen }: { rows: Row[]; f
                   <td className="px-3 py-2"><VerdictBadge value={row.decision_verdict} /></td>
                   <td className="px-3 py-2">{text(row.setup ?? row.move_tag)}</td>
                   <td className="px-3 py-2">{text(row.sector)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.investigator_score)}</td>
+                  <td className="px-3 py-2 text-right"><ScoreCell row={row} /></td>
                   <td className="px-3 py-2 text-right tabular-nums">{fixed(row.appearance_count_20d)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{pct(row.price_progression_pct ?? row.price_vs_first_trigger_pct)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fixed(row.rank_change_20d)}</td>
@@ -374,14 +450,22 @@ function ActiveTable({ rows, filters, onToggleFilter, onOpen }: { rows: Row[]; f
 }
 
 function InvestigatorDrawer({ row, details, onClose }: { row: Row | null; details: Record<string, Record<string, unknown>>; onClose: () => void }) {
-  const [tab, setTab] = useState<DrawerTab>('summary');
+  const [tab, setTab] = useState<DrawerTab>('thesis');
   if (!row) return null;
   const symbol = symbolOf(row);
   const detail = (details[symbol] ?? {}) as Record<string, Row>;
   const summary = (detail.summary ?? row) as Row;
   const repeat = (detail.repeat ?? {}) as Row;
   const trap = (detail.trap ?? detail.archive ?? {}) as Row;
-  const tabs: DrawerTab[] = ['summary', 'timeline', 'chart', 'factors', 'trap', 'actions'];
+  const tabs: Array<{ key: DrawerTab; label: string }> = [
+    { key: 'thesis', label: 'Thesis' },
+    { key: 'timeline', label: 'Timeline' },
+    { key: 'price', label: 'Price Chart' },
+    { key: 'repeat', label: 'Repeat Evidence' },
+    { key: 'trap', label: 'Trap Evidence' },
+    { key: 'factors', label: 'Factor Breakdown' },
+    { key: 'actions', label: 'Actions' },
+  ];
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/70" onClick={onClose}>
       <aside className="ml-auto h-full w-full max-w-2xl overflow-y-auto border-l border-slate-800 bg-slate-950 p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
@@ -401,17 +485,33 @@ function InvestigatorDrawer({ row, details, onClose }: { row: Row | null; detail
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           {tabs.map((item) => (
-            <button key={item} type="button" className={cn('rounded-md border px-3 py-1 text-xs capitalize', tab === item ? 'border-sky-500 bg-sky-500/10 text-sky-200' : 'border-slate-700 text-slate-300 hover:bg-slate-800')} onClick={() => setTab(item)}>
-              {item}
+            <button key={item.key} type="button" className={cn('rounded-md border px-3 py-1 text-xs', tab === item.key ? 'border-sky-500 bg-sky-500/10 text-sky-200' : 'border-slate-700 text-slate-300 hover:bg-slate-800')} onClick={() => setTab(item.key)}>
+              {item.label}
             </button>
           ))}
         </div>
         <div className="mt-4 rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-300">
-          {tab === 'summary' ? (
-            <div className="space-y-2">
+          {tab === 'thesis' ? (
+            <div className="space-y-4">
               <p><span className="text-slate-500">Verdict:</span> {text(summary.decision_verdict)}</p>
               <p><span className="text-slate-500">Reason:</span> {text(summary.decision_reason)}</p>
               <p><span className="text-slate-500">Setup:</span> {text(summary.setup ?? summary.move_tag ?? summary.trigger_reason)}</p>
+              <div>
+                <div className="mb-1 font-semibold text-slate-100">Why selected</div>
+                <ul className="list-disc space-y-1 pl-5">
+                  <li>Repeat appeared {fixed(summary.appearance_count_20d ?? repeat.appearance_count_20d)} times.</li>
+                  <li>Price is {pct(summary.price_progression_pct ?? summary.price_vs_first_trigger_pct)} from first appearance.</li>
+                  <li>Volume signal is {text(summary.volume_signal)}.</li>
+                </ul>
+              </div>
+              <div>
+                <div className="mb-1 font-semibold text-slate-100">Why not high conviction</div>
+                <ul className="list-disc space-y-1 pl-5">
+                  {num(summary.investigator_score) < 80 ? <li>Score below 80.</li> : null}
+                  {!bool(summary.volume_escalation) && text(summary.volume_signal) !== 'Rising' ? <li>Volume confirmation is not strong enough.</li> : null}
+                  {num(summary.rank_change_20d) >= 0 ? <li>Rank improvement is not strong enough.</li> : null}
+                </ul>
+              </div>
             </div>
           ) : null}
           {tab === 'timeline' ? (
@@ -421,13 +521,23 @@ function InvestigatorDrawer({ row, details, onClose }: { row: Row | null; detail
               <p>Appearances 20D: {fixed(repeat.appearance_count_20d ?? summary.appearance_count_20d)}</p>
             </div>
           ) : null}
-          {tab === 'chart' ? <EmptyState message="Price, volume, and rank sparklines will appear when symbol-level Investigator history is available." /> : null}
+          {tab === 'price' ? <EmptyState message="Price, volume, and rank sparklines will appear when symbol-level Investigator history is available." /> : null}
+          {tab === 'repeat' ? (
+            <div className="grid grid-cols-2 gap-3">
+              <Metric label="First Seen" value={text(repeat.first_seen_date ?? summary.first_seen_date)} />
+              <Metric label="Last Seen" value={text(repeat.last_seen_date ?? summary.last_seen_date ?? summary.trade_date)} />
+              <Metric label="Repeat Score" value={fixed(repeat.repeat_score ?? summary.repeat_score)} />
+              <Metric label="High Priority" value={bool(repeat.high_priority_repeat ?? summary.high_priority_repeat) ? 'Yes' : 'No'} />
+            </div>
+          ) : null}
           {tab === 'factors' ? (
             <div className="grid grid-cols-2 gap-3">
               <QualityBar label="Repeat" value={repeat.repeat_score ?? summary.repeat_score} />
               <QualityBar label="Volume/Delivery" value={num(summary.volume_delivery_score) * 5} />
               <QualityBar label="Sector" value={num(summary.sector_support_score) * 10} />
               <QualityBar label="Setup" value={num(summary.trigger_quality_score) * 5} />
+              <QualityBar label="Price Sustain" value={(num(summary.price_progression_pct ?? summary.price_vs_first_trigger_pct) + 20) * 2.5} />
+              <QualityBar label="Trap Penalty" value={scoreParts(summary)[6].value} />
             </div>
           ) : null}
           {tab === 'trap' ? (
@@ -437,7 +547,15 @@ function InvestigatorDrawer({ row, details, onClose }: { row: Row | null; detail
               <p><span className="text-slate-500">Low delivery:</span> {bool(summary.low_delivery_flag) ? 'Yes' : 'No'}</p>
             </div>
           ) : null}
-          {tab === 'actions' ? <EmptyState message="Manual watchlist, archive, and override actions are not wired in this read-only view." /> : null}
+          {tab === 'actions' ? (
+            <div className="grid gap-2 sm:grid-cols-3">
+              {['Promote to Watchlist', 'Archive', 'Mark Trap'].map((label) => (
+                <button key={label} type="button" disabled className="rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-500">
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       </aside>
     </div>
@@ -460,11 +578,19 @@ export default function InvestigatorPage() {
   const data = query.data;
   const [filters, setFilters] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Row | null>(null);
+  const [trapFilter, setTrapFilter] = useState<TrapFilter>(null);
   const summary = data?.summary ?? {};
   const deltas = data?.summary_deltas ?? {};
   const decisionRows = sortByScore(data?.decision_queue ?? []);
   const fallbackRows = sortByScore(data?.closest_to_high_conviction ?? []);
-  const activeRows = useMemo(() => sortByScore(data?.active_watchlist ?? []).filter((row) => passesFilters(row, filters)), [data?.active_watchlist, filters]);
+  const trapMatches = (row: Row) => {
+    if (!trapFilter) return true;
+    const symbol = symbolOf(row);
+    return text(row.trap_category) === trapFilter.category || trapFilter.symbols.includes(symbol);
+  };
+  const activeRows = useMemo(() => sortByScore(data?.active_watchlist ?? []).filter((row) => passesFilters(row, filters)).filter(trapMatches), [data?.active_watchlist, filters, trapFilter]);
+  const archiveRows = useMemo(() => (data?.archive_summary?.rows ?? []).filter(trapMatches), [data?.archive_summary?.rows, trapFilter]);
+  const trendRows = data?.charts?.trend ?? data?.charts?.four_week_trend ?? [];
 
   const toggleFilter = (key: string) => {
     setFilters((current) => {
@@ -487,14 +613,17 @@ export default function InvestigatorPage() {
         <>
           <HealthRibbon data={data as unknown as Row} />
           <SectionCard title="Investigator Pulse">
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5">
               <Metric label="Daily Gainers" value={summary.daily_gainers} deltaValue={deltas.daily_gainers} />
-              <Metric label="New Candidates" value={summary.new_candidates} deltaValue={deltas.new_candidates} />
+              <Metric label="New In Window" value={summary.new_in_window ?? summary.new_candidates} deltaValue={deltas.new_in_window ?? deltas.new_candidates} />
               <Metric label="Active Queue" value={summary.active_queue} deltaValue={deltas.active_queue} />
               <Metric label="Repeat >=3x" value={summary.repeat_ge3} deltaValue={deltas.repeat_ge3} />
               <Metric label="Improving" value={summary.improving_repeats} deltaValue={deltas.improving_repeats} />
               <Metric label="High Conviction" value={summary.high_conviction} deltaValue={deltas.high_conviction} />
+              {hasValue(summary, 'trap_count') || hasValue(summary, 'traps') ? <Metric label="Trap Count" value={summary.trap_count ?? summary.traps} deltaValue={deltas.trap_count ?? deltas.traps} /> : null}
               <Metric label="Trap Rate" value={pct(num(summary.trap_rate) * 100)} />
+              {hasValue(summary, 'fresh_trap_today') ? <Metric label="Fresh Traps" value={summary.fresh_trap_today} deltaValue={deltas.fresh_trap_today} /> : null}
+              {hasValue(summary, 'repeat_trap') ? <Metric label="Repeat Trap" value={summary.repeat_trap} deltaValue={deltas.repeat_trap} /> : null}
               <Metric label="Archived" value={summary.archived} deltaValue={deltas.archived} />
             </div>
           </SectionCard>
@@ -502,19 +631,20 @@ export default function InvestigatorPage() {
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.5fr_1fr_1fr]">
             <ActionQueue rows={decisionRows} fallback={fallbackRows} highConvictionCount={num(summary.high_conviction)} onOpen={setSelected} />
             <RepeatQualityPanel rows={data.repeat_quality ?? []} onOpen={setSelected} />
-            <TrapRadar rows={data.trap_radar ?? []} />
+            <TrapRadar rows={data.trap_radar ?? []} activeFilter={trapFilter} onFilter={setTrapFilter} />
           </div>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-            <SectionCard title="Investigator Funnel"><FunnelChart rows={data.charts?.funnel ?? []} /></SectionCard>
+            <SectionCard title="Today Funnel"><FunnelChart rows={data.charts?.funnel_today ?? data.charts?.funnel ?? []} /></SectionCard>
+            <SectionCard title="Rolling Window Funnel"><FunnelChart rows={data.charts?.funnel_window ?? data.charts?.funnel ?? []} /></SectionCard>
             <SectionCard title="Repeat vs Price Sustain"><ScatterPanel rows={data.charts?.repeat_price_scatter ?? []} /></SectionCard>
-            <SectionCard title="4-Week Trend"><TrendBars rows={data.charts?.four_week_trend ?? []} /></SectionCard>
           </div>
+          <SectionCard title="Investigator Trend"><TrendBars rows={trendRows} /></SectionCard>
 
-          <ActiveTable rows={activeRows} filters={filters} onToggleFilter={toggleFilter} onOpen={setSelected} />
+          <ActiveTable rows={activeRows} filters={filters} trapFilter={trapFilter} onClearTrapFilter={() => setTrapFilter(null)} onToggleFilter={toggleFilter} onOpen={setSelected} />
 
           <SectionCard title="Archive" description="Closed cases stay available without competing with the active queue." collapsible defaultCollapsed>
-            {(data.archive_summary?.rows ?? []).length === 0 ? (
+            {archiveRows.length === 0 ? (
               <EmptyState message="No archived rows available." />
             ) : (
               <div className="overflow-x-auto">
@@ -523,7 +653,7 @@ export default function InvestigatorPage() {
                     <tr><th className="px-3 py-2">Symbol</th><th className="px-3 py-2">Reason</th><th className="px-3 py-2">Verdict</th><th className="px-3 py-2">Re-entry Rule</th></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
-                    {(data.archive_summary?.rows ?? []).slice(0, 25).map((row) => (
+                    {archiveRows.slice(0, 25).map((row) => (
                       <tr key={symbolOf(row)} className="text-slate-200">
                         <td className="px-3 py-2 font-semibold">{symbolOf(row)}</td>
                         <td className="px-3 py-2">{text(row.drop_reason)}</td>

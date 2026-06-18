@@ -44,6 +44,7 @@ def build_investigator_payload(
     repeat_quality = _records(_repeat_quality(repeat_tracker), limit=20)
     trap_radar = _trap_radar(pd.concat([traps, archive_with_traps], ignore_index=True))
     archive_today = _records(_archive_today(archive_with_traps, run_date), limit=25)
+    evidence = pd.concat([traps, archive_with_traps], ignore_index=True)
     decision_summary = _decision_summary(
         summary=summary,
         today_gainers=today_gainers,
@@ -52,6 +53,8 @@ def build_investigator_payload(
         high=high,
         traps=traps,
         archive=archive,
+        trap_evidence=evidence,
+        run_date=run_date,
     )
     return {
         "run_id": run_id or str(summary.get("run_id") or ""),
@@ -71,8 +74,11 @@ def build_investigator_payload(
         "archive_today": archive_today,
         "charts": {
             "funnel": _funnel(decision_summary),
+            "funnel_today": _funnel_today(decision_summary),
+            "funnel_window": _funnel_window(decision_summary),
             "repeat_price_scatter": _repeat_price_scatter(active, repeat_tracker),
             "four_week_trend": _four_week_trend(active, traps, archive_with_traps),
+            "trend": _trend(active, traps, archive_with_traps),
         },
         "row_details": _row_details(active, repeat_tracker, traps, archive_with_traps),
     }
@@ -191,21 +197,31 @@ def _decision_summary(
     high: pd.DataFrame,
     traps: pd.DataFrame,
     archive: pd.DataFrame,
+    trap_evidence: pd.DataFrame,
+    run_date: str,
 ) -> dict[str, Any]:
     daily = int(summary.get("daily_gainer_count", len(today_gainers)))
     repeat_ge3 = int((_num(repeat_tracker, "appearance_count_20d") >= 3).sum()) if not repeat_tracker.empty else 0
     improving = int(((_num(repeat_tracker, "appearance_count_20d") >= 3) & (_num(repeat_tracker, "rank_change_20d") < 0) & (_num(repeat_tracker, "price_progression_pct") > 0)).sum()) if not repeat_tracker.empty else 0
     new_candidates = int((_num(active, "appearance_count_20d").fillna(1) <= 1).sum()) if not active.empty else 0
     traps_count = int(summary.get("trap_count", len(traps)))
+    evidence_count = int(len(trap_evidence)) if trap_evidence is not None else traps_count
+    fresh_trap_today = _fresh_trap_count(trap_evidence, run_date)
+    repeat_trap = _repeat_trap_count(trap_evidence)
     return {
         "daily_gainers": daily,
         "new_candidates": new_candidates,
+        "new_in_window": new_candidates,
         "active_queue": int(summary.get("active_count", len(active))),
         "repeat_ge3": repeat_ge3,
         "improving_repeats": improving,
         "high_conviction": int(summary.get("high_conviction_count", len(high))),
         "trap_rate": round((traps_count / daily) if daily else 0.0, 3),
         "traps": traps_count,
+        "trap_count": traps_count,
+        "trap_evidence_count": evidence_count,
+        "fresh_trap_today": fresh_trap_today,
+        "repeat_trap": repeat_trap,
         "archived": int(summary.get("archived_count", len(archive))),
     }
 
@@ -262,10 +278,30 @@ def _archive_today(frame: pd.DataFrame, run_date: str) -> pd.DataFrame:
 def _funnel(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         {"key": "daily", "label": "Daily Gainers", "count": int(summary.get("daily_gainers", 0))},
-        {"key": "active", "label": "Active", "count": int(summary.get("active_queue", 0))},
+        {"key": "active", "label": "Active Queue", "count": int(summary.get("active_queue", 0))},
         {"key": "repeat", "label": "Repeat >=3x", "count": int(summary.get("repeat_ge3", 0))},
+        {"key": "improving", "label": "Improving", "count": int(summary.get("improving_repeats", 0))},
         {"key": "high", "label": "High Conviction", "count": int(summary.get("high_conviction", 0))},
-        {"key": "traps", "label": "Traps", "count": int(summary.get("traps", 0))},
+        {"key": "traps", "label": "Trap Count", "count": int(summary.get("trap_count", summary.get("traps", 0)))},
+        {"key": "archived", "label": "Archived", "count": int(summary.get("archived", 0))},
+    ]
+
+
+def _funnel_today(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {"key": "daily", "label": "Daily Gainers (today)", "count": int(summary.get("daily_gainers", 0))},
+        {"key": "fresh_traps", "label": "Fresh Traps (today)", "count": int(summary.get("fresh_trap_today", 0))},
+        {"key": "high", "label": "High Conviction (today)", "count": int(summary.get("high_conviction", 0))},
+    ]
+
+
+def _funnel_window(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {"key": "new_window", "label": "New In Window", "count": int(summary.get("new_in_window", summary.get("new_candidates", 0)))},
+        {"key": "active", "label": "Active Queue", "count": int(summary.get("active_queue", 0))},
+        {"key": "repeat", "label": "Repeat >=3x", "count": int(summary.get("repeat_ge3", 0))},
+        {"key": "improving", "label": "Improving", "count": int(summary.get("improving_repeats", 0))},
+        {"key": "repeat_trap", "label": "Repeat Trap", "count": int(summary.get("repeat_trap", 0))},
         {"key": "archived", "label": "Archived", "count": int(summary.get("archived", 0))},
     ]
 
@@ -294,6 +330,38 @@ def _four_week_trend(active: pd.DataFrame, traps: pd.DataFrame, archive: pd.Data
         dates = pd.to_datetime(frame[date_col], errors="coerce").dropna().dt.to_period("W").astype(str)
         for week, count in dates.value_counts().items():
             counts.setdefault(str(week), {"week": str(week), "active": 0, "traps": 0, "archived": 0})[key] += int(count)
+    return [counts[key] for key in sorted(counts)]
+
+
+def _trend(active: pd.DataFrame, traps: pd.DataFrame, archive: pd.DataFrame) -> list[dict[str, Any]]:
+    counts: dict[str, dict[str, int]] = {}
+
+    def add(frame: pd.DataFrame, metric: str, mask: pd.Series | None = None) -> None:
+        if frame.empty:
+            return
+        date_col = _best_date_column(frame)
+        if date_col is None:
+            return
+        source = frame.loc[mask] if mask is not None else frame
+        dates = pd.to_datetime(source[date_col], errors="coerce").dropna().dt.date.astype(str)
+        for day, count in dates.value_counts().items():
+            bucket = counts.setdefault(
+                str(day),
+                {"date": str(day), "new": 0, "repeat": 0, "improving": 0, "traps": 0, "archived": 0, "high_conviction": 0},
+            )
+            bucket[metric] += int(count)
+
+    if not active.empty:
+        appearances = _num(active, "appearance_count_20d").fillna(1)
+        add(active, "new", appearances <= 1)
+        add(active, "repeat", appearances >= 2)
+        add(active, "improving", (appearances >= 2) & (_num(active, "rank_change_20d") < 0) & (_num(active, "price_progression_pct").fillna(_num(active, "price_vs_first_trigger_pct")) > 0))
+        verdict = _text(active, "decision_verdict").str.upper().str.replace(" ", "_", regex=False)
+        if not verdict.str.contains("HIGH_CONVICTION").any() and "verdict" in active.columns:
+            verdict = _text(active, "verdict").str.upper()
+        add(active, "high_conviction", verdict.str.contains("HIGH_CONVICTION", na=False))
+    add(traps, "traps")
+    add(archive, "archived")
     return [counts[key] for key in sorted(counts)]
 
 
@@ -357,7 +425,37 @@ def _text(frame: pd.DataFrame, column: str) -> pd.Series:
 def _bool(frame: pd.DataFrame, column: str) -> pd.Series:
     if column not in frame.columns:
         return pd.Series(False, index=frame.index)
-    return frame[column].fillna(False).astype(str).str.lower().isin({"true", "1", "yes"})
+    return frame[column].astype("string").fillna("").str.lower().isin({"true", "1", "yes"})
+
+
+def _fresh_trap_count(frame: pd.DataFrame, run_date: str) -> int:
+    if frame.empty or not run_date:
+        return 0
+    date_cols = [column for column in ("trade_date", "last_seen_date", "archived_at", "created_at", "first_seen_date") if column in frame.columns]
+    if not date_cols:
+        return 0
+    seen = pd.Series(False, index=frame.index)
+    for column in date_cols:
+        dates = pd.to_datetime(frame[column], errors="coerce").dt.date.astype(str)
+        seen = seen | dates.eq(str(run_date))
+    return int(seen.sum())
+
+
+def _repeat_trap_count(frame: pd.DataFrame) -> int:
+    if frame.empty:
+        return 0
+    appearances = _num(frame, "appearance_count_20d")
+    if appearances.notna().any():
+        return int(appearances.fillna(0).ge(2).sum())
+    symbols = _text(frame, "symbol_id")
+    return int(symbols[symbols.ne("")].duplicated(keep=False).sum())
+
+
+def _best_date_column(frame: pd.DataFrame) -> str | None:
+    for column in ("trade_date", "last_seen_date", "archived_at", "created_at", "first_seen_date"):
+        if column in frame.columns:
+            return column
+    return None
 
 
 def _clip(series: pd.Series, lower: float, upper: float) -> pd.Series:
