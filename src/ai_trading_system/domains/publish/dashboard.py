@@ -32,6 +32,7 @@ DATA_INVESTIGATOR_SHEET = "_DATA_INVESTIGATOR"
 VISIBLE_SHEET_MAX_ROWS = 60
 DAILY_REPORT_MAX_ROWS = 140
 VISIBLE_SHEET_MAX_COLS = 14
+INVESTIGATOR_ACTIVE_MAX_COLS = 16
 DATA_BREADTH_MAX_ROWS = 250
 DATA_SECTOR_HISTORY_MAX_ROWS = 500
 DATA_INVESTIGATOR_MAX_ROWS = 300
@@ -327,7 +328,7 @@ def _grid_layout_requests(
             }
         },
     ]
-    widths = [190, 130, 110, 110, 120, 160, 220, 180, 130, 130, 130, 130, 130, 130]
+    widths = [190, 130, 110, 110, 120, 160, 160, 100, 90, 120, 120, 110, 110, 130, 120, 90]
     for idx, width in enumerate(widths[:max_cols]):
         requests.append(
             {
@@ -886,6 +887,114 @@ def _investigator_active_frame(active: pd.DataFrame | None) -> pd.DataFrame:
     )
 
 
+def _active_investigator_list_frame(active: pd.DataFrame | None) -> pd.DataFrame:
+    columns = [
+        "Symbol",
+        "Verdict",
+        "S1 State",
+        "Pattern",
+        "Pattern Score",
+        "Setup",
+        "Sector",
+        "Score",
+        "Repeat",
+        "Price vs First",
+        "Rank Change",
+        "Volume",
+        "Days Stale",
+        "Trap Flags",
+        "Last Seen",
+        "Action",
+    ]
+    if active is None or active.empty:
+        return pd.DataFrame(columns=columns)
+    source = active.copy()
+    out = pd.DataFrame(
+        {
+            "Symbol": source.get("symbol_id", source.get("symbol", "")),
+            "Verdict": _investigator_display_verdict(source),
+            "S1 State": source.get("s1_promotion_state", ""),
+            "Pattern": source.get("pattern_family", ""),
+            "Pattern Score": source.get("pattern_score", ""),
+            "Setup": source.get("setup", source.get("move_tag", source.get("trigger_reason", ""))),
+            "Sector": source.get("sector", source.get("sector_name", "")),
+            "Score": source.get("investigator_score", ""),
+            "Repeat": source.get("appearance_count_20d", ""),
+            "Price vs First": source.get("price_progression_pct", source.get("price_vs_first_trigger_pct", "")),
+            "Rank Change": source.get("rank_change_20d", ""),
+            "Volume": source.get("volume_signal", source.get("volume_escalation", "")),
+            "Days Stale": source.get("days_since_last_seen", ""),
+            "Trap Flags": source.get("trap_category", source.get("drop_reason", "")),
+            "Last Seen": source.get("last_seen_date", source.get("trade_date", "")),
+            "Action": source.get("action", source.get("next_action", "Open")),
+        }
+    )
+    out = out.assign(
+        Setup=out["Setup"].fillna("").astype(str).str.replace("_", " ", regex=False).str.upper(),
+        Pattern=out["Pattern"].fillna("").astype(str).str.replace("_", " ", regex=False),
+        Volume=_investigator_display_volume(out["Volume"]),
+        **{"Price vs First": _percent_display(out["Price vs First"], decimals=1)},
+    )
+    out = _to_numeric(out, ["Pattern Score", "Score", "Repeat", "Rank Change", "Days Stale"], 1)
+    return _sort_active_investigator_list(out, source).head(50).reset_index(drop=True)
+
+
+def _investigator_display_verdict(source: pd.DataFrame) -> pd.Series:
+    raw = source.get("decision_verdict")
+    if raw is None:
+        raw = source.get("verdict", pd.Series("", index=source.index))
+    display = raw.fillna("").astype(str).str.replace("_", " ", regex=False).str.title()
+    replacements = {
+        "Watch Only": "Watch",
+        "Medium Conviction": "Investigate",
+        "High Conviction": "High Conviction",
+        "Noise Trap": "Trap Risk",
+    }
+    return display.replace(replacements)
+
+
+def _investigator_display_volume(values: pd.Series | Any) -> pd.Series:
+    series = values if isinstance(values, pd.Series) else pd.Series(values)
+    text = series.fillna("").astype(str)
+    lowered = text.str.lower()
+    return text.mask(lowered.isin({"true", "1", "yes"}), "Rising").mask(lowered.isin({"false", "0", "no"}), "-")
+
+
+def _percent_display(values: pd.Series | Any, *, decimals: int = 1) -> pd.Series:
+    series = values if isinstance(values, pd.Series) else pd.Series(values)
+    numeric = pd.to_numeric(series, errors="coerce")
+    formatted = numeric.map(lambda value: f"{value:.{decimals}f}%" if pd.notna(value) else "")
+    return formatted.where(series.notna(), "")
+
+
+def _sort_active_investigator_list(out: pd.DataFrame, source: pd.DataFrame) -> pd.DataFrame:
+    safe = out.copy()
+    score = pd.to_numeric(source.get("investigator_score", pd.Series(pd.NA, index=source.index)), errors="coerce")
+    current = pd.to_numeric(source.get("score_current", pd.Series(pd.NA, index=source.index)), errors="coerce")
+    peak = pd.to_numeric(source.get("score_peak", pd.Series(pd.NA, index=source.index)), errors="coerce")
+    repeat = pd.to_numeric(source.get("appearance_count_20d", pd.Series(pd.NA, index=source.index)), errors="coerce")
+    verdict_order = {
+        "HIGH_CONVICTION": 0,
+        "MEDIUM_CONVICTION": 1,
+        "WATCH_ONLY": 2,
+        "NOISE_TRAP": 3,
+    }
+    verdict_sort = source.get("verdict", pd.Series("", index=source.index)).fillna("").astype(str).str.upper().map(verdict_order).fillna(99)
+    safe = safe.assign(
+        _ScoreSort=score.fillna(current),
+        _CurrentSort=current,
+        _PeakSort=peak,
+        _RepeatSort=repeat,
+        _VerdictSort=verdict_sort,
+    )
+    return safe.sort_values(
+        ["_ScoreSort", "_VerdictSort", "_CurrentSort", "_PeakSort", "_RepeatSort", "Symbol"],
+        ascending=[False, True, False, False, False, True],
+        na_position="last",
+        kind="stable",
+    ).drop(columns=["_ScoreSort", "_CurrentSort", "_PeakSort", "_RepeatSort", "_VerdictSort"])
+
+
 def _investigator_action_queue_frame(
     *,
     payload: dict[str, Any] | None,
@@ -1276,11 +1385,7 @@ def publish_dashboard_payload(
     investigator_today = _investigator_frame(investigator_scores_df)
     investigator_repeat = _investigator_repeat_frame(investigator_repeat_df)
     investigator_active = _investigator_active_frame(investigator_active_df)
-    investigator_action_queue = _investigator_action_queue_frame(
-        payload=investigator_payload,
-        active=investigator_active_df,
-        repeat=investigator_repeat_df,
-    )
+    active_investigator_list = _active_investigator_list_frame(investigator_active_df)
     investigator_traps = _investigator_trap_frame(investigator_trap_df)
     events_index = _frame(payload.get("events_index", []))
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
@@ -1307,7 +1412,7 @@ def publish_dashboard_payload(
         ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
         ("MARKET BREADTH SNAPSHOT", breadth_snapshot),
         ("PATTERN SETUPS", bundle.pattern_setups if not bundle.pattern_setups.empty else pattern_min),
-        ("INVESTIGATOR ACTION QUEUE", investigator_action_queue),
+        ("ACTIVE INVESTIGATOR LIST", active_investigator_list),
         ("TOP RANKED", bundle.top_ranked if not bundle.top_ranked.empty else rank_min),
         ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
         ("BREAKOUTS (all, unfiltered)", breakout_min),
@@ -1364,7 +1469,8 @@ def publish_dashboard_payload(
     _investigator_queue_worksheet, investigator_queue_rows = _write_table_sheet(
         manager=manager,
         sheet_name=INVESTIGATOR_ACTION_QUEUE_SHEET,
-        frame=investigator_action_queue,
+        frame=active_investigator_list,
+        max_cols=INVESTIGATOR_ACTIVE_MAX_COLS,
     )
 
     investigator_detail = _combine_frames(

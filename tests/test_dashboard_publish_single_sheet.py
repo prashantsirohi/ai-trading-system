@@ -339,6 +339,14 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
                 "appearance_count_20d": 1,
                 "days_since_last_seen": 0,
                 "price_vs_first_trigger_pct": 0.0,
+                "rank_change_20d": 0,
+                "volume_escalation": False,
+                "pattern_family": "flag",
+                "pattern_score": 30,
+                "s1_promotion_state": "S1_BASE_FORMING",
+                "trigger_reason": "weekly_momentum",
+                "sector": "-",
+                "last_seen_date": "2026-04-09",
             },
             {
                 "symbol_id": "MED",
@@ -349,6 +357,14 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
                 "appearance_count_20d": 1,
                 "days_since_last_seen": 0,
                 "price_vs_first_trigger_pct": 0.0,
+                "rank_change_20d": -21,
+                "volume_escalation": True,
+                "pattern_family": "",
+                "pattern_score": 0,
+                "s1_promotion_state": "",
+                "trigger_reason": "sector_rotation",
+                "sector": "FMCG",
+                "last_seen_date": "2026-04-09",
             },
         ]
     )
@@ -530,9 +546,30 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "Industry 29" in industry_text
     assert "Old Industry" not in industry_text
     assert len([row for row in industry_grid[1:] if row and row[1] != ""]) == 30
-    assert investigator_grid[0] == ["Symbol", "Verdict", "Reason", "Score", "Repeat", "Price vs First", "Rank Delta", "Vol", "Action"]
-    assert investigator_grid[1][0] == "HIGH"
-    assert investigator_grid[2][0] == "LOW"
+    assert investigator_grid[0] == [
+        "Symbol",
+        "Verdict",
+        "S1 State",
+        "Pattern",
+        "Pattern Score",
+        "Setup",
+        "Sector",
+        "Score",
+        "Repeat",
+        "Price vs First",
+        "Rank Change",
+        "Volume",
+        "Days Stale",
+        "Trap Flags",
+        "Last Seen",
+        "Action",
+    ]
+    assert investigator_grid[1][0] == "WATCH"
+    assert investigator_grid[1][1] == "Watch"
+    assert investigator_grid[1][2] == "S1_BASE_FORMING"
+    assert investigator_grid[1][9] == "0.0%"
+    assert investigator_grid[2][0] == "MED"
+    assert investigator_grid[2][11] == "Rising"
     assert not [update for update in manager.sheets["05_Market_Breadth"].updates if update[0] == "A1"]
 
     daily_text = "\n".join(str(cell) for row in daily_grid for cell in row if cell != "")
@@ -543,9 +580,9 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "PE 5Y Percentile" in daily_text
     assert "New High / Low" in daily_text
     assert "PATTERN SETUPS" in daily_text
-    assert "INVESTIGATOR ACTION QUEUE" in daily_text
-    assert "ACTIVE INVESTIGATOR LIST" not in daily_text
-    assert daily_text.index("HIGH") < daily_text.index("LOW")
+    assert "ACTIVE INVESTIGATOR LIST" in daily_text
+    assert "INVESTIGATOR ACTION QUEUE" not in daily_text
+    assert daily_text.index("WATCH") < daily_text.index("MED")
     assert "TOP RANKED" in daily_text
     assert "RANKING FEEDBACK" in daily_text
     assert "BREAKOUTS (all, unfiltered)" in daily_text
