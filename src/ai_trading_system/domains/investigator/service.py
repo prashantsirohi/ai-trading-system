@@ -13,6 +13,7 @@ from ai_trading_system.domains.investigator.fundamentals import load_fundamental
 from ai_trading_system.domains.investigator.intake import load_investigator_intake
 from ai_trading_system.domains.investigator.lifecycle import apply_lifecycle
 from ai_trading_system.domains.investigator.move_classifier import classify_move
+from ai_trading_system.domains.investigator.pattern_scan import best_pattern_by_symbol, build_investigator_pattern_scan
 from ai_trading_system.domains.investigator.payload import build_investigator_payload
 from ai_trading_system.domains.investigator.price_structure import score_price_structure
 from ai_trading_system.domains.investigator.repeat_tracker import build_repeat_tracker
@@ -61,6 +62,14 @@ class InvestigatorService:
         history = self._load_history(context)
         repeat = build_repeat_tracker(current_scores=scores, historical_daily_log=history)
         active, archived = apply_lifecycle(scores, repeat)
+        investigator_patterns = build_investigator_pattern_scan(
+            context=context,
+            active_watchlist=active,
+            ranked_df=ranked,
+        )
+        best_patterns = best_pattern_by_symbol(investigator_patterns)
+        active = _merge_best_patterns(active, best_patterns)
+        scores = _merge_best_patterns(scores, best_patterns)
         traps = scores.loc[scores.get("verdict", pd.Series(dtype=str)).eq("NOISE_TRAP") | scores.get("hard_trap_flag", pd.Series(False, index=scores.index)).fillna(False)].copy()
         gate = final_gate(scores)
         summary = self._summary(
@@ -83,6 +92,7 @@ class InvestigatorService:
             active_watchlist=active,
             trap_log=traps,
             archive=archived,
+            investigator_pattern_scan=investigator_patterns,
             data_trust_status=str(context.params.get("data_trust_status", "unknown")),
             stage_status={"rank": "completed", "investigator": "completed", "publish": "pending"},
         )
@@ -92,6 +102,7 @@ class InvestigatorService:
             investigator_scores=scores,
             repeat_tracker=repeat,
             active_watchlist=active,
+            investigator_pattern_scan=investigator_patterns,
             trap_log=traps,
             archived_investigator=archived,
             final_3q_gate=gate,
@@ -243,6 +254,39 @@ def _mark_top_ranked_context(candidates: pd.DataFrame, ranked: pd.DataFrame | No
     ranked_symbols = set(ranked["symbol_id"].astype(str).str.upper())
     out.loc[:, "in_ranked_signals"] = out["symbol_id"].astype(str).str.upper().isin(ranked_symbols)
     return out
+
+
+def _merge_best_patterns(frame: pd.DataFrame, best_patterns: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty or best_patterns is None or best_patterns.empty or "symbol_id" not in frame.columns:
+        return frame
+    desired = [
+        "symbol_id",
+        "pattern_family",
+        "pattern_state",
+        "pattern_lifecycle_state",
+        "pattern_score",
+        "setup_quality",
+        "s1_promotion_state",
+        "promotion_reason",
+        "stage2_score",
+        "stage2_label",
+        "breakout_level",
+        "watchlist_trigger_level",
+        "invalidation_price",
+        "is_strong_volume_confirmation",
+        "is_combined_volume_confirmation",
+        "breakout_volume_ratio",
+        "source_investigator",
+        "source_ranked",
+    ]
+    available = [col for col in desired if col in best_patterns.columns]
+    if len(available) <= 1:
+        return frame
+    out = frame.copy()
+    out.loc[:, "symbol_id"] = out["symbol_id"].astype(str).str.strip().str.upper()
+    pattern_cols = [col for col in available if col != "symbol_id"]
+    out = out.drop(columns=pattern_cols, errors="ignore")
+    return out.merge(best_patterns[available], on="symbol_id", how="left")
 
 
 def _read_optional(artifact: StageArtifact | None) -> pd.DataFrame:

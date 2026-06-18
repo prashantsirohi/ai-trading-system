@@ -23,7 +23,6 @@ from ai_trading_system.analytics.patterns.contracts import (
 )
 from ai_trading_system.analytics.patterns.data import load_pattern_frame, load_pattern_research_frame
 from ai_trading_system.analytics.patterns.detectors import (
-    PatternScanStats,
     detect_pattern_signals_for_symbol,
     detect_cup_handle_events,
     detect_round_bottom_events,
@@ -349,6 +348,7 @@ def build_pattern_signals(
     pattern_confirmed_expiry_bars: int = 20,
     pattern_invalidated_retention_bars: int = 5,
     pattern_incremental_ranked_buffer: int = 50,
+    write_pattern_cache: bool = True,
 ) -> pd.DataFrame:
     """Build live bullish pattern signals for one domain and signal date."""
 
@@ -439,15 +439,16 @@ def build_pattern_signals(
         output_df = output_df[
             output_df["pattern_lifecycle_state"].astype(str).str.lower() != "expired"
         ].reset_index(drop=True)
-    _write_pattern_cache(
-        project_root=project_root,
-        data_domain=data_domain,
-        exchange=exchange,
-        signal_date=signal_date,
-        scan_mode=effective_scan_mode,
-        selected_symbols=selected_symbols,
-        signals_df=snapshot_df,
-    )
+    if write_pattern_cache:
+        _write_pattern_cache(
+            project_root=project_root,
+            data_domain=data_domain,
+            exchange=exchange,
+            signal_date=signal_date,
+            scan_mode=effective_scan_mode,
+            selected_symbols=selected_symbols,
+            signals_df=snapshot_df,
+        )
     output_df.attrs["pattern_scan_metrics"] = {
         **scan_resolution,
         "requested_scan_mode": normalized_scan_mode,

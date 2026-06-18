@@ -7,6 +7,7 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.domains.investigator import pattern_scan as pattern_scan_module
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 from ai_trading_system.pipeline.orchestrator import PIPELINE_ORDER
 from ai_trading_system.pipeline.stages.investigator import InvestigatorStage
@@ -194,6 +195,76 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
         assert conn.execute("SELECT COUNT(*) FROM investigator_scores").fetchone()[0] == 3
         row = conn.execute("SELECT composite_score, rank_position FROM investigator_scores WHERE symbol_id = 'AAA'").fetchone()
         assert row == (82.0, 42.0)
+
+
+def test_investigator_stage_scans_non_s2_active_s1_pattern_candidate(tmp_path: Path, monkeypatch) -> None:
+    run_id = "pipeline-2026-05-07-s1"
+    _seed_ohlcv(tmp_path / "data" / "ohlcv.duckdb")
+    registry = RegistryStore(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_load_pattern_frame(*args, **kwargs):
+        captured["load_symbols"] = kwargs["symbols"]
+        return pd.DataFrame(
+            [
+                {"symbol_id": "STEALTH", "timestamp": "2026-05-07", "close": 108.5},
+            ]
+        )
+
+    def fake_build_pattern_signals(*args, **kwargs):
+        captured["stage2_only"] = kwargs["stage2_only"]
+        captured["write_pattern_cache"] = kwargs["write_pattern_cache"]
+        assert "STEALTH" in kwargs["symbols"]
+        return pd.DataFrame(
+            [
+                {
+                    "symbol_id": "STEALTH",
+                    "pattern_family": "round_bottom",
+                    "pattern_state": "watchlist",
+                    "pattern_lifecycle_state": "watchlist",
+                    "pattern_score": 72.0,
+                    "setup_quality": 62.0,
+                    "stage2_score": 42.0,
+                    "is_combined_volume_confirmation": True,
+                    "breakout_volume_ratio": 1.4,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(pattern_scan_module, "load_pattern_frame", fake_load_pattern_frame)
+    monkeypatch.setattr(pattern_scan_module, "build_pattern_signals", fake_build_pattern_signals)
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id=run_id,
+        run_date="2026-05-07",
+        stage_name="investigator",
+        attempt_number=1,
+        registry=registry,
+        params={},
+        artifacts=_rank_artifacts(tmp_path, run_id),
+    )
+
+    InvestigatorStage().run(context)
+
+    output_dir = tmp_path / "data" / "pipeline_runs" / run_id / "investigator" / "attempt_1"
+    active = pd.read_csv(output_dir / "active_watchlist.csv")
+    scores = pd.read_csv(output_dir / "investigator_scores.csv")
+    pattern_scan = pd.read_csv(output_dir / "investigator_pattern_scan.csv")
+    payload = json.loads((output_dir / "investigator_payload.json").read_text(encoding="utf-8"))
+
+    assert "STEALTH" in set(active["symbol_id"].astype(str))
+    assert "STEALTH" in set(pattern_scan["symbol_id"].astype(str))
+    assert captured["stage2_only"] is False
+    assert captured["write_pattern_cache"] is False
+    assert str(scores.loc[scores["symbol_id"].eq("STEALTH"), "execution_eligible"].iloc[0]).lower() in {"false", "0"}
+    assert active.loc[active["symbol_id"].eq("STEALTH"), "s1_promotion_state"].iloc[0] == "S1_TO_S2_TRANSITION"
+    assert payload["pattern_confirmation"]["scanned_count"] == 1
+    assert payload["pattern_confirmation"]["s1_to_s2_transition"] == 1
+    queue_row = next(row for row in payload["decision_queue"] if row["symbol_id"] == "STEALTH")
+    assert queue_row["pattern_state"] == "watchlist"
+    assert queue_row["s1_promotion_state"] == "S1_TO_S2_TRANSITION"
+    assert queue_row["promotion_reason"]
 
 
 def test_pipeline_order_places_investigator_after_rank() -> None:

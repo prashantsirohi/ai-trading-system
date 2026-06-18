@@ -48,7 +48,31 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
         "active_watchlist": pd.DataFrame(
             [
                 {"symbol_id": "WATCH", "status": "Watchlist", "verdict": "WATCH_ONLY", "score_current": 45, "rank_change_20d": 20},
-                {"symbol_id": "AAA", "status": "Active Research", "verdict": "MEDIUM_CONVICTION", "score_current": 70, "volume_delivery_score": 12},
+                {
+                    "symbol_id": "AAA",
+                    "status": "Active Research",
+                    "verdict": "MEDIUM_CONVICTION",
+                    "score_current": 70,
+                    "volume_delivery_score": 12,
+                    "pattern_state": "watchlist",
+                    "pattern_score": 72,
+                    "setup_quality": 63,
+                    "s1_promotion_state": "S1_TO_S2_TRANSITION",
+                    "promotion_reason": "High pattern score with volume confirmation",
+                },
+            ]
+        ),
+        "investigator_pattern_scan": pd.DataFrame(
+            [
+                {
+                    "symbol_id": "AAA",
+                    "pattern_family": "round_bottom",
+                    "pattern_state": "watchlist",
+                    "pattern_score": 72,
+                    "setup_quality": 63,
+                    "s1_promotion_state": "S1_TO_S2_TRANSITION",
+                    "promotion_reason": "High pattern score with volume confirmation",
+                }
             ]
         ),
         "trap_log": pd.DataFrame(
@@ -86,12 +110,18 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     assert body["today_gainers"][0]["symbol_id"] == "AAA"
     assert body["repeat_tracker"][0]["symbol_id"] == "AAA"
     assert body["decision_queue"][0]["symbol_id"] == "AAA"
+    assert body["decision_queue"][0]["s1_promotion_state"] == "S1_TO_S2_TRANSITION"
+    assert body["decision_queue"][0]["pattern_score"] == 72
     assert body["closest_to_high_conviction"][0]["symbol_id"] == "AAA"
+    assert body["pattern_confirmation"]["scanned_count"] == 1
+    assert body["pattern_confirmation"]["s1_to_s2_transition"] == 1
+    assert body["investigator_pattern_scan"][0]["symbol_id"] == "AAA"
     assert body["trap_radar"][0]["trap_category"] == "One-day spike"
     assert body["decision_payload"]["charts"]["funnel_today"][0]["label"] == "Daily Gainers (today)"
     assert body["decision_payload"]["charts"]["funnel_window"][0]["key"] == "new_window"
     assert body["decision_payload"]["charts"]["trend"][0]["date"] == "2026-05-07"
     assert body["active_watchlist"][0]["symbol_id"] == "AAA"
+    assert body["active_watchlist"][0]["s1_promotion_state"] == "S1_TO_S2_TRANSITION"
     assert body["archive_summary"]["by_reason"]["ONE_CANDLE_DRAMA"] == 1
     assert body["decision_payload"]["charts"]["funnel"]
     json.dumps(body, allow_nan=False)

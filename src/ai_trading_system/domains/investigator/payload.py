@@ -20,6 +20,7 @@ def build_investigator_payload(
     active_watchlist: pd.DataFrame,
     trap_log: pd.DataFrame,
     archive: pd.DataFrame,
+    investigator_pattern_scan: pd.DataFrame | None = None,
     previous_summary: dict[str, Any] | None = None,
     data_trust_status: str = "unknown",
     stage_status: dict[str, str] | None = None,
@@ -45,6 +46,7 @@ def build_investigator_payload(
     trap_radar = _trap_radar(pd.concat([traps, archive_with_traps], ignore_index=True))
     archive_today = _records(_archive_today(archive_with_traps, run_date), limit=25)
     evidence = pd.concat([traps, archive_with_traps], ignore_index=True)
+    pattern_confirmation = _pattern_confirmation(investigator_pattern_scan)
     decision_summary = _decision_summary(
         summary=summary,
         today_gainers=today_gainers,
@@ -66,6 +68,7 @@ def build_investigator_payload(
             "publish": stage_status.get("publish", "unknown"),
         },
         "summary": decision_summary,
+        "pattern_confirmation": pattern_confirmation,
         "summary_deltas": _summary_deltas(decision_summary, previous_summary) if previous_summary else {},
         "decision_queue": decision_queue,
         "closest_to_high_conviction": [] if len(high) > 0 else closest,
@@ -264,6 +267,59 @@ def _trap_radar(frame: pd.DataFrame) -> list[dict[str, Any]]:
         examples = [str(value) for value in group.get("symbol_id", pd.Series(dtype=object)).dropna().head(3).tolist()]
         rows.append({"trap_category": str(category), "count": int(len(group)), "examples": examples})
     return sorted(rows, key=lambda row: (-int(row["count"]), str(row["trap_category"])))
+
+
+def _pattern_confirmation(pattern_scan: pd.DataFrame | None) -> dict[str, Any]:
+    frame = pattern_scan.copy() if pattern_scan is not None else pd.DataFrame()
+    if frame.empty:
+        scanned_symbols = list(getattr(pattern_scan, "attrs", {}).get("scanned_symbols", []) if pattern_scan is not None else [])
+        return {
+            "scanned_count": len(scanned_symbols),
+            "s1_base_forming": 0,
+            "s1_near_breakout": 0,
+            "s1_to_s2_transition": 0,
+            "s2_confirmed": 0,
+            "top_setups": [],
+        }
+    state = _text(frame, "s1_promotion_state").str.upper()
+    out = frame.copy()
+    out.loc[:, "_state_priority"] = state.map(
+        {
+            "S2_CONFIRMED": 5,
+            "S1_TO_S2_TRANSITION": 4,
+            "S1_NEAR_BREAKOUT": 3,
+            "S1_ACCUMULATION": 2,
+            "S1_BASE_FORMING": 1,
+            "FAILED_S1": 0,
+        }
+    ).fillna(0)
+    out.loc[:, "_pattern_score_sort"] = _num(out, "pattern_score").fillna(-1)
+    out.loc[:, "_setup_quality_sort"] = _num(out, "setup_quality").fillna(-1)
+    top_cols = [
+        "symbol_id",
+        "pattern_family",
+        "pattern_state",
+        "pattern_score",
+        "setup_quality",
+        "s1_promotion_state",
+        "promotion_reason",
+        "trigger_reason",
+        "investigator_status",
+    ]
+    top = out.sort_values(
+        ["_state_priority", "_pattern_score_sort", "_setup_quality_sort", "symbol_id"],
+        ascending=[False, False, False, True],
+        kind="stable",
+    )
+    top = top[[col for col in top_cols if col in top.columns]]
+    return {
+        "scanned_count": int(frame.get("symbol_id", pd.Series(dtype=object)).astype(str).str.upper().nunique()),
+        "s1_base_forming": int(state.eq("S1_BASE_FORMING").sum()),
+        "s1_near_breakout": int(state.eq("S1_NEAR_BREAKOUT").sum()),
+        "s1_to_s2_transition": int(state.eq("S1_TO_S2_TRANSITION").sum()),
+        "s2_confirmed": int(state.eq("S2_CONFIRMED").sum()),
+        "top_setups": _records(top, limit=10),
+    }
 
 
 def _archive_today(frame: pd.DataFrame, run_date: str) -> pd.DataFrame:

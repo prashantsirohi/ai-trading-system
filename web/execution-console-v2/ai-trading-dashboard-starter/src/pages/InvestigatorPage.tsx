@@ -24,7 +24,7 @@ import { useInvestigatorSnapshot } from '@/lib/queries';
 import { cn } from '@/lib/utils/cn';
 
 type Row = Record<string, unknown>;
-type DrawerTab = 'thesis' | 'timeline' | 'price' | 'repeat' | 'trap' | 'factors' | 'actions';
+type DrawerTab = 'thesis' | 'timeline' | 'price' | 'pattern' | 'repeat' | 'trap' | 'factors' | 'actions';
 type TrapFilter = { category: string; symbols: string[] } | null;
 
 const FILTERS = [
@@ -33,6 +33,7 @@ const FILTERS = [
   { key: 'rank', label: 'Rank improving' },
   { key: 'volume', label: 'Volume rising' },
   { key: 'trapFree', label: 'Trap-free' },
+  { key: 's1Near', label: 'S1 Near Breakout+' },
   { key: 'newToday', label: 'New today' },
   { key: 'stale', label: 'Stale >5d' },
 ] as const;
@@ -82,6 +83,14 @@ function delta(value: unknown): string {
 
 function symbolOf(row: Row | null | undefined): string {
   return String(row?.symbol_id ?? row?.symbol ?? '');
+}
+
+function s1State(row: Row): string {
+  return String(row.s1_promotion_state ?? '').toUpperCase();
+}
+
+function isS1NearOrBetter(row: Row): boolean {
+  return ['S1_NEAR_BREAKOUT', 'S1_TO_S2_TRANSITION', 'S2_CONFIRMED'].includes(s1State(row));
 }
 
 function sortByScore(rows: Row[]): Row[] {
@@ -150,6 +159,40 @@ function VerdictBadge({ value }: { value: unknown }) {
   return <StatusBadge status={label} label={label} tone={VERDICT_TONES[label] ?? 'neutral'} />;
 }
 
+function S1StateBadge({ value }: { value: unknown }) {
+  const state = String(value ?? '').toUpperCase();
+  if (!state) return <span className="text-slate-500">-</span>;
+  const tone = state === 'S2_CONFIRMED' || state === 'S1_TO_S2_TRANSITION' ? 'good' : state === 'FAILED_S1' ? 'bad' : state === 'S1_NEAR_BREAKOUT' ? 'warn' : 'neutral';
+  return <StatusBadge status={state} label={text(state)} tone={tone} />;
+}
+
+function PatternConfirmationPanel({ confirmation }: { confirmation?: Row }) {
+  const data = confirmation ?? {};
+  return (
+    <SectionCard title="Pattern Confirmation" description="Investigator-only pattern context for active S1 and early accumulation names.">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
+        <Metric label="Scanned" value={fixed(data.scanned_count)} />
+        <Metric label="S1 Base" value={fixed(data.s1_base_forming)} />
+        <Metric label="S1 Near" value={fixed(data.s1_near_breakout)} />
+        <Metric label="S1 -> S2" value={fixed(data.s1_to_s2_transition)} />
+        <Metric label="S2 Confirmed" value={fixed(data.s2_confirmed)} />
+      </div>
+      {Array.isArray(data.top_setups) && data.top_setups.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {data.top_setups.slice(0, 6).map((setup) => {
+            const row = setup as Row;
+            return (
+              <span key={`${symbolOf(row)}-${text(row.pattern_family)}`} className="rounded-md border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-xs text-slate-200">
+                <span className="font-semibold">{symbolOf(row)}</span> {text(row.pattern_family)} {fixed(row.pattern_score)}
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
+    </SectionCard>
+  );
+}
+
 function ActionQueue({ rows, fallback, highConvictionCount, onOpen }: { rows: Row[]; fallback: Row[]; highConvictionCount: number; onOpen: (row: Row) => void }) {
   const display = rows.length > 0 ? rows : fallback;
   return (
@@ -173,6 +216,9 @@ function ActionQueue({ rows, fallback, highConvictionCount, onOpen }: { rows: Ro
                 <th className="px-3 py-2">Symbol</th>
                 <th className="px-3 py-2">Verdict</th>
                 <th className="px-3 py-2">Reason</th>
+                <th className="px-3 py-2">S1 State</th>
+                <th className="px-3 py-2">Pattern</th>
+                <th className="px-3 py-2 text-right">Pattern Score</th>
                 <th className="px-3 py-2 text-right">Score</th>
                 <th className="px-3 py-2 text-right">Repeat</th>
                 <th className="px-3 py-2 text-right">Price vs First</th>
@@ -187,6 +233,9 @@ function ActionQueue({ rows, fallback, highConvictionCount, onOpen }: { rows: Ro
                   <td className="px-3 py-2 font-semibold">{symbolOf(row)}</td>
                   <td className="px-3 py-2"><VerdictBadge value={row.decision_verdict} /></td>
                   <td className="px-3 py-2 text-slate-300">{text(row.decision_reason)}</td>
+                  <td className="px-3 py-2"><S1StateBadge value={row.s1_promotion_state} /></td>
+                  <td className="px-3 py-2">{text(row.pattern_family)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.pattern_score)}</td>
                   <td className="px-3 py-2 text-right"><ScoreCell row={row} /></td>
                   <td className="px-3 py-2 text-right tabular-nums">{fixed(row.appearance_count_20d)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{pct(row.price_progression_pct ?? row.price_vs_first_trigger_pct)}</td>
@@ -411,10 +460,10 @@ function ActiveTable({ rows, filters, trapFilter, onClearTrapFilter, onToggleFil
         <EmptyState message="No active rows match the selected filters." />
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-[1100px] text-left text-xs">
+          <table className="min-w-[1320px] text-left text-xs">
             <thead className="uppercase text-slate-500">
               <tr>
-                {['Symbol', 'Verdict', 'Setup', 'Sector', 'Score', 'Repeat', 'Price vs First', 'Rank Change', 'Volume', 'Days Stale', 'Trap Flags', 'Last Seen', 'Action'].map((head) => (
+                {['Symbol', 'Verdict', 'S1 State', 'Pattern', 'Pattern Score', 'Setup', 'Sector', 'Score', 'Repeat', 'Price vs First', 'Rank Change', 'Volume', 'Days Stale', 'Trap Flags', 'Last Seen', 'Action'].map((head) => (
                   <th key={head} className="px-3 py-2">{head}</th>
                 ))}
               </tr>
@@ -424,6 +473,9 @@ function ActiveTable({ rows, filters, trapFilter, onClearTrapFilter, onToggleFil
                 <tr key={symbolOf(row)} className="text-slate-200 hover:bg-slate-800/35">
                   <td className="px-3 py-2 font-semibold">{symbolOf(row)}</td>
                   <td className="px-3 py-2"><VerdictBadge value={row.decision_verdict} /></td>
+                  <td className="px-3 py-2"><S1StateBadge value={row.s1_promotion_state} /></td>
+                  <td className="px-3 py-2">{text(row.pattern_family)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.pattern_score)}</td>
                   <td className="px-3 py-2">{text(row.setup ?? row.move_tag)}</td>
                   <td className="px-3 py-2">{text(row.sector)}</td>
                   <td className="px-3 py-2 text-right"><ScoreCell row={row} /></td>
@@ -461,6 +513,7 @@ function InvestigatorDrawer({ row, details, onClose }: { row: Row | null; detail
     { key: 'thesis', label: 'Thesis' },
     { key: 'timeline', label: 'Timeline' },
     { key: 'price', label: 'Price Chart' },
+    { key: 'pattern', label: 'Pattern' },
     { key: 'repeat', label: 'Repeat Evidence' },
     { key: 'trap', label: 'Trap Evidence' },
     { key: 'factors', label: 'Factor Breakdown' },
@@ -474,6 +527,7 @@ function InvestigatorDrawer({ row, details, onClose }: { row: Row | null; detail
             <p className="text-xs uppercase tracking-wide text-slate-500">Investigator Case</p>
             <h2 className="text-xl font-semibold text-white">{symbol}</h2>
             <p className="mt-1 text-sm text-slate-400">{text(summary.sector)} | {text(summary.decision_reason)}</p>
+            <div className="mt-2"><S1StateBadge value={summary.s1_promotion_state} /></div>
           </div>
           <button type="button" className="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800" onClick={onClose}>Close</button>
         </div>
@@ -482,6 +536,7 @@ function InvestigatorDrawer({ row, details, onClose }: { row: Row | null; detail
           <Metric label="Price vs First" value={pct(summary.price_progression_pct ?? summary.price_vs_first_trigger_pct)} />
           <Metric label="Repeat" value={fixed(summary.appearance_count_20d ?? repeat.appearance_count_20d)} />
           <Metric label="Rank Delta" value={fixed(summary.rank_change_20d ?? repeat.rank_change_20d)} />
+          <Metric label="Pattern Score" value={fixed(summary.pattern_score)} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           {tabs.map((item) => (
@@ -522,6 +577,24 @@ function InvestigatorDrawer({ row, details, onClose }: { row: Row | null; detail
             </div>
           ) : null}
           {tab === 'price' ? <EmptyState message="Price, volume, and rank sparklines will appear when symbol-level Investigator history is available." /> : null}
+          {tab === 'pattern' ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <Metric label="S1 State" value={text(summary.s1_promotion_state)} />
+                <Metric label="Pattern" value={text(summary.pattern_family)} />
+                <Metric label="Pattern Score" value={fixed(summary.pattern_score)} />
+                <Metric label="Setup Quality" value={fixed(summary.setup_quality)} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Metric label="State" value={text(summary.pattern_state)} />
+                <Metric label="Lifecycle" value={text(summary.pattern_lifecycle_state)} />
+                <Metric label="Breakout" value={fixed(summary.breakout_level)} />
+                <Metric label="Invalidation" value={fixed(summary.invalidation_price)} />
+              </div>
+              <p><span className="text-slate-500">Promotion reason:</span> {text(summary.promotion_reason)}</p>
+              <p><span className="text-slate-500">Watch trigger:</span> {fixed(summary.watchlist_trigger_level)}</p>
+            </div>
+          ) : null}
           {tab === 'repeat' ? (
             <div className="grid grid-cols-2 gap-3">
               <Metric label="First Seen" value={text(repeat.first_seen_date ?? summary.first_seen_date)} />
@@ -568,6 +641,7 @@ function passesFilters(row: Row, filters: Set<string>): boolean {
   if (filters.has('rank') && num(row.rank_change_20d) >= 0) return false;
   if (filters.has('volume') && !bool(row.volume_escalation) && text(row.volume_signal) !== 'Rising') return false;
   if (filters.has('trapFree') && text(row.decision_verdict) === 'Trap Risk') return false;
+  if (filters.has('s1Near') && !isS1NearOrBetter(row)) return false;
   if (filters.has('newToday') && num(row.appearance_count_20d, 1) > 1) return false;
   if (filters.has('stale') && num(row.days_since_last_seen) <= 5) return false;
   return true;
@@ -627,6 +701,7 @@ export default function InvestigatorPage() {
               <Metric label="Archived" value={summary.archived} deltaValue={deltas.archived} />
             </div>
           </SectionCard>
+          <PatternConfirmationPanel confirmation={data.pattern_confirmation as Row | undefined} />
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.5fr_1fr_1fr]">
             <ActionQueue rows={decisionRows} fallback={fallbackRows} highConvictionCount={num(summary.high_conviction)} onOpen={setSelected} />

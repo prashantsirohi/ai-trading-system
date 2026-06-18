@@ -24,6 +24,7 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         "trap_log": _read_csv(artifacts.get("trap_log")),
         "active_watchlist": _read_csv(artifacts.get("active_watchlist")),
         "archive": _read_csv(artifacts.get("archived_investigator")),
+        "investigator_pattern_scan": _read_csv(artifacts.get("investigator_pattern_scan")),
     }
     summary = _read_json(artifacts.get("investigator_summary"))
     scores = frames["scores"]
@@ -46,6 +47,7 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
             active_watchlist=frames["active_watchlist"],
             trap_log=frames["trap_log"],
             archive=archive,
+            investigator_pattern_scan=frames["investigator_pattern_scan"],
             previous_summary=previous_summary,
             stage_status=_stage_status_from_artifacts(artifacts),
         )
@@ -62,6 +64,7 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         "repeat_tracker": _records(_sort_repeat_tracker(frames["repeat_tracker"])),
         "trap_log": _records(frames["trap_log"]),
         "active_watchlist": _records(_sort_active_watchlist(frames["active_watchlist"])),
+        "investigator_pattern_scan": _records(frames["investigator_pattern_scan"]),
         "archive_summary": {
             "count": int(len(archive)),
             "by_reason": _counts(archive, "drop_reason"),
@@ -81,6 +84,7 @@ def _latest_artifacts(project_root: Path) -> dict[str, Path | None]:
         "active_watchlist",
         "trap_log",
         "archived_investigator",
+        "investigator_pattern_scan",
         "investigator_summary",
         "investigator_payload",
     ):
