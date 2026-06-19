@@ -576,10 +576,7 @@ def _sector_rotation_latest(frame: pd.DataFrame) -> pd.DataFrame:
     columns = ["Industry", "RS Ratio", "RS Momentum", "Quadrant", "Alpha20D"]
     if frame.empty:
         return pd.DataFrame(columns=columns)
-    source = frame.copy()
-    latest_date = source["date"].dropna().max() if "date" in source.columns else None
-    if latest_date:
-        source = source.loc[source["date"].eq(latest_date)].copy()
+    source = _sector_rotation_latest_points(frame)
     out = pd.DataFrame(
         {
             "Industry": source.get("industry", ""),
@@ -594,6 +591,23 @@ def _sector_rotation_latest(frame: pd.DataFrame) -> pd.DataFrame:
         .head(25)
         .reset_index(drop=True)
     )
+
+
+def _sector_rotation_latest_points(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+    source = frame.copy()
+    if "industry" not in source.columns:
+        return source
+    source.loc[:, "_industry_key"] = source["industry"].fillna("").astype(str).str.strip().str.casefold()
+    source = source.loc[source["_industry_key"].ne("")].copy()
+    if source.empty:
+        return source.drop(columns=["_industry_key"], errors="ignore")
+    if "date" in source.columns:
+        source.loc[:, "_date_sort"] = pd.to_datetime(source["date"], errors="coerce")
+        source = source.sort_values(["_date_sort", "industry"], ascending=[False, True], na_position="last", kind="stable")
+    source = source.drop_duplicates("_industry_key", keep="first")
+    return source.drop(columns=["_industry_key", "_date_sort"], errors="ignore").reset_index(drop=True)
 
 
 def _industry_rotation_full_frame(frame: pd.DataFrame | None) -> pd.DataFrame:
@@ -662,7 +676,7 @@ def _sector_rotation_chart_requests(
     visible_sheet_id = int(visible_worksheet.id)
     data_sheet_id = int(data_worksheet.id)
     latest_date = rotation_frame["date"].dropna().max() if "date" in rotation_frame.columns else None
-    latest_rows = rotation_frame.loc[rotation_frame["date"].eq(latest_date)].copy() if latest_date else rotation_frame.copy()
+    latest_rows = _sector_rotation_latest_points(rotation_frame)
     latest_rows = latest_rows.head(60)
     start_idx = 0
     end_idx = min(len(latest_rows) + 1, DATA_SECTOR_HISTORY_MAX_ROWS + 1)
@@ -1412,7 +1426,6 @@ def publish_dashboard_payload(
         ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
         ("MARKET BREADTH SNAPSHOT", breadth_snapshot),
         ("PATTERN SETUPS", bundle.pattern_setups if not bundle.pattern_setups.empty else pattern_min),
-        ("ACTIVE INVESTIGATOR LIST", active_investigator_list),
         ("TOP RANKED", bundle.top_ranked if not bundle.top_ranked.empty else rank_min),
         ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
         ("BREAKOUTS (all, unfiltered)", breakout_min),
@@ -1428,7 +1441,7 @@ def publish_dashboard_payload(
     )
 
     sector_rotation = _sector_rotation_frame(source_sector_rotation)
-    sector_hidden_frame = sector_rotation if not sector_rotation.empty else source_sector
+    sector_hidden_frame = _sector_rotation_latest_points(sector_rotation) if not sector_rotation.empty else source_sector
     sector_data_worksheet = _write_hidden_data_sheet(
         manager=manager,
         sheet_name=DATA_SECTOR_HISTORY_SHEET,

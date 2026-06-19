@@ -401,6 +401,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             {"date": "2026-04-08", "industry": "Power", "rs_ratio": 102.1, "rs_momentum": 97.4, "quadrant": "Weakening", "alpha_20d": 0.02},
             {"date": "2026-04-08", "industry": "Chemicals", "rs_ratio": 98.3, "rs_momentum": 103.2, "quadrant": "Improving", "alpha_20d": -0.01},
             {"date": "2026-04-07", "industry": "Banks", "rs_ratio": 103.4, "rs_momentum": 100.8, "quadrant": "Leading", "alpha_20d": 0.06},
+            {"date": "2026-04-07", "industry": "Media", "rs_ratio": 101.2, "rs_momentum": 99.1, "quadrant": "Weakening", "alpha_20d": 0.01},
         ]
     )
     industry_rotation_df = pd.DataFrame(
@@ -580,9 +581,8 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "PE 5Y Percentile" in daily_text
     assert "New High / Low" in daily_text
     assert "PATTERN SETUPS" in daily_text
-    assert "ACTIVE INVESTIGATOR LIST" in daily_text
+    assert "ACTIVE INVESTIGATOR LIST" not in daily_text
     assert "INVESTIGATOR ACTION QUEUE" not in daily_text
-    assert daily_text.index("WATCH") < daily_text.index("MED")
     assert "TOP RANKED" in daily_text
     assert "RANKING FEEDBACK" in daily_text
     assert "BREAKOUTS (all, unfiltered)" in daily_text
@@ -602,6 +602,8 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "AAA" in set(hidden["_DATA_INVESTIGATOR"]["Symbol"].astype(str))
     assert "MED" in set(hidden["_DATA_INVESTIGATOR"]["Symbol"].astype(str))
     assert "Banks" in set(hidden["_DATA_SECTOR_HISTORY"]["industry"].astype(str))
+    assert "Media" in set(hidden["_DATA_SECTOR_HISTORY"]["industry"].astype(str))
+    assert hidden["_DATA_SECTOR_HISTORY"]["industry"].value_counts().to_dict()["Banks"] == 1
     assert hidden["_DATA_BREADTH"].iloc[-1]["PEPctile5Y"] == 74.0
     assert hidden["_DATA_BREADTH"].iloc[-1]["PEPctile5YSMA20"] == 73.0
 
@@ -617,6 +619,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert chart_specs[0]["title"] == "Sector Rotation: Relative Strength vs Momentum"
     assert chart_specs[0]["basicChart"]["chartType"] == "SCATTER"
     assert len(chart_specs[0]["basicChart"]["series"]) == 1
+    assert chart_specs[0]["basicChart"]["domains"][0]["domain"]["sourceRange"]["sources"][0]["endRowIndex"] == 5
     assert any("updateDimensionProperties" in req for call in manager.spreadsheet.batch_requests for req in call.get("requests", []))
 
 
