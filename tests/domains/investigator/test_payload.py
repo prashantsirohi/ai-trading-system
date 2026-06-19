@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ai_trading_system.domains.investigator.payload import build_investigator_payload
+from ai_trading_system.domains.investigator.payload import _investigator_score, build_investigator_payload
 
 
 def test_payload_derives_decision_scores_and_trap_categories() -> None:
@@ -75,3 +75,65 @@ def test_payload_derives_decision_scores_and_trap_categories() -> None:
     assert payload["charts"]["funnel_window"][0]["key"] == "new_window"
     assert payload["charts"]["trend"][0]["date"] == "2026-05-07"
     assert payload["charts"]["trend"][0]["traps"] == 1
+
+
+def test_payload_pattern_state_lifts_investigator_score_without_changing_final_score() -> None:
+    active = pd.DataFrame(
+        [
+            {
+                "symbol_id": "FAIL",
+                "trade_date": "2026-05-07",
+                "final_score": 60,
+                "trigger_quality_score": 1,
+                "s1_promotion_state": "FAILED_S1",
+            },
+            {
+                "symbol_id": "CONF",
+                "trade_date": "2026-05-07",
+                "final_score": 60,
+                "trigger_quality_score": 1,
+                "s1_promotion_state": "S2_CONFIRMED",
+            },
+        ]
+    )
+
+    payload = build_investigator_payload(
+        run_id="run-1",
+        run_date="2026-05-07",
+        summary={"daily_gainer_count": 2, "active_count": 2, "trap_count": 0, "archived_count": 0},
+        today_gainers=pd.DataFrame([{"symbol_id": "FAIL"}, {"symbol_id": "CONF"}]),
+        scores=active,
+        repeat_tracker=pd.DataFrame(),
+        active_watchlist=active,
+        trap_log=pd.DataFrame(),
+        archive=pd.DataFrame(),
+    )
+
+    records = {row["symbol_id"]: row for row in payload["decision_queue"]}
+    assert records["CONF"]["investigator_score"] > records["FAIL"]["investigator_score"]
+    assert records["CONF"]["final_score"] == records["FAIL"]["final_score"] == 60
+
+
+def test_investigator_score_uses_higher_of_move_setup_and_pattern_setup() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "MOVE",
+                "trigger_quality_score": 20,
+                "s1_promotion_state": "FAILED_S1",
+                "price_progression_pct": 0,
+                "rank_change_20d": 0,
+            },
+            {
+                "symbol_id": "PATTERN",
+                "trigger_quality_score": 1,
+                "s1_promotion_state": "S2_CONFIRMED",
+                "price_progression_pct": 0,
+                "rank_change_20d": 0,
+            },
+        ]
+    )
+
+    scores = _investigator_score(frame)
+
+    assert scores.iloc[0] == scores.iloc[1] == 30.0

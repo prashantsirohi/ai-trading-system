@@ -9,6 +9,16 @@ from typing import Any
 import pandas as pd
 
 
+S1_PATTERN_SETUP_SCORE = {
+    "FAILED_S1": 0,
+    "S1_BASE_FORMING": 25,
+    "S1_ACCUMULATION": 45,
+    "S1_NEAR_BREAKOUT": 65,
+    "S1_TO_S2_TRANSITION": 80,
+    "S2_CONFIRMED": 100,
+}
+
+
 def build_investigator_payload(
     *,
     run_id: str,
@@ -129,10 +139,26 @@ def _investigator_score(frame: pd.DataFrame) -> pd.Series:
     rank = _clip(50 - _num(frame, "rank_change_20d") * 1.5, 0, 100)
     volume = _clip(_num(frame, "volume_delivery_score") * 5, 0, 100)
     sector = _clip(_num(frame, "sector_support_score") * 10, 0, 100)
-    setup = _clip(_num(frame, "trigger_quality_score") * 5, 0, 100)
+    move_setup = _clip(_num(frame, "trigger_quality_score") * 5, 0, 100)
+    pattern_setup = _pattern_setup_score(frame)
+    setup = pd.concat([move_setup, pattern_setup], axis=1).max(axis=1)
     trap_penalty = _trap_penalty(frame)
     score = 0.25 * repeat + 0.20 * price + 0.20 * rank + 0.15 * volume + 0.10 * sector + 0.10 * setup - 0.20 * trap_penalty
     return score.clip(lower=0, upper=100).round(1)
+
+
+def _pattern_setup_score(frame: pd.DataFrame) -> pd.Series:
+    if "s1_promotion_state" not in frame.columns:
+        return pd.Series(0.0, index=frame.index)
+    return (
+        frame["s1_promotion_state"]
+        .fillna("")
+        .astype(str)
+        .str.upper()
+        .map(S1_PATTERN_SETUP_SCORE)
+        .fillna(0.0)
+        .astype(float)
+    )
 
 
 def _decision_verdict(row: pd.Series) -> str:

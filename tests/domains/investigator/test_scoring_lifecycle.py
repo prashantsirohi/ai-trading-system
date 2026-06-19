@@ -33,6 +33,47 @@ def test_missing_fundamentals_caps_high_conviction_at_medium() -> None:
     assert scored.iloc[0]["verdict"] == "MEDIUM_CONVICTION"
 
 
+def test_high_conviction_is_assigned_by_final_score_threshold() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "HIGH",
+                "price_structure_score": 15,
+                "volume_delivery_score": 20,
+                "fundamental_score": 20,
+                "trigger_quality_score": 9,
+                "sector_support_score": 8,
+                "buyer_fingerprint_score": 0,
+                "composite_score": 70,
+                "credible_trigger": True,
+                "hard_trap_flag": False,
+                "fa_missing": False,
+            },
+            {
+                "symbol_id": "MED",
+                "price_structure_score": 15,
+                "volume_delivery_score": 20,
+                "fundamental_score": 20,
+                "trigger_quality_score": 9,
+                "sector_support_score": 7,
+                "buyer_fingerprint_score": 0,
+                "composite_score": 70,
+                "credible_trigger": True,
+                "hard_trap_flag": False,
+                "fa_missing": False,
+            },
+        ]
+    )
+
+    scored = finalize_scores(frame)
+
+    # Current intended behavior: HIGH_CONVICTION is assigned by final_score >= 80.
+    assert scored.loc[scored["symbol_id"].eq("HIGH"), "final_score"].iloc[0] == 80
+    assert scored.loc[scored["symbol_id"].eq("HIGH"), "verdict"].iloc[0] == "HIGH_CONVICTION"
+    assert scored.loc[scored["symbol_id"].eq("MED"), "final_score"].iloc[0] == 79
+    assert scored.loc[scored["symbol_id"].eq("MED"), "verdict"].iloc[0] == "MEDIUM_CONVICTION"
+
+
 def test_hard_trap_forces_noise_trap() -> None:
     frame = pd.DataFrame(
         [
@@ -136,6 +177,41 @@ def test_repeat_tracker_counts_trigger_types_over_20d() -> None:
     assert row["stealth_count_20d"] == 1
 
 
+def test_repeat_tracker_counts_history_even_if_prior_row_was_archived() -> None:
+    current = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "trade_date": "2026-05-07",
+                "close": 110,
+                "volume_ratio_20": 2.5,
+                "rank_position": 35,
+                "final_score": 58,
+            }
+        ]
+    )
+    history = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "trade_date": "2026-05-01",
+                "close": 100,
+                "volume_ratio_20": 1.0,
+                "rank_position": 80,
+                "final_score": 30,
+                "drop_reason": "LOW_DELIVERY_NO_REPEAT",
+            }
+        ]
+    )
+
+    repeat = build_repeat_tracker(current_scores=current, historical_daily_log=history)
+
+    row = repeat.iloc[0]
+    assert row["appearance_count_20d"] == 2
+    assert round(row["price_progression_pct"], 1) == 10
+    assert row["rank_change_20d"] == -45
+
+
 def test_weekly_and_stealth_survive_move_classifier_as_credible_triggers() -> None:
     frame = pd.DataFrame(
         [
@@ -152,6 +228,23 @@ def test_weekly_and_stealth_survive_move_classifier_as_credible_triggers() -> No
     assert classified.loc[classified["symbol_id"].eq("STEALTH"), "move_tag"].iloc[0] == "STEALTH_ACCUMULATION"
     assert classified.loc[classified["symbol_id"].eq("STEALTH"), "trigger_quality_score"].iloc[0] == 13
     assert classified.loc[classified["symbol_id"].eq("STEALTH"), "credible_trigger"].iloc[0]
+
+
+def test_sector_rotation_currently_overrides_move_tag_priority() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "WWW",
+                "trigger_reason": "WEEKLY_GAINER",
+                "sector_rotation_active": True,
+            }
+        ]
+    )
+
+    classified = classify_move(frame)
+
+    # Guardrail for current behavior: sector context can override the trigger move tag.
+    assert classified.iloc[0]["move_tag"] == "SECTOR_ROTATION"
 
 
 def test_lifecycle_one_candle_drama_archive_reason() -> None:
@@ -197,6 +290,134 @@ def test_lifecycle_one_candle_drama_archive_reason() -> None:
     assert active.empty
     assert archived.iloc[0]["status"] == "DROPPED"
     assert archived.iloc[0]["drop_reason"] == "ONE_CANDLE_DRAMA"
+
+
+def test_lifecycle_noise_trap_reason_precedes_low_delivery_reason() -> None:
+    scores = pd.DataFrame(
+        [
+            {
+                "symbol_id": "TRAP",
+                "trade_date": "2026-05-01",
+                "verdict": "NOISE_TRAP",
+                "final_score": 30,
+                "composite_score": 30,
+                "credible_trigger": False,
+                "sector_support_score": 0,
+                "sector_rotation_active": False,
+                "long_upper_wick_trap": False,
+                "low_delivery_flag": True,
+                "fa_improvement": False,
+                "sector_clustering": False,
+            }
+        ]
+    )
+    repeat = pd.DataFrame(
+        [
+            {
+                "symbol_id": "TRAP",
+                "first_seen_date": "2026-05-01",
+                "last_seen_date": "2026-05-01",
+                "days_since_last_seen": 5,
+                "appearance_count_20d": 1,
+                "price_progression_pct": -2,
+            }
+        ]
+    )
+
+    active, archived = apply_lifecycle(scores, repeat)
+
+    assert active.empty
+    assert archived.iloc[0]["drop_reason"] == "NOISE_TRAP"
+
+
+def test_lifecycle_same_day_fresh_trigger_is_not_archived_by_aging_rules() -> None:
+    scores = pd.DataFrame(
+        [
+            {
+                "symbol_id": "FRESH",
+                "trade_date": "2026-05-07",
+                "verdict": "WATCH_ONLY",
+                "final_score": 42,
+                "composite_score": 50,
+                "credible_trigger": False,
+                "sector_support_score": 0,
+                "sector_rotation_active": False,
+                "long_upper_wick_trap": False,
+                "low_delivery_flag": True,
+                "fa_improvement": False,
+                "sector_clustering": False,
+            }
+        ]
+    )
+    repeat = pd.DataFrame(
+        [
+            {
+                "symbol_id": "FRESH",
+                "first_seen_date": "2026-05-07",
+                "last_seen_date": "2026-05-07",
+                "days_since_last_seen": 0,
+                "appearance_count_20d": 1,
+                "score_current": 42,
+                "score_peak": 42,
+                "rank_current": 80,
+                "rank_change_20d": 0,
+                "price_progression_pct": -2,
+                "volume_escalation": False,
+                "sector_cluster_count": 0,
+            }
+        ]
+    )
+
+    active, archived = apply_lifecycle(scores, repeat)
+
+    assert archived.empty
+    assert active.iloc[0]["status"] == "WATCHLIST"
+
+
+def test_lifecycle_allows_archived_symbol_back_when_current_evidence_improves() -> None:
+    current = pd.DataFrame(
+        [
+            {
+                "symbol_id": "RETURN",
+                "trade_date": "2026-05-07",
+                "close": 112,
+                "volume_ratio_20": 2.5,
+                "rank_position": 35,
+                "final_score": 58,
+            }
+        ]
+    )
+    archived_history = pd.DataFrame(
+        [
+            {
+                "symbol_id": "RETURN",
+                "trade_date": "2026-05-01",
+                "close": 100,
+                "volume_ratio_20": 1.0,
+                "rank_position": 90,
+                "final_score": 30,
+                "drop_reason": "LOW_DELIVERY_NO_REPEAT",
+            }
+        ]
+    )
+    repeat = build_repeat_tracker(current_scores=current, historical_daily_log=archived_history)
+    scores = current.assign(
+        verdict="MEDIUM_CONVICTION",
+        composite_score=70,
+        credible_trigger=True,
+        sector_support_score=0,
+        sector_rotation_active=False,
+        long_upper_wick_trap=False,
+        low_delivery_flag=False,
+        fa_improvement=False,
+        sector_clustering=False,
+    )
+
+    active, archived = apply_lifecycle(scores, repeat)
+
+    assert archived.empty
+    assert active.iloc[0]["symbol_id"] == "RETURN"
+    assert active.iloc[0]["status"] == "ACTIVE_RESEARCH"
 
 
 def test_lifecycle_does_not_drop_weekly_or_stealth_as_one_candle_drama() -> None:

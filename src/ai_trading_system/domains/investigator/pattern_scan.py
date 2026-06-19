@@ -178,6 +178,8 @@ def _volume_confirmed(row: pd.Series) -> bool:
 
 
 def _accumulation_improving(row: pd.Series) -> bool:
+    trigger_reason = str(row.get("trigger_reason") or "").upper()
+    trigger_accumulation = trigger_reason in {"WEEKLY_GAINER", "STEALTH_ACCUMULATION"}
     return (
         _truthy(row.get("volume_escalation"))
         or _num(row.get("delivery_pct")) >= 50
@@ -186,6 +188,7 @@ def _accumulation_improving(row: pd.Series) -> bool:
         or _num(row.get("appearance_count_20d")) >= 2
         or _num(row.get("price_progression_pct")) > 0
         or _num(row.get("rank_change_20d")) < 0
+        or trigger_accumulation
     )
 
 
@@ -194,9 +197,14 @@ def _trap_evidence(row: pd.Series) -> bool:
         str(row.get(col) or "").upper()
         for col in ("drop_reason", "investigator_verdict", "pattern_lifecycle_state")
     )
+    low_delivery_failure = (
+        _truthy(row.get("low_delivery_flag"))
+        and _num(row.get("appearance_count_20d")) <= 1
+        and _num(row.get("price_progression_pct")) < 0
+    )
     return (
         _truthy(row.get("hard_trap_flag"))
-        or _truthy(row.get("low_delivery_flag"))
+        or low_delivery_failure
         or "TRAP" in text
         or "INVALIDATED" in text
     )
