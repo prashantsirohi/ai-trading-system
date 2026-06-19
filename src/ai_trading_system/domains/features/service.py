@@ -87,6 +87,14 @@ class FeaturesOrchestrationService:
             context.params.get("full_rebuild", False)
             or context.params.get("data_domain") == "research"
         )
+        feature_compute_engine = str(
+            context.params.get("feature_compute_engine")
+            or ("duckdb_batch" if full_rebuild else "legacy")
+        ).strip().lower()
+        if feature_compute_engine not in {"legacy", "duckdb_batch"}:
+            raise ValueError(
+                "feature_compute_engine must be one of: legacy, duckdb_batch"
+            )
 
         def _render_progress_bar(completed: int, total: int, width: int = 20) -> str:
             total = max(1, int(total))
@@ -135,18 +143,64 @@ class FeaturesOrchestrationService:
                     metadata=update,
                 )
 
-        daily_update_runner.run(
-            symbols_only=False,
-            features_only=True,
-            batch_size=int(context.params.get("batch_size", 700)),
-            bulk=bool(context.params.get("bulk", False)),
-            symbol_limit=context.params.get("symbol_limit"),
-            data_domain=context.params.get("data_domain", "operational"),
-            symbols=updated_symbols,
-            full_rebuild=full_rebuild,
-            feature_tail_bars=int(context.params.get("feature_tail_bars", 252)),
-            feature_progress_callback=_feature_progress,
-        )
+        feature_run_summary: dict = {}
+        if feature_compute_engine == "duckdb_batch":
+            from ai_trading_system.domains.features.compute_features_batch import (
+                DEFAULT_FEATURE_TYPES,
+                run_batch_feature_computation,
+            )
+            from ai_trading_system.domains.features.sector_rs import compute_all_symbols_rs
+            from ai_trading_system.platform.db.paths import get_domain_paths
+
+            data_domain = str(context.params.get("data_domain", "operational"))
+            paths = get_domain_paths(context.project_root, data_domain)
+            batch_symbols = None if full_rebuild else updated_symbols
+            context.report_task(
+                task_name="feature_progress",
+                status="running",
+                detail="starting DuckDB batch feature computation",
+                metadata={
+                    "feature_compute_engine": feature_compute_engine,
+                    "full_rebuild": bool(full_rebuild),
+                    "symbols_count": len(batch_symbols or []),
+                },
+            )
+            feature_run_summary = run_batch_feature_computation(
+                project_root=context.project_root,
+                data_domain=data_domain,
+                symbols=batch_symbols,
+                exchanges=[str(context.params.get("exchange", "NSE"))],
+                feature_types=context.params.get("feature_types") or DEFAULT_FEATURE_TYPES,
+                full_rebuild=full_rebuild,
+                incremental=not full_rebuild,
+            )
+            compute_all_symbols_rs(
+                db_path=str(paths.ohlcv_db_path),
+                feature_store_dir=str(paths.feature_store_dir),
+                masterdb_path=str(paths.master_db_path),
+            )
+            context.report_task(
+                task_name="feature_progress",
+                status="done",
+                detail=(
+                    "DuckDB batch feature computation complete "
+                    f"({int(feature_run_summary.get('rows_written_total') or 0)} rows)"
+                ),
+                metadata=feature_run_summary,
+            )
+        else:
+            feature_run_summary = daily_update_runner.run(
+                symbols_only=False,
+                features_only=True,
+                batch_size=int(context.params.get("batch_size", 700)),
+                bulk=bool(context.params.get("bulk", False)),
+                symbol_limit=context.params.get("symbol_limit"),
+                data_domain=context.params.get("data_domain", "operational"),
+                symbols=updated_symbols,
+                full_rebuild=full_rebuild,
+                feature_tail_bars=int(context.params.get("feature_tail_bars", 252)),
+                feature_progress_callback=_feature_progress,
+            ) or {}
 
         valuation_summary = {"status": "disabled"}
         if bool(context.params.get("enable_valuation_features", True)):
@@ -219,6 +273,15 @@ class FeaturesOrchestrationService:
         snapshot_id, feature_rows, feature_registry_entries = (
             record_snapshot or self.record_snapshot
         )(context)
+        feature_rows_by_type = dict(
+            feature_run_summary.get("feature_rows_by_type")
+            or feature_run_summary.get("feature_result")
+            or {}
+        )
+        target_symbol_count = int(
+            feature_run_summary.get("symbols_targeted")
+            or (0 if updated_symbols is None else len(updated_symbols))
+        )
         benchmark_symbol = str(context.params.get("benchmark_symbol", "NIFTY_500"))
         trust_summary = load_data_trust_summary(context.db_path, run_date=context.run_date)
         feature_confidence = 1.0 if int(feature_rows or 0) > 0 else 0.0
@@ -232,7 +295,12 @@ class FeaturesOrchestrationService:
             "feature_rows": feature_rows,
             "feature_registry_entries": int(feature_registry_entries),
             "feature_mode": "full_rebuild" if full_rebuild else "incremental",
-            "target_symbol_count": len(updated_symbols or []),
+            "feature_compute_engine": feature_compute_engine,
+            "feature_parallelism": (
+                "duckdb_internal" if feature_compute_engine == "duckdb_batch" else "none"
+            ),
+            "feature_rows_by_type": feature_rows_by_type,
+            "target_symbol_count": target_symbol_count,
             "feature_enhancements": {
                 "readiness": True,
                 "feature_confidence": True,

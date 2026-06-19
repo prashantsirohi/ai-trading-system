@@ -9,12 +9,11 @@ Usage:
     python compute_features_batch.py --dry-run        # Show what would run
 """
 
-import os
-import sys
 import time
 import pandas as pd
-from datetime import datetime, timedelta
-from typing import List
+from pathlib import Path
+from typing import Any, Iterable
+import os
 
 from ai_trading_system.platform.utils.bootstrap import ensure_project_root_on_path
 
@@ -46,6 +45,18 @@ import duckdb
 _PATHS = get_domain_paths(project_root=project_root, data_domain="operational")
 DB_PATH = str(_PATHS.ohlcv_db_path)
 FEATURE_DIR = str(_PATHS.feature_store_dir)
+DEFAULT_FEATURE_TYPES = [
+    "rsi",
+    "adx",
+    "sma",
+    "ema",
+    "macd",
+    "atr",
+    "bb",
+    "roc",
+    "supertrend",
+]
+BATCH_SOURCE_TABLE = "_feature_batch_source"
 os.makedirs(FEATURE_DIR, exist_ok=True)
 
 
@@ -54,58 +65,120 @@ def create_temp_feature_table(conn, table_name: str, columns_sql: str):
     conn.execute(f"CREATE TABLE {table_name} ({columns_sql})")
 
 
-def export_feature(conn, table_name: str, feature_name: str, exchange: str) -> int:
-    """Export temp table to partitioned Parquet via DuckDB COPY."""
+def _duckdb_literal(value: str | Path) -> str:
+    return str(value).replace("'", "''")
+
+
+def _normalize_symbols(symbols: Iterable[str] | None) -> list[str] | None:
+    if symbols is None:
+        return None
+    normalized = sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()})
+    return normalized
+
+
+def prepare_feature_batch_source(
+    conn,
+    *,
+    exchange: str,
+    symbols: Iterable[str] | None = None,
+    source_table: str = BATCH_SOURCE_TABLE,
+) -> int:
+    """Create a temporary source table for one exchange and optional symbols."""
+    normalized_symbols = _normalize_symbols(symbols)
+    conn.execute(f"DROP TABLE IF EXISTS {source_table}")
+    params: list[Any] = [str(exchange)]
+    symbol_filter = ""
+    if normalized_symbols is not None:
+        if not normalized_symbols:
+            symbol_filter = " AND FALSE"
+        else:
+            placeholders = ",".join("?" for _ in normalized_symbols)
+            symbol_filter = f" AND symbol_id IN ({placeholders})"
+            params.extend(normalized_symbols)
+    conn.execute(
+        f"""
+        CREATE TEMP TABLE {source_table} AS
+        SELECT *
+        FROM _catalog_feature_source
+        WHERE exchange = ?
+          AND timestamp IS NOT NULL
+          {symbol_filter}
+        """,
+        params,
+    )
+    return int(conn.execute(f"SELECT COUNT(DISTINCT symbol_id) FROM {source_table}").fetchone()[0] or 0)
+
+
+def export_feature(
+    conn,
+    table_name: str,
+    feature_name: str,
+    exchange: str,
+    *,
+    feature_store_dir: str | Path = FEATURE_DIR,
+    replace_exchange: bool = True,
+) -> int:
+    """Export temp table to parquet while preserving symbol-file compatibility."""
     row_count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
     if row_count == 0:
         conn.execute(f"DROP TABLE IF EXISTS {table_name}")
         conn.commit()
         return 0
 
-    feat_dir = os.path.join(FEATURE_DIR, feature_name, exchange)
-    if os.path.exists(feat_dir):
+    feat_dir = Path(feature_store_dir) / feature_name / exchange
+    if replace_exchange and feat_dir.exists():
         import shutil
 
         shutil.rmtree(feat_dir)
-    os.makedirs(feat_dir, exist_ok=True)
+    feat_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        parts_dir = feat_dir / "_duckdb_parts"
+        parts_dir.mkdir(parents=True, exist_ok=True)
         conn.execute(f"""
             COPY {table_name}
-            TO '{feat_dir}'
+            TO '{_duckdb_literal(parts_dir)}'
             (FORMAT PARQUET, PER_THREAD_OUTPUT TRUE, OVERWRITE TRUE)
         """)
     except Exception as e:
-        logger.warning(f"  COPY failed, falling back to pandas export: {e}")
-        df = conn.execute(f"SELECT * FROM {table_name}").fetchdf()
-        feat_dir = os.path.join(FEATURE_DIR, feature_name, exchange)
-        os.makedirs(feat_dir, exist_ok=True)
-        for sym_id in df["symbol_id"].unique():
-            sym_df = df[df["symbol_id"] == sym_id]
-            out_path = os.path.join(feat_dir, f"{sym_id}.parquet")
-            sym_df.to_parquet(out_path, index=False)
-            row_count = len(df)
+        logger.warning(f"  COPY failed; continuing with symbol-file export only: {e}")
+
+    df = conn.execute(f"SELECT * FROM {table_name}").fetchdf()
+    if not df.empty and "symbol_id" in df.columns:
+        for sym_id, sym_df in df.groupby("symbol_id", sort=True):
+            safe_symbol = str(sym_id).strip().upper()
+            if not safe_symbol:
+                continue
+            out_path = feat_dir / f"{safe_symbol}.parquet"
+            sym_df.sort_values("timestamp").to_parquet(out_path, index=False)
 
     conn.execute(f"DROP TABLE IF EXISTS {table_name}")
     conn.commit()
     return row_count
 
 
-def batch_rsi(conn, exchange="NSE", period=14):
+def batch_rsi(
+    conn,
+    exchange="NSE",
+    period=14,
+    *,
+    source_table: str = "_catalog_feature_source",
+    feature_store_dir: str | Path = FEATURE_DIR,
+    replace_exchange: bool = True,
+):
     tbl = f"temp_feat_rsi"
     logger.info(f"  RSI({period})...")
     t0 = time.time()
     create_temp_feature_table(
         conn,
         tbl,
-        "symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE, rsi DOUBLE",
+        f"symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE, rsi_{period} DOUBLE",
     )
     conn.execute(f"""
         WITH prices AS (
             SELECT symbol_id, exchange, timestamp, close,
                    LAG(close) OVER w AS prev_close
-            FROM _catalog_feature_source
-            WHERE exchange = '{exchange}'
+            FROM {source_table}
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
         ),
         gl AS (
@@ -125,74 +198,137 @@ def batch_rsi(conn, exchange="NSE", period=14):
         SELECT symbol_id, exchange, timestamp, close,
                CASE WHEN al = 0 THEN 100
                     ELSE ROUND(100 - (100 / (1 + ag / NULLIF(al, 0))), 4)
-               END AS rsi
+               END AS rsi_{period}
         FROM sm WHERE ag IS NOT NULL AND al IS NOT NULL
         ORDER BY symbol_id, timestamp
     """)
     conn.commit()
-    rows = export_feature(conn, tbl, "rsi", exchange)
+    rows = export_feature(
+        conn,
+        tbl,
+        "rsi",
+        exchange,
+        feature_store_dir=feature_store_dir,
+        replace_exchange=replace_exchange,
+    )
     logger.info(f"    -> {rows:,} rows in {time.time() - t0:.1f}s")
     return rows
 
 
-def batch_sma(conn, exchange="NSE", periods=[20, 50, 200]):
+def batch_sma(
+    conn,
+    exchange="NSE",
+    periods=[20, 50, 200],
+    *,
+    source_table: str = "_catalog_feature_source",
+    feature_store_dir: str | Path = FEATURE_DIR,
+    replace_exchange: bool = True,
+):
     tbl = f"temp_feat_sma"
     logger.info(f"  SMA({periods})...")
     t0 = time.time()
     create_temp_feature_table(
         conn,
         tbl,
-        "symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE, period INT, sma_value DOUBLE",
+        "symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE",
     )
-
     for p in periods:
-        conn.execute(f"""
-            INSERT INTO {tbl}
-            SELECT symbol_id, exchange, timestamp, close, {p} AS period,
-                   ROUND(AVG(close) OVER w, 4) AS sma_value
-            FROM _catalog_feature_source
-            WHERE exchange = '{exchange}'
-            WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp ROWS BETWEEN {p - 1} PRECEDING AND CURRENT ROW)
-            QUALIFY COUNT(*) OVER (PARTITION BY symbol_id) >= {p}
-            ORDER BY symbol_id, timestamp
-        """)
+        conn.execute(f"ALTER TABLE {tbl} ADD COLUMN sma_{int(p)} DOUBLE")
+
+    sma_cols = ",\n                   ".join(
+        f"ROUND(AVG(close) OVER w{int(p)}, 4) AS sma_{int(p)}" for p in periods
+    )
+    window_defs = ", ".join(
+        f"w{int(p)} AS (PARTITION BY symbol_id ORDER BY timestamp ROWS BETWEEN {int(p) - 1} PRECEDING AND CURRENT ROW)"
+        for p in periods
+    )
+    conn.execute(f"""
+        INSERT INTO {tbl}
+        SELECT symbol_id, exchange, timestamp, close,
+               {sma_cols}
+        FROM {source_table}
+        WINDOW {window_defs}
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp) >= {max(int(p) for p in periods)}
+        ORDER BY symbol_id, timestamp
+    """)
 
     conn.commit()
-    rows = export_feature(conn, tbl, "sma", exchange)
+    rows = export_feature(
+        conn,
+        tbl,
+        "sma",
+        exchange,
+        feature_store_dir=feature_store_dir,
+        replace_exchange=replace_exchange,
+    )
     logger.info(f"    -> {rows:,} rows in {time.time() - t0:.1f}s")
     return rows
 
 
-def batch_ema(conn, exchange="NSE", periods=[12, 26, 50, 200]):
+def batch_ema(
+    conn,
+    exchange="NSE",
+    periods=[12, 26, 50, 200],
+    *,
+    source_table: str = "_catalog_feature_source",
+    feature_store_dir: str | Path = FEATURE_DIR,
+    replace_exchange: bool = True,
+):
     tbl = f"temp_feat_ema"
     logger.info(f"  EMA({periods})...")
     t0 = time.time()
     create_temp_feature_table(
         conn,
         tbl,
-        "symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE, ema_period INT, ema_value DOUBLE",
+        "symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE",
     )
-
     for p in periods:
-        alpha = 2.0 / (p + 1)
-        conn.execute(f"""
-            INSERT INTO {tbl}
-            SELECT symbol_id, exchange, timestamp, close, {p} AS ema_period,
-                   ROUND(EXPONENTIAL_MOVING_AVERAGE(close, {alpha}) OVER w, 4) AS ema_value
-            FROM _catalog_feature_source
-            WHERE exchange = '{exchange}'
-            WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp) >= {p}
-            ORDER BY symbol_id, timestamp
-        """)
+        conn.execute(f"ALTER TABLE {tbl} ADD COLUMN ema_{int(p)} DOUBLE")
+
+    ema_cols = ",\n                   ".join(
+        f"""ROUND(
+                       CASE
+                           WHEN LAG(close) OVER w IS NULL THEN close
+                           ELSE LAG(close) OVER w + {2.0 / (int(p) + 1)} * (close - LAG(close) OVER w)
+                       END,
+                       4
+                   ) AS ema_{int(p)}"""
+        for p in periods
+    )
+    conn.execute(f"""
+        INSERT INTO {tbl}
+        SELECT symbol_id, exchange, timestamp, close,
+               {ema_cols}
+        FROM {source_table}
+        WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp) >= {min(int(p) for p in periods)}
+        ORDER BY symbol_id, timestamp
+    """)
 
     conn.commit()
-    rows = export_feature(conn, tbl, "ema", exchange)
+    rows = export_feature(
+        conn,
+        tbl,
+        "ema",
+        exchange,
+        feature_store_dir=feature_store_dir,
+        replace_exchange=replace_exchange,
+    )
     logger.info(f"    -> {rows:,} rows in {time.time() - t0:.1f}s")
     return rows
 
 
-def batch_macd(conn, exchange="NSE", fast=12, slow=26, signal=9):
+def batch_macd(
+    conn,
+    exchange="NSE",
+    fast=12,
+    slow=26,
+    signal=9,
+    *,
+    source_table: str = "_catalog_feature_source",
+    feature_store_dir: str | Path = FEATURE_DIR,
+    replace_exchange: bool = True,
+):
     tbl = f"temp_feat_macd"
     logger.info(f"  MACD({fast},{slow},{signal})...")
     t0 = time.time()
@@ -200,60 +336,92 @@ def batch_macd(conn, exchange="NSE", fast=12, slow=26, signal=9):
         conn,
         tbl,
         "symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE, "
-        "macd_line DOUBLE, macd_signal DOUBLE, macd_histogram DOUBLE",
+        f"macd_line DOUBLE, macd_signal_{signal} DOUBLE, macd_histogram DOUBLE",
     )
 
-    alpha_fast = 2.0 / (fast + 1)
-    alpha_slow = 2.0 / (slow + 1)
-
     conn.execute(f"""
-        WITH ema_data AS (
+        WITH prices AS (
             SELECT symbol_id, exchange, timestamp, close,
-                   EXPONENTIAL_MOVING_AVERAGE(close, {alpha_fast}) OVER w AS ef,
-                   EXPONENTIAL_MOVING_AVERAGE(close, {alpha_slow}) OVER w AS es
-            FROM _catalog_feature_source
-            WHERE exchange = '{exchange}'
+                   LAG(close) OVER w AS prev_close
+            FROM {source_table}
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
+        ),
+        ema_fast AS (
+            SELECT symbol_id, exchange, timestamp, close,
+                   CASE WHEN prev_close IS NULL THEN close
+                        ELSE prev_close + {2.0 / (fast + 1)} * (close - prev_close)
+                   END AS ema_f
+            FROM prices
+        ),
+        ema_slow AS (
+            SELECT symbol_id, exchange, timestamp, close,
+                   CASE WHEN prev_close IS NULL THEN close
+                        ELSE prev_close + {2.0 / (slow + 1)} * (close - prev_close)
+                   END AS ema_s
+            FROM prices
+        ),
+        macd_line AS (
+            SELECT
+                f.symbol_id, f.exchange, f.timestamp, f.close,
+                f.ema_f - s.ema_s AS ml
+            FROM ema_fast f
+            JOIN ema_slow s USING (symbol_id, exchange, timestamp)
         ),
         macd_data AS (
             SELECT symbol_id, exchange, timestamp, close,
-                   ef - es AS ml,
-                   EXPONENTIAL_MOVING_AVERAGE(ef - es, {2.0 / (signal + 1)}) OVER w AS sl
-            FROM ema_data
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp) >= {slow}
+                   ml,
+                   CASE WHEN LAG(ml) OVER w IS NULL THEN ml
+                        ELSE LAG(ml) OVER w + {2.0 / (signal + 1)} * (ml - LAG(ml) OVER w)
+                   END AS sl
+            FROM macd_line
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp) >= {slow}
         )
         INSERT INTO {tbl}
         SELECT symbol_id, exchange, timestamp, close,
                ROUND(ml, 4) AS macd_line,
-               ROUND(sl, 4) AS macd_signal,
+               ROUND(sl, 4) AS macd_signal_{signal},
                ROUND(ml - sl, 4) AS macd_histogram
         FROM macd_data
         ORDER BY symbol_id, timestamp
     """)
 
     conn.commit()
-    rows = export_feature(conn, tbl, "macd", exchange)
+    rows = export_feature(
+        conn,
+        tbl,
+        "macd",
+        exchange,
+        feature_store_dir=feature_store_dir,
+        replace_exchange=replace_exchange,
+    )
     logger.info(f"    -> {rows:,} rows in {time.time() - t0:.1f}s")
     return rows
 
 
-def batch_atr(conn, exchange="NSE", period=14):
+def batch_atr(
+    conn,
+    exchange="NSE",
+    period=14,
+    *,
+    source_table: str = "_catalog_feature_source",
+    feature_store_dir: str | Path = FEATURE_DIR,
+    replace_exchange: bool = True,
+):
     tbl = f"temp_feat_atr"
     logger.info(f"  ATR({period})...")
     t0 = time.time()
     create_temp_feature_table(
         conn,
         tbl,
-        "symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE, atr_value DOUBLE, atr_period INT",
+        f"symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE, atr_{period} DOUBLE",
     )
 
     conn.execute(f"""
         WITH hlc AS (
             SELECT symbol_id, exchange, timestamp, high, low, close,
                    LAG(close) OVER w AS prev_close
-            FROM _catalog_feature_source
-            WHERE exchange = '{exchange}'
+            FROM {source_table}
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
         ),
         tr_data AS (
@@ -263,19 +431,34 @@ def batch_atr(conn, exchange="NSE", period=14):
         )
         INSERT INTO {tbl}
         SELECT symbol_id, exchange, timestamp, close,
-               ROUND(AVG(tr) OVER w, 4) AS atr_value, {period} AS atr_period
+               ROUND(AVG(tr) OVER w, 4) AS atr_{period}
         FROM tr_data
         WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp ROWS BETWEEN {period - 1} PRECEDING AND CURRENT ROW)
         ORDER BY symbol_id, timestamp
     """)
 
     conn.commit()
-    rows = export_feature(conn, tbl, "atr", exchange)
+    rows = export_feature(
+        conn,
+        tbl,
+        "atr",
+        exchange,
+        feature_store_dir=feature_store_dir,
+        replace_exchange=replace_exchange,
+    )
     logger.info(f"    -> {rows:,} rows in {time.time() - t0:.1f}s")
     return rows
 
 
-def batch_adx(conn, exchange="NSE", period=14):
+def batch_adx(
+    conn,
+    exchange="NSE",
+    period=14,
+    *,
+    source_table: str = "_catalog_feature_source",
+    feature_store_dir: str | Path = FEATURE_DIR,
+    replace_exchange: bool = True,
+):
     tbl = f"temp_feat_adx"
     logger.info(f"  ADX({period})...")
     t0 = time.time()
@@ -283,14 +466,14 @@ def batch_adx(conn, exchange="NSE", period=14):
         conn,
         tbl,
         "symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE, "
-        "adx_plus DOUBLE, adx_minus DOUBLE, adx_value DOUBLE, adx_period INT",
+        f"plus_di_{period} DOUBLE, minus_di_{period} DOUBLE, adx_{period} DOUBLE",
     )
 
     conn.execute(f"""
         WITH hlc AS (
             SELECT symbol_id, exchange, timestamp, high, low, close,
                    LAG(close) OVER w AS prev_close
-            FROM _catalog_feature_source WHERE exchange = '{exchange}'
+            FROM {source_table}
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
         ),
         tr_hilo AS (
@@ -318,22 +501,37 @@ def batch_adx(conn, exchange="NSE", period=14):
         )
         INSERT INTO {tbl}
         SELECT symbol_id, exchange, timestamp, close,
-               ROUND(pdx, 4) AS adx_plus,
-               ROUND(mdx, 4) AS adx_minus,
-               ROUND(AVG(dx_val) OVER w, 4) AS adx_value,
-               {period} AS adx_period
+               ROUND(pdx, 4) AS plus_di_{period},
+               ROUND(mdx, 4) AS minus_di_{period},
+               ROUND(AVG(dx_val) OVER w, 4) AS adx_{period}
         FROM dx_data
         WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp ROWS BETWEEN {period - 1} PRECEDING AND CURRENT ROW)
         ORDER BY symbol_id, timestamp
     """)
 
     conn.commit()
-    rows = export_feature(conn, tbl, "adx", exchange)
+    rows = export_feature(
+        conn,
+        tbl,
+        "adx",
+        exchange,
+        feature_store_dir=feature_store_dir,
+        replace_exchange=replace_exchange,
+    )
     logger.info(f"    -> {rows:,} rows in {time.time() - t0:.1f}s")
     return rows
 
 
-def batch_bollinger_bands(conn, exchange="NSE", period=20, std_dev=2):
+def batch_bollinger_bands(
+    conn,
+    exchange="NSE",
+    period=20,
+    std_dev=2,
+    *,
+    source_table: str = "_catalog_feature_source",
+    feature_store_dir: str | Path = FEATURE_DIR,
+    replace_exchange: bool = True,
+):
     tbl = f"temp_feat_bb"
     logger.info(f"  BB({period},{std_dev})...")
     t0 = time.time()
@@ -341,59 +539,92 @@ def batch_bollinger_bands(conn, exchange="NSE", period=20, std_dev=2):
         conn,
         tbl,
         "symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE, "
-        "bb_middle DOUBLE, bb_upper DOUBLE, bb_lower DOUBLE, bb_period INT, bb_std INT",
+        f"bb_middle_{period} DOUBLE, bb_upper_{period}_{int(std_dev)}sd DOUBLE, bb_lower_{period}_{int(std_dev)}sd DOUBLE",
     )
 
     conn.execute(f"""
         INSERT INTO {tbl}
         SELECT symbol_id, exchange, timestamp, close,
-               ROUND(AVG(close) OVER w, 4) AS bb_middle,
-               ROUND(AVG(close) OVER w + {std_dev} * STDDEV(close) OVER w, 4) AS bb_upper,
-               ROUND(AVG(close) OVER w - {std_dev} * STDDEV(close) OVER w, 4) AS bb_lower,
-               {period} AS bb_period, {std_dev} AS bb_std
-        FROM _catalog_feature_source
-        WHERE exchange = '{exchange}'
+               ROUND(AVG(close) OVER w, 4) AS bb_middle_{period},
+               ROUND(AVG(close) OVER w + {std_dev} * STDDEV(close) OVER w, 4) AS bb_upper_{period}_{int(std_dev)}sd,
+               ROUND(AVG(close) OVER w - {std_dev} * STDDEV(close) OVER w, 4) AS bb_lower_{period}_{int(std_dev)}sd
+        FROM {source_table}
         WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp ROWS BETWEEN {period - 1} PRECEDING AND CURRENT ROW)
         QUALIFY COUNT(*) OVER (PARTITION BY symbol_id) >= {period}
         ORDER BY symbol_id, timestamp
     """)
 
     conn.commit()
-    rows = export_feature(conn, tbl, "bb", exchange)
+    rows = export_feature(
+        conn,
+        tbl,
+        "bb",
+        exchange,
+        feature_store_dir=feature_store_dir,
+        replace_exchange=replace_exchange,
+    )
     logger.info(f"    -> {rows:,} rows in {time.time() - t0:.1f}s")
     return rows
 
 
-def batch_roc(conn, exchange="NSE", periods=[1, 3, 5, 10, 20]):
+def batch_roc(
+    conn,
+    exchange="NSE",
+    periods=[1, 3, 5, 10, 20],
+    *,
+    source_table: str = "_catalog_feature_source",
+    feature_store_dir: str | Path = FEATURE_DIR,
+    replace_exchange: bool = True,
+):
     tbl = f"temp_feat_roc"
     logger.info(f"  ROC({periods})...")
     t0 = time.time()
     create_temp_feature_table(
         conn,
         tbl,
-        "symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE, "
-        "roc_period INT, roc_value DOUBLE",
+        "symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE",
     )
-
     for p in periods:
-        conn.execute(f"""
-            INSERT INTO {tbl}
-            SELECT symbol_id, exchange, timestamp, close, {p} AS roc_period,
-                   ROUND(CASE WHEN LAG(close, {p}) OVER w > 0
-                       THEN 100 * (close - LAG(close, {p}) OVER w) / LAG(close, {p}) OVER w
-                       ELSE 0 END, 4) AS roc_value
-            FROM _catalog_feature_source
-            WHERE exchange = '{exchange}'
-            WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
-        """)
-        conn.commit()
+        conn.execute(f"ALTER TABLE {tbl} ADD COLUMN roc_{int(p)} DOUBLE")
 
-    rows = export_feature(conn, tbl, "roc", exchange)
+    roc_cols = ",\n               ".join(
+        f"""ROUND(CASE WHEN LAG(close, {int(p)}) OVER w > 0
+                       THEN 100 * (close - LAG(close, {int(p)}) OVER w) / LAG(close, {int(p)}) OVER w
+                       ELSE NULL END, 4) AS roc_{int(p)}"""
+        for p in periods
+    )
+    conn.execute(f"""
+        INSERT INTO {tbl}
+        SELECT symbol_id, exchange, timestamp, close,
+               {roc_cols}
+        FROM {source_table}
+        WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
+        ORDER BY symbol_id, timestamp
+    """)
+    conn.commit()
+
+    rows = export_feature(
+        conn,
+        tbl,
+        "roc",
+        exchange,
+        feature_store_dir=feature_store_dir,
+        replace_exchange=replace_exchange,
+    )
     logger.info(f"    -> {rows:,} rows in {time.time() - t0:.1f}s")
     return rows
 
 
-def batch_supertrend(conn, exchange="NSE", period=10, multiplier=3):
+def batch_supertrend(
+    conn,
+    exchange="NSE",
+    period=10,
+    multiplier=3,
+    *,
+    source_table: str = "_catalog_feature_source",
+    feature_store_dir: str | Path = FEATURE_DIR,
+    replace_exchange: bool = True,
+):
     tbl = f"temp_feat_supertrend"
     logger.info(f"  Supertrend({period},{multiplier})...")
     t0 = time.time()
@@ -401,8 +632,7 @@ def batch_supertrend(conn, exchange="NSE", period=10, multiplier=3):
         conn,
         tbl,
         "symbol_id TEXT, exchange TEXT, timestamp TIMESTAMP, close DOUBLE, "
-        "atr_value DOUBLE, st_upper DOUBLE, st_lower DOUBLE, st_signal INT, "
-        "st_period INT, st_multiplier INT",
+        f"supertrend_{period}_{int(multiplier)} DOUBLE, supertrend_dir_{period}_{int(multiplier)} INT",
     )
 
     conn.execute(f"""
@@ -410,8 +640,7 @@ def batch_supertrend(conn, exchange="NSE", period=10, multiplier=3):
             SELECT symbol_id, exchange, timestamp, high, low, close,
                    AVG(high - low) OVER w AS avg_tr,
                    (high + low) / 2 AS hl2
-            FROM _catalog_feature_source
-            WHERE exchange = '{exchange}'
+            FROM {source_table}
             WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp ROWS BETWEEN {period - 1} PRECEDING AND CURRENT ROW)
         ),
         bands AS (
@@ -429,17 +658,21 @@ def batch_supertrend(conn, exchange="NSE", period=10, multiplier=3):
         )
         INSERT INTO {tbl}
         SELECT symbol_id, exchange, timestamp, close,
-               ROUND(avg_tr, 4) AS atr_value,
-               ROUND(ub, 4) AS st_upper,
-               ROUND(lb, 4) AS st_lower,
-               CASE WHEN close > final_band THEN 1 ELSE -1 END AS st_signal,
-               {period} AS st_period, {multiplier} AS st_multiplier
+               ROUND(final_band, 4) AS supertrend_{period}_{int(multiplier)},
+               CASE WHEN close > final_band THEN 1 ELSE -1 END AS supertrend_dir_{period}_{int(multiplier)}
         FROM st_data
         ORDER BY symbol_id, timestamp
     """)
 
     conn.commit()
-    rows = export_feature(conn, tbl, "supertrend", exchange)
+    rows = export_feature(
+        conn,
+        tbl,
+        "supertrend",
+        exchange,
+        feature_store_dir=feature_store_dir,
+        replace_exchange=replace_exchange,
+    )
     logger.info(f"    -> {rows:,} rows in {time.time() - t0:.1f}s")
     return rows
 
@@ -465,63 +698,117 @@ def register_features(conn, feature_name: str, exchange: str, rows_computed: int
     conn.commit()
 
 
+BATCH_FEATURE_FUNCTIONS = {
+    "rsi": batch_rsi,
+    "sma": batch_sma,
+    "ema": batch_ema,
+    "macd": batch_macd,
+    "atr": batch_atr,
+    "adx": batch_adx,
+    "bb": batch_bollinger_bands,
+    "roc": batch_roc,
+    "supertrend": batch_supertrend,
+}
+
+
+def run_batch_feature_computation(
+    *,
+    project_root: str | Path | None = None,
+    data_domain: str = "operational",
+    symbols: Iterable[str] | None = None,
+    exchanges: Iterable[str] | None = None,
+    feature_types: Iterable[str] | None = None,
+    full_rebuild: bool = False,
+    incremental: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Compute feature groups with set-based DuckDB SQL and compatible parquet output."""
+    root = project_root or globals().get("project_root")
+    paths = get_domain_paths(project_root=root, data_domain=data_domain)
+    normalized_symbols = _normalize_symbols(symbols)
+    selected_exchanges = [str(exchange).strip().upper() for exchange in (exchanges or ["NSE"]) if str(exchange).strip()]
+    selected_features = [str(feature).strip().lower() for feature in (feature_types or DEFAULT_FEATURE_TYPES)]
+    unknown = sorted(set(selected_features) - set(BATCH_FEATURE_FUNCTIONS))
+    if unknown:
+        raise ValueError(f"Unsupported batch feature type(s): {unknown}")
+
+    conn = duckdb.connect(str(paths.ohlcv_db_path))
+    rows_by_type = {feature_name: 0 for feature_name in selected_features}
+    symbols_by_exchange: dict[str, int] = {}
+    started = time.time()
+    try:
+        ensure_feature_catalog_source(conn)
+        replace_exchange = normalized_symbols is None
+        for exchange in selected_exchanges:
+            symbol_count = prepare_feature_batch_source(
+                conn,
+                exchange=exchange,
+                symbols=normalized_symbols,
+                source_table=BATCH_SOURCE_TABLE,
+            )
+            symbols_by_exchange[exchange] = symbol_count
+            logger.info(
+                "DuckDB batch feature source ready: exchange=%s symbols=%s features=%s replace_exchange=%s",
+                exchange,
+                symbol_count,
+                selected_features,
+                replace_exchange,
+            )
+            if dry_run:
+                continue
+            for feature_name in selected_features:
+                feature_fn = BATCH_FEATURE_FUNCTIONS[feature_name]
+                rows = int(
+                    feature_fn(
+                        conn,
+                        exchange=exchange,
+                        source_table=BATCH_SOURCE_TABLE,
+                        feature_store_dir=paths.feature_store_dir,
+                        replace_exchange=replace_exchange,
+                    )
+                    or 0
+                )
+                register_features(conn, feature_name, exchange, rows)
+                rows_by_type[feature_name] += rows
+    finally:
+        conn.close()
+
+    total_rows = int(sum(rows_by_type.values()))
+    return {
+        "mode": "duckdb_batch",
+        "data_domain": data_domain,
+        "exchanges": selected_exchanges,
+        "feature_types": selected_features,
+        "feature_result": rows_by_type,
+        "feature_rows_by_type": rows_by_type,
+        "rows_written_total": total_rows,
+        "symbols_targeted": int(sum(symbols_by_exchange.values())),
+        "symbols_by_exchange": symbols_by_exchange,
+        "full_rebuild": bool(full_rebuild),
+        "incremental": bool(incremental),
+        "dry_run": bool(dry_run),
+        "feature_store_dir": str(paths.feature_store_dir),
+        "elapsed_seconds": round(time.time() - started, 3),
+    }
+
+
 def main():
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--features", nargs="+", default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--data-domain", default="operational", choices=["operational", "research"])
     args = parser.parse_args()
 
-    all_features = {
-        "rsi": batch_rsi,
-        "sma": batch_sma,
-        "ema": batch_ema,
-        "macd": batch_macd,
-        "atr": batch_atr,
-        "adx": batch_adx,
-        "bb": batch_bollinger_bands,
-        "roc": batch_roc,
-        "supertrend": batch_supertrend,
-    }
-
-    features_to_run = {
-        k: v
-        for k, v in all_features.items()
-        if args.features is None or k in args.features
-    }
-
-    conn = duckdb.connect(DB_PATH)
-    ensure_feature_catalog_source(conn)
-    n_syms = conn.execute(
-        "SELECT COUNT(DISTINCT symbol_id) FROM _catalog_feature_source WHERE exchange = 'NSE'"
-    ).fetchone()[0]
-    logger.info(f"Computing features for {n_syms} NSE symbols...")
-
-    if args.dry_run:
-        logger.info(f"[DRY RUN] Would compute: {list(features_to_run.keys())}")
-        conn.close()
-        return
-
-    t0 = time.time()
-    total_rows = 0
-
-    for feat_name, feat_fn in features_to_run.items():
-        try:
-            rows = feat_fn(conn)
-            register_features(conn, feat_name, "NSE", rows)
-            total_rows += rows
-        except Exception as e:
-            import traceback
-
-            logger.error(f"  ERROR {feat_name}: {e}")
-            logger.error(traceback.format_exc())
-
-    conn.close()
-
-    elapsed = time.time() - t0
-    logger.info(f"\nAll features computed in {elapsed:.1f}s")
-    logger.info(f"Total rows written: {total_rows:,}")
+    summary = run_batch_feature_computation(
+        project_root=project_root,
+        data_domain=args.data_domain,
+        feature_types=args.features,
+        full_rebuild=True,
+        dry_run=args.dry_run,
+    )
+    logger.info("DuckDB batch feature summary: %s", summary)
 
 
 if __name__ == "__main__":

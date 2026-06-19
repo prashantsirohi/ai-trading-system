@@ -2287,6 +2287,7 @@ def test_orchestrator_parser_defaults_skip_preflight_and_uses_today() -> None:
     assert args.pattern_confirmed_expiry_bars == 20
     assert args.pattern_invalidated_retention_bars == 5
     assert args.pattern_incremental_ranked_buffer == 50
+    assert args.feature_compute_engine is None
     assert args.stale_missing_symbol_grace_days == 3
 
 

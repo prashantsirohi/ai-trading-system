@@ -740,6 +740,8 @@ def test_build_pattern_signals_uses_parallel_helper_when_requested(monkeypatch) 
     assert called["parallel"] == 1
     assert len(signals) == 1
     assert signals.iloc[0]["symbol_id"] == "CUP"
+    assert signals.attrs["pattern_scan_metrics"]["pattern_workers"] == 4
+    assert signals.attrs["pattern_scan_metrics"]["pattern_parallelism"] == "process_pool"
 
 
 def test_build_pattern_signals_falls_back_to_serial_on_transient_parallel_resource_error(monkeypatch) -> None:
@@ -791,6 +793,8 @@ def test_build_pattern_signals_falls_back_to_serial_on_transient_parallel_resour
     assert called["serial"] == 1
     assert len(signals) == 1
     assert signals.iloc[0]["symbol_id"] == "CUP"
+    assert signals.attrs["pattern_scan_metrics"]["pattern_workers"] == 4
+    assert signals.attrs["pattern_scan_metrics"]["pattern_parallelism"] == "sequential_fallback"
 
 
 def test_build_pattern_signals_falls_back_to_serial_on_permission_error_from_process_pool(monkeypatch) -> None:

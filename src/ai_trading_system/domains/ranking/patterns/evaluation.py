@@ -184,7 +184,12 @@ def _scan_pattern_signals(
             )
 
     if not signal_rows:
-        return pd.DataFrame(), dict(stats), processed
+        empty = pd.DataFrame()
+        empty.attrs["pattern_parallelism"] = "sequential"
+        empty.attrs["pattern_workers"] = 1
+        empty.attrs["pattern_effective_workers"] = 1
+        empty.attrs["pattern_eligible_symbols"] = total_symbols
+        return empty, dict(stats), processed
 
     signals_df = pd.DataFrame(signal_rows)
     signals_df = signals_df.sort_values(
@@ -192,6 +197,10 @@ def _scan_pattern_signals(
         ascending=[True, False, True, False],
         na_position="last",
     ).reset_index(drop=True)
+    signals_df.attrs["pattern_parallelism"] = "sequential"
+    signals_df.attrs["pattern_workers"] = 1
+    signals_df.attrs["pattern_effective_workers"] = 1
+    signals_df.attrs["pattern_eligible_symbols"] = total_symbols
     return signals_df, dict(stats), processed
 
 
@@ -251,7 +260,12 @@ def _scan_pattern_signals_parallel(
         )
     total_symbols = len(eligible_symbols)
     if total_symbols == 0:
-        return pd.DataFrame(), {}, {}
+        empty = pd.DataFrame()
+        empty.attrs["pattern_parallelism"] = "sequential"
+        empty.attrs["pattern_workers"] = int(pattern_workers)
+        empty.attrs["pattern_effective_workers"] = 0
+        empty.attrs["pattern_eligible_symbols"] = 0
+        return empty, {}, {}
     if total_symbols == 1 or int(pattern_workers) <= 1:
         return _scan_pattern_signals(frame, config=config, progress_callback=progress_callback)
 
@@ -287,10 +301,24 @@ def _scan_pattern_signals_parallel(
                 "Pattern parallel scan resource-constrained; falling back to sequential scan: %s",
                 exc,
             )
-            return _scan_pattern_signals(frame, config=config, progress_callback=progress_callback)
+            fallback_df, fallback_stats, fallback_processed = _scan_pattern_signals(
+                frame,
+                config=config,
+                progress_callback=progress_callback,
+            )
+            fallback_df.attrs["pattern_parallelism"] = "sequential_fallback"
+            fallback_df.attrs["pattern_workers"] = int(pattern_workers)
+            fallback_df.attrs["pattern_effective_workers"] = 1
+            fallback_df.attrs["pattern_eligible_symbols"] = total_symbols
+            return fallback_df, fallback_stats, fallback_processed
         raise
     if not signal_rows:
-        return pd.DataFrame(), dict(stats), {}
+        empty = pd.DataFrame()
+        empty.attrs["pattern_parallelism"] = "process_pool"
+        empty.attrs["pattern_workers"] = int(pattern_workers)
+        empty.attrs["pattern_effective_workers"] = worker_count
+        empty.attrs["pattern_eligible_symbols"] = total_symbols
+        return empty, dict(stats), {}
 
     signals_df = pd.DataFrame(signal_rows)
     signals_df = signals_df.sort_values(
@@ -298,6 +326,10 @@ def _scan_pattern_signals_parallel(
         ascending=[True, False, True, False],
         na_position="last",
     ).reset_index(drop=True)
+    signals_df.attrs["pattern_parallelism"] = "process_pool"
+    signals_df.attrs["pattern_workers"] = int(pattern_workers)
+    signals_df.attrs["pattern_effective_workers"] = worker_count
+    signals_df.attrs["pattern_eligible_symbols"] = total_symbols
     return signals_df, dict(stats), {}
 
 
@@ -409,11 +441,26 @@ def build_pattern_signals(
     )
 
     fresh_signals_df = pd.DataFrame()
-    if int(pattern_workers) > 1:
+    requested_workers = max(1, int(pattern_workers))
+    eligible_symbol_count = (
+        int(scan_frame["symbol_id"].astype(str).nunique())
+        if not scan_frame.empty and "symbol_id" in scan_frame.columns
+        else 0
+    )
+    planned_parallelism = (
+        "process_pool" if requested_workers > 1 and eligible_symbol_count > 1 else "sequential"
+    )
+    logger.info(
+        "Pattern scan execution: parallelism=%s requested_workers=%s eligible_symbols=%s",
+        planned_parallelism,
+        requested_workers,
+        eligible_symbol_count,
+    )
+    if requested_workers > 1:
         fresh_signals_df, _, _ = _scan_pattern_signals_parallel(
             scan_frame,
             config=active_config,
-            pattern_workers=int(pattern_workers),
+            pattern_workers=requested_workers,
             progress_callback=progress_callback,
         )
     else:
@@ -435,10 +482,28 @@ def build_pattern_signals(
     )
     snapshot_df = _attach_rank_context_and_score(snapshot_df, ranked_df=ranked_df).reset_index(drop=True)
     output_df = snapshot_df.copy()
+    pattern_scan_metrics = {
+        "pattern_workers": requested_workers,
+        "pattern_effective_workers": int(
+            fresh_signals_df.attrs.get(
+                "pattern_effective_workers",
+                min(requested_workers, eligible_symbol_count) if planned_parallelism == "process_pool" else 1,
+            )
+            or 0
+        ),
+        "pattern_parallelism": str(
+            fresh_signals_df.attrs.get("pattern_parallelism", planned_parallelism)
+        ),
+        "pattern_eligible_symbols": int(
+            fresh_signals_df.attrs.get("pattern_eligible_symbols", eligible_symbol_count) or 0
+        ),
+    }
+    output_df.attrs["pattern_scan_metrics"] = pattern_scan_metrics
     if not output_df.empty and "pattern_lifecycle_state" in output_df.columns:
         output_df = output_df[
             output_df["pattern_lifecycle_state"].astype(str).str.lower() != "expired"
         ].reset_index(drop=True)
+        output_df.attrs["pattern_scan_metrics"] = pattern_scan_metrics
     if write_pattern_cache:
         _write_pattern_cache(
             project_root=project_root,
@@ -451,6 +516,7 @@ def build_pattern_signals(
         )
     output_df.attrs["pattern_scan_metrics"] = {
         **scan_resolution,
+        **pattern_scan_metrics,
         "requested_scan_mode": normalized_scan_mode,
         "effective_scan_mode": effective_scan_mode,
         "selected_symbol_count": len(selected_symbols),

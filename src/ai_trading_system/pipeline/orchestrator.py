@@ -1222,6 +1222,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Tail window used by incremental operational feature updates.",
     )
     parser.add_argument(
+        "--feature-compute-engine",
+        choices=["legacy", "duckdb_batch"],
+        default=None,
+        help="Feature computation engine. Use duckdb_batch for set-based full feature rebuilds.",
+    )
+    parser.add_argument(
         "--strategy-mode",
         choices=["technical", "ml", "hybrid_confirm", "hybrid_overlay"],
         default="technical",
@@ -1538,6 +1544,8 @@ def main() -> None:
         "publish_weekly_pdf": args.publish_weekly_pdf,
         "full_rebuild": args.full_rebuild,
         "feature_tail_bars": args.feature_tail_bars,
+        "feature_compute_engine": args.feature_compute_engine
+        or ("duckdb_batch" if args.full_rebuild else "legacy"),
         "strategy_mode": args.strategy_mode,
         "execution_top_n": args.execution_top_n,
         "execution_ml_horizon": args.execution_ml_horizon,

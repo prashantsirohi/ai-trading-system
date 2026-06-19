@@ -1003,6 +1003,7 @@ class RankOrchestrationService:
                 "pattern_seed_symbols_digest": pattern_seed_metadata.get("seed_symbols_digest"),
                 "pattern_seed_metadata": pattern_seed_metadata,
                 "pattern_scan_mode": str(context.params.get("pattern_scan_mode", "incremental")),
+                "pattern_workers": int(context.params.get("pattern_workers", 1) or 1),
                 "pattern_watchlist_expiry_bars": int(
                     context.params.get("pattern_watchlist_expiry_bars", 10)
                 ),
@@ -1511,6 +1512,9 @@ class RankOrchestrationService:
             "factor_correlation_details": correlation_result.get("violations", []),
             "factor_correlations_json": json.dumps(correlation_result.get("correlation_matrix", {})) if isinstance(correlation_result.get("correlation_matrix"), dict) else json.dumps({}),
             "pattern_seed_metadata": pattern_seed_metadata,
+            "pattern_workers": int(context.params.get("pattern_workers", 1) or 1),
+            "pattern_effective_workers": int(pattern_scan_metadata.get("pattern_effective_workers") or 0),
+            "pattern_parallelism": pattern_scan_metadata.get("pattern_parallelism"),
         }
         outputs["__dashboard_payload__"] = dashboard_payload
         return outputs
