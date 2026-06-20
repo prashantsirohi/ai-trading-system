@@ -44,7 +44,12 @@ const FALLBACK: InvestigatorSnapshot = {
   data_trust_status: 'trusted',
   stage_status: { rank: 'completed', investigator: 'completed', publish: 'pending' },
   summary: {
+    total_intake: 51,
+    total_intake_count: 51,
     daily_gainers: 51,
+    daily_gainer_count: 32,
+    weekly_gainer_count: 12,
+    stealth_accumulation_count: 7,
     new_candidates: 12,
     new_in_window: 12,
     active_queue: 42,
@@ -58,11 +63,13 @@ const FALLBACK: InvestigatorSnapshot = {
     repeat_trap: 5,
     archived: 9,
   },
-  raw_summary: { daily_gainer_count: 51, active_count: 42, trap_count: 16 },
-  summary_deltas: { daily_gainers: 5, new_candidates: 2, new_in_window: 2, active_queue: 7, repeat_ge3: 3, improving_repeats: 1, high_conviction: -1, traps: 4, trap_count: 4, fresh_trap_today: 1, repeat_trap: 2, archived: 2 },
+  raw_summary: { total_intake_count: 51, daily_gainer_count: 32, weekly_gainer_count: 12, stealth_accumulation_count: 7, active_count: 42, trap_count: 16 },
+  summary_deltas: { total_intake: 5, daily_gainers: 5, new_candidates: 2, new_in_window: 2, active_queue: 7, repeat_ge3: 3, improving_repeats: 1, high_conviction: -1, traps: 4, trap_count: 4, fresh_trap_today: 1, repeat_trap: 2, archived: 2 },
   pattern_confirmation: {
     scanned_count: 18,
+    failed_s1: 3,
     s1_base_forming: 7,
+    s1_accumulation: 3,
     s1_near_breakout: 5,
     s1_to_s2_transition: 2,
     s2_confirmed: 1,
@@ -146,7 +153,7 @@ const FALLBACK: InvestigatorSnapshot = {
   archive_today: [],
   charts: {
     funnel: [
-      { key: 'daily', label: 'Daily Gainers', count: 51 },
+      { key: 'intake', label: 'Investigator Intake', count: 51 },
       { key: 'active', label: 'Active Queue', count: 42 },
       { key: 'repeat', label: 'Repeat >=3x', count: 8 },
       { key: 'improving', label: 'Improving', count: 4 },
@@ -155,7 +162,7 @@ const FALLBACK: InvestigatorSnapshot = {
       { key: 'archived', label: 'Archived', count: 9 },
     ],
     funnel_today: [
-      { key: 'daily', label: 'Daily Gainers (today)', count: 51 },
+      { key: 'intake', label: 'Investigator Intake (today)', count: 51 },
       { key: 'fresh_traps', label: 'Fresh Traps (today)', count: 3 },
       { key: 'high', label: 'High Conviction (today)', count: 0 },
     ],

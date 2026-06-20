@@ -69,6 +69,8 @@ def build_investigator_pattern_scan(
 
     out = patterns.copy()
     out.loc[:, "symbol_id"] = out["symbol_id"].astype(str).str.strip().str.upper()
+    if "trade_date" not in out.columns:
+        out.loc[:, "trade_date"] = context.run_date
     context_cols = _investigator_context(active_watchlist)
     if not context_cols.empty:
         out = out.merge(context_cols, on="symbol_id", how="left")

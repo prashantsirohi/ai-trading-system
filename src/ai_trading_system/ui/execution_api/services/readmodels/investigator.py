@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from math import isfinite
 from pathlib import Path
 from typing import Any
@@ -13,6 +13,84 @@ import pandas as pd
 
 from ai_trading_system.domains.investigator.payload import build_investigator_payload
 from ai_trading_system.platform.db.paths import get_domain_paths, resolve_artifact_path
+
+
+def get_investigator_pattern_history(
+    symbol_id: str,
+    lookback_days: int,
+    as_of: str | date | datetime | None = None,
+    *,
+    project_root: Path | str | None = None,
+) -> dict[str, Any]:
+    symbol = str(symbol_id or "").strip().upper()
+    lookback = max(0, int(lookback_days))
+    if not symbol:
+        return {"symbol_id": symbol, "lookback_days": lookback, "as_of": _json_safe(as_of), "history": []}
+    paths = get_domain_paths(project_root=project_root, data_domain="operational")
+    db_path = paths.root_dir / "control_plane.duckdb"
+    if not db_path.exists():
+        return {"symbol_id": symbol, "lookback_days": lookback, "as_of": _json_safe(as_of), "history": []}
+    conn: duckdb.DuckDBPyConnection | None = None
+    try:
+        conn = duckdb.connect(str(db_path), read_only=True)
+        as_of_date = _coerce_date(as_of)
+        if as_of_date is None:
+            row = conn.execute(
+                "SELECT MAX(trade_date) FROM investigator_pattern_scan WHERE UPPER(symbol_id) = ?",
+                [symbol],
+            ).fetchone()
+            as_of_date = _coerce_date(row[0] if row else None)
+        if as_of_date is None:
+            return {"symbol_id": symbol, "lookback_days": lookback, "as_of": None, "history": []}
+        from_date = as_of_date - timedelta(days=lookback)
+        frame = conn.execute(
+            """
+            SELECT
+                run_id,
+                attempt_number,
+                artifact_uri,
+                trade_date,
+                symbol_id,
+                pattern_family,
+                pattern_state,
+                pattern_lifecycle_state,
+                pattern_score,
+                setup_quality,
+                stage2_score,
+                stage2_label,
+                breakout_level,
+                watchlist_trigger_level,
+                invalidation_price,
+                is_strong_volume_confirmation,
+                is_combined_volume_confirmation,
+                breakout_volume_ratio,
+                s1_promotion_state,
+                promotion_reason,
+                trigger_reason,
+                investigator_status,
+                investigator_verdict,
+                investigator_final_score,
+                source_investigator,
+                source_ranked
+            FROM investigator_pattern_scan
+            WHERE UPPER(symbol_id) = ?
+              AND trade_date >= ?
+              AND trade_date <= ?
+            ORDER BY trade_date DESC, run_id DESC, attempt_number DESC
+            """,
+            [symbol, from_date, as_of_date],
+        ).fetchdf()
+    except Exception:
+        return {"symbol_id": symbol, "lookback_days": lookback, "as_of": _json_safe(as_of), "history": []}
+    finally:
+        if conn is not None:
+            conn.close()
+    return {
+        "symbol_id": symbol,
+        "lookback_days": lookback,
+        "as_of": as_of_date.isoformat(),
+        "history": _records(frame),
+    }
 
 
 def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
@@ -198,6 +276,8 @@ def _summary_deltas_from_payload(payload: dict[str, Any], previous_summary: dict
 
 def _legacy_summary_key(key: str) -> str:
     return {
+        "total_intake": "total_intake_count",
+        "total_intake_count": "daily_gainer_count",
         "daily_gainers": "daily_gainer_count",
         "active_queue": "active_count",
         "high_conviction": "high_conviction_count",
@@ -244,6 +324,19 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, float) and not isfinite(value):
         return None
     return value
+
+
+def _coerce_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.date()
 
 
 def _sort_repeat_tracker(frame: pd.DataFrame) -> pd.DataFrame:

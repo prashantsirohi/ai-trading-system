@@ -174,6 +174,7 @@ class InvestigatorService:
             "investigator_scores": "investigator_scores",
             "repeat_tracker": "investigator_repeat_tracker",
             "active_watchlist": "investigator_lifecycle",
+            "investigator_pattern_scan": "investigator_pattern_scan",
             "final_3q_gate": "investigator_final_gate",
             "archived_investigator": "investigator_archive",
         }
@@ -220,6 +221,7 @@ class InvestigatorService:
             "run_id": context.run_id,
             "run_date": context.run_date,
             "trigger_counts": {str(k): int(v) for k, v in trigger_counts.items()},
+            "total_intake_count": int(len(gainers)),
             "daily_gainer_count": int(trigger_counts.get("DAILY_GAINER", 0)),
             "weekly_gainer_count": int(trigger_counts.get("WEEKLY_GAINER", 0)),
             "stealth_accumulation_count": int(trigger_counts.get("STEALTH_ACCUMULATION", 0)),

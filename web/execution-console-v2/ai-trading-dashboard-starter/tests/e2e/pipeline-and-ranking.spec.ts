@@ -83,7 +83,7 @@ test.describe('execution-console-v2 smoke', () => {
 
     await expect(page.getByRole('heading', { name: 'Investigator', exact: true })).toBeVisible();
     await expect(page.getByText('Trust: trusted')).toBeVisible();
-    await expect(page.getByText('Daily Gainers').first()).toBeVisible();
+    await expect(page.getByText('Investigator Intake').first()).toBeVisible();
     await expect(page.getByText('New In Window').first()).toBeVisible();
     await expect(page.getByText('Trap Count').first()).toBeVisible();
     await expect(page.getByText('Fresh Traps').first()).toBeVisible();

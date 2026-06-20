@@ -688,7 +688,7 @@ export default function InvestigatorPage() {
           <HealthRibbon data={data as unknown as Row} />
           <SectionCard title="Investigator Pulse">
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5">
-              <Metric label="Daily Gainers" value={summary.daily_gainers} deltaValue={deltas.daily_gainers} />
+              <Metric label="Investigator Intake" value={summary.total_intake ?? summary.daily_gainers} deltaValue={deltas.total_intake ?? deltas.daily_gainers} />
               <Metric label="New In Window" value={summary.new_in_window ?? summary.new_candidates} deltaValue={deltas.new_in_window ?? deltas.new_candidates} />
               <Metric label="Active Queue" value={summary.active_queue} deltaValue={deltas.active_queue} />
               <Metric label="Repeat >=3x" value={summary.repeat_ge3} deltaValue={deltas.repeat_ge3} />

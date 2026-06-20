@@ -229,7 +229,10 @@ def _decision_summary(
     trap_evidence: pd.DataFrame,
     run_date: str,
 ) -> dict[str, Any]:
-    daily = int(summary.get("daily_gainer_count", len(today_gainers)))
+    total_intake = int(summary.get("total_intake_count", len(today_gainers)))
+    daily = int(summary.get("daily_gainer_count", total_intake))
+    weekly = int(summary.get("weekly_gainer_count", 0))
+    stealth = int(summary.get("stealth_accumulation_count", 0))
     repeat_ge3 = int((_num(repeat_tracker, "appearance_count_20d") >= 3).sum()) if not repeat_tracker.empty else 0
     improving = int(((_num(repeat_tracker, "appearance_count_20d") >= 3) & (_num(repeat_tracker, "rank_change_20d") < 0) & (_num(repeat_tracker, "price_progression_pct") > 0)).sum()) if not repeat_tracker.empty else 0
     new_candidates = int((_num(active, "appearance_count_20d").fillna(1) <= 1).sum()) if not active.empty else 0
@@ -238,14 +241,19 @@ def _decision_summary(
     fresh_trap_today = _fresh_trap_count(trap_evidence, run_date)
     repeat_trap = _repeat_trap_count(trap_evidence)
     return {
-        "daily_gainers": daily,
+        "total_intake": total_intake,
+        "total_intake_count": total_intake,
+        "daily_gainers": total_intake,
+        "daily_gainer_count": daily,
+        "weekly_gainer_count": weekly,
+        "stealth_accumulation_count": stealth,
         "new_candidates": new_candidates,
         "new_in_window": new_candidates,
         "active_queue": int(summary.get("active_count", len(active))),
         "repeat_ge3": repeat_ge3,
         "improving_repeats": improving,
         "high_conviction": int(summary.get("high_conviction_count", len(high))),
-        "trap_rate": round((traps_count / daily) if daily else 0.0, 3),
+        "trap_rate": round((traps_count / total_intake) if total_intake else 0.0, 3),
         "traps": traps_count,
         "trap_count": traps_count,
         "trap_evidence_count": evidence_count,
@@ -266,6 +274,8 @@ def _summary_deltas(current: dict[str, Any], previous: dict[str, Any] | None) ->
 
 def _legacy_summary_key(key: str) -> str:
     return {
+        "total_intake": "total_intake_count",
+        "total_intake_count": "daily_gainer_count",
         "daily_gainers": "daily_gainer_count",
         "active_queue": "active_count",
         "high_conviction": "high_conviction_count",
@@ -301,7 +311,9 @@ def _pattern_confirmation(pattern_scan: pd.DataFrame | None) -> dict[str, Any]:
         scanned_symbols = list(getattr(pattern_scan, "attrs", {}).get("scanned_symbols", []) if pattern_scan is not None else [])
         return {
             "scanned_count": len(scanned_symbols),
+            "failed_s1": 0,
             "s1_base_forming": 0,
+            "s1_accumulation": 0,
             "s1_near_breakout": 0,
             "s1_to_s2_transition": 0,
             "s2_confirmed": 0,
@@ -340,7 +352,9 @@ def _pattern_confirmation(pattern_scan: pd.DataFrame | None) -> dict[str, Any]:
     top = top[[col for col in top_cols if col in top.columns]]
     return {
         "scanned_count": int(frame.get("symbol_id", pd.Series(dtype=object)).astype(str).str.upper().nunique()),
+        "failed_s1": int(state.eq("FAILED_S1").sum()),
         "s1_base_forming": int(state.eq("S1_BASE_FORMING").sum()),
+        "s1_accumulation": int(state.eq("S1_ACCUMULATION").sum()),
         "s1_near_breakout": int(state.eq("S1_NEAR_BREAKOUT").sum()),
         "s1_to_s2_transition": int(state.eq("S1_TO_S2_TRANSITION").sum()),
         "s2_confirmed": int(state.eq("S2_CONFIRMED").sum()),
@@ -359,7 +373,7 @@ def _archive_today(frame: pd.DataFrame, run_date: str) -> pd.DataFrame:
 
 def _funnel(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return [
-        {"key": "daily", "label": "Daily Gainers", "count": int(summary.get("daily_gainers", 0))},
+        {"key": "intake", "label": "Investigator Intake", "count": int(summary.get("total_intake", summary.get("daily_gainers", 0)))},
         {"key": "active", "label": "Active Queue", "count": int(summary.get("active_queue", 0))},
         {"key": "repeat", "label": "Repeat >=3x", "count": int(summary.get("repeat_ge3", 0))},
         {"key": "improving", "label": "Improving", "count": int(summary.get("improving_repeats", 0))},
@@ -371,7 +385,7 @@ def _funnel(summary: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _funnel_today(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return [
-        {"key": "daily", "label": "Daily Gainers (today)", "count": int(summary.get("daily_gainers", 0))},
+        {"key": "intake", "label": "Investigator Intake (today)", "count": int(summary.get("total_intake", summary.get("daily_gainers", 0)))},
         {"key": "fresh_traps", "label": "Fresh Traps (today)", "count": int(summary.get("fresh_trap_today", 0))},
         {"key": "high", "label": "High Conviction (today)", "count": int(summary.get("high_conviction", 0))},
     ]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ai_trading_system.domains.investigator.payload import _investigator_score, build_investigator_payload
+from ai_trading_system.domains.investigator.payload import _investigator_score, _pattern_confirmation, build_investigator_payload
 
 
 def test_payload_derives_decision_scores_and_trap_categories() -> None:
@@ -71,10 +71,65 @@ def test_payload_derives_decision_scores_and_trap_categories() -> None:
     assert payload["summary"]["trap_count"] == 1
     assert payload["summary"]["fresh_trap_today"] == 1
     assert payload["summary"]["repeat_trap"] == 1
-    assert payload["charts"]["funnel_today"][0]["label"] == "Daily Gainers (today)"
+    assert payload["charts"]["funnel_today"][0]["label"] == "Investigator Intake (today)"
     assert payload["charts"]["funnel_window"][0]["key"] == "new_window"
     assert payload["charts"]["trend"][0]["date"] == "2026-05-07"
     assert payload["charts"]["trend"][0]["traps"] == 1
+
+
+def test_payload_uses_total_intake_for_summary_and_funnel() -> None:
+    payload = build_investigator_payload(
+        run_id="run-1",
+        run_date="2026-05-07",
+        summary={
+            "total_intake_count": 6,
+            "daily_gainer_count": 2,
+            "weekly_gainer_count": 3,
+            "stealth_accumulation_count": 1,
+            "active_count": 2,
+            "trap_count": 3,
+            "archived_count": 0,
+        },
+        today_gainers=pd.DataFrame([{"symbol_id": "AAA"}]),
+        scores=pd.DataFrame([{"symbol_id": "AAA"}]),
+        repeat_tracker=pd.DataFrame(),
+        active_watchlist=pd.DataFrame([{"symbol_id": "AAA"}]),
+        trap_log=pd.DataFrame([{"symbol_id": "TRAP1"}, {"symbol_id": "TRAP2"}, {"symbol_id": "TRAP3"}]),
+        archive=pd.DataFrame(),
+    )
+
+    assert payload["summary"]["total_intake"] == 6
+    assert payload["summary"]["total_intake_count"] == 6
+    assert payload["summary"]["daily_gainers"] == 6
+    assert payload["summary"]["daily_gainer_count"] == 2
+    assert payload["summary"]["weekly_gainer_count"] == 3
+    assert payload["summary"]["stealth_accumulation_count"] == 1
+    assert payload["summary"]["trap_rate"] == 0.5
+    assert payload["charts"]["funnel"][0] == {"key": "intake", "label": "Investigator Intake", "count": 6}
+    assert payload["charts"]["funnel_today"][0] == {"key": "intake", "label": "Investigator Intake (today)", "count": 6}
+
+
+def test_pattern_confirmation_counts_all_s1_states_and_sorts_top_setups() -> None:
+    confirmation = _pattern_confirmation(
+        pd.DataFrame(
+            [
+                {"symbol_id": "FAIL", "s1_promotion_state": "FAILED_S1", "pattern_score": 95, "setup_quality": 95},
+                {"symbol_id": "ACC", "s1_promotion_state": "S1_ACCUMULATION", "pattern_score": 50, "setup_quality": 40},
+                {"symbol_id": "BASE", "s1_promotion_state": "S1_BASE_FORMING", "pattern_score": 60, "setup_quality": 40},
+                {"symbol_id": "NEAR", "s1_promotion_state": "S1_NEAR_BREAKOUT", "pattern_score": 66, "setup_quality": 61},
+                {"symbol_id": "TRANS", "s1_promotion_state": "S1_TO_S2_TRANSITION", "pattern_score": 72, "setup_quality": 63},
+                {"symbol_id": "CONF", "s1_promotion_state": "S2_CONFIRMED", "pattern_score": 70, "setup_quality": 62},
+            ]
+        )
+    )
+
+    assert confirmation["failed_s1"] == 1
+    assert confirmation["s1_base_forming"] == 1
+    assert confirmation["s1_accumulation"] == 1
+    assert confirmation["s1_near_breakout"] == 1
+    assert confirmation["s1_to_s2_transition"] == 1
+    assert confirmation["s2_confirmed"] == 1
+    assert [row["symbol_id"] for row in confirmation["top_setups"][:3]] == ["CONF", "TRANS", "NEAR"]
 
 
 def test_payload_pattern_state_lifts_investigator_score_without_changing_final_score() -> None:

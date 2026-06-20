@@ -11,6 +11,7 @@ from ai_trading_system.domains.investigator import pattern_scan as pattern_scan_
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 from ai_trading_system.pipeline.orchestrator import PIPELINE_ORDER
 from ai_trading_system.pipeline.stages.investigator import InvestigatorStage
+from ai_trading_system.ui.execution_api.services.readmodels.investigator import get_investigator_pattern_history
 
 
 def _seed_ohlcv(path: Path) -> None:
@@ -177,6 +178,7 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     assert (output_dir / "final_3q_gate.csv").exists()
     assert (output_dir / "investigator_summary.json").exists()
     assert (output_dir / "investigator_payload.json").exists()
+    assert result.metadata["total_intake_count"] == 3
     assert result.metadata["daily_gainer_count"] == 1
     assert result.metadata["weekly_gainer_count"] == 1
     assert result.metadata["stealth_accumulation_count"] == 1
@@ -225,6 +227,10 @@ def test_investigator_stage_scans_non_s2_active_s1_pattern_candidate(tmp_path: P
                     "pattern_score": 72.0,
                     "setup_quality": 62.0,
                     "stage2_score": 42.0,
+                    "stage2_label": "watchlist",
+                    "breakout_level": 120.0,
+                    "watchlist_trigger_level": 118.0,
+                    "invalidation_price": 101.0,
                     "is_combined_volume_confirmation": True,
                     "breakout_volume_ratio": 1.4,
                 }
@@ -265,6 +271,75 @@ def test_investigator_stage_scans_non_s2_active_s1_pattern_candidate(tmp_path: P
     assert queue_row["pattern_state"] == "watchlist"
     assert queue_row["s1_promotion_state"] == "S1_TO_S2_TRANSITION"
     assert queue_row["promotion_reason"]
+    with registry._reader() as conn:  # noqa: SLF001
+        row = conn.execute(
+            """
+            SELECT
+                trade_date,
+                symbol_id,
+                pattern_family,
+                stage2_label,
+                breakout_level,
+                watchlist_trigger_level,
+                invalidation_price,
+                s1_promotion_state,
+                source_investigator,
+                source_ranked
+            FROM investigator_pattern_scan
+            WHERE symbol_id = 'STEALTH'
+            """
+        ).fetchone()
+    assert row == (
+        pd.Timestamp("2026-05-07").date(),
+        "STEALTH",
+        "round_bottom",
+        "watchlist",
+        120.0,
+        118.0,
+        101.0,
+        "S1_TO_S2_TRANSITION",
+        True,
+        False,
+    )
+
+
+def test_investigator_pattern_history_keeps_multiple_states_across_dates(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+    with registry._writer() as conn:  # noqa: SLF001
+        conn.execute(
+            """
+            INSERT INTO investigator_pattern_scan (
+                run_id,
+                attempt_number,
+                artifact_uri,
+                trade_date,
+                symbol_id,
+                pattern_family,
+                pattern_state,
+                pattern_lifecycle_state,
+                pattern_score,
+                setup_quality,
+                stage2_score,
+                s1_promotion_state,
+                promotion_reason,
+                source_investigator,
+                source_ranked
+            )
+            VALUES
+                ('run-2026-05-01', 1, 'artifact://old', '2026-05-01', 'KIRLPNU', 'round_bottom', 'watchlist', 'watchlist', 52, 40, 30, 'S1_ACCUMULATION', 'Accumulation evidence', true, false),
+                ('run-2026-05-07', 1, 'artifact://mid', '2026-05-07', 'KIRLPNU', 'round_bottom', 'watchlist', 'watchlist', 72, 63, 55, 'S1_TO_S2_TRANSITION', 'Transition evidence', true, false),
+                ('run-2026-05-14', 1, 'artifact://new', '2026-05-14', 'KIRLPNU', 'round_bottom', 'confirmed', 'confirmed', 80, 70, 75, 'S2_CONFIRMED', 'Confirmed evidence', true, true)
+            """
+        )
+
+    history = get_investigator_pattern_history("kirlpnu", 20, as_of="2026-05-14", project_root=tmp_path)
+
+    assert history["symbol_id"] == "KIRLPNU"
+    assert [row["s1_promotion_state"] for row in history["history"]] == [
+        "S2_CONFIRMED",
+        "S1_TO_S2_TRANSITION",
+        "S1_ACCUMULATION",
+    ]
 
 
 def test_pipeline_order_places_investigator_after_rank() -> None:

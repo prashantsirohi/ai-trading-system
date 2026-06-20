@@ -93,7 +93,21 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
         frame.to_csv(path, index=False)
         registry.record_artifact(run_id, "investigator", 1, StageArtifact.from_file(artifact_type, path, row_count=len(frame), attempt_number=1))
     summary_path = attempt_dir / "investigator_summary.json"
-    summary_path.write_text(json.dumps({"run_id": run_id, "run_date": "2026-05-07", "daily_gainer_count": 2, "active_count": 2, "trap_count": 1, "archived_count": 1}), encoding="utf-8")
+    summary_path.write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "run_date": "2026-05-07",
+                "total_intake_count": 2,
+                "daily_gainer_count": 1,
+                "weekly_gainer_count": 1,
+                "active_count": 2,
+                "trap_count": 1,
+                "archived_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
     registry.record_artifact(run_id, "investigator", 1, StageArtifact.from_file("investigator_summary", summary_path, row_count=1, attempt_number=1))
 
     response = TestClient(create_app()).get("/api/execution/investigator", headers=API_HEADERS)
@@ -114,10 +128,14 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     assert body["decision_queue"][0]["pattern_score"] == 72
     assert body["closest_to_high_conviction"][0]["symbol_id"] == "AAA"
     assert body["pattern_confirmation"]["scanned_count"] == 1
+    assert body["pattern_confirmation"]["failed_s1"] == 0
+    assert body["pattern_confirmation"]["s1_accumulation"] == 0
     assert body["pattern_confirmation"]["s1_to_s2_transition"] == 1
     assert body["investigator_pattern_scan"][0]["symbol_id"] == "AAA"
     assert body["trap_radar"][0]["trap_category"] == "One-day spike"
-    assert body["decision_payload"]["charts"]["funnel_today"][0]["label"] == "Daily Gainers (today)"
+    assert body["decision_payload"]["summary"]["total_intake"] == 2
+    assert body["decision_payload"]["summary"]["daily_gainer_count"] == 1
+    assert body["decision_payload"]["charts"]["funnel_today"][0]["label"] == "Investigator Intake (today)"
     assert body["decision_payload"]["charts"]["funnel_window"][0]["key"] == "new_window"
     assert body["decision_payload"]["charts"]["trend"][0]["date"] == "2026-05-07"
     assert body["active_watchlist"][0]["symbol_id"] == "AAA"
