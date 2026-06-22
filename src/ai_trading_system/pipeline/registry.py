@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -754,16 +755,37 @@ class RegistryStore:
             ).fetchone()
             return int(row[0]) if row else 1
 
-    def start_stage(self, run_id: str, stage_name: str, attempt_number: int) -> str:
+    def start_stage(
+        self,
+        run_id: str,
+        stage_name: str,
+        attempt_number: int,
+        *,
+        parent_stage_name: str | None = None,
+        resumable_key: str | None = None,
+        resume_policy: str | None = None,
+        checkpoint: Optional[Dict[str, Any]] = None,
+    ) -> str:
         stage_run_id = f"{stage_name}-{attempt_number}-{uuid.uuid4().hex[:8]}"
         with self._writer() as conn:
             conn.execute(
                 """
                 INSERT INTO pipeline_stage_run
-                (stage_run_id, run_id, stage_name, attempt_number, status, started_at)
-                VALUES (?, ?, ?, ?, 'running', (current_timestamp AT TIME ZONE 'UTC'))
+                (stage_run_id, run_id, stage_name, attempt_number, status, started_at,
+                 heartbeat_at, parent_stage_name, resumable_key, resume_policy, checkpoint_json)
+                VALUES (?, ?, ?, ?, 'running', (current_timestamp AT TIME ZONE 'UTC'),
+                        (current_timestamp AT TIME ZONE 'UTC'), ?, ?, ?, ?)
                 """,
-                [stage_run_id, run_id, stage_name, attempt_number],
+                [
+                    stage_run_id,
+                    run_id,
+                    stage_name,
+                    attempt_number,
+                    parent_stage_name,
+                    resumable_key,
+                    resume_policy,
+                    self._json(checkpoint),
+                ],
             )
         return stage_run_id
 
@@ -774,17 +796,79 @@ class RegistryStore:
         error_class: Optional[str] = None,
         error_message: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        checkpoint: Optional[Dict[str, Any]] = None,
     ) -> None:
+        checkpoint_json = self._json(checkpoint) if checkpoint is not None else None
         with self._writer() as conn:
+            if checkpoint is None:
+                conn.execute(
+                    """
+                    UPDATE pipeline_stage_run
+                    SET status = ?, ended_at = (current_timestamp AT TIME ZONE 'UTC'),
+                        error_class = ?, error_message = ?, metadata_json = ?
+                    WHERE stage_run_id = ?
+                    """,
+                    [status, error_class, error_message, self._json(metadata), stage_run_id],
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE pipeline_stage_run
+                    SET status = ?, ended_at = (current_timestamp AT TIME ZONE 'UTC'),
+                        error_class = ?, error_message = ?, metadata_json = ?,
+                        checkpoint_json = ?
+                    WHERE stage_run_id = ?
+                    """,
+                    [status, error_class, error_message, self._json(metadata), checkpoint_json, stage_run_id],
+                )
+
+    def heartbeat_stage(self, stage_run_id: str, checkpoint: Optional[Dict[str, Any]] = None) -> None:
+        with self._writer() as conn:
+            if checkpoint is None:
+                conn.execute(
+                    """
+                    UPDATE pipeline_stage_run
+                    SET heartbeat_at = (current_timestamp AT TIME ZONE 'UTC')
+                    WHERE stage_run_id = ?
+                    """,
+                    [stage_run_id],
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE pipeline_stage_run
+                    SET heartbeat_at = (current_timestamp AT TIME ZONE 'UTC'),
+                        checkpoint_json = ?
+                    WHERE stage_run_id = ?
+                    """,
+                    [self._json(checkpoint), stage_run_id],
+                )
+
+    def mark_stale_running_attempts_interrupted(self, run_id: str) -> int:
+        with self._writer() as conn:
+            rows = conn.execute(
+                """
+                SELECT stage_run_id
+                FROM pipeline_stage_run
+                WHERE run_id = ? AND status = 'running'
+                """,
+                [run_id],
+            ).fetchall()
+            if not rows:
+                return 0
             conn.execute(
                 """
                 UPDATE pipeline_stage_run
-                SET status = ?, ended_at = (current_timestamp AT TIME ZONE 'UTC'),
-                    error_class = ?, error_message = ?, metadata_json = ?
-                WHERE stage_run_id = ?
+                SET status = 'interrupted',
+                    ended_at = COALESCE(ended_at, (current_timestamp AT TIME ZONE 'UTC')),
+                    interrupted_at = (current_timestamp AT TIME ZONE 'UTC'),
+                    error_class = COALESCE(NULLIF(error_class, ''), 'InterruptedRun'),
+                    error_message = COALESCE(NULLIF(error_message, ''), 'Marked interrupted before resume')
+                WHERE run_id = ? AND status = 'running'
                 """,
-                [status, error_class, error_message, self._json(metadata), stage_run_id],
+                [run_id],
             )
+            return len(rows)
 
     def record_artifact(
         self,
@@ -1410,7 +1494,20 @@ class RegistryStore:
                 params.append(started_after)
             rows = conn.execute(
                 f"""
-                SELECT stage_name, attempt_number, status, error_class, error_message, started_at, ended_at
+                SELECT
+                    stage_name,
+                    attempt_number,
+                    status,
+                    error_class,
+                    error_message,
+                    started_at,
+                    ended_at,
+                    parent_stage_name,
+                    resumable_key,
+                    heartbeat_at,
+                    interrupted_at,
+                    resume_policy,
+                    checkpoint_json
                 FROM pipeline_stage_run
                 {where_sql}
                 ORDER BY started_at, attempt_number
@@ -1426,9 +1523,77 @@ class RegistryStore:
                 "error_message": row[4],
                 "started_at": str(row[5]) if row[5] is not None else None,
                 "ended_at": str(row[6]) if row[6] is not None else None,
+                "parent_stage_name": row[7],
+                "resumable_key": row[8],
+                "heartbeat_at": str(row[9]) if row[9] is not None else None,
+                "interrupted_at": str(row[10]) if row[10] is not None else None,
+                "resume_policy": row[11],
+                "checkpoint": self._loads(row[12]),
             }
             for row in rows
         ]
+
+    def latest_stage_status_map(self, run_id: str) -> Dict[str, Dict[str, Any]]:
+        latest: Dict[str, Dict[str, Any]] = {}
+        for stage_run in self.get_stage_runs(run_id):
+            stage_name = str(stage_run.get("stage_name") or "")
+            if stage_name:
+                latest[stage_name] = stage_run
+        return latest
+
+    def find_latest_resumable_run(
+        self,
+        *,
+        run_date: str,
+        data_domain: str = "operational",
+        canary: bool = False,
+    ) -> str | None:
+        with self._reader() as conn:
+            rows = conn.execute(
+                """
+                SELECT run_id, status, metadata_json
+                FROM pipeline_run
+                WHERE pipeline_name = 'daily_pipeline'
+                  AND CAST(run_date AS DATE) = CAST(? AS DATE)
+                ORDER BY started_at DESC NULLS LAST
+                LIMIT 50
+                """,
+                [run_date],
+            ).fetchall()
+
+        for run_id, status, metadata_json in rows:
+            metadata = self._loads(metadata_json) or {}
+            params = dict(metadata.get("params") or {})
+            if str(params.get("data_domain", "operational")) != str(data_domain):
+                continue
+            if bool(params.get("canary", False)) != bool(canary):
+                continue
+            pid = metadata.get("orchestrator_pid")
+            if str(status) == "running" and self._pid_alive(pid):
+                continue
+            stage_statuses = self.latest_stage_status_map(str(run_id))
+            if str(status) == "running":
+                return str(run_id)
+            if any(
+                str(item.get("status") or "") in {"running", "interrupted", "failed"}
+                for item in stage_statuses.values()
+            ):
+                return str(run_id)
+        return None
+
+    @staticmethod
+    def _pid_alive(pid: object) -> bool:
+        try:
+            pid_int = int(pid)
+        except (TypeError, ValueError):
+            return False
+        if pid_int <= 0 or pid_int == os.getpid():
+            return False
+        try:
+            os.kill(pid_int, 0)
+            return True
+        except OSError:
+            return False
 
     def get_run(self, run_id: str) -> Dict[str, Any]:
         with self._reader() as conn:

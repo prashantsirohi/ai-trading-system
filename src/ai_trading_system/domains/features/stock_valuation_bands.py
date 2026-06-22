@@ -18,6 +18,7 @@ METRICS = ("pe", "ps", "pb")
 
 @dataclass(frozen=True)
 class StockValuationBandsResult:
+    status: str
     rows: int
     symbols: int
     start_date: str | None
@@ -35,6 +36,7 @@ def refresh_stock_valuation_bands(
     min_history_days_3y: int = 504,
     min_history_days_5y: int = 756,
     output_csv: str | Path | None = None,
+    skip_if_current: bool = False,
 ) -> StockValuationBandsResult:
     """Refresh stock valuation bands from `stock_valuation_daily`."""
 
@@ -42,10 +44,32 @@ def refresh_stock_valuation_bands(
     conn = duckdb.connect(str(ohlcv_db_path))
     try:
         ensure_valuation_schema(conn)
+        requested_from = str(from_date)[:10] if from_date else None
+        requested_to = str(to_date)[:10] if to_date else requested_from
+        if skip_if_current and requested_from and requested_to and _bands_current(
+            conn,
+            universe_id=universe_id,
+            from_date=requested_from,
+            to_date=requested_to,
+        ):
+            latest = _load_latest_bands(conn, universe_id=universe_id, to_date=requested_to)
+            _write_output(latest, output_csv)
+            latest_date = (
+                str(pd.to_datetime(latest["date"]).dt.date.max()) if not latest.empty else requested_to
+            )
+            return StockValuationBandsResult(
+                status="skipped_current",
+                rows=0,
+                symbols=int(latest["symbol"].nunique()) if not latest.empty else 0,
+                start_date=requested_from,
+                end_date=requested_to,
+                latest_rows=int(len(latest)),
+                latest_date=latest_date,
+            )
         source = _load_source(conn, universe_id=universe_id, to_date=to_date)
         if source.empty:
             _write_output(pd.DataFrame(), output_csv)
-            return StockValuationBandsResult(0, 0, None, None, 0, None)
+            return StockValuationBandsResult("empty", 0, 0, None, None, 0, None)
         bands = _build_bands(
             source,
             min_history_days_3y=int(min_history_days_3y),
@@ -57,7 +81,7 @@ def refresh_stock_valuation_bands(
             bands = bands.loc[pd.to_datetime(bands["date"]).dt.date <= pd.Timestamp(to_date).date()].copy()
         if bands.empty:
             _write_output(pd.DataFrame(), output_csv)
-            return StockValuationBandsResult(0, 0, None, None, 0, None)
+            return StockValuationBandsResult("empty", 0, 0, None, None, 0, None)
         start = str(pd.to_datetime(bands["date"]).dt.date.min())
         end = str(pd.to_datetime(bands["date"]).dt.date.max())
         conn.execute(
@@ -76,6 +100,7 @@ def refresh_stock_valuation_bands(
     latest = bands.loc[pd.to_datetime(bands["date"]).dt.date.astype(str).eq(latest_date)].copy()
     _write_output(latest, output_csv)
     return StockValuationBandsResult(
+        status="completed",
         rows=int(len(bands)),
         symbols=int(bands["symbol"].nunique()),
         start_date=start,
@@ -83,6 +108,66 @@ def refresh_stock_valuation_bands(
         latest_rows=int(len(latest)),
         latest_date=latest_date,
     )
+
+
+def _bands_current(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    universe_id: str,
+    from_date: str,
+    to_date: str,
+) -> bool:
+    exists = conn.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'stock_valuation_bands'"
+    ).fetchone()[0]
+    if not exists:
+        return False
+    band_row = conn.execute(
+        """
+        SELECT COUNT(DISTINCT date), COUNT(DISTINCT symbol)
+        FROM stock_valuation_bands
+        WHERE universe_id = ?
+          AND date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+        """,
+        [universe_id, from_date, to_date],
+    ).fetchone()
+    if not band_row or int(band_row[0] or 0) <= 0:
+        return False
+    source_row = conn.execute(
+        """
+        SELECT COUNT(DISTINCT symbol)
+        FROM stock_valuation_daily
+        WHERE universe_id = ?
+          AND date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+        """,
+        [universe_id, from_date, to_date],
+    ).fetchone()
+    source_symbols = int(source_row[0] or 0) if source_row else 0
+    band_symbols = int(band_row[1] or 0)
+    return source_symbols > 0 and band_symbols >= source_symbols
+
+
+def _load_latest_bands(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    universe_id: str,
+    to_date: str,
+) -> pd.DataFrame:
+    return conn.execute(
+        """
+        SELECT *
+        FROM stock_valuation_bands
+        WHERE universe_id = ?
+          AND date = (
+              SELECT MAX(date)
+              FROM stock_valuation_bands
+              WHERE universe_id = ?
+                AND date <= CAST(? AS DATE)
+          )
+        ORDER BY symbol
+        """,
+        [universe_id, universe_id, to_date],
+    ).df()
 
 
 def _load_source(conn: duckdb.DuckDBPyConnection, *, universe_id: str, to_date: str | None) -> pd.DataFrame:

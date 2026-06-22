@@ -44,12 +44,15 @@ def build_investigator_payload(
     high = enriched_scores.loc[_text(enriched_scores, "decision_verdict").eq("High Conviction")].copy()
 
     decision_queue = _records(
-        active.sort_values(["investigator_score", "symbol_id"], ascending=[False, True], kind="stable"),
+        _sort_for_records(active, ["investigator_score", "symbol_id"], [False, True]),
         limit=20,
     )
     closest = _records(
-        enriched_scores.loc[~_text(enriched_scores, "decision_verdict").eq("High Conviction")]
-        .sort_values(["investigator_score", "symbol_id"], ascending=[False, True], kind="stable"),
+        _sort_for_records(
+            enriched_scores.loc[~_text(enriched_scores, "decision_verdict").eq("High Conviction")],
+            ["investigator_score", "symbol_id"],
+            [False, True],
+        ),
         limit=5,
     )
     repeat_quality = _records(_repeat_quality(repeat_tracker), limit=20)
@@ -504,6 +507,16 @@ def _records(frame: pd.DataFrame, limit: int | None = None) -> list[dict[str, An
     safe = safe.loc[:, ~safe.columns.duplicated()].copy()
     safe = safe.where(safe.notna(), None)
     return [_json_safe(row) for row in safe.to_dict(orient="records")]
+
+
+def _sort_for_records(frame: pd.DataFrame, columns: list[str], ascending: list[bool]) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    available = [col for col in columns if col in frame.columns]
+    if not available:
+        return frame
+    directions = [ascending[columns.index(col)] for col in available]
+    return frame.sort_values(available, ascending=directions, kind="stable")
 
 
 def _num(frame: pd.DataFrame, column: str) -> pd.Series:

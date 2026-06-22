@@ -66,8 +66,40 @@ def load_investigator_intake(
     if not resolved_as_of:
         return _empty()
     with duckdb.connect(str(ohlcv_db_path), read_only=True) as conn:
-        rows = conn.execute(
+        has_delivery = bool(
+            conn.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '_delivery'"
+            ).fetchone()[0]
+        )
+        delivery_cte = (
             """
+            delivery AS (
+              SELECT symbol_id, delivery_pct
+              FROM (
+                SELECT
+                  symbol_id,
+                  delivery_pct,
+                  ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp DESC) AS rn
+                FROM _delivery
+                WHERE exchange = 'NSE'
+                  AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
+              )
+              WHERE rn = 1
+            )
+            """
+            if has_delivery
+            else """
+            delivery AS (
+              SELECT
+                CAST(NULL AS VARCHAR) AS symbol_id,
+                CAST(NULL AS DOUBLE) AS delivery_pct
+              WHERE FALSE
+            )
+            """
+        )
+        params = [resolved_as_of, resolved_as_of] if has_delivery else [resolved_as_of]
+        rows = conn.execute(
+            f"""
             WITH base AS (
               SELECT
                 symbol_id,
@@ -133,19 +165,7 @@ def load_investigator_intake(
             latest AS (
               SELECT * FROM last_rows WHERE rn = 1
             ),
-            delivery AS (
-              SELECT symbol_id, delivery_pct
-              FROM (
-                SELECT
-                  symbol_id,
-                  delivery_pct,
-                  ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp DESC) AS rn
-                FROM _delivery
-                WHERE exchange = 'NSE'
-                  AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
-              )
-              WHERE rn = 1
-            )
+            {delivery_cte}
             SELECT
               latest.symbol_id,
               latest.trade_date,
@@ -171,7 +191,7 @@ def load_investigator_intake(
             WHERE latest.prev_close > 0
             """
             ,
-            [resolved_as_of, resolved_as_of],
+            params,
         ).fetchdf()
     if rows.empty:
         return _empty()

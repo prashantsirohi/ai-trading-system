@@ -5,13 +5,24 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import duckdb
 
 from ai_trading_system.analytics.data_trust import load_data_trust_summary
 from ai_trading_system.pipeline.contracts import TrustConfidenceEnvelope
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
+
+
+FEATURE_SUBSTAGES = [
+    "features_technical",
+    "features_sector_rs",
+    "features_valuation",
+    "features_stock_valuation_bands",
+    "features_sector_earnings",
+    "features_phase1",
+    "features_snapshot",
+]
 
 
 class FeaturesOrchestrationService:
@@ -26,6 +37,8 @@ class FeaturesOrchestrationService:
         *,
         record_snapshot: Optional[Callable[[StageContext], tuple[int, int, int]]] = None,
     ) -> StageResult:
+        if context.stage_name in FEATURE_SUBSTAGES:
+            return self.run_substage(context, record_snapshot=record_snapshot)
         metadata = self.run_default(context, record_snapshot=record_snapshot)
         artifact_path = context.write_json("feature_snapshot.json", metadata)
         artifact = StageArtifact.from_file(
@@ -58,6 +71,425 @@ class FeaturesOrchestrationService:
                 )
         return StageResult(artifacts=artifacts, metadata=metadata)
 
+    def run_substage(
+        self,
+        context: StageContext,
+        *,
+        record_snapshot: Optional[Callable[[StageContext], tuple[int, int, int]]] = None,
+    ) -> StageResult:
+        if self.operation is not None:
+            if context.stage_name == "features_snapshot":
+                metadata = self.operation(context)
+                artifact_path = context.write_json("feature_snapshot.json", metadata)
+                return StageResult(
+                    artifacts=[
+                        StageArtifact.from_file(
+                            "feature_snapshot",
+                            artifact_path,
+                            row_count=metadata.get("feature_rows"),
+                            metadata=metadata,
+                            attempt_number=context.attempt_number,
+                        )
+                    ],
+                    metadata=metadata,
+                )
+            metadata = {
+                "status": "completed",
+                "operation_bypass": True,
+                "parent_stage_name": "features",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            artifact_path = context.write_json(f"{context.stage_name}.json", metadata)
+            return StageResult(
+                artifacts=[
+                    StageArtifact.from_file(
+                        context.stage_name,
+                        artifact_path,
+                        metadata=metadata,
+                        attempt_number=context.attempt_number,
+                    )
+                ],
+                metadata=metadata,
+            )
+        runners = {
+            "features_technical": self.run_technical,
+            "features_sector_rs": self.run_sector_rs,
+            "features_valuation": self.run_valuation,
+            "features_stock_valuation_bands": self.run_stock_valuation_bands,
+            "features_sector_earnings": self.run_sector_earnings,
+            "features_phase1": self.run_phase1,
+            "features_snapshot": lambda ctx: self.run_snapshot(ctx, record_snapshot=record_snapshot),
+        }
+        runner = runners.get(context.stage_name)
+        if runner is None:
+            raise ValueError(f"Unsupported feature substage: {context.stage_name}")
+        metadata = runner(context)
+        artifacts: list[StageArtifact] = []
+        if context.stage_name == "features_snapshot":
+            artifact_path = context.write_json("feature_snapshot.json", metadata)
+            artifacts.append(
+                StageArtifact.from_file(
+                    "feature_snapshot",
+                    artifact_path,
+                    row_count=metadata.get("feature_rows"),
+                    metadata=metadata,
+                    attempt_number=context.attempt_number,
+                )
+            )
+        else:
+            filename = f"{context.stage_name}.json"
+            artifact_path = context.write_json(filename, metadata)
+            artifacts.append(
+                StageArtifact.from_file(
+                    context.stage_name,
+                    artifact_path,
+                    row_count=metadata.get("rows") or metadata.get("rows_written_total"),
+                    metadata=metadata,
+                    attempt_number=context.attempt_number,
+                )
+            )
+            output_csv = metadata.get("output_csv") if isinstance(metadata, dict) else None
+            if output_csv:
+                csv_path = Path(output_csv)
+                if csv_path.exists():
+                    artifacts.append(
+                        StageArtifact.from_file(
+                            csv_path.stem,
+                            csv_path,
+                            row_count=metadata.get("latest_rows") or metadata.get("rows"),
+                            metadata=metadata,
+                            attempt_number=context.attempt_number,
+                        )
+                    )
+        return StageResult(artifacts=artifacts, metadata=metadata)
+
+    def _load_updated_symbols(self, context: StageContext) -> list[str] | None:
+        ingest_artifact = context.artifact_for("ingest", "ingest_summary")
+        if ingest_artifact is None:
+            return None
+        try:
+            with open(ingest_artifact.uri, "r", encoding="utf-8") as handle:
+                ingest_summary = json.load(handle)
+            return (
+                ingest_summary.get("downstream_changed_symbols")
+                or ingest_summary.get("updated_symbols")
+                or None
+            )
+        except Exception:
+            return None
+
+    def _full_rebuild(self, context: StageContext) -> bool:
+        return bool(
+            context.params.get("full_rebuild", False)
+            or context.params.get("data_domain") == "research"
+        )
+
+    def _feature_progress(self, context: StageContext, update: dict) -> None:
+        status = str(update.get("status") or "running").strip().lower()
+        total = int(update.get("total_steps") or update.get("total") or 0)
+        completed = int(update.get("completed_steps") or update.get("completed") or 0)
+        pct = int((completed / max(1, total)) * 100)
+        feature_type = str(update.get("feature_type") or "").strip()
+        symbol_id = str(update.get("symbol_id") or "").strip()
+        step_status = str(update.get("step_status") or "").strip()
+        eta = update.get("eta_seconds")
+        eta_txt = f"{int(eta)}s" if eta is not None else "n/a"
+        detail = (
+            f"{completed}/{max(1, total)} ({pct}%)"
+            + (f" · {feature_type}:{symbol_id}" if feature_type and symbol_id else "")
+            + (f" · step={step_status}" if step_status else "")
+            + f" · eta={eta_txt}"
+        )
+        context.report_task(
+            task_name="technical_features",
+            status="done" if status == "completed" else "running",
+            detail="starting technical feature computation" if status == "started" else detail,
+            metadata=update,
+        )
+
+    def _resolve_feature_engine(self, context: StageContext, feature_types: list[str]) -> tuple[str, str | None]:
+        requested = str(context.params.get("feature_compute_engine") or "auto").strip().lower()
+        if requested not in {"auto", "legacy", "duckdb_batch"}:
+            raise ValueError("feature_compute_engine must be one of: auto, legacy, duckdb_batch")
+        if requested in {"legacy", "duckdb_batch"}:
+            return requested, None
+        from ai_trading_system.domains.features.compute_features_batch import BATCH_FEATURE_FUNCTIONS
+
+        unsupported = sorted(set(feature_types) - set(BATCH_FEATURE_FUNCTIONS))
+        if unsupported:
+            return "legacy", f"unsupported_batch_features={','.join(unsupported)}"
+        return "duckdb_batch", None
+
+    def _default_feature_types(self, context: StageContext) -> list[str]:
+        raw = context.params.get("feature_types")
+        if raw:
+            return [str(item).strip().lower() for item in raw if str(item).strip()]
+        return ["rsi", "adx", "sma", "ema", "macd", "atr", "bb", "roc", "supertrend"]
+
+    def run_technical(self, context: StageContext) -> dict[str, Any]:
+        if self.operation is not None:
+            return self.operation(context)
+
+        full_rebuild = self._full_rebuild(context)
+        feature_types = self._default_feature_types(context)
+        feature_compute_engine, fallback_reason = self._resolve_feature_engine(context, feature_types)
+        updated_symbols = self._load_updated_symbols(context)
+        feature_run_summary: dict[str, Any] = {}
+        if feature_compute_engine == "duckdb_batch":
+            from ai_trading_system.domains.features.compute_features_batch import run_batch_feature_computation
+
+            batch_symbols = None if full_rebuild else updated_symbols
+            context.report_task(
+                task_name="technical_features",
+                status="running",
+                detail="duckdb_batch starting",
+                metadata={
+                    "total_steps": len(feature_types),
+                    "completed_steps": 0,
+                    "feature_compute_engine": feature_compute_engine,
+                    "symbols_count": len(batch_symbols or []),
+                },
+            )
+            feature_run_summary = run_batch_feature_computation(
+                project_root=context.project_root,
+                data_domain=str(context.params.get("data_domain", "operational")),
+                symbols=batch_symbols,
+                exchanges=[str(context.params.get("exchange", "NSE"))],
+                feature_types=feature_types,
+                full_rebuild=full_rebuild,
+                incremental=not full_rebuild,
+            )
+            context.report_task(
+                task_name="technical_features",
+                status="done",
+                detail=f"duckdb_batch complete rows={int(feature_run_summary.get('rows_written_total') or 0)}",
+                metadata={
+                    **feature_run_summary,
+                    "total_steps": len(feature_types),
+                    "completed_steps": len(feature_types),
+                },
+            )
+        else:
+            from ai_trading_system.domains.features.feature_store import FeatureStore
+            from ai_trading_system.platform.db.paths import get_domain_paths
+
+            paths = get_domain_paths(context.project_root, context.params.get("data_domain", "operational"))
+            symbols = updated_symbols
+            if symbols is None:
+                from ai_trading_system.domains.features.repository import ensure_feature_catalog_source
+
+                conn = duckdb.connect(str(paths.ohlcv_db_path))
+                try:
+                    ensure_feature_catalog_source(conn)
+                    rows = conn.execute(
+                        """
+                        SELECT DISTINCT symbol_id
+                        FROM _catalog_feature_source
+                        WHERE exchange = ?
+                        ORDER BY symbol_id
+                        """,
+                        [str(context.params.get("exchange", "NSE"))],
+                    ).fetchall()
+                    symbols = [row[0] for row in rows]
+                    if context.params.get("symbol_limit") is not None:
+                        symbols = symbols[: int(context.params.get("symbol_limit"))]
+                finally:
+                    conn.close()
+            fs = FeatureStore(
+                ohlcv_db_path=str(paths.ohlcv_db_path),
+                feature_store_dir=str(paths.feature_store_dir),
+                data_domain=str(context.params.get("data_domain", "operational")),
+            )
+            result = fs.compute_and_store_features(
+                symbols=symbols,
+                exchanges=[str(context.params.get("exchange", "NSE"))],
+                feature_types=feature_types,
+                incremental=not full_rebuild,
+                tail_bars=int(context.params.get("feature_tail_bars", 252)),
+                full_rebuild=full_rebuild,
+                progress_callback=lambda update: self._feature_progress(context, update),
+            )
+            feature_run_summary = {
+                "mode": "legacy",
+                "feature_result": result,
+                "feature_rows_by_type": result,
+                "rows_written_total": int(sum(result.values())),
+                "symbols_targeted": len(symbols or []),
+                "full_rebuild": bool(full_rebuild),
+                "incremental": not full_rebuild,
+            }
+
+        return {
+            "status": "completed",
+            "feature_mode": "full_rebuild" if full_rebuild else "incremental",
+            "feature_compute_engine": feature_compute_engine,
+            "feature_engine_fallback_reason": fallback_reason,
+            "feature_parallelism": "duckdb_internal" if feature_compute_engine == "duckdb_batch" else "none",
+            "feature_rows_by_type": dict(
+                feature_run_summary.get("feature_rows_by_type")
+                or feature_run_summary.get("feature_result")
+                or {}
+            ),
+            "target_symbol_count": int(feature_run_summary.get("symbols_targeted") or 0),
+            "rows_written_total": int(feature_run_summary.get("rows_written_total") or 0),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def run_sector_rs(self, context: StageContext) -> dict[str, Any]:
+        from ai_trading_system.domains.features.sector_rs import compute_all_symbols_rs
+        from ai_trading_system.platform.db.paths import get_domain_paths
+
+        paths = get_domain_paths(context.project_root, context.params.get("data_domain", "operational"))
+        context.report_task(task_name="sector_rs", status="running", detail="computing all-symbol sector RS")
+        compute_all_symbols_rs(
+            db_path=str(paths.ohlcv_db_path),
+            feature_store_dir=str(paths.feature_store_dir),
+            masterdb_path=str(paths.master_db_path),
+        )
+        return {"status": "completed", "feature_store_dir": str(paths.feature_store_dir)}
+
+    def _valuation_universes(self, context: StageContext) -> list[str]:
+        raw_universes = context.params.get("valuation_universes") or "UNIV_TOP500_MCAP,UNIV_TOP1000_MCAP"
+        return (
+            [item.strip() for item in raw_universes.split(",") if item.strip()]
+            if isinstance(raw_universes, str)
+            else list(raw_universes)
+        )
+
+    def run_valuation(self, context: StageContext) -> dict[str, Any]:
+        if not bool(context.params.get("enable_valuation_features", True)):
+            return {"status": "disabled"}
+        from ai_trading_system.domains.features.valuation_refresh import refresh_valuation_features
+        from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
+        from ai_trading_system.platform.db.paths import get_domain_paths
+
+        paths = get_domain_paths(context.project_root, context.params.get("data_domain", "operational"))
+        valuation_from_date = context.params.get("valuation_from_date") or context.run_date
+        valuation_to_date = context.params.get("valuation_to_date") or context.run_date
+        context.report_task(task_name="valuation", status="running", detail="valuation phase 1/3: TTM/index/cycle")
+        summary = refresh_valuation_features(
+            ohlcv_db_path=paths.ohlcv_db_path,
+            screener_db_path=context.params.get("screener_financials_db_path") or default_screener_db_path(context.project_root),
+            master_db_path=paths.master_db_path,
+            from_date=str(valuation_from_date)[:10],
+            to_date=str(valuation_to_date)[:10],
+            universes=self._valuation_universes(context),
+            min_history_days=int(context.params.get("valuation_min_history_days", 756) or 756),
+            enable_stock_valuation_bands=False,
+            progress=True,
+        )
+        return summary
+
+    def run_stock_valuation_bands(self, context: StageContext) -> dict[str, Any]:
+        if not bool(context.params.get("enable_stock_valuation_bands", True)):
+            return {"status": "disabled"}
+        from ai_trading_system.domains.features.stock_valuation_bands import refresh_stock_valuation_bands
+        from ai_trading_system.platform.db.paths import get_domain_paths
+
+        paths = get_domain_paths(context.project_root, context.params.get("data_domain", "operational"))
+        from_date = str(context.params.get("valuation_from_date") or context.run_date)[:10]
+        to_date = str(context.params.get("valuation_to_date") or context.run_date)[:10]
+        context.report_task(
+            task_name="stock_valuation_bands",
+            status="running",
+            detail="valuation phase 4/4: stock valuation bands",
+        )
+        result = refresh_stock_valuation_bands(
+            ohlcv_db_path=paths.ohlcv_db_path,
+            from_date=from_date,
+            to_date=to_date,
+            universe_id=str(context.params.get("stock_valuation_band_universe_id", "UNIV_TOP1000_MCAP") or "UNIV_TOP1000_MCAP"),
+            min_history_days_3y=int(context.params.get("valuation_band_min_history_days_3y", 504) or 504),
+            min_history_days_5y=int(context.params.get("valuation_band_min_history_days_5y", 756) or 756),
+            output_csv=context.output_dir() / "stock_valuation_bands_latest.csv",
+            skip_if_current=bool(context.params.get("stock_valuation_bands_skip_if_current", True)),
+        )
+        return result.__dict__
+
+    def run_sector_earnings(self, context: StageContext) -> dict[str, Any]:
+        if not bool(context.params.get("enable_sector_earnings_features", True)):
+            return {"status": "disabled"}
+        from ai_trading_system.domains.features.sector_earnings_leadership import refresh_sector_earnings_leadership
+        from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
+        from ai_trading_system.platform.db.paths import get_domain_paths
+
+        paths = get_domain_paths(context.project_root, context.params.get("data_domain", "operational"))
+        summary = refresh_sector_earnings_leadership(
+            ohlcv_db_path=paths.ohlcv_db_path,
+            screener_db_path=context.params.get("screener_financials_db_path") or default_screener_db_path(context.project_root),
+            master_db_path=paths.master_db_path,
+            from_date=context.params.get("sector_earnings_from_date"),
+            to_date=context.params.get("sector_earnings_to_date") or context.run_date,
+            output_csv=context.output_dir() / "sector_earnings_leadership.csv",
+        )
+        return summary.__dict__ if hasattr(summary, "__dict__") else dict(summary)
+
+    def run_phase1(self, context: StageContext) -> dict[str, Any]:
+        if not bool(context.params.get("enable_phase1_features", True)):
+            return {"status": "disabled"}
+        from ai_trading_system.domains.features.phase1 import refresh_phase1_features
+
+        try:
+            return refresh_phase1_features(
+                ohlcv_db_path=context.db_path,
+                as_of=context.run_date,
+                exchange=str(context.params.get("exchange", "NSE")),
+            ).to_dict()
+        except Exception as exc:
+            return {"status": "degraded", "error": str(exc)}
+
+    def _latest_substage_metadata(self, context: StageContext, stage_name: str) -> dict[str, Any]:
+        if context.registry is None:
+            return {}
+        latest = context.registry.latest_stage_status_map(context.run_id).get(stage_name) or {}
+        return dict(latest.get("checkpoint") or {})
+
+    def run_snapshot(
+        self,
+        context: StageContext,
+        *,
+        record_snapshot: Optional[Callable[[StageContext], tuple[int, int, int]]] = None,
+    ) -> dict[str, Any]:
+        snapshot_id, feature_rows, feature_registry_entries = (
+            record_snapshot or self.record_snapshot
+        )(context)
+        technical = self._latest_substage_metadata(context, "features_technical")
+        valuation = self._latest_substage_metadata(context, "features_valuation")
+        stock_bands = self._latest_substage_metadata(context, "features_stock_valuation_bands")
+        sector_earnings = self._latest_substage_metadata(context, "features_sector_earnings")
+        phase1 = self._latest_substage_metadata(context, "features_phase1")
+        benchmark_symbol = str(context.params.get("benchmark_symbol", "NIFTY_500"))
+        trust_summary = load_data_trust_summary(context.db_path, run_date=context.run_date)
+        trust_confidence = TrustConfidenceEnvelope.from_trust_summary(
+            trust_summary,
+            feature_confidence=1.0 if int(feature_rows or 0) > 0 else 0.0,
+        )
+        return {
+            "snapshot_id": int(snapshot_id),
+            "feature_rows": feature_rows,
+            "feature_registry_entries": int(feature_registry_entries),
+            "feature_mode": technical.get("feature_mode", "incremental"),
+            "feature_compute_engine": technical.get("feature_compute_engine", "unknown"),
+            "feature_parallelism": technical.get("feature_parallelism", "none"),
+            "feature_rows_by_type": dict(technical.get("feature_rows_by_type") or {}),
+            "target_symbol_count": int(technical.get("target_symbol_count") or 0),
+            "feature_enhancements": {
+                "readiness": True,
+                "feature_confidence": True,
+                "multi_timeframe_returns": [5, 20, 60, 120, 252],
+                "liquidity": True,
+                "cross_sectional": True,
+                "pattern_preconditions": True,
+                "benchmark_relative": {"enabled": True, "benchmark_symbol": benchmark_symbol},
+                "valuation_features": valuation,
+                "stock_valuation_bands": stock_bands,
+                "sector_earnings_features": sector_earnings,
+                "phase1_features": phase1,
+            },
+            "trust_confidence": trust_confidence.to_dict(),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     def run_default(
         self,
         context: StageContext,
@@ -89,11 +521,16 @@ class FeaturesOrchestrationService:
         )
         feature_compute_engine = str(
             context.params.get("feature_compute_engine")
-            or ("duckdb_batch" if full_rebuild else "legacy")
+            or ("legacy" if context.stage_name == "features" else "auto")
         ).strip().lower()
+        if feature_compute_engine == "auto":
+            feature_compute_engine, _ = self._resolve_feature_engine(
+                context,
+                self._default_feature_types(context),
+            )
         if feature_compute_engine not in {"legacy", "duckdb_batch"}:
             raise ValueError(
-                "feature_compute_engine must be one of: legacy, duckdb_batch"
+                "feature_compute_engine must be one of: auto, legacy, duckdb_batch"
             )
 
         def _render_progress_bar(completed: int, total: int, width: int = 20) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import threading
@@ -48,7 +49,25 @@ log_context = logging_module.log_context
 logger = logging_module.logger
 
 
-PIPELINE_ORDER = ["ingest", "features", "rank", "investigator", "fundamentals", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
+FEATURE_SUBSTAGES = [
+    "features_technical",
+    "features_sector_rs",
+    "features_valuation",
+    "features_stock_valuation_bands",
+    "features_sector_earnings",
+    "features_phase1",
+    "features_snapshot",
+]
+FEATURE_SUBSTAGE_LABELS = {
+    "features_technical": "technical features",
+    "features_sector_rs": "sector relative strength",
+    "features_valuation": "valuation features",
+    "features_stock_valuation_bands": "stock valuation bands",
+    "features_sector_earnings": "sector earnings",
+    "features_phase1": "phase1 derived features",
+    "features_snapshot": "feature snapshot and DQ",
+}
+PIPELINE_ORDER = ["ingest", *FEATURE_SUBSTAGES, "rank", "investigator", "fundamentals", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
 # Stages dropped from the default order unless explicitly enabled (e.g. by a flag
 # or by a detected input). They remain valid when named in an explicit stage list.
 OPTIONAL_STAGES = frozenset({"fundamentals"})
@@ -97,9 +116,34 @@ class TerminalProgressRenderer:
         else:
             print(line, flush=True)
 
-    def emit_run_header(self, *, run_id: str, run_date: str, data_domain: str, stages: list[str]) -> None:
+    def emit_run_header(
+        self,
+        *,
+        run_id: str,
+        run_date: str,
+        data_domain: str,
+        stages: list[str],
+        resume_status: str | None = None,
+    ) -> None:
         self._stage_order = list(stages)
         self._run_started_at = time.time()
+        if self.mode == "json":
+            print(
+                json.dumps(
+                    {
+                        "event": "run_start",
+                        "run_id": run_id,
+                        "run_date": run_date,
+                        "data_domain": data_domain,
+                        "stages": stages,
+                        "resume_status": resume_status,
+                    },
+                    default=str,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+            return
         if self.mode == "verbose":
             return
         sep = "=" * _BANNER_WIDTH
@@ -107,6 +151,7 @@ class TerminalProgressRenderer:
         print(f"  run_id : {run_id}", file=sys.stderr, flush=True)
         print(f"  date   : {run_date}", file=sys.stderr, flush=True)
         print(f"  domain : {data_domain}", file=sys.stderr, flush=True)
+        print(f"  resume : {resume_status or 'new_or_explicit'}", file=sys.stderr, flush=True)
         print(f"  stages : {', '.join(stages)}", file=sys.stderr, flush=True)
         print(sep, file=sys.stderr, flush=True)
         self._bar = tqdm(
@@ -145,6 +190,22 @@ class TerminalProgressRenderer:
         self._bar.set_postfix_str(detail)
 
     def emit_stage(self, *, stage_name: str, status: str, detail: str | None = None) -> None:
+        if self.mode == "json":
+            print(
+                json.dumps(
+                    {
+                        "event": "stage",
+                        "stage_name": stage_name,
+                        "parent_stage_name": "features" if stage_name in FEATURE_SUBSTAGES else None,
+                        "status": status,
+                        "detail": detail,
+                    },
+                    default=str,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+            return
         if self.mode == "verbose":
             return
         prior = self.stage_states.get(stage_name)
@@ -190,6 +251,16 @@ class TerminalProgressRenderer:
         self._write(f"{self._stamp()} | [{status[:4]:<4}] {label}")
 
     def emit_task(self, payload: dict[str, object]) -> None:
+        if self.mode == "json":
+            event_payload = dict(payload)
+            stage_name = str(event_payload.get("stage_name") or "")
+            event_payload.setdefault("parent_stage_name", "features" if stage_name in FEATURE_SUBSTAGES else None)
+            if "completed" not in event_payload and "completed_steps" in event_payload:
+                event_payload["completed"] = event_payload.get("completed_steps")
+            if "total" not in event_payload and "total_steps" in event_payload:
+                event_payload["total"] = event_payload.get("total_steps")
+            print(json.dumps({"event": "task", **event_payload}, default=str), file=sys.stderr, flush=True)
+            return
         if self.mode == "verbose":
             return
         stage_name = str(payload.get("stage_name", ""))
@@ -277,6 +348,13 @@ class PipelineOrchestrator:
         default_stages = {
             "ingest": IngestStage(),
             "features": FeaturesStage(),
+            "features_technical": FeaturesStage(),
+            "features_sector_rs": FeaturesStage(),
+            "features_valuation": FeaturesStage(),
+            "features_stock_valuation_bands": FeaturesStage(),
+            "features_sector_earnings": FeaturesStage(),
+            "features_phase1": FeaturesStage(),
+            "features_snapshot": FeaturesStage(),
             "rank": RankStage(),
             "investigator": InvestigatorStage(),
             "fundamentals": FundamentalsStage(),
@@ -290,12 +368,23 @@ class PipelineOrchestrator:
             "perf_tracker": PerfTrackerStage(),
         }
         if stages:
+            if "features" in stages:
+                feature_stage = stages["features"]
+                for substage in FEATURE_SUBSTAGES:
+                    default_stages[substage] = stages.get(substage, feature_stage)
             default_stages.update(stages)
         self.stages = default_stages
         self.progress_renderer = progress_renderer
         self._stage_hints = {
             "ingest": "fetching OHLCV and validating source data",
             "features": "computing technical features and writing feature store",
+            "features_technical": "features 1/7: technical features",
+            "features_sector_rs": "features 2/7: sector relative strength",
+            "features_valuation": "features 3/7: valuation features",
+            "features_stock_valuation_bands": "features 4/7: stock valuation bands",
+            "features_sector_earnings": "features 5/7: sector earnings leadership",
+            "features_phase1": "features 6/7: phase1 derived features",
+            "features_snapshot": "features 7/7: snapshot and feature DQ",
             "rank": "scoring symbols and building ranked outputs",
             "investigator": "investigating daily gainers and ageing active watchlist",
             "fundamentals": "enriching ranked candidates with Screener fundamentals",
@@ -331,8 +420,8 @@ class PipelineOrchestrator:
         requested_downstream = [
             stage
             for stage in stage_names
-            if stage in {"features", "rank", "execute"}
-            and PIPELINE_ORDER.index(stage) > PIPELINE_ORDER.index("ingest")
+            if stage in {*FEATURE_SUBSTAGES, "features", "rank", "execute"}
+            and PIPELINE_ORDER.index(stage if stage != "features" else "features_technical") > PIPELINE_ORDER.index("ingest")
         ]
         if not requested_downstream:
             return None
@@ -380,14 +469,28 @@ class PipelineOrchestrator:
         metadata: Optional[Dict[str, object]] = None,
     ) -> None:
         attempt_number = self.registry.next_stage_attempt(run_id, stage_name)
-        stage_run_id = self.registry.start_stage(run_id, stage_name, attempt_number)
-        self.registry.finish_stage(stage_run_id, status="skipped", metadata=metadata or {})
+        parent_stage = "features" if stage_name in FEATURE_SUBSTAGES else None
+        stage_run_id = self.registry.start_stage(
+            run_id,
+            stage_name,
+            attempt_number,
+            parent_stage_name=parent_stage,
+            resumable_key=stage_name,
+            resume_policy="stage",
+        )
+        self.registry.finish_stage(stage_run_id, status="skipped", metadata=metadata or {}, checkpoint=metadata or {})
         if self.progress_renderer is not None:
             self.progress_renderer.emit_stage(stage_name=stage_name, status="skip", detail=detail)
+
+    def _alias_feature_snapshot_artifact(self, artifacts: Dict[str, Dict[str, StageArtifact]]) -> None:
+        snapshot = artifacts.get("features_snapshot", {}).get("feature_snapshot")
+        if snapshot is not None:
+            artifacts.setdefault("features", {})["feature_snapshot"] = snapshot
 
     def _start_stage_heartbeat(
         self,
         *,
+        stage_run_id: str,
         stage_name: str,
         attempt_number: int,
         interval_seconds: int = 30,
@@ -406,6 +509,18 @@ class PipelineOrchestrator:
                 elapsed = int(time.time() - start_ts)
                 attempt_prefix = "" if attempt_number == 1 else f"attempt {attempt_number} · "
                 detail = f"{attempt_prefix}{hint} · elapsed {elapsed}s"
+                try:
+                    self.registry.heartbeat_stage(
+                        stage_run_id,
+                        checkpoint={
+                            "stage_name": stage_name,
+                            "attempt_number": attempt_number,
+                            "elapsed_seconds": elapsed,
+                            "detail": detail,
+                        },
+                    )
+                except Exception:
+                    pass
                 update_running = getattr(self.progress_renderer, "update_running", None)
                 if callable(update_running):
                     update_running(stage_name=stage_name, detail=detail)
@@ -435,9 +550,24 @@ class PipelineOrchestrator:
             fundamental_scores_path=params.get("fundamental_scores_path"),
             enable_candidate_tracker=bool(params.get("enable_candidate_tracker", True)),
         )
-        run_date = run_date or date.today().isoformat()
-        run_id = run_id or self._build_run_id(run_date)
         data_domain = params.get("data_domain", "operational")
+        run_date = run_date or date.today().isoformat()
+        resumed_run_id = None
+        if run_id is None and not bool(params.get("new_run", False)):
+            resumed_run_id = self.registry.find_latest_resumable_run(
+                run_date=run_date,
+                data_domain=str(data_domain),
+                canary=bool(params.get("canary", False)),
+            )
+            if resumed_run_id:
+                interrupted = self.registry.mark_stale_running_attempts_interrupted(resumed_run_id)
+                logger.info(
+                    "Auto-resuming pipeline run_id=%s interrupted_attempts=%s",
+                    resumed_run_id,
+                    interrupted,
+                )
+                run_id = resumed_run_id
+        run_id = run_id or self._build_run_id(run_date)
         domain_paths = ensure_domain_layout(project_root=self.project_root, data_domain=data_domain)
         new_run = not self.registry.run_exists(run_id)
 
@@ -447,13 +577,23 @@ class PipelineOrchestrator:
                 pipeline_name="daily_pipeline",
                 run_date=run_date,
                 trigger=trigger,
-                metadata={"requested_stages": list(stage_names), "params": params},
+                metadata={
+                    "requested_stages": list(stage_names),
+                    "params": params,
+                    "orchestrator_pid": os.getpid(),
+                },
             )
         else:
+            run_record = self.registry.get_run(run_id)
+            run_metadata = run_record.get("metadata", {}) if run_record else {}
+            run_metadata["orchestrator_pid"] = os.getpid()
+            run_metadata["requested_stages"] = list(stage_names)
+            run_metadata["params"] = params
+            self.registry.update_run(run_id, status="running", metadata=run_metadata)
             self.registry.append_run_metadata_event(
                 run_id,
                 {
-                    "event_type": "retry_requested",
+                    "event_type": "auto_resume_requested" if resumed_run_id else "retry_requested",
                     "requested_at": datetime.now(timezone.utc).isoformat(),
                     "requested_stages": list(stage_names),
                     "trigger": trigger,
@@ -467,6 +607,7 @@ class PipelineOrchestrator:
                     run_date=run_date,
                     data_domain=str(data_domain),
                     stages=list(stage_names),
+                    resume_status=("auto_resume" if resumed_run_id else "new_or_explicit"),
                 )
             if params.get("preflight", True):
                 preflight = self.preflight_checker.run(stage_names, params)
@@ -501,7 +642,7 @@ class PipelineOrchestrator:
                     if run["stage_name"] == stage_name:
                         latest_attempt = run
                         break
-                if latest_attempt and latest_attempt.get("status") == "completed":
+                if latest_attempt and latest_attempt.get("status") in {"completed", "skipped"}:
                     if not bool(params.get("force_rerun", False)):
                         if self.progress_renderer is not None:
                             self.progress_renderer.emit_stage(
@@ -527,8 +668,10 @@ class PipelineOrchestrator:
                     continue
 
                 artifacts = self.registry.get_artifact_map(run_id)
+                self._alias_feature_snapshot_artifact(artifacts)
                 if stage_name in {"investigator", "events", "execute", "insight", "publish"}:
                     self._attach_latest_rank_artifacts(artifacts, run_id=run_id)
+                    self._alias_feature_snapshot_artifact(artifacts)
 
                 input_hash = compute_stage_input_hash(
                     stage_name=stage_name,
@@ -555,11 +698,20 @@ class PipelineOrchestrator:
 
                 self.registry.update_run(run_id, status="running", current_stage=stage_name)
                 attempt_number = self.registry.next_stage_attempt(run_id, stage_name)
-                stage_run_id = self.registry.start_stage(run_id, stage_name, attempt_number)
+                parent_stage = "features" if stage_name in FEATURE_SUBSTAGES else None
+                stage_run_id = self.registry.start_stage(
+                    run_id,
+                    stage_name,
+                    attempt_number,
+                    parent_stage_name=parent_stage,
+                    resumable_key=stage_name,
+                    resume_policy="stage",
+                    checkpoint={"stage_name": stage_name, "attempt_number": attempt_number},
+                )
                 if self.progress_renderer is not None:
                     initial_detail = self._stage_hints.get(stage_name, "starting")
                     if attempt_number != 1:
-                        initial_detail = f"attempt {attempt_number} · {initial_detail}"
+                        initial_detail = f"attempt {attempt_number} · resume/rerun · {initial_detail}"
                     self.progress_renderer.emit_stage(
                         stage_name=stage_name,
                         status="running",
@@ -584,6 +736,7 @@ class PipelineOrchestrator:
                     try:
                         stage = self.stages[stage_name]
                         heartbeat = self._start_stage_heartbeat(
+                            stage_run_id=stage_run_id,
                             stage_name=stage_name,
                             attempt_number=attempt_number,
                             interval_seconds=int(params.get("terminal_heartbeat_seconds", 30) or 30),
@@ -599,9 +752,25 @@ class PipelineOrchestrator:
                         for artifact in result.artifacts:
                             self.registry.record_artifact(run_id, stage_name, attempt_number, artifact)
                             context.artifacts[stage_name][artifact.artifact_type] = artifact
+                            if stage_name == "features_snapshot" and artifact.artifact_type == "feature_snapshot":
+                                context.artifacts.setdefault("features", {})["feature_snapshot"] = artifact
 
-                        if stage_name in {"ingest", "features", "rank"}:
+                        if stage_name in {"ingest", "rank"}:
                             self.dq_engine.evaluate(context, result)
+                        if stage_name == "features_snapshot":
+                            dq_context = StageContext(
+                                project_root=context.project_root,
+                                db_path=context.db_path,
+                                run_id=context.run_id,
+                                run_date=context.run_date,
+                                stage_name="features",
+                                attempt_number=context.attempt_number,
+                                registry=context.registry,
+                                params=context.params,
+                                artifacts=context.artifacts,
+                                task_reporter=context.task_reporter,
+                            )
+                            self.dq_engine.evaluate(dq_context, result)
 
                         if stage_name == "ingest":
                             skip_plan = self._plan_downstream_stage_skips(
@@ -664,6 +833,7 @@ class PipelineOrchestrator:
                             stage_run_id,
                             status="completed",
                             metadata=completed_metadata,
+                            checkpoint=completed_metadata,
                         )
                         if self.progress_renderer is not None:
                             self.progress_renderer.emit_stage(stage_name=stage_name, status="done")
@@ -770,6 +940,15 @@ class PipelineOrchestrator:
         fundamental_scores_path: object | None = None,
         enable_candidate_tracker: bool = True,
     ) -> List[str]:
+        def _expand_features(stages: Iterable[str]) -> list[str]:
+            expanded: list[str] = []
+            for stage in stages:
+                if stage == "features":
+                    expanded.extend(FEATURE_SUBSTAGES)
+                else:
+                    expanded.append(stage)
+            return expanded
+
         if stage_names is None:
             fundamentals_enabled = bool(enable_fundamentals) or self._fundamental_scores_available(
                 fundamental_scores_path
@@ -781,7 +960,7 @@ class PipelineOrchestrator:
                 or (stage == "fundamentals" and fundamentals_enabled)
                 if stage != "candidate_tracker" or bool(enable_candidate_tracker)
             ]
-        requested = list(stage_names)
+        requested = _expand_features(stage_names)
         invalid = [stage for stage in requested if stage not in PIPELINE_ORDER]
         if invalid:
             raise ValueError(f"Unknown stages requested: {invalid}")
@@ -993,6 +1172,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-rerun",
         action="store_true",
         help="Re-run the listed --stages even if a previous attempt completed (creates a new attempt).",
+    )
+    parser.add_argument(
+        "--new-run",
+        action="store_true",
+        help="Bypass same-date auto-resume and create a fresh run id.",
     )
     parser.add_argument("--batch-size", type=int, default=700)
     parser.add_argument("--bulk", action="store_true")
@@ -1223,9 +1407,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--feature-compute-engine",
-        choices=["legacy", "duckdb_batch"],
+        choices=["auto", "legacy", "duckdb_batch"],
         default=None,
-        help="Feature computation engine. Use duckdb_batch for set-based full feature rebuilds.",
+        help="Feature computation engine. auto chooses DuckDB batch when supported.",
     )
     parser.add_argument(
         "--strategy-mode",
@@ -1492,14 +1676,13 @@ def main() -> None:
             raise SystemExit(1)
         run_id = resolved_run_id
         logger.info("Resolved publish-only run to latest publishable run_id=%s", run_id)
-    if run_id is None:
-        run_id = orchestrator._build_run_id(run_date)
     params = {
         "force": args.force,
         "corporate_actions_force_full": bool(args.corporate_actions_force_full or args.force),
         "corporate_actions_overlap_days": int(args.corporate_actions_overlap_days),
         "corporate_actions_normalizer_version": int(args.corporate_actions_normalizer_version),
         "force_rerun": args.force_rerun,
+        "new_run": bool(args.new_run),
         "batch_size": args.batch_size,
         "bulk": args.bulk,
         "top_n": args.top_n,
@@ -1544,8 +1727,7 @@ def main() -> None:
         "publish_weekly_pdf": args.publish_weekly_pdf,
         "full_rebuild": args.full_rebuild,
         "feature_tail_bars": args.feature_tail_bars,
-        "feature_compute_engine": args.feature_compute_engine
-        or ("duckdb_batch" if args.full_rebuild else "legacy"),
+        "feature_compute_engine": args.feature_compute_engine or "auto",
         "strategy_mode": args.strategy_mode,
         "execution_top_n": args.execution_top_n,
         "execution_ml_horizon": args.execution_ml_horizon,

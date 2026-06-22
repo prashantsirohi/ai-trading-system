@@ -7,7 +7,7 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
-from ai_trading_system.domains.features.compute_features_batch import run_batch_feature_computation
+from ai_trading_system.domains.features.compute_features_batch import register_features, run_batch_feature_computation
 from ai_trading_system.domains.features.feature_store import FeatureStore
 from ai_trading_system.pipeline.stages.features import FeaturesStage
 
@@ -88,6 +88,46 @@ def _seed_catalog_multi_symbol(db_path: Path, periods: int = 260) -> None:
                 )
     finally:
         conn.close()
+
+
+def test_batch_feature_registry_recovers_from_sequence_drift(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS _feat_id_seq START 1")
+        conn.execute(
+            """
+            CREATE TABLE _feature_registry (
+                feature_id BIGINT PRIMARY KEY DEFAULT nextval('_feat_id_seq'),
+                feature_name TEXT NOT NULL,
+                exchange TEXT,
+                computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                rows_computed BIGINT,
+                status TEXT DEFAULT 'completed'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO _feature_registry
+                (feature_id, feature_name, exchange, rows_computed, status)
+            VALUES (1209425, 'existing', 'NSE', 1, 'completed')
+            """
+        )
+
+        register_features(conn, "rsi", "NSE", 100)
+
+        rows = conn.execute(
+            """
+            SELECT feature_id, feature_name, exchange, rows_computed, status
+            FROM _feature_registry
+            ORDER BY feature_id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert rows[-1] == (1209426, "rsi", "NSE", 100, "completed")
 
 
 def test_feature_store_incremental_recomputes_only_tail(tmp_path: Path) -> None:

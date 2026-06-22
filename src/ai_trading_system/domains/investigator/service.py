@@ -47,6 +47,46 @@ class InvestigatorService:
         )
         candidates = _merge_optional(gainers, breakout, ranked, stock_scan)
         candidates = _mark_top_ranked_context(candidates, ranked)
+        if candidates.empty:
+            empty = pd.DataFrame()
+            summary = self._summary(
+                context=context,
+                gainers=gainers,
+                scores=empty,
+                repeat=empty,
+                active=empty,
+                traps=empty,
+                archived=empty,
+                gate=empty,
+            )
+            payload = build_investigator_payload(
+                run_id=context.run_id,
+                run_date=context.run_date,
+                summary=summary,
+                today_gainers=gainers,
+                scores=empty,
+                repeat_tracker=empty,
+                active_watchlist=empty,
+                trap_log=empty,
+                archive=empty,
+                investigator_pattern_scan=empty,
+                data_trust_status=str(context.params.get("data_trust_status", "unknown")),
+                stage_status={"rank": "completed", "investigator": "completed", "publish": "pending"},
+            )
+            artifacts = self._write_artifacts(
+                context=context,
+                daily_gainer_log=gainers,
+                investigator_scores=empty,
+                repeat_tracker=empty,
+                active_watchlist=empty,
+                investigator_pattern_scan=empty,
+                trap_log=empty,
+                archived_investigator=empty,
+                final_3q_gate=empty,
+                investigator_summary=summary,
+                investigator_payload=payload,
+            )
+            return StageResult(artifacts=artifacts, metadata=summary)
         candidates = score_price_structure(candidates)
         candidates = score_volume_anatomy(candidates)
         fundamentals = load_fundamental_snapshot(
@@ -250,6 +290,9 @@ def _merge_optional(gainers: pd.DataFrame, *frames: pd.DataFrame | None) -> pd.D
 
 def _mark_top_ranked_context(candidates: pd.DataFrame, ranked: pd.DataFrame | None) -> pd.DataFrame:
     out = candidates.copy()
+    if out.empty:
+        out.loc[:, "in_ranked_signals"] = pd.Series(dtype=bool)
+        return out
     out.loc[:, "in_ranked_signals"] = False
     if ranked is None or ranked.empty or "symbol_id" not in ranked.columns:
         return out

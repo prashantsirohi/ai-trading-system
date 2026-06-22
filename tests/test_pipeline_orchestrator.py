@@ -15,7 +15,7 @@ from ai_trading_system.domains.ingest.nse_delivery_scraper import NseHistoricalD
 from ai_trading_system.pipeline.preflight import PreflightChecker
 from ai_trading_system.domains.publish.delivery_manager import PublisherDeliveryManager
 import ai_trading_system.pipeline.orchestrator as orchestrator_module
-from ai_trading_system.pipeline.orchestrator import PipelineOrchestrator
+from ai_trading_system.pipeline.orchestrator import FEATURE_SUBSTAGES, PipelineOrchestrator
 from ai_trading_system.pipeline.stages import FeaturesStage, IngestStage, PublishStage, RankStage
 from ai_trading_system.domains.ranking.service import build_integrated_stock_scan_view
 from ai_trading_system.pipeline.contracts import DataQualityCriticalError, PublishStageError, StageArtifact, StageContext
@@ -118,8 +118,9 @@ def test_stage_boundaries_and_registry_rows(tmp_path: Path) -> None:
     assert result["status"] in ("completed", "completed_with_dq_relaxations")
     assert [stage["stage_name"] for stage in result["stages"]] == [
         "ingest",
-        "features",
+        *FEATURE_SUBSTAGES,
         "rank",
+        "investigator",
         "candidates",
         "candidate_tracker",
         "events",
@@ -130,7 +131,7 @@ def test_stage_boundaries_and_registry_rows(tmp_path: Path) -> None:
         "perf_tracker",
     ]
     assert registry.count_rows("pipeline_run") == 1
-    assert registry.count_rows("pipeline_stage_run") == 11
+    assert registry.count_rows("pipeline_stage_run") == 18
     assert registry.count_rows("pipeline_artifact") >= 5
     assert registry.count_rows("dq_result") >= 8
     conn = duckdb.connect(str(registry.db_path))
@@ -150,6 +151,12 @@ def test_stage_boundaries_and_registry_rows(tmp_path: Path) -> None:
     assert artifact_row[1]
     assert breakout_row[0].endswith("breakout_scan.csv")
     assert dashboard_payload_row[0].endswith("dashboard_payload.json")
+    feature_rows = [
+        row for row in registry.get_stage_runs(result["run_id"])
+        if row["stage_name"] in FEATURE_SUBSTAGES
+    ]
+    assert [row["stage_name"] for row in feature_rows] == FEATURE_SUBSTAGES
+    assert {row["parent_stage_name"] for row in feature_rows} == {"features"}
 
 
 def test_compute_stage_input_hash_is_stable_and_sensitive() -> None:
@@ -206,6 +213,111 @@ def test_compute_stage_input_hash_is_stable_and_sensitive() -> None:
     assert different_run_date != base
     assert different_param != base
     assert different_stage != base
+
+
+def test_auto_resume_same_date_interrupts_stale_stage_and_continues(tmp_path: Path) -> None:
+    project_root = tmp_path
+    (project_root / "data").mkdir(parents=True, exist_ok=True)
+    registry = RegistryStore(project_root)
+    run_id = "pipeline-2026-03-28-resume"
+    _init_catalog(
+        project_root / "data" / "ohlcv.duckdb",
+        [("ABC", "NSE", "2026-03-28 15:30:00", 10.0, 11.0, 9.5, 10.8, 1000)],
+    )
+    registry.create_run(
+        run_id=run_id,
+        pipeline_name="daily_pipeline",
+        run_date="2026-03-28",
+        metadata={"params": {"data_domain": "operational", "canary": False}, "orchestrator_pid": 99999999},
+    )
+    ingest_stage_run = registry.start_stage(run_id, "ingest", 1)
+    registry.finish_stage(ingest_stage_run, "completed", metadata={"input_hash": "old-ingest"})
+    stale_stage_run = registry.start_stage(
+        run_id,
+        "features_technical",
+        1,
+        parent_stage_name="features",
+        resumable_key="features_technical:2026-03-28",
+        resume_policy="same_date",
+    )
+    calls: list[str] = []
+
+    def ingest_op(context):
+        calls.append(context.stage_name)
+        raise AssertionError("completed ingest should be skipped during auto-resume")
+
+    def feature_op(context):
+        calls.append(context.stage_name)
+        return {"snapshot_id": 42, "feature_rows": 10}
+
+    orchestrator = PipelineOrchestrator(
+        project_root=project_root,
+        registry=registry,
+        stages={
+            "ingest": IngestStage(operation=ingest_op),
+            "features": FeaturesStage(operation=feature_op),
+        },
+    )
+
+    result = orchestrator.run_pipeline(
+        run_date="2026-03-28",
+        stage_names=["ingest", "features"],
+        params={"preflight": False},
+    )
+
+    assert result["run_id"] == run_id
+    assert "ingest" not in calls
+    assert calls == ["features_snapshot"]
+    stage_runs = registry.get_stage_runs(run_id)
+    technical_runs = [row for row in stage_runs if row["stage_name"] == "features_technical"]
+    assert [row["attempt_number"] for row in technical_runs] == [1, 2]
+    assert technical_runs[0]["status"] == "interrupted"
+    assert technical_runs[0]["interrupted_at"]
+    assert technical_runs[1]["status"] == "completed"
+    assert technical_runs[1]["parent_stage_name"] == "features"
+    feature_statuses = {
+        row["stage_name"]: row["status"]
+        for row in stage_runs
+        if row["stage_name"] in FEATURE_SUBSTAGES
+    }
+    assert feature_statuses == {stage_name: "completed" for stage_name in FEATURE_SUBSTAGES}
+    assert registry.find_latest_resumable_run(run_date="2026-03-28") is None
+    assert stale_stage_run
+
+
+def test_progress_json_events_include_feature_substage_fields(capsys: pytest.CaptureFixture[str]) -> None:
+    renderer = orchestrator_module.TerminalProgressRenderer(mode="json")
+
+    renderer.emit_run_header(
+        run_id="pipeline-2026-03-28-json",
+        run_date="2026-03-28",
+        data_domain="operational",
+        stages=["ingest", "features_technical"],
+        resume_status="auto_resume:pipeline-2026-03-28-json",
+    )
+    renderer.emit_stage(stage_name="features_technical", status="running", detail="features 1/7: technical")
+    renderer.emit_task(
+        {
+            "stage_name": "features_technical",
+            "task_name": "technical",
+            "attempt_number": 2,
+            "status": "running",
+            "completed_steps": 3,
+            "total_steps": 7,
+            "elapsed_seconds": 12.5,
+        }
+    )
+
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert events[0]["event"] == "run_start"
+    assert events[0]["resume_status"] == "auto_resume:pipeline-2026-03-28-json"
+    assert events[1]["event"] == "stage"
+    assert events[1]["parent_stage_name"] == "features"
+    assert events[2]["event"] == "task"
+    assert events[2]["parent_stage_name"] == "features"
+    assert events[2]["completed"] == 3
+    assert events[2]["total"] == 7
+    assert events[2]["elapsed_seconds"] == 12.5
 
 
 def test_orchestrator_records_input_hash_and_skips_on_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -283,7 +395,7 @@ def test_orchestrator_records_input_hash_and_skips_on_match(tmp_path: Path, monk
         )
     finally:
         conn.close()
-    for stage_name in ("ingest", "features", "rank", "publish"):
+    for stage_name in ("ingest", *FEATURE_SUBSTAGES, "rank", "publish"):
         meta = json.loads(completed_hashes[stage_name])
         assert meta.get("input_hash"), f"{stage_name} metadata missing input_hash"
 
@@ -746,7 +858,9 @@ def test_publish_failure_can_retry_independently(tmp_path: Path) -> None:
     stage_runs = registry.get_stage_runs(run_id)
     publish_runs = [row for row in stage_runs if row["stage_name"] == "publish"]
     assert len(publish_runs) == 2
-    assert len([row for row in stage_runs if row["stage_name"] == "features"]) == 1
+    feature_runs = [row for row in stage_runs if row["stage_name"] in FEATURE_SUBSTAGES]
+    assert [row["stage_name"] for row in feature_runs] == FEATURE_SUBSTAGES
+    assert all(row["parent_stage_name"] == "features" for row in feature_runs)
     assert publish_attempts["sheets"] == 1
     assert publish_attempts["telegram"] == 3
     delivery_logs = registry.get_delivery_logs(run_id)

@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
-from ai_trading_system.pipeline.orchestrator import PipelineOrchestrator
+from ai_trading_system.pipeline.orchestrator import FEATURE_SUBSTAGES, PipelineOrchestrator
 from ai_trading_system.pipeline.stages.fundamentals import FundamentalsStage
 
 
@@ -337,8 +337,9 @@ def test_orchestrator_auto_injects_fundamentals_when_snapshot_exists(tmp_path: P
 
     assert orchestrator._normalize_stage_names(None) == [
         "ingest",
-        "features",
+        *FEATURE_SUBSTAGES,
         "rank",
+        "investigator",
         "candidates",
         "candidate_tracker",
         "events",
@@ -351,8 +352,9 @@ def test_orchestrator_auto_injects_fundamentals_when_snapshot_exists(tmp_path: P
     _scores(scores_path)
     assert orchestrator._normalize_stage_names(None) == [
         "ingest",
-        "features",
+        *FEATURE_SUBSTAGES,
         "rank",
+        "investigator",
         "fundamentals",
         "candidates",
         "candidate_tracker",
@@ -365,8 +367,9 @@ def test_orchestrator_auto_injects_fundamentals_when_snapshot_exists(tmp_path: P
     ]
     assert orchestrator._normalize_stage_names(None, enable_fundamentals=True) == [
         "ingest",
-        "features",
+        *FEATURE_SUBSTAGES,
         "rank",
+        "investigator",
         "fundamentals",
         "candidates",
         "candidate_tracker",

@@ -691,11 +691,26 @@ def register_features(conn, feature_name: str, exchange: str, rows_computed: int
             status TEXT DEFAULT 'completed'
         )
     """)
-    conn.execute(
-        "INSERT INTO _feature_registry (feature_name, exchange, rows_computed, status) VALUES (?, ?, ?, ?)",
-        (feature_name, exchange, rows_computed, "completed"),
-    )
-    conn.commit()
+    for _ in range(5):
+        feat_id_raw = conn.execute("SELECT nextval('_feat_id_seq')").fetchone()
+        seq_id = int(feat_id_raw[0]) if feat_id_raw else 1
+        max_id_raw = conn.execute("SELECT COALESCE(MAX(feature_id), 0) FROM _feature_registry").fetchone()
+        max_id = int(max_id_raw[0]) if max_id_raw else 0
+        feature_id = max(seq_id, max_id + 1)
+        try:
+            conn.execute(
+                """
+                INSERT INTO _feature_registry
+                    (feature_id, feature_name, exchange, rows_computed, status)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (feature_id, feature_name, exchange, rows_computed, "completed"),
+            )
+            conn.commit()
+            return
+        except duckdb.ConstraintException:
+            continue
+    raise RuntimeError("Failed to register batch feature after repeated feature_id collisions.")
 
 
 BATCH_FEATURE_FUNCTIONS = {
