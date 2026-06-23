@@ -264,6 +264,7 @@ def _attach_rank(gainers: pd.DataFrame, ranked: pd.DataFrame) -> pd.DataFrame:
         "delivery_pct",
         "sector_strength",
         "sector",
+        "sector_name",
         "market_cap_cr",
     ]
     cols = [col for col in desired if col in rank.columns]
@@ -271,7 +272,23 @@ def _attach_rank(gainers: pd.DataFrame, ranked: pd.DataFrame) -> pd.DataFrame:
     if "delivery_pct_rank" in merged.columns:
         merged.loc[:, "delivery_pct"] = merged["delivery_pct"].combine_first(merged["delivery_pct_rank"])
         merged = merged.drop(columns=["delivery_pct_rank"])
+    if "sector_name_rank" in merged.columns:
+        if "sector_name" in merged.columns:
+            merged.loc[:, "sector_name"] = _first_present(merged["sector_name"], merged["sector_name_rank"])
+        else:
+            merged.loc[:, "sector_name"] = merged["sector_name_rank"]
+        merged = merged.drop(columns=["sector_name_rank"])
+    if "sector" in merged.columns and "sector_name" in merged.columns:
+        merged.loc[:, "sector"] = _first_present(merged["sector"], merged["sector_name"])
+    elif "sector_name" in merged.columns:
+        merged.loc[:, "sector"] = merged["sector_name"]
     return merged
+
+
+def _first_present(primary: pd.Series, fallback: pd.Series) -> pd.Series:
+    primary_clean = primary.mask(primary.astype(str).str.strip().eq(""))
+    fallback_clean = fallback.mask(fallback.astype(str).str.strip().eq(""))
+    return primary_clean.combine_first(fallback_clean)
 
 
 def _empty() -> pd.DataFrame:

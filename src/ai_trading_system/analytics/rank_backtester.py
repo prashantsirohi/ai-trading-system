@@ -223,7 +223,7 @@ class RankBacktester:
             if os.path.exists(os.path.join(self.feature_store_dir, "adx", exchange)):
                 adx_df = conn.execute(f"""
                     SELECT symbol_id, exchange, adx_14 AS adx_value
-                    FROM read_parquet('{adx_path}')
+                    FROM read_parquet('{adx_path}', union_by_name = true)
                     WHERE timestamp <= '{cutoff_ts}'
                     QUALIFY ROW_NUMBER() OVER (
                         PARTITION BY symbol_id ORDER BY timestamp DESC

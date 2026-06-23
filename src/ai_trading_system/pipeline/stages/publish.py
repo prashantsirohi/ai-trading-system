@@ -664,6 +664,7 @@ class PublishStage:
             run_date=context.run_date,
             ranked_df=datasets.get("ranked_signals"),
             breakout_df=datasets.get("breakout_scan"),
+            stock_scan_df=datasets.get("stock_scan"),
             sector_df=datasets.get("sector_dashboard"),
             prior_ranked_df=prior_ranked_df,
             failed_breakouts_df=failed_breakouts_df,

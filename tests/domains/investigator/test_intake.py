@@ -58,6 +58,28 @@ def _ranked(symbol: str = "AAA") -> pd.DataFrame:
     return pd.DataFrame([{"symbol_id": symbol, "market_cap_cr": 1000, "composite_score": 70, "rank": 10}])
 
 
+def test_intake_preserves_ranked_sector_name(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    _create_catalog(db_path)
+    as_of = _insert_symbol(db_path, "AAA", [100, 100, 100, 100, 100, 106])
+    ranked = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "market_cap_cr": 1000,
+                "composite_score": 70,
+                "rank": 10,
+                "sector_name": "Pharma",
+            }
+        ]
+    )
+
+    intake = load_investigator_intake(ohlcv_db_path=db_path, ranked_signals=ranked, as_of=as_of)
+
+    assert intake.iloc[0]["sector_name"] == "Pharma"
+    assert intake.iloc[0]["sector"] == "Pharma"
+
+
 def test_daily_gainer_remains_daily_gainer(tmp_path: Path) -> None:
     db_path = tmp_path / "ohlcv.duckdb"
     _create_catalog(db_path)

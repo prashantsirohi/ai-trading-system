@@ -1,5 +1,6 @@
 import json
 
+import duckdb
 import pandas as pd
 import pytest
 
@@ -524,6 +525,62 @@ def test_ranker_input_loader_normalizes_swapped_columns():
     assert normalized.to_dict("records") == [
         {"symbol_id": "ABC", "exchange": "NSE"},
         {"symbol_id": "XYZ", "exchange": "NSE"},
+    ]
+
+
+def test_ranker_input_loader_loads_mixed_schema_adx_files(tmp_path):
+    feature_dir = tmp_path / "feature_store" / "adx" / "NSE"
+    feature_dir.mkdir(parents=True)
+    db_path = tmp_path / "ohlcv.duckdb"
+
+    duckdb.connect(str(db_path)).close()
+
+    pd.DataFrame(
+        [
+            {
+                "symbol_id": "LEGACY",
+                "exchange": "NSE",
+                "timestamp": "2026-06-22",
+                "close": 100.0,
+                "adx_14": 21.0,
+            },
+            {
+                "symbol_id": "LEGACY",
+                "exchange": "NSE",
+                "timestamp": "2026-06-23",
+                "close": 101.0,
+                "adx_14": 22.0,
+            },
+        ]
+    ).to_parquet(feature_dir / "LEGACY.parquet", index=False)
+    pd.DataFrame(
+        [
+            {
+                "symbol_id": "COMPACT",
+                "exchange": "NSE",
+                "timestamp": "2026-06-23",
+                "plus_di_14": 19.0,
+                "minus_di_14": 11.0,
+                "adx_14": 33.0,
+            }
+        ]
+    ).to_parquet(feature_dir / "COMPACT.parquet", index=False)
+
+    loader = RankerInputLoader(
+        ohlcv_db_path=str(db_path),
+        feature_store_dir=str(tmp_path / "feature_store"),
+        master_db_path="unused.db",
+    )
+
+    adx = (
+        loader.load_latest_adx(date="2026-06-23")
+        .sort_values("symbol_id")
+        .reset_index(drop=True)
+    )
+
+    assert adx[["symbol_id", "exchange", "adx_14"]].to_dict("records") == [
+        {"symbol_id": "COMPACT", "exchange": "NSE", "adx_14": 33.0},
+        {"symbol_id": "LEGACY", "exchange": "NSE", "adx_14": 22.0},
     ]
 
 

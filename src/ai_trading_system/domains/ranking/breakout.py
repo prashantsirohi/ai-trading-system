@@ -782,7 +782,7 @@ def scan_breakouts(
             adx_df = conn.execute(
                 f"""
                 SELECT symbol_id, adx_14
-                FROM read_parquet('{adx_path}/*.parquet')
+                FROM read_parquet('{adx_path}/*.parquet', union_by_name = true)
                 WHERE timestamp <= '{date}'
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp DESC) = 1
                 """

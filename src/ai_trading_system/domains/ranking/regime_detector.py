@@ -69,7 +69,7 @@ class RegimeDetector:
                             PARTITION BY symbol_id
                             ORDER BY timestamp DESC
                         ) AS rn
-                    FROM read_parquet('{pattern}')
+                    FROM read_parquet('{pattern}', union_by_name = true)
                     {cutoff_clause}
                 )
                 SELECT latest_adx

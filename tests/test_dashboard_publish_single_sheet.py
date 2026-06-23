@@ -623,6 +623,60 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert any("updateDimensionProperties" in req for call in manager.spreadsheet.batch_requests for req in call.get("requests", []))
 
 
+def test_publish_dashboard_payload_writes_full_investigator_active_list(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("ai_trading_system.domains.publish.dashboard.GoogleSheetsManager", _FakeManager)
+    monkeypatch.setattr(
+        "ai_trading_system.domains.publish.dashboard._load_operational_breadth",
+        lambda _root: pd.DataFrame(),
+    )
+    active = pd.DataFrame(
+        [
+            {
+                "symbol_id": f"ACTIVE{i:03d}",
+                "verdict": "WATCH_ONLY",
+                "score_current": float(100 - i),
+                "final_score": float(100 - i),
+                "score_peak": float(105 - i),
+                "appearance_count_20d": i,
+                "sector_name": f"Sector {i:03d}",
+                "last_seen_date": "2026-04-09",
+            }
+            for i in range(65)
+        ]
+    )
+    active.loc[0, "sector_name"] = ""
+
+    result = publish_dashboard_payload(
+        {"summary": {"run_date": "2026-04-09"}},
+        project_root=tmp_path,
+        run_date="2026-04-09",
+        ranked_df=pd.DataFrame(
+            [
+                {"symbol_id": "AAA", "composite_score": 90.0},
+                {"symbol_id": "ACTIVE000", "composite_score": 89.0},
+            ]
+        ),
+        breakout_df=pd.DataFrame(),
+        stock_scan_df=pd.DataFrame([{"symbol_id": "ACTIVE000", "sector_name": "Stock Scan Sector"}]),
+        sector_df=pd.DataFrame(),
+        investigator_active_df=active,
+    )
+
+    manager = _FakeManager.last_instance
+    assert manager is not None
+    investigator_updates = [update for update in manager.sheets["investigator"].updates if update[0] == "A1"]
+    assert len(investigator_updates) == 1
+    investigator_grid = investigator_updates[0][1]
+    assert result["investigator_rows_written"] == 66
+    assert len(investigator_grid) == 66
+    assert investigator_grid[1][0] == "ACTIVE000"
+    assert investigator_grid[1][6] == "Stock Scan Sector"
+    assert investigator_grid[1][7] == 100.0
+    assert investigator_grid[-1][0] == "ACTIVE064"
+    assert investigator_grid[-1][6] == "Sector 064"
+    assert investigator_grid[-1][7] == 36.0
+
+
 def test_publish_dashboard_payload_keeps_existing_same_date_sheet(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("ai_trading_system.domains.publish.dashboard.GoogleSheetsManager", _FakeManager)
     monkeypatch.setattr(

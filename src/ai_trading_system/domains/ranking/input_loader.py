@@ -348,7 +348,7 @@ class RankerInputLoader:
             adx_latest = conn.execute(
                 f"""
                 SELECT *
-                FROM read_parquet('{adx_path}/*.parquet')
+                FROM read_parquet('{adx_path}/*.parquet', union_by_name = true)
                 WHERE timestamp <= '{cutoff_ts}'
                 QUALIFY ROW_NUMBER() OVER (
                     PARTITION BY symbol_id ORDER BY timestamp DESC

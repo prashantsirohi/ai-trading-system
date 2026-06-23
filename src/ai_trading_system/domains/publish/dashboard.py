@@ -931,8 +931,8 @@ def _active_investigator_list_frame(active: pd.DataFrame | None) -> pd.DataFrame
             "Pattern": source.get("pattern_family", ""),
             "Pattern Score": source.get("pattern_score", ""),
             "Setup": source.get("setup", source.get("move_tag", source.get("trigger_reason", ""))),
-            "Sector": source.get("sector", source.get("sector_name", "")),
-            "Score": source.get("investigator_score", ""),
+            "Sector": _first_present_series(source, ["sector", "sector_name", "Sector"]),
+            "Score": _first_present_series(source, ["investigator_score", "score_current", "final_score", "score"]),
             "Repeat": source.get("appearance_count_20d", ""),
             "Price vs First": source.get("price_progression_pct", source.get("price_vs_first_trigger_pct", "")),
             "Rank Change": source.get("rank_change_20d", ""),
@@ -950,7 +950,50 @@ def _active_investigator_list_frame(active: pd.DataFrame | None) -> pd.DataFrame
         **{"Price vs First": _percent_display(out["Price vs First"], decimals=1)},
     )
     out = _to_numeric(out, ["Pattern Score", "Score", "Repeat", "Rank Change", "Days Stale"], 1)
-    return _sort_active_investigator_list(out, source).head(50).reset_index(drop=True)
+    return _sort_active_investigator_list(out, source).reset_index(drop=True)
+
+
+def _enrich_investigator_active_with_rank(active: pd.DataFrame | None, ranked: pd.DataFrame | None) -> pd.DataFrame | None:
+    if active is None or active.empty or ranked is None or ranked.empty:
+        return active
+    if "symbol_id" not in active.columns or "symbol_id" not in ranked.columns:
+        return active
+    ranked_sector_cols = [col for col in ("sector", "sector_name", "Sector") if col in ranked.columns]
+    if not ranked_sector_cols:
+        return active
+
+    out = active.copy()
+    rank = ranked[["symbol_id", *ranked_sector_cols]].copy()
+    rank.loc[:, "symbol_id"] = rank["symbol_id"].astype(str)
+    rank = rank.drop_duplicates("symbol_id", keep="first").set_index("symbol_id")
+    active_symbols = out["symbol_id"].astype(str)
+    for target in ("sector", "sector_name"):
+        rank_col = next((col for col in (target, "sector_name", "sector", "Sector") if col in rank.columns), None)
+        if rank_col is None:
+            continue
+        mapped = active_symbols.map(rank[rank_col])
+        if target in out.columns:
+            out.loc[:, target] = _first_present_series(
+                pd.DataFrame({"current": out[target], "ranked": mapped}, index=out.index),
+                ["current", "ranked"],
+            )
+        else:
+            out.loc[:, target] = mapped
+    return out
+
+
+def _investigator_sector_lookup(ranked: pd.DataFrame | None, stock_scan: pd.DataFrame | None) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for frame in (stock_scan, ranked):
+        if frame is None or frame.empty or "symbol_id" not in frame.columns:
+            continue
+        sector_cols = [col for col in ("sector", "sector_name", "Sector") if col in frame.columns]
+        if not sector_cols:
+            continue
+        frames.append(frame[["symbol_id", *sector_cols]].copy())
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True, sort=False).drop_duplicates("symbol_id", keep="first")
 
 
 def _investigator_display_verdict(source: pd.DataFrame) -> pd.Series:
@@ -985,6 +1028,7 @@ def _sort_active_investigator_list(out: pd.DataFrame, source: pd.DataFrame) -> p
     safe = out.copy()
     score = pd.to_numeric(source.get("investigator_score", pd.Series(pd.NA, index=source.index)), errors="coerce")
     current = pd.to_numeric(source.get("score_current", pd.Series(pd.NA, index=source.index)), errors="coerce")
+    final = pd.to_numeric(source.get("final_score", pd.Series(pd.NA, index=source.index)), errors="coerce")
     peak = pd.to_numeric(source.get("score_peak", pd.Series(pd.NA, index=source.index)), errors="coerce")
     repeat = pd.to_numeric(source.get("appearance_count_20d", pd.Series(pd.NA, index=source.index)), errors="coerce")
     verdict_order = {
@@ -995,7 +1039,7 @@ def _sort_active_investigator_list(out: pd.DataFrame, source: pd.DataFrame) -> p
     }
     verdict_sort = source.get("verdict", pd.Series("", index=source.index)).fillna("").astype(str).str.upper().map(verdict_order).fillna(99)
     safe = safe.assign(
-        _ScoreSort=score.fillna(current),
+        _ScoreSort=score.fillna(current).fillna(final),
         _CurrentSort=current,
         _PeakSort=peak,
         _RepeatSort=repeat,
@@ -1007,6 +1051,22 @@ def _sort_active_investigator_list(out: pd.DataFrame, source: pd.DataFrame) -> p
         na_position="last",
         kind="stable",
     ).drop(columns=["_ScoreSort", "_CurrentSort", "_PeakSort", "_RepeatSort", "_VerdictSort"])
+
+
+def _first_present_series(source: pd.DataFrame, columns: list[str]) -> pd.Series:
+    out = pd.Series("", index=source.index, dtype="object")
+    filled = pd.Series(False, index=source.index)
+    for column in columns:
+        if column not in source.columns:
+            continue
+        values = source[column]
+        if not isinstance(values, pd.Series):
+            values = pd.Series(values, index=source.index)
+        present = values.notna() & ~values.astype(str).str.strip().eq("")
+        fill_mask = present & ~filled
+        out.loc[fill_mask] = values.loc[fill_mask]
+        filled = filled | fill_mask
+    return out
 
 
 def _investigator_action_queue_frame(
@@ -1356,6 +1416,7 @@ def publish_dashboard_payload(
     run_date: str | None = None,
     ranked_df: pd.DataFrame | None = None,
     breakout_df: pd.DataFrame | None = None,
+    stock_scan_df: pd.DataFrame | None = None,
     sector_df: pd.DataFrame | None = None,
     prior_ranked_df: pd.DataFrame | None = None,
     failed_breakouts_df: pd.DataFrame | None = None,
@@ -1386,6 +1447,7 @@ def publish_dashboard_payload(
         format_rows_for_channel(source_ranked.to_dict(orient="records") if isinstance(source_ranked, pd.DataFrame) else [], "dashboard")["rows"]
     )
     source_breakout = breakout_df if isinstance(breakout_df, pd.DataFrame) and not breakout_df.empty else _frame(payload.get("breakout_scan", []))
+    source_stock_scan = stock_scan_df if isinstance(stock_scan_df, pd.DataFrame) and not stock_scan_df.empty else pd.DataFrame()
     source_sector = sector_df if isinstance(sector_df, pd.DataFrame) and not sector_df.empty else _frame(payload.get("sector_dashboard", []))
     source_sector_rotation = sector_rotation_df if isinstance(sector_rotation_df, pd.DataFrame) and not sector_rotation_df.empty else pd.DataFrame()
     source_industry_rotation = industry_rotation_df if isinstance(industry_rotation_df, pd.DataFrame) and not industry_rotation_df.empty else pd.DataFrame()
@@ -1396,10 +1458,12 @@ def publish_dashboard_payload(
     pattern_min = _pattern_frame(pattern_df)
     weekly_moves = _weekly_move_frame(source_ranked)
     failed_breakouts = _failed_breakout_frame(failed_breakouts_df)
+    investigator_sector_lookup = _investigator_sector_lookup(source_ranked, source_stock_scan)
+    investigator_active_source = _enrich_investigator_active_with_rank(investigator_active_df, investigator_sector_lookup)
     investigator_today = _investigator_frame(investigator_scores_df)
     investigator_repeat = _investigator_repeat_frame(investigator_repeat_df)
-    investigator_active = _investigator_active_frame(investigator_active_df)
-    active_investigator_list = _active_investigator_list_frame(investigator_active_df)
+    investigator_active = _investigator_active_frame(investigator_active_source)
+    active_investigator_list = _active_investigator_list_frame(investigator_active_source)
     investigator_traps = _investigator_trap_frame(investigator_trap_df)
     events_index = _frame(payload.get("events_index", []))
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
