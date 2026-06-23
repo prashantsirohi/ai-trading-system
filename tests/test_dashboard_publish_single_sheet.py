@@ -63,6 +63,7 @@ class _FakeManager:
         self.writes: list[tuple[str, str, pd.DataFrame, bool]] = []
         self.hidden_writes: list[tuple[str, pd.DataFrame, int, int]] = []
         self.hidden: set[str] = set()
+        self.dimensions: dict[str, tuple[int, int]] = {}
         self.requests_attempted = 0
         self.rows_written = 0
         self.quota_limited = False
@@ -75,7 +76,7 @@ class _FakeManager:
         return self.sheets.get(sheet_name)
 
     def get_or_create_sheet(self, title: str, rows: int = 1000, cols: int = 26):
-        _ = rows, cols
+        self.dimensions[title] = (rows, cols)
         ws = self.sheets.get(title)
         if ws is None:
             ws = _FakeWorksheet(title=title, sheet_id=777)
@@ -539,8 +540,10 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     investigator_grid = visible_updates["investigator"][0][1]
     assert len(daily_grid) == 140
     assert len(sector_grid) == 60
-    assert all(len(row) == 14 for row in daily_grid)
+    assert all(len(row) == 25 for row in daily_grid)
     assert all(len(row) == 14 for row in sector_grid)
+    assert manager.dimensions["01_Daily_Report"] == (140, 25)
+    assert manager.dimensions["04_Sector_Leadership"] == (60, 14)
     assert industry_grid[0][:6] == ["Date", "Industry", "Sector", "Quadrant", "RS Ratio", "RS Momentum"]
     industry_text = "\n".join(str(cell) for row in industry_grid for cell in row if cell != "")
     assert "Industry 00" in industry_text
@@ -574,23 +577,25 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert not [update for update in manager.sheets["05_Market_Breadth"].updates if update[0] == "A1"]
 
     daily_text = "\n".join(str(cell) for row in daily_grid for cell in row if cell != "")
+    assert "TOP MARKET DECISION BANNER" in daily_text
     assert "DAILY SUMMARY" in daily_text
-    assert "TODAY'S DECISION SHORTLIST" in daily_text
+    assert "CONFIRMED BREAKOUTS" in daily_text
+    assert "PATTERN WATCHLIST" in daily_text
+    assert "DIAGNOSTICS" in daily_text
     assert "MARKET BREADTH SNAPSHOT" in daily_text
     assert "% Above SMA200" in daily_text
     assert "PE 5Y Percentile" in daily_text
     assert "New High / Low" in daily_text
-    assert "PATTERN SETUPS" in daily_text
     assert "ACTIVE INVESTIGATOR LIST" not in daily_text
     assert "INVESTIGATOR ACTION QUEUE" not in daily_text
-    assert "TOP RANKED" in daily_text
     assert "RANKING FEEDBACK" in daily_text
-    assert "BREAKOUTS (all, unfiltered)" in daily_text
     assert "Base forming (S1)" in daily_text
-    assert "cup_handle" in daily_text
+    assert "Cup/Handle" in daily_text
     assert "P024" in daily_text
-    assert "filtered_by_regime" in daily_text
     assert "S000" in daily_text
+    assert "Reason" in daily_text
+    assert "Risk Note" in daily_text
+    assert "Watchlist Score" in daily_text
 
     assert "EVENTS SUMMARY" not in daily_text
 
@@ -675,6 +680,61 @@ def test_publish_dashboard_payload_writes_full_investigator_active_list(monkeypa
     assert investigator_grid[-1][0] == "ACTIVE064"
     assert investigator_grid[-1][6] == "Sector 064"
     assert investigator_grid[-1][7] == 36.0
+
+
+def test_publish_dashboard_payload_daily_report_marks_no_breakouts_and_new_entries(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("ai_trading_system.domains.publish.dashboard.GoogleSheetsManager", _FakeManager)
+    monkeypatch.setattr(
+        "ai_trading_system.domains.publish.dashboard._load_operational_breadth",
+        lambda _root: pd.DataFrame(),
+    )
+
+    result = publish_dashboard_payload(
+        {
+            "summary": {
+                "run_date": "2026-04-09",
+                "data_trust_status": "degraded",
+                "allowed_exposure": 0.15,
+            },
+            "market_regime_phase": {
+                "phase_label": "Bear / Stage 4",
+                "driven_by": {"breadth_velocity_bucket": "very_negative"},
+            },
+        },
+        project_root=tmp_path,
+        run_date="2026-04-09",
+        ranked_df=pd.DataFrame(
+            [
+                {
+                    "symbol_id": "AAA",
+                    "sector": "Banks",
+                    "composite_score": 88,
+                    "close": 100,
+                    "sma_50": 95,
+                    "sma_200": 80,
+                    "sma50_slope_20d_pct": 2,
+                    "near_52w_high_pct": 8,
+                    "volume_ratio_20": 1.6,
+                    "delivery_pct": 60,
+                }
+            ]
+        ),
+        breakout_df=pd.DataFrame([{"symbol_id": "AAA", "qualified": False, "breakout_state": "watchlist", "breakout_score": 80, "breakout_level": 103}]),
+        pattern_df=pd.DataFrame([{"symbol_id": "AAA", "pattern_family": "VCP", "pattern_score": 85, "breakout_level": 103}]),
+        sector_df=pd.DataFrame([{"Sector": "Banks", "Quadrant": "Leading"}]),
+        watchlist_df=pd.DataFrame([{"symbol_id": "AAA", "days_on_watchlist": 1}]),
+        prior_watchlist_df=pd.DataFrame([{"symbol_id": "BBB"}]),
+    )
+
+    manager = _FakeManager.last_instance
+    assert manager is not None
+    daily_grid = [update for update in manager.sheets["01_Daily_Report"].updates if update[0] == "A1"][0][1]
+    daily_text = "\n".join(str(cell) for row in daily_grid for cell in row if cell != "")
+    assert result["daily_report"]["confirmed_breakout_rows"] == 0
+    assert "No confirmed / trade-qualified breakouts today." in daily_text
+    assert "No trade-qualified breakouts today." in daily_text
+    assert "NEW" in daily_text
+    assert "Watchlist Score" in daily_text
 
 
 def test_publish_dashboard_payload_keeps_existing_same_date_sheet(monkeypatch, tmp_path: Path) -> None:

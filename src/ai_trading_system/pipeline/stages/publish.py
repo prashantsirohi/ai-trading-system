@@ -645,8 +645,10 @@ class PublishStage:
 
         weekly_data = self._load_weekly_report_data(context, datasets)
         prior_ranked_df = pd.DataFrame()
+        prior_watchlist_df = self._load_prior_watchlist(context)
         pattern_df = datasets.get("pattern_scan") if isinstance(datasets.get("pattern_scan"), pd.DataFrame) else pd.DataFrame()
         failed_breakouts_df = pd.DataFrame()
+        rank_summary = self._read_json_artifact_safe(context.artifact_for("rank", "rank_summary"))
         if weekly_data is not None:
             prior_ranked_df = weekly_data.prior_ranked_signals
             if pattern_df.empty:
@@ -680,6 +682,10 @@ class PublishStage:
             investigator_payload=datasets.get("investigator_payload"),
             decision_bundle=datasets.get("decision_bundle"),
             ranking_feedback=self._load_ranking_feedback(context),
+            rank_artifact_uri=rank_artifact.uri,
+            run_id=context.run_id,
+            rank_summary=rank_summary,
+            prior_watchlist_df=prior_watchlist_df,
         )
         return {
             "report_id": "dashboard_sheet",
@@ -689,7 +695,36 @@ class PublishStage:
             "sheets_requests_attempted": result.get("sheets_requests_attempted", 0) if isinstance(result, dict) else 0,
             "sheets_rows_written": result.get("sheets_rows_written", 0) if isinstance(result, dict) else 0,
             "google_sheets_error": result.get("google_sheets_error") if isinstance(result, dict) else None,
+            "daily_report": result.get("daily_report") if isinstance(result, dict) else None,
         }
+
+    def _load_prior_watchlist(self, context: StageContext) -> pd.DataFrame:
+        try:
+            from ai_trading_system.domains.publish.channels.weekly_pdf import history
+
+            current_date = history.parse_run_date(context.run_id)
+            if current_date is None and context.run_date:
+                current_date = datetime.fromisoformat(str(context.run_date)).date()
+            if current_date is None:
+                return pd.DataFrame()
+            pipeline_runs_dir = history.resolve_pipeline_runs_dir(
+                context.project_root,
+                data_domain=str(context.params.get("data_domain", "operational")),
+            )
+            prior_runs = [
+                run
+                for run in history.list_pipeline_runs(pipeline_runs_dir)
+                if run.run_id != context.run_id and run.run_date < current_date
+            ]
+            if not prior_runs:
+                return pd.DataFrame()
+            prior = prior_runs[-1]
+            path = prior.rank_attempt_dir / "watchlist_candidates.csv"
+            if not path.exists():
+                return pd.DataFrame()
+            return pd.read_csv(path)
+        except Exception:
+            return pd.DataFrame()
 
     def _load_ranking_feedback(self, context: StageContext) -> Dict[str, Any]:
         artifact = context.artifact_for("perf_tracker", "perf_tracker_ranking_feedback_summary")

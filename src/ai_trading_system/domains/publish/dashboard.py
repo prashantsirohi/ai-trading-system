@@ -15,6 +15,7 @@ from ai_trading_system.domains.publish.decision_bundle import (
 )
 from ai_trading_system.platform.logging.logger import logger
 from ai_trading_system.domains.publish.publish_payloads import format_rows_for_channel
+from ai_trading_system.domains.publish.sheets_daily_report import build_daily_report_sections
 from ai_trading_system.domains.publish.channels.weekly_pdf import metrics as weekly_metrics
 from ai_trading_system.ui.execution_api.services.readmodels.market_breadth import (
     load_operational_breadth_frame,
@@ -32,6 +33,7 @@ DATA_INVESTIGATOR_SHEET = "_DATA_INVESTIGATOR"
 VISIBLE_SHEET_MAX_ROWS = 60
 DAILY_REPORT_MAX_ROWS = 140
 VISIBLE_SHEET_MAX_COLS = 14
+DAILY_REPORT_MAX_COLS = 25
 INVESTIGATOR_ACTIVE_MAX_COLS = 16
 DATA_BREADTH_MAX_ROWS = 250
 DATA_SECTOR_HISTORY_MAX_ROWS = 500
@@ -222,11 +224,12 @@ def _sheet_cell(value: Any) -> Any:
     return str(value)
 
 
-def _cap_visible_frame(frame: pd.DataFrame, *, rows: int | None = None) -> pd.DataFrame:
+def _cap_visible_frame(frame: pd.DataFrame, *, rows: int | None = None, cols: int | None = None) -> pd.DataFrame:
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return pd.DataFrame()
     row_limit = rows if rows is not None else VISIBLE_SHEET_MAX_ROWS
-    return frame.iloc[:row_limit, :VISIBLE_SHEET_MAX_COLS].copy()
+    col_limit = cols if cols is not None else VISIBLE_SHEET_MAX_COLS
+    return frame.iloc[:row_limit, :col_limit].copy()
 
 
 def _normalise_grid(rows: list[list[Any]], *, max_rows: int = VISIBLE_SHEET_MAX_ROWS, max_cols: int = VISIBLE_SHEET_MAX_COLS) -> list[list[Any]]:
@@ -244,15 +247,15 @@ def _sections_to_grid(
     *,
     max_rows: int = VISIBLE_SHEET_MAX_ROWS,
     max_cols: int = VISIBLE_SHEET_MAX_COLS,
-) -> tuple[list[list[Any]], list[dict[str, int | str | None]]]:
+) -> tuple[list[list[Any]], list[dict[str, Any]]]:
     rows: list[list[Any]] = []
-    layouts: list[dict[str, int | str | None]] = []
+    layouts: list[dict[str, Any]] = []
     for title, frame in sections:
         if len(rows) >= max_rows:
             break
         title_row = len(rows) + 1
         rows.append([title])
-        safe = _cap_visible_frame(frame, rows=max(0, max_rows - len(rows) - 1))
+        safe = _cap_visible_frame(frame, rows=max(0, max_rows - len(rows) - 1), cols=max_cols)
         if safe.empty:
             rows.append(["No data available"])
             layouts.append({"title": title, "title_row": title_row, "header_row": None, "row_count": 0, "col_count": 1})
@@ -270,6 +273,7 @@ def _sections_to_grid(
                     "header_row": header_row,
                     "row_count": int(min(len(safe), max(0, len(rows) - header_row))),
                     "col_count": int(min(len(safe.columns), max_cols)),
+                    "columns": list(safe.columns[:max_cols]),
                 }
             )
         if len(rows) < max_rows:
@@ -283,10 +287,13 @@ def _write_visible_grid_sheet(
     sheet_name: str,
     sections: list[tuple[str, pd.DataFrame]],
     extra_requests: list[dict[str, Any]] | None = None,
-    extra_request_builder: Callable[[Any, list[dict[str, int | str | None]]], list[dict[str, Any]]] | None = None,
+    extra_request_builder: Callable[[Any, list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
     max_rows: int = VISIBLE_SHEET_MAX_ROWS,
     max_cols: int = VISIBLE_SHEET_MAX_COLS,
-) -> tuple[Any, list[dict[str, int | str | None]], int]:
+    frozen_rows: int = 1,
+    frozen_cols: int = 0,
+    column_widths: list[int] | None = None,
+) -> tuple[Any, list[dict[str, Any]], int]:
     worksheet = manager.get_or_create_sheet(sheet_name, rows=max_rows, cols=max_cols)
     if worksheet is None:
         raise RuntimeError(f"Dashboard publish failed creating sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
@@ -295,7 +302,15 @@ def _write_visible_grid_sheet(
         manager.update_worksheet_values(worksheet, grid, range_name="A1")
     else:
         raise RuntimeError("GoogleSheetsManager.update_worksheet_values is required")
-    requests = _grid_layout_requests(worksheet, layouts, max_rows=max_rows, max_cols=max_cols)
+    requests = _grid_layout_requests(
+        worksheet,
+        layouts,
+        max_rows=max_rows,
+        max_cols=max_cols,
+        frozen_rows=frozen_rows,
+        frozen_cols=frozen_cols,
+        column_widths=column_widths,
+    )
     requests.extend(extra_requests or [])
     if extra_request_builder is not None:
         requests.extend(extra_request_builder(worksheet, layouts))
@@ -307,10 +322,13 @@ def _write_visible_grid_sheet(
 
 def _grid_layout_requests(
     worksheet: Any,
-    section_layouts: list[dict[str, int | str | None]],
+    section_layouts: list[dict[str, Any]],
     *,
     max_rows: int = VISIBLE_SHEET_MAX_ROWS,
     max_cols: int = VISIBLE_SHEET_MAX_COLS,
+    frozen_rows: int = 1,
+    frozen_cols: int = 0,
+    column_widths: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     sheet_id = int(worksheet.id)
     requests: list[dict[str, Any]] = [
@@ -321,14 +339,15 @@ def _grid_layout_requests(
                     "gridProperties": {
                         "rowCount": max_rows,
                         "columnCount": max_cols,
-                        "frozenRowCount": 1,
+                        "frozenRowCount": frozen_rows,
+                        "frozenColumnCount": frozen_cols,
                     },
                 },
-                "fields": "gridProperties(rowCount,columnCount,frozenRowCount)",
+                "fields": "gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount)",
             }
         },
     ]
-    widths = [190, 130, 110, 110, 120, 160, 160, 100, 90, 120, 120, 110, 110, 130, 120, 90]
+    widths = column_widths or [190, 130, 110, 110, 120, 160, 160, 100, 90, 120, 120, 110, 110, 130, 120, 90]
     for idx, width in enumerate(widths[:max_cols]):
         requests.append(
             {
@@ -372,6 +391,218 @@ def _grid_layout_requests(
                 }
             )
     return requests
+
+
+def _daily_report_column_widths() -> list[int]:
+    return [
+        150,
+        170,
+        150,
+        230,
+        150,
+        170,
+        150,
+        220,
+        120,
+        110,
+        120,
+        105,
+        120,
+        100,
+        95,
+        90,
+        90,
+        130,
+        100,
+        95,
+        95,
+        90,
+        110,
+        300,
+        280,
+    ]
+
+
+def _daily_report_format_requests(worksheet: Any, section_layouts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sheet_id = int(worksheet.id)
+    requests: list[dict[str, Any]] = []
+    for layout in section_layouts:
+        header_row = layout.get("header_row")
+        row_count = int(layout.get("row_count") or 0)
+        columns = list(layout.get("columns") or [])
+        if not header_row or row_count <= 0:
+            continue
+        start = int(header_row)
+        end = start + row_count
+        title = str(layout.get("title") or "")
+        if title == "PATTERN WATCHLIST":
+            requests.append(
+                {
+                    "setBasicFilter": {
+                        "filter": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": int(header_row) - 1,
+                                "endRowIndex": end,
+                                "startColumnIndex": 0,
+                                "endColumnIndex": int(layout.get("col_count") or len(columns) or DAILY_REPORT_MAX_COLS),
+                            }
+                        }
+                    }
+                }
+            )
+        for col_name in ("Reason", "Risk Note", "Value", "Value 1", "Value 2", "Value 3", "Value 4", "Operator Message"):
+            if col_name not in columns:
+                continue
+            col_idx = columns.index(col_name)
+            requests.append(
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": start,
+                            "endRowIndex": end,
+                            "startColumnIndex": col_idx,
+                            "endColumnIndex": col_idx + 1,
+                        },
+                        "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
+                        "fields": "userEnteredFormat.wrapStrategy",
+                    }
+                }
+            )
+        requests.extend(_daily_number_format_requests(sheet_id, start, end, columns))
+        requests.extend(_daily_status_color_requests(sheet_id, start, end, columns))
+    return requests
+
+
+def _daily_number_format_requests(sheet_id: int, start: int, end: int, columns: list[str]) -> list[dict[str, Any]]:
+    requests: list[dict[str, Any]] = []
+    decimal_columns = {
+        "Watchlist Score",
+        "Composite Score",
+        "Pattern Score",
+        "Breakout Score",
+        "Breakout Level",
+        "Close",
+        "Distance To Breakout %",
+        "Volume Ratio",
+        "Delivery %",
+        "RS 20D",
+        "RS 60D",
+    }
+    int_columns = {"Priority", "Previous Rank", "Rank Change", "Days On List"}
+    for idx, column in enumerate(columns):
+        if column in decimal_columns:
+            pattern = "0.00"
+        elif column in int_columns:
+            pattern = "0"
+        else:
+            continue
+        requests.append(
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": start,
+                        "endRowIndex": end,
+                        "startColumnIndex": idx,
+                        "endColumnIndex": idx + 1,
+                    },
+                    "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": pattern}}},
+                    "fields": "userEnteredFormat.numberFormat",
+                }
+            }
+        )
+    return requests
+
+
+def _daily_status_color_requests(sheet_id: int, start: int, end: int, columns: list[str]) -> list[dict[str, Any]]:
+    requests: list[dict[str, Any]] = []
+
+    def col_range(col_name: str) -> dict[str, int] | None:
+        if col_name not in columns:
+            return None
+        idx = columns.index(col_name)
+        return {
+            "sheetId": sheet_id,
+            "startRowIndex": start,
+            "endRowIndex": end,
+            "startColumnIndex": idx,
+            "endColumnIndex": idx + 1,
+        }
+
+    status_range = col_range("Status")
+    if status_range:
+        requests.extend(
+            [
+                _text_condition_request(status_range, "Qualified", {"red": 0.82, "green": 0.94, "blue": 0.82}),
+                _text_condition_request(status_range, "Watch", {"red": 0.88, "green": 0.96, "blue": 0.84}),
+                _text_condition_request(status_range, "Study", {"red": 1.0, "green": 0.93, "blue": 0.74}),
+                _text_condition_request(status_range, "Avoid", {"red": 0.93, "green": 0.86, "blue": 0.86}),
+            ]
+        )
+    new_range = col_range("New Entry")
+    if new_range:
+        requests.append(_text_condition_request(new_range, "NEW", {"red": 0.80, "green": 0.91, "blue": 1.0}))
+    value_ranges = [col_range(name) for name in ("Value", "Value 1", "Value 2", "Value 3", "Value 4")]
+    for value_range in [item for item in value_ranges if item]:
+        requests.extend(
+            [
+                _text_condition_request(value_range, "trusted", {"red": 0.82, "green": 0.94, "blue": 0.82}),
+                _text_condition_request(value_range, "degraded", {"red": 1.0, "green": 0.93, "blue": 0.74}),
+                _text_condition_request(value_range, "blocked", {"red": 0.93, "green": 0.76, "blue": 0.76}),
+                _text_condition_request(value_range, "very_negative", {"red": 0.93, "green": 0.76, "blue": 0.76}),
+                _text_condition_request(value_range, "Bear", {"red": 0.93, "green": 0.76, "blue": 0.76}),
+                _text_condition_request(value_range, "Stage 4", {"red": 0.93, "green": 0.76, "blue": 0.76}),
+                _number_condition_request(value_range, "NUMBER_LESS_THAN_EQ", 0.15, {"red": 1.0, "green": 0.88, "blue": 0.70}),
+                _number_condition_request(value_range, "NUMBER_GREATER_THAN_EQ", 0.5, {"red": 0.82, "green": 0.94, "blue": 0.82}),
+            ]
+        )
+    for score_col in ("Watchlist Score", "Composite Score"):
+        score_range = col_range(score_col)
+        if score_range:
+            requests.extend(
+                [
+                    _number_condition_request(score_range, "NUMBER_GREATER_THAN_EQ", 85, {"red": 0.82, "green": 0.94, "blue": 0.82}),
+                    _number_condition_request(score_range, "NUMBER_BETWEEN", [70, 85], {"red": 1.0, "green": 0.93, "blue": 0.74}),
+                    _number_condition_request(score_range, "NUMBER_LESS", 70, {"red": 0.92, "green": 0.92, "blue": 0.92}),
+                ]
+            )
+    return requests
+
+
+def _text_condition_request(cell_range: dict[str, int], text: str, color: dict[str, float]) -> dict[str, Any]:
+    return {
+        "addConditionalFormatRule": {
+            "rule": {
+                "ranges": [cell_range],
+                "booleanRule": {
+                    "condition": {"type": "TEXT_CONTAINS", "values": [{"userEnteredValue": text}]},
+                    "format": {"backgroundColor": color},
+                },
+            },
+            "index": 0,
+        }
+    }
+
+
+def _number_condition_request(cell_range: dict[str, int], condition_type: str, values: float | list[float], color: dict[str, float]) -> dict[str, Any]:
+    raw_values = values if isinstance(values, list) else [values]
+    return {
+        "addConditionalFormatRule": {
+            "rule": {
+                "ranges": [cell_range],
+                "booleanRule": {
+                    "condition": {
+                        "type": condition_type,
+                        "values": [{"userEnteredValue": str(value)} for value in raw_values],
+                    },
+                    "format": {"backgroundColor": color},
+                },
+            },
+            "index": 0,
+        }
+    }
 
 
 def _write_hidden_data_sheet(
@@ -496,7 +727,7 @@ def _market_breadth_snapshot_frame(breadth: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
-def _breadth_snapshot_format_requests(worksheet: Any, section_layouts: list[dict[str, int | str | None]]) -> list[dict[str, Any]]:
+def _breadth_snapshot_format_requests(worksheet: Any, section_layouts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     layout = next((item for item in section_layouts if item.get("title") == "MARKET BREADTH SNAPSHOT"), None)
     if not layout or not layout.get("header_row"):
         return []
@@ -1432,6 +1663,10 @@ def publish_dashboard_payload(
     investigator_payload: dict[str, Any] | None = None,
     decision_bundle: PublishDecisionBundle | None = None,
     ranking_feedback: dict[str, Any] | None = None,
+    rank_artifact_uri: str | None = None,
+    run_id: str | None = None,
+    rank_summary: dict[str, Any] | None = None,
+    prior_watchlist_df: pd.DataFrame | None = None,
 ) -> Dict[str, Any]:
     """Write compact operator workbook tabs without using Sheets as storage."""
     manager = GoogleSheetsManager()
@@ -1453,9 +1688,6 @@ def publish_dashboard_payload(
     source_industry_rotation = industry_rotation_df if isinstance(industry_rotation_df, pd.DataFrame) and not industry_rotation_df.empty else pd.DataFrame()
     source_watchlist = watchlist_df if isinstance(watchlist_df, pd.DataFrame) and not watchlist_df.empty else _frame(payload.get("watchlist", []))
 
-    rank_min = _minimal_rank_frame(source_ranked)
-    breakout_min = _minimal_breakout_frame(source_breakout)
-    pattern_min = _pattern_frame(pattern_df)
     weekly_moves = _weekly_move_frame(source_ranked)
     failed_breakouts = _failed_breakout_frame(failed_breakouts_df)
     investigator_sector_lookup = _investigator_sector_lookup(source_ranked, source_stock_scan)
@@ -1482,26 +1714,40 @@ def publish_dashboard_payload(
         market_regime_phase=payload.get("market_regime_phase", {}),
     )
 
-    summary = bundle.run_summary
     breadth_snapshot = _market_breadth_snapshot_frame(breadth)
-    daily_sections = [
-        ("RUN SUMMARY", summary),
-        ("DAILY SUMMARY", _compact_summary_frame(summary)),
-        ("TODAY'S DECISION SHORTLIST", bundle.watchlist_candidates),
-        ("MARKET BREADTH SNAPSHOT", breadth_snapshot),
-        ("PATTERN SETUPS", bundle.pattern_setups if not bundle.pattern_setups.empty else pattern_min),
-        ("TOP RANKED", bundle.top_ranked if not bundle.top_ranked.empty else rank_min),
-        ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
-        ("BREAKOUTS (all, unfiltered)", breakout_min),
-        ("MARKET MOVES SNAPSHOT", bundle.market_moves if not bundle.market_moves.empty else weekly_moves),
-        ("FAILED BREAKOUTS", bundle.failed_breakouts if not bundle.failed_breakouts.empty else failed_breakouts),
-    ]
+    daily_report = build_daily_report_sections(
+        payload=payload,
+        run_date=run_date or payload.get("summary", {}).get("run_date") or base_sheet_name,
+        ranked_df=source_ranked,
+        breakout_df=source_breakout,
+        pattern_df=pattern_df,
+        stock_scan_df=source_stock_scan,
+        sector_df=source_sector,
+        watchlist_df=source_watchlist,
+        prior_watchlist_df=prior_watchlist_df,
+        rank_summary=rank_summary,
+        rank_artifact_uri=rank_artifact_uri,
+        run_id=run_id,
+    )
+    daily_sections = list(daily_report.sections)
+    daily_sections.insert(2, ("MARKET BREADTH SNAPSHOT", breadth_snapshot))
+    daily_sections.extend(
+        [
+            ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
+            ("MARKET MOVES SNAPSHOT", bundle.market_moves if not bundle.market_moves.empty else weekly_moves),
+            ("FAILED BREAKOUTS", bundle.failed_breakouts if not bundle.failed_breakouts.empty else failed_breakouts),
+        ]
+    )
     _daily_worksheet, _daily_layouts, daily_rows = _write_visible_grid_sheet(
         manager=manager,
         sheet_name=sheet_name,
         sections=daily_sections,
-        extra_request_builder=_breadth_snapshot_format_requests,
+        extra_request_builder=lambda worksheet, layouts: _breadth_snapshot_format_requests(worksheet, layouts) + _daily_report_format_requests(worksheet, layouts),
         max_rows=DAILY_REPORT_MAX_ROWS,
+        max_cols=DAILY_REPORT_MAX_COLS,
+        frozen_rows=1,
+        frozen_cols=3,
+        column_widths=_daily_report_column_widths(),
     )
 
     sector_rotation = _sector_rotation_frame(source_sector_rotation)
@@ -1607,6 +1853,7 @@ def publish_dashboard_payload(
         "investigator_data_sheet_name": DATA_INVESTIGATOR_SHEET,
         "hidden_data_sheets": [DATA_BREADTH_SHEET, DATA_SECTOR_HISTORY_SHEET, DATA_INVESTIGATOR_SHEET],
         "cleanup": cleanup,
+        "daily_report": daily_report.metadata,
         **quota_meta,
     }
 
