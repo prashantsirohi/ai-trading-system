@@ -60,6 +60,24 @@ PATTERN_WATCHLIST_COLUMNS = [
     "Risk Note",
 ]
 
+TOP_RANKED_COLUMNS = [
+    "Rank",
+    "Symbol",
+    "Sector",
+    "Sector Status",
+    "Composite Score",
+    "Close",
+    "Volume Ratio",
+    "Delivery %",
+    "RS 20D",
+    "RS 60D",
+    "Stage",
+    "Previous Rank",
+    "Rank Change",
+    "Reason",
+    "Risk Note",
+]
+
 OPTIONAL_COLUMNS = {
     "ranked_signals": [
         "symbol_id",
@@ -217,6 +235,7 @@ def build_daily_report_sections(
     )
     confirmed = build_confirmed_breakouts(symbol_rows, context)
     watchlist = build_pattern_watchlist(symbol_rows, context, previous_symbols=previous_symbols, previous_available=prior_watchlist_df is not None and not _frame(prior_watchlist_df).empty)
+    top_ranked = build_top_ranked(symbol_rows, context)
     banner = build_market_decision_banner(context)
     summary = build_daily_summary(context)
     diagnostics = _diagnostic_footer(
@@ -236,11 +255,13 @@ def build_daily_report_sections(
         ("DAILY SUMMARY", summary),
         ("CONFIRMED BREAKOUTS", confirmed),
         ("PATTERN WATCHLIST", watchlist),
+        ("TOP RANKED", top_ranked),
         ("DIAGNOSTICS", diagnostics),
     ]
     metadata = {
         "confirmed_breakout_rows": 0 if _is_fallback_confirmed(confirmed) else len(confirmed),
         "pattern_watchlist_rows": len(watchlist),
+        "top_ranked_rows": len(top_ranked),
         "missing_optional_columns": missing,
         "operator_message": _operator_message(context),
     }
@@ -397,6 +418,35 @@ def build_pattern_watchlist(
     return frame.sort_values(["Watchlist Score", "Composite Score", "Symbol"], ascending=[False, False, True], na_position="last", kind="stable").reset_index(drop=True)
 
 
+def build_top_ranked(rows: list[dict[str, Any]], context: MarketContext, *, limit: int = 25) -> pd.DataFrame:
+    ranked = [row for row in rows if not _is_missing(_first(row, ["composite_score"]))]
+    out = []
+    for idx, row in enumerate(ranked, start=1):
+        out.append(
+            {
+                "Rank": _priority(row, idx),
+                "Symbol": _symbol(row),
+                "Sector": _first(row, ["sector", "sector_name", "Sector"]),
+                "Sector Status": _sector_status(row),
+                "Composite Score": _round(_num(_first(row, ["composite_score"]), None)),
+                "Close": _round(_num(_first(row, ["close"]), None)),
+                "Volume Ratio": _round(_num(_first(row, ["volume_ratio_20", "volume_ratio"]), None)),
+                "Delivery %": _round(_num(_first(row, ["delivery_pct", "delivery_pct_today", "delivery_pct_20d_avg"]), None)),
+                "RS 20D": _round(_num(_first(row, ["rel_strength_20d", "rel_strength_score"]), None)),
+                "RS 60D": _round(_num(_first(row, ["rel_strength_60d"]), None)),
+                "Stage": classify_stage(row),
+                "Previous Rank": _blank_number(_first(row, ["previous_rank", "previous_rank_position"])),
+                "Rank Change": _blank_number(_first(row, ["rank_change", "rank_delta"])),
+                "Reason": _rank_reason(row),
+                "Risk Note": generate_risk_note(row, context),
+            }
+        )
+    if not out:
+        return pd.DataFrame(columns=TOP_RANKED_COLUMNS)
+    frame = pd.DataFrame(out, columns=TOP_RANKED_COLUMNS)
+    return frame.sort_values(["Rank", "Composite Score", "Symbol"], ascending=[True, False, True], na_position="last", kind="stable").head(limit).reset_index(drop=True)
+
+
 def compute_watchlist_score(row: dict[str, Any] | pd.Series, market_context: MarketContext | dict[str, Any]) -> float:
     record = dict(row)
     context = market_context if isinstance(market_context, MarketContext) else MarketContext(**{k: v for k, v in market_context.items() if k in MarketContext.__dataclass_fields__})
@@ -502,6 +552,22 @@ def generate_reason(row: dict[str, Any] | pd.Series, market_context: MarketConte
     if not _is_qualified(record):
         parts.append("pattern setup only")
     return " + ".join(parts) if parts else "Setup retained for operator review"
+
+
+def _rank_reason(row: dict[str, Any]) -> str:
+    parts = []
+    sector = _sector_status(row)
+    score = _num(_first(row, ["composite_score"]), None)
+    stage = classify_stage(row)
+    if score is not None and score >= 85:
+        parts.append("high composite score")
+    elif score is not None:
+        parts.append("ranked by composite score")
+    if sector:
+        parts.append(f"{sector} sector")
+    if stage and stage != "Unknown":
+        parts.append(stage)
+    return " + ".join(parts) if parts else "Ranked signal"
 
 
 def generate_risk_note(row: dict[str, Any] | pd.Series, market_context: MarketContext | dict[str, Any]) -> str:

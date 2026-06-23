@@ -6,6 +6,7 @@ from ai_trading_system.domains.publish.sheets_daily_report import (
     MarketContext,
     build_confirmed_breakouts,
     build_daily_report_sections,
+    build_top_ranked,
     classify_stage,
     compute_new_entry,
     compute_watchlist_score,
@@ -123,3 +124,26 @@ def test_daily_report_builds_fallback_and_new_watchlist_row() -> None:
     assert sections["PATTERN WATCHLIST"].iloc[0]["Watchlist Score"] > 0
     assert sections["PATTERN WATCHLIST"].iloc[0]["Reason"]
     assert sections["PATTERN WATCHLIST"].iloc[0]["Risk Note"]
+    assert sections["TOP RANKED"].iloc[0]["Symbol"] == "AAA"
+
+
+def test_top_ranked_section_keeps_ranked_names_without_pattern_setup() -> None:
+    frame = build_top_ranked(
+        [
+            {
+                "symbol_id": "RANKONLY",
+                "rank": 1,
+                "sector": "Banks",
+                "sector_status": "Leading",
+                "composite_score": 91,
+                "close": 100,
+                "sma_50": 95,
+                "sma_200": 80,
+                "stage2_label": "",
+            }
+        ],
+        _context(),
+    )
+
+    assert frame.iloc[0]["Symbol"] == "RANKONLY"
+    assert frame.iloc[0]["Composite Score"] == 91

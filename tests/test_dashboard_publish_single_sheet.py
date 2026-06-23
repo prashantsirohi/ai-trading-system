@@ -588,6 +588,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "New High / Low" in daily_text
     assert "ACTIVE INVESTIGATOR LIST" not in daily_text
     assert "INVESTIGATOR ACTION QUEUE" not in daily_text
+    assert "TOP RANKED" in daily_text
     assert "RANKING FEEDBACK" in daily_text
     assert "Base forming (S1)" in daily_text
     assert "Cup/Handle" in daily_text
