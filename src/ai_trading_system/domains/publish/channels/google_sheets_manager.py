@@ -630,7 +630,7 @@ class GoogleSheetsManager:
         range_name: str = "A1",
     ) -> None:
         normalized = [[_to_cell(value) for value in row] for row in values]
-        self._execute_with_backoff(lambda: worksheet.update(normalized, range_name=range_name), is_write=True)
+        self._execute_with_backoff(lambda: worksheet.update(normalized, range_name=range_name, raw=False), is_write=True)
         self.rows_written += len(normalized)
 
     def batch_update(self, body: Dict[str, Any]) -> Any:

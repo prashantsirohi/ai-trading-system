@@ -22,6 +22,8 @@ from ai_trading_system.ui.execution_api.services.readmodels.market_breadth impor
 )
 
 DAILY_REPORT_SHEET = "01_Daily_Report"
+DIAGNOSTICS_SHEET = "Diagnostics"
+MODEL_FEEDBACK_SHEET = "Model_Feedback"
 SECTOR_LEADERSHIP_SHEET = "04_Sector_Leadership"
 INDUSTRY_ROTATION_SHEET = "industry rotation"
 MARKET_BREADTH_SHEET = "05_Market_Breadth"
@@ -33,13 +35,15 @@ DATA_INVESTIGATOR_SHEET = "_DATA_INVESTIGATOR"
 VISIBLE_SHEET_MAX_ROWS = 60
 DAILY_REPORT_MAX_ROWS = 140
 VISIBLE_SHEET_MAX_COLS = 14
-DAILY_REPORT_MAX_COLS = 25
+DAILY_REPORT_MAX_COLS = 26
 INVESTIGATOR_ACTIVE_MAX_COLS = 16
 DATA_BREADTH_MAX_ROWS = 250
 DATA_SECTOR_HISTORY_MAX_ROWS = 500
 DATA_INVESTIGATOR_MAX_ROWS = 300
 OPERATOR_TAB_ORDER = [
     DAILY_REPORT_SHEET,
+    DIAGNOSTICS_SHEET,
+    MODEL_FEEDBACK_SHEET,
     "03_Portfolio",
     SECTOR_LEADERSHIP_SHEET,
     INDUSTRY_ROTATION_SHEET,
@@ -420,6 +424,7 @@ def _daily_report_column_widths() -> list[int]:
         110,
         300,
         280,
+        220,
     ]
 
 
@@ -435,7 +440,7 @@ def _daily_report_format_requests(worksheet: Any, section_layouts: list[dict[str
         start = int(header_row)
         end = start + row_count
         title = str(layout.get("title") or "")
-        if title == "PATTERN WATCHLIST":
+        if title in {"STUDY WATCHLIST TOP 10", "TOP RANKED", "CONFIRMED BREAKOUTS"}:
             requests.append(
                 {
                     "setBasicFilter": {
@@ -451,7 +456,7 @@ def _daily_report_format_requests(worksheet: Any, section_layouts: list[dict[str
                     }
                 }
             )
-        for col_name in ("Reason", "Risk Note", "Value", "Value 1", "Value 2", "Value 3", "Value 4", "Operator Message"):
+        for col_name in ("Reason", "Risk Note", "Value", "Value 1", "Value 2", "Value 3", "Value 4", "Operator Message", "Links"):
             if col_name not in columns:
                 continue
             col_idx = columns.index(col_name)
@@ -475,6 +480,26 @@ def _daily_report_format_requests(worksheet: Any, section_layouts: list[dict[str
     return requests
 
 
+def _clear_conditional_format_requests(manager: GoogleSheetsManager, worksheet: Any) -> list[dict[str, Any]]:
+    if manager.spreadsheet is None or not hasattr(manager, "fetch_sheet_metadata"):
+        return []
+    try:
+        metadata = manager.fetch_sheet_metadata()
+    except Exception:
+        return []
+    sheet_id = int(worksheet.id)
+    for sheet in metadata.get("sheets", []):
+        properties = sheet.get("properties", {})
+        if int(properties.get("sheetId", -1)) != sheet_id:
+            continue
+        rule_count = len(sheet.get("conditionalFormats") or [])
+        return [
+            {"deleteConditionalFormatRule": {"sheetId": sheet_id, "index": idx}}
+            for idx in range(rule_count - 1, -1, -1)
+        ]
+    return []
+
+
 def _daily_number_format_requests(sheet_id: int, start: int, end: int, columns: list[str]) -> list[dict[str, Any]]:
     requests: list[dict[str, Any]] = []
     decimal_columns = {
@@ -490,7 +515,7 @@ def _daily_number_format_requests(sheet_id: int, start: int, end: int, columns: 
         "RS 20D",
         "RS 60D",
     }
-    int_columns = {"Priority", "Previous Rank", "Rank Change", "Days On List"}
+    int_columns = {"Priority", "Rank", "Previous Rank", "Rank Change", "Days On List"}
     for idx, column in enumerate(columns):
         if column in decimal_columns:
             pattern = "0.00"
@@ -535,10 +560,13 @@ def _daily_status_color_requests(sheet_id: int, start: int, end: int, columns: l
     if status_range:
         requests.extend(
             [
-                _text_condition_request(status_range, "Qualified", {"red": 0.82, "green": 0.94, "blue": 0.82}),
-                _text_condition_request(status_range, "Watch", {"red": 0.88, "green": 0.96, "blue": 0.84}),
-                _text_condition_request(status_range, "Study", {"red": 1.0, "green": 0.93, "blue": 0.74}),
-                _text_condition_request(status_range, "Avoid", {"red": 0.93, "green": 0.86, "blue": 0.86}),
+                _text_condition_request(status_range, "TRADE_READY", {"red": 0.82, "green": 0.94, "blue": 0.82}),
+                _text_condition_request(status_range, "STUDY_ONLY", {"red": 0.83, "green": 0.90, "blue": 1.0}),
+                _text_condition_request(status_range, "WATCH", {"red": 0.88, "green": 0.96, "blue": 1.0}),
+                _text_condition_request(status_range, "BLOCKED_BY_REGIME", {"red": 1.0, "green": 0.88, "blue": 0.70}),
+                _text_condition_request(status_range, "BLOCKED_BY_TRUST", {"red": 1.0, "green": 0.78, "blue": 0.68}),
+                _text_condition_request(status_range, "AVOID_RISK", {"red": 0.93, "green": 0.76, "blue": 0.76}),
+                _text_condition_request(status_range, "No confirmed", {"red": 1.0, "green": 0.88, "blue": 0.70}),
             ]
         )
     new_range = col_range("New Entry")
@@ -1731,23 +1759,42 @@ def publish_dashboard_payload(
     )
     daily_sections = list(daily_report.sections)
     daily_sections.insert(2, ("MARKET BREADTH SNAPSHOT", breadth_snapshot))
-    daily_sections.extend(
+    _daily_worksheet, _daily_layouts, daily_rows = _write_visible_grid_sheet(
+        manager=manager,
+        sheet_name=sheet_name,
+        sections=daily_sections,
+        extra_request_builder=lambda worksheet, layouts: (
+            _clear_conditional_format_requests(manager, worksheet)
+            + _breadth_snapshot_format_requests(worksheet, layouts)
+            + _daily_report_format_requests(worksheet, layouts)
+        ),
+        max_rows=DAILY_REPORT_MAX_ROWS,
+        max_cols=DAILY_REPORT_MAX_COLS,
+        frozen_rows=1,
+        frozen_cols=3,
+        column_widths=_daily_report_column_widths(),
+    )
+    diagnostics_frame = pd.DataFrame(daily_report.metadata.get("diagnostics") or [])
+    _diagnostics_worksheet, _diagnostics_rows = _write_table_sheet(
+        manager=manager,
+        sheet_name=DIAGNOSTICS_SHEET,
+        frame=diagnostics_frame,
+        min_rows=VISIBLE_SHEET_MAX_ROWS,
+        max_cols=8,
+    )
+    model_feedback_frame = _combine_frames(
         [
             ("RANKING FEEDBACK", _ranking_feedback_frame(ranking_feedback)),
             ("MARKET MOVES SNAPSHOT", bundle.market_moves if not bundle.market_moves.empty else weekly_moves),
             ("FAILED BREAKOUTS", bundle.failed_breakouts if not bundle.failed_breakouts.empty else failed_breakouts),
         ]
     )
-    _daily_worksheet, _daily_layouts, daily_rows = _write_visible_grid_sheet(
+    _model_feedback_worksheet, model_feedback_rows = _write_table_sheet(
         manager=manager,
-        sheet_name=sheet_name,
-        sections=daily_sections,
-        extra_request_builder=lambda worksheet, layouts: _breadth_snapshot_format_requests(worksheet, layouts) + _daily_report_format_requests(worksheet, layouts),
-        max_rows=DAILY_REPORT_MAX_ROWS,
+        sheet_name=MODEL_FEEDBACK_SHEET,
+        frame=model_feedback_frame,
+        min_rows=VISIBLE_SHEET_MAX_ROWS,
         max_cols=DAILY_REPORT_MAX_COLS,
-        frozen_rows=1,
-        frozen_cols=3,
-        column_widths=_daily_report_column_widths(),
     )
 
     sector_rotation = _sector_rotation_frame(source_sector_rotation)
@@ -1844,6 +1891,10 @@ def publish_dashboard_payload(
         "sheet_name": sheet_name,
         "base_sheet_name": base_sheet_name,
         "rows_written": int(daily_rows),
+        "diagnostics_sheet_name": DIAGNOSTICS_SHEET,
+        "diagnostics_rows_written": int(_diagnostics_rows),
+        "model_feedback_sheet_name": MODEL_FEEDBACK_SHEET,
+        "model_feedback_rows_written": int(model_feedback_rows),
         "sector_sheet_name": SECTOR_LEADERSHIP_SHEET,
         "industry_rotation_sheet_name": INDUSTRY_ROTATION_SHEET,
         "industry_rotation_rows_written": int(industry_rotation_rows),

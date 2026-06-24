@@ -4,6 +4,7 @@ import pandas as pd
 
 from ai_trading_system.domains.publish.sheets_daily_report import (
     MarketContext,
+    blocked_by_flags,
     build_confirmed_breakouts,
     build_daily_report_sections,
     build_top_ranked,
@@ -13,6 +14,7 @@ from ai_trading_system.domains.publish.sheets_daily_report import (
     determine_status,
     generate_reason,
     generate_risk_note,
+    symbol_links,
 )
 
 
@@ -69,9 +71,13 @@ def test_compute_new_entry_prefers_previous_symbols_and_falls_back_to_days() -> 
 
 
 def test_empty_qualified_breakouts_produces_visible_fallback_row() -> None:
-    frame = build_confirmed_breakouts([_row(qualified=False, breakout_state="watchlist")], _context())
+    frame = build_confirmed_breakouts(
+        [_row(qualified=False, breakout_state="watchlist")],
+        _context(regime_phase="Bear / Stage 4", breadth_velocity="very_negative", trust_status="degraded"),
+    )
 
     assert frame.iloc[0]["Status"] == "No confirmed / trade-qualified breakouts today."
+    assert frame.iloc[0]["Blocked By"] == "REGIME, BREADTH, TRUST, NO_CONFIRMATION"
 
 
 def test_classify_stage_core_scenarios() -> None:
@@ -90,7 +96,30 @@ def test_reason_and_risk_note_tolerate_missing_optional_columns() -> None:
 def test_status_downgrades_non_qualified_rows_in_weak_regime() -> None:
     context = _context(regime_phase="Bear / Stage 4", allowed_exposure=0.15)
 
-    assert determine_status(_row(qualified=False, breakout_state="watchlist"), context) == "Study"
+    assert determine_status(_row(qualified=False, breakout_state="watchlist"), context) == "BLOCKED_BY_REGIME"
+
+
+def test_status_taxonomy_and_blocked_by_flags() -> None:
+    assert determine_status(_row(qualified=True, breakout_state="qualified"), _context()) == "TRADE_READY"
+    assert determine_status(_row(qualified=True, breakout_state="qualified"), _context(trust_status="blocked")) == "BLOCKED_BY_TRUST"
+    assert determine_status(_row(qualified=False, breakout_state="watchlist", volume_ratio_20=0.2), _context()) == "AVOID_RISK"
+    assert determine_status(_row(qualified=False, breakout_state="watchlist", sector_status="Leading"), _context()) == "WATCH"
+
+    context = _context(regime_phase="Bear / Stage 4", trust_status="degraded", breadth_velocity="very_negative")
+    flags = blocked_by_flags(
+        _row(sector_status="Lagging", volume_ratio_20=None, risk_flags="trap flag; days stale > threshold"),
+        context,
+        risk_note="Bear regime; Trust degraded; Too far from breakout level; Illiquid / avoid; Volume confirmation missing; Lagging sector; Days stale > threshold; Trap flag",
+    )
+    assert flags == "REGIME, TRUST, DISTANCE, LIQUIDITY, VOLUME, SECTOR, STALE, TRAP"
+
+
+def test_symbol_links_uses_safe_hyperlink_formula() -> None:
+    links = symbol_links("RELIANCE")
+
+    assert links.startswith("=HYPERLINK(")
+    assert "NSE:RELIANCE" in links
+    assert "screener.in/company/RELIANCE" in links
 
 
 def test_daily_report_builds_fallback_and_new_watchlist_row() -> None:
@@ -120,11 +149,24 @@ def test_daily_report_builds_fallback_and_new_watchlist_row() -> None:
 
     assert "No trade-qualified breakouts today." in result.metadata["operator_message"]
     assert sections["CONFIRMED BREAKOUTS"].iloc[0]["Status"] == "No confirmed / trade-qualified breakouts today."
-    assert sections["PATTERN WATCHLIST"].iloc[0]["New Entry"] == "NEW"
-    assert sections["PATTERN WATCHLIST"].iloc[0]["Watchlist Score"] > 0
-    assert sections["PATTERN WATCHLIST"].iloc[0]["Reason"]
-    assert sections["PATTERN WATCHLIST"].iloc[0]["Risk Note"]
+    assert sections["STUDY WATCHLIST TOP 10"].iloc[0]["New Entry"] == "NEW"
+    assert sections["STUDY WATCHLIST TOP 10"].iloc[0]["Status"] == "BLOCKED_BY_REGIME"
+    assert sections["STUDY WATCHLIST TOP 10"].iloc[0]["Watchlist Score"] > 0
+    assert sections["STUDY WATCHLIST TOP 10"].iloc[0]["Reason"]
+    assert sections["STUDY WATCHLIST TOP 10"].iloc[0]["Risk Note"]
     assert sections["TOP RANKED"].iloc[0]["Symbol"] == "AAA"
+    assert "DIAGNOSTICS" not in sections
+    assert "ranked_signals" in str(result.metadata["missing_optional_columns"])
+    main_text = "\n".join(
+        str(cell)
+        for _title, frame in result.sections
+        for row in frame.fillna("").values.tolist()
+        for cell in row
+        if cell != ""
+    )
+    assert "ranked_signals:" not in main_text
+    assert "Missing optional columns" not in main_text
+    assert "factor rs increase_candidate" not in main_text
 
 
 def test_top_ranked_section_keeps_ranked_names_without_pattern_setup() -> None:

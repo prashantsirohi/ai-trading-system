@@ -28,8 +28,10 @@ CONFIRMED_BREAKOUT_COLUMNS = [
     "RS 20D",
     "RS 60D",
     "Stage",
+    "Blocked By",
     "Reason",
     "Risk Note",
+    "Links",
 ]
 
 PATTERN_WATCHLIST_COLUMNS = [
@@ -55,9 +57,10 @@ PATTERN_WATCHLIST_COLUMNS = [
     "Rank Change",
     "Days On List",
     "New Entry",
-    "Tags",
+    "Blocked By",
     "Reason",
     "Risk Note",
+    "Links",
 ]
 
 TOP_RANKED_COLUMNS = [
@@ -72,10 +75,10 @@ TOP_RANKED_COLUMNS = [
     "RS 20D",
     "RS 60D",
     "Stage",
-    "Previous Rank",
-    "Rank Change",
+    "Blocked By",
     "Reason",
     "Risk Note",
+    "Links",
 ]
 
 OPTIONAL_COLUMNS = {
@@ -238,7 +241,7 @@ def build_daily_report_sections(
     top_ranked = build_top_ranked(symbol_rows, context)
     banner = build_market_decision_banner(context)
     summary = build_daily_summary(context)
-    diagnostics = _diagnostic_footer(
+    diagnostics = build_diagnostics_frame(
         run_id=run_id,
         rank_artifact_uri=rank_artifact_uri,
         publish_timestamp=publish_timestamp,
@@ -250,13 +253,14 @@ def build_daily_report_sections(
         missing_optional_columns=missing,
         trust_notes=context.trust_notes,
     )
+    footer = _main_footer(context, diagnostics)
     sections = [
         ("TOP MARKET DECISION BANNER", banner),
         ("DAILY SUMMARY", summary),
         ("CONFIRMED BREAKOUTS", confirmed),
-        ("PATTERN WATCHLIST", watchlist),
+        ("STUDY WATCHLIST TOP 10", watchlist.head(10).reset_index(drop=True)),
         ("TOP RANKED", top_ranked),
-        ("DIAGNOSTICS", diagnostics),
+        ("FOOTER", footer),
     ]
     metadata = {
         "confirmed_breakout_rows": 0 if _is_fallback_confirmed(confirmed) else len(confirmed),
@@ -264,36 +268,28 @@ def build_daily_report_sections(
         "top_ranked_rows": len(top_ranked),
         "missing_optional_columns": missing,
         "operator_message": _operator_message(context),
+        "diagnostics": diagnostics.to_dict(orient="records"),
     }
     return DailyReportBuildResult(sections=sections, metadata=metadata)
 
 
 def build_market_decision_banner(context: MarketContext) -> pd.DataFrame:
+    action = context.action or ("defensive_trim" if _is_weak_regime(context) else "review")
     return pd.DataFrame(
         [
             {
-                "Metric 1": "Run Date",
-                "Value 1": context.run_date,
-                "Metric 2": "Trust Status",
-                "Value 2": context.trust_status,
-                "Metric 3": "Market State",
-                "Value 3": context.market_state,
-                "Metric 4": "Direction Bias",
-                "Value 4": context.direction_bias,
-            },
-            {
-                "Metric 1": "Action",
-                "Value 1": context.action,
+                "Metric 1": "Today Action",
+                "Value 1": action,
                 "Metric 2": "Allowed Exposure",
                 "Value 2": _blank_number(context.allowed_exposure),
                 "Metric 3": "Regime Phase",
                 "Value 3": context.regime_phase,
-                "Metric 4": "Breadth > 200DMA",
-                "Value 4": context.breadth_200dma,
+                "Metric 4": "Breadth Velocity",
+                "Value 4": context.breadth_velocity,
             },
             {
-                "Metric 1": "Breadth Velocity",
-                "Value 1": context.breadth_velocity,
+                "Metric 1": "Trust Status",
+                "Value 1": context.trust_status,
                 "Metric 2": "Qualified Breakouts",
                 "Value 2": context.qualified_breakouts,
                 "Metric 3": "Pattern Setups",
@@ -302,10 +298,20 @@ def build_market_decision_banner(context: MarketContext) -> pd.DataFrame:
                 "Value 4": context.watchlist_candidates,
             },
             {
-                "Metric 1": "Sectors Scanned",
-                "Value 1": context.sectors_scanned,
-                "Metric 2": "Operator Message",
-                "Value 2": _operator_message(context),
+                "Metric 1": "Run Date",
+                "Value 1": context.run_date,
+                "Metric 2": "Latest Validated Date",
+                "Value 2": context.latest_validated_date,
+                "Metric 3": "Market State",
+                "Value 3": context.market_state,
+                "Metric 4": "Direction Bias",
+                "Value 4": context.direction_bias,
+            },
+            {
+                "Metric 1": "Operator Message",
+                "Value 1": _operator_message(context),
+                "Metric 2": "",
+                "Value 2": "",
                 "Metric 3": "",
                 "Value 3": "",
                 "Metric 4": "",
@@ -340,12 +346,24 @@ def build_daily_summary(context: MarketContext) -> pd.DataFrame:
 def build_confirmed_breakouts(rows: list[dict[str, Any]], context: MarketContext) -> pd.DataFrame:
     confirmed = [row for row in rows if _is_qualified(row)]
     if not confirmed:
-        return pd.DataFrame([{"Status": "No confirmed / trade-qualified breakouts today."}], columns=CONFIRMED_BREAKOUT_COLUMNS)
+        tags = _empty_breakout_reason_tags(context)
+        return pd.DataFrame(
+            [
+                {
+                    "Status": "No confirmed / trade-qualified breakouts today.",
+                    "Blocked By": ", ".join(tags),
+                    "Reason": "No trade entries",
+                    "Risk Note": "; ".join(_empty_breakout_reasons(context)),
+                }
+            ],
+            columns=CONFIRMED_BREAKOUT_COLUMNS,
+        )
     out = []
     for idx, row in enumerate(confirmed, start=1):
+        risk_note = generate_risk_note(row, context)
         out.append(
             {
-                "Status": "Qualified",
+                "Status": determine_status(row, context),
                 "Priority": idx,
                 "Symbol": _symbol(row),
                 "Sector": _first(row, ["sector", "sector_name", "Sector"]),
@@ -363,8 +381,10 @@ def build_confirmed_breakouts(rows: list[dict[str, Any]], context: MarketContext
                 "RS 20D": _round(_num(_first(row, ["rel_strength_20d", "rel_strength_score"]), None)),
                 "RS 60D": _round(_num(_first(row, ["rel_strength_60d"]), None)),
                 "Stage": classify_stage(row),
+                "Blocked By": blocked_by_flags(row, context, risk_note=risk_note),
                 "Reason": generate_reason(row, context),
-                "Risk Note": generate_risk_note(row, context),
+                "Risk Note": risk_note,
+                "Links": symbol_links(_symbol(row)),
             }
         )
     frame = pd.DataFrame(out, columns=CONFIRMED_BREAKOUT_COLUMNS)
@@ -383,6 +403,7 @@ def build_pattern_watchlist(
     out = []
     for idx, row in enumerate(candidates, start=1):
         days = _days_on_list(row)
+        risk_note = generate_risk_note(row, context)
         out.append(
             {
                 "Status": determine_status(row, context),
@@ -407,9 +428,10 @@ def build_pattern_watchlist(
                 "Rank Change": _blank_number(_first(row, ["rank_change", "rank_delta"])),
                 "Days On List": days,
                 "New Entry": compute_new_entry(_symbol(row), previous_symbols if previous_available else None, days),
-                "Tags": _first(row, ["momentum_tags", "tags", "watchlist_bucket"]),
+                "Blocked By": blocked_by_flags(row, context, risk_note=risk_note),
                 "Reason": generate_reason(row, context),
-                "Risk Note": generate_risk_note(row, context),
+                "Risk Note": risk_note,
+                "Links": symbol_links(_symbol(row)),
             }
         )
     if not out:
@@ -418,10 +440,11 @@ def build_pattern_watchlist(
     return frame.sort_values(["Watchlist Score", "Composite Score", "Symbol"], ascending=[False, False, True], na_position="last", kind="stable").reset_index(drop=True)
 
 
-def build_top_ranked(rows: list[dict[str, Any]], context: MarketContext, *, limit: int = 25) -> pd.DataFrame:
+def build_top_ranked(rows: list[dict[str, Any]], context: MarketContext, *, limit: int = 10) -> pd.DataFrame:
     ranked = [row for row in rows if not _is_missing(_first(row, ["composite_score"]))]
     out = []
     for idx, row in enumerate(ranked, start=1):
+        risk_note = generate_risk_note(row, context)
         out.append(
             {
                 "Rank": _priority(row, idx),
@@ -435,10 +458,10 @@ def build_top_ranked(rows: list[dict[str, Any]], context: MarketContext, *, limi
                 "RS 20D": _round(_num(_first(row, ["rel_strength_20d", "rel_strength_score"]), None)),
                 "RS 60D": _round(_num(_first(row, ["rel_strength_60d"]), None)),
                 "Stage": classify_stage(row),
-                "Previous Rank": _blank_number(_first(row, ["previous_rank", "previous_rank_position"])),
-                "Rank Change": _blank_number(_first(row, ["rank_change", "rank_delta"])),
+                "Blocked By": blocked_by_flags(row, context, risk_note=risk_note),
                 "Reason": _rank_reason(row),
-                "Risk Note": generate_risk_note(row, context),
+                "Risk Note": risk_note,
+                "Links": symbol_links(_symbol(row)),
             }
         )
     if not out:
@@ -516,22 +539,29 @@ def classify_stage(row: dict[str, Any] | pd.Series) -> str:
 def determine_status(row: dict[str, Any] | pd.Series, market_context: MarketContext | dict[str, Any]) -> str:
     record = dict(row)
     context = market_context if isinstance(market_context, MarketContext) else MarketContext(**{k: v for k, v in market_context.items() if k in MarketContext.__dataclass_fields__})
-    if _is_qualified(record):
-        return "Qualified"
-    if _is_illiquid_or_missing(record):
-        return "Avoid"
-    sector = _sector_status(record).lower()
-    weak_regime = _is_weak_regime(context)
     score = compute_watchlist_score(record, context)
-    if sector == "lagging" and weak_regime:
-        return "Avoid" if score < 45 else "Study"
+    trust = context.trust_status.lower()
+    weak_regime = _is_weak_regime(context)
+    if trust == "blocked":
+        return "BLOCKED_BY_TRUST"
+    if _has_avoid_risk(record):
+        return "AVOID_RISK"
+    if _is_qualified(record) and not weak_regime and trust == "trusted":
+        return "TRADE_READY"
     if weak_regime:
-        return "Study"
+        return "BLOCKED_BY_REGIME"
+    if trust == "degraded" and not _is_qualified(record):
+        return "BLOCKED_BY_TRUST" if score < 55 else "STUDY_ONLY"
+    if _is_qualified(record):
+        return "STUDY_ONLY"
+    sector = _sector_status(record).lower()
     if sector == "leading" and score >= 70:
-        return "Watch"
+        return "WATCH"
     if sector == "improving" and score >= 75:
-        return "Watch"
-    return "Study"
+        return "WATCH"
+    if _has_setup(record):
+        return "STUDY_ONLY"
+    return "NO_ACTION"
 
 
 def generate_reason(row: dict[str, Any] | pd.Series, market_context: MarketContext | dict[str, Any]) -> str:
@@ -592,7 +622,59 @@ def generate_risk_note(row: dict[str, Any] | pd.Series, market_context: MarketCo
         notes.append("Below 200DMA")
     if _is_illiquid_or_missing(record):
         notes.append("Illiquid / avoid")
+    risk_flags = str(_first(record, ["risk_flags", "risk_flag", "trap_flag", "trap_category", "drop_reason"]) or "").strip()
+    if risk_flags:
+        notes.append(risk_flags.replace("_", " "))
     return "; ".join(dict.fromkeys(notes)) if notes else "Clean setup"
+
+
+def blocked_by_flags(
+    row: dict[str, Any] | pd.Series,
+    market_context: MarketContext | dict[str, Any],
+    *,
+    risk_note: str | None = None,
+) -> str:
+    record = dict(row)
+    context = market_context if isinstance(market_context, MarketContext) else MarketContext(**{k: v for k, v in market_context.items() if k in MarketContext.__dataclass_fields__})
+    note = (risk_note or generate_risk_note(record, context)).lower()
+    source = " ".join(
+        str(value).lower()
+        for value in [
+            note,
+            _first(record, ["risk_flags", "risk_flag", "trap_flag", "trap_category", "drop_reason"]),
+            _sector_status(record),
+        ]
+        if not _is_missing(value)
+    )
+    flags: list[str] = []
+    if _is_weak_regime(context) or "bear regime" in source or "stage 4" in source:
+        flags.append("REGIME")
+    if context.trust_status.lower() in {"degraded", "blocked"} or "trust" in source:
+        flags.append("TRUST")
+    if "too far" in source or "distance" in source or "breakout level" in source:
+        flags.append("DISTANCE")
+    if "illiquid" in source or "liquidity" in source:
+        flags.append("LIQUIDITY")
+    if "volume confirmation missing" in source or "weak volume" in source:
+        flags.append("VOLUME")
+    if "lagging" in source or "weak sector" in source:
+        flags.append("SECTOR")
+    if "stale" in source or "days stale" in source:
+        flags.append("STALE")
+    if "trap" in source:
+        flags.append("TRAP")
+    return ", ".join(dict.fromkeys(flags))
+
+
+def symbol_links(symbol: Any) -> str:
+    safe = str(symbol or "").strip().upper()
+    if not safe:
+        return ""
+    escaped = safe.replace('"', '""')
+    return (
+        f'=HYPERLINK("https://www.tradingview.com/chart/?symbol=NSE:{escaped}","Chart")'
+        f' & " | " & HYPERLINK("https://www.screener.in/company/{escaped}/","Screener")'
+    )
 
 
 def compute_new_entry(symbol: Any, previous_symbols: set[str] | None, days_on_list: Any) -> str:
@@ -703,7 +785,7 @@ def _best_rows(frame: pd.DataFrame, sort_cols: list[str]) -> list[dict[str, Any]
     return [row.drop(labels=["_symbol_key"], errors="ignore").to_dict() for _, row in df.drop_duplicates("_symbol_key", keep="first").iterrows()]
 
 
-def _diagnostic_footer(**kwargs: Any) -> pd.DataFrame:
+def build_diagnostics_frame(**kwargs: Any) -> pd.DataFrame:
     missing = kwargs.pop("missing_optional_columns", {})
     rows = [
         ("Source run_id", kwargs.get("run_id")),
@@ -718,6 +800,28 @@ def _diagnostic_footer(**kwargs: Any) -> pd.DataFrame:
         ("Trust notes", kwargs.get("trust_notes")),
     ]
     return pd.DataFrame([{"Metric": k, "Value": "" if _is_missing(v) else v} for k, v in rows])
+
+
+def _main_footer(context: MarketContext, diagnostics: pd.DataFrame) -> pd.DataFrame:
+    diag_note = "Diagnostics available in Diagnostics tab."
+    feedback_note = "Model feedback available in Model_Feedback tab."
+    run_id = ""
+    published = ""
+    if not diagnostics.empty:
+        lookup = {str(row.get("Metric")): row.get("Value") for _, row in diagnostics.iterrows()}
+        run_id = str(lookup.get("Source run_id") or "")
+        published = str(lookup.get("Publish timestamp") or "")
+    return pd.DataFrame(
+        [
+            {
+                "Run Date": context.run_date,
+                "Run ID": run_id,
+                "Published": published,
+                "Diagnostics": diag_note,
+                "Model Feedback": feedback_note,
+            }
+        ]
+    )
 
 
 def _operator_message(context: MarketContext) -> str:
@@ -739,6 +843,30 @@ def _operator_message(context: MarketContext) -> str:
     if context.qualified_breakouts == 0:
         parts.append("Use shortlist for study only until conditions improve.")
     return " ".join(parts)
+
+
+def _empty_breakout_reason_tags(context: MarketContext) -> list[str]:
+    tags: list[str] = []
+    if _is_weak_regime(context):
+        tags.append("REGIME")
+    if str(context.breadth_velocity).lower() == "very_negative":
+        tags.append("BREADTH")
+    if context.trust_status.lower() in {"degraded", "blocked"}:
+        tags.append("TRUST")
+    tags.append("NO_CONFIRMATION")
+    return tags
+
+
+def _empty_breakout_reasons(context: MarketContext) -> list[str]:
+    reasons: list[str] = []
+    if "bear" in context.regime_phase.lower() or "stage 4" in context.regime_phase.lower():
+        reasons.append("Bear regime")
+    if str(context.breadth_velocity).lower() == "very_negative":
+        reasons.append("Very negative breadth velocity")
+    if context.trust_status.lower() in {"degraded", "blocked"}:
+        reasons.append(f"Trust {context.trust_status}")
+    reasons.append("No qualified breakout confirmation")
+    return reasons
 
 
 def _missing_optional_columns(**frames: pd.DataFrame) -> dict[str, list[str]]:
@@ -783,9 +911,34 @@ def _is_illiquid_or_missing(row: dict[str, Any]) -> bool:
     return volume is not None and volume < 0.5
 
 
+def _has_avoid_risk(row: dict[str, Any]) -> bool:
+    risk_text = " ".join(
+        str(value).lower()
+        for value in [
+            _first(row, ["risk_flags", "risk_flag", "trap_flag", "trap_category", "drop_reason"]),
+            _first(row, ["liquidity_bucket", "liquidity_status"]),
+            _sector_status(row),
+        ]
+        if not _is_missing(value)
+    )
+    if any(token in risk_text for token in ("illiquid", "avoid", "trap", "stale", "too extended", "overextended", "weak volume", "lagging")):
+        return True
+    distance = _distance_to_breakout(row)
+    if distance is not None and abs(distance) > 8:
+        return True
+    return _is_illiquid_or_missing(row)
+
+
 def _is_weak_regime(context: MarketContext) -> bool:
     regime = context.regime_phase.lower()
-    return "bear" in regime or "stage 4" in regime or "stage4" in regime or (context.allowed_exposure is not None and context.allowed_exposure <= 0.15)
+    breadth = str(context.breadth_velocity or "").lower()
+    return (
+        "bear" in regime
+        or "stage 4" in regime
+        or "stage4" in regime
+        or breadth == "very_negative"
+        or (context.allowed_exposure is not None and context.allowed_exposure <= 0.15)
+    )
 
 
 def _setup_quality_score(row: dict[str, Any]) -> float:

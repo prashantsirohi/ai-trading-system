@@ -521,6 +521,8 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert manager is not None
     assert result["sheet_name"] == "01_Daily_Report"
     assert result["base_sheet_name"] == "2026-04-09"
+    assert result["diagnostics_sheet_name"] == "Diagnostics"
+    assert result["model_feedback_sheet_name"] == "Model_Feedback"
     assert result["sector_sheet_name"] == "04_Sector_Leadership"
     assert result["industry_rotation_sheet_name"] == "industry rotation"
     assert result["breadth_sheet_name"] == "01_Daily_Report"
@@ -528,21 +530,27 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert result["investigator_data_sheet_name"] == "_DATA_INVESTIGATOR"
     assert {"DATA", "FILTER", "Publish_Log", "02_Watchlist_Current", "05_Market_Breadth", "2026-04-08"}.issubset(set(manager.spreadsheet.deleted))
 
-    visible_titles = {"01_Daily_Report", "04_Sector_Leadership", "industry rotation", "investigator"}
+    visible_titles = {"01_Daily_Report", "Diagnostics", "Model_Feedback", "04_Sector_Leadership", "industry rotation", "investigator"}
     visible_updates = {
         title: [update for update in manager.sheets[title].updates if update[0] == "A1"]
         for title in visible_titles
     }
     assert all(len(updates) == 1 for updates in visible_updates.values())
     daily_grid = visible_updates["01_Daily_Report"][0][1]
+    diagnostics_grid = visible_updates["Diagnostics"][0][1]
+    model_feedback_grid = visible_updates["Model_Feedback"][0][1]
     sector_grid = visible_updates["04_Sector_Leadership"][0][1]
     industry_grid = visible_updates["industry rotation"][0][1]
     investigator_grid = visible_updates["investigator"][0][1]
     assert len(daily_grid) == 140
+    assert len(diagnostics_grid) >= 10
+    assert len(model_feedback_grid) >= 4
     assert len(sector_grid) == 60
-    assert all(len(row) == 25 for row in daily_grid)
+    assert all(len(row) == 26 for row in daily_grid)
+    assert all(len(row) == 2 for row in diagnostics_grid)
+    assert all(len(row) <= 25 for row in model_feedback_grid)
     assert all(len(row) == 14 for row in sector_grid)
-    assert manager.dimensions["01_Daily_Report"] == (140, 25)
+    assert manager.dimensions["01_Daily_Report"] == (140, 26)
     assert manager.dimensions["04_Sector_Leadership"] == (60, 14)
     assert industry_grid[0][:6] == ["Date", "Industry", "Sector", "Quadrant", "RS Ratio", "RS Momentum"]
     industry_text = "\n".join(str(cell) for row in industry_grid for cell in row if cell != "")
@@ -580,8 +588,8 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "TOP MARKET DECISION BANNER" in daily_text
     assert "DAILY SUMMARY" in daily_text
     assert "CONFIRMED BREAKOUTS" in daily_text
-    assert "PATTERN WATCHLIST" in daily_text
-    assert "DIAGNOSTICS" in daily_text
+    assert "STUDY WATCHLIST TOP 10" in daily_text
+    assert "DIAGNOSTICS" not in daily_text
     assert "MARKET BREADTH SNAPSHOT" in daily_text
     assert "% Above SMA200" in daily_text
     assert "PE 5Y Percentile" in daily_text
@@ -589,16 +597,28 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "ACTIVE INVESTIGATOR LIST" not in daily_text
     assert "INVESTIGATOR ACTION QUEUE" not in daily_text
     assert "TOP RANKED" in daily_text
-    assert "RANKING FEEDBACK" in daily_text
+    assert "RANKING FEEDBACK" not in daily_text
+    assert "ranked_signals:" not in daily_text
+    assert "Missing optional columns" not in daily_text
     assert "Base forming (S1)" in daily_text
     assert "Cup/Handle" in daily_text
-    assert "P024" in daily_text
+    assert "P009" in daily_text
+    assert "P024" not in daily_text
     assert "S000" in daily_text
     assert "Reason" in daily_text
     assert "Risk Note" in daily_text
     assert "Watchlist Score" in daily_text
 
     assert "EVENTS SUMMARY" not in daily_text
+    diagnostics_text = "\n".join(str(cell) for row in diagnostics_grid for cell in row if cell != "")
+    assert "Missing optional columns" in diagnostics_text
+    assert "Rows in ranked_signals" in diagnostics_text
+    assert "Rank artifact path" in diagnostics_text
+    model_feedback_text = "\n".join(str(cell) for row in model_feedback_grid for cell in row if cell != "")
+    assert "RANKING FEEDBACK" in model_feedback_text
+    assert "rank_edge" in model_feedback_text
+    assert "top-10 vs rank-51-plus" in model_feedback_text
+    assert "MARKET MOVES SNAPSHOT" in model_feedback_text
 
     hidden = {name: frame for name, frame, _max_rows, _max_cols in manager.hidden_writes}
     assert {"_DATA_BREADTH", "_DATA_SECTOR_HISTORY", "_DATA_INVESTIGATOR"}.issubset(hidden)
