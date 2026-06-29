@@ -91,6 +91,8 @@ def _rank_ic_xy(x, y) -> float | None:
         return None
     x_rank = x.rank()
     y_rank = y.rank()
+    if x_rank.nunique(dropna=True) < 2 or y_rank.nunique(dropna=True) < 2:
+        return None
     corr = float(x_rank.corr(y_rank))
     return corr if corr == corr else None  # noqa: PLR0124
 

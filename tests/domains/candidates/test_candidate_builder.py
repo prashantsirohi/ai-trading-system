@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ai_trading_system.domains.candidates.builder import build_final_candidates, build_final_candidates_from_files
+from ai_trading_system.domains.candidates.builder import _first_available, build_final_candidates, build_final_candidates_from_files
 from ai_trading_system.domains.candidates.contracts import FINAL_CANDIDATE_COLUMNS
 
 
@@ -160,6 +160,15 @@ def test_build_final_candidates_assigns_groups_and_rejects_red_flags() -> None:
     assert "Rejected by fundamental red flag" in by_symbol.loc["BAD", "candidate_reason"]
     assert summary["rows_selected"] == len(result)
     assert summary["candidate_group_counts"]["AVOID_RED_FLAG"] == 1
+
+
+def test_first_available_text_default_preserves_object_dtype() -> None:
+    frame = pd.DataFrame({"industry_group": pd.Series([float("nan"), float("nan")], dtype="float64")})
+
+    result = _first_available(frame, ["industry_group", "industry_group_fundamental"], "")
+
+    assert result.dtype == object
+    assert result.tolist() == ["", ""]
 
 
 def test_build_final_candidates_requires_valid_setup_for_normal_candidates() -> None:

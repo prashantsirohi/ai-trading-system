@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ai_trading_system.domains.fundamentals.enrich_rank import enrich_rank_artifacts
+from ai_trading_system.domains.fundamentals.enrich_rank import _first_available, enrich_rank_artifacts
 
 
 def _write_base_files(rank_dir: Path, scores_path: Path, trends_path: Path | None = None) -> None:
@@ -116,6 +116,15 @@ def test_enrich_rank_assigns_buckets_and_scores(tmp_path: Path) -> None:
     assert "improving fundamentals" in by_symbol.loc["AAA", "watchlist_reason"]
     assert "deteriorating fundamentals" in by_symbol.loc["BAD", "watchlist_reason"]
     assert by_symbol.loc["AAA", "next_action"] == "Add to watchlist and review chart"
+
+
+def test_first_available_text_default_preserves_object_dtype() -> None:
+    frame = pd.DataFrame({"industry_group": pd.Series([float("nan"), float("nan")], dtype="float64")})
+
+    result = _first_available(frame, ["industry_group", "industry_group_fundamental"], "")
+
+    assert result.dtype == object
+    assert result.tolist() == ["", ""]
 
 
 def test_enrich_rank_tolerates_missing_optional_scan_files(tmp_path: Path) -> None:

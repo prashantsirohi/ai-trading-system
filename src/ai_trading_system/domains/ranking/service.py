@@ -90,6 +90,13 @@ def _bool_series(frame: pd.DataFrame, column: str) -> pd.Series:
     return text.isin({"1", "true", "t", "yes", "y"})
 
 
+def _records_without_duplicate_columns(frame: pd.DataFrame | None) -> list[dict[str, Any]]:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return []
+    unique = frame.loc[:, ~frame.columns.duplicated()].copy()
+    return unique.to_dict(orient="records")
+
+
 def _coerce_numeric_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     output = frame.copy()
     for column in columns:
@@ -1235,7 +1242,7 @@ class RankOrchestrationService:
         try:
             context.write_json(
                 "watchlist_rejections.json",
-                watchlist_rejections_df.to_dict(orient="records") if isinstance(watchlist_rejections_df, pd.DataFrame) else [],
+                _records_without_duplicate_columns(watchlist_rejections_df),
             )
         except Exception as exc:
             warnings.append(f"watchlist rejections sidecar unavailable: {exc}")
@@ -1333,7 +1340,7 @@ class RankOrchestrationService:
                     context.run_date,
                     context.run_id,
                     context.attempt_number,
-                    watchlist_final_df.to_dict(orient="records"),
+                    _records_without_duplicate_columns(watchlist_final_df),
                     watchlist_artifact_uri,
                 )
                 if enriched_rows:
@@ -1359,7 +1366,7 @@ class RankOrchestrationService:
         try:
             context.write_json(
                 "watchlist_candidates.json",
-                watchlist_final_df.to_dict(orient="records") if isinstance(watchlist_final_df, pd.DataFrame) else [],
+                _records_without_duplicate_columns(watchlist_final_df),
             )
             (context.output_dir() / "watchlist_digest.md").write_text(
                 render_watchlist_markdown(watchlist_final_df),
@@ -1448,7 +1455,7 @@ class RankOrchestrationService:
             dashboard_payload.setdefault("summary", {})["ranked_shortlist_count"] = int(len(ranked))
             dashboard_payload.setdefault("summary", {})["ranked_universe_count"] = int(len(ranked_universe))
             dashboard_payload["watchlist"] = (
-                watchlist_final_df.head(15).to_dict(orient="records")
+                _records_without_duplicate_columns(watchlist_final_df.head(15))
                 if isinstance(watchlist_final_df, pd.DataFrame) and not watchlist_final_df.empty
                 else []
             )

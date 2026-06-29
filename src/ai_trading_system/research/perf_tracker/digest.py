@@ -286,6 +286,8 @@ def _rank_ic(valid: pd.DataFrame) -> float | None:
     # Spearman = Pearson on the ranks. Done by hand to avoid the scipy dependency.
     x_rank = valid.iloc[:, 0].rank()
     y_rank = valid["fwd_20d_return"].rank()
+    if x_rank.nunique(dropna=True) < 2 or y_rank.nunique(dropna=True) < 2:
+        return None
     corr = float(x_rank.corr(y_rank))
     return corr if corr == corr else None  # noqa: PLR0124
 
@@ -293,7 +295,11 @@ def _rank_ic(valid: pd.DataFrame) -> float | None:
 def _rank_ic_xy(x: pd.Series, y: pd.Series) -> float | None:
     if len(x) < 30:
         return None
-    corr = float(x.rank().corr(y.rank()))
+    x_rank = x.rank()
+    y_rank = y.rank()
+    if x_rank.nunique(dropna=True) < 2 or y_rank.nunique(dropna=True) < 2:
+        return None
+    corr = float(x_rank.corr(y_rank))
     return corr if corr == corr else None  # noqa: PLR0124
 
 

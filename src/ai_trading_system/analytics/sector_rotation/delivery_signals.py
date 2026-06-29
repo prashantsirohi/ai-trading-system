@@ -64,10 +64,13 @@ def compute_accumulation_distribution(
     history.loc[:, "delivery_qty"] = history["volume"] * history["delivery_pct"] / 100.0
     history.loc[:, "delivery_value"] = history["delivery_qty"] * history["close"]
     history.loc[:, "_return_rank_pct"] = history.groupby("date")["price_return_5d"].rank(pct=True).fillna(0.5)
+    delivery_z20 = pd.to_numeric(history["delivery_pct_z20"], errors="coerce")
+    volume_z20 = pd.to_numeric(history["volume_z20"], errors="coerce")
+    return_rank_pct = pd.to_numeric(history["_return_rank_pct"], errors="coerce")
     history.loc[:, "accumulation_score"] = (
-        0.40 * history["delivery_pct_z20"].clip(-3, 3).fillna(0.0)
-        + 0.30 * history["volume_z20"].clip(-3, 3).fillna(0.0)
-        + 0.30 * history["_return_rank_pct"].fillna(0.5)
+        0.40 * delivery_z20.clip(-3, 3).fillna(0.0)
+        + 0.30 * volume_z20.clip(-3, 3).fillna(0.0)
+        + 0.30 * return_rank_pct.fillna(0.5)
     )
     history.loc[:, "accumulation_score"] = (50.0 + 10.0 * history["accumulation_score"]).clip(0, 100)
     history.loc[:, "delivery_signal"] = NEUTRAL_LABEL

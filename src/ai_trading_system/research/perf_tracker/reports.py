@@ -410,7 +410,11 @@ def _cutoff_sql(cutoff) -> str:
 
 
 def _spearman_ic(x: pd.Series, y: pd.Series) -> float | None:
-    corr = float(x.rank().corr(y.rank()))
+    x_rank = x.rank()
+    y_rank = y.rank()
+    if x_rank.nunique(dropna=True) < 2 or y_rank.nunique(dropna=True) < 2:
+        return None
+    corr = float(x_rank.corr(y_rank))
     return corr if corr == corr else None  # noqa: PLR0124
 
 

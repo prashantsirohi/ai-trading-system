@@ -10,6 +10,7 @@ from ai_trading_system.domains.ranking.watchlist import (
     validate_watchlist_candidates,
 )
 from ai_trading_system.domains.ranking.watchlist_catalyst import enrich_with_catalyst
+from ai_trading_system.domains.ranking.service import _records_without_duplicate_columns
 
 
 class _FakeCatalystClient:
@@ -108,6 +109,14 @@ def test_watchlist_score_is_bounded_and_deterministic() -> None:
     score = compute_watchlist_score(prefilter.iloc[0])
     assert 0 <= score <= 100
     assert score == compute_watchlist_score(prefilter.iloc[0])
+
+
+def test_watchlist_json_records_drop_duplicate_columns() -> None:
+    frame = pd.DataFrame([["AAA", "first", "second"]], columns=["symbol_id", "score", "score"])
+
+    records = _records_without_duplicate_columns(frame)
+
+    assert records == [{"symbol_id": "AAA", "score": "first"}]
 
 
 def test_top_ranked_alone_does_not_satisfy_momentum_gate() -> None:

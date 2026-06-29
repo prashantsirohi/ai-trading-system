@@ -212,7 +212,7 @@ def _truthy_series(frame: pd.DataFrame, column: str) -> pd.Series:
 
 
 def _first_available(frame: pd.DataFrame, columns: list[str], default: Any = pd.NA) -> pd.Series:
-    result = pd.Series(default, index=frame.index)
+    result = pd.Series(default, index=frame.index, dtype="object" if isinstance(default, str) else None)
     for column in columns:
         if column in frame.columns:
             result = result.where(result.notna(), frame[column])
