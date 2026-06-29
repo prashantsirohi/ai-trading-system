@@ -15,7 +15,13 @@ from ai_trading_system.domains.ingest.nse_delivery_scraper import NseHistoricalD
 from ai_trading_system.pipeline.preflight import PreflightChecker
 from ai_trading_system.domains.publish.delivery_manager import PublisherDeliveryManager
 import ai_trading_system.pipeline.orchestrator as orchestrator_module
-from ai_trading_system.pipeline.orchestrator import FEATURE_SUBSTAGES, PipelineOrchestrator
+from ai_trading_system.pipeline.orchestrator import (
+    FEATURE_SUBSTAGES,
+    PipelineDurationEstimate,
+    PipelineOrchestrator,
+    StageDurationEstimate,
+    estimate_pipeline_stage_durations,
+)
 from ai_trading_system.pipeline.stages import FeaturesStage, IngestStage, PublishStage, RankStage
 from ai_trading_system.domains.ranking.service import build_integrated_stock_scan_view
 from ai_trading_system.pipeline.contracts import DataQualityCriticalError, PublishStageError, StageArtifact, StageContext
@@ -62,6 +68,178 @@ def _init_catalog(db_path: Path, rows: list[tuple]) -> None:
             )
     finally:
         conn.close()
+
+
+def _insert_stage_run(
+    registry: RegistryStore,
+    *,
+    run_id: str,
+    stage_name: str,
+    status: str,
+    started_at: str,
+    ended_at: str,
+) -> None:
+    conn = duckdb.connect(str(registry.db_path))
+    try:
+        conn.execute(
+            """
+            INSERT INTO pipeline_stage_run
+            (stage_run_id, run_id, stage_name, attempt_number, status, started_at, ended_at)
+            VALUES (?, ?, ?, 1, ?, CAST(? AS TIMESTAMP), CAST(? AS TIMESTAMP))
+            """,
+            [
+                f"{run_id}-{stage_name}-{status}-{started_at}",
+                run_id,
+                stage_name,
+                status,
+                started_at,
+                ended_at,
+            ],
+        )
+    finally:
+        conn.close()
+
+
+def test_pipeline_duration_estimator_uses_recent_completed_stage_medians(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+    _insert_stage_run(
+        registry,
+        run_id="run-1",
+        stage_name="ingest",
+        status="completed",
+        started_at="2026-04-01 09:00:00",
+        ended_at="2026-04-01 09:00:10",
+    )
+    _insert_stage_run(
+        registry,
+        run_id="run-2",
+        stage_name="ingest",
+        status="completed",
+        started_at="2026-04-02 09:00:00",
+        ended_at="2026-04-02 09:00:30",
+    )
+    _insert_stage_run(
+        registry,
+        run_id="run-failed",
+        stage_name="ingest",
+        status="failed",
+        started_at="2026-04-03 09:00:00",
+        ended_at="2026-04-03 09:09:00",
+    )
+    _insert_stage_run(
+        registry,
+        run_id="run-bad-clock",
+        stage_name="features_technical",
+        status="completed",
+        started_at="2026-04-04 09:10:00",
+        ended_at="2026-04-04 09:00:00",
+    )
+
+    estimate = estimate_pipeline_stage_durations(
+        registry,
+        ["ingest", "features_technical", "rank"],
+        fallback_seconds=45,
+    )
+
+    assert estimate.stage_estimates["ingest"].estimated_seconds == pytest.approx(20.0)
+    assert estimate.stage_estimates["ingest"].sample_count == 2
+    assert estimate.stage_estimates["features_technical"].estimated_seconds == pytest.approx(45.0)
+    assert estimate.stage_estimates["features_technical"].source == "fallback"
+    assert estimate.stage_estimates["rank"].source == "fallback"
+    assert estimate.total_seconds == pytest.approx(110.0)
+    assert estimate.confidence == "low"
+
+
+def _duration_estimate(stage_seconds: dict[str, float], confidence: str = "high") -> PipelineDurationEstimate:
+    return PipelineDurationEstimate(
+        stage_estimates={
+            stage_name: StageDurationEstimate(
+                stage_name=stage_name,
+                estimated_seconds=seconds,
+                sample_count=3,
+                source="history_median",
+            )
+            for stage_name, seconds in stage_seconds.items()
+        },
+        total_seconds=sum(stage_seconds.values()),
+        confidence=confidence,
+    )
+
+
+def test_terminal_progress_renderer_uses_time_weighted_stage_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = {"value": 1000.0}
+    monkeypatch.setattr(orchestrator_module.time, "time", lambda: now["value"])
+    renderer = orchestrator_module.TerminalProgressRenderer(mode="compact")
+
+    renderer.emit_run_header(
+        run_id="run-time-progress",
+        run_date="2026-04-01",
+        data_domain="operational",
+        stages=["ingest", "rank"],
+        duration_estimate=_duration_estimate({"ingest": 10.0, "rank": 100.0}),
+    )
+    renderer.emit_stage(stage_name="ingest", status="running")
+    now["value"] += 5.0
+    renderer.update_running(stage_name="ingest", detail="halfway")
+    assert renderer._bar.n == pytest.approx(5.0)
+
+    renderer.emit_stage(stage_name="ingest", status="done")
+    assert renderer._bar.n == pytest.approx(10.0)
+
+    renderer.emit_stage(stage_name="rank", status="running")
+    now["value"] += 10.0
+    renderer.update_running(stage_name="rank", detail="ranking")
+    assert renderer._bar.n == pytest.approx(20.0)
+
+
+def test_terminal_progress_renderer_prefers_task_fraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(orchestrator_module.time, "time", lambda: 2000.0)
+    renderer = orchestrator_module.TerminalProgressRenderer(mode="compact")
+    renderer.emit_run_header(
+        run_id="run-task-fraction",
+        run_date="2026-04-01",
+        data_domain="operational",
+        stages=["features_technical"],
+        duration_estimate=_duration_estimate({"features_technical": 80.0}),
+    )
+
+    renderer.emit_stage(stage_name="features_technical", status="running")
+    renderer.emit_task(
+        {
+            "stage_name": "features_technical",
+            "task_name": "technical",
+            "status": "running",
+            "metadata": {"completed_steps": 3, "total_steps": 4},
+        }
+    )
+
+    assert renderer._bar.n == pytest.approx(60.0)
+
+
+def test_terminal_progress_renderer_caps_underestimated_running_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = {"value": 3000.0}
+    monkeypatch.setattr(orchestrator_module.time, "time", lambda: now["value"])
+    renderer = orchestrator_module.TerminalProgressRenderer(mode="compact")
+    renderer.emit_run_header(
+        run_id="run-underestimated",
+        run_date="2026-04-01",
+        data_domain="operational",
+        stages=["rank"],
+        duration_estimate=_duration_estimate({"rank": 10.0}),
+    )
+
+    renderer.emit_stage(stage_name="rank", status="running")
+    now["value"] += 999.0
+    renderer.update_running(stage_name="rank", detail="still running")
+
+    assert renderer._bar.n == pytest.approx(9.7)
+    assert renderer._bar.n < renderer._bar.total
 
 
 def test_stage_boundaries_and_registry_rows(tmp_path: Path) -> None:
@@ -294,6 +472,7 @@ def test_progress_json_events_include_feature_substage_fields(capsys: pytest.Cap
         data_domain="operational",
         stages=["ingest", "features_technical"],
         resume_status="auto_resume:pipeline-2026-03-28-json",
+        duration_estimate=_duration_estimate({"ingest": 10.0, "features_technical": 70.0}),
     )
     renderer.emit_stage(stage_name="features_technical", status="running", detail="features 1/7: technical")
     renderer.emit_task(
@@ -311,8 +490,12 @@ def test_progress_json_events_include_feature_substage_fields(capsys: pytest.Cap
     events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
     assert events[0]["event"] == "run_start"
     assert events[0]["resume_status"] == "auto_resume:pipeline-2026-03-28-json"
+    assert events[0]["progress_mode"] == "time_weighted"
+    assert events[0]["estimated_total_seconds"] == 80.0
     assert events[1]["event"] == "stage"
     assert events[1]["parent_stage_name"] == "features"
+    assert events[1]["progress_mode"] == "time_weighted"
+    assert events[1]["estimated_remaining_seconds"] == 80.0
     assert events[2]["event"] == "task"
     assert events[2]["parent_stage_name"] == "features"
     assert events[2]["completed"] == 3

@@ -10,8 +10,10 @@ import sys
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
+from statistics import median
 from typing import Dict, Iterable, List, Optional
 
 from tqdm.auto import tqdm
@@ -75,6 +77,111 @@ DEFAULT_CLI_STAGES = "ingest,features,rank,investigator,fundamentals,candidates,
 
 
 _BANNER_WIDTH = 78
+DEFAULT_STAGE_DURATION_SECONDS = 60.0
+MIN_RUNNING_STAGE_PROGRESS_FRACTION = 0.02
+MAX_RUNNING_STAGE_PROGRESS_FRACTION = 0.97
+
+
+@dataclass(frozen=True)
+class StageDurationEstimate:
+    """Estimated duration for one stage, in seconds."""
+
+    stage_name: str
+    estimated_seconds: float
+    sample_count: int
+    source: str
+
+
+@dataclass(frozen=True)
+class PipelineDurationEstimate:
+    """Time-weighted duration model for a requested pipeline run."""
+
+    stage_estimates: dict[str, StageDurationEstimate]
+    total_seconds: float
+    confidence: str
+
+
+def estimate_pipeline_stage_durations(
+    registry: RegistryStore,
+    stage_names: list[str],
+    *,
+    history_limit_per_stage: int = 30,
+    fallback_seconds: float = DEFAULT_STAGE_DURATION_SECONDS,
+) -> PipelineDurationEstimate:
+    """Estimate requested stage durations from recent completed stage runs.
+
+    The estimator intentionally uses existing control-plane timestamps only:
+    no schema changes, no persisted derived state, and no live DB mutation.
+    """
+
+    requested = [str(stage) for stage in stage_names]
+    if not requested:
+        return PipelineDurationEstimate(stage_estimates={}, total_seconds=0.0, confidence="low")
+
+    durations_by_stage: dict[str, list[float]] = {stage: [] for stage in requested}
+    try:
+        with registry._reader() as conn:
+            for stage_name in requested:
+                rows = conn.execute(
+                    """
+                    SELECT date_diff('millisecond', started_at, ended_at) / 1000.0 AS duration_seconds
+                    FROM pipeline_stage_run
+                    WHERE stage_name = ?
+                      AND status = 'completed'
+                      AND started_at IS NOT NULL
+                      AND ended_at IS NOT NULL
+                      AND ended_at > started_at
+                    ORDER BY ended_at DESC NULLS LAST
+                    LIMIT ?
+                    """,
+                    [stage_name, int(history_limit_per_stage)],
+                ).fetchall()
+                durations_by_stage[stage_name] = [
+                    float(row[0])
+                    for row in rows
+                    if row and row[0] is not None and float(row[0]) > 0
+                ]
+    except Exception:
+        durations_by_stage = {stage: [] for stage in requested}
+
+    stage_estimates: dict[str, StageDurationEstimate] = {}
+    missing_count = 0
+    for stage_name in requested:
+        samples = durations_by_stage.get(stage_name, [])
+        if samples:
+            estimate_seconds = max(float(median(samples)), 1.0)
+            source = "history_median"
+        else:
+            estimate_seconds = max(float(fallback_seconds), 1.0)
+            source = "fallback"
+            missing_count += 1
+        stage_estimates[stage_name] = StageDurationEstimate(
+            stage_name=stage_name,
+            estimated_seconds=estimate_seconds,
+            sample_count=len(samples),
+            source=source,
+        )
+
+    confidence = "high" if missing_count == 0 else "low"
+
+    return PipelineDurationEstimate(
+        stage_estimates=stage_estimates,
+        total_seconds=sum(item.estimated_seconds for item in stage_estimates.values()),
+        confidence=confidence,
+    )
+
+
+def _format_duration_compact(seconds: float | int | None) -> str:
+    if seconds is None:
+        return "unknown"
+    remaining = max(int(round(float(seconds))), 0)
+    if remaining < 60:
+        return f"{remaining}s"
+    minutes, secs = divmod(remaining, 60)
+    if minutes < 60:
+        return f"{minutes}m {secs:02d}s" if secs else f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m" if minutes else f"{hours}h"
 
 
 class TerminalProgressRenderer:
@@ -99,11 +206,13 @@ class TerminalProgressRenderer:
         self._stage_order: list[str] = []
         self._current_stage: Optional[str] = None
         self._run_started_at: Optional[float] = None
+        self._stage_started_at: Optional[float] = None
         self._is_tty = bool(getattr(sys.stderr, "isatty", lambda: False)())
-        # Within-stage fractional progress: bar position = _stages_completed +
-        # _current_stage_fraction (0.0..1.0). Driven by task metadata that
-        # carries total_steps/completed_steps (e.g. features stage).
-        self._stages_completed: int = 0
+        self._duration_estimate: Optional[PipelineDurationEstimate] = None
+        # Within-stage fractional progress: bar position =
+        # completed_estimated_seconds + current_stage_estimated_seconds * fraction.
+        # Driven first by task metadata, then by elapsed time.
+        self._completed_work_seconds: float = 0.0
         self._current_stage_fraction: float = 0.0
 
     def _stamp(self) -> str:
@@ -124,9 +233,14 @@ class TerminalProgressRenderer:
         data_domain: str,
         stages: list[str],
         resume_status: str | None = None,
+        duration_estimate: PipelineDurationEstimate | None = None,
     ) -> None:
         self._stage_order = list(stages)
         self._run_started_at = time.time()
+        self._stage_started_at = None
+        self._duration_estimate = duration_estimate
+        self._completed_work_seconds = 0.0
+        self._current_stage_fraction = 0.0
         if self.mode == "json":
             print(
                 json.dumps(
@@ -137,6 +251,13 @@ class TerminalProgressRenderer:
                         "data_domain": data_domain,
                         "stages": stages,
                         "resume_status": resume_status,
+                        "progress_mode": "time_weighted" if duration_estimate is not None else "stage_count",
+                        "estimated_total_seconds": (
+                            round(duration_estimate.total_seconds, 3)
+                            if duration_estimate is not None
+                            else None
+                        ),
+                        "eta_confidence": duration_estimate.confidence if duration_estimate is not None else None,
                     },
                     default=str,
                 ),
@@ -153,11 +274,19 @@ class TerminalProgressRenderer:
         print(f"  domain : {data_domain}", file=sys.stderr, flush=True)
         print(f"  resume : {resume_status or 'new_or_explicit'}", file=sys.stderr, flush=True)
         print(f"  stages : {', '.join(stages)}", file=sys.stderr, flush=True)
+        if duration_estimate is not None:
+            print(
+                f"  eta    : {_format_duration_compact(duration_estimate.total_seconds)} estimate "
+                f"({duration_estimate.confidence} confidence)",
+                file=sys.stderr,
+                flush=True,
+            )
         print(sep, file=sys.stderr, flush=True)
+        total = duration_estimate.total_seconds if duration_estimate is not None else float(len(stages))
         self._bar = tqdm(
-            total=len(stages),
+            total=max(float(total), 1.0),
             desc="pipeline",
-            unit="stage",
+            unit="s" if duration_estimate is not None else "stage",
             dynamic_ncols=True,
             leave=True,
             file=sys.stderr,
@@ -165,29 +294,78 @@ class TerminalProgressRenderer:
         )
 
     def _refresh_bar_position(self) -> None:
-        """Re-render bar at fractional position: stages_done + within-stage fraction."""
+        """Re-render the progress bar at the current estimated work position."""
         if self._bar is None:
             return
-        target = float(self._stages_completed) + max(0.0, min(1.0, self._current_stage_fraction))
+        target = self._completed_work_seconds + self._current_stage_estimate_seconds() * max(
+            0.0,
+            min(1.0, self._current_stage_fraction),
+        )
         # Clamp to total so tqdm doesn't extrapolate past 100%.
         target = min(target, float(self._bar.total or target))
         self._bar.n = target
         self._bar.refresh()
 
+    def _current_stage_estimate_seconds(self) -> float:
+        if self._duration_estimate is None or not self._current_stage:
+            return 1.0
+        estimate = self._duration_estimate.stage_estimates.get(self._current_stage)
+        return estimate.estimated_seconds if estimate is not None else DEFAULT_STAGE_DURATION_SECONDS
+
+    def _remaining_estimated_seconds(self) -> float | None:
+        if self._duration_estimate is None:
+            return None
+        current_work = self._completed_work_seconds + self._current_stage_estimate_seconds() * max(
+            0.0,
+            min(1.0, self._current_stage_fraction),
+        )
+        return max(self._duration_estimate.total_seconds - current_work, 0.0)
+
+    def _eta_postfix(self, detail: str | None = None) -> str:
+        if self._duration_estimate is None:
+            return detail or ""
+        remaining = _format_duration_compact(self._remaining_estimated_seconds())
+        bits = [f"eta={remaining} remaining", f"confidence={self._duration_estimate.confidence}"]
+        if detail:
+            bits.append(detail)
+        return " · ".join(bits)
+
+    def _elapsed_stage_fraction(self) -> float:
+        if self._stage_started_at is None:
+            return 0.0
+        estimate_seconds = self._current_stage_estimate_seconds()
+        if estimate_seconds <= 0:
+            return 0.0
+        elapsed_fraction = (time.time() - self._stage_started_at) / estimate_seconds
+        return max(
+            MIN_RUNNING_STAGE_PROGRESS_FRACTION,
+            min(MAX_RUNNING_STAGE_PROGRESS_FRACTION, elapsed_fraction),
+        )
+
     def _advance(self, *, stage_name: str, status: str) -> None:
         if self._bar is None:
             return
-        self._bar.set_postfix_str(f"{stage_name}={status}")
-        self._stages_completed += 1
+        if self._duration_estimate is None:
+            self._completed_work_seconds += 1.0
+        else:
+            estimate = self._duration_estimate.stage_estimates.get(stage_name)
+            self._completed_work_seconds += (
+                estimate.estimated_seconds if estimate is not None else DEFAULT_STAGE_DURATION_SECONDS
+            )
         self._current_stage_fraction = 0.0
+        self._stage_started_at = None
         self._refresh_bar_position()
+        self._bar.set_postfix_str(self._eta_postfix(f"{stage_name}={status}"))
 
     def update_running(self, *, stage_name: str, detail: str) -> None:
         """Update the bar in place while a stage is running (heartbeat hook)."""
         if self._bar is None or self.mode == "verbose":
             return
+        if stage_name == self._current_stage:
+            self._current_stage_fraction = max(self._current_stage_fraction, self._elapsed_stage_fraction())
+            self._refresh_bar_position()
         self._bar.set_description_str(stage_name)
-        self._bar.set_postfix_str(detail)
+        self._bar.set_postfix_str(self._eta_postfix(detail))
 
     def emit_stage(self, *, stage_name: str, status: str, detail: str | None = None) -> None:
         if self.mode == "json":
@@ -199,6 +377,12 @@ class TerminalProgressRenderer:
                         "parent_stage_name": "features" if stage_name in FEATURE_SUBSTAGES else None,
                         "status": status,
                         "detail": detail,
+                        "progress_mode": "time_weighted" if self._duration_estimate is not None else "stage_count",
+                        "estimated_remaining_seconds": (
+                            round(self._remaining_estimated_seconds(), 3)
+                            if self._remaining_estimated_seconds() is not None
+                            else None
+                        ),
                     },
                     default=str,
                 ),
@@ -213,10 +397,11 @@ class TerminalProgressRenderer:
 
         if status == "running":
             self._current_stage = stage_name
+            self._stage_started_at = time.time()
             self._current_stage_fraction = 0.0
             if self._bar is not None:
                 self._bar.set_description_str(stage_name)
-                self._bar.set_postfix_str(detail or "running")
+                self._bar.set_postfix_str(self._eta_postfix(detail or "running"))
                 self._refresh_bar_position()
             else:
                 label = f"{stage_name}" + (f" - {detail}" if detail else "")
@@ -280,18 +465,24 @@ class TerminalProgressRenderer:
             total_steps = metadata.get("total_steps")
             completed_steps = metadata.get("completed_steps")
             if isinstance(total_steps, (int, float)) and total_steps and isinstance(completed_steps, (int, float)):
-                fraction = max(0.0, min(1.0, float(completed_steps) / float(total_steps)))
+                fraction = max(
+                    0.0,
+                    min(MAX_RUNNING_STAGE_PROGRESS_FRACTION, float(completed_steps) / float(total_steps)),
+                )
                 # Never let the fraction regress within a single stage —
                 # avoids visual flicker if events arrive out of order.
                 if fraction > self._current_stage_fraction:
                     self._current_stage_fraction = fraction
                     self._refresh_bar_position()
+        elif stage_name == self._current_stage:
+            self._current_stage_fraction = max(self._current_stage_fraction, self._elapsed_stage_fraction())
+            self._refresh_bar_position()
         if self._bar is not None and stage_name == self._current_stage and status in {"running", "ok", "success", "completed", "done"}:
             display_detail = detail or status
             if task_name:
                 display_detail = f"{task_name}: {display_detail}"
             self._bar.set_description_str(stage_name)
-            self._bar.set_postfix_str(display_detail)
+            self._bar.set_postfix_str(self._eta_postfix(display_detail))
         # Only surface task lines that the operator actually needs to see —
         # ok/running for every sub-task would drown the bar.
         if status in {"running", "ok", "success", "completed"}:
@@ -601,6 +792,7 @@ class PipelineOrchestrator:
                 },
             )
         with log_context(run_id=run_id):
+            duration_estimate = estimate_pipeline_stage_durations(self.registry, list(stage_names))
             if self.progress_renderer is not None:
                 self.progress_renderer.emit_run_header(
                     run_id=run_id,
@@ -608,6 +800,7 @@ class PipelineOrchestrator:
                     data_domain=str(data_domain),
                     stages=list(stage_names),
                     resume_status=("auto_resume" if resumed_run_id else "new_or_explicit"),
+                    duration_estimate=duration_estimate,
                 )
             if params.get("preflight", True):
                 preflight = self.preflight_checker.run(stage_names, params)
