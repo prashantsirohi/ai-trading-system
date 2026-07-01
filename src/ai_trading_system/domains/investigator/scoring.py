@@ -5,6 +5,10 @@ from __future__ import annotations
 import pandas as pd
 
 
+FINAL_GATE_COLUMNS = ["symbol_id", "trade_date", "verdict", "final_score", "thesis", "invalidation_level", "exit_plan", "gate_status"]
+FINAL_GATE_EXIT_PLAN = "Exit on invalidation breach, failed 3-session follow-through, or investigator score below 55."
+
+
 def apply_rank_overlay(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
     composite = pd.to_numeric(_series(out, "composite_score"), errors="coerce")
@@ -49,15 +53,24 @@ def finalize_scores(frame: pd.DataFrame) -> pd.DataFrame:
 
 def final_gate(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
-        return pd.DataFrame(columns=["symbol_id", "trade_date", "verdict", "final_score", "thesis", "invalidation_level", "exit_plan", "gate_status"])
-    eligible = frame.loc[pd.to_numeric(frame.get("final_score"), errors="coerce").fillna(0).ge(55)].copy()
+        return pd.DataFrame(columns=FINAL_GATE_COLUMNS)
+    score = pd.to_numeric(frame.get("final_score"), errors="coerce").fillna(0)
+    verdict = _series(frame, "verdict").fillna("").astype(str).str.upper()
+    hard_trap = _series(frame, "hard_trap_flag").map(_truthy).fillna(False)
+    credible = _series(frame, "credible_trigger").map(_truthy).fillna(False)
+    eligible = frame.loc[
+        score.ge(55)
+        & verdict.isin({"MEDIUM_CONVICTION", "HIGH_CONVICTION"})
+        & ~hard_trap
+        & (credible | verdict.eq("HIGH_CONVICTION"))
+    ].copy()
     if eligible.empty:
-        return pd.DataFrame(columns=["symbol_id", "trade_date", "verdict", "final_score", "thesis", "invalidation_level", "exit_plan", "gate_status"])
-    eligible.loc[:, "thesis"] = ""
-    eligible.loc[:, "invalidation_level"] = ""
-    eligible.loc[:, "exit_plan"] = ""
+        return pd.DataFrame(columns=FINAL_GATE_COLUMNS)
+    eligible.loc[:, "thesis"] = eligible.apply(_default_thesis, axis=1)
+    eligible.loc[:, "invalidation_level"] = eligible.apply(_default_invalidation_level, axis=1)
+    eligible.loc[:, "exit_plan"] = FINAL_GATE_EXIT_PLAN
     eligible.loc[:, "gate_status"] = "PENDING"
-    return eligible[["symbol_id", "trade_date", "verdict", "final_score", "thesis", "invalidation_level", "exit_plan", "gate_status"]]
+    return eligible[FINAL_GATE_COLUMNS]
 
 
 def _verdict(score: float) -> str:
@@ -74,3 +87,62 @@ def _series(frame: pd.DataFrame, column: str) -> pd.Series:
     if column in frame.columns:
         return frame[column]
     return pd.Series(pd.NA, index=frame.index)
+
+
+def _default_thesis(row: pd.Series) -> str:
+    trigger = _clean_label(row.get("trigger_reason")) or "investigator trigger"
+    move = _clean_label(row.get("move_tag"))
+    sector = _clean_label(row.get("sector")) or _clean_label(row.get("sector_name"))
+    verdict = _clean_label(row.get("verdict")) or "review"
+    score = _format_number(row.get("final_score"))
+    parts = [trigger]
+    if move and move != trigger:
+        parts.append(move)
+    if sector:
+        parts.append(f"sector {sector}")
+    parts.append(f"score {score}" if score else "score review")
+    parts.append(verdict)
+    return "; ".join(parts)
+
+
+def _default_invalidation_level(row: pd.Series) -> str:
+    for column in ("invalidation_price", "pattern_invalidation_price", "pattern_invalidation", "invalidation"):
+        value = _as_float(row.get(column))
+        if value is not None:
+            return _format_number(value)
+    low = _as_float(row.get("low"))
+    if low is not None:
+        return _format_number(low)
+    close = _as_float(row.get("close"))
+    if close is not None:
+        return _format_number(close * 0.93)
+    return "manual review"
+
+
+def _clean_label(value: object) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"nan", "none", "null", "<na>"}:
+        return ""
+    return text.replace("_", " ").title()
+
+
+def _as_float(value: object) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if pd.isna(out) else out
+
+
+def _format_number(value: object) -> str:
+    number = _as_float(value)
+    if number is None:
+        return ""
+    rounded = round(number, 2)
+    return str(int(rounded)) if rounded.is_integer() else f"{rounded:.2f}"
+
+
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"true", "1", "yes", "y"}

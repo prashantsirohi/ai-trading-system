@@ -1390,6 +1390,26 @@ def _investigator_action_queue_fallback(*, active: pd.DataFrame | None, repeat: 
     return out
 
 
+def _investigator_final_gate_frame(final_gate: pd.DataFrame | None) -> pd.DataFrame:
+    columns = ["Symbol", "Verdict", "Score", "Thesis", "Invalidation", "Exit Plan", "Status"]
+    if final_gate is None or final_gate.empty:
+        return pd.DataFrame(columns=columns)
+    source = final_gate.copy()
+    out = pd.DataFrame(
+        {
+            "Symbol": source.get("symbol_id", source.get("symbol", "")),
+            "Verdict": source.get("verdict", ""),
+            "Score": source.get("final_score", ""),
+            "Thesis": source.get("thesis", ""),
+            "Invalidation": source.get("invalidation_level", ""),
+            "Exit Plan": source.get("exit_plan", ""),
+            "Status": source.get("gate_status", ""),
+        }
+    )
+    out = _to_numeric(out, ["Score"], 2)
+    return out
+
+
 def _investigator_trap_frame(traps: pd.DataFrame | None) -> pd.DataFrame:
     if traps is None or traps.empty:
         return pd.DataFrame(columns=["Symbol", "Verdict", "Score", "Trap", "Delivery", "Rank"])
@@ -1686,6 +1706,7 @@ def publish_dashboard_payload(
     investigator_repeat_df: pd.DataFrame | None = None,
     investigator_active_df: pd.DataFrame | None = None,
     investigator_trap_df: pd.DataFrame | None = None,
+    investigator_final_gate_df: pd.DataFrame | None = None,
     sector_rotation_df: pd.DataFrame | None = None,
     industry_rotation_df: pd.DataFrame | None = None,
     investigator_payload: dict[str, Any] | None = None,
@@ -1725,6 +1746,7 @@ def publish_dashboard_payload(
     investigator_active = _investigator_active_frame(investigator_active_source)
     active_investigator_list = _active_investigator_list_frame(investigator_active_source)
     investigator_traps = _investigator_trap_frame(investigator_trap_df)
+    investigator_final_gate = _investigator_final_gate_frame(investigator_final_gate_df)
     events_index = _frame(payload.get("events_index", []))
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
     bundle = decision_bundle or build_publish_decision_bundle(
@@ -1845,6 +1867,7 @@ def publish_dashboard_payload(
 
     investigator_detail = _combine_frames(
         [
+            ("FINAL 3Q GATE", investigator_final_gate),
             ("STOCK INVESTIGATOR", investigator_today),
             ("INVESTIGATOR REPEAT ACCUMULATION", investigator_repeat),
             ("ACTIVE INVESTIGATOR LIST", investigator_active),

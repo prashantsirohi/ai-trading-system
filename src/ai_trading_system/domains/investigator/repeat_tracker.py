@@ -38,7 +38,7 @@ def build_repeat_tracker(
             ]
         ].copy()
         current_log.loc[:, "appeared"] = True
-        history = pd.concat([history, current_log], ignore_index=True)
+        history = current_log if history.empty else pd.concat([history, current_log], ignore_index=True)
     if history.empty or "symbol_id" not in history.columns:
         return _empty()
     history.loc[:, "trade_date"] = pd.to_datetime(history["trade_date"], errors="coerce")
@@ -48,6 +48,7 @@ def build_repeat_tracker(
         return _empty()
     history = history.sort_values(["symbol_id", "trade_date"], kind="stable")
     window = history.loc[history["trade_date"] >= latest_date - pd.Timedelta(days=int(window_days) * 2)].copy()
+    window = _attach_sector_peer_counts(window)
     rows: list[dict[str, object]] = []
     for symbol, group in window.groupby("symbol_id", sort=True):
         group = group.sort_values("trade_date", kind="stable")
@@ -73,7 +74,7 @@ def build_repeat_tracker(
                 "rank_change_20d": _rank_change(group),
                 "score_current": _safe(last.get("final_score")),
                 "score_peak": _safe(pd.to_numeric(group.get("final_score"), errors="coerce").max()) if "final_score" in group.columns else 0.0,
-                "sector_cluster_count": int(group.get("sector", pd.Series(dtype=object)).nunique()) if "sector" in group.columns else 0,
+                "sector_cluster_count": int(_safe(last.get("_sector_peer_count"))),
             }
         )
     out = pd.DataFrame(rows)
@@ -104,6 +105,25 @@ def _count_trigger_since(group: pd.DataFrame, latest_date: pd.Timestamp, days: i
     in_window = group["trade_date"] >= latest_date - pd.Timedelta(days=int(days))
     triggers = group["trigger_reason"].fillna("").astype(str).str.upper().eq(trigger_reason)
     return int((in_window & triggers).sum())
+
+
+def _attach_sector_peer_counts(frame: pd.DataFrame) -> pd.DataFrame:
+    out = frame.copy()
+    out.loc[:, "_sector_peer_count"] = 0
+    if out.empty or "sector" not in out.columns:
+        return out
+    sector = out["sector"].fillna("").astype(str).str.strip().str.upper()
+    valid = sector.ne("") & ~sector.isin({"NAN", "NONE", "NULL", "<NA>"})
+    if not valid.any():
+        return out
+    out = out.assign(_sector_norm=sector)
+    out.loc[valid, "_sector_peer_count"] = (
+        out.loc[valid]
+        .groupby(["trade_date", "_sector_norm"], dropna=True)["symbol_id"]
+        .transform("nunique")
+        .astype(int)
+    )
+    return out.drop(columns=["_sector_norm"], errors="ignore")
 
 
 def _is_rising(series: pd.Series | None) -> bool:

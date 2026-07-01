@@ -87,6 +87,20 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
             ]
         ),
         "archived_investigator": pd.DataFrame([{"symbol_id": "XYZ", "archived_at": "2026-05-07", "drop_reason": "ONE_CANDLE_DRAMA"}]),
+        "final_3q_gate": pd.DataFrame(
+            [
+                {
+                    "symbol_id": "AAA",
+                    "trade_date": "2026-05-07",
+                    "verdict": "MEDIUM_CONVICTION",
+                    "final_score": 72,
+                    "thesis": "Stealth accumulation; score 72",
+                    "invalidation_level": "95.5",
+                    "exit_plan": "Exit on invalidation breach, failed 3-session follow-through, or investigator score below 55.",
+                    "gate_status": "PENDING",
+                }
+            ]
+        ),
     }
     for artifact_type, frame in files.items():
         path = attempt_dir / f"{artifact_type}.csv"
@@ -132,8 +146,11 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     assert body["pattern_confirmation"]["s1_accumulation"] == 0
     assert body["pattern_confirmation"]["s1_to_s2_transition"] == 1
     assert body["investigator_pattern_scan"][0]["symbol_id"] == "AAA"
+    assert body["final_3q_gate"][0]["symbol_id"] == "AAA"
+    assert body["final_3q_gate"][0]["thesis"]
     assert body["trap_radar"][0]["trap_category"] == "One-day spike"
     assert body["decision_payload"]["summary"]["total_intake"] == 2
+    assert body["decision_payload"]["final_3q_gate"][0]["exit_plan"]
     assert body["decision_payload"]["summary"]["daily_gainer_count"] == 1
     assert body["decision_payload"]["charts"]["funnel_today"][0]["label"] == "Investigator Intake (today)"
     assert body["decision_payload"]["charts"]["funnel_window"][0]["key"] == "new_window"

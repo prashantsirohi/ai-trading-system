@@ -5,7 +5,7 @@ import pandas as pd
 from ai_trading_system.domains.investigator.lifecycle import apply_lifecycle
 from ai_trading_system.domains.investigator.move_classifier import classify_move
 from ai_trading_system.domains.investigator.repeat_tracker import build_repeat_tracker
-from ai_trading_system.domains.investigator.scoring import finalize_scores
+from ai_trading_system.domains.investigator.scoring import finalize_scores, final_gate
 
 
 def test_missing_fundamentals_caps_high_conviction_at_medium() -> None:
@@ -98,6 +98,88 @@ def test_hard_trap_forces_noise_trap() -> None:
     assert scored.iloc[0]["verdict"] == "NOISE_TRAP"
 
 
+def test_final_gate_excludes_high_score_hard_trap_noise_trap() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "TRAP",
+                "trade_date": "2026-05-07",
+                "verdict": "NOISE_TRAP",
+                "final_score": 72,
+                "hard_trap_flag": True,
+                "credible_trigger": True,
+                "low": 95,
+                "close": 100,
+            }
+        ]
+    )
+
+    gate = final_gate(frame)
+
+    assert gate.empty
+    assert list(gate.columns) == ["symbol_id", "trade_date", "verdict", "final_score", "thesis", "invalidation_level", "exit_plan", "gate_status"]
+
+
+def test_final_gate_includes_medium_conviction_with_review_defaults() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "GOOD",
+                "trade_date": "2026-05-07",
+                "verdict": "MEDIUM_CONVICTION",
+                "final_score": 61,
+                "hard_trap_flag": False,
+                "credible_trigger": True,
+                "trigger_reason": "STEALTH_ACCUMULATION",
+                "move_tag": "SECTOR_ROTATION",
+                "sector": "Capital Goods",
+                "low": 94.25,
+                "close": 101.0,
+            }
+        ]
+    )
+
+    gate = final_gate(frame)
+
+    assert len(gate) == 1
+    row = gate.iloc[0]
+    assert row["symbol_id"] == "GOOD"
+    assert row["gate_status"] == "PENDING"
+    assert str(row["thesis"]).strip()
+    assert "Stealth Accumulation" in row["thesis"]
+    assert row["invalidation_level"] == "94.25"
+    assert str(row["exit_plan"]).strip()
+
+
+def test_final_gate_uses_close_discount_when_no_invalidation_or_low() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "FALLBACK",
+                "trade_date": "2026-05-07",
+                "verdict": "HIGH_CONVICTION",
+                "final_score": 84,
+                "hard_trap_flag": False,
+                "credible_trigger": False,
+                "trigger_reason": "DAILY_GAINER",
+                "close": 100.0,
+            }
+        ]
+    )
+
+    gate = final_gate(frame)
+
+    assert len(gate) == 1
+    assert gate.iloc[0]["invalidation_level"] == "93"
+
+
+def test_final_gate_empty_input_returns_compatible_columns() -> None:
+    gate = final_gate(pd.DataFrame())
+
+    assert gate.empty
+    assert list(gate.columns) == ["symbol_id", "trade_date", "verdict", "final_score", "thesis", "invalidation_level", "exit_plan", "gate_status"]
+
+
 def test_missing_rank_is_neutral_not_low_rank_trap() -> None:
     frame = pd.DataFrame(
         [
@@ -175,6 +257,21 @@ def test_repeat_tracker_counts_trigger_types_over_20d() -> None:
     assert row["daily_gainer_count_20d"] == 1
     assert row["weekly_gainer_count_20d"] == 1
     assert row["stealth_count_20d"] == 1
+
+
+def test_repeat_tracker_counts_same_date_sector_peers() -> None:
+    current = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "trade_date": "2026-05-21", "close": 112, "volume_ratio_20": 2.5, "final_score": 58, "sector": "Capital Goods"},
+            {"symbol_id": "BBB", "trade_date": "2026-05-21", "close": 98, "volume_ratio_20": 2.1, "final_score": 56, "sector": "Capital Goods"},
+            {"symbol_id": "CCC", "trade_date": "2026-05-21", "close": 76, "volume_ratio_20": 1.9, "final_score": 55, "sector": "Capital Goods"},
+        ]
+    )
+
+    repeat = build_repeat_tracker(current_scores=current, historical_daily_log=pd.DataFrame())
+
+    clusters = repeat.set_index("symbol_id")["sector_cluster_count"].to_dict()
+    assert clusters == {"AAA": 3, "BBB": 3, "CCC": 3}
 
 
 def test_repeat_tracker_counts_history_even_if_prior_row_was_archived() -> None:

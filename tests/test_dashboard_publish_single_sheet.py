@@ -461,6 +461,19 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             },
         ]
     }
+    investigator_final_gate = pd.DataFrame(
+        [
+            {
+                "symbol_id": "HIGH",
+                "verdict": "MEDIUM_CONVICTION",
+                "final_score": 79,
+                "thesis": "Sector rotation; score 79",
+                "invalidation_level": "101.25",
+                "exit_plan": "Exit on invalidation breach, failed 3-session follow-through, or investigator score below 55.",
+                "gate_status": "PENDING",
+            }
+        ]
+    )
 
     payload = {
         "summary": {"run_date": "2026-04-09", "data_trust_status": "trusted"},
@@ -491,6 +504,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             investigator_repeat_df=investigator_repeat,
             investigator_active_df=investigator_active,
             investigator_trap_df=investigator_traps,
+            investigator_final_gate_df=investigator_final_gate,
             sector_rotation_df=sector_rotation_df,
             industry_rotation_df=industry_rotation_df,
             investigator_payload=investigator_payload,
@@ -627,6 +641,11 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert len(hidden["_DATA_INVESTIGATOR"]) <= 300
     assert "AAA" in set(hidden["_DATA_INVESTIGATOR"]["Symbol"].astype(str))
     assert "MED" in set(hidden["_DATA_INVESTIGATOR"]["Symbol"].astype(str))
+    final_gate_rows = hidden["_DATA_INVESTIGATOR"].loc[hidden["_DATA_INVESTIGATOR"]["section"].eq("FINAL 3Q GATE")]
+    assert not final_gate_rows.empty
+    assert "Sector rotation; score 79" in set(final_gate_rows["Thesis"].astype(str))
+    assert "101.25" in set(final_gate_rows["Invalidation"].astype(str))
+    assert final_gate_rows["Exit Plan"].astype(str).str.contains("failed 3-session").any()
     assert "Banks" in set(hidden["_DATA_SECTOR_HISTORY"]["industry"].astype(str))
     assert "Media" in set(hidden["_DATA_SECTOR_HISTORY"]["industry"].astype(str))
     assert hidden["_DATA_SECTOR_HISTORY"]["industry"].value_counts().to_dict()["Banks"] == 1

@@ -103,6 +103,7 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         "active_watchlist": _read_csv(artifacts.get("active_watchlist")),
         "archive": _read_csv(artifacts.get("archived_investigator")),
         "investigator_pattern_scan": _read_csv(artifacts.get("investigator_pattern_scan")),
+        "final_3q_gate": _read_csv(artifacts.get("final_3q_gate")),
     }
     summary = _read_json(artifacts.get("investigator_summary"))
     scores = frames["scores"]
@@ -125,6 +126,7 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
             active_watchlist=frames["active_watchlist"],
             trap_log=frames["trap_log"],
             archive=archive,
+            final_3q_gate=frames["final_3q_gate"],
             investigator_pattern_scan=frames["investigator_pattern_scan"],
             previous_summary=previous_summary,
             stage_status=_stage_status_from_artifacts(artifacts),
@@ -134,6 +136,7 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         if not payload.get("summary_deltas"):
             payload["summary_deltas"] = _summary_deltas_from_payload(payload, previous_summary)
         payload.setdefault("stage_status", _stage_status_from_artifacts(artifacts))
+        payload.setdefault("final_3q_gate", _records(frames["final_3q_gate"], limit=50))
 
     compatible = {
         "summary": summary,
@@ -143,6 +146,7 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         "trap_log": _records(frames["trap_log"]),
         "active_watchlist": _records(_sort_active_watchlist(frames["active_watchlist"])),
         "investigator_pattern_scan": _records(frames["investigator_pattern_scan"]),
+        "final_3q_gate": _records(frames["final_3q_gate"], limit=100),
         "archive_summary": {
             "count": int(len(archive)),
             "by_reason": _counts(archive, "drop_reason"),
@@ -163,6 +167,7 @@ def _latest_artifacts(project_root: Path) -> dict[str, Path | None]:
         "trap_log",
         "archived_investigator",
         "investigator_pattern_scan",
+        "final_3q_gate",
         "investigator_summary",
         "investigator_payload",
     ):

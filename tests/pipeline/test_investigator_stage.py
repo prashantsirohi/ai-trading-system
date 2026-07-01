@@ -199,6 +199,40 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
         assert row == (82.0, 42.0)
 
 
+def test_registry_migration_creates_investigator_cohort_performance(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+
+    with registry._reader() as conn:  # noqa: SLF001
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info('investigator_cohort_performance')").fetchall()
+        }
+
+    assert {
+        "trade_date",
+        "symbol_id",
+        "exchange",
+        "trigger_reason",
+        "verdict",
+        "final_score",
+        "hard_trap_flag",
+        "credible_trigger",
+        "move_tag",
+        "sector",
+        "close",
+        "fwd_3d_return",
+        "fwd_5d_return",
+        "fwd_10d_return",
+        "fwd_20d_return",
+        "fwd_3d_matured_at",
+        "fwd_5d_matured_at",
+        "fwd_10d_matured_at",
+        "fwd_20d_matured_at",
+        "data_quality_status",
+        "inserted_at",
+    }.issubset(columns)
+
+
 def test_investigator_stage_scans_non_s2_active_s1_pattern_candidate(tmp_path: Path, monkeypatch) -> None:
     run_id = "pipeline-2026-05-07-s1"
     _seed_ohlcv(tmp_path / "data" / "ohlcv.duckdb")

@@ -677,6 +677,7 @@ class PublishStage:
             investigator_repeat_df=datasets.get("investigator_repeat_tracker"),
             investigator_active_df=datasets.get("investigator_active_watchlist"),
             investigator_trap_df=datasets.get("investigator_trap_log"),
+            investigator_final_gate_df=datasets.get("investigator_final_3q_gate"),
             sector_rotation_df=datasets.get("sector_rotation"),
             industry_rotation_df=datasets.get("industry_rotation"),
             investigator_payload=datasets.get("investigator_payload"),
