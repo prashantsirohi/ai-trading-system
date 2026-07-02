@@ -212,11 +212,20 @@ def _truthy_series(frame: pd.DataFrame, column: str) -> pd.Series:
 
 
 def _first_available(frame: pd.DataFrame, columns: list[str], default: Any = pd.NA) -> pd.Series:
-    result = pd.Series(default, index=frame.index, dtype="object" if isinstance(default, str) else None)
+    text_default = isinstance(default, str)
+    result = pd.Series(default, index=frame.index, dtype="object" if text_default else None)
     for column in columns:
         if column in frame.columns:
-            result = result.where(result.notna(), frame[column])
-    return result
+            replacement = frame[column].astype("object") if text_default else frame[column]
+            result = result.where(result.notna(), replacement)
+    return result.astype("object").fillna(default) if text_default else result
+
+
+def _assign_first_available(frame: pd.DataFrame, target: str, columns: list[str], default: Any = pd.NA) -> pd.DataFrame:
+    values = _first_available(frame, columns, default)
+    output = frame.drop(columns=[target], errors="ignore")
+    output.loc[:, target] = values
+    return output
 
 
 def _breakout_pattern_score(frame: pd.DataFrame) -> pd.Series:
@@ -431,9 +440,9 @@ def enrich_rank_artifacts(
     if not valuation_frame.empty:
         merged = merged.merge(valuation_frame, on="symbol", how="left", suffixes=("", "_valuation"))
 
-    merged.loc[:, "name"] = _first_available(merged, ["name", "name_fundamental"], "")
-    merged.loc[:, "industry_group"] = _first_available(merged, ["industry_group", "industry_group_fundamental"], "")
-    merged.loc[:, "industry"] = _first_available(merged, ["industry", "industry_fundamental"], "")
+    merged = _assign_first_available(merged, "name", ["name", "name_fundamental"], "")
+    merged = _assign_first_available(merged, "industry_group", ["industry_group", "industry_group_fundamental"], "")
+    merged = _assign_first_available(merged, "industry", ["industry", "industry_fundamental"], "")
     merged.loc[:, "relative_strength"] = _first_available(merged, ["relative_strength", "rel_strength", "rel_strength_score"], pd.NA)
     merged.loc[:, "volume_intensity"] = _first_available(merged, ["volume_intensity", "vol_intensity", "vol_intensity_score"], pd.NA)
     merged.loc[:, "trend_persistence"] = _first_available(merged, ["trend_persistence", "trend_score", "trend_score_score"], pd.NA)

@@ -57,9 +57,10 @@ def build_final_candidates(
     merged = merged.merge(pattern, on="symbol", how="left", suffixes=("", "_pattern"))
     merged = merged.merge(watchlist, on="symbol", how="left", suffixes=("", "_fundamental"))
 
-    merged.loc[:, "name"] = _first_available(merged, ["name", "name_fundamental"], "")
-    merged.loc[:, "industry_group"] = _first_available(
+    merged = _assign_first_available(merged, "name", ["name", "name_fundamental"], "")
+    merged = _assign_first_available(
         merged,
+        "industry_group",
         ["industry_group", "industry_group_fundamental", "sector_name", "sector", "Sector"],
         "",
     )
@@ -251,11 +252,20 @@ def _first_column(frame: pd.DataFrame, columns: list[str]) -> str | None:
 
 
 def _first_available(frame: pd.DataFrame, columns: list[str], default: Any = pd.NA) -> pd.Series:
-    result = pd.Series(pd.NA, index=frame.index, dtype="object" if isinstance(default, str) else None)
+    text_default = isinstance(default, str)
+    result = pd.Series(pd.NA, index=frame.index, dtype="object" if text_default else None)
     for column in columns:
         if column in frame.columns:
-            result = result.where(result.notna(), frame[column])
-    return result.fillna(default)
+            replacement = frame[column].astype("object") if text_default else frame[column]
+            result = result.where(result.notna(), replacement)
+    return result.astype("object").fillna(default) if text_default else result.fillna(default)
+
+
+def _assign_first_available(frame: pd.DataFrame, target: str, columns: list[str], default: Any = pd.NA) -> pd.DataFrame:
+    values = _first_available(frame, columns, default)
+    output = frame.drop(columns=[target], errors="ignore")
+    output.loc[:, target] = values
+    return output
 
 
 def _num(frame: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:

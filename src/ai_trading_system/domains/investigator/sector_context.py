@@ -21,7 +21,7 @@ def attach_sector_context(frame: pd.DataFrame, sector_dashboard: pd.DataFrame | 
             cols = ["_sector_key"] + [col for col in ("RS", "RS_rank_pct", "rel_strength", "Quadrant", "peer_gainers_count") if col in sec.columns]
             out = out.merge(sec[cols].drop_duplicates("_sector_key"), on="_sector_key", how="left", suffixes=("", "_sector"))
             out = out.drop(columns=["_sector_key"])
-    rs = pd.to_numeric(_series(out, "RS").combine_first(_series(out, "rel_strength_sector")), errors="coerce")
+    rs = _first_numeric(out, ["RS", "rel_strength_sector"])
     rs_rank_pct = pd.to_numeric(_series(out, "RS_rank_pct"), errors="coerce")
     peer_count = pd.to_numeric(_series(out, "peer_gainers_count"), errors="coerce")
     stock_vs_sector = pd.to_numeric(_series(out, "stock_vs_sector_rs"), errors="coerce")
@@ -43,3 +43,11 @@ def _series(frame: pd.DataFrame, column: str) -> pd.Series:
     if column in frame.columns:
         return frame[column]
     return pd.Series(pd.NA, index=frame.index)
+
+
+def _first_numeric(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
+    result = pd.Series(pd.NA, index=frame.index, dtype="object")
+    for column in columns:
+        if column in frame.columns:
+            result = result.where(result.notna(), frame[column].astype("object"))
+    return pd.to_numeric(result, errors="coerce")
