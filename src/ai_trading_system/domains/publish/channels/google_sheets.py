@@ -28,6 +28,7 @@ RAW_VALUATION_SHEET = "_RAW_VALUATION_DASHBOARD"
 RAW_FUNDAMENTAL_WATCHLIST_SHEET = "_RAW_Fundamental_Watchlist"
 VISIBLE_SHEET_MAX_ROWS = 60
 VISIBLE_SHEET_MAX_COLS = 14
+FINAL_3Q_GATE_SHEET = "Final 3Q Gate"
 OPERATOR_TAB_ORDER = [
     "01_Daily_Report",
     PORTFOLIO_SHEET,
@@ -133,6 +134,26 @@ def _cap_visible_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return safe.iloc[: VISIBLE_SHEET_MAX_ROWS - 1, :VISIBLE_SHEET_MAX_COLS].copy()
 
 
+def _sort_final_3q_gate_for_publish(frame: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+    out = frame.copy()
+    verdict_priority = {
+        "HIGH_CONVICTION": 0,
+        "MEDIUM_CONVICTION": 1,
+    }
+    verdict = out.get("verdict", pd.Series("", index=out.index)).fillna("").astype(str).str.upper()
+    out.loc[:, "_verdict_priority"] = verdict.map(verdict_priority).fillna(99)
+    out.loc[:, "_final_score_sort"] = pd.to_numeric(out.get("final_score", pd.Series(pd.NA, index=out.index)), errors="coerce")
+    sort_columns = ["_verdict_priority", "_final_score_sort"]
+    ascending = [True, False]
+    if "symbol_id" in out.columns:
+        sort_columns.append("symbol_id")
+        ascending.append(True)
+    out = out.sort_values(sort_columns, ascending=ascending, na_position="last", kind="stable")
+    return out.drop(columns=["_verdict_priority", "_final_score_sort"], errors="ignore").reset_index(drop=True)
+
+
 def _require_spreadsheet_id() -> Optional[str]:
     spreadsheet_id = os.getenv("GOOGLE_SPREADSHEET_ID")
     if not spreadsheet_id:
@@ -225,6 +246,8 @@ def publish_investigator(sheets: dict[str, pd.DataFrame]) -> bool:
         raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
     for sheet_name, frame in sheets.items():
         safe = frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+        if sheet_name == FINAL_3Q_GATE_SHEET:
+            safe = _sort_final_3q_gate_for_publish(safe)
         safe = safe.fillna("")
         rows = max(1000, len(safe) + 20)
         cols = max(12, len(safe.columns) + 2)

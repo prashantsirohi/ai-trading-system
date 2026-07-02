@@ -1,11 +1,11 @@
--- Migration 023: schema-only scaffold for investigator forward-return tracking.
--- TODO: add a backfill/service mirroring research/perf_tracker once investigator
--- cohorts are ready to be matured operationally.
+-- Migration 023: investigator forward-return tracking foundation.
+-- TODO: add forward-return maturation/backfill mirroring research/perf_tracker
+-- once investigator cohorts are ready to be matured operationally.
 
 CREATE TABLE IF NOT EXISTS investigator_cohort_performance (
-    trade_date DATE,
-    symbol_id VARCHAR,
-    exchange VARCHAR,
+    trade_date DATE NOT NULL,
+    symbol_id VARCHAR NOT NULL,
+    exchange VARCHAR NOT NULL DEFAULT 'NSE',
     trigger_reason VARCHAR,
     verdict VARCHAR,
     final_score DOUBLE,
@@ -22,11 +22,27 @@ CREATE TABLE IF NOT EXISTS investigator_cohort_performance (
     fwd_5d_matured_at DATE,
     fwd_10d_matured_at DATE,
     fwd_20d_matured_at DATE,
-    data_quality_status VARCHAR DEFAULT 'trusted',
+    data_quality_status VARCHAR DEFAULT 'PENDING',
     inserted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (trade_date, symbol_id, exchange)
 );
 
+ALTER TABLE investigator_cohort_performance ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE investigator_cohort_performance ALTER COLUMN data_quality_status SET DEFAULT 'PENDING';
+
+CREATE INDEX IF NOT EXISTS idx_investigator_cohort_trade_date
+    ON investigator_cohort_performance(trade_date);
+CREATE INDEX IF NOT EXISTS idx_investigator_cohort_symbol_id
+    ON investigator_cohort_performance(symbol_id);
+CREATE INDEX IF NOT EXISTS idx_investigator_cohort_verdict
+    ON investigator_cohort_performance(verdict);
+CREATE INDEX IF NOT EXISTS idx_investigator_cohort_trigger_reason
+    ON investigator_cohort_performance(trigger_reason);
+CREATE INDEX IF NOT EXISTS idx_investigator_cohort_sector
+    ON investigator_cohort_performance(sector);
+CREATE INDEX IF NOT EXISTS idx_investigator_cohort_data_quality_status
+    ON investigator_cohort_performance(data_quality_status);
 CREATE INDEX IF NOT EXISTS idx_investigator_cohort_symbol_date
     ON investigator_cohort_performance(symbol_id, trade_date);
 CREATE INDEX IF NOT EXISTS idx_investigator_cohort_date_verdict

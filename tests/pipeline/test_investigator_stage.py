@@ -7,7 +7,9 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.analytics.registry import RegistryStore
+from ai_trading_system.domains.investigator.cohort_performance import upsert_investigator_cohorts
 from ai_trading_system.domains.investigator import pattern_scan as pattern_scan_module
+from ai_trading_system.domains.investigator import service as investigator_service_module
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 from ai_trading_system.pipeline.orchestrator import PIPELINE_ORDER
 from ai_trading_system.pipeline.stages.investigator import InvestigatorStage
@@ -207,6 +209,10 @@ def test_registry_migration_creates_investigator_cohort_performance(tmp_path: Pa
             row[1]
             for row in conn.execute("PRAGMA table_info('investigator_cohort_performance')").fetchall()
         }
+        column_info = {
+            row[1]: row
+            for row in conn.execute("PRAGMA table_info('investigator_cohort_performance')").fetchall()
+        }
 
     assert {
         "trade_date",
@@ -230,7 +236,110 @@ def test_registry_migration_creates_investigator_cohort_performance(tmp_path: Pa
         "fwd_20d_matured_at",
         "data_quality_status",
         "inserted_at",
+        "updated_at",
     }.issubset(columns)
+    assert "PENDING" in str(column_info["data_quality_status"][4])
+
+
+def test_investigator_cohort_upsert_is_idempotent_and_pending(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+    final_gate = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "trade_date": "2026-05-07",
+                "verdict": "HIGH_CONVICTION",
+                "final_score": 88,
+                "hard_trap_flag": False,
+                "credible_trigger": True,
+            }
+        ]
+    )
+    scores = pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "trade_date": "2026-05-07",
+                "trigger_reason": "DAILY_GAINER",
+                "move_tag": "SECTOR_ROTATION",
+                "sector": "Finance",
+                "close": 110.0,
+            }
+        ]
+    )
+
+    with registry._writer() as conn:  # noqa: SLF001
+        assert upsert_investigator_cohorts(conn, final_gate, scores) == 1
+        assert upsert_investigator_cohorts(conn, final_gate, scores) == 1
+
+    with registry._reader() as conn:  # noqa: SLF001
+        rows = conn.execute(
+            """
+            SELECT
+                COUNT(*),
+                MIN(trigger_reason),
+                MIN(move_tag),
+                MIN(sector),
+                MIN(close),
+                MIN(data_quality_status),
+                COUNT(fwd_3d_return),
+                COUNT(fwd_20d_return)
+            FROM investigator_cohort_performance
+            WHERE symbol_id = 'AAA'
+            """
+        ).fetchone()
+
+    assert rows == (1, "DAILY_GAINER", "SECTOR_ROTATION", "Finance", 110.0, "PENDING", 0, 0)
+
+
+def test_investigator_stage_persists_final_gate_cohorts(tmp_path: Path, monkeypatch) -> None:
+    run_id = "pipeline-2026-05-07-cohort"
+    _seed_ohlcv(tmp_path / "data" / "ohlcv.duckdb")
+    registry = RegistryStore(tmp_path)
+
+    def fake_final_gate(scores: pd.DataFrame) -> pd.DataFrame:
+        source = scores.loc[scores["symbol_id"].eq("AAA")].copy()
+        return pd.DataFrame(
+            [
+                {
+                    "symbol_id": "AAA",
+                    "trade_date": source.iloc[0]["trade_date"],
+                    "verdict": "HIGH_CONVICTION",
+                    "final_score": 88,
+                    "thesis": "Cohort seed test",
+                    "invalidation_level": "100",
+                    "exit_plan": "Exit on invalidation breach, failed 3-session follow-through, or investigator score below 55.",
+                    "gate_status": "PENDING",
+                    "hard_trap_flag": False,
+                    "credible_trigger": True,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(investigator_service_module, "final_gate", fake_final_gate)
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id=run_id,
+        run_date="2026-05-07",
+        stage_name="investigator",
+        attempt_number=1,
+        registry=registry,
+        params={},
+        artifacts=_rank_artifacts(tmp_path, run_id),
+    )
+
+    InvestigatorStage().run(context)
+
+    with registry._reader() as conn:  # noqa: SLF001
+        row = conn.execute(
+            """
+            SELECT COUNT(*), MIN(symbol_id), MIN(data_quality_status), COUNT(fwd_5d_return)
+            FROM investigator_cohort_performance
+            """
+        ).fetchone()
+
+    assert row == (1, "AAA", "PENDING", 0)
 
 
 def test_investigator_stage_scans_non_s2_active_s1_pattern_candidate(tmp_path: Path, monkeypatch) -> None:

@@ -464,13 +464,40 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     investigator_final_gate = pd.DataFrame(
         [
             {
-                "symbol_id": "HIGH",
+                "symbol_id": "MEDLOW",
+                "trade_date": "2026-04-09",
                 "verdict": "MEDIUM_CONVICTION",
+                "final_score": 61,
+                "thesis": "Lower score medium setup",
+                "invalidation_level": "95.00",
+                "exit_plan": "Exit on invalidation breach, failed 3-session follow-through, or investigator score below 55.",
+                "gate_status": "PENDING",
+                "hard_trap_flag": False,
+                "credible_trigger": True,
+            },
+            {
+                "symbol_id": "MEDHIGH",
+                "trade_date": "2026-04-09",
+                "verdict": "MEDIUM_CONVICTION",
+                "final_score": 84,
+                "thesis": "Higher score medium setup",
+                "invalidation_level": "99.50",
+                "exit_plan": "Exit on invalidation breach, failed 3-session follow-through, or investigator score below 55.",
+                "gate_status": "PENDING",
+                "hard_trap_flag": False,
+                "credible_trigger": True,
+            },
+            {
+                "symbol_id": "HIGH",
+                "trade_date": "2026-04-09",
+                "verdict": "HIGH_CONVICTION",
                 "final_score": 79,
                 "thesis": "Sector rotation; score 79",
                 "invalidation_level": "101.25",
                 "exit_plan": "Exit on invalidation breach, failed 3-session follow-through, or investigator score below 55.",
                 "gate_status": "PENDING",
+                "hard_trap_flag": False,
+                "credible_trigger": True,
             }
         ]
     )
@@ -541,10 +568,11 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert result["industry_rotation_sheet_name"] == "industry rotation"
     assert result["breadth_sheet_name"] == "01_Daily_Report"
     assert result["investigator_sheet_name"] == "investigator"
+    assert result["final_3q_gate_sheet_name"] == "Final 3Q Gate"
     assert result["investigator_data_sheet_name"] == "_DATA_INVESTIGATOR"
     assert {"DATA", "FILTER", "Publish_Log", "02_Watchlist_Current", "05_Market_Breadth", "2026-04-08"}.issubset(set(manager.spreadsheet.deleted))
 
-    visible_titles = {"01_Daily_Report", "Diagnostics", "Model_Feedback", "04_Sector_Leadership", "industry rotation", "investigator"}
+    visible_titles = {"01_Daily_Report", "Diagnostics", "Model_Feedback", "04_Sector_Leadership", "industry rotation", "investigator", "Final 3Q Gate"}
     visible_updates = {
         title: [update for update in manager.sheets[title].updates if update[0] == "A1"]
         for title in visible_titles
@@ -556,6 +584,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     sector_grid = visible_updates["04_Sector_Leadership"][0][1]
     industry_grid = visible_updates["industry rotation"][0][1]
     investigator_grid = visible_updates["investigator"][0][1]
+    final_gate_grid = visible_updates["Final 3Q Gate"][0][1]
     assert len(daily_grid) == 140
     assert len(diagnostics_grid) >= 10
     assert len(model_feedback_grid) >= 4
@@ -596,6 +625,31 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert investigator_grid[1][9] == "0.0%"
     assert investigator_grid[2][0] == "MED"
     assert investigator_grid[2][11] == "Rising"
+    assert final_gate_grid[0] == [
+        "symbol_id",
+        "trade_date",
+        "verdict",
+        "final_score",
+        "thesis",
+        "invalidation_level",
+        "exit_plan",
+        "gate_status",
+        "hard_trap_flag",
+        "credible_trigger",
+    ]
+    assert final_gate_grid[1][0] == "HIGH"
+    assert final_gate_grid[1][1] == "2026-04-09"
+    assert final_gate_grid[1][2] == "HIGH_CONVICTION"
+    assert final_gate_grid[1][4] == "Sector rotation; score 79"
+    assert final_gate_grid[1][5] == "101.25"
+    assert final_gate_grid[1][8] is False
+    assert final_gate_grid[1][9] is True
+    assert final_gate_grid[2][0] == "MEDHIGH"
+    assert final_gate_grid[2][2] == "MEDIUM_CONVICTION"
+    assert final_gate_grid[2][3] == 84
+    assert final_gate_grid[3][0] == "MEDLOW"
+    assert final_gate_grid[3][3] == 61
+    assert result["final_3q_gate_rows_written"] == 4
     assert not [update for update in manager.sheets["05_Market_Breadth"].updates if update[0] == "A1"]
 
     daily_text = "\n".join(str(cell) for row in daily_grid for cell in row if cell != "")
@@ -643,9 +697,11 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "MED" in set(hidden["_DATA_INVESTIGATOR"]["Symbol"].astype(str))
     final_gate_rows = hidden["_DATA_INVESTIGATOR"].loc[hidden["_DATA_INVESTIGATOR"]["section"].eq("FINAL 3Q GATE")]
     assert not final_gate_rows.empty
-    assert "Sector rotation; score 79" in set(final_gate_rows["Thesis"].astype(str))
-    assert "101.25" in set(final_gate_rows["Invalidation"].astype(str))
-    assert final_gate_rows["Exit Plan"].astype(str).str.contains("failed 3-session").any()
+    assert "Sector rotation; score 79" in set(final_gate_rows["thesis"].astype(str))
+    assert "101.25" in set(final_gate_rows["invalidation_level"].astype(str))
+    assert final_gate_rows["exit_plan"].astype(str).str.contains("failed 3-session").any()
+    assert final_gate_rows["hard_trap_flag"].eq(False).any()
+    assert final_gate_rows["credible_trigger"].eq(True).any()
     assert "Banks" in set(hidden["_DATA_SECTOR_HISTORY"]["industry"].astype(str))
     assert "Media" in set(hidden["_DATA_SECTOR_HISTORY"]["industry"].astype(str))
     assert hidden["_DATA_SECTOR_HISTORY"]["industry"].value_counts().to_dict()["Banks"] == 1

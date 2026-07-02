@@ -9,6 +9,7 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 
 from ai_trading_system.domains.investigator.buyer_fingerprint import score_buyer_fingerprint
+from ai_trading_system.domains.investigator.cohort_performance import upsert_investigator_cohorts
 from ai_trading_system.domains.investigator.fundamentals import load_fundamental_snapshot, score_fundamentals
 from ai_trading_system.domains.investigator.intake import load_investigator_intake
 from ai_trading_system.domains.investigator.lifecycle import apply_lifecycle
@@ -152,6 +153,7 @@ class InvestigatorService:
             investigator_payload=payload,
         )
         self._persist_tables(context, artifacts)
+        self._persist_cohort_performance(context, gate, scores)
         return StageResult(artifacts=artifacts, metadata=summary)
 
     def _load_history(self, context: StageContext) -> pd.DataFrame:
@@ -242,6 +244,12 @@ class InvestigatorService:
                         f"INSERT INTO {table} ({', '.join(selected)}) SELECT {', '.join(selected)} FROM investigator_stage_frame"
                     )
                 conn.execute("DROP TABLE investigator_stage_frame")
+
+    def _persist_cohort_performance(self, context: StageContext, gate: pd.DataFrame, scores: pd.DataFrame) -> None:
+        if context.registry is None or gate.empty:
+            return
+        with context.registry._writer() as conn:  # noqa: SLF001
+            upsert_investigator_cohorts(conn, gate, scores)
 
     def _summary(
         self,

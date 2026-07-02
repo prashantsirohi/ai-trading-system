@@ -8,6 +8,20 @@ from ai_trading_system.domains.investigator.repeat_tracker import build_repeat_t
 from ai_trading_system.domains.investigator.scoring import finalize_scores, final_gate
 
 
+FINAL_GATE_EXPECTED_COLUMNS = [
+    "symbol_id",
+    "trade_date",
+    "verdict",
+    "final_score",
+    "thesis",
+    "invalidation_level",
+    "exit_plan",
+    "gate_status",
+    "hard_trap_flag",
+    "credible_trigger",
+]
+
+
 def test_missing_fundamentals_caps_high_conviction_at_medium() -> None:
     frame = pd.DataFrame(
         [
@@ -117,7 +131,7 @@ def test_final_gate_excludes_high_score_hard_trap_noise_trap() -> None:
     gate = final_gate(frame)
 
     assert gate.empty
-    assert list(gate.columns) == ["symbol_id", "trade_date", "verdict", "final_score", "thesis", "invalidation_level", "exit_plan", "gate_status"]
+    assert list(gate.columns) == FINAL_GATE_EXPECTED_COLUMNS
 
 
 def test_final_gate_includes_medium_conviction_with_review_defaults() -> None:
@@ -149,6 +163,8 @@ def test_final_gate_includes_medium_conviction_with_review_defaults() -> None:
     assert "Stealth Accumulation" in row["thesis"]
     assert row["invalidation_level"] == "94.25"
     assert str(row["exit_plan"]).strip()
+    assert not bool(row["hard_trap_flag"])
+    assert bool(row["credible_trigger"])
 
 
 def test_final_gate_uses_close_discount_when_no_invalidation_or_low() -> None:
@@ -177,7 +193,7 @@ def test_final_gate_empty_input_returns_compatible_columns() -> None:
     gate = final_gate(pd.DataFrame())
 
     assert gate.empty
-    assert list(gate.columns) == ["symbol_id", "trade_date", "verdict", "final_score", "thesis", "invalidation_level", "exit_plan", "gate_status"]
+    assert list(gate.columns) == FINAL_GATE_EXPECTED_COLUMNS
 
 
 def test_missing_rank_is_neutral_not_low_rank_trap() -> None:
@@ -272,6 +288,35 @@ def test_repeat_tracker_counts_same_date_sector_peers() -> None:
 
     clusters = repeat.set_index("symbol_id")["sector_cluster_count"].to_dict()
     assert clusters == {"AAA": 3, "BBB": 3, "CCC": 3}
+
+
+def test_repeat_tracker_sector_cluster_count_isolated_by_sector() -> None:
+    current = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "trade_date": "2026-05-21", "close": 112, "volume_ratio_20": 2.5, "final_score": 58, "sector": "Capital Goods"},
+            {"symbol_id": "BBB", "trade_date": "2026-05-21", "close": 98, "volume_ratio_20": 2.1, "final_score": 56, "sector": "Capital Goods"},
+            {"symbol_id": "CCC", "trade_date": "2026-05-21", "close": 76, "volume_ratio_20": 1.9, "final_score": 55, "sector": "FMCG"},
+        ]
+    )
+
+    repeat = build_repeat_tracker(current_scores=current, historical_daily_log=pd.DataFrame())
+
+    clusters = repeat.set_index("symbol_id")["sector_cluster_count"].to_dict()
+    assert clusters == {"AAA": 2, "BBB": 2, "CCC": 1}
+
+
+def test_repeat_tracker_missing_sector_does_not_crash() -> None:
+    current = pd.DataFrame(
+        [
+            {"symbol_id": "AAA", "trade_date": "2026-05-21", "close": 112, "volume_ratio_20": 2.5, "final_score": 58, "sector": ""},
+            {"symbol_id": "BBB", "trade_date": "2026-05-21", "close": 98, "volume_ratio_20": 2.1, "final_score": 56, "sector": pd.NA},
+        ]
+    )
+
+    repeat = build_repeat_tracker(current_scores=current, historical_daily_log=pd.DataFrame())
+
+    clusters = repeat.set_index("symbol_id")["sector_cluster_count"].to_dict()
+    assert clusters == {"AAA": 0, "BBB": 0}
 
 
 def test_repeat_tracker_counts_history_even_if_prior_row_was_archived() -> None:

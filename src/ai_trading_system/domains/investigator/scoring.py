@@ -5,7 +5,18 @@ from __future__ import annotations
 import pandas as pd
 
 
-FINAL_GATE_COLUMNS = ["symbol_id", "trade_date", "verdict", "final_score", "thesis", "invalidation_level", "exit_plan", "gate_status"]
+FINAL_GATE_COLUMNS = [
+    "symbol_id",
+    "trade_date",
+    "verdict",
+    "final_score",
+    "thesis",
+    "invalidation_level",
+    "exit_plan",
+    "gate_status",
+    "hard_trap_flag",
+    "credible_trigger",
+]
 FINAL_GATE_EXIT_PLAN = "Exit on invalidation breach, failed 3-session follow-through, or investigator score below 55."
 
 
@@ -70,6 +81,9 @@ def final_gate(frame: pd.DataFrame) -> pd.DataFrame:
     eligible.loc[:, "invalidation_level"] = eligible.apply(_default_invalidation_level, axis=1)
     eligible.loc[:, "exit_plan"] = FINAL_GATE_EXIT_PLAN
     eligible.loc[:, "gate_status"] = "PENDING"
+    for column in ("hard_trap_flag", "credible_trigger"):
+        if column not in eligible.columns:
+            eligible.loc[:, column] = pd.NA
     return eligible[FINAL_GATE_COLUMNS]
 
 

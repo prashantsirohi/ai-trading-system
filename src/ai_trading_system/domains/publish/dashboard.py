@@ -29,6 +29,7 @@ INDUSTRY_ROTATION_SHEET = "industry rotation"
 MARKET_BREADTH_SHEET = "05_Market_Breadth"
 INVESTIGATOR_SHEET = "06_Investigator"
 INVESTIGATOR_ACTION_QUEUE_SHEET = "investigator"
+FINAL_3Q_GATE_SHEET = "Final 3Q Gate"
 DATA_BREADTH_SHEET = "_DATA_BREADTH"
 DATA_SECTOR_HISTORY_SHEET = "_DATA_SECTOR_HISTORY"
 DATA_INVESTIGATOR_SHEET = "_DATA_INVESTIGATOR"
@@ -48,6 +49,7 @@ OPERATOR_TAB_ORDER = [
     SECTOR_LEADERSHIP_SHEET,
     INDUSTRY_ROTATION_SHEET,
     INVESTIGATOR_ACTION_QUEUE_SHEET,
+    FINAL_3Q_GATE_SHEET,
 ]
 LEGACY_OPERATOR_TABS = [
     "DATA",
@@ -214,6 +216,26 @@ def _to_numeric(df: pd.DataFrame, columns: list[str], places: int) -> pd.DataFra
         if col in out.columns:
             out.loc[:, col] = pd.to_numeric(out[col], errors="coerce").round(places)
     return out
+
+
+def _sort_final_3q_gate(frame: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+    out = frame.copy()
+    verdict_priority = {
+        "HIGH_CONVICTION": 0,
+        "MEDIUM_CONVICTION": 1,
+    }
+    verdict = out.get("verdict", pd.Series("", index=out.index)).fillna("").astype(str).str.upper()
+    out.loc[:, "_verdict_priority"] = verdict.map(verdict_priority).fillna(99)
+    out.loc[:, "_final_score_sort"] = pd.to_numeric(out.get("final_score", pd.Series(pd.NA, index=out.index)), errors="coerce")
+    sort_columns = ["_verdict_priority", "_final_score_sort"]
+    ascending = [True, False]
+    if "symbol_id" in out.columns:
+        sort_columns.append("symbol_id")
+        ascending.append(True)
+    out = out.sort_values(sort_columns, ascending=ascending, na_position="last", kind="stable")
+    return out.drop(columns=["_verdict_priority", "_final_score_sort"], errors="ignore").reset_index(drop=True)
 
 
 def _sheet_cell(value: Any) -> Any:
@@ -1391,23 +1413,37 @@ def _investigator_action_queue_fallback(*, active: pd.DataFrame | None, repeat: 
 
 
 def _investigator_final_gate_frame(final_gate: pd.DataFrame | None) -> pd.DataFrame:
-    columns = ["Symbol", "Verdict", "Score", "Thesis", "Invalidation", "Exit Plan", "Status"]
+    columns = [
+        "symbol_id",
+        "trade_date",
+        "verdict",
+        "final_score",
+        "thesis",
+        "invalidation_level",
+        "exit_plan",
+        "gate_status",
+        "hard_trap_flag",
+        "credible_trigger",
+    ]
     if final_gate is None or final_gate.empty:
         return pd.DataFrame(columns=columns)
     source = final_gate.copy()
     out = pd.DataFrame(
         {
-            "Symbol": source.get("symbol_id", source.get("symbol", "")),
-            "Verdict": source.get("verdict", ""),
-            "Score": source.get("final_score", ""),
-            "Thesis": source.get("thesis", ""),
-            "Invalidation": source.get("invalidation_level", ""),
-            "Exit Plan": source.get("exit_plan", ""),
-            "Status": source.get("gate_status", ""),
+            "symbol_id": source.get("symbol_id", source.get("symbol", "")),
+            "trade_date": source.get("trade_date", ""),
+            "verdict": source.get("verdict", ""),
+            "final_score": source.get("final_score", ""),
+            "thesis": source.get("thesis", ""),
+            "invalidation_level": source.get("invalidation_level", ""),
+            "exit_plan": source.get("exit_plan", ""),
+            "gate_status": source.get("gate_status", ""),
+            "hard_trap_flag": source.get("hard_trap_flag", ""),
+            "credible_trigger": source.get("credible_trigger", ""),
         }
     )
-    out = _to_numeric(out, ["Score"], 2)
-    return out
+    out = _to_numeric(out, ["final_score"], 2)
+    return _sort_final_3q_gate(out)
 
 
 def _investigator_trap_frame(traps: pd.DataFrame | None) -> pd.DataFrame:
@@ -1864,6 +1900,12 @@ def publish_dashboard_payload(
         frame=active_investigator_list,
         max_cols=INVESTIGATOR_ACTIVE_MAX_COLS,
     )
+    _final_gate_worksheet, final_gate_rows = _write_table_sheet(
+        manager=manager,
+        sheet_name=FINAL_3Q_GATE_SHEET,
+        frame=investigator_final_gate,
+        max_cols=10,
+    )
 
     investigator_detail = _combine_frames(
         [
@@ -1924,6 +1966,8 @@ def publish_dashboard_payload(
         "breadth_sheet_name": DAILY_REPORT_SHEET,
         "investigator_sheet_name": INVESTIGATOR_ACTION_QUEUE_SHEET,
         "investigator_rows_written": int(investigator_queue_rows),
+        "final_3q_gate_sheet_name": FINAL_3Q_GATE_SHEET,
+        "final_3q_gate_rows_written": int(final_gate_rows),
         "investigator_data_sheet_name": DATA_INVESTIGATOR_SHEET,
         "hidden_data_sheets": [DATA_BREADTH_SHEET, DATA_SECTOR_HISTORY_SHEET, DATA_INVESTIGATOR_SHEET],
         "cleanup": cleanup,
