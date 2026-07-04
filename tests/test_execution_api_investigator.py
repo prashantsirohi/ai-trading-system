@@ -148,6 +148,8 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     assert body["investigator_pattern_scan"][0]["symbol_id"] == "AAA"
     assert body["final_3q_gate"][0]["symbol_id"] == "AAA"
     assert body["final_3q_gate"][0]["thesis"]
+    assert "investigator_performance_summary" in body
+    assert "investigator_threshold_recommendations" in body
     assert body["trap_radar"][0]["trap_category"] == "One-day spike"
     assert body["decision_payload"]["summary"]["total_intake"] == 2
     assert body["decision_payload"]["final_3q_gate"][0]["exit_plan"]

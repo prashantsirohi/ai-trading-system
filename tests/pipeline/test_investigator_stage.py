@@ -178,6 +178,9 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     assert (output_dir / "trap_log.csv").exists()
     assert (output_dir / "archived_investigator.csv").exists()
     assert (output_dir / "final_3q_gate.csv").exists()
+    assert (output_dir / "investigator_performance_summary.csv").exists()
+    assert (output_dir / "investigator_performance_summary.json").exists()
+    assert (output_dir / "investigator_threshold_recommendations.json").exists()
     assert (output_dir / "investigator_summary.json").exists()
     assert (output_dir / "investigator_payload.json").exists()
     assert result.metadata["total_intake_count"] == 3
@@ -192,6 +195,9 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     assert {artifact.artifact_type for artifact in result.artifacts} >= {
         "daily_gainer_log",
         "investigator_scores",
+        "investigator_performance_summary",
+        "investigator_performance_summary_json",
+        "investigator_threshold_recommendations",
         "investigator_summary",
         "investigator_payload",
     }
@@ -239,6 +245,29 @@ def test_registry_migration_creates_investigator_cohort_performance(tmp_path: Pa
         "updated_at",
     }.issubset(columns)
     assert "PENDING" in str(column_info["data_quality_status"][4])
+
+
+def test_registry_migration_creates_sprint3_final_gate_columns(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+
+    with registry._reader() as conn:  # noqa: SLF001
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info('investigator_final_gate')").fetchall()
+        }
+
+    assert {
+        "invalidation_source",
+        "gate_entry_date",
+        "days_since_gate_entry",
+        "latest_close",
+        "invalidation_breached",
+        "followthrough_status",
+        "exit_triggered",
+        "exit_reason",
+        "hard_trap_flag",
+        "credible_trigger",
+    }.issubset(columns)
 
 
 def test_registry_migration_updates_indexed_investigator_cohort_table(tmp_path: Path) -> None:
@@ -371,6 +400,7 @@ def test_investigator_stage_persists_final_gate_cohorts(tmp_path: Path, monkeypa
                     "final_score": 88,
                     "thesis": "Cohort seed test",
                     "invalidation_level": "100",
+                    "invalidation_source": "low",
                     "exit_plan": "Exit on invalidation breach, failed 3-session follow-through, or investigator score below 55.",
                     "gate_status": "PENDING",
                     "hard_trap_flag": False,

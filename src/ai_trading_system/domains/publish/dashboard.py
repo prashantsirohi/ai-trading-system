@@ -30,6 +30,7 @@ MARKET_BREADTH_SHEET = "05_Market_Breadth"
 INVESTIGATOR_SHEET = "06_Investigator"
 INVESTIGATOR_ACTION_QUEUE_SHEET = "investigator"
 FINAL_3Q_GATE_SHEET = "Final 3Q Gate"
+INVESTIGATOR_PERFORMANCE_SHEET = "Investigator Performance"
 DATA_BREADTH_SHEET = "_DATA_BREADTH"
 DATA_SECTOR_HISTORY_SHEET = "_DATA_SECTOR_HISTORY"
 DATA_INVESTIGATOR_SHEET = "_DATA_INVESTIGATOR"
@@ -50,6 +51,7 @@ OPERATOR_TAB_ORDER = [
     INDUSTRY_ROTATION_SHEET,
     INVESTIGATOR_ACTION_QUEUE_SHEET,
     FINAL_3Q_GATE_SHEET,
+    INVESTIGATOR_PERFORMANCE_SHEET,
 ]
 LEGACY_OPERATOR_TABS = [
     "DATA",
@@ -1420,7 +1422,13 @@ def _investigator_final_gate_frame(final_gate: pd.DataFrame | None) -> pd.DataFr
         "final_score",
         "thesis",
         "invalidation_level",
+        "invalidation_source",
         "exit_plan",
+        "latest_close",
+        "invalidation_breached",
+        "followthrough_status",
+        "exit_triggered",
+        "exit_reason",
         "gate_status",
         "hard_trap_flag",
         "credible_trigger",
@@ -1436,14 +1444,46 @@ def _investigator_final_gate_frame(final_gate: pd.DataFrame | None) -> pd.DataFr
             "final_score": source.get("final_score", ""),
             "thesis": source.get("thesis", ""),
             "invalidation_level": source.get("invalidation_level", ""),
+            "invalidation_source": source.get("invalidation_source", ""),
             "exit_plan": source.get("exit_plan", ""),
+            "latest_close": source.get("latest_close", ""),
+            "invalidation_breached": source.get("invalidation_breached", ""),
+            "followthrough_status": source.get("followthrough_status", ""),
+            "exit_triggered": source.get("exit_triggered", ""),
+            "exit_reason": source.get("exit_reason", ""),
             "gate_status": source.get("gate_status", ""),
             "hard_trap_flag": source.get("hard_trap_flag", ""),
             "credible_trigger": source.get("credible_trigger", ""),
         }
     )
-    out = _to_numeric(out, ["final_score"], 2)
+    out = _to_numeric(out, ["final_score", "latest_close"], 2)
     return _sort_final_3q_gate(out)
+
+
+def _investigator_performance_frame(performance: pd.DataFrame | None) -> pd.DataFrame:
+    columns = [
+        "group_type",
+        "group_value",
+        "horizon",
+        "sample_count",
+        "win_rate",
+        "avg_return",
+        "median_return",
+        "hit_rate_above_2pct",
+        "hit_rate_above_5pct",
+    ]
+    if performance is None or performance.empty:
+        return pd.DataFrame(columns=columns)
+    out = performance.copy()
+    for column in columns:
+        if column not in out.columns:
+            out.loc[:, column] = ""
+    out = _to_numeric(
+        out[columns],
+        ["sample_count", "win_rate", "avg_return", "median_return", "hit_rate_above_2pct", "hit_rate_above_5pct"],
+        2,
+    )
+    return out.sort_values(["horizon", "group_type", "sample_count"], ascending=[True, True, False], kind="stable").head(100)
 
 
 def _investigator_trap_frame(traps: pd.DataFrame | None) -> pd.DataFrame:
@@ -1743,6 +1783,7 @@ def publish_dashboard_payload(
     investigator_active_df: pd.DataFrame | None = None,
     investigator_trap_df: pd.DataFrame | None = None,
     investigator_final_gate_df: pd.DataFrame | None = None,
+    investigator_performance_summary_df: pd.DataFrame | None = None,
     sector_rotation_df: pd.DataFrame | None = None,
     industry_rotation_df: pd.DataFrame | None = None,
     investigator_payload: dict[str, Any] | None = None,
@@ -1783,6 +1824,7 @@ def publish_dashboard_payload(
     active_investigator_list = _active_investigator_list_frame(investigator_active_source)
     investigator_traps = _investigator_trap_frame(investigator_trap_df)
     investigator_final_gate = _investigator_final_gate_frame(investigator_final_gate_df)
+    investigator_performance = _investigator_performance_frame(investigator_performance_summary_df)
     events_index = _frame(payload.get("events_index", []))
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
     bundle = decision_bundle or build_publish_decision_bundle(
@@ -1904,12 +1946,19 @@ def publish_dashboard_payload(
         manager=manager,
         sheet_name=FINAL_3Q_GATE_SHEET,
         frame=investigator_final_gate,
-        max_cols=10,
+        max_cols=16,
+    )
+    _investigator_performance_worksheet, investigator_performance_rows = _write_table_sheet(
+        manager=manager,
+        sheet_name=INVESTIGATOR_PERFORMANCE_SHEET,
+        frame=investigator_performance,
+        max_cols=12,
     )
 
     investigator_detail = _combine_frames(
         [
             ("FINAL 3Q GATE", investigator_final_gate),
+            ("INVESTIGATOR PERFORMANCE", investigator_performance),
             ("STOCK INVESTIGATOR", investigator_today),
             ("INVESTIGATOR REPEAT ACCUMULATION", investigator_repeat),
             ("ACTIVE INVESTIGATOR LIST", investigator_active),
@@ -1921,7 +1970,7 @@ def publish_dashboard_payload(
         sheet_name=DATA_INVESTIGATOR_SHEET,
         frame=investigator_detail,
         max_rows=DATA_INVESTIGATOR_MAX_ROWS,
-        max_cols=VISIBLE_SHEET_MAX_COLS,
+        max_cols=32,
     )
 
     breadth_cols = [
@@ -1968,6 +2017,8 @@ def publish_dashboard_payload(
         "investigator_rows_written": int(investigator_queue_rows),
         "final_3q_gate_sheet_name": FINAL_3Q_GATE_SHEET,
         "final_3q_gate_rows_written": int(final_gate_rows),
+        "investigator_performance_sheet_name": INVESTIGATOR_PERFORMANCE_SHEET,
+        "investigator_performance_rows_written": int(investigator_performance_rows),
         "investigator_data_sheet_name": DATA_INVESTIGATOR_SHEET,
         "hidden_data_sheets": [DATA_BREADTH_SHEET, DATA_SECTOR_HISTORY_SHEET, DATA_INVESTIGATOR_SHEET],
         "cleanup": cleanup,

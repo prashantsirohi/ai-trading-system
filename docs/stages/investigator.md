@@ -101,7 +101,10 @@ $DATA_ROOT/pipeline_runs/<run_id>/investigator/attempt_<n>/
 | `investigator_pattern_scan` | `investigator_pattern_scan.csv` | Investigator-owned pattern scan for active names. |
 | `trap_log` | `trap_log.csv` | Current scored trap rows. |
 | `archived_investigator` | `archived_investigator.csv` | Dropped or archived rows with reasons. |
-| `final_3q_gate` | `final_3q_gate.csv` | Manual final-gate queue for names with `final_score >= 55`. |
+| `final_3q_gate` | `final_3q_gate.csv` | Manual final-gate queue with invalidation audit fields and operator-only exit monitoring. |
+| `investigator_performance_summary` | `investigator_performance_summary.csv` | Grouped forward-return performance by trigger, verdict, move tag, sector, score bucket, credible trigger, and trap flag. |
+| `investigator_performance_summary_json` | `investigator_performance_summary.json` | Cohort counts, matured horizon counts, best/worst trigger and move-tag summaries, and score-bucket performance. |
+| `investigator_threshold_recommendations` | `investigator_threshold_recommendations.json` | Diagnostic-only threshold recommendations; never auto-applies scoring changes. |
 | `investigator_summary` | `investigator_summary.json` | Counts and run metadata. |
 | `investigator_payload` | `investigator_payload.json` | API/dashboard decision-board payload. |
 
@@ -117,8 +120,10 @@ The stage persists selected artifact rows to the control-plane registry database
 | `active_watchlist` | `investigator_lifecycle` |
 | `final_3q_gate` | `investigator_final_gate` |
 | `archived_investigator` | `investigator_archive` |
+| clean final-gate cohorts | `investigator_cohort_performance` |
 
 Rows are scoped by `run_id` and `attempt_number`. On rerun of the same attempt, existing rows for that scope are deleted and reinserted.
+`investigator_cohort_performance` is keyed by `trade_date`, `symbol_id`, and `exchange`; upserts are idempotent and preserve already matured forward returns.
 
 ## High-Level Flow
 
@@ -155,8 +160,10 @@ flowchart TD
 9. Apply lifecycle rules to split active rows from archived rows.
 10. Pattern-scan active investigator symbols without Stage 2 prescreening and without writing the pattern cache.
 11. Merge each symbol's best pattern row back into active and score artifacts.
-12. Build trap log, final manual gate, summary, and dashboard/API payload.
-13. Write artifacts and persist configured tables.
+12. Build trap log and final manual gate, including `invalidation_source`, stock-specific `exit_plan`, and operator exit-monitoring fields.
+13. Seed and mature `investigator_cohort_performance` from trusted `_catalog` prices.
+14. Build performance-summary and threshold-recommendation artifacts.
+15. Write artifacts and persist configured tables.
 
 ## Intake Logic
 
@@ -314,6 +321,41 @@ Overrides:
 - Any hard trap becomes `NOISE_TRAP`.
 - Missing fundamentals downgrades `HIGH_CONVICTION` to `MEDIUM_CONVICTION`.
 - `execution_eligible` is always set to false.
+
+## Final 3Q Gate Auditability
+
+`final_3q_gate` remains a manual-review queue, not an execution authorization. Eligible rows must still satisfy the existing final-gate score, verdict, trap, and credible-trigger rules.
+
+`invalidation_level` uses this fallback order, and `invalidation_source` records which input won:
+
+1. `invalidation_price`
+2. `pattern_invalidation_price`
+3. `pattern_invalidation`
+4. `invalidation`
+5. `low`
+6. `close * 0.93` with source `close_7pct_fallback`
+7. `manual review` with source `manual_review`
+
+When the invalidation level is numeric, `exit_plan` includes that level directly. When invalidation requires manual review, the exit plan says manual review is required and still reminds the operator to monitor failed 3-session follow-through and score below 55.
+
+Exit-monitoring fields are advisory:
+
+- `gate_entry_date` — first known date the symbol entered the final gate, using persisted final-gate/cohort history when available.
+- `days_since_gate_entry` — calendar days from gate entry to the latest trusted catalog close.
+- `latest_close` — latest trusted `_catalog` close used for monitoring.
+- `invalidation_breached` — true when latest close is below numeric invalidation.
+- `followthrough_status` — `PENDING_3D`, `CONFIRMED`, `FAILED_3D`, or `UNKNOWN`.
+- `exit_triggered` and `exit_reason` — operator guidance only, prioritized as `INVALIDATION_BREACH`, `FAILED_3D_FOLLOWTHROUGH`, `SCORE_BELOW_55`, `NONE`, or `UNKNOWN_DATA`.
+
+The stage does not auto-delete final-gate rows solely because `exit_triggered` is true.
+
+## Cohort Performance
+
+Clean final-gate rows are seeded into `investigator_cohort_performance`. A maturation pass reads trusted OHLCV from `$DATA_ROOT/ohlcv.duckdb::_catalog` and computes 3D, 5D, 10D, and 20D forward returns in percentage points using trading-session offsets. It also fills `fwd_*_matured_at` dates and sets `data_quality_status` to `PENDING`, `PARTIAL_MATURED`, `MATURED`, or `INSUFFICIENT_PRICE_DATA`.
+
+`investigator_performance_summary.csv` groups matured rows by trigger reason, verdict, move tag, sector, score bucket (`55-64`, `65-74`, `75-84`, `85+`), credible trigger, and hard-trap flag. For each group and horizon it reports sample count, win rate, average/median return, hit rates above 2% and 5%, average negative return, and average positive return.
+
+`investigator_threshold_recommendations.json` is diagnostic-only. If fewer than 100 matured 5D rows exist overall, or fewer than 30 matured rows exist for a group, it reports insufficient sample and recommends not tuning thresholds. Even with enough sample, it only emits recommendations for review; it does not modify production scoring constants, final-gate thresholds, or execution behavior.
 
 ## Repeat Tracker
 

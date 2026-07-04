@@ -108,8 +108,18 @@ CREATE TABLE IF NOT EXISTS investigator_final_gate (
     final_score DOUBLE,
     thesis VARCHAR,
     invalidation_level VARCHAR,
+    invalidation_source VARCHAR,
     exit_plan VARCHAR,
-    gate_status VARCHAR
+    gate_status VARCHAR,
+    gate_entry_date DATE,
+    days_since_gate_entry INTEGER,
+    latest_close DOUBLE,
+    invalidation_breached BOOLEAN,
+    followthrough_status VARCHAR,
+    exit_triggered BOOLEAN,
+    exit_reason VARCHAR,
+    hard_trap_flag BOOLEAN,
+    credible_trigger BOOLEAN
 );
 
 CREATE TABLE IF NOT EXISTS investigator_archive (
@@ -139,3 +149,14 @@ CREATE INDEX IF NOT EXISTS idx_investigator_daily_symbol_date ON investigator_da
 CREATE INDEX IF NOT EXISTS idx_investigator_scores_symbol_date ON investigator_scores(symbol_id, trade_date);
 CREATE INDEX IF NOT EXISTS idx_investigator_lifecycle_status ON investigator_lifecycle(status);
 CREATE INDEX IF NOT EXISTS idx_investigator_archive_symbol ON investigator_archive(symbol_id);
+
+ALTER TABLE investigator_final_gate ADD COLUMN IF NOT EXISTS invalidation_source VARCHAR;
+ALTER TABLE investigator_final_gate ADD COLUMN IF NOT EXISTS gate_entry_date DATE;
+ALTER TABLE investigator_final_gate ADD COLUMN IF NOT EXISTS days_since_gate_entry INTEGER;
+ALTER TABLE investigator_final_gate ADD COLUMN IF NOT EXISTS latest_close DOUBLE;
+ALTER TABLE investigator_final_gate ADD COLUMN IF NOT EXISTS invalidation_breached BOOLEAN;
+ALTER TABLE investigator_final_gate ADD COLUMN IF NOT EXISTS followthrough_status VARCHAR;
+ALTER TABLE investigator_final_gate ADD COLUMN IF NOT EXISTS exit_triggered BOOLEAN;
+ALTER TABLE investigator_final_gate ADD COLUMN IF NOT EXISTS exit_reason VARCHAR;
+ALTER TABLE investigator_final_gate ADD COLUMN IF NOT EXISTS hard_trap_flag BOOLEAN;
+ALTER TABLE investigator_final_gate ADD COLUMN IF NOT EXISTS credible_trigger BOOLEAN;

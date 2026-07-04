@@ -15,6 +15,7 @@ FINAL_GATE_EXPECTED_COLUMNS = [
     "final_score",
     "thesis",
     "invalidation_level",
+    "invalidation_source",
     "exit_plan",
     "gate_status",
     "hard_trap_flag",
@@ -162,7 +163,8 @@ def test_final_gate_includes_medium_conviction_with_review_defaults() -> None:
     assert str(row["thesis"]).strip()
     assert "Stealth Accumulation" in row["thesis"]
     assert row["invalidation_level"] == "94.25"
-    assert str(row["exit_plan"]).strip()
+    assert row["invalidation_source"] == "low"
+    assert row["exit_plan"] == "Exit if close breaks 94.25, failed 3-session follow-through, or investigator score falls below 55."
     assert not bool(row["hard_trap_flag"])
     assert bool(row["credible_trigger"])
 
@@ -187,6 +189,41 @@ def test_final_gate_uses_close_discount_when_no_invalidation_or_low() -> None:
 
     assert len(gate) == 1
     assert gate.iloc[0]["invalidation_level"] == "93"
+    assert gate.iloc[0]["invalidation_source"] == "close_7pct_fallback"
+
+
+def test_final_gate_invalidation_source_follows_fallback_order() -> None:
+    base = {
+        "trade_date": "2026-05-07",
+        "verdict": "HIGH_CONVICTION",
+        "final_score": 84,
+        "hard_trap_flag": False,
+        "credible_trigger": False,
+    }
+    frame = pd.DataFrame(
+        [
+            {**base, "symbol_id": "A", "invalidation_price": 101, "pattern_invalidation_price": 99, "low": 90},
+            {**base, "symbol_id": "B", "pattern_invalidation_price": 99, "low": 90},
+            {**base, "symbol_id": "C", "pattern_invalidation": 98, "low": 90},
+            {**base, "symbol_id": "D", "invalidation": 97, "low": 90},
+            {**base, "symbol_id": "E", "low": 90},
+            {**base, "symbol_id": "F", "close": 100},
+            {**base, "symbol_id": "G"},
+        ]
+    )
+
+    gate = final_gate(frame).set_index("symbol_id")
+
+    assert gate.loc["A", "invalidation_source"] == "invalidation_price"
+    assert gate.loc["B", "invalidation_source"] == "pattern_invalidation_price"
+    assert gate.loc["C", "invalidation_source"] == "pattern_invalidation"
+    assert gate.loc["D", "invalidation_source"] == "invalidation"
+    assert gate.loc["E", "invalidation_source"] == "low"
+    assert gate.loc["F", "invalidation_level"] == "93"
+    assert gate.loc["F", "invalidation_source"] == "close_7pct_fallback"
+    assert gate.loc["G", "invalidation_level"] == "manual review"
+    assert gate.loc["G", "invalidation_source"] == "manual_review"
+    assert gate.loc["G", "exit_plan"] == "Manual exit review required; also monitor failed 3-session follow-through or score below 55."
 
 
 def test_final_gate_empty_input_returns_compatible_columns() -> None:

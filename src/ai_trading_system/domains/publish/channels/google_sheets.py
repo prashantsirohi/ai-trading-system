@@ -109,15 +109,22 @@ _INVESTIGATOR_FORMATS: dict[str, dict[str, str]] = {
     "first_seen_date": GoogleSheetsManager.FORMAT_DATE,
     "last_seen_date": GoogleSheetsManager.FORMAT_DATE,
     "archived_at": GoogleSheetsManager.FORMAT_DATE,
+    "gate_entry_date": GoogleSheetsManager.FORMAT_DATE,
     "daily_return_pct": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "volume_ratio_20": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "delivery_pct": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "composite_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "final_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "latest_close": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "repeat_score": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "price_progression_pct": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "price_vs_first_trigger_pct": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "rank_change_20d": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "win_rate": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "avg_return": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "median_return": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "hit_rate_above_2pct": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "hit_rate_above_5pct": GoogleSheetsManager.FORMAT_DECIMAL_2,
 }
 _FUNDAMENTAL_TRACKING_PUBLISH_BUCKETS = frozenset(
     {

@@ -50,7 +50,10 @@ def test_publish_stage_loads_investigator_datasets(tmp_path: Path) -> None:
     archive_path = attempt_dir / "archived_investigator.csv"
     gate_path = attempt_dir / "final_3q_gate.csv"
     gainers_path = attempt_dir / "daily_gainer_log.csv"
+    performance_path = attempt_dir / "investigator_performance_summary.csv"
     summary_path = attempt_dir / "investigator_summary.json"
+    performance_summary_path = attempt_dir / "investigator_performance_summary.json"
+    recommendations_path = attempt_dir / "investigator_threshold_recommendations.json"
     pd.DataFrame([{"symbol_id": "AAA", "verdict": "HIGH_CONVICTION", "final_score": 88}]).to_csv(scores_path, index=False)
     pd.DataFrame([{"symbol_id": "AAA", "repeat_score": 64}]).to_csv(repeat_path, index=False)
     pd.DataFrame([{"symbol_id": "TRAP", "verdict": "NOISE_TRAP"}]).to_csv(trap_path, index=False)
@@ -58,7 +61,10 @@ def test_publish_stage_loads_investigator_datasets(tmp_path: Path) -> None:
     pd.DataFrame([{"symbol_id": "XYZ", "drop_reason": "ONE_CANDLE_DRAMA"}]).to_csv(archive_path, index=False)
     pd.DataFrame([{"symbol_id": "AAA", "gate_status": "PENDING"}]).to_csv(gate_path, index=False)
     pd.DataFrame([{"symbol_id": "AAA", "daily_return_pct": 8.0}]).to_csv(gainers_path, index=False)
+    pd.DataFrame([{"group_type": "trigger_reason", "group_value": "DAILY_GAINER", "horizon": "5d", "sample_count": 1}]).to_csv(performance_path, index=False)
     summary_path.write_text(json.dumps({"active_count": 1}), encoding="utf-8")
+    performance_summary_path.write_text(json.dumps({"total_cohorts": 1}), encoding="utf-8")
+    recommendations_path.write_text(json.dumps({"insufficient_sample": True}), encoding="utf-8")
     context = StageContext(
         project_root=tmp_path,
         db_path=tmp_path / "data" / "ohlcv.duckdb",
@@ -75,7 +81,10 @@ def test_publish_stage_loads_investigator_datasets(tmp_path: Path) -> None:
                 "archived_investigator": StageArtifact.from_file("archived_investigator", archive_path, row_count=1),
                 "final_3q_gate": StageArtifact.from_file("final_3q_gate", gate_path, row_count=1),
                 "daily_gainer_log": StageArtifact.from_file("daily_gainer_log", gainers_path, row_count=1),
+                "investigator_performance_summary": StageArtifact.from_file("investigator_performance_summary", performance_path, row_count=1),
                 "investigator_summary": StageArtifact.from_file("investigator_summary", summary_path, row_count=1),
+                "investigator_performance_summary_json": StageArtifact.from_file("investigator_performance_summary_json", performance_summary_path, row_count=1),
+                "investigator_threshold_recommendations": StageArtifact.from_file("investigator_threshold_recommendations", recommendations_path, row_count=1),
             }
         },
     )
@@ -87,6 +96,9 @@ def test_publish_stage_loads_investigator_datasets(tmp_path: Path) -> None:
     assert datasets["investigator_scores"].iloc[0]["symbol_id"] == "AAA"
     assert datasets["investigator_high_conviction"].iloc[0]["symbol_id"] == "AAA"
     assert datasets["investigator_archive"].iloc[0]["drop_reason"] == "ONE_CANDLE_DRAMA"
+    assert datasets["investigator_performance_summary"].iloc[0]["group_value"] == "DAILY_GAINER"
+    assert datasets["investigator_performance_summary_json"] == {"total_cohorts": 1}
+    assert datasets["investigator_threshold_recommendations"] == {"insufficient_sample": True}
 
 
 def test_publish_investigator_sorts_final_gate_by_verdict_then_score(monkeypatch) -> None:

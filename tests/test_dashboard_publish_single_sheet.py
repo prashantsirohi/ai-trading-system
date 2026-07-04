@@ -470,7 +470,13 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
                 "final_score": 61,
                 "thesis": "Lower score medium setup",
                 "invalidation_level": "95.00",
-                "exit_plan": "Exit on invalidation breach, failed 3-session follow-through, or investigator score below 55.",
+                "invalidation_source": "low",
+                "exit_plan": "Exit if close breaks 95, failed 3-session follow-through, or investigator score falls below 55.",
+                "latest_close": 96.0,
+                "invalidation_breached": False,
+                "followthrough_status": "PENDING_3D",
+                "exit_triggered": False,
+                "exit_reason": "NONE",
                 "gate_status": "PENDING",
                 "hard_trap_flag": False,
                 "credible_trigger": True,
@@ -482,7 +488,13 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
                 "final_score": 84,
                 "thesis": "Higher score medium setup",
                 "invalidation_level": "99.50",
-                "exit_plan": "Exit on invalidation breach, failed 3-session follow-through, or investigator score below 55.",
+                "invalidation_source": "pattern_invalidation_price",
+                "exit_plan": "Exit if close breaks 99.50, failed 3-session follow-through, or investigator score falls below 55.",
+                "latest_close": 102.0,
+                "invalidation_breached": False,
+                "followthrough_status": "CONFIRMED",
+                "exit_triggered": False,
+                "exit_reason": "NONE",
                 "gate_status": "PENDING",
                 "hard_trap_flag": False,
                 "credible_trigger": True,
@@ -494,10 +506,31 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
                 "final_score": 79,
                 "thesis": "Sector rotation; score 79",
                 "invalidation_level": "101.25",
-                "exit_plan": "Exit on invalidation breach, failed 3-session follow-through, or investigator score below 55.",
+                "invalidation_source": "invalidation_price",
+                "exit_plan": "Exit if close breaks 101.25, failed 3-session follow-through, or investigator score falls below 55.",
+                "latest_close": 104.0,
+                "invalidation_breached": False,
+                "followthrough_status": "CONFIRMED",
+                "exit_triggered": False,
+                "exit_reason": "NONE",
                 "gate_status": "PENDING",
                 "hard_trap_flag": False,
                 "credible_trigger": True,
+            }
+        ]
+    )
+    investigator_performance = pd.DataFrame(
+        [
+            {
+                "group_type": "trigger_reason",
+                "group_value": "DAILY_GAINER",
+                "horizon": "5d",
+                "sample_count": 12,
+                "win_rate": 58.3,
+                "avg_return": 3.2,
+                "median_return": 2.4,
+                "hit_rate_above_2pct": 50.0,
+                "hit_rate_above_5pct": 25.0,
             }
         ]
     )
@@ -532,6 +565,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             investigator_active_df=investigator_active,
             investigator_trap_df=investigator_traps,
             investigator_final_gate_df=investigator_final_gate,
+            investigator_performance_summary_df=investigator_performance,
             sector_rotation_df=sector_rotation_df,
             industry_rotation_df=industry_rotation_df,
             investigator_payload=investigator_payload,
@@ -572,7 +606,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert result["investigator_data_sheet_name"] == "_DATA_INVESTIGATOR"
     assert {"DATA", "FILTER", "Publish_Log", "02_Watchlist_Current", "05_Market_Breadth", "2026-04-08"}.issubset(set(manager.spreadsheet.deleted))
 
-    visible_titles = {"01_Daily_Report", "Diagnostics", "Model_Feedback", "04_Sector_Leadership", "industry rotation", "investigator", "Final 3Q Gate"}
+    visible_titles = {"01_Daily_Report", "Diagnostics", "Model_Feedback", "04_Sector_Leadership", "industry rotation", "investigator", "Final 3Q Gate", "Investigator Performance"}
     visible_updates = {
         title: [update for update in manager.sheets[title].updates if update[0] == "A1"]
         for title in visible_titles
@@ -585,6 +619,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     industry_grid = visible_updates["industry rotation"][0][1]
     investigator_grid = visible_updates["investigator"][0][1]
     final_gate_grid = visible_updates["Final 3Q Gate"][0][1]
+    performance_grid = visible_updates["Investigator Performance"][0][1]
     assert len(daily_grid) == 140
     assert len(diagnostics_grid) >= 10
     assert len(model_feedback_grid) >= 4
@@ -632,24 +667,34 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         "final_score",
         "thesis",
         "invalidation_level",
+        "invalidation_source",
         "exit_plan",
+        "latest_close",
+        "invalidation_breached",
+        "followthrough_status",
+        "exit_triggered",
+        "exit_reason",
         "gate_status",
         "hard_trap_flag",
         "credible_trigger",
     ]
+    assert len(performance_grid) >= 2
     assert final_gate_grid[1][0] == "HIGH"
     assert final_gate_grid[1][1] == "2026-04-09"
     assert final_gate_grid[1][2] == "HIGH_CONVICTION"
     assert final_gate_grid[1][4] == "Sector rotation; score 79"
     assert final_gate_grid[1][5] == "101.25"
-    assert final_gate_grid[1][8] is False
-    assert final_gate_grid[1][9] is True
+    assert final_gate_grid[1][6] == "invalidation_price"
+    assert final_gate_grid[1][10] == "CONFIRMED"
+    assert final_gate_grid[1][14] is False
+    assert final_gate_grid[1][15] is True
     assert final_gate_grid[2][0] == "MEDHIGH"
     assert final_gate_grid[2][2] == "MEDIUM_CONVICTION"
     assert final_gate_grid[2][3] == 84
     assert final_gate_grid[3][0] == "MEDLOW"
     assert final_gate_grid[3][3] == 61
     assert result["final_3q_gate_rows_written"] == 4
+    assert result["investigator_performance_sheet_name"] == "Investigator Performance"
     assert not [update for update in manager.sheets["05_Market_Breadth"].updates if update[0] == "A1"]
 
     daily_text = "\n".join(str(cell) for row in daily_grid for cell in row if cell != "")

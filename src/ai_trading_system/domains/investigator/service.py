@@ -9,7 +9,13 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 
 from ai_trading_system.domains.investigator.buyer_fingerprint import score_buyer_fingerprint
-from ai_trading_system.domains.investigator.cohort_performance import upsert_investigator_cohorts
+from ai_trading_system.domains.investigator.cohort_performance import (
+    build_performance_summary,
+    build_threshold_recommendations,
+    mature_investigator_cohorts,
+    upsert_investigator_cohorts,
+)
+from ai_trading_system.domains.investigator.exit_monitor import attach_exit_monitoring
 from ai_trading_system.domains.investigator.fundamentals import load_fundamental_snapshot, score_fundamentals
 from ai_trading_system.domains.investigator.intake import load_investigator_intake
 from ai_trading_system.domains.investigator.lifecycle import apply_lifecycle
@@ -50,6 +56,7 @@ class InvestigatorService:
         candidates = _mark_top_ranked_context(candidates, ranked)
         if candidates.empty:
             empty = pd.DataFrame()
+            performance_frame, performance_summary, threshold_recommendations = self._performance_outputs(context)
             summary = self._summary(
                 context=context,
                 gainers=gainers,
@@ -59,6 +66,7 @@ class InvestigatorService:
                 traps=empty,
                 archived=empty,
                 gate=empty,
+                performance_summary=performance_summary,
             )
             payload = build_investigator_payload(
                 run_id=context.run_id,
@@ -72,6 +80,8 @@ class InvestigatorService:
                 archive=empty,
                 final_3q_gate=empty,
                 investigator_pattern_scan=empty,
+                performance_summary=performance_summary,
+                threshold_recommendations=threshold_recommendations,
                 data_trust_status=str(context.params.get("data_trust_status", "unknown")),
                 stage_status={"rank": "completed", "investigator": "completed", "publish": "pending"},
             )
@@ -85,8 +95,11 @@ class InvestigatorService:
                 trap_log=empty,
                 archived_investigator=empty,
                 final_3q_gate=empty,
+                investigator_performance_summary=performance_frame,
                 investigator_summary=summary,
                 investigator_payload=payload,
+                investigator_performance_summary_json=performance_summary,
+                investigator_threshold_recommendations=threshold_recommendations,
             )
             return StageResult(artifacts=artifacts, metadata=summary)
         candidates = score_price_structure(candidates)
@@ -114,6 +127,9 @@ class InvestigatorService:
         scores = _merge_best_patterns(scores, best_patterns)
         traps = scores.loc[scores.get("verdict", pd.Series(dtype=str)).eq("NOISE_TRAP") | scores.get("hard_trap_flag", pd.Series(False, index=scores.index)).fillna(False)].copy()
         gate = final_gate(scores)
+        gate = self._attach_exit_monitoring(context, gate)
+        self._persist_cohort_performance(context, gate, scores)
+        performance_frame, performance_summary, threshold_recommendations = self._performance_outputs(context)
         summary = self._summary(
             context=context,
             gainers=gainers,
@@ -123,6 +139,7 @@ class InvestigatorService:
             traps=traps,
             archived=archived,
             gate=gate,
+            performance_summary=performance_summary,
         )
         payload = build_investigator_payload(
             run_id=context.run_id,
@@ -136,6 +153,8 @@ class InvestigatorService:
             archive=archived,
             final_3q_gate=gate,
             investigator_pattern_scan=investigator_patterns,
+            performance_summary=performance_summary,
+            threshold_recommendations=threshold_recommendations,
             data_trust_status=str(context.params.get("data_trust_status", "unknown")),
             stage_status={"rank": "completed", "investigator": "completed", "publish": "pending"},
         )
@@ -149,11 +168,13 @@ class InvestigatorService:
             trap_log=traps,
             archived_investigator=archived,
             final_3q_gate=gate,
+            investigator_performance_summary=performance_frame,
             investigator_summary=summary,
             investigator_payload=payload,
+            investigator_performance_summary_json=performance_summary,
+            investigator_threshold_recommendations=threshold_recommendations,
         )
         self._persist_tables(context, artifacts)
-        self._persist_cohort_performance(context, gate, scores)
         return StageResult(artifacts=artifacts, metadata=summary)
 
     def _load_history(self, context: StageContext) -> pd.DataFrame:
@@ -190,8 +211,13 @@ class InvestigatorService:
         output_dir = context.output_dir()
         artifacts: list[StageArtifact] = []
         for artifact_type, value in frames_and_summary.items():
-            if artifact_type in {"investigator_summary", "investigator_payload"}:
-                filename = "investigator_summary.json" if artifact_type == "investigator_summary" else "investigator_payload.json"
+            if isinstance(value, dict):
+                filename = {
+                    "investigator_summary": "investigator_summary.json",
+                    "investigator_payload": "investigator_payload.json",
+                    "investigator_performance_summary_json": "investigator_performance_summary.json",
+                    "investigator_threshold_recommendations": "investigator_threshold_recommendations.json",
+                }.get(artifact_type, f"{artifact_type}.json")
                 path = context.write_json(filename, value)
                 artifacts.append(StageArtifact.from_file(artifact_type, path, row_count=1, metadata=value, attempt_number=context.attempt_number))
                 continue
@@ -250,6 +276,50 @@ class InvestigatorService:
             return
         with context.registry._writer() as conn:  # noqa: SLF001
             upsert_investigator_cohorts(conn, gate, scores)
+            mature_investigator_cohorts(conn, ohlcv_db_path=context.db_path)
+
+    def _attach_exit_monitoring(self, context: StageContext, gate: pd.DataFrame) -> pd.DataFrame:
+        if gate.empty:
+            return gate
+        conn = None
+        try:
+            if context.registry is not None:
+                conn = context.registry._connect(read_only=True)  # noqa: SLF001
+            return attach_exit_monitoring(
+                gate,
+                ohlcv_db_path=context.db_path,
+                registry_conn=conn,
+                as_of=context.run_date,
+            )
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def _performance_outputs(self, context: StageContext) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]]:
+        if context.registry is None:
+            summary = {
+                "total_cohorts": 0,
+                "pending_cohorts": 0,
+                "matured_cohorts": 0,
+                "matured_by_horizon": {"3d": 0, "5d": 0, "10d": 0, "20d": 0},
+            }
+            return pd.DataFrame(), summary, build_threshold_recommendations(pd.DataFrame(), summary)
+        try:
+            with context.registry._writer() as conn:  # noqa: SLF001
+                mature_investigator_cohorts(conn, ohlcv_db_path=context.db_path)
+                frame, summary = build_performance_summary(conn)
+                recommendations = build_threshold_recommendations(frame, summary)
+                return frame, summary, recommendations
+        except Exception as exc:
+            summary = {
+                "status": "unavailable",
+                "error": str(exc),
+                "total_cohorts": 0,
+                "pending_cohorts": 0,
+                "matured_cohorts": 0,
+                "matured_by_horizon": {"3d": 0, "5d": 0, "10d": 0, "20d": 0},
+            }
+            return pd.DataFrame(), summary, build_threshold_recommendations(pd.DataFrame(), summary)
 
     def _summary(
         self,
@@ -262,6 +332,7 @@ class InvestigatorService:
         traps: pd.DataFrame,
         archived: pd.DataFrame,
         gate: pd.DataFrame,
+        performance_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         verdict_counts = scores.get("verdict", pd.Series(dtype=str)).value_counts().to_dict() if not scores.empty else {}
         status_counts = active.get("status", pd.Series(dtype=str)).value_counts().to_dict() if not active.empty else {}
@@ -285,6 +356,7 @@ class InvestigatorService:
             "repeat_accumulation_count": int(repeat.get("high_priority_repeat", pd.Series(dtype=bool)).sum()) if not repeat.empty else 0,
             "verdict_counts": {str(k): int(v) for k, v in verdict_counts.items()},
             "status_counts": {str(k): int(v) for k, v in status_counts.items()},
+            "performance": performance_summary or {},
         }
 
 

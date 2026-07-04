@@ -399,6 +399,7 @@ class PublishStage:
             "trap_log": "investigator_trap_log",
             "archived_investigator": "investigator_archive",
             "final_3q_gate": "investigator_final_3q_gate",
+            "investigator_performance_summary": "investigator_performance_summary",
         }
         for artifact_type, dataset_name in artifact_map.items():
             artifact = context.artifact_for("investigator", artifact_type)
@@ -407,6 +408,12 @@ class PublishStage:
         datasets["investigator_summary"] = self._read_json_artifact_safe(summary_artifact)
         payload_artifact = context.artifact_for("investigator", "investigator_payload")
         datasets["investigator_payload"] = self._read_json_artifact_safe(payload_artifact)
+        datasets["investigator_performance_summary_json"] = self._read_json_artifact_safe(
+            context.artifact_for("investigator", "investigator_performance_summary_json")
+        )
+        datasets["investigator_threshold_recommendations"] = self._read_json_artifact_safe(
+            context.artifact_for("investigator", "investigator_threshold_recommendations")
+        )
         scores = datasets.get("investigator_scores")
         if isinstance(scores, pd.DataFrame) and not scores.empty and "verdict" in scores.columns:
             datasets["investigator_high_conviction"] = scores.loc[
@@ -678,6 +685,7 @@ class PublishStage:
             investigator_active_df=datasets.get("investigator_active_watchlist"),
             investigator_trap_df=datasets.get("investigator_trap_log"),
             investigator_final_gate_df=datasets.get("investigator_final_3q_gate"),
+            investigator_performance_summary_df=datasets.get("investigator_performance_summary"),
             sector_rotation_df=datasets.get("sector_rotation"),
             industry_rotation_df=datasets.get("industry_rotation"),
             investigator_payload=datasets.get("investigator_payload"),
@@ -819,6 +827,7 @@ class PublishStage:
                 "High Conviction": datasets.get("investigator_high_conviction", pd.DataFrame()),
                 "Trap Log": datasets.get("investigator_trap_log", pd.DataFrame()),
                 "Final 3Q Gate": datasets.get("investigator_final_3q_gate", pd.DataFrame()),
+                "Investigator Performance": datasets.get("investigator_performance_summary", pd.DataFrame()),
                 "Archive": datasets.get("investigator_archive", pd.DataFrame()),
             }
         ):
