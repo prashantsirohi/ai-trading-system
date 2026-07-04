@@ -29,6 +29,20 @@ CREATE TABLE IF NOT EXISTS investigator_cohort_performance (
 );
 
 ALTER TABLE investigator_cohort_performance ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+-- DuckDB rejects ALTER COLUMN when secondary indexes depend on the table.
+-- Re-running this migration after a partial/previous initialization may find
+-- these indexes already present, so drop only this migration's indexes before
+-- setting the default and recreate them below.
+DROP INDEX IF EXISTS idx_investigator_cohort_trade_date;
+DROP INDEX IF EXISTS idx_investigator_cohort_symbol_id;
+DROP INDEX IF EXISTS idx_investigator_cohort_verdict;
+DROP INDEX IF EXISTS idx_investigator_cohort_trigger_reason;
+DROP INDEX IF EXISTS idx_investigator_cohort_sector;
+DROP INDEX IF EXISTS idx_investigator_cohort_data_quality_status;
+DROP INDEX IF EXISTS idx_investigator_cohort_symbol_date;
+DROP INDEX IF EXISTS idx_investigator_cohort_date_verdict;
+
 ALTER TABLE investigator_cohort_performance ALTER COLUMN data_quality_status SET DEFAULT 'PENDING';
 
 CREATE INDEX IF NOT EXISTS idx_investigator_cohort_trade_date

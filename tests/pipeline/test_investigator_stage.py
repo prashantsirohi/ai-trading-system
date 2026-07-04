@@ -241,6 +241,69 @@ def test_registry_migration_creates_investigator_cohort_performance(tmp_path: Pa
     assert "PENDING" in str(column_info["data_quality_status"][4])
 
 
+def test_registry_migration_updates_indexed_investigator_cohort_table(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "control_plane.duckdb"
+    db_path.parent.mkdir(parents=True)
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE investigator_cohort_performance (
+                trade_date DATE NOT NULL,
+                symbol_id VARCHAR NOT NULL,
+                exchange VARCHAR NOT NULL DEFAULT 'NSE',
+                trigger_reason VARCHAR,
+                verdict VARCHAR,
+                final_score DOUBLE,
+                hard_trap_flag BOOLEAN,
+                credible_trigger BOOLEAN,
+                move_tag VARCHAR,
+                sector VARCHAR,
+                close DOUBLE,
+                fwd_3d_return DOUBLE,
+                fwd_5d_return DOUBLE,
+                fwd_10d_return DOUBLE,
+                fwd_20d_return DOUBLE,
+                fwd_3d_matured_at DATE,
+                fwd_5d_matured_at DATE,
+                fwd_10d_matured_at DATE,
+                fwd_20d_matured_at DATE,
+                data_quality_status VARCHAR,
+                inserted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (trade_date, symbol_id, exchange)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX idx_investigator_cohort_data_quality_status "
+            "ON investigator_cohort_performance(data_quality_status)"
+        )
+    finally:
+        conn.close()
+
+    registry = RegistryStore(tmp_path)
+
+    with registry._reader() as conn:  # noqa: SLF001
+        column_info = {
+            row[1]: row
+            for row in conn.execute("PRAGMA table_info('investigator_cohort_performance')").fetchall()
+        }
+        indexes = {
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT index_name
+                FROM duckdb_indexes()
+                WHERE table_name = 'investigator_cohort_performance'
+                """
+            ).fetchall()
+        }
+
+    assert "PENDING" in str(column_info["data_quality_status"][4])
+    assert "idx_investigator_cohort_data_quality_status" in indexes
+
+
 def test_investigator_cohort_upsert_is_idempotent_and_pending(tmp_path: Path) -> None:
     registry = RegistryStore(tmp_path)
     final_gate = pd.DataFrame(
