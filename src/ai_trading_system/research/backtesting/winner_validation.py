@@ -22,8 +22,8 @@ import pandas as pd
 from scipy.stats import spearmanr
 
 from ai_trading_system.domains.ranking.contracts import DEFAULT_FACTOR_WEIGHTS
-from ai_trading_system.domains.ranking.patterns.contracts import PatternScanConfig
-from ai_trading_system.domains.ranking.patterns.evaluation import _scan_pattern_signals
+from ai_trading_system.analytics.patterns.contracts import PatternScanConfig
+from ai_trading_system.analytics.patterns.evaluation import _scan_pattern_signals
 from ai_trading_system.platform.db.paths import get_domain_paths
 
 
@@ -568,7 +568,8 @@ def _factor_summary_by_group(frame: pd.DataFrame, group_col: str) -> list[dict[s
                 {
                     group_col: group_value,
                     "factor": factor,
-                    "current_weight": DEFAULT_FACTOR_WEIGHTS.get(FACTOR_TO_WEIGHT_KEY[factor], 0.0),
+                    "active_proxy_weight": DEFAULT_FACTOR_WEIGHTS.get(FACTOR_TO_WEIGHT_KEY[factor], 0.0),
+                    "live_ranker_weight": DEFAULT_FACTOR_WEIGHTS.get(FACTOR_TO_WEIGHT_KEY[factor], 0.0),
                     **stats,
                     "n": int(len(group)),
                 }
@@ -592,7 +593,7 @@ def _active_proxy_distribution(frame: pd.DataFrame) -> dict[str, Any]:
 def _capture_rates(frame: pd.DataFrame) -> dict[str, dict[str, float | int]]:
     pctile = pd.to_numeric(frame["active_technical_proxy_pctile"], errors="coerce")
     return {
-        f"top_{threshold}_pctile": {
+        f"pctile_ge_{threshold}": {
             "threshold": threshold,
             "captured_count": int((pctile >= threshold).sum()),
             "capture_rate": float((pctile >= threshold).mean()),
@@ -781,11 +782,12 @@ def _write_markdown_report(summary: dict[str, Any], out_dir: Path) -> None:
     lines.append("## Factor Gaps")
     lines.append("")
     overall = [row for row in summary["factor_summary"] if row.get("scope") == "overall"]
-    lines.append("| Factor | Current weight | Winner pctile median | Top-quartile hit rate | IC vs rally |")
-    lines.append("|---|---:|---:|---:|---:|")
+    lines.append("| Factor | Active proxy weight | Live ranker weight | Winner pctile median | Top-quartile hit rate | IC vs rally |")
+    lines.append("|---|---:|---:|---:|---:|---:|")
     for row in overall:
         lines.append(
-            f"| {row['factor']} | {row['current_weight']:.2f} | {row['winner_pctile_median']:.1f} | "
+            f"| {row['factor']} | {row['active_proxy_weight']:.2f} | {row.get('live_ranker_weight', 0.0):.2f} | "
+            f"{row['winner_pctile_median']:.1f} | "
             f"{row['top_quartile_hit_rate']:.1f}% | {row['ic_vs_rally']:.2f} |"
         )
     lines.append("")

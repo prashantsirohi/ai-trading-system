@@ -193,7 +193,7 @@ def test_distribution_capture_and_quartile_helpers() -> None:
     quartiles = _rally_quartile_summary(frame)
 
     assert dist["above_50_count"] == 2
-    assert capture["top_70_pctile"]["captured_count"] == 1
+    assert capture["pctile_ge_70"]["captured_count"] == 1
     assert quartiles["top"]["median_active_technical_proxy_pctile"] == 10.0
     assert quartiles["bottom"]["median_active_technical_proxy_pctile"] == 85.0
 
@@ -217,6 +217,8 @@ def test_factor_summary_supports_grouped_ic() -> None:
     rs = next(row for row in rows if row["factor"] == "relative_strength")
 
     assert rs["regime_bucket"] == "bull"
+    assert rs["active_proxy_weight"] == winner_validation.DEFAULT_FACTOR_WEIGHTS["relative_strength"]
+    assert rs["live_ranker_weight"] == winner_validation.DEFAULT_FACTOR_WEIGHTS["relative_strength"]
     assert rs["top_quartile_hit_rate"] == 50.0
     assert rs["ic_vs_rally"] == 1.0
 

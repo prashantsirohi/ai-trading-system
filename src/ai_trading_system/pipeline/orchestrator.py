@@ -1198,6 +1198,8 @@ class PipelineOrchestrator:
             "ranked_signals",
             "breakout_scan",
             "volume_shockers",
+            "early_accumulation_scan",
+            "early_accumulation_summary",
             "dashboard_payload",
             "sector_dashboard",
             "stock_scan",

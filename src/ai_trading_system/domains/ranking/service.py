@@ -44,6 +44,7 @@ TASK_FILE_MAP = {
     "rank_universe": ("ranked_universe", "csv"),
     "breakout_scan": ("breakout_scan", "csv"),
     "pattern_scan": ("pattern_scan", "csv"),
+    "early_accumulation_scan": ("early_accumulation_scan", "csv"),
     "stock_scan": ("stock_scan", "csv"),
     "sector_dashboard": ("sector_dashboard", "csv"),
     "sector_rotation": ("sector_rotation", "csv"),
@@ -452,6 +453,7 @@ class RankOrchestrationService:
             ("watchlist_rejections_json", "watchlist_rejections.json"),
             ("watchlist_digest", "watchlist_digest.md"),
             ("watchlist_catalyst", "watchlist_catalyst.json"),
+            ("early_accumulation_summary", "early_accumulation_summary.json"),
         ):
             sidecar_path = output_dir / filename
             if not sidecar_path.exists():
@@ -1049,6 +1051,80 @@ class RankOrchestrationService:
                 f"pattern_scan unavailable: {pattern_status.get('error_message', pattern_status.get('detail'))}"
             )
 
+        from ai_trading_system.domains.ranking.early_accumulation import (
+            EarlyAccumulationConfig,
+            build_early_accumulation_scan,
+        )
+
+        early_config = EarlyAccumulationConfig.from_params(effective_params)
+        early_summary: dict[str, Any] = {
+            "enabled": early_config.enabled,
+            "rows": 0,
+            "warnings": [],
+        }
+
+        def build_early_accumulation_output() -> pd.DataFrame:
+            nonlocal early_summary
+            frame, summary = build_early_accumulation_scan(
+                ranked_universe=ranked_universe if not ranked_universe.empty else ranked,
+                pattern_df=pattern_df,
+                breakout_df=breakout_df,
+                as_of_date=context.run_date,
+                config=early_config,
+            )
+            early_summary = summary
+            return frame
+
+        early_accumulation_df, early_status = self.execute_rank_task(
+            context=context,
+            task_name="early_accumulation_scan",
+            label="Build early_accumulation_scan",
+            fingerprint_payload={
+                "task": "early_accumulation_scan",
+                "logic_version": "2026-07-05-phase2-v1",
+                "run_date": context.run_date,
+                "config": early_config,
+                "ranked_universe_fingerprint": self.dataframe_fingerprint(ranked_universe),
+                "pattern_fingerprint": self.dataframe_fingerprint(pattern_df),
+                "breakout_fingerprint": self.dataframe_fingerprint(breakout_df),
+            },
+            task_status=task_status,
+            previous_attempt=previous_attempt,
+            previous_statuses=previous_statuses,
+            builder=build_early_accumulation_output,
+            optional=True,
+            skip_reason=None if early_config.enabled else "early_accumulation disabled by config",
+        )
+        outputs["early_accumulation_scan"] = early_accumulation_df
+        if isinstance(early_accumulation_df, pd.DataFrame):
+            early_summary.setdefault("rows", int(len(early_accumulation_df)))
+            if "graduation_status" in early_accumulation_df.columns:
+                early_summary.setdefault(
+                    "graduation_status_counts",
+                    {
+                        str(key): int(value)
+                        for key, value in early_accumulation_df["graduation_status"].astype(str).value_counts().to_dict().items()
+                    },
+                )
+        if early_status["status"] in {"failed", "timed_out", "degraded"}:
+            warnings.append(
+                "early_accumulation_scan unavailable: "
+                f"{early_status.get('error_message', early_status.get('detail'))}"
+            )
+            early_summary = {
+                "enabled": early_config.enabled,
+                "rows": 0,
+                "warnings": [
+                    f"early_accumulation_scan unavailable: {early_status.get('error_message', early_status.get('detail'))}"
+                ],
+            }
+        if early_summary.get("warnings"):
+            warnings.extend(f"early_accumulation warning: {item}" for item in early_summary.get("warnings", []))
+        try:
+            context.write_json("early_accumulation_summary.json", early_summary)
+        except Exception as exc:
+            warnings.append(f"early_accumulation summary unavailable: {exc}")
+
         legacy_stock_scan_df, stock_status = self.execute_rank_task(
             context=context,
             task_name="stock_scan",
@@ -1386,6 +1462,7 @@ class RankOrchestrationService:
                 "ranked_universe_fingerprint": self.dataframe_fingerprint(ranked_universe),
                 "breakout_fingerprint": self.dataframe_fingerprint(breakout_df),
                 "pattern_fingerprint": self.dataframe_fingerprint(pattern_df),
+                "early_accumulation_fingerprint": self.dataframe_fingerprint(early_accumulation_df),
                 "stock_scan_fingerprint": self.dataframe_fingerprint(stock_scan_df),
                 "sector_dashboard_fingerprint": self.dataframe_fingerprint(sector_dashboard_df),
                 "sector_rotation_fingerprint": self.dataframe_fingerprint(outputs.get("sector_rotation", pd.DataFrame())),
@@ -1413,6 +1490,7 @@ class RankOrchestrationService:
                 pattern_df=pattern_df,
                 stock_scan_df=stock_scan_df,
                 sector_dashboard_df=sector_dashboard_df,
+                early_accumulation_df=early_accumulation_df,
                 sector_rotation_payload=self._load_sector_rotation_payload(context),
                 warnings=warnings,
                 trust_summary=trust_summary,
@@ -1454,6 +1532,7 @@ class RankOrchestrationService:
                 dashboard_payload.setdefault("summary", {})["effective_rank_top_n"] = regime_profile.rank_top_n
             dashboard_payload.setdefault("summary", {})["ranked_shortlist_count"] = int(len(ranked))
             dashboard_payload.setdefault("summary", {})["ranked_universe_count"] = int(len(ranked_universe))
+            dashboard_payload.setdefault("summary", {})["early_accumulation_count"] = int(len(early_accumulation_df))
             dashboard_payload["watchlist"] = (
                 _records_without_duplicate_columns(watchlist_final_df.head(15))
                 if isinstance(watchlist_final_df, pd.DataFrame) and not watchlist_final_df.empty
@@ -1510,6 +1589,8 @@ class RankOrchestrationService:
             "symbol_universe_count": len(ranked_universe),
             "ranked_shortlist_count": len(ranked),
             "ranked_universe_count": len(ranked_universe),
+            "early_accumulation_count": int(len(early_accumulation_df)),
+            "early_accumulation_summary": early_summary,
             "canary_blocked": bool(context.params.get("canary")) and context.params.get("canary_blocked", False),
             "factor_turnover_pct": daily_turnover.get("turnover_pct", 0.0),
             "factor_turnover_symbols_changed": daily_turnover.get("symbols_changed", 0),

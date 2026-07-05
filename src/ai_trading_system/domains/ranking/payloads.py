@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from ai_trading_system.pipeline.contracts import StageContext
+from ai_trading_system.domains.ranking.early_accumulation import early_accumulation_preview
 
 
 def summarize_task_statuses(task_status: Dict[str, Any]) -> Dict[str, int]:
@@ -282,6 +283,7 @@ def build_dashboard_payload(
     stock_scan_df: pd.DataFrame,
     sector_dashboard_df: pd.DataFrame,
     warnings: list[str],
+    early_accumulation_df: Optional[pd.DataFrame] = None,
     sector_rotation_payload: Optional[Dict[str, Any]] = None,
     trust_summary: Optional[Dict[str, Any]] = None,
     task_status: Optional[Dict[str, Any]] = None,
@@ -359,6 +361,13 @@ def build_dashboard_payload(
         )
     )
     stage2_leaders = _stage2_leader_records(limit=50)
+    early_accumulation_records = early_accumulation_preview(
+        early_accumulation_df,
+        limit=int(context.params.get("early_accumulation_preview_top_n", 10) or 10),
+    )
+    early_status_counts: Dict[str, int] = {}
+    if early_accumulation_df is not None and not early_accumulation_df.empty and "graduation_status" in early_accumulation_df.columns:
+        early_status_counts = early_accumulation_df["graduation_status"].astype(str).value_counts().to_dict()
     stage2_total_count = 0
     stage2_label_counts: Dict[str, int] = {}
     if stock_scan_df is not None and not stock_scan_df.empty and "stage2_label" in stock_scan_df.columns:
@@ -416,6 +425,9 @@ def build_dashboard_payload(
             "pattern_discovery_count": len(pattern_discoveries),
             "breakout_candidate_count": len(breakout_candidates),
             "stage2_leader_count": len(stage2_leaders),
+            "early_accumulation_enabled": bool(context.params.get("early_accumulation_enabled", True)),
+            "early_accumulation_count": int(len(early_accumulation_df)) if early_accumulation_df is not None else 0,
+            "early_accumulation_graduation_status_counts": early_status_counts,
             "stage2_total_count": stage2_total_count,
             "stage2_label_counts": stage2_label_counts,
             **discovery_visibility,
@@ -436,6 +448,7 @@ def build_dashboard_payload(
         "stock_scan": _records(stock_scan_df, limit=10),
         "ranked_leaders": ranked_leaders,
         "stage2_leaders": stage2_leaders,
+        "early_accumulation_preview": early_accumulation_records,
         "pattern_discoveries": pattern_discoveries,
         "breakout_candidates": breakout_candidates,
         "sector_dashboard": _records(sector_dashboard_df, limit=10),
