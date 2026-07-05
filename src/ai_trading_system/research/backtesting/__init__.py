@@ -23,6 +23,10 @@ from ai_trading_system.research.backtesting.winner_capture import (
     WinnerCaptureConfig,
     run_winner_capture_analysis,
 )
+from ai_trading_system.research.backtesting.winner_validation import (
+    WinnerValidationConfig,
+    run_winner_validation_report,
+)
 
 __all__ = [
     "BacktestResult",
@@ -33,6 +37,8 @@ __all__ = [
     "load_ranked_by_date",
     "load_research_ranked_by_date",
     "WinnerCaptureConfig",
+    "WinnerValidationConfig",
     "run_winner_capture_analysis",
+    "run_winner_validation_report",
     "validate_research_dynamic_data",
 ]

@@ -60,6 +60,7 @@ ai-trading-fundamentals-validate-exports = "ai_trading_system.domains.fundamenta
 ai-trading-valuation-refresh = "ai_trading_system.domains.features.valuation_refresh:main"
 ai-trading-sector-earnings-refresh = "ai_trading_system.domains.features.sector_earnings_leadership:main"
 ai-trading-backfill-operational-valuation = "ai_trading_system.interfaces.cli.backfill_operational_valuation:main"
+ai-trading-winner-validation-report = "ai_trading_system.research.backtesting.winner_validation:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
