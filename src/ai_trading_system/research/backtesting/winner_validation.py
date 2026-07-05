@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import warnings
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -93,6 +94,7 @@ class WinnerValidationConfig:
     pattern_max_age_days: int = 90
     full_year_min_days: int = 180
     partial_year_min_days: int = 60
+    show_progress: bool = False
 
 
 def _year_window(con: duckdb.DuckDBPyConnection, year: int, exchange: str) -> StudyWindow:
@@ -601,6 +603,21 @@ def _capture_rates(frame: pd.DataFrame) -> dict[str, dict[str, float | int]]:
 
 def _rally_quartile_summary(frame: pd.DataFrame) -> dict[str, Any]:
     ranked = frame.copy()
+    if len(ranked) < 4:
+        bottom = ranked.nsmallest(1, "low_to_high_rally_pct")
+        top = ranked.nlargest(1, "low_to_high_rally_pct")
+        return {
+            "bottom": {
+                "count": int(len(bottom)),
+                "median_rally_pct": float(bottom["low_to_high_rally_pct"].median()),
+                "median_active_technical_proxy_pctile": float(bottom["active_technical_proxy_pctile"].median()),
+            },
+            "top": {
+                "count": int(len(top)),
+                "median_rally_pct": float(top["low_to_high_rally_pct"].median()),
+                "median_active_technical_proxy_pctile": float(top["active_technical_proxy_pctile"].median()),
+            },
+        }
     ranked.loc[:, "rally_quartile"] = pd.qcut(
         ranked["low_to_high_rally_pct"].rank(method="first"),
         4,
@@ -864,6 +881,22 @@ def _write_outputs(
     return summary
 
 
+def _progress_bar(items, *, enabled: bool, desc: str, unit: str):
+    if not enabled:
+        return items
+    try:
+        from tqdm import tqdm
+
+        return tqdm(items, desc=desc, unit=unit, leave=True)
+    except Exception:
+        return items
+
+
+def _progress_note(enabled: bool, message: str) -> None:
+    if enabled:
+        print(message, file=sys.stderr, flush=True)
+
+
 def run_winner_validation_report(config: WinnerValidationConfig | None = None) -> dict[str, Any]:
     active_config = config or WinnerValidationConfig()
     paths = get_domain_paths(project_root=active_config.project_root, data_domain=active_config.data_domain)
@@ -875,7 +908,11 @@ def run_winner_validation_report(config: WinnerValidationConfig | None = None) -
         windows = [_year_window(con, year, active_config.exchange) for year in active_config.years]
         panel_cache: dict[str, pd.DataFrame] = {}
         rows: list[dict[str, Any]] = []
-        for window in windows:
+        _progress_note(
+            active_config.show_progress,
+            f"Winner validation: {len(windows)} year window(s), top_n={active_config.top_n}, output={out_dir}",
+        )
+        for window in _progress_bar(windows, enabled=active_config.show_progress, desc="Years", unit="year"):
             min_days = active_config.partial_year_min_days if window.end < date(window.year, 12, 31) else active_config.full_year_min_days
             winners = _load_winners(
                 con,
@@ -884,7 +921,17 @@ def run_winner_validation_report(config: WinnerValidationConfig | None = None) -
                 top_n=active_config.top_n,
                 min_days=min_days,
             )
-            for winner in winners.itertuples(index=False):
+            _progress_note(
+                active_config.show_progress,
+                f"Year {window.year}: loaded {len(winners)} winner candidate(s) from {window.start} to {window.end}",
+            )
+            winner_iter = _progress_bar(
+                list(winners.itertuples(index=False)),
+                enabled=active_config.show_progress,
+                desc=f"{window.year} winners",
+                unit="winner",
+            )
+            for winner in winner_iter:
                 signal_date = pd.Timestamp(winner.low_date).date()
                 key = f"{active_config.exchange}:{signal_date.isoformat()}"
                 if key not in panel_cache:
@@ -966,6 +1013,10 @@ def run_winner_validation_report(config: WinnerValidationConfig | None = None) -
         db_path=paths.ohlcv_db_path,
     )
     summary["artifact_dir"] = str(out_dir)
+    _progress_note(
+        active_config.show_progress,
+        f"Winner validation complete: {len(all_rows)} analyzed winner row(s), artifacts written to {out_dir}",
+    )
     return summary
 
 
@@ -977,6 +1028,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--exchange", default="NSE")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--quiet", action="store_true", help="Disable progress output")
     args = parser.parse_args(argv)
     summary = run_winner_validation_report(
         WinnerValidationConfig(
@@ -986,6 +1038,7 @@ def main(argv: list[str] | None = None) -> None:
             exchange=args.exchange,
             output_dir=args.output_dir,
             project_root=args.project_root,
+            show_progress=not args.quiet,
         )
     )
     print(f"Wrote winner validation artifacts to {summary['artifact_dir']}")
