@@ -154,6 +154,40 @@ def test_execution_candidate_builder_applies_soft_gate_and_loads_overlay(tmp_pat
     assert bundle.ml_overlay_df["symbol_id"].tolist() == ["AAA"]
 
 
+def test_execution_candidate_builder_ignores_early_accumulation_artifact(tmp_path: Path) -> None:
+    ranked_path = tmp_path / "ranked_signals.csv"
+    pd.DataFrame([{"symbol_id": "AAA", "exchange": "NSE", "close": 100.0, "composite_score": 92.0}]).to_csv(ranked_path, index=False)
+    early_path = tmp_path / "early_accumulation_scan.csv"
+    pd.DataFrame(
+        [
+            {
+                "symbol_id": "EARLY",
+                "exchange": "NSE",
+                "close": 80.0,
+                "early_accumulation_score": 99.0,
+                "graduation_status": "pattern_confirmed",
+            }
+        ]
+    ).to_csv(early_path, index=False)
+    dashboard_path = tmp_path / "dashboard_payload.json"
+    dashboard_path.write_text(json.dumps({"summary": {"data_trust_status": "trusted"}}), encoding="utf-8")
+    context = _stage_context(
+        tmp_path,
+        artifacts={
+            "rank": {
+                "ranked_signals": StageArtifact("ranked_signals", str(ranked_path)),
+                "early_accumulation_scan": StageArtifact("early_accumulation_scan", str(early_path)),
+                "dashboard_payload": StageArtifact("dashboard_payload", str(dashboard_path)),
+            }
+        },
+    )
+
+    bundle = ExecutionCandidateBuilder().build(context, request=ExecutionRequest.from_context(context))
+
+    assert bundle.ranked_df["symbol_id"].tolist() == ["AAA"]
+    assert "EARLY" not in set(bundle.ranked_df["symbol_id"])
+
+
 def test_execution_candidate_builder_respects_untrusted_execution_override(tmp_path: Path) -> None:
     ranked_path = tmp_path / "ranked_signals.csv"
     pd.DataFrame([{"symbol_id": "AAA", "exchange": "NSE", "composite_score": 90.0}]).to_csv(ranked_path, index=False)

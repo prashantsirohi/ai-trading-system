@@ -75,6 +75,30 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
                 }
             ]
         ),
+        "investigator_early_accumulation": pd.DataFrame(
+            [
+                {
+                    "symbol": "EARLY",
+                    "symbol_id": "EARLY",
+                    "sector": "Industrials",
+                    "close": 120.5,
+                    "early_accumulation_score": 84.0,
+                    "early_accumulation_rank": 1,
+                    "early_purity_bucket": "true_early",
+                    "pattern_family": "cup_handle",
+                    "pattern_age_days": 4,
+                    "base_pattern_freshness_score": 86,
+                    "above_200dma_reclaim_score": 72,
+                    "delivery_accumulation_score": 68,
+                    "momentum_recovery_score": 71,
+                    "volume_confirmation_score": 75,
+                    "active_rank_pctile": 55,
+                    "breakout_qualified": False,
+                    "graduation_status": "pattern_confirmed",
+                    "watchlist_reason": "Fresh base with improving confirmation",
+                }
+            ]
+        ),
         "trap_log": pd.DataFrame(
             [
                 {
@@ -118,6 +142,7 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
                 "active_count": 2,
                 "trap_count": 1,
                 "archived_count": 1,
+                "investigator_early_accumulation_count": 1,
             }
         ),
         encoding="utf-8",
@@ -146,6 +171,9 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     assert body["pattern_confirmation"]["s1_accumulation"] == 0
     assert body["pattern_confirmation"]["s1_to_s2_transition"] == 1
     assert body["investigator_pattern_scan"][0]["symbol_id"] == "AAA"
+    assert body["investigator_early_accumulation"][0]["symbol"] == "EARLY"
+    assert body["investigator_early_accumulation"][0]["early_purity_bucket"] == "true_early"
+    assert body["summary"]["investigator_early_accumulation_count"] == 1
     assert body["final_3q_gate"][0]["symbol_id"] == "AAA"
     assert body["final_3q_gate"][0]["thesis"]
     assert "investigator_performance_summary" in body
@@ -154,6 +182,7 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     assert body["decision_payload"]["summary"]["total_intake"] == 2
     assert body["decision_payload"]["final_3q_gate"][0]["exit_plan"]
     assert body["decision_payload"]["summary"]["daily_gainer_count"] == 1
+    assert body["decision_payload"]["investigator_early_accumulation"][0]["symbol"] == "EARLY"
     assert body["decision_payload"]["charts"]["funnel_today"][0]["label"] == "Investigator Intake (today)"
     assert body["decision_payload"]["charts"]["funnel_window"][0]["key"] == "new_window"
     assert body["decision_payload"]["charts"]["trend"][0]["date"] == "2026-05-07"
@@ -162,3 +191,23 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     assert body["archive_summary"]["by_reason"]["ONE_CANDLE_DRAMA"] == 1
     assert body["decision_payload"]["charts"]["funnel"]
     json.dumps(body, allow_nan=False)
+
+
+def test_investigator_endpoint_handles_missing_early_accumulation_artifact(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AI_TRADING_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("EXECUTION_API_KEY", API_HEADERS["x-api-key"])
+    registry = RegistryStore(tmp_path)
+    run_id = "pipeline-2026-05-08-demo"
+    registry.create_run(run_id=run_id, pipeline_name="daily_pipeline", run_date="2026-05-08", status="completed")
+    attempt_dir = tmp_path / "data" / "pipeline_runs" / run_id / "investigator" / "attempt_1"
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = attempt_dir / "investigator_summary.json"
+    summary_path.write_text(json.dumps({"run_id": run_id, "run_date": "2026-05-08"}), encoding="utf-8")
+    registry.record_artifact(run_id, "investigator", 1, StageArtifact.from_file("investigator_summary", summary_path, row_count=1, attempt_number=1))
+
+    response = TestClient(create_app()).get("/api/execution/investigator", headers=API_HEADERS)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["investigator_early_accumulation"] == []
+    assert body["summary"]["investigator_early_accumulation_count"] == 0

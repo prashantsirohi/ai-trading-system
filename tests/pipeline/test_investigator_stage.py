@@ -140,6 +140,29 @@ def _rank_artifacts(project_root: Path, run_id: str) -> dict[str, dict[str, Stag
     ).to_csv(rank_dir / "stock_scan.csv", index=False)
     pd.DataFrame([{"symbol_id": "AAA", "breakout_positive": True, "qualified": True}]).to_csv(rank_dir / "breakout_scan.csv", index=False)
     pd.DataFrame([{"symbol_id": "AAA", "Sector": "Finance", "RS_rank_pct": 80, "Quadrant": "Leading"}]).to_csv(rank_dir / "sector_dashboard.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "symbol_id": "EARLY",
+                "sector_name": "Industrials",
+                "close": 120.5,
+                "early_accumulation_score": 84.0,
+                "early_accumulation_rank": 1,
+                "early_purity_bucket": "true_early",
+                "top_pattern_family": "cup_handle",
+                "top_pattern_age_days": 4,
+                "base_pattern_freshness_score": 86,
+                "above_200dma_reclaim_score": 72,
+                "delivery_accumulation_score": 68,
+                "momentum_recovery_score": 71,
+                "volume_confirmation_score": 75,
+                "active_rank_pctile": 55,
+                "breakout_state": "",
+                "graduation_status": "pattern_confirmed",
+                "watchlist_reason": "Fresh base with improving confirmation",
+            }
+        ]
+    ).to_csv(rank_dir / "early_accumulation_scan.csv", index=False)
     (rank_dir / "dashboard_payload.json").write_text(json.dumps({"summary": {"run_date": "2026-05-07"}}), encoding="utf-8")
     return {
         "rank": {
@@ -147,6 +170,7 @@ def _rank_artifacts(project_root: Path, run_id: str) -> dict[str, dict[str, Stag
             "stock_scan": StageArtifact.from_file("stock_scan", rank_dir / "stock_scan.csv", row_count=2, attempt_number=1),
             "breakout_scan": StageArtifact.from_file("breakout_scan", rank_dir / "breakout_scan.csv", row_count=1, attempt_number=1),
             "sector_dashboard": StageArtifact.from_file("sector_dashboard", rank_dir / "sector_dashboard.csv", row_count=1, attempt_number=1),
+            "early_accumulation_scan": StageArtifact.from_file("early_accumulation_scan", rank_dir / "early_accumulation_scan.csv", row_count=1, attempt_number=1),
             "dashboard_payload": StageArtifact.from_file("dashboard_payload", rank_dir / "dashboard_payload.json", row_count=1, attempt_number=1),
         }
     }
@@ -181,9 +205,16 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     assert (output_dir / "investigator_performance_summary.csv").exists()
     assert (output_dir / "investigator_performance_summary.json").exists()
     assert (output_dir / "investigator_threshold_recommendations.json").exists()
+    assert (output_dir / "investigator_early_accumulation.csv").exists()
     assert (output_dir / "investigator_summary.json").exists()
     assert (output_dir / "investigator_payload.json").exists()
+    early = pd.read_csv(output_dir / "investigator_early_accumulation.csv")
+    assert early.iloc[0]["symbol"] == "EARLY"
+    assert early.iloc[0]["sector"] == "Industrials"
+    assert early.iloc[0]["early_purity_bucket"] == "true_early"
+    assert bool(early.iloc[0]["breakout_qualified"]) is False
     assert result.metadata["total_intake_count"] == 3
+    assert result.metadata["investigator_early_accumulation_count"] == 1
     assert result.metadata["daily_gainer_count"] == 1
     assert result.metadata["weekly_gainer_count"] == 1
     assert result.metadata["stealth_accumulation_count"] == 1
@@ -198,6 +229,7 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
         "investigator_performance_summary",
         "investigator_performance_summary_json",
         "investigator_threshold_recommendations",
+        "investigator_early_accumulation",
         "investigator_summary",
         "investigator_payload",
     }

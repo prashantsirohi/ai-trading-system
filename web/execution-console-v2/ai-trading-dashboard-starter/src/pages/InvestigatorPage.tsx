@@ -193,6 +193,76 @@ function PatternConfirmationPanel({ confirmation }: { confirmation?: Row }) {
   );
 }
 
+function InvestigatorEarlyAccumulationPanel({ rows }: { rows: Row[] }) {
+  const display = [...rows].sort((a, b) => {
+    const rankDelta = num(a.early_accumulation_rank, Infinity) - num(b.early_accumulation_rank, Infinity);
+    if (rankDelta !== 0) return rankDelta;
+    const scoreDelta = num(b.early_accumulation_score, -Infinity) - num(a.early_accumulation_score, -Infinity);
+    if (scoreDelta !== 0) return scoreDelta;
+    return symbolOf(a).localeCompare(symbolOf(b));
+  });
+  return (
+    <SectionCard title="Investigator Early Accumulation" description="Emerging bases kept in Investigator watchlist context.">
+      {display.length === 0 ? (
+        <EmptyState message="No early accumulation artifact available for this run." />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-[1560px] text-left text-xs">
+            <thead className="uppercase text-slate-500">
+              <tr>
+                {[
+                  'Symbol',
+                  'Sector',
+                  'Close',
+                  'Score',
+                  'Rank',
+                  'Bucket',
+                  'Pattern',
+                  'Age',
+                  'Pattern Freshness',
+                  '200DMA',
+                  'Delivery',
+                  'Momentum',
+                  'Volume',
+                  'Active Rank Pctile',
+                  'Breakout',
+                  'Graduation',
+                  'Reason',
+                ].map((head) => (
+                  <th key={head} className="px-3 py-2">{head}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800">
+              {display.slice(0, 50).map((row) => (
+                <tr key={symbolOf(row)} className="text-slate-200 hover:bg-slate-800/35">
+                  <td className="px-3 py-2 font-semibold">{symbolOf(row)}</td>
+                  <td className="px-3 py-2">{text(row.sector)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.close, 2)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.early_accumulation_score)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.early_accumulation_rank)}</td>
+                  <td className="px-3 py-2">{text(row.early_purity_bucket)}</td>
+                  <td className="px-3 py-2">{text(row.pattern_family)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.pattern_age_days)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.base_pattern_freshness_score)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.above_200dma_reclaim_score)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.delivery_accumulation_score)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.momentum_recovery_score)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.volume_confirmation_score)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{pct(row.active_rank_pctile, 0)}</td>
+                  <td className="px-3 py-2">{bool(row.breakout_qualified) ? 'Yes' : 'No'}</td>
+                  <td className="px-3 py-2"><StatusBadge status={text(row.graduation_status)} label={text(row.graduation_status)} /></td>
+                  <td className="px-3 py-2 text-slate-300">{text(row.watchlist_reason)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
 function ActionQueue({ rows, fallback, highConvictionCount, onOpen }: { rows: Row[]; fallback: Row[]; highConvictionCount: number; onOpen: (row: Row) => void }) {
   const display = rows.length > 0 ? rows : fallback;
   return (
@@ -702,6 +772,7 @@ export default function InvestigatorPage() {
             </div>
           </SectionCard>
           <PatternConfirmationPanel confirmation={data.pattern_confirmation as Row | undefined} />
+          <InvestigatorEarlyAccumulationPanel rows={data.investigator_early_accumulation ?? []} />
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.5fr_1fr_1fr]">
             <ActionQueue rows={decisionRows} fallback={fallbackRows} highConvictionCount={num(summary.high_conviction)} onOpen={setSelected} />

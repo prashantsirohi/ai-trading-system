@@ -12,6 +12,7 @@ export interface InvestigatorSnapshot {
   decision_queue?: Array<Record<string, unknown>>;
   closest_to_high_conviction?: Array<Record<string, unknown>>;
   repeat_quality?: Array<Record<string, unknown>>;
+  investigator_early_accumulation?: Array<Record<string, unknown>>;
   trap_radar?: Array<Record<string, unknown>>;
   archive_today?: Array<Record<string, unknown>>;
   charts?: {
@@ -144,6 +145,28 @@ const FALLBACK: InvestigatorSnapshot = {
   repeat_quality: [
     { symbol_id: 'KICL', appearance_count_20d: 5, price_progression_pct: 8.8, rank_signal: 'Improving', volume_signal: 'Rising', high_priority_repeat: true, repeat_strength: 86, price_sustain: 72, rank_momentum: 80, volume_confirmation: 100 },
     { symbol_id: 'KILBURN', appearance_count_20d: 4, price_progression_pct: 8.8, rank_signal: 'Falling', volume_signal: 'Flat', repeat_strength: 75, price_sustain: 70, rank_momentum: 32, volume_confirmation: 0 },
+  ],
+  investigator_early_accumulation: [
+    {
+      symbol: 'KICL',
+      symbol_id: 'KICL',
+      sector: 'Industrials',
+      close: 126,
+      early_accumulation_score: 82,
+      early_accumulation_rank: 1,
+      early_purity_bucket: 'true_early',
+      pattern_family: 'round_bottom',
+      pattern_age_days: 4,
+      base_pattern_freshness_score: 86,
+      above_200dma_reclaim_score: 74,
+      delivery_accumulation_score: 68,
+      momentum_recovery_score: 72,
+      volume_confirmation_score: 77,
+      active_rank_pctile: 64,
+      breakout_qualified: false,
+      graduation_status: 'pattern_confirmed',
+      watchlist_reason: 'Fresh base with improving volume',
+    },
   ],
   trap_radar: [
     { trap_category: 'One-day spike', count: 8, examples: ['EKC'] },

@@ -228,3 +228,32 @@ def test_build_final_candidates_from_files_writes_outputs(tmp_path: Path) -> Non
     persisted_summary = json.loads((output_dir / "candidate_summary.json").read_text(encoding="utf-8"))
     assert persisted_summary["rows_selected"] == len(result)
     assert summary["status"] == "completed"
+
+
+def test_build_final_candidates_from_files_ignores_early_accumulation_scan(tmp_path: Path) -> None:
+    rank_dir = tmp_path / "rank" / "attempt_1"
+    output_dir = tmp_path / "candidates" / "attempt_1"
+    rank_dir.mkdir(parents=True)
+    _ranked().to_csv(rank_dir / "ranked_signals.csv", index=False)
+    _breakout().to_csv(rank_dir / "breakout_scan.csv", index=False)
+    _pattern().to_csv(rank_dir / "pattern_scan.csv", index=False)
+    _sector().to_csv(rank_dir / "sector_dashboard.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "symbol_id": "EARLY",
+                "early_accumulation_score": 99,
+                "graduation_status": "pattern_confirmed",
+            }
+        ]
+    ).to_csv(rank_dir / "early_accumulation_scan.csv", index=False)
+
+    result, _summary = build_final_candidates_from_files(
+        ranked_signals_path=rank_dir / "ranked_signals.csv",
+        breakout_scan_path=rank_dir / "breakout_scan.csv",
+        pattern_scan_path=rank_dir / "pattern_scan.csv",
+        sector_dashboard_path=rank_dir / "sector_dashboard.csv",
+        output_dir=output_dir,
+    )
+
+    assert "EARLY" not in set(result["symbol"])

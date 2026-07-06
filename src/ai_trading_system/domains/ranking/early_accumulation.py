@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -73,19 +74,30 @@ OUTPUT_COLUMNS = [
     "rel_strength_score",
     "active_rank",
     "active_rank_pctile",
+    "early_purity_bucket",
     "composite_score",
     "composite_score_adjusted",
     "breakout_state",
+    "breakout_qualified",
+    "breakout_type",
+    "breakout_score",
     "graduation_status",
     "watchlist_reason",
 ]
+BUCKET_PRIORITY = {
+    "true_early": 0,
+    "emerging": 1,
+    "near_graduation": 2,
+    "already_graduated": 3,
+    "unknown_rank_context": 4,
+}
 
 
 @dataclass(frozen=True)
 class EarlyAccumulationConfig:
     enabled: bool = True
-    top_n: int = 100
-    min_score: float = 60.0
+    top_n: int = 150
+    min_score: float = 45.0
     pattern_max_age_days: int = 60
     pattern_lookback_days: int = 120
     require_liquidity: bool = True
@@ -93,6 +105,12 @@ class EarlyAccumulationConfig:
     min_avg_value_traded: float | None = None
     exclude_illiquid: bool = True
     preview_top_n: int = 10
+    true_early_top_n: int = 50
+    emerging_top_n: int = 50
+    near_graduation_top_n: int = 30
+    already_graduated_top_n: int = 20
+    min_true_early_rows: int = 25
+    min_emerging_rows: int = 25
 
     @classmethod
     def from_params(cls, params: dict[str, Any] | None) -> "EarlyAccumulationConfig":
@@ -108,8 +126,8 @@ class EarlyAccumulationConfig:
         min_avg = None if min_avg_raw in (None, "") else float(min_avg_raw)
         return cls(
             enabled=_bool("early_accumulation_enabled", True),
-            top_n=int(params.get("early_accumulation_top_n", 100) or 100),
-            min_score=float(params.get("early_accumulation_min_score", 60.0) or 60.0),
+            top_n=int(params.get("early_accumulation_top_n", 150) or 150),
+            min_score=float(params.get("early_accumulation_min_score", 45.0) or 45.0),
             pattern_max_age_days=int(params.get("early_accumulation_pattern_max_age_days", 60) or 60),
             pattern_lookback_days=int(params.get("early_accumulation_pattern_lookback_days", 120) or 120),
             require_liquidity=_bool("early_accumulation_require_liquidity", True),
@@ -117,6 +135,12 @@ class EarlyAccumulationConfig:
             min_avg_value_traded=min_avg,
             exclude_illiquid=_bool("early_accumulation_exclude_illiquid", True),
             preview_top_n=int(params.get("early_accumulation_preview_top_n", 10) or 10),
+            true_early_top_n=int(params.get("early_accumulation_true_early_top_n", 50) or 50),
+            emerging_top_n=int(params.get("early_accumulation_emerging_top_n", 50) or 50),
+            near_graduation_top_n=int(params.get("early_accumulation_near_graduation_top_n", 30) or 30),
+            already_graduated_top_n=int(params.get("early_accumulation_already_graduated_top_n", 20) or 20),
+            min_true_early_rows=int(params.get("early_accumulation_min_true_early_rows", 25) or 25),
+            min_emerging_rows=int(params.get("early_accumulation_min_emerging_rows", 25) or 25),
         )
 
 
@@ -257,15 +281,30 @@ def _pattern_summary(
 
 def _breakout_summary(breakout_df: pd.DataFrame | None) -> pd.DataFrame:
     frame = _normalize_symbol_frame(breakout_df)
+    columns = ["symbol_id", "exchange", "breakout_state", "breakout_qualified", "breakout_type", "breakout_score"]
     if frame.empty:
-        return pd.DataFrame(columns=["symbol_id", "exchange", "breakout_state"])
+        return pd.DataFrame(columns=columns)
     if "breakout_state" not in frame.columns:
         frame.loc[:, "breakout_state"] = ""
+    if "breakout_type" not in frame.columns:
+        frame.loc[:, "breakout_type"] = frame.get("candidate_tier", "")
+    if "breakout_score" not in frame.columns:
+        frame.loc[:, "breakout_score"] = np.nan
+    if "breakout_qualified" not in frame.columns:
+        qualified = frame.get("qualified", pd.Series(False, index=frame.index))
+        if pd.api.types.is_bool_dtype(qualified):
+            qualified = qualified.fillna(False).astype(bool)
+        else:
+            qualified = qualified.astype(str).str.lower().isin({"1", "true", "yes", "y", "qualified"})
+        frame.loc[:, "breakout_qualified"] = (
+            frame["breakout_state"].fillna("").astype(str).str.lower().eq("qualified")
+            | qualified
+        )
     score = _num(frame, "breakout_score", 0.0)
     frame = frame.assign(_score=score).sort_values(
         ["symbol_id", "_score"], ascending=[True, False], kind="stable"
     )
-    return frame.drop_duplicates(["symbol_id", "exchange"], keep="first")[["symbol_id", "exchange", "breakout_state"]]
+    return frame.drop_duplicates(["symbol_id", "exchange"], keep="first")[columns]
 
 
 def _zone_score(close_vs_sma200_pct: pd.Series) -> pd.Series:
@@ -289,6 +328,22 @@ def _reclaim_freshness_score(frame: pd.DataFrame, close_vs_sma200_pct: pd.Series
     fresh = fresh.mask(days.isna() & (close_vs_sma200_pct >= 0), 60.0)
     fresh = fresh.mask(days.isna() & (close_vs_sma200_pct < 0), 40.0)
     return fresh.clip(0.0, 100.0)
+
+
+def _missing_column(frame: pd.DataFrame, column: str) -> bool:
+    return column not in frame.columns or pd.to_numeric(frame[column], errors="coerce").notna().sum() == 0
+
+
+def _warn_missing(
+    frame: pd.DataFrame,
+    column: str,
+    missing_input_columns: list[str],
+    warnings: list[str],
+    message: str,
+) -> None:
+    if _missing_column(frame, column):
+        missing_input_columns.append(column)
+        warnings.append(message)
 
 
 def _delivery_score(frame: pd.DataFrame, warnings: list[str]) -> pd.Series:
@@ -371,8 +426,7 @@ def _watchlist_reason(row: pd.Series) -> str:
 
 
 def _graduation_status(row: pd.Series) -> str:
-    breakout_state = str(row.get("breakout_state") or "").lower()
-    if breakout_state == "qualified":
+    if bool(row.get("breakout_qualified")):
         return "breakout_qualified"
     if float(row.get("active_rank_pctile") or 0.0) >= 70.0:
         return "active_rank_graduated"
@@ -381,6 +435,63 @@ def _graduation_status(row: pd.Series) -> str:
     if float(row.get("above_200dma_reclaim_score") or 0.0) >= 70.0:
         return "reclaim_confirmed"
     return "early_watchlist"
+
+
+def _early_purity_bucket(row: pd.Series) -> str:
+    if bool(row.get("breakout_qualified")):
+        return "already_graduated"
+    pctile = row.get("active_rank_pctile")
+    if pctile is None or pd.isna(pctile):
+        return "unknown_rank_context"
+    pctile = float(pctile)
+    if pctile < 50.0:
+        return "true_early"
+    if pctile < 70.0:
+        return "emerging"
+    if pctile < 85.0:
+        return "near_graduation"
+    return "already_graduated"
+
+
+def _distribution(series: pd.Series) -> dict[str, float | None]:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    if values.empty:
+        return {"min": None, "median": None, "mean": None, "max": None}
+    return {
+        "min": float(values.min()),
+        "median": float(values.median()),
+        "mean": float(values.mean()),
+        "max": float(values.max()),
+    }
+
+
+def _select_bucketed(frame: pd.DataFrame, config: EarlyAccumulationConfig, warnings: list[str]) -> pd.DataFrame:
+    scored = frame.sort_values(["early_accumulation_score", "symbol_id"], ascending=[False, True], kind="stable")
+    filtered = scored.loc[scored["early_accumulation_score"] >= config.min_score].copy()
+    if filtered.empty and not scored.empty:
+        warnings.append("no candidates passed early_accumulation_min_score; outputting top candidates by score")
+        filtered = scored.head(config.top_n).copy()
+    caps = {
+        "true_early": int(config.true_early_top_n),
+        "emerging": int(config.emerging_top_n),
+        "near_graduation": int(config.near_graduation_top_n),
+        "already_graduated": int(config.already_graduated_top_n),
+        "unknown_rank_context": int(config.true_early_top_n),
+    }
+    pieces = []
+    for bucket in BUCKET_PRIORITY:
+        bucket_frame = filtered.loc[filtered["early_purity_bucket"].eq(bucket)].copy()
+        if bucket_frame.empty:
+            continue
+        pieces.append(bucket_frame.head(caps.get(bucket, config.top_n)))
+    selected = pd.concat(pieces, ignore_index=True) if pieces else filtered.head(config.top_n).copy()
+    selected.loc[:, "_bucket_priority"] = selected["early_purity_bucket"].map(BUCKET_PRIORITY).fillna(99)
+    selected = selected.sort_values(
+        ["_bucket_priority", "early_accumulation_score", "symbol_id"],
+        ascending=[True, False, True],
+        kind="stable",
+    ).head(config.top_n)
+    return selected.drop(columns=["_bucket_priority"], errors="ignore").reset_index(drop=True)
 
 
 def _apply_liquidity_filters(frame: pd.DataFrame, config: EarlyAccumulationConfig, warnings: list[str]) -> pd.DataFrame:
@@ -412,11 +523,13 @@ def build_early_accumulation_scan(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     config = config or EarlyAccumulationConfig()
     warnings: list[str] = []
+    missing_input_columns: list[str] = []
     if not config.enabled:
         return empty_early_accumulation_frame(), {
             "enabled": False,
             "rows": 0,
             "warnings": ["early_accumulation disabled by config"],
+            "missing_input_columns": [],
             "config": asdict(config),
         }
 
@@ -426,6 +539,7 @@ def build_early_accumulation_scan(
             "enabled": True,
             "rows": 0,
             "warnings": ["ranked_universe is empty"],
+            "missing_input_columns": ["ranked_universe"],
             "config": asdict(config),
         }
     ranked = ranked.copy()
@@ -439,11 +553,22 @@ def build_early_accumulation_scan(
             "enabled": True,
             "rows": 0,
             "warnings": warnings,
+            "missing_input_columns": missing_input_columns,
             "config": asdict(config),
         }
+    for column, message in (
+        ("sma_200", "sma_200 missing; above_200dma_reclaim_score used neutral fallback"),
+        ("sma50_slope_20d_pct", "sma50_slope_20d_pct missing; trend repair used neutral slope"),
+        ("days_since_200dma_reclaim", "days_since_200dma_reclaim unavailable; reclaim freshness set neutral"),
+        ("adx_14", "adx_14 missing; trend repair used neutral ADX"),
+    ):
+        _warn_missing(ranked, column, missing_input_columns, warnings, message)
 
     pattern = _pattern_summary(pattern_df, as_of_date=as_of_date, max_age_days=config.pattern_max_age_days)
     breakout = _breakout_summary(breakout_df)
+    if breakout.empty:
+        warnings.append("breakout_scan artifact missing; breakout_qualified set false")
+        missing_input_columns.extend(["breakout_state", "breakout_qualified", "breakout_type", "breakout_score"])
     frame = ranked.merge(pattern, on=["symbol_id", "exchange"], how="left")
     frame = frame.merge(breakout, on=["symbol_id", "exchange"], how="left")
     for column, default in (
@@ -453,19 +578,29 @@ def build_early_accumulation_scan(
     ):
         if column not in frame.columns:
             frame.loc[:, column] = default
-        frame.loc[:, column] = frame[column].fillna(default)
+        frame.loc[:, column] = frame[column].mask(frame[column].isna(), default)
+    for column, default in (
+        ("breakout_state", ""),
+        ("breakout_qualified", False),
+        ("breakout_type", pd.NA),
+        ("breakout_score", pd.NA),
+    ):
+        if column not in frame.columns:
+            frame.loc[:, column] = default
+        frame.loc[:, column] = frame[column].mask(frame[column].isna(), default)
+    frame.loc[:, "breakout_qualified"] = frame["breakout_qualified"].astype(bool)
 
     close = _num(frame, "close")
     sma200 = _num(frame, "sma_200")
     close_vs_sma200 = ((close / sma200.replace(0, np.nan)) - 1.0) * 100.0
     if "above_200dma_pct" in frame.columns:
         close_vs_sma200 = close_vs_sma200.fillna(_num(frame, "above_200dma_pct"))
-    frame.loc[:, "close_vs_sma200_pct"] = close_vs_sma200.fillna(0.0)
+    frame.loc[:, "close_vs_sma200_pct"] = close_vs_sma200
     slope_score = (50.0 + _num(frame, "sma200_slope_20d_pct", 0.0).fillna(0.0).clip(-10, 10) * 5.0).clip(0.0, 100.0)
     frame.loc[:, "above_200dma_reclaim_score"] = (
-        _zone_score(frame["close_vs_sma200_pct"]) * 0.40
+        _zone_score(frame["close_vs_sma200_pct"].fillna(0.0)) * 0.40
         + slope_score * 0.30
-        + _reclaim_freshness_score(frame, frame["close_vs_sma200_pct"]) * 0.30
+        + _reclaim_freshness_score(frame, frame["close_vs_sma200_pct"].fillna(0.0)) * 0.30
     ).clip(0.0, 100.0)
     frame.loc[:, "delivery_pct_imputed"] = _imputed_mask(frame)
     frame.loc[:, "delivery_accumulation_score"] = _delivery_score(frame, warnings)
@@ -481,37 +616,65 @@ def build_early_accumulation_scan(
     if "active_rank" not in frame.columns:
         rank_source = _num(frame, "rank")
         frame.loc[:, "active_rank"] = rank_source
-    score_source = _num(frame, "composite_score_adjusted").fillna(_num(frame, "composite_score"))
-    frame.loc[:, "active_rank_pctile"] = score_source.rank(pct=True).fillna(0.0) * 100.0
+    if _missing_column(frame, "active_rank"):
+        missing_input_columns.append("active_rank")
+        warnings.append("active_rank unavailable; active rank context left null")
+    if "active_rank_pctile" in frame.columns and _num(frame, "active_rank_pctile").notna().sum() > 0:
+        frame.loc[:, "active_rank_pctile"] = _num(frame, "active_rank_pctile")
+    else:
+        score_source = _num(frame, "composite_score_adjusted").fillna(_num(frame, "composite_score"))
+        if score_source.notna().sum() > 0:
+            frame.loc[:, "active_rank_pctile"] = score_source.rank(pct=True) * 100.0
+            missing_input_columns.append("active_rank_pctile")
+            warnings.append("active rank percentile missing; computed from composite_score")
+        else:
+            frame.loc[:, "active_rank_pctile"] = np.nan
+            missing_input_columns.extend(["active_rank_pctile", "composite_score"])
+            warnings.append("active rank percentile and composite_score missing; early_purity_bucket set unknown_rank_context")
 
     score = pd.Series(0.0, index=frame.index, dtype="float64")
     for column, weight in SCORE_WEIGHTS.items():
         score = score + _num(frame, column, 0.0).fillna(0.0).clip(0.0, 100.0) * weight
     frame.loc[:, "early_accumulation_score"] = score.clip(0.0, 100.0)
+    frame.loc[:, "early_purity_bucket"] = frame.apply(_early_purity_bucket, axis=1)
     frame.loc[:, "graduation_status"] = frame.apply(_graduation_status, axis=1)
     frame.loc[:, "watchlist_reason"] = frame.apply(_watchlist_reason, axis=1)
 
     filtered = frame.loc[frame["early_accumulation_score"] >= config.min_score].copy()
-    filtered = filtered.sort_values(
-        ["early_accumulation_score", "base_pattern_freshness_score", "above_200dma_reclaim_score", "symbol_id"],
-        ascending=[False, False, False, True],
-        kind="stable",
-    ).head(config.top_n)
-    filtered.loc[:, "early_accumulation_rank"] = np.arange(1, len(filtered) + 1)
+    selected = _select_bucketed(frame, config, warnings)
+    selected.loc[:, "early_accumulation_rank"] = np.arange(1, len(selected) + 1)
+    bucket_counts = selected["early_purity_bucket"].astype(str).value_counts().to_dict() if not selected.empty else {}
+    if int(bucket_counts.get("true_early", 0)) < int(config.min_true_early_rows):
+        warnings.append("true_early candidates below configured minimum; review min_score or input coverage")
+    if int(bucket_counts.get("emerging", 0)) < int(config.min_emerging_rows):
+        warnings.append("emerging candidates below configured minimum; review min_score or input coverage")
+    if selected.empty:
+        warnings.append("early_accumulation_scan produced no candidates")
+    elif int(bucket_counts.get("already_graduated", 0)) / max(1, len(selected)) >= 0.8:
+        warnings.append("output dominated by already_graduated candidates; lower min_score or adjust bucket caps")
 
     for column in OUTPUT_COLUMNS:
-        if column not in filtered.columns:
-            filtered.loc[:, column] = pd.NA
-    output = filtered[OUTPUT_COLUMNS].reset_index(drop=True)
+        if column not in selected.columns:
+            selected.loc[:, column] = pd.NA
+    output = selected[OUTPUT_COLUMNS].reset_index(drop=True)
     status_counts = output["graduation_status"].astype(str).value_counts().to_dict() if not output.empty else {}
+    deduped_missing = sorted(set(str(column) for column in missing_input_columns))
+    after_score_count = int(len(filtered))
     summary = {
         "enabled": True,
         "rows": int(len(output)),
         "candidate_rows_before_score_filter": int(len(frame)),
+        "candidate_rows_after_score_filter": after_score_count,
         "min_score": float(config.min_score),
         "top_n": int(config.top_n),
+        "bucket_counts": {str(k): int(v) for k, v in bucket_counts.items()},
         "graduation_status_counts": {str(k): int(v) for k, v in status_counts.items()},
+        "score_distribution": _distribution(output.get("early_accumulation_score", pd.Series(dtype=float))),
+        "active_rank_pctile_distribution": _distribution(output.get("active_rank_pctile", pd.Series(dtype=float))),
+        "missing_input_columns": deduped_missing,
         "warnings": warnings,
+        "artifact_path": None,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "config": asdict(config),
     }
     return output, summary
@@ -527,6 +690,7 @@ def early_accumulation_preview(frame: pd.DataFrame, *, limit: int = 10) -> list[
         "sector_name",
         "early_accumulation_rank",
         "early_accumulation_score",
+        "early_purity_bucket",
         "top_pattern_family",
         "top_pattern_age_days",
         "graduation_status",

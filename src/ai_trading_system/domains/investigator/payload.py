@@ -32,6 +32,7 @@ def build_investigator_payload(
     archive: pd.DataFrame,
     final_3q_gate: pd.DataFrame | None = None,
     investigator_pattern_scan: pd.DataFrame | None = None,
+    investigator_early_accumulation: pd.DataFrame | None = None,
     performance_summary: dict[str, Any] | None = None,
     threshold_recommendations: dict[str, Any] | None = None,
     previous_summary: dict[str, Any] | None = None,
@@ -63,6 +64,7 @@ def build_investigator_payload(
     archive_today = _records(_archive_today(archive_with_traps, run_date), limit=25)
     evidence = pd.concat([traps, archive_with_traps], ignore_index=True)
     pattern_confirmation = _pattern_confirmation(investigator_pattern_scan)
+    early_accumulation = _sort_investigator_early_accumulation(investigator_early_accumulation)
     decision_summary = _decision_summary(
         summary=summary,
         today_gainers=today_gainers,
@@ -87,6 +89,7 @@ def build_investigator_payload(
         "pattern_confirmation": pattern_confirmation,
         "summary_deltas": _summary_deltas(decision_summary, previous_summary) if previous_summary else {},
         "decision_queue": decision_queue,
+        "investigator_early_accumulation": _records(early_accumulation, limit=100),
         "final_3q_gate": _records(final_3q_gate if final_3q_gate is not None else pd.DataFrame(), limit=50),
         "performance_summary": performance_summary or {},
         "threshold_recommendations": threshold_recommendations or {},
@@ -104,6 +107,23 @@ def build_investigator_payload(
         },
         "row_details": _row_details(active, repeat_tracker, traps, archive_with_traps),
     }
+
+
+def _sort_investigator_early_accumulation(frame: pd.DataFrame | None) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    safe = frame.copy()
+    for column in ("early_accumulation_rank", "early_accumulation_score"):
+        safe.loc[:, column] = pd.to_numeric(safe[column], errors="coerce") if column in safe.columns else pd.NA
+    symbol = safe.get("symbol_id", safe.get("symbol", pd.Series("", index=safe.index))).fillna("").astype(str)
+    safe = safe.assign(_symbol_sort=symbol)
+    safe = safe.sort_values(
+        ["early_accumulation_rank", "early_accumulation_score", "_symbol_sort"],
+        ascending=[True, False, True],
+        na_position="last",
+        kind="stable",
+    )
+    return safe.drop(columns=["_symbol_sort"]).reset_index(drop=True)
 
 
 def _attach_decision_fields(frame: pd.DataFrame, repeat_tracker: pd.DataFrame) -> pd.DataFrame:
@@ -268,6 +288,7 @@ def _decision_summary(
         "trap_evidence_count": evidence_count,
         "fresh_trap_today": fresh_trap_today,
         "repeat_trap": repeat_trap,
+        "investigator_early_accumulation_count": int(summary.get("investigator_early_accumulation_count", 0) or 0),
         "archived": int(summary.get("archived_count", len(archive))),
     }
 

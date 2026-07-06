@@ -1081,7 +1081,7 @@ class RankOrchestrationService:
             label="Build early_accumulation_scan",
             fingerprint_payload={
                 "task": "early_accumulation_scan",
-                "logic_version": "2026-07-05-phase2-v1",
+                "logic_version": "2026-07-06-phase2-repair-v2",
                 "run_date": context.run_date,
                 "config": early_config,
                 "ranked_universe_fingerprint": self.dataframe_fingerprint(ranked_universe),
@@ -1098,6 +1098,15 @@ class RankOrchestrationService:
         outputs["early_accumulation_scan"] = early_accumulation_df
         if isinstance(early_accumulation_df, pd.DataFrame):
             early_summary.setdefault("rows", int(len(early_accumulation_df)))
+            early_summary["artifact_path"] = str(context.output_dir() / "early_accumulation_scan.csv")
+            if "early_purity_bucket" in early_accumulation_df.columns:
+                early_summary.setdefault(
+                    "bucket_counts",
+                    {
+                        str(key): int(value)
+                        for key, value in early_accumulation_df["early_purity_bucket"].astype(str).value_counts().to_dict().items()
+                    },
+                )
             if "graduation_status" in early_accumulation_df.columns:
                 early_summary.setdefault(
                     "graduation_status_counts",
@@ -1532,7 +1541,7 @@ class RankOrchestrationService:
                 dashboard_payload.setdefault("summary", {})["effective_rank_top_n"] = regime_profile.rank_top_n
             dashboard_payload.setdefault("summary", {})["ranked_shortlist_count"] = int(len(ranked))
             dashboard_payload.setdefault("summary", {})["ranked_universe_count"] = int(len(ranked_universe))
-            dashboard_payload.setdefault("summary", {})["early_accumulation_count"] = int(len(early_accumulation_df))
+            dashboard_payload.setdefault("summary", {})["investigator_early_accumulation_count"] = int(len(early_accumulation_df))
             dashboard_payload["watchlist"] = (
                 _records_without_duplicate_columns(watchlist_final_df.head(15))
                 if isinstance(watchlist_final_df, pd.DataFrame) and not watchlist_final_df.empty

@@ -368,6 +368,9 @@ def build_dashboard_payload(
     early_status_counts: Dict[str, int] = {}
     if early_accumulation_df is not None and not early_accumulation_df.empty and "graduation_status" in early_accumulation_df.columns:
         early_status_counts = early_accumulation_df["graduation_status"].astype(str).value_counts().to_dict()
+    early_bucket_counts: Dict[str, int] = {}
+    if early_accumulation_df is not None and not early_accumulation_df.empty and "early_purity_bucket" in early_accumulation_df.columns:
+        early_bucket_counts = early_accumulation_df["early_purity_bucket"].astype(str).value_counts().to_dict()
     stage2_total_count = 0
     stage2_label_counts: Dict[str, int] = {}
     if stock_scan_df is not None and not stock_scan_df.empty and "stage2_label" in stock_scan_df.columns:
@@ -425,9 +428,10 @@ def build_dashboard_payload(
             "pattern_discovery_count": len(pattern_discoveries),
             "breakout_candidate_count": len(breakout_candidates),
             "stage2_leader_count": len(stage2_leaders),
-            "early_accumulation_enabled": bool(context.params.get("early_accumulation_enabled", True)),
-            "early_accumulation_count": int(len(early_accumulation_df)) if early_accumulation_df is not None else 0,
-            "early_accumulation_graduation_status_counts": early_status_counts,
+            "investigator_early_accumulation_enabled": bool(context.params.get("early_accumulation_enabled", True)),
+            "investigator_early_accumulation_count": int(len(early_accumulation_df)) if early_accumulation_df is not None else 0,
+            "investigator_early_accumulation_bucket_counts": early_bucket_counts,
+            "investigator_early_accumulation_graduation_status_counts": early_status_counts,
             "stage2_total_count": stage2_total_count,
             "stage2_label_counts": stage2_label_counts,
             **discovery_visibility,
@@ -448,7 +452,7 @@ def build_dashboard_payload(
         "stock_scan": _records(stock_scan_df, limit=10),
         "ranked_leaders": ranked_leaders,
         "stage2_leaders": stage2_leaders,
-        "early_accumulation_preview": early_accumulation_records,
+        "investigator_early_accumulation_preview": early_accumulation_records,
         "pattern_discoveries": pattern_discoveries,
         "breakout_candidates": breakout_candidates,
         "sector_dashboard": _records(sector_dashboard_df, limit=10),

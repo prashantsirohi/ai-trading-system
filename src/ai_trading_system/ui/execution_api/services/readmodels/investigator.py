@@ -103,6 +103,7 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         "active_watchlist": _read_csv(artifacts.get("active_watchlist")),
         "archive": _read_csv(artifacts.get("archived_investigator")),
         "investigator_pattern_scan": _read_csv(artifacts.get("investigator_pattern_scan")),
+        "investigator_early_accumulation": _read_csv(artifacts.get("investigator_early_accumulation")),
         "final_3q_gate": _read_csv(artifacts.get("final_3q_gate")),
         "investigator_performance_summary": _read_csv(artifacts.get("investigator_performance_summary")),
     }
@@ -129,6 +130,7 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
             archive=archive,
             final_3q_gate=frames["final_3q_gate"],
             investigator_pattern_scan=frames["investigator_pattern_scan"],
+            investigator_early_accumulation=frames["investigator_early_accumulation"],
             previous_summary=previous_summary,
             stage_status=_stage_status_from_artifacts(artifacts),
         )
@@ -138,6 +140,10 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
             payload["summary_deltas"] = _summary_deltas_from_payload(payload, previous_summary)
         payload.setdefault("stage_status", _stage_status_from_artifacts(artifacts))
         payload.setdefault("final_3q_gate", _records(frames["final_3q_gate"], limit=50))
+        payload.setdefault("investigator_early_accumulation", _records(_sort_early_accumulation(frames["investigator_early_accumulation"]), limit=100))
+        payload.setdefault("summary", {})
+        if isinstance(payload["summary"], dict):
+            payload["summary"].setdefault("investigator_early_accumulation_count", int(len(frames["investigator_early_accumulation"])))
         payload.setdefault("performance_summary", _read_json(artifacts.get("investigator_performance_summary_json")))
         payload.setdefault("threshold_recommendations", _read_json(artifacts.get("investigator_threshold_recommendations")))
 
@@ -149,6 +155,7 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         "trap_log": _records(frames["trap_log"]),
         "active_watchlist": _records(_sort_active_watchlist(frames["active_watchlist"])),
         "investigator_pattern_scan": _records(frames["investigator_pattern_scan"]),
+        "investigator_early_accumulation": _records(_sort_early_accumulation(frames["investigator_early_accumulation"]), limit=100),
         "final_3q_gate": _records(frames["final_3q_gate"], limit=100),
         "investigator_performance_summary": _records(frames["investigator_performance_summary"], limit=200),
         "investigator_performance_summary_json": _read_json(artifacts.get("investigator_performance_summary_json")),
@@ -173,6 +180,7 @@ def _latest_artifacts(project_root: Path) -> dict[str, Path | None]:
         "trap_log",
         "archived_investigator",
         "investigator_pattern_scan",
+        "investigator_early_accumulation",
         "final_3q_gate",
         "investigator_performance_summary",
         "investigator_summary",
@@ -410,3 +418,20 @@ def _sort_active_watchlist(frame: pd.DataFrame) -> pd.DataFrame:
         kind="stable",
     )
     return safe.drop(columns=["_verdict_sort"]).reset_index(drop=True)
+
+
+def _sort_early_accumulation(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    safe = frame.copy()
+    for column in ("early_accumulation_rank", "early_accumulation_score"):
+        safe.loc[:, column] = pd.to_numeric(safe[column], errors="coerce") if column in safe.columns else pd.NA
+    symbol = safe.get("symbol_id", safe.get("symbol", pd.Series("", index=safe.index))).fillna("").astype(str)
+    safe = safe.assign(_symbol_sort=symbol)
+    safe = safe.sort_values(
+        ["early_accumulation_rank", "early_accumulation_score", "_symbol_sort"],
+        ascending=[True, False, True],
+        na_position="last",
+        kind="stable",
+    )
+    return safe.drop(columns=["_symbol_sort"]).reset_index(drop=True)

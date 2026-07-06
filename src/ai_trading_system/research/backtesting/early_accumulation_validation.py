@@ -317,6 +317,7 @@ def _summary(frame: pd.DataFrame, config: EarlyAccumulationValidationConfig) -> 
         "graduation_rate": float(frame["graduation_status"].astype(str).ne("early_watchlist").mean()),
         "false_positive_rate": float((fwd120 < 0.0).mean()),
         "by_regime": {},
+        "by_early_purity_bucket": {},
         "config": asdict(config),
     }
     for regime, group in frame.groupby("regime_bucket"):
@@ -326,6 +327,18 @@ def _summary(frame: pd.DataFrame, config: EarlyAccumulationValidationConfig) -> 
             "median_fwd_return_120d": float(regime_fwd.median()),
             "hit_rate_gt_20": float((regime_fwd >= 20.0).mean()),
         }
+    if "early_purity_bucket" in frame.columns:
+        for bucket, group in frame.groupby("early_purity_bucket"):
+            bucket_fwd = pd.to_numeric(group["fwd_return_120d"], errors="coerce")
+            summary["by_early_purity_bucket"][str(bucket)] = {
+                "rows": int(len(group)),
+                "median_fwd_return_20d": float(pd.to_numeric(group["fwd_return_20d"], errors="coerce").median()),
+                "median_fwd_return_60d": float(pd.to_numeric(group["fwd_return_60d"], errors="coerce").median()),
+                "median_fwd_return_120d": float(bucket_fwd.median()),
+                "hit_rate_gt_20": float((bucket_fwd >= 20.0).mean()),
+                "hit_rate_gt_50": float((bucket_fwd >= 50.0).mean()),
+                "false_positive_rate": float((bucket_fwd < 0.0).mean()),
+            }
     return summary
 
 
@@ -342,6 +355,15 @@ def _write_markdown(summary: dict[str, Any], output_dir: Path) -> None:
         f"- Hit rate >20%: {summary.get('hit_rate_gt_20', float('nan')):.1%}",
         f"- False-positive rate: {summary.get('false_positive_rate', float('nan')):.1%}",
     ]
+    buckets = summary.get("by_early_purity_bucket", {})
+    if isinstance(buckets, dict) and buckets:
+        lines.extend(["", "## By Early Purity Bucket"])
+        for bucket, values in buckets.items():
+            lines.append(
+                f"- {bucket}: rows={values.get('rows', 0)}, "
+                f"median 120D={values.get('median_fwd_return_120d', float('nan')):.2f}%, "
+                f"hit >20%={values.get('hit_rate_gt_20', float('nan')):.1%}"
+            )
     output_dir.joinpath("early_accumulation_validation_summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

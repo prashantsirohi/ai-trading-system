@@ -87,12 +87,13 @@ def test_run_validation_writes_artifacts_and_metrics(tmp_path: Path) -> None:
 
     assert summary["rows"] > 0
     assert "precision_at_25" in summary
+    assert summary["by_early_purity_bucket"]
     assert (out_dir / "early_accumulation_validation_summary.md").exists()
     assert (out_dir / "early_accumulation_validation_summary.json").exists()
     assert (out_dir / "early_accumulation_decile_returns.csv").exists()
     assert (out_dir / "early_accumulation_examples.csv").exists()
     examples = pd.read_csv(out_dir / "early_accumulation_examples.csv")
-    assert {"fwd_return_20d", "fwd_return_60d", "fwd_return_120d", "regime_bucket"}.issubset(examples.columns)
+    assert {"fwd_return_20d", "fwd_return_60d", "fwd_return_120d", "regime_bucket", "early_purity_bucket"}.issubset(examples.columns)
 
 
 def test_cli_smoke(monkeypatch, capsys) -> None:

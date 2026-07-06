@@ -38,6 +38,9 @@ class InvestigatorService:
         ranked = _read_csv(Path(ranked_artifact.uri))
         breakout = _read_optional(context.artifact_for("rank", "breakout_scan"))
         stock_scan = _read_optional(context.artifact_for("rank", "stock_scan"))
+        early_accumulation = _normalise_investigator_early_accumulation(
+            _read_optional(context.artifact_for("rank", "early_accumulation_scan"))
+        )
         rank_context = stock_scan if not stock_scan.empty else ranked
         sector_dashboard = _read_optional(context.artifact_for("rank", "sector_dashboard"))
         gainers = load_investigator_intake(
@@ -67,6 +70,7 @@ class InvestigatorService:
                 archived=empty,
                 gate=empty,
                 performance_summary=performance_summary,
+                investigator_early_accumulation=early_accumulation,
             )
             payload = build_investigator_payload(
                 run_id=context.run_id,
@@ -80,6 +84,7 @@ class InvestigatorService:
                 archive=empty,
                 final_3q_gate=empty,
                 investigator_pattern_scan=empty,
+                investigator_early_accumulation=early_accumulation,
                 performance_summary=performance_summary,
                 threshold_recommendations=threshold_recommendations,
                 data_trust_status=str(context.params.get("data_trust_status", "unknown")),
@@ -95,6 +100,7 @@ class InvestigatorService:
                 trap_log=empty,
                 archived_investigator=empty,
                 final_3q_gate=empty,
+                investigator_early_accumulation=early_accumulation,
                 investigator_performance_summary=performance_frame,
                 investigator_summary=summary,
                 investigator_payload=payload,
@@ -140,6 +146,7 @@ class InvestigatorService:
             archived=archived,
             gate=gate,
             performance_summary=performance_summary,
+            investigator_early_accumulation=early_accumulation,
         )
         payload = build_investigator_payload(
             run_id=context.run_id,
@@ -153,6 +160,7 @@ class InvestigatorService:
             archive=archived,
             final_3q_gate=gate,
             investigator_pattern_scan=investigator_patterns,
+            investigator_early_accumulation=early_accumulation,
             performance_summary=performance_summary,
             threshold_recommendations=threshold_recommendations,
             data_trust_status=str(context.params.get("data_trust_status", "unknown")),
@@ -168,6 +176,7 @@ class InvestigatorService:
             trap_log=traps,
             archived_investigator=archived,
             final_3q_gate=gate,
+            investigator_early_accumulation=early_accumulation,
             investigator_performance_summary=performance_frame,
             investigator_summary=summary,
             investigator_payload=payload,
@@ -333,6 +342,7 @@ class InvestigatorService:
         archived: pd.DataFrame,
         gate: pd.DataFrame,
         performance_summary: dict[str, Any] | None = None,
+        investigator_early_accumulation: pd.DataFrame | None = None,
     ) -> dict[str, Any]:
         verdict_counts = scores.get("verdict", pd.Series(dtype=str)).value_counts().to_dict() if not scores.empty else {}
         status_counts = active.get("status", pd.Series(dtype=str)).value_counts().to_dict() if not active.empty else {}
@@ -356,6 +366,9 @@ class InvestigatorService:
             "repeat_accumulation_count": int(repeat.get("high_priority_repeat", pd.Series(dtype=bool)).sum()) if not repeat.empty else 0,
             "verdict_counts": {str(k): int(v) for k, v in verdict_counts.items()},
             "status_counts": {str(k): int(v) for k, v in status_counts.items()},
+            "investigator_early_accumulation_count": int(len(investigator_early_accumulation))
+            if investigator_early_accumulation is not None
+            else 0,
             "performance": performance_summary or {},
         }
 
@@ -429,3 +442,71 @@ def _read_csv(path: Path) -> pd.DataFrame:
         return pd.read_csv(path)
     except EmptyDataError:
         return pd.DataFrame()
+
+
+INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS = [
+    "symbol",
+    "symbol_id",
+    "sector",
+    "close",
+    "early_accumulation_score",
+    "early_accumulation_rank",
+    "early_purity_bucket",
+    "pattern_family",
+    "pattern_age_days",
+    "base_pattern_freshness_score",
+    "above_200dma_reclaim_score",
+    "delivery_accumulation_score",
+    "momentum_recovery_score",
+    "volume_confirmation_score",
+    "active_rank_pctile",
+    "breakout_qualified",
+    "graduation_status",
+    "watchlist_reason",
+]
+
+
+def _normalise_investigator_early_accumulation(frame: pd.DataFrame | None) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS)
+    out = frame.copy()
+    rename_map = {
+        "sector_name": "sector",
+        "top_pattern_family": "pattern_family",
+        "top_pattern_age_days": "pattern_age_days",
+    }
+    out = out.rename(columns={src: dst for src, dst in rename_map.items() if src in out.columns and dst not in out.columns})
+    if "symbol_id" not in out.columns:
+        out.loc[:, "symbol_id"] = out.get("symbol", pd.Series("", index=out.index))
+    out.loc[:, "symbol_id"] = out["symbol_id"].fillna("").astype(str).str.strip().str.upper()
+    out.loc[:, "symbol"] = out["symbol_id"]
+    if "breakout_qualified" not in out.columns:
+        status = out.get("graduation_status", pd.Series("", index=out.index)).fillna("").astype(str)
+        breakout_state = out.get("breakout_state", pd.Series("", index=out.index)).fillna("").astype(str)
+        out.loc[:, "breakout_qualified"] = status.eq("breakout_qualified") | breakout_state.str.lower().eq("qualified")
+    for column in INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS:
+        if column not in out.columns:
+            out.loc[:, column] = pd.NA
+    for column in (
+        "close",
+        "early_accumulation_score",
+        "early_accumulation_rank",
+        "pattern_age_days",
+        "base_pattern_freshness_score",
+        "above_200dma_reclaim_score",
+        "delivery_accumulation_score",
+        "momentum_recovery_score",
+        "volume_confirmation_score",
+        "active_rank_pctile",
+    ):
+        out.loc[:, column] = pd.to_numeric(out[column], errors="coerce")
+    out.loc[:, "breakout_qualified"] = out["breakout_qualified"].fillna(False).astype(bool)
+    out = out.loc[:, INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS].copy()
+    if not out.empty:
+        out = out.sort_values(
+            ["early_accumulation_rank", "early_accumulation_score", "symbol_id"],
+            ascending=[True, False, True],
+            na_position="last",
+            kind="stable",
+        )
+    return out.reset_index(drop=True)

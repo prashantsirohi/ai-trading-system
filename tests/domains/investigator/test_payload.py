@@ -109,6 +109,76 @@ def test_payload_uses_total_intake_for_summary_and_funnel() -> None:
     assert payload["charts"]["funnel_today"][0] == {"key": "intake", "label": "Investigator Intake (today)", "count": 6}
 
 
+def test_payload_exposes_investigator_early_accumulation_table_and_empty_state() -> None:
+    payload = build_investigator_payload(
+        run_id="run-1",
+        run_date="2026-05-07",
+        summary={"investigator_early_accumulation_count": 1},
+        today_gainers=pd.DataFrame(),
+        scores=pd.DataFrame(),
+        repeat_tracker=pd.DataFrame(),
+        active_watchlist=pd.DataFrame(),
+        trap_log=pd.DataFrame(),
+        archive=pd.DataFrame(),
+        investigator_early_accumulation=pd.DataFrame(
+            [
+                {
+                    "symbol": "AAA",
+                    "symbol_id": "AAA",
+                    "sector": "Industrials",
+                    "close": 100,
+                    "early_accumulation_score": 82,
+                    "early_accumulation_rank": 1,
+                    "early_purity_bucket": "true_early",
+                    "pattern_family": "cup_handle",
+                    "pattern_age_days": 5,
+                    "base_pattern_freshness_score": 90,
+                    "above_200dma_reclaim_score": 75,
+                    "delivery_accumulation_score": 60,
+                    "momentum_recovery_score": 70,
+                    "volume_confirmation_score": 65,
+                    "active_rank_pctile": 55,
+                    "breakout_qualified": False,
+                    "graduation_status": "pattern_confirmed",
+                    "watchlist_reason": "Fresh base",
+                }
+            ]
+        ),
+    )
+
+    assert payload["summary"]["investigator_early_accumulation_count"] == 1
+    assert payload["investigator_early_accumulation"][0]["symbol"] == "AAA"
+    assert {
+        "symbol",
+        "sector",
+        "early_accumulation_score",
+        "early_purity_bucket",
+        "base_pattern_freshness_score",
+        "above_200dma_reclaim_score",
+        "delivery_accumulation_score",
+        "momentum_recovery_score",
+        "volume_confirmation_score",
+        "active_rank_pctile",
+        "breakout_qualified",
+        "graduation_status",
+        "watchlist_reason",
+    }.issubset(payload["investigator_early_accumulation"][0])
+
+    empty_payload = build_investigator_payload(
+        run_id="run-1",
+        run_date="2026-05-07",
+        summary={},
+        today_gainers=pd.DataFrame(),
+        scores=pd.DataFrame(),
+        repeat_tracker=pd.DataFrame(),
+        active_watchlist=pd.DataFrame(),
+        trap_log=pd.DataFrame(),
+        archive=pd.DataFrame(),
+    )
+    assert empty_payload["investigator_early_accumulation"] == []
+    assert empty_payload["summary"]["investigator_early_accumulation_count"] == 0
+
+
 def test_pattern_confirmation_counts_all_s1_states_and_sorts_top_setups() -> None:
     confirmation = _pattern_confirmation(
         pd.DataFrame(
