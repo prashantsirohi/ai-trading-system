@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from ai_trading_system.domains.investigator.cohort_performance import (
+    _load_catalog_prices,
     build_performance_summary,
     build_threshold_recommendations,
     mature_investigator_cohorts,
@@ -131,6 +132,47 @@ def test_mature_investigator_cohorts_handles_partial_and_missing_prices(tmp_path
     assert rows[0][4] == "PARTIAL_MATURED"
     assert rows[1][0] == "MISSING"
     assert rows[1][4] == "INSUFFICIENT_PRICE_DATA"
+
+
+def test_load_catalog_prices_numbers_large_symbol_set_in_duckdb(tmp_path: Path) -> None:
+    ohlcv = tmp_path / "wide.duckdb"
+    conn = duckdb.connect(str(ohlcv))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE _catalog (
+                symbol_id VARCHAR,
+                exchange VARCHAR,
+                timestamp TIMESTAMP,
+                close DOUBLE,
+                is_benchmark BOOLEAN
+            )
+            """
+        )
+        rows = []
+        for symbol_idx in range(120):
+            symbol = f"SYM{symbol_idx:03d}"
+            for day in range(1, 8):
+                rows.append((symbol, "NSE", f"2026-05-{day:02d}", 100.0 + day, False))
+        conn.executemany("INSERT INTO _catalog VALUES (?, ?, ?, ?, ?)", rows)
+    finally:
+        conn.close()
+
+    cohorts = pd.DataFrame(
+        [
+            {"trade_date": "2026-05-03", "symbol_id": "SYM000", "exchange": "NSE"},
+            {"trade_date": "2026-05-03", "symbol_id": "SYM119", "exchange": "NSE"},
+        ]
+    )
+
+    prices = _load_catalog_prices(ohlcv, cohorts)
+
+    assert set(prices["symbol_id"].unique()) == {"SYM000", "SYM119"}
+    assert prices["trade_date"].min() == "2026-05-03"
+    assert prices.groupby(["symbol_id", "exchange"])["idx"].max().to_dict() == {
+        ("SYM000", "NSE"): 4,
+        ("SYM119", "NSE"): 4,
+    }
 
 
 def test_performance_summary_groups_metrics_and_empty_table() -> None:

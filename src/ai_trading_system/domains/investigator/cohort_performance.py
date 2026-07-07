@@ -389,23 +389,43 @@ def _load_catalog_prices(ohlcv_db_path: str | Path, cohorts: pd.DataFrame) -> pd
     symbols = sorted(cohorts["symbol_id"].dropna().astype(str).str.upper().unique().tolist())
     if not symbols:
         return pd.DataFrame(columns=["symbol_id", "exchange", "trade_date", "close", "idx"])
+    trade_dates = pd.to_datetime(cohorts.get("trade_date", pd.Series(dtype="object")), errors="coerce").dropna()
+    min_trade_date = trade_dates.min().strftime("%Y-%m-%d") if not trade_dates.empty else None
     conn: duckdb.DuckDBPyConnection | None = None
     try:
         conn = duckdb.connect(str(path), read_only=True)
         placeholders = ", ".join(["?"] * len(symbols))
+        params: list[Any] = [*symbols]
+        date_filter = ""
+        if min_trade_date:
+            date_filter = "AND CAST(timestamp AS DATE) >= CAST(? AS DATE)"
+            params.append(min_trade_date)
         prices = conn.execute(
             f"""
+            WITH catalog_prices AS (
+                SELECT
+                    UPPER(symbol_id) AS symbol_id,
+                    UPPER(COALESCE(exchange, 'NSE')) AS exchange,
+                    CAST(timestamp AS DATE) AS trade_date,
+                    close
+                FROM _catalog
+                WHERE UPPER(symbol_id) IN ({placeholders})
+                  AND COALESCE(is_benchmark, false) = false
+                  {date_filter}
+            )
             SELECT
-                UPPER(symbol_id) AS symbol_id,
-                UPPER(COALESCE(exchange, 'NSE')) AS exchange,
-                CAST(timestamp AS DATE) AS trade_date,
-                close
-            FROM _catalog
-            WHERE UPPER(symbol_id) IN ({placeholders})
-              AND COALESCE(is_benchmark, false) = false
+                symbol_id,
+                exchange,
+                trade_date,
+                close,
+                ROW_NUMBER() OVER (
+                    PARTITION BY symbol_id, exchange
+                    ORDER BY trade_date
+                ) - 1 AS idx
+            FROM catalog_prices
             ORDER BY symbol_id, exchange, trade_date
             """,
-            symbols,
+            params,
         ).fetchdf()
     except Exception:
         return pd.DataFrame(columns=["symbol_id", "exchange", "trade_date", "close", "idx"])
@@ -414,10 +434,13 @@ def _load_catalog_prices(ohlcv_db_path: str | Path, cohorts: pd.DataFrame) -> pd
             conn.close()
     if prices.empty:
         return prices
-    prices.loc[:, "trade_date"] = pd.to_datetime(prices["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    prices.loc[:, "close"] = pd.to_numeric(prices["close"], errors="coerce")
-    prices = prices.dropna(subset=["trade_date", "close"]).reset_index(drop=True)
-    prices.loc[:, "idx"] = prices.groupby(["symbol_id", "exchange"]).cumcount()
+    prices = prices.assign(
+        trade_date=pd.to_datetime(prices["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d"),
+        close=pd.to_numeric(prices["close"], errors="coerce"),
+        idx=pd.to_numeric(prices["idx"], errors="coerce"),
+    )
+    prices = prices.dropna(subset=["trade_date", "close", "idx"]).reset_index(drop=True)
+    prices.loc[:, "idx"] = prices["idx"].astype(int)
     return prices
 
 
