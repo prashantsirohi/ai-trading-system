@@ -1466,11 +1466,19 @@ def _investigator_performance_frame(performance: pd.DataFrame | None) -> pd.Data
         "group_value",
         "horizon",
         "sample_count",
+        "sample_confidence",
+        "min_sample_pass",
         "win_rate",
         "avg_return",
         "median_return",
         "hit_rate_above_2pct",
         "hit_rate_above_5pct",
+        "edge_vs_baseline",
+        "avg_winner_return",
+        "avg_loser_return",
+        "payoff_ratio",
+        "expectancy",
+        "best_horizon_flag",
     ]
     if performance is None or performance.empty:
         return pd.DataFrame(columns=columns)
@@ -1480,10 +1488,26 @@ def _investigator_performance_frame(performance: pd.DataFrame | None) -> pd.Data
             out.loc[:, column] = ""
     out = _to_numeric(
         out[columns],
-        ["sample_count", "win_rate", "avg_return", "median_return", "hit_rate_above_2pct", "hit_rate_above_5pct"],
+        [
+            "sample_count",
+            "win_rate",
+            "avg_return",
+            "median_return",
+            "hit_rate_above_2pct",
+            "hit_rate_above_5pct",
+            "edge_vs_baseline",
+            "avg_winner_return",
+            "avg_loser_return",
+            "payoff_ratio",
+            "expectancy",
+        ],
         2,
     )
-    return out.sort_values(["horizon", "group_type", "sample_count"], ascending=[True, True, False], kind="stable").head(100)
+    return out.sort_values(
+        ["horizon", "min_sample_pass", "edge_vs_baseline", "sample_count"],
+        ascending=[True, False, False, False],
+        kind="stable",
+    ).head(100)
 
 
 def _investigator_trap_frame(traps: pd.DataFrame | None) -> pd.DataFrame:
@@ -1952,7 +1976,7 @@ def publish_dashboard_payload(
         manager=manager,
         sheet_name=INVESTIGATOR_PERFORMANCE_SHEET,
         frame=investigator_performance,
-        max_cols=12,
+        max_cols=17,
     )
 
     investigator_detail = _combine_frames(
@@ -1970,7 +1994,7 @@ def publish_dashboard_payload(
         sheet_name=DATA_INVESTIGATOR_SHEET,
         frame=investigator_detail,
         max_rows=DATA_INVESTIGATOR_MAX_ROWS,
-        max_cols=32,
+        max_cols=48,
     )
 
     breadth_cols = [

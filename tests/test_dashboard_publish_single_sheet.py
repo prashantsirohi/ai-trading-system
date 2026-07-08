@@ -679,6 +679,25 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         "credible_trigger",
     ]
     assert len(performance_grid) >= 2
+    assert performance_grid[0] == [
+        "group_type",
+        "group_value",
+        "horizon",
+        "sample_count",
+        "sample_confidence",
+        "min_sample_pass",
+        "win_rate",
+        "avg_return",
+        "median_return",
+        "hit_rate_above_2pct",
+        "hit_rate_above_5pct",
+        "edge_vs_baseline",
+        "avg_winner_return",
+        "avg_loser_return",
+        "payoff_ratio",
+        "expectancy",
+        "best_horizon_flag",
+    ]
     assert final_gate_grid[1][0] == "HIGH"
     assert final_gate_grid[1][1] == "2026-04-09"
     assert final_gate_grid[1][2] == "HIGH_CONVICTION"

@@ -26,6 +26,11 @@ from ai_trading_system.domains.investigator.price_structure import score_price_s
 from ai_trading_system.domains.investigator.repeat_tracker import build_repeat_tracker
 from ai_trading_system.domains.investigator.scoring import final_gate, finalize_scores
 from ai_trading_system.domains.investigator.sector_context import attach_sector_context
+from ai_trading_system.domains.investigator.stage_pattern_context import (
+    enrich_investigator_context,
+    normalise_pattern_context,
+    rank_pattern_symbols,
+)
 from ai_trading_system.domains.investigator.volume_anatomy import score_volume_anatomy
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 
@@ -37,6 +42,7 @@ class InvestigatorService:
         ranked_artifact = context.require_artifact("rank", "ranked_signals")
         ranked = _read_csv(Path(ranked_artifact.uri))
         breakout = _read_optional(context.artifact_for("rank", "breakout_scan"))
+        rank_pattern_scan = _read_optional(context.artifact_for("rank", "pattern_scan"))
         stock_scan = _read_optional(context.artifact_for("rank", "stock_scan"))
         early_accumulation = _normalise_investigator_early_accumulation(
             _read_optional(context.artifact_for("rank", "early_accumulation_scan"))
@@ -56,6 +62,13 @@ class InvestigatorService:
             min_market_cap_cr=float(context.params.get("investigator_min_market_cap_cr", 500.0)),
         )
         candidates = _merge_optional(gainers, breakout, ranked, stock_scan)
+        candidates, stage_pattern_context = enrich_investigator_context(
+            candidates,
+            ranked=ranked,
+            stock_scan=stock_scan,
+            breakout_scan=breakout,
+            pattern_scan=rank_pattern_scan,
+        )
         candidates = _mark_top_ranked_context(candidates, ranked)
         if candidates.empty:
             empty = pd.DataFrame()
@@ -71,6 +84,7 @@ class InvestigatorService:
                 gate=empty,
                 performance_summary=performance_summary,
                 investigator_early_accumulation=early_accumulation,
+                stage_pattern_context=_stage_pattern_summary(stage_pattern_context, performance_frame),
             )
             payload = build_investigator_payload(
                 run_id=context.run_id,
@@ -123,12 +137,15 @@ class InvestigatorService:
         history = self._load_history(context)
         repeat = build_repeat_tracker(current_scores=scores, historical_daily_log=history)
         active, archived = apply_lifecycle(scores, repeat)
+        rank_scanned_symbols = rank_pattern_symbols(rank_pattern_scan)
+        active_for_pattern_scan = _without_symbols(active, rank_scanned_symbols)
         investigator_patterns = build_investigator_pattern_scan(
             context=context,
-            active_watchlist=active,
+            active_watchlist=active_for_pattern_scan,
             ranked_df=ranked,
         )
-        best_patterns = best_pattern_by_symbol(investigator_patterns)
+        rank_patterns_for_merge = normalise_pattern_context(rank_pattern_scan)
+        best_patterns = best_pattern_by_symbol(_combine_pattern_sources(rank_patterns_for_merge, investigator_patterns))
         active = _merge_best_patterns(active, best_patterns)
         scores = _merge_best_patterns(scores, best_patterns)
         traps = scores.loc[scores.get("verdict", pd.Series(dtype=str)).eq("NOISE_TRAP") | scores.get("hard_trap_flag", pd.Series(False, index=scores.index)).fillna(False)].copy()
@@ -147,6 +164,12 @@ class InvestigatorService:
             gate=gate,
             performance_summary=performance_summary,
             investigator_early_accumulation=early_accumulation,
+            stage_pattern_context=_stage_pattern_summary({
+                **stage_pattern_context,
+                "rank_pattern_reused_rows": int(len(rank_patterns_for_merge)),
+                "investigator_pattern_scanned_rows": int(len(investigator_patterns)),
+                "pattern_scan_skipped_existing_rows": int(len(active) - len(active_for_pattern_scan)),
+            }, performance_frame),
         )
         payload = build_investigator_payload(
             run_id=context.run_id,
@@ -343,6 +366,7 @@ class InvestigatorService:
         gate: pd.DataFrame,
         performance_summary: dict[str, Any] | None = None,
         investigator_early_accumulation: pd.DataFrame | None = None,
+        stage_pattern_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         verdict_counts = scores.get("verdict", pd.Series(dtype=str)).value_counts().to_dict() if not scores.empty else {}
         status_counts = active.get("status", pd.Series(dtype=str)).value_counts().to_dict() if not active.empty else {}
@@ -369,6 +393,7 @@ class InvestigatorService:
             "investigator_early_accumulation_count": int(len(investigator_early_accumulation))
             if investigator_early_accumulation is not None
             else 0,
+            "stage_pattern_context": stage_pattern_context or {},
             "performance": performance_summary or {},
         }
 
@@ -396,6 +421,58 @@ def _mark_top_ranked_context(candidates: pd.DataFrame, ranked: pd.DataFrame | No
     return out
 
 
+def _without_symbols(frame: pd.DataFrame, symbols: set[str]) -> pd.DataFrame:
+    if frame is None or frame.empty or not symbols or "symbol_id" not in frame.columns:
+        return frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+    values = frame["symbol_id"].fillna("").astype(str).str.strip().str.upper()
+    return frame.loc[~values.isin(symbols)].copy().reset_index(drop=True)
+
+
+def _combine_pattern_sources(*frames: pd.DataFrame | None) -> pd.DataFrame:
+    available = [frame.copy() for frame in frames if isinstance(frame, pd.DataFrame) and not frame.empty]
+    if not available:
+        return pd.DataFrame()
+    out = pd.concat(available, ignore_index=True, sort=False)
+    if "symbol_id" in out.columns:
+        out.loc[:, "symbol_id"] = out["symbol_id"].fillna("").astype(str).str.strip().str.upper()
+        out = out.loc[out["symbol_id"].ne("")].copy()
+    return out.reset_index(drop=True)
+
+
+def _stage_pattern_summary(context: dict[str, Any], performance_frame: pd.DataFrame | None) -> dict[str, Any]:
+    out = dict(context or {})
+    out.setdefault("rank_pattern_reused_rows", 0)
+    out.setdefault("investigator_pattern_scanned_rows", 0)
+    out.setdefault("pattern_scan_skipped_existing_rows", 0)
+    warnings = list(out.get("warnings") or [])
+    if performance_frame is None or performance_frame.empty:
+        out["top_positive_edges"] = []
+        out["top_negative_edges"] = []
+        warnings.append("no group has sample_count >= 20")
+        out["warnings"] = sorted(set(str(item) for item in warnings))
+        return out
+    frame = performance_frame.copy()
+    frame.loc[:, "_sample_count"] = pd.to_numeric(frame.get("sample_count"), errors="coerce").fillna(0)
+    frame.loc[:, "_edge"] = pd.to_numeric(frame.get("edge_vs_baseline"), errors="coerce")
+    eligible = frame.loc[frame["_sample_count"].ge(20) & frame["_edge"].notna()].copy()
+    if eligible.empty:
+        warnings.append("no group has sample_count >= 20")
+    positive = eligible.loc[eligible["_edge"].gt(0)].sort_values(["_edge", "_sample_count"], ascending=[False, False], kind="stable").head(5)
+    negative = eligible.loc[eligible["_edge"].lt(0)].sort_values(["_edge", "_sample_count"], ascending=[True, False], kind="stable").head(5)
+    out["top_positive_edges"] = _edge_records(positive)
+    out["top_negative_edges"] = _edge_records(negative)
+    out["warnings"] = sorted(set(str(item) for item in warnings))
+    return out
+
+
+def _edge_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if frame.empty:
+        return []
+    columns = ["group_type", "group_value", "horizon", "sample_count", "avg_return", "edge_vs_baseline", "expectancy"]
+    available = [column for column in columns if column in frame.columns]
+    return frame[available].where(frame[available].notna(), None).to_dict(orient="records")
+
+
 def _merge_best_patterns(frame: pd.DataFrame, best_patterns: pd.DataFrame) -> pd.DataFrame:
     if frame is None or frame.empty or best_patterns is None or best_patterns.empty or "symbol_id" not in frame.columns:
         return frame
@@ -405,7 +482,9 @@ def _merge_best_patterns(frame: pd.DataFrame, best_patterns: pd.DataFrame) -> pd
         "pattern_state",
         "pattern_lifecycle_state",
         "pattern_score",
+        "pattern_rank",
         "setup_quality",
+        "setup_quality_bucket",
         "s1_promotion_state",
         "promotion_reason",
         "stage2_score",
@@ -425,8 +504,19 @@ def _merge_best_patterns(frame: pd.DataFrame, best_patterns: pd.DataFrame) -> pd
     out = frame.copy()
     out.loc[:, "symbol_id"] = out["symbol_id"].astype(str).str.strip().str.upper()
     pattern_cols = [col for col in available if col != "symbol_id"]
-    out = out.drop(columns=pattern_cols, errors="ignore")
-    return out.merge(best_patterns[available], on="symbol_id", how="left")
+    merged = out.merge(best_patterns[available], on="symbol_id", how="left", suffixes=("", "_best"))
+    for column in pattern_cols:
+        best_col = f"{column}_best"
+        if best_col not in merged.columns:
+            continue
+        if column not in merged.columns:
+            merged.loc[:, column] = merged[best_col]
+        else:
+            current = merged[column]
+            missing = current.isna() | current.astype(str).str.strip().str.upper().isin({"", "NONE", "NAN"})
+            merged.loc[missing, column] = merged.loc[missing, best_col]
+        merged = merged.drop(columns=[best_col])
+    return merged
 
 
 def _read_optional(artifact: StageArtifact | None) -> pd.DataFrame:

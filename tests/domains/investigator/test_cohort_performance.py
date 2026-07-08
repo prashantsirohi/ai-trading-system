@@ -28,6 +28,23 @@ def _create_cohort_table(conn: duckdb.DuckDBPyConnection) -> None:
             credible_trigger BOOLEAN,
             move_tag VARCHAR,
             sector VARCHAR,
+            stage_label VARCHAR,
+            pattern_family VARCHAR,
+            pattern_state VARCHAR,
+            setup_quality_bucket VARCHAR,
+            breakout_type VARCHAR,
+            candidate_tier VARCHAR,
+            qualified_breakout BOOLEAN,
+            stage_score DOUBLE,
+            pattern_score DOUBLE,
+            breakout_score DOUBLE,
+            composite_score DOUBLE,
+            relative_strength DOUBLE,
+            volume_intensity DOUBLE,
+            trend_persistence DOUBLE,
+            proximity_to_highs DOUBLE,
+            delivery_pct DOUBLE,
+            sector_strength DOUBLE,
             close DOUBLE,
             fwd_3d_return DOUBLE,
             fwd_5d_return DOUBLE,
@@ -264,3 +281,86 @@ def test_threshold_recommendations_are_diagnostic_only() -> None:
     sufficient = build_threshold_recommendations(frame, {"matured_by_horizon": {"5d": 100}})
     assert sufficient["insufficient_sample"] is False
     assert sufficient["recommendations"]
+
+
+def test_performance_summary_stage_pattern_groups_confidence_and_edge() -> None:
+    conn = duckdb.connect(":memory:")
+    _create_cohort_table(conn)
+    rows = pd.DataFrame(
+        [
+            {
+                "trade_date": "2026-05-01",
+                "symbol_id": "A",
+                "exchange": "NSE",
+                "trigger_reason": "DAILY_GAINER",
+                "verdict": "HIGH_CONVICTION",
+                "move_tag": "DAILY_MOMENTUM",
+                "sector": "Finance",
+                "stage_label": "STAGE_2_CONFIRMED",
+                "pattern_family": "CONSOLIDATION",
+                "pattern_state": "BREAKING_OUT",
+                "setup_quality_bucket": "HIGH",
+                "breakout_type": "RANGE_BREAKOUT",
+                "candidate_tier": "A",
+                "qualified_breakout": True,
+                "fwd_5d_return": 6.0,
+                "data_quality_status": "PARTIAL_MATURED",
+            },
+            {
+                "trade_date": "2026-05-01",
+                "symbol_id": "B",
+                "exchange": "NSE",
+                "trigger_reason": "DAILY_GAINER",
+                "verdict": "MEDIUM_CONVICTION",
+                "move_tag": "DAILY_MOMENTUM",
+                "sector": "Finance",
+                "stage_label": "STAGE_2_CONFIRMED",
+                "pattern_family": "CONSOLIDATION",
+                "pattern_state": "BREAKING_OUT",
+                "setup_quality_bucket": "HIGH",
+                "breakout_type": "RANGE_BREAKOUT",
+                "candidate_tier": "A",
+                "qualified_breakout": True,
+                "fwd_5d_return": -2.0,
+                "data_quality_status": "PARTIAL_MATURED",
+            },
+            {
+                "trade_date": "2026-05-01",
+                "symbol_id": "C",
+                "exchange": "NSE",
+                "trigger_reason": "WEEKLY_GAINER",
+                "verdict": "WATCH_ONLY",
+                "move_tag": "COUNTER_TREND",
+                "sector": "IT",
+                "stage_label": "STAGE_4_DECLINE",
+                "pattern_family": "OTHER",
+                "pattern_state": "FORMING",
+                "setup_quality_bucket": "LOW",
+                "candidate_tier": "NONE",
+                "qualified_breakout": False,
+                "fwd_5d_return": 0.0,
+                "data_quality_status": "PARTIAL_MATURED",
+            },
+        ]
+    )
+    conn.register("rows", rows)
+    conn.execute("INSERT INTO investigator_cohort_performance BY NAME SELECT * FROM rows")
+    conn.unregister("rows")
+
+    frame, _summary = build_performance_summary(conn)
+    group_types = set(frame["group_type"])
+    cross = frame.loc[
+        frame["group_type"].eq("stage_x_pattern")
+        & frame["group_value"].eq("STAGE_2_CONFIRMED | CONSOLIDATION")
+        & frame["horizon"].eq("5d")
+    ].iloc[0]
+
+    assert {"stage_label", "pattern_family", "stage_x_pattern", "pattern_x_trigger_reason"}.issubset(group_types)
+    assert cross["sample_count"] == 2
+    assert cross["sample_confidence"] == "LOW"
+    assert bool(cross["min_sample_pass"]) is False
+    assert cross["edge_vs_baseline"] == pytest.approx(0.6667)
+    assert cross["avg_winner_return"] == pytest.approx(6.0)
+    assert cross["avg_loser_return"] == pytest.approx(-2.0)
+    assert cross["payoff_ratio"] == pytest.approx(3.0)
+    assert cross["expectancy"] == pytest.approx(2.0)

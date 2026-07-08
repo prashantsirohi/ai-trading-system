@@ -69,6 +69,7 @@ Smoke mode is disabled because synthetic investigator artifacts are not allowed.
 | Input | Source | Notes |
 |---|---|---|
 | `ranked_signals` | `rank` artifact | Required through `context.require_artifact("rank", "ranked_signals")`. |
+| `pattern_scan` | `rank` artifact | Primary pattern context; symbols already present here are not rescanned by the Investigator-owned pattern scan. |
 | OHLCV catalog | `$DATA_ROOT/ohlcv.duckdb::_catalog` | Read by `load_investigator_intake`. |
 | Delivery data | `$DATA_ROOT/ohlcv.duckdb::_delivery` | Latest delivery percentage per symbol. |
 
@@ -95,10 +96,10 @@ $DATA_ROOT/pipeline_runs/<run_id>/investigator/attempt_<n>/
 | Artifact type | File | Purpose |
 |---|---|---|
 | `daily_gainer_log` | `daily_gainer_log.csv` | Latest daily, weekly, and stealth trigger intake. |
-| `investigator_scores` | `investigator_scores.csv` | Domain conviction components, final score, verdict, trap flags. |
+| `investigator_scores` | `investigator_scores.csv` | Domain conviction components, final score, verdict, trap flags, plus normalized stage/pattern/breakout context. |
 | `repeat_tracker` | `repeat_tracker.csv` | Rolling recurrence, price progression, rank change, repeat quality. |
 | `active_watchlist` | `active_watchlist.csv` | Non-archived lifecycle queue with status and pattern enrichment. |
-| `investigator_pattern_scan` | `investigator_pattern_scan.csv` | Investigator-owned pattern scan for active names. |
+| `investigator_pattern_scan` | `investigator_pattern_scan.csv` | Investigator-owned incremental pattern scan for active names not already scanned by rank. |
 | `trap_log` | `trap_log.csv` | Current scored trap rows. |
 | `archived_investigator` | `archived_investigator.csv` | Dropped or archived rows with reasons. |
 | `final_3q_gate` | `final_3q_gate.csv` | Manual final-gate queue with invalidation audit fields and operator-only exit monitoring. |
@@ -353,7 +354,9 @@ The stage does not auto-delete final-gate rows solely because `exit_triggered` i
 
 Clean final-gate rows are seeded into `investigator_cohort_performance`. A maturation pass reads trusted OHLCV from `$DATA_ROOT/ohlcv.duckdb::_catalog` and computes 3D, 5D, 10D, and 20D forward returns in percentage points using trading-session offsets. It also fills `fwd_*_matured_at` dates and sets `data_quality_status` to `PENDING`, `PARTIAL_MATURED`, `MATURED`, or `INSUFFICIENT_PRICE_DATA`.
 
-`investigator_performance_summary.csv` groups matured rows by trigger reason, verdict, move tag, sector, score bucket (`55-64`, `65-74`, `75-84`, `85+`), credible trigger, and hard-trap flag. For each group and horizon it reports sample count, win rate, average/median return, hit rates above 2% and 5%, average negative return, and average positive return.
+`investigator_performance_summary.csv` groups matured rows by trigger reason, verdict, move tag, sector, score bucket (`55-64`, `65-74`, `75-84`, `85+`), credible trigger, hard-trap flag, stage label, pattern family/state, setup-quality bucket, breakout type, candidate tier, and qualified-breakout flag. It also emits cross groups such as stage × pattern, stage × breakout tier, pattern × trigger reason, and stage/pattern × verdict or move tag.
+
+For each group and horizon it reports sample count, confidence (`LOW`, `MEDIUM`, `HIGH`), minimum-sample pass/fail, win rate, average/median return, hit rates above 2% and 5%, winner/loser averages, edge versus the same-horizon baseline, payoff ratio, expectancy, and a best-horizon flag. `min_sample_pass` is true only when `sample_count >= 20`, so low-sample edges stay visible without being presented as strong evidence.
 
 `investigator_threshold_recommendations.json` is diagnostic-only. If fewer than 100 matured 5D rows exist overall, or fewer than 30 matured rows exist for a group, it reports insufficient sample and recommends not tuning thresholds. Even with enough sample, it only emits recommendations for review; it does not modify production scoring constants, final-gate thresholds, or execution behavior.
 
@@ -405,15 +408,16 @@ Lifecycle converts scored rows into either active watchlist rows or archived row
 
 ## Investigator Pattern Scan
 
-The pattern scan is intentionally different from the rank-stage pattern scan:
+The pattern scan is intentionally incremental to the rank-stage pattern scan:
 
-- Input universe is active investigator symbols only.
+- Rank-stage `pattern_scan.csv` is the primary pattern source for current-run symbols.
+- Input universe is active investigator symbols only after removing symbols already present in rank-stage `pattern_scan.csv`.
 - Maximum symbols defaults to `investigator_pattern_max_symbols = 100`.
 - Lookback defaults to `investigator_pattern_lookback_days = 420`.
 - `stage2_only = False` so early Stage 1 bases can be detected.
 - `write_pattern_cache = False` so investigative scans do not mutate the ranking pattern cache.
 
-Pattern results are classified into a promotion state:
+Investigator-owned pattern results are classified into a promotion state:
 
 | State | Meaning |
 |---|---|
@@ -424,7 +428,7 @@ Pattern results are classified into a promotion state:
 | `S1_TO_S2_TRANSITION` | High pattern score with volume confirmation. |
 | `S2_CONFIRMED` | Stage 2 score, confirmed pattern state, and volume support. |
 
-The highest-priority pattern per symbol is merged back into `active_watchlist` and `investigator_scores`.
+The highest-priority pattern per symbol is merged back into `active_watchlist` and `investigator_scores`. Existing rank-stage pattern context is retained; Investigator-owned scans fill gaps for active names that rank did not scan.
 
 ## Final Gate
 

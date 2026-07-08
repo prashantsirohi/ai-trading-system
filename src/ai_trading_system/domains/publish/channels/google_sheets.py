@@ -125,6 +125,11 @@ _INVESTIGATOR_FORMATS: dict[str, dict[str, str]] = {
     "median_return": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "hit_rate_above_2pct": GoogleSheetsManager.FORMAT_DECIMAL_2,
     "hit_rate_above_5pct": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "edge_vs_baseline": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "avg_winner_return": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "avg_loser_return": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "payoff_ratio": GoogleSheetsManager.FORMAT_DECIMAL_2,
+    "expectancy": GoogleSheetsManager.FORMAT_DECIMAL_2,
 }
 _FUNDAMENTAL_TRACKING_PUBLISH_BUCKETS = frozenset(
     {

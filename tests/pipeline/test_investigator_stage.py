@@ -112,6 +112,12 @@ def _rank_artifacts(project_root: Path, run_id: str) -> dict[str, dict[str, Stag
             {
                 "symbol_id": "TOP",
                 "composite_score": 90,
+                "close": 130,
+                "sma_50": 120,
+                "sma_200": 100,
+                "sma50_slope_20d_pct": 2.0,
+                "sma200_slope_20d_pct": 0.5,
+                "near_52w_high_pct": 8.0,
                 "relative_strength": 70,
                 "trend_persistence": 80,
                 "volume_intensity": 90,
@@ -127,6 +133,12 @@ def _rank_artifacts(project_root: Path, run_id: str) -> dict[str, dict[str, Stag
             {
                 "symbol_id": "AAA",
                 "composite_score": 82,
+                "close": 110,
+                "sma_50": 105,
+                "sma_200": 90,
+                "sma50_slope_20d_pct": 1.5,
+                "sma200_slope_20d_pct": 0.4,
+                "near_52w_high_pct": 9.0,
                 "rank": 42,
                 "relative_strength": 70,
                 "trend_persistence": 80,
@@ -139,6 +151,18 @@ def _rank_artifacts(project_root: Path, run_id: str) -> dict[str, dict[str, Stag
         ]
     ).to_csv(rank_dir / "stock_scan.csv", index=False)
     pd.DataFrame([{"symbol_id": "AAA", "breakout_positive": True, "qualified": True}]).to_csv(rank_dir / "breakout_scan.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "pattern_family": "cup_handle",
+                "pattern_state": "confirmed",
+                "pattern_score": 81,
+                "pattern_rank": 3,
+                "setup_quality": 74,
+            }
+        ]
+    ).to_csv(rank_dir / "pattern_scan.csv", index=False)
     pd.DataFrame([{"symbol_id": "AAA", "Sector": "Finance", "RS_rank_pct": 80, "Quadrant": "Leading"}]).to_csv(rank_dir / "sector_dashboard.csv", index=False)
     pd.DataFrame(
         [
@@ -169,6 +193,7 @@ def _rank_artifacts(project_root: Path, run_id: str) -> dict[str, dict[str, Stag
             "ranked_signals": StageArtifact.from_file("ranked_signals", rank_dir / "ranked_signals.csv", row_count=2, attempt_number=1),
             "stock_scan": StageArtifact.from_file("stock_scan", rank_dir / "stock_scan.csv", row_count=2, attempt_number=1),
             "breakout_scan": StageArtifact.from_file("breakout_scan", rank_dir / "breakout_scan.csv", row_count=1, attempt_number=1),
+            "pattern_scan": StageArtifact.from_file("pattern_scan", rank_dir / "pattern_scan.csv", row_count=1, attempt_number=1),
             "sector_dashboard": StageArtifact.from_file("sector_dashboard", rank_dir / "sector_dashboard.csv", row_count=1, attempt_number=1),
             "early_accumulation_scan": StageArtifact.from_file("early_accumulation_scan", rank_dir / "early_accumulation_scan.csv", row_count=1, attempt_number=1),
             "dashboard_payload": StageArtifact.from_file("dashboard_payload", rank_dir / "dashboard_payload.json", row_count=1, attempt_number=1),
@@ -209,6 +234,7 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     assert (output_dir / "investigator_summary.json").exists()
     assert (output_dir / "investigator_payload.json").exists()
     early = pd.read_csv(output_dir / "investigator_early_accumulation.csv")
+    scores = pd.read_csv(output_dir / "investigator_scores.csv")
     assert early.iloc[0]["symbol"] == "EARLY"
     assert early.iloc[0]["sector"] == "Industrials"
     assert early.iloc[0]["early_purity_bucket"] == "true_early"
@@ -223,6 +249,11 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
         "WEEKLY_GAINER": 1,
         "STEALTH_ACCUMULATION": 1,
     }
+    aaa = scores.loc[scores["symbol_id"].eq("AAA")].iloc[0]
+    assert aaa["stage_label"] == "STAGE_2_CONFIRMED"
+    assert aaa["pattern_family"] == "CUP_HANDLE"
+    assert aaa["pattern_state"] == "CONFIRMED"
+    assert result.metadata["stage_pattern_context"]["rank_pattern_reused_rows"] == 1
     assert {artifact.artifact_type for artifact in result.artifacts} >= {
         "daily_gainer_log",
         "investigator_scores",
@@ -246,6 +277,10 @@ def test_registry_migration_creates_investigator_cohort_performance(tmp_path: Pa
         columns = {
             row[1]
             for row in conn.execute("PRAGMA table_info('investigator_cohort_performance')").fetchall()
+        }
+        score_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info('investigator_scores')").fetchall()
         }
         column_info = {
             row[1]: row
@@ -275,7 +310,23 @@ def test_registry_migration_creates_investigator_cohort_performance(tmp_path: Pa
         "data_quality_status",
         "inserted_at",
         "updated_at",
+        "stage_label",
+        "pattern_family",
+        "pattern_state",
+        "setup_quality_bucket",
+        "breakout_type",
+        "candidate_tier",
+        "qualified_breakout",
     }.issubset(columns)
+    assert {
+        "stage_label",
+        "pattern_family",
+        "pattern_state",
+        "setup_quality_bucket",
+        "breakout_type",
+        "candidate_tier",
+        "qualified_breakout",
+    }.issubset(score_columns)
     assert "PENDING" in str(column_info["data_quality_status"][4])
 
 
@@ -387,6 +438,10 @@ def test_investigator_cohort_upsert_is_idempotent_and_pending(tmp_path: Path) ->
                 "trigger_reason": "DAILY_GAINER",
                 "move_tag": "SECTOR_ROTATION",
                 "sector": "Finance",
+                "stage_label": "STAGE_2_CONFIRMED",
+                "pattern_family": "CUP_HANDLE",
+                "candidate_tier": "A",
+                "qualified_breakout": True,
                 "close": 110.0,
             }
         ]
@@ -404,6 +459,10 @@ def test_investigator_cohort_upsert_is_idempotent_and_pending(tmp_path: Path) ->
                 MIN(trigger_reason),
                 MIN(move_tag),
                 MIN(sector),
+                MIN(stage_label),
+                MIN(pattern_family),
+                MIN(candidate_tier),
+                BOOL_OR(qualified_breakout),
                 MIN(close),
                 MIN(data_quality_status),
                 COUNT(fwd_3d_return),
@@ -413,7 +472,20 @@ def test_investigator_cohort_upsert_is_idempotent_and_pending(tmp_path: Path) ->
             """
         ).fetchone()
 
-    assert rows == (1, "DAILY_GAINER", "SECTOR_ROTATION", "Finance", 110.0, "PENDING", 0, 0)
+    assert rows == (
+        1,
+        "DAILY_GAINER",
+        "SECTOR_ROTATION",
+        "Finance",
+        "STAGE_2_CONFIRMED",
+        "CUP_HANDLE",
+        "A",
+        True,
+        110.0,
+        "PENDING",
+        0,
+        0,
+    )
 
 
 def test_investigator_stage_persists_final_gate_cohorts(tmp_path: Path, monkeypatch) -> None:
@@ -485,6 +557,7 @@ def test_investigator_stage_scans_non_s2_active_s1_pattern_candidate(tmp_path: P
         captured["stage2_only"] = kwargs["stage2_only"]
         captured["write_pattern_cache"] = kwargs["write_pattern_cache"]
         assert "STEALTH" in kwargs["symbols"]
+        assert "AAA" not in kwargs["symbols"]
         return pd.DataFrame(
             [
                 {

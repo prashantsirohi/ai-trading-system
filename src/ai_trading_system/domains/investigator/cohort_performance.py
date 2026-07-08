@@ -20,6 +20,23 @@ COHORT_COLUMNS = [
     "credible_trigger",
     "move_tag",
     "sector",
+    "stage_label",
+    "pattern_family",
+    "pattern_state",
+    "setup_quality_bucket",
+    "breakout_type",
+    "candidate_tier",
+    "qualified_breakout",
+    "stage_score",
+    "pattern_score",
+    "breakout_score",
+    "composite_score",
+    "relative_strength",
+    "volume_intensity",
+    "trend_persistence",
+    "proximity_to_highs",
+    "delivery_pct",
+    "sector_strength",
     "close",
     "fwd_3d_return",
     "fwd_5d_return",
@@ -40,7 +57,25 @@ PERFORMANCE_GROUP_COLUMNS = [
     "final_score_bucket",
     "credible_trigger",
     "hard_trap_flag",
+    "stage_label",
+    "pattern_family",
+    "pattern_state",
+    "setup_quality_bucket",
+    "breakout_type",
+    "candidate_tier",
+    "qualified_breakout",
 ]
+PERFORMANCE_CROSS_GROUPS = {
+    "stage_x_pattern": ("stage_label", "pattern_family"),
+    "stage_x_pattern_state": ("stage_label", "pattern_family", "pattern_state"),
+    "stage_x_breakout_tier": ("stage_label", "candidate_tier"),
+    "pattern_x_trigger_reason": ("pattern_family", "trigger_reason"),
+    "stage_x_trigger_reason": ("stage_label", "trigger_reason"),
+    "stage_x_move_tag": ("stage_label", "move_tag"),
+    "pattern_x_move_tag": ("pattern_family", "move_tag"),
+    "stage_x_verdict": ("stage_label", "verdict"),
+    "pattern_x_verdict": ("pattern_family", "verdict"),
+}
 
 
 def build_cohort_rows(
@@ -73,7 +108,31 @@ def build_cohort_rows(
             )
         score_columns = [
             col
-            for col in ("symbol_id", "trade_date", "trigger_reason", "move_tag", "sector", "close")
+            for col in (
+                "symbol_id",
+                "trade_date",
+                "trigger_reason",
+                "move_tag",
+                "sector",
+                "stage_label",
+                "pattern_family",
+                "pattern_state",
+                "setup_quality_bucket",
+                "breakout_type",
+                "candidate_tier",
+                "qualified_breakout",
+                "stage_score",
+                "pattern_score",
+                "breakout_score",
+                "composite_score",
+                "relative_strength",
+                "volume_intensity",
+                "trend_persistence",
+                "proximity_to_highs",
+                "delivery_pct",
+                "sector_strength",
+                "close",
+            )
             if col in scores.columns
         ]
         scores = scores[score_columns].drop_duplicates(
@@ -89,11 +148,36 @@ def build_cohort_rows(
     out.loc[:, "trade_date"] = source["trade_date"]
     out.loc[:, "symbol_id"] = source["symbol_id"]
     out.loc[:, "exchange"] = str(exchange or "NSE").strip().upper() or "NSE"
-    for column in ("trigger_reason", "verdict", "move_tag", "sector"):
+    for column in (
+        "trigger_reason",
+        "verdict",
+        "move_tag",
+        "sector",
+        "stage_label",
+        "pattern_family",
+        "pattern_state",
+        "setup_quality_bucket",
+        "breakout_type",
+        "candidate_tier",
+    ):
         out.loc[:, column] = _first_available(source, column)
+    out.loc[:, "qualified_breakout"] = _nullable_bool(_first_available(source, "qualified_breakout"))
     out.loc[:, "final_score"] = pd.to_numeric(_first_available(source, "final_score"), errors="coerce")
     out.loc[:, "hard_trap_flag"] = _nullable_bool(_first_available(source, "hard_trap_flag"))
     out.loc[:, "credible_trigger"] = _nullable_bool(_first_available(source, "credible_trigger"))
+    for column in (
+        "stage_score",
+        "pattern_score",
+        "breakout_score",
+        "composite_score",
+        "relative_strength",
+        "volume_intensity",
+        "trend_persistence",
+        "proximity_to_highs",
+        "delivery_pct",
+        "sector_strength",
+    ):
+        out.loc[:, column] = pd.to_numeric(_first_available(source, column), errors="coerce")
     out.loc[:, "close"] = pd.to_numeric(_first_available(source, "close"), errors="coerce")
     for column in (
         "fwd_3d_return",
@@ -138,6 +222,23 @@ def upsert_investigator_cohorts(
                 incoming.credible_trigger,
                 incoming.move_tag,
                 incoming.sector,
+                incoming.stage_label,
+                incoming.pattern_family,
+                incoming.pattern_state,
+                incoming.setup_quality_bucket,
+                incoming.breakout_type,
+                incoming.candidate_tier,
+                incoming.qualified_breakout,
+                incoming.stage_score,
+                incoming.pattern_score,
+                incoming.breakout_score,
+                incoming.composite_score,
+                incoming.relative_strength,
+                incoming.volume_intensity,
+                incoming.trend_persistence,
+                incoming.proximity_to_highs,
+                incoming.delivery_pct,
+                incoming.sector_strength,
                 incoming.close,
                 COALESCE(existing.fwd_3d_return, incoming.fwd_3d_return) AS fwd_3d_return,
                 COALESCE(existing.fwd_5d_return, incoming.fwd_5d_return) AS fwd_5d_return,
@@ -211,6 +312,23 @@ def mature_investigator_cohorts(
                 cohorts.credible_trigger,
                 cohorts.move_tag,
                 cohorts.sector,
+                cohorts.stage_label,
+                cohorts.pattern_family,
+                cohorts.pattern_state,
+                cohorts.setup_quality_bucket,
+                cohorts.breakout_type,
+                cohorts.candidate_tier,
+                cohorts.qualified_breakout,
+                cohorts.stage_score,
+                cohorts.pattern_score,
+                cohorts.breakout_score,
+                cohorts.composite_score,
+                cohorts.relative_strength,
+                cohorts.volume_intensity,
+                cohorts.trend_persistence,
+                cohorts.proximity_to_highs,
+                cohorts.delivery_pct,
+                cohorts.sector_strength,
                 cohorts.close,
                 updates.fwd_3d_return,
                 updates.fwd_5d_return,
@@ -261,6 +379,10 @@ def build_performance_summary(
         return pd.DataFrame(columns=_performance_columns()), summary
     working = cohorts.copy()
     working.loc[:, "final_score_bucket"] = _score_bucket(working.get("final_score", pd.Series(dtype=float)))
+    baselines = {
+        horizon: _baseline_avg_return(working, f"fwd_{horizon}d_return")
+        for horizon in HORIZONS
+    }
     rows: list[dict[str, Any]] = []
     for group_column in PERFORMANCE_GROUP_COLUMNS:
         if group_column not in working.columns:
@@ -268,7 +390,7 @@ def build_performance_summary(
         labels = working[group_column].fillna("UNKNOWN").astype(str)
         for label, group in working.assign(_group_label=labels).groupby("_group_label", dropna=False):
             for horizon in HORIZONS:
-                metrics = _return_metrics(group, f"fwd_{horizon}d_return")
+                metrics = _return_metrics(group, f"fwd_{horizon}d_return", baseline_avg=baselines[horizon])
                 if metrics["sample_count"] <= 0:
                     continue
                 rows.append(
@@ -279,7 +401,32 @@ def build_performance_summary(
                         **metrics,
                     }
                 )
+    for group_type, columns in PERFORMANCE_CROSS_GROUPS.items():
+        if not set(columns).issubset(working.columns):
+            continue
+        cross = working.copy()
+        cross.loc[:, "_group_label"] = _cross_label(cross, columns)
+        for label, group in cross.groupby("_group_label", dropna=False):
+            for horizon in HORIZONS:
+                metrics = _return_metrics(group, f"fwd_{horizon}d_return", baseline_avg=baselines[horizon])
+                if metrics["sample_count"] <= 0:
+                    continue
+                rows.append(
+                    {
+                        "group_type": group_type,
+                        "group_value": str(label),
+                        "horizon": f"{horizon}d",
+                        **metrics,
+                    }
+                )
     frame = pd.DataFrame(rows, columns=_performance_columns())
+    frame = _mark_best_horizons(frame)
+    if not frame.empty:
+        frame = frame.sort_values(
+            ["horizon", "min_sample_pass", "edge_vs_baseline", "sample_count"],
+            ascending=[True, False, False, False],
+            kind="stable",
+        ).reset_index(drop=True)
     summary.update(_best_worst_payload(frame))
     summary["score_bucket_performance"] = _records(
         frame.loc[frame.get("group_type", pd.Series(dtype=str)).eq("final_score_bucket")]
@@ -536,20 +683,75 @@ def _best_worst_payload(frame: pd.DataFrame) -> dict[str, Any]:
     return payload
 
 
-def _return_metrics(frame: pd.DataFrame, column: str) -> dict[str, Any]:
+def _baseline_avg_return(frame: pd.DataFrame, column: str) -> float | None:
+    values = pd.to_numeric(frame.get(column, pd.Series(dtype=float)), errors="coerce").dropna()
+    return round(float(values.mean()), 4) if len(values) else None
+
+
+def _cross_label(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    labels = []
+    for column in columns:
+        labels.append(frame[column].fillna("UNKNOWN").astype(str).replace("", "UNKNOWN"))
+    out = labels[0]
+    for label in labels[1:]:
+        out = out + " | " + label
+    return out
+
+
+def _mark_best_horizons(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    out = frame.copy()
+    out.loc[:, "best_horizon_flag"] = False
+    eligible = pd.to_numeric(out.get("avg_return"), errors="coerce").notna()
+    if not eligible.any():
+        return out
+    idx = (
+        out.loc[eligible]
+        .sort_values(["group_type", "group_value", "avg_return", "sample_count"], ascending=[True, True, False, False], kind="stable")
+        .drop_duplicates(["group_type", "group_value"], keep="first")
+        .index
+    )
+    out.loc[idx, "best_horizon_flag"] = True
+    return out
+
+
+def _return_metrics(frame: pd.DataFrame, column: str, *, baseline_avg: float | None = None) -> dict[str, Any]:
     values = pd.to_numeric(frame.get(column, pd.Series(dtype=float)), errors="coerce").dropna()
     positives = values.loc[values.gt(0)]
     negatives = values.loc[values.lt(0)]
     count = int(len(values))
+    avg_return = round(float(values.mean()), 4) if count else pd.NA
+    win_rate_decimal = float(values.gt(0).mean()) if count else None
+    avg_winner = round(float(positives.mean()), 4) if len(positives) else pd.NA
+    avg_loser = round(float(negatives.mean()), 4) if len(negatives) else pd.NA
+    payoff_ratio = (
+        round(float(avg_winner) / abs(float(avg_loser)), 4)
+        if pd.notna(avg_winner) and pd.notna(avg_loser) and float(avg_loser) != 0
+        else pd.NA
+    )
+    expectancy = (
+        round((win_rate_decimal * float(avg_winner)) + ((1.0 - win_rate_decimal) * float(avg_loser)), 4)
+        if win_rate_decimal is not None and pd.notna(avg_winner) and pd.notna(avg_loser)
+        else pd.NA
+    )
     return {
         "sample_count": count,
+        "sample_confidence": "HIGH" if count >= 50 else "MEDIUM" if count >= 20 else "LOW",
+        "min_sample_pass": count >= 20,
         "win_rate": round(float(values.gt(0).mean() * 100.0), 2) if count else pd.NA,
-        "avg_return": round(float(values.mean()), 4) if count else pd.NA,
+        "avg_return": avg_return,
         "median_return": round(float(values.median()), 4) if count else pd.NA,
         "hit_rate_above_2pct": round(float(values.gt(2.0).mean() * 100.0), 2) if count else pd.NA,
         "hit_rate_above_5pct": round(float(values.gt(5.0).mean() * 100.0), 2) if count else pd.NA,
         "avg_loss_when_negative": round(float(negatives.mean()), 4) if len(negatives) else pd.NA,
         "avg_gain_when_positive": round(float(positives.mean()), 4) if len(positives) else pd.NA,
+        "edge_vs_baseline": round(float(avg_return) - float(baseline_avg), 4) if pd.notna(avg_return) and baseline_avg is not None else pd.NA,
+        "avg_winner_return": avg_winner,
+        "avg_loser_return": avg_loser,
+        "payoff_ratio": payoff_ratio,
+        "expectancy": expectancy,
+        "best_horizon_flag": False,
     }
 
 
@@ -569,6 +771,8 @@ def _performance_columns() -> list[str]:
         "group_value",
         "horizon",
         "sample_count",
+        "sample_confidence",
+        "min_sample_pass",
         "win_rate",
         "avg_return",
         "median_return",
@@ -576,6 +780,12 @@ def _performance_columns() -> list[str]:
         "hit_rate_above_5pct",
         "avg_loss_when_negative",
         "avg_gain_when_positive",
+        "edge_vs_baseline",
+        "avg_winner_return",
+        "avg_loser_return",
+        "payoff_ratio",
+        "expectancy",
+        "best_horizon_flag",
     ]
 
 
