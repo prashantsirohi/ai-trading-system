@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from ai_trading_system.domains.investigator.trap_summary import attach_trap_category, build_trap_summary_metrics
+
 
 S1_PATTERN_SETUP_SCORE = {
     "FAILED_S1": 0,
@@ -156,11 +158,7 @@ def _attach_decision_fields(frame: pd.DataFrame, repeat_tracker: pd.DataFrame) -
 
 
 def _attach_trap_category(frame: pd.DataFrame) -> pd.DataFrame:
-    out = frame.copy() if frame is not None else pd.DataFrame()
-    if out.empty:
-        return out
-    out.loc[:, "trap_category"] = _trap_category_series(out)
-    return out
+    return attach_trap_category(frame)
 
 
 def _investigator_score(frame: pd.DataFrame) -> pd.Series:
@@ -266,9 +264,19 @@ def _decision_summary(
     repeat_ge3 = int((_num(repeat_tracker, "appearance_count_20d") >= 3).sum()) if not repeat_tracker.empty else 0
     improving = int(((_num(repeat_tracker, "appearance_count_20d") >= 3) & (_num(repeat_tracker, "rank_change_20d") < 0) & (_num(repeat_tracker, "price_progression_pct") > 0)).sum()) if not repeat_tracker.empty else 0
     new_candidates = int((_num(active, "appearance_count_20d").fillna(1) <= 1).sum()) if not active.empty else 0
-    traps_count = int(summary.get("trap_count", len(traps)))
-    evidence_count = int(len(trap_evidence)) if trap_evidence is not None else traps_count
-    fresh_trap_today = _fresh_trap_count(trap_evidence, run_date)
+    if "candidate_union_rows" in summary:
+        candidate_rows = int(summary.get("candidate_union_rows") or 0)
+    else:
+        candidate_rows = int(summary.get("total_intake_count", 0) or 0)
+    if "candidate_union_rows" not in summary and candidate_rows <= 0:
+        candidate_rows = max(len(today_gainers), len(active), len(traps))
+    trap_metrics = build_trap_summary_metrics(
+        current_traps=traps,
+        archive=archive,
+        run_date=run_date,
+        candidate_union_rows=candidate_rows,
+    )
+    traps_count = int(trap_metrics["unique_trap_symbols"])
     repeat_trap = _repeat_trap_count(trap_evidence)
     decision = {
         "total_intake": total_intake,
@@ -283,14 +291,15 @@ def _decision_summary(
         "repeat_ge3": repeat_ge3,
         "improving_repeats": improving,
         "high_conviction": int(summary.get("high_conviction_count", len(high))),
-        "trap_rate": round((traps_count / total_intake) if total_intake else 0.0, 3),
+        "trap_rate": trap_metrics["trap_candidate_rate"],
         "traps": traps_count,
         "trap_count": traps_count,
-        "trap_evidence_count": evidence_count,
-        "fresh_trap_today": fresh_trap_today,
+        "trap_evidence_count": trap_metrics["trap_evidence_events"],
+        "fresh_trap_today": trap_metrics["fresh_trap_symbols_today"],
         "repeat_trap": repeat_trap,
         "investigator_early_accumulation_count": int(summary.get("investigator_early_accumulation_count", 0) or 0),
         "archived": int(summary.get("archived_count", len(archive))),
+        **trap_metrics,
     }
     for key in (
         "candidate_union_rows",
@@ -300,6 +309,16 @@ def _decision_summary(
         "previous_watchlist_rows",
         "multi_source_candidate_rows",
         "candidate_source_counts",
+        "stage_input_complete_rows",
+        "stage_input_incomplete_rows",
+        "stage_input_missing_field_counts",
+        "stage_missing_sma200_rows",
+        "stage_missing_sma50_slope_rows",
+        "stage_missing_sma200_slope_rows",
+        "stage_missing_near_high_rows",
+        "stage_unknown_rows",
+        "stage_label_counts",
+        "stage_input_confidence_counts",
     ):
         if key in summary:
             decision[key] = summary[key]

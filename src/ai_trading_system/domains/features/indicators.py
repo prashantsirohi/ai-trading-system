@@ -40,6 +40,8 @@ def add_multi_timeframe_returns(frame: pd.DataFrame) -> pd.DataFrame:
 # Stage 2 Uptrend scoring (Weinstein methodology, NSE-calibrated)
 # ---------------------------------------------------------------------------
 _STAGE2_OUTPUT_COLS = (
+    "sma_50",
+    "sma50_slope_20d_pct",
     "sma_150",
     "sma150_slope_20d_pct",
     "sma200_slope_20d_pct",
@@ -141,6 +143,9 @@ def add_stage2_features(df: pd.DataFrame) -> pd.DataFrame:
     out.loc[:, "sma_150"] = close.rolling(150, min_periods=100).mean()
 
     # ── SMA references (use existing columns when present) ───────────────
+    computed_sma_50 = close.rolling(50, min_periods=50).mean()
+    sma_50 = pd.to_numeric(out.get("sma_50", computed_sma_50), errors="coerce").combine_first(computed_sma_50)
+    out.loc[:, "sma_50"] = sma_50
     sma_150 = out["sma_150"]
     sma_200 = pd.to_numeric(
         out.get("sma_200", close.rolling(200, min_periods=100).mean()),
@@ -154,6 +159,7 @@ def add_stage2_features(df: pd.DataFrame) -> pd.DataFrame:
     sma_200_ready = close.rolling(200, min_periods=200).count() >= 200
 
     # ── SMA slopes (20-bar look-back, expressed as %) ────────────────────
+    out.loc[:, "sma50_slope_20d_pct"] = ((sma_50 / sma_50.shift(20)) - 1.0) * 100.0
     out.loc[:, "sma150_slope_20d_pct"] = ((sma_150 / sma_150.shift(20)) - 1.0) * 100.0
     out.loc[:, "sma200_slope_20d_pct"] = ((sma_200 / sma_200.shift(20)) - 1.0) * 100.0
 

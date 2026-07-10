@@ -600,8 +600,10 @@ class StockRanker:
         for column in [
             "timestamp",
             "close",
+            "sma_50",
             "sma_200",
             "sma_150",
+            "sma50_slope_20d_pct",
             "sma200_slope_20d_pct",
             "stage2_score",
             "is_stage2_structural",

@@ -106,6 +106,8 @@ RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "sma_11",
     "sma_20",
     "sma_50",
+    "sma_200",
+    "sma50_slope_20d_pct",
     "swing_low_20",
     "volume",
     "timestamp",

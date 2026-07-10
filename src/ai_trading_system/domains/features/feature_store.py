@@ -14,6 +14,8 @@ from ai_trading_system.platform.logging.logger import logger
 
 # Columns produced by the Stage 2 computation — persisted to feature parquet
 STAGE2_FEATURE_COLUMNS: tuple[str, ...] = (
+    "sma_50",
+    "sma50_slope_20d_pct",
     "sma_150",
     "sma150_slope_20d_pct",
     "sma200_slope_20d_pct",

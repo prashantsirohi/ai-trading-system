@@ -263,9 +263,35 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     }
     aaa = scores.loc[scores["symbol_id"].eq("AAA")].iloc[0]
     assert aaa["stage_label"] == "STAGE_2_CONFIRMED"
+    assert scores["stage_label"].ne("UNKNOWN").any()
+    assert scores["stage_label"].eq("UNKNOWN").any()
+    assert {
+        "stage_sma200_source",
+        "stage_sma50_slope_source",
+        "stage_sma200_slope_source",
+        "stage_near_high_source",
+        "stage_input_complete",
+        "stage_input_completeness_pct",
+        "stage_input_missing_fields",
+        "stage_input_confidence",
+    }.issubset(scores.columns)
+    assert scores["execution_eligible"].astype(str).str.lower().isin({"false", "0"}).all()
     assert aaa["pattern_family"] == "CUP_HANDLE"
     assert aaa["pattern_state"] == "CONFIRMED"
     assert result.metadata["stage_pattern_context"]["rank_pattern_reused_rows"] == 1
+    assert result.metadata["stage_input_complete_rows"] >= 1
+    assert result.metadata["stage_input_incomplete_rows"] >= 1
+    assert result.metadata["stage_unknown_rows"] >= 1
+    assert result.metadata["stage_label_counts"]["STAGE_2_CONFIRMED"] >= 1
+    assert result.metadata["stage_input_missing_field_counts"]["sma_200"] >= 1
+    assert result.metadata["trap_count"] <= result.metadata["candidate_union_rows"]
+    assert 0 <= result.metadata["trap_candidate_rate"] <= 1
+    assert result.metadata["trap_summary_valid"] is True
+    payload = json.loads((output_dir / "investigator_payload.json").read_text(encoding="utf-8"))
+    payload_summary = payload["summary"]
+    assert payload_summary["trap_count"] == payload_summary["unique_trap_symbols"]
+    assert payload_summary["trap_rate"] == payload_summary["trap_candidate_rate"]
+    assert payload_summary["stage_label_counts"]["STAGE_2_CONFIRMED"] >= 1
     assert {artifact.artifact_type for artifact in result.artifacts} >= {
         "daily_gainer_log",
         "investigator_scores",

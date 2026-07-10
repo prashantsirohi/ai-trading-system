@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import pandas as pd
@@ -20,6 +21,14 @@ STAGE_CONTEXT_COLUMNS = [
     "volume_dryup_flag",
     "accumulation_flag",
     "distribution_flag",
+    "stage_sma200_source",
+    "stage_sma50_slope_source",
+    "stage_sma200_slope_source",
+    "stage_near_high_source",
+    "stage_input_complete",
+    "stage_input_completeness_pct",
+    "stage_input_missing_fields",
+    "stage_input_confidence",
 ]
 PATTERN_CONTEXT_COLUMNS = [
     "pattern_family",
@@ -95,6 +104,7 @@ def enrich_investigator_context(
     if not breakout_context.empty:
         out = _merge_prefer_right(out, breakout_context, on="symbol_id")
 
+    out = normalise_stage_inputs(out)
     classified = out.apply(classify_stage_row, axis=1, result_type="expand")
     for column in ("stage_label", "stage_score", "stage_reason"):
         out.loc[:, column] = classified[column]
@@ -105,6 +115,109 @@ def enrich_investigator_context(
     _ensure_composite_defaults(out)
     out.loc[:, "final_score_bucket"] = _score_bucket(out.get("composite_score", pd.Series(pd.NA, index=out.index)))
     return out, _diagnostics(out, ranked, stock_scan, breakout_scan, pattern_scan)
+
+
+def normalise_stage_inputs(frame: pd.DataFrame) -> pd.DataFrame:
+    """Resolve Stage aliases and safe derivations into one canonical contract."""
+
+    out = _normalise_symbols(frame)
+    if out.empty:
+        return out
+    normalized = out.apply(_normalise_stage_input_row, axis=1, result_type="expand")
+    for column in normalized.columns:
+        out.loc[:, column] = normalized[column]
+    return out
+
+
+def _normalise_stage_input_row(row: pd.Series) -> dict[str, Any]:
+    close, close_source = _resolve_numeric(row, "close", [])
+    sma50, sma50_source = _resolve_numeric(row, "sma_50", ["sma50", "ema_50"])
+    sma200, sma200_source = _resolve_numeric(row, "sma_200", ["sma200", "ema_200"])
+    if pd.isna(sma200) and pd.notna(close) and close > 0:
+        distance = _first_numeric(row, ["above_200dma_pct", "close_vs_sma200_pct"])
+        denominator = 1.0 + distance / 100.0 if pd.notna(distance) else float("nan")
+        if pd.notna(denominator) and math.isfinite(denominator) and denominator > 0:
+            sma200 = close / denominator
+            sma200_source = "DERIVED"
+
+    sma50_slope, sma50_slope_source = _resolve_numeric(
+        row,
+        "sma50_slope_20d_pct",
+        ["sma_50_slope_20d_pct", "sma50_slope_pct"],
+    )
+    sma50_positive: Any = (sma50_slope > 0) if pd.notna(sma50_slope) else _optional_bool(row.get("sma50_slope_positive"))
+    if pd.isna(sma50_slope) and pd.notna(sma50_positive):
+        sma50_slope_source = "BOOLEAN_FALLBACK"
+
+    sma200_slope, sma200_slope_source = _resolve_numeric(
+        row,
+        "sma200_slope_20d_pct",
+        ["sma_200_slope_20d_pct", "sma200_slope_pct"],
+    )
+    sma200_positive: Any = (sma200_slope >= 0) if pd.notna(sma200_slope) else _optional_bool(row.get("sma200_slope_positive"))
+    if pd.isna(sma200_slope) and pd.notna(sma200_positive):
+        sma200_slope_source = "BOOLEAN_FALLBACK"
+
+    near_high, near_high_source = _resolve_numeric(
+        row,
+        "near_52w_high_pct",
+        ["distance_from_52w_high_pct"],
+    )
+    high_52w = _num(row.get("high_52w"))
+    if pd.isna(near_high) and pd.notna(close) and pd.notna(high_52w) and high_52w > 0:
+        near_high = (high_52w - close) / high_52w * 100.0
+        near_high_source = "DERIVED"
+    if pd.isna(near_high):
+        prox_high = _num(row.get("prox_high"))
+        if pd.notna(prox_high) and 0 <= prox_high <= 100:
+            near_high = 100.0 - prox_high
+            near_high_source = "DERIVED"
+    if pd.notna(near_high) and near_high < 0:
+        near_high = 0.0
+
+    relative_strength, relative_strength_source = _resolve_numeric(
+        row,
+        "relative_strength",
+        ["rel_strength_score", "relative_strength_score", "rel_strength"],
+    )
+
+    resolved = {
+        "close": (close, close_source),
+        "sma_50": (sma50, sma50_source),
+        "sma_200": (sma200, sma200_source),
+        "sma50_slope_direction": (sma50_positive, sma50_slope_source),
+        "sma200_slope_direction": (sma200_positive, sma200_slope_source),
+        "near_52w_high_pct": (near_high, near_high_source),
+        "relative_strength": (relative_strength, relative_strength_source),
+    }
+    missing = [name for name, (value, _) in resolved.items() if pd.isna(value)]
+    completeness = round((len(resolved) - len(missing)) / len(resolved) * 100.0, 1)
+    sources = [source for _, source in resolved.values()]
+    if missing or "BOOLEAN_FALLBACK" in sources:
+        confidence = "LOW"
+    elif "DERIVED" in sources:
+        confidence = "MEDIUM"
+    else:
+        confidence = "HIGH"
+    return {
+        "close": close,
+        "sma_50": sma50,
+        "sma_200": sma200,
+        "sma50_slope_20d_pct": sma50_slope,
+        "sma200_slope_20d_pct": sma200_slope,
+        "sma50_slope_positive": sma50_positive,
+        "sma200_slope_positive": sma200_positive,
+        "near_52w_high_pct": near_high,
+        "relative_strength": relative_strength,
+        "stage_sma200_source": sma200_source,
+        "stage_sma50_slope_source": sma50_slope_source,
+        "stage_sma200_slope_source": sma200_slope_source,
+        "stage_near_high_source": near_high_source,
+        "stage_input_complete": not missing,
+        "stage_input_completeness_pct": completeness,
+        "stage_input_missing_fields": "|".join(missing),
+        "stage_input_confidence": confidence,
+    }
 
 
 def normalise_pattern_context(pattern_scan: pd.DataFrame | None) -> pd.DataFrame:
@@ -153,40 +266,44 @@ def normalise_breakout_context(breakout_scan: pd.DataFrame | None) -> pd.DataFra
 def classify_stage_row(row: pd.Series) -> dict[str, Any]:
     """Classify a symbol into the Investigator market-stage vocabulary."""
 
+    if "stage_input_complete" not in row.index:
+        row = row.copy()
+        for column, value in _normalise_stage_input_row(row).items():
+            row.loc[column] = value
     close = _num(row.get("close"))
-    sma50 = _num(_first_value(row, ["sma_50", "sma50", "ema_50"]))
-    sma200 = _num(_first_value(row, ["sma_200", "sma200", "ema_200"]))
-    sma50_slope = _num(row.get("sma50_slope_20d_pct"))
-    sma200_slope = _num(row.get("sma200_slope_20d_pct"))
+    sma50 = _num(row.get("sma_50"))
+    sma200 = _num(row.get("sma_200"))
+    sma50_positive = _optional_bool(row.get("sma50_slope_positive"))
+    sma200_positive = _optional_bool(row.get("sma200_slope_positive"))
     near_high = _num(row.get("near_52w_high_pct"))
     rel_strength = _num(_first_value(row, ["relative_strength", "rel_strength_score", "relative_strength_score"]))
     distribution = _truthy(row.get("distribution_flag")) or str(row.get("breakout_state") or "").lower() in {"failed", "filtered_by_symbol_trend"}
     dryup_or_base = _truthy(row.get("volume_dryup_flag")) or _truthy(row.get("accumulation_flag")) or pd.notna(_num(row.get("base_age_days")))
 
-    required = [close, sma200, sma50_slope, near_high]
-    if any(pd.isna(value) for value in required):
-        return {"stage_label": "UNKNOWN", "stage_score": 0.0, "stage_reason": "required stage fields missing"}
+    if not bool(row.get("stage_input_complete", False)):
+        missing = str(row.get("stage_input_missing_fields") or "required stage fields")
+        return {"stage_label": "UNKNOWN", "stage_score": 0.0, "stage_reason": f"required stage fields missing: {missing}"}
 
     above50 = pd.notna(sma50) and close > sma50
     above200 = close > sma200
-    sma50_pos = sma50_slope > 0
-    sma200_nonneg = pd.isna(sma200_slope) or sma200_slope >= 0
+    sma50_pos = bool(sma50_positive)
+    sma200_nonneg = bool(sma200_positive)
     weak_rs = pd.notna(rel_strength) and rel_strength < 40
     near_sma200 = abs(close / sma200 - 1.0) <= 0.05 if sma200 else False
 
-    if above50 and above200 and sma50_pos and sma200_nonneg and near_high <= 15:
+    if close < sma200 and not sma50_pos and weak_rs:
+        label = "STAGE_4_DECLINE"
+        score = 20.0
+    elif (close >= sma200 * 0.95) and (not sma50_pos or distribution):
+        label = "STAGE_3_DISTRIBUTION"
+        score = 40.0
+    elif above50 and above200 and sma50_pos and sma200_nonneg and near_high <= 15:
         label = "STAGE_2_CONFIRMED"
         score = 90.0
     elif above200 and sma50_pos and near_high <= 25:
         label = "STAGE_2_EARLY"
         score = 72.0
-    elif close < sma200 and sma50_slope <= 0 and weak_rs:
-        label = "STAGE_4_DECLINE"
-        score = 20.0
-    elif (close >= sma200 * 0.95) and (sma50_slope <= 0 or distribution):
-        label = "STAGE_3_DISTRIBUTION"
-        score = 40.0
-    elif (near_sma200 or dryup_or_base or near_high > 15) and not (close < sma200 and sma50_slope <= 0):
+    elif (near_sma200 or dryup_or_base or near_high > 15) and not (close < sma200 and not sma50_pos):
         label = "STAGE_1_BASE"
         score = 55.0
     else:
@@ -209,20 +326,31 @@ def rank_pattern_symbols(pattern_scan: pd.DataFrame | None) -> set[str]:
 
 
 def _rank_context(ranked: pd.DataFrame | None, stock_scan: pd.DataFrame | None) -> pd.DataFrame:
-    frames = [_normalise_symbols(frame) for frame in (ranked, stock_scan) if frame is not None and not frame.empty and "symbol_id" in frame.columns]
-    if not frames:
+    merged = _coalesce_rank_frames(ranked, stock_scan)
+    if merged.empty:
         return pd.DataFrame()
-    merged = pd.concat(frames, ignore_index=True, sort=False)
-    merged = merged.drop_duplicates("symbol_id", keep="last").reset_index(drop=True)
     out = pd.DataFrame(index=merged.index)
     out.loc[:, "symbol_id"] = merged["symbol_id"]
     passthrough = [
         "close",
         "sma_50",
+        "sma50",
+        "ema_50",
         "sma_200",
+        "sma200",
+        "ema_200",
         "sma50_slope_20d_pct",
+        "sma_50_slope_20d_pct",
+        "sma50_slope_pct",
         "sma200_slope_20d_pct",
+        "sma_200_slope_20d_pct",
+        "sma200_slope_pct",
         "near_52w_high_pct",
+        "distance_from_52w_high_pct",
+        "high_52w",
+        "prox_high",
+        "above_200dma_pct",
+        "close_vs_sma200_pct",
         "base_age_days",
         "volume_dryup_flag",
         "accumulation_flag",
@@ -234,8 +362,12 @@ def _rank_context(ranked: pd.DataFrame | None, stock_scan: pd.DataFrame | None) 
             out.loc[:, column] = merged[column]
     out.loc[:, "price_above_sma50"] = _bool_or_compare(merged, "price_above_sma50", "close", "sma_50")
     out.loc[:, "price_above_sma200"] = _bool_or_compare(merged, "price_above_sma200", "close", "sma_200")
-    out.loc[:, "sma50_slope_positive"] = _numeric(merged, "sma50_slope_20d_pct").gt(0)
-    out.loc[:, "sma200_slope_positive"] = _numeric(merged, "sma200_slope_20d_pct").ge(0)
+    out.loc[:, "sma50_slope_positive"] = _bool_or_numeric_sign(
+        merged, "sma50_slope_positive", ["sma50_slope_20d_pct", "sma_50_slope_20d_pct", "sma50_slope_pct"], strict=True
+    )
+    out.loc[:, "sma200_slope_positive"] = _bool_or_numeric_sign(
+        merged, "sma200_slope_positive", ["sma200_slope_20d_pct", "sma_200_slope_20d_pct", "sma200_slope_pct"], strict=False
+    )
     out.loc[:, "composite_score"] = pd.to_numeric(_first_available(merged, ["composite_score"]), errors="coerce")
     out.loc[:, "relative_strength"] = pd.to_numeric(_first_available(merged, ["relative_strength", "rel_strength_score", "relative_strength_score"]), errors="coerce")
     out.loc[:, "volume_intensity"] = pd.to_numeric(_first_available(merged, ["volume_intensity", "vol_intensity", "vol_intensity_score"]), errors="coerce")
@@ -243,6 +375,33 @@ def _rank_context(ranked: pd.DataFrame | None, stock_scan: pd.DataFrame | None) 
     out.loc[:, "proximity_to_highs"] = pd.to_numeric(_first_available(merged, ["proximity_to_highs", "prox_high", "prox_high_score"]), errors="coerce")
     out.loc[:, "sector_strength"] = pd.to_numeric(_first_available(merged, ["sector_strength", "sector_strength_score", "sector_rs_value"]), errors="coerce")
     return out.drop_duplicates("symbol_id", keep="last").reset_index(drop=True)
+
+
+def _coalesce_rank_frames(ranked: pd.DataFrame | None, stock_scan: pd.DataFrame | None) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for priority, frame in enumerate((stock_scan, ranked)):
+        if frame is None or frame.empty or "symbol_id" not in frame.columns:
+            continue
+        normalized = _normalise_symbols(frame).copy()
+        normalized.loc[:, "_context_priority"] = priority
+        normalized.loc[:, "_context_ordinal"] = range(len(normalized))
+        frames.append(normalized)
+    if not frames:
+        return pd.DataFrame()
+    combined = pd.concat(frames, ignore_index=True, sort=False).sort_values(
+        ["symbol_id", "_context_priority", "_context_ordinal"], kind="stable"
+    )
+    value_columns = [column for column in combined.columns if column not in {"symbol_id", "_context_priority", "_context_ordinal"}]
+    rows: list[dict[str, Any]] = []
+    for symbol, group in combined.groupby("symbol_id", sort=True):
+        record: dict[str, Any] = {"symbol_id": symbol}
+        for column in value_columns:
+            values = group[column].loc[group[column].notna()]
+            nonempty = values.loc[~values.astype(str).str.strip().eq("")]
+            if not nonempty.empty:
+                record[column] = nonempty.iloc[0]
+        rows.append(record)
+    return pd.DataFrame(rows)
 
 
 def _merge_prefer_right(left: pd.DataFrame, right: pd.DataFrame, *, on: str) -> pd.DataFrame:
@@ -253,8 +412,9 @@ def _merge_prefer_right(left: pd.DataFrame, right: pd.DataFrame, *, on: str) -> 
     for column in overlap:
         ctx = f"{column}_ctx"
         if ctx in merged.columns:
-            merged.loc[:, column] = merged[ctx].combine_first(merged[column])
-            merged = merged.drop(columns=[ctx])
+            values = merged[ctx].combine_first(merged[column])
+            merged = merged.drop(columns=[column, ctx])
+            merged.loc[:, column] = values
     return merged
 
 
@@ -265,6 +425,10 @@ def _diagnostics(
     breakout_scan: pd.DataFrame | None,
     pattern_scan: pd.DataFrame | None,
 ) -> dict[str, Any]:
+    labels = out.get("stage_label", pd.Series(dtype=object)).fillna("UNKNOWN").astype(str)
+    confidence = out.get("stage_input_confidence", pd.Series(dtype=object)).fillna("LOW").astype(str)
+    complete = out.get("stage_input_complete", pd.Series(False, index=out.index)).map(_truthy)
+    missing_fields = _missing_field_counts(out)
     return {
         "stage_pattern_enabled": True,
         "ranked_signals_joined": bool(ranked is not None and not ranked.empty),
@@ -274,10 +438,39 @@ def _diagnostics(
         "candidate_rows": int(len(out)),
         "pattern_matched_rows": int(out.get("pattern_family", pd.Series(dtype=object)).fillna("NONE").ne("NONE").sum()) if not out.empty else 0,
         "breakout_matched_rows": int(out.get("candidate_tier", pd.Series(dtype=object)).fillna("NONE").ne("NONE").sum()) if not out.empty else 0,
-        "stage_known_rows": int(out.get("stage_label", pd.Series(dtype=object)).fillna("UNKNOWN").ne("UNKNOWN").sum()) if not out.empty else 0,
-        "stage_unknown_rows": int(out.get("stage_label", pd.Series(dtype=object)).fillna("UNKNOWN").eq("UNKNOWN").sum()) if not out.empty else 0,
+        "stage_known_rows": int(labels.ne("UNKNOWN").sum()),
+        "stage_unknown_rows": int(labels.eq("UNKNOWN").sum()),
+        "stage_input_complete_rows": int(complete.sum()),
+        "stage_input_incomplete_rows": int((~complete).sum()),
+        "stage_input_missing_field_counts": missing_fields,
+        "stage_missing_sma200_rows": _source_count(out, "stage_sma200_source", "MISSING"),
+        "stage_missing_sma50_slope_rows": _source_count(out, "stage_sma50_slope_source", "MISSING"),
+        "stage_missing_sma200_slope_rows": _source_count(out, "stage_sma200_slope_source", "MISSING"),
+        "stage_missing_near_high_rows": _source_count(out, "stage_near_high_source", "MISSING"),
+        "stage_label_counts": {str(key): int(value) for key, value in labels.value_counts().to_dict().items()},
+        "stage_input_confidence_counts": {str(key): int(value) for key, value in confidence.value_counts().to_dict().items()},
         "warnings": _warnings(out, ranked, stock_scan, breakout_scan, pattern_scan),
     }
+
+
+def _missing_field_counts(frame: pd.DataFrame) -> dict[str, int]:
+    required = (
+        "close",
+        "sma_50",
+        "sma_200",
+        "sma50_slope_direction",
+        "sma200_slope_direction",
+        "near_52w_high_pct",
+        "relative_strength",
+    )
+    counts = {field: 0 for field in required}
+    if frame.empty or "stage_input_missing_fields" not in frame.columns:
+        return counts
+    for value in frame["stage_input_missing_fields"].fillna("").astype(str):
+        for field in {item for item in value.split("|") if item}:
+            if field in counts:
+                counts[field] += 1
+    return counts
 
 
 def _warnings(out: pd.DataFrame, ranked: pd.DataFrame | None, stock_scan: pd.DataFrame | None, breakout_scan: pd.DataFrame | None, pattern_scan: pd.DataFrame | None) -> list[str]:
@@ -286,14 +479,19 @@ def _warnings(out: pd.DataFrame, ranked: pd.DataFrame | None, stock_scan: pd.Dat
         warnings.append("pattern_scan missing")
     if breakout_scan is None or breakout_scan.empty:
         warnings.append("breakout_scan missing")
-    rank_source = stock_scan if stock_scan is not None and not stock_scan.empty else ranked
-    if rank_source is None or rank_source.empty or not {"close", "sma_200", "sma50_slope_20d_pct", "near_52w_high_pct"}.issubset(rank_source.columns):
-        warnings.append("required SMA columns missing")
+    if not out.empty and not out.get("stage_input_complete", pd.Series(False, index=out.index)).map(_truthy).any():
+        warnings.append("required Stage inputs unresolved")
     if not out.empty:
         unknown_pct = out.get("stage_label", pd.Series("UNKNOWN", index=out.index)).fillna("UNKNOWN").eq("UNKNOWN").mean()
         if unknown_pct >= 0.5:
             warnings.append("high UNKNOWN stage percentage")
     return warnings
+
+
+def _source_count(frame: pd.DataFrame, column: str, value: str) -> int:
+    if frame.empty or column not in frame.columns:
+        return 0
+    return int(frame[column].fillna("MISSING").astype(str).str.upper().eq(value).sum())
 
 
 def _ensure_bool_context(out: pd.DataFrame) -> None:
@@ -368,6 +566,55 @@ def _bool_or_compare(frame: pd.DataFrame, bool_column: str, left: str, right: st
 def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
     source = frame[column] if column in frame.columns else pd.Series(pd.NA, index=frame.index)
     return pd.to_numeric(source, errors="coerce")
+
+
+def _bool_or_numeric_sign(
+    frame: pd.DataFrame,
+    bool_column: str,
+    numeric_columns: list[str],
+    *,
+    strict: bool,
+) -> pd.Series:
+    if bool_column in frame.columns:
+        direct = frame[bool_column].map(_optional_bool)
+    else:
+        direct = pd.Series(pd.NA, index=frame.index, dtype=object)
+    numeric = pd.to_numeric(_first_available(frame, numeric_columns), errors="coerce")
+    derived = numeric.gt(0) if strict else numeric.ge(0)
+    derived = derived.where(numeric.notna(), pd.NA)
+    return direct.where(direct.notna(), derived)
+
+
+def _resolve_numeric(row: pd.Series, direct: str, aliases: list[str]) -> tuple[float, str]:
+    direct_value = _num(row.get(direct))
+    if pd.notna(direct_value):
+        return direct_value, "DIRECT"
+    for alias in aliases:
+        value = _num(row.get(alias))
+        if pd.notna(value):
+            return value, "ALIAS"
+    return float("nan"), "MISSING"
+
+
+def _first_numeric(row: pd.Series, columns: list[str]) -> float:
+    for column in columns:
+        value = _num(row.get(column))
+        if pd.notna(value):
+            return value
+    return float("nan")
+
+
+def _optional_bool(value: Any) -> Any:
+    if value is None or pd.isna(value):
+        return pd.NA
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y", "positive", "nonnegative"}:
+        return True
+    if text in {"false", "0", "no", "n", "negative"}:
+        return False
+    return pd.NA
 
 
 def _pattern_family(value: Any) -> str:
@@ -447,4 +694,4 @@ def _num(value: Any) -> float:
         out = float(value)
     except (TypeError, ValueError):
         return float("nan")
-    return float("nan") if pd.isna(out) else out
+    return out if math.isfinite(out) else float("nan")

@@ -35,6 +35,7 @@ from ai_trading_system.domains.investigator.stage_pattern_context import (
     normalise_pattern_context,
     rank_pattern_symbols,
 )
+from ai_trading_system.domains.investigator.trap_summary import build_trap_summary_metrics
 from ai_trading_system.domains.investigator.volume_anatomy import score_volume_anatomy
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 
@@ -451,6 +452,26 @@ class InvestigatorService:
         stage_pattern_context: dict[str, Any] | None = None,
         intake_diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        stage_pattern_context = stage_pattern_context or {}
+        candidate_rows = int((intake_diagnostics or {}).get("candidate_union_rows", len(scores)) or 0)
+        trap_metrics = build_trap_summary_metrics(
+            current_traps=traps,
+            archive=archived,
+            run_date=context.run_date,
+            candidate_union_rows=candidate_rows,
+        )
+        stage_summary_keys = (
+            "stage_input_complete_rows",
+            "stage_input_incomplete_rows",
+            "stage_input_missing_field_counts",
+            "stage_missing_sma200_rows",
+            "stage_missing_sma50_slope_rows",
+            "stage_missing_sma200_slope_rows",
+            "stage_missing_near_high_rows",
+            "stage_unknown_rows",
+            "stage_label_counts",
+            "stage_input_confidence_counts",
+        )
         verdict_counts = scores.get("verdict", pd.Series(dtype=str)).value_counts().to_dict() if not scores.empty else {}
         status_counts = active.get("status", pd.Series(dtype=str)).value_counts().to_dict() if not active.empty else {}
         trigger_counts = gainers.get("trigger_reason", pd.Series(dtype=str)).value_counts().to_dict() if not gainers.empty else {}
@@ -465,7 +486,7 @@ class InvestigatorService:
             "stealth_accumulation_count": int(trigger_counts.get("STEALTH_ACCUMULATION", 0)),
             "scored_count": int(len(scores)),
             "active_count": int(len(active)),
-            "trap_count": int(len(traps)),
+            "trap_count": trap_metrics["unique_trap_symbols"],
             "archived_count": int(len(archived)),
             "final_gate_pending_count": int(len(gate)),
             "high_conviction_count": int(verdict_counts.get("HIGH_CONVICTION", 0)),
@@ -476,9 +497,11 @@ class InvestigatorService:
             "investigator_early_accumulation_count": int(len(investigator_early_accumulation))
             if investigator_early_accumulation is not None
             else 0,
-            "stage_pattern_context": stage_pattern_context or {},
+            "stage_pattern_context": stage_pattern_context,
             "performance": performance_summary or {},
             **(intake_diagnostics or {}),
+            **{key: stage_pattern_context[key] for key in stage_summary_keys if key in stage_pattern_context},
+            **trap_metrics,
         }
 
 

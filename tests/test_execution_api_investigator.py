@@ -160,7 +160,12 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     assert body["summary"]["active_queue"] == 2
     assert body["summary"]["new_in_window"] == body["summary"]["new_candidates"]
     assert body["summary"]["trap_count"] == 1
-    assert body["summary"]["fresh_trap_today"] == 2
+    assert body["summary"]["fresh_trap_today"] == 1
+    assert body["summary"]["fresh_trap_symbols_today"] == 1
+    assert body["summary"]["unique_trap_symbols"] == 1
+    assert body["summary"]["trap_evidence_events"] == 2
+    assert body["summary"]["trap_candidate_rate"] == 0.5
+    assert body["summary"]["trap_summary_valid"] is True
     assert body["summary"]["repeat_trap"] == 1
     assert body["raw_summary"]["active_count"] == 2
     assert body["summary_deltas"]["active_queue"] == 1

@@ -617,6 +617,8 @@ def test_build_integrated_stock_scan_view_preserves_discoveries_and_best_context
                 "rel_strength_score": 90.0,
                 "stage2_score": 88.0,
                 "close": 110.0,
+                "sma_200": 101.0,
+                "sma50_slope_20d_pct": 1.25,
             }
         ]
     )
@@ -716,6 +718,8 @@ def test_build_integrated_stock_scan_view_preserves_discoveries_and_best_context
     assert int(lookup["RANKED1"]["rank"]) == 1
     assert bool(lookup["RANKED1"]["discovered_by_pattern_scan"]) is False
     assert lookup["RANKED1"]["category"] == "BUY"
+    assert float(lookup["RANKED1"]["sma_200"]) == 101.0
+    assert float(lookup["RANKED1"]["sma50_slope_20d_pct"]) == 1.25
 
     assert pd.isna(lookup["DISCOVERED"]["rank"])
     assert pd.isna(lookup["DISCOVERED"]["composite_score"])

@@ -9,6 +9,7 @@ from ai_trading_system.domains.features.indicators import (
     add_stage2_features,
     add_volume_zscore_features,
 )
+from ai_trading_system.domains.ranking.contracts import RANKED_SIGNAL_COLUMNS
 
 
 def _make_frame(
@@ -60,6 +61,10 @@ def test_structural_stage2_truth_table_and_alias_hold() -> None:
     assert float(last["stage2_score"]) == 100.0
     assert last["stage2_hard_fail_reason"] == ""
     assert last["stage2_fail_reason"] == ""
+    assert pd.notna(last["sma_200"])
+    assert pd.notna(last["sma50_slope_20d_pct"])
+    assert "sma_200" in RANKED_SIGNAL_COLUMNS
+    assert "sma50_slope_20d_pct" in RANKED_SIGNAL_COLUMNS
 
 
 def test_non_structural_high_score_becomes_candidate_not_stage2() -> None:
