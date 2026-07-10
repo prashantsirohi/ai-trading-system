@@ -58,7 +58,9 @@ def _seed_ohlcv(path: Path) -> None:
             ('WWW', 'NSE', '2026-05-06', 106, 106, 106, 106, 1000, false, 'equity'),
             ('WWW', 'NSE', '2026-05-07', 108.5, 108.5, 108.5, 108.5, 1000, false, 'equity'),
             ('BBB', 'NSE', '2026-05-06', 100, 101, 99, 100, 1000, false, 'equity'),
-            ('BBB', 'NSE', '2026-05-07', 100, 103, 99, 102, 3000, false, 'equity')
+            ('BBB', 'NSE', '2026-05-07', 100, 103, 99, 102, 3000, false, 'equity'),
+            ('EARLY', 'NSE', '2026-05-06', 116, 119, 115, 118, 1000, false, 'equity'),
+            ('EARLY', 'NSE', '2026-05-07', 118, 122, 117, 120.5, 2500, false, 'equity')
             """
         )
         stealth_rows = [
@@ -97,7 +99,8 @@ def _seed_ohlcv(path: Path) -> None:
             ('AAA', 'NSE', '2026-05-07', 65),
             ('WWW', 'NSE', '2026-05-07', 55),
             ('STEALTH', 'NSE', '2026-04-30', 58),
-            ('BBB', 'NSE', '2026-05-07', 30)
+            ('BBB', 'NSE', '2026-05-07', 30),
+            ('EARLY', 'NSE', '2026-05-07', 62)
             """
         )
     finally:
@@ -181,6 +184,9 @@ def _rank_artifacts(project_root: Path, run_id: str) -> dict[str, dict[str, Stag
                 "momentum_recovery_score": 71,
                 "volume_confirmation_score": 75,
                 "active_rank_pctile": 55,
+                "composite_score": 65,
+                "volume_ratio_20": 2.5,
+                "delivery_pct": 62,
                 "breakout_state": "",
                 "graduation_status": "pattern_confirmed",
                 "watchlist_reason": "Fresh base with improving confirmation",
@@ -239,8 +245,14 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     assert early.iloc[0]["sector"] == "Industrials"
     assert early.iloc[0]["early_purity_bucket"] == "true_early"
     assert bool(early.iloc[0]["breakout_qualified"]) is False
+    early_score = scores.loc[scores["symbol_id"].eq("EARLY")].iloc[0]
+    assert early_score["primary_candidate_source"] == "EARLY_ACCUMULATION"
+    assert early_score["candidate_sources"] == "EARLY_ACCUMULATION"
+    assert bool(early_score["new_candidate_today"]) is True
     assert result.metadata["total_intake_count"] == 3
     assert result.metadata["investigator_early_accumulation_count"] == 1
+    assert result.metadata["candidate_union_rows"] == 4
+    assert result.metadata["early_accumulation_only_rows"] == 1
     assert result.metadata["daily_gainer_count"] == 1
     assert result.metadata["weekly_gainer_count"] == 1
     assert result.metadata["stealth_accumulation_count"] == 1
@@ -265,9 +277,14 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
         "investigator_payload",
     }
     with registry._reader() as conn:  # noqa: SLF001
-        assert conn.execute("SELECT COUNT(*) FROM investigator_scores").fetchone()[0] == 3
+        assert conn.execute("SELECT COUNT(*) FROM investigator_scores").fetchone()[0] == 4
         row = conn.execute("SELECT composite_score, rank_position FROM investigator_scores WHERE symbol_id = 'AAA'").fetchone()
         assert row == (82.0, 42.0)
+        source_row = conn.execute(
+            "SELECT primary_candidate_source, candidate_sources, candidate_source_count, new_candidate_today "
+            "FROM investigator_scores WHERE symbol_id = 'EARLY'"
+        ).fetchone()
+        assert source_row == ("EARLY_ACCUMULATION", "EARLY_ACCUMULATION", 1, True)
 
 
 def test_registry_migration_creates_investigator_cohort_performance(tmp_path: Path) -> None:
@@ -327,7 +344,81 @@ def test_registry_migration_creates_investigator_cohort_performance(tmp_path: Pa
         "candidate_tier",
         "qualified_breakout",
     }.issubset(score_columns)
+    assert {
+        "candidate_sources",
+        "primary_candidate_source",
+        "candidate_source_count",
+        "new_candidate_today",
+    }.issubset(score_columns)
     assert "PENDING" in str(column_info["data_quality_status"][4])
+
+
+def test_investigator_migrations_are_replay_safe(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path)
+
+    registry._apply_migrations()  # noqa: SLF001 - explicitly exercise startup replay behavior
+
+    with registry._reader() as conn:  # noqa: SLF001
+        score_columns = {row[1] for row in conn.execute("PRAGMA table_info('investigator_scores')").fetchall()}
+        lifecycle_columns = {row[1] for row in conn.execute("PRAGMA table_info('investigator_lifecycle')").fetchall()}
+        archive_columns = {row[1] for row in conn.execute("PRAGMA table_info('investigator_archive')").fetchall()}
+    source_columns = {
+        "candidate_sources",
+        "primary_candidate_source",
+        "candidate_source_count",
+        "new_candidate_today",
+    }
+    assert source_columns.issubset(score_columns)
+    assert source_columns.issubset(lifecycle_columns)
+    assert source_columns.issubset(archive_columns)
+
+
+def test_investigator_stage_reloads_previous_stage1_watchlist(tmp_path: Path, monkeypatch) -> None:
+    first_run_id = "pipeline-2026-05-07-first"
+    _seed_ohlcv(tmp_path / "data" / "ohlcv.duckdb")
+    registry = RegistryStore(tmp_path)
+    first_context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id=first_run_id,
+        run_date="2026-05-07",
+        stage_name="investigator",
+        attempt_number=1,
+        registry=registry,
+        params={},
+        artifacts=_rank_artifacts(tmp_path, first_run_id),
+    )
+    first_result = InvestigatorStage().run(first_context)
+    active_artifact = next(artifact for artifact in first_result.artifacts if artifact.artifact_type == "active_watchlist")
+    first_active = pd.read_csv(active_artifact.uri)
+    assert "EARLY" in set(first_active["symbol_id"])
+
+    monkeypatch.setattr(registry, "get_latest_artifact", lambda **_: [active_artifact])
+    second_run_id = "pipeline-2026-05-08-second"
+    second_artifacts = _rank_artifacts(tmp_path, second_run_id)
+    early_path = Path(second_artifacts["rank"]["early_accumulation_scan"].uri)
+    pd.DataFrame(columns=["symbol_id", "early_accumulation_score"]).to_csv(early_path, index=False)
+    second_context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id=second_run_id,
+        run_date="2026-05-08",
+        stage_name="investigator",
+        attempt_number=1,
+        registry=registry,
+        params={},
+        artifacts=second_artifacts,
+    )
+
+    second_result = InvestigatorStage().run(second_context)
+    scores_artifact = next(artifact for artifact in second_result.artifacts if artifact.artifact_type == "investigator_scores")
+    second_scores = pd.read_csv(scores_artifact.uri)
+    carried = second_scores.loc[second_scores["symbol_id"].eq("EARLY")].iloc[0]
+
+    assert carried["primary_candidate_source"] == "PREVIOUS_WATCHLIST"
+    assert carried["candidate_sources"] == "PREVIOUS_WATCHLIST"
+    assert bool(carried["new_candidate_today"]) is False
+    assert second_result.metadata["previous_watchlist_rows"] >= 1
 
 
 def test_registry_migration_creates_sprint3_final_gate_columns(tmp_path: Path) -> None:

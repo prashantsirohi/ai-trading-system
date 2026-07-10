@@ -59,6 +59,8 @@ def load_investigator_intake(
     min_green_days_5d: int = 3,
     include_weekly: bool = True,
     include_stealth: bool = True,
+    symbols: list[str] | None = None,
+    require_trigger: bool = True,
 ) -> pd.DataFrame:
     """Return latest NSE investigator triggers, enriched with rank fields when present."""
 
@@ -197,6 +199,9 @@ def load_investigator_intake(
         return _empty()
     rows.loc[:, "symbol_id"] = rows["symbol_id"].map(as_symbol)
     rows = _attach_rank(rows, ranked_signals)
+    if symbols is not None:
+        selected_symbols = {as_symbol(symbol) for symbol in symbols if as_symbol(symbol)}
+        rows = rows.loc[rows["symbol_id"].isin(selected_symbols)].copy()
     if "market_cap_cr" in rows.columns:
         market_cap_ok = rows["market_cap_cr"].isna() | (pd.to_numeric(rows["market_cap_cr"], errors="coerce") >= min_market_cap_cr)
     else:
@@ -221,11 +226,13 @@ def load_investigator_intake(
         & (return_20d >= float(stealth_20d_pct))
         & (green_days_5d >= int(min_green_days_5d))
     )
-    mask = (daily_spike | weekly_gainer | stealth_accumulation) & market_cap_ok
+    trigger_mask = daily_spike | weekly_gainer | stealth_accumulation
+    mask = (trigger_mask if require_trigger else pd.Series(True, index=rows.index)) & market_cap_ok
     out = rows.loc[mask].copy()
-    out.loc[:, "trigger_reason"] = "STEALTH_ACCUMULATION"
-    out.loc[daily_spike.loc[out.index], "trigger_reason"] = "DAILY_GAINER"
-    out.loc[weekly_gainer.loc[out.index] & ~daily_spike.loc[out.index], "trigger_reason"] = "WEEKLY_GAINER"
+    out.loc[:, "trigger_reason"] = pd.NA if not require_trigger else "STEALTH_ACCUMULATION"
+    if require_trigger:
+        out.loc[daily_spike.loc[out.index], "trigger_reason"] = "DAILY_GAINER"
+        out.loc[weekly_gainer.loc[out.index] & ~daily_spike.loc[out.index], "trigger_reason"] = "WEEKLY_GAINER"
     priority = {"DAILY_GAINER": 0, "WEEKLY_GAINER": 1, "STEALTH_ACCUMULATION": 2}
     out.loc[:, "_trigger_priority"] = out["trigger_reason"].map(priority).fillna(99)
     return (
@@ -236,6 +243,27 @@ def load_investigator_intake(
         )
         .drop(columns=["_trigger_priority"])
         .reset_index(drop=True)
+    )
+
+
+def load_investigator_snapshot(
+    *,
+    ohlcv_db_path: Path,
+    ranked_signals: pd.DataFrame,
+    symbols: list[str],
+    as_of: str | None = None,
+) -> pd.DataFrame:
+    """Load fresh trusted market rows for already-admitted Investigator symbols."""
+
+    if not symbols:
+        return _empty()
+    return load_investigator_intake(
+        ohlcv_db_path=ohlcv_db_path,
+        ranked_signals=ranked_signals,
+        as_of=as_of,
+        min_market_cap_cr=0.0,
+        symbols=symbols,
+        require_trigger=False,
     )
 
 

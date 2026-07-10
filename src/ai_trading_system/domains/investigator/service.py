@@ -9,6 +9,10 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 
 from ai_trading_system.domains.investigator.buyer_fingerprint import score_buyer_fingerprint
+from ai_trading_system.domains.investigator.candidate_union import (
+    build_candidate_union,
+    eligible_previous_watchlist,
+)
 from ai_trading_system.domains.investigator.cohort_performance import (
     build_performance_summary,
     build_threshold_recommendations,
@@ -17,7 +21,7 @@ from ai_trading_system.domains.investigator.cohort_performance import (
 )
 from ai_trading_system.domains.investigator.exit_monitor import attach_exit_monitoring
 from ai_trading_system.domains.investigator.fundamentals import load_fundamental_snapshot, score_fundamentals
-from ai_trading_system.domains.investigator.intake import load_investigator_intake
+from ai_trading_system.domains.investigator.intake import load_investigator_intake, load_investigator_snapshot
 from ai_trading_system.domains.investigator.lifecycle import apply_lifecycle
 from ai_trading_system.domains.investigator.move_classifier import classify_move
 from ai_trading_system.domains.investigator.pattern_scan import best_pattern_by_symbol, build_investigator_pattern_scan
@@ -61,7 +65,28 @@ class InvestigatorService:
             min_green_days_5d=int(context.params.get("investigator_min_green_days_5d", 3)),
             min_market_cap_cr=float(context.params.get("investigator_min_market_cap_cr", 500.0)),
         )
-        candidates = _merge_optional(gainers, breakout, ranked, stock_scan)
+        previous_watchlist = self._load_previous_watchlist(context)
+        candidates, intake_diagnostics = build_candidate_union(
+            event_intake=gainers,
+            early_accumulation=early_accumulation,
+            previous_watchlist=previous_watchlist,
+            ranked=ranked,
+            stock_scan=stock_scan,
+            breakout_scan=breakout,
+        )
+        market_snapshot = load_investigator_snapshot(
+            ohlcv_db_path=context.db_path,
+            ranked_signals=rank_context,
+            symbols=candidates.get("symbol_id", pd.Series(dtype=str)).astype(str).tolist(),
+            as_of=context.params.get("investigator_as_of") or context.run_date,
+        )
+        candidates = _refresh_market_snapshot(candidates, market_snapshot)
+        if not candidates.empty:
+            if "trade_date" not in candidates.columns:
+                candidates.loc[:, "trade_date"] = context.run_date
+            else:
+                missing_trade_date = pd.to_datetime(candidates["trade_date"], errors="coerce").isna()
+                candidates.loc[missing_trade_date, "trade_date"] = context.run_date
         candidates, stage_pattern_context = enrich_investigator_context(
             candidates,
             ranked=ranked,
@@ -84,6 +109,7 @@ class InvestigatorService:
                 gate=empty,
                 performance_summary=performance_summary,
                 investigator_early_accumulation=early_accumulation,
+                intake_diagnostics=intake_diagnostics,
                 stage_pattern_context=_stage_pattern_summary(stage_pattern_context, performance_frame),
             )
             payload = build_investigator_payload(
@@ -164,6 +190,7 @@ class InvestigatorService:
             gate=gate,
             performance_summary=performance_summary,
             investigator_early_accumulation=early_accumulation,
+            intake_diagnostics=intake_diagnostics,
             stage_pattern_context=_stage_pattern_summary({
                 **stage_pattern_context,
                 "rank_pattern_reused_rows": int(len(rank_patterns_for_merge)),
@@ -209,6 +236,57 @@ class InvestigatorService:
         self._persist_tables(context, artifacts)
         return StageResult(artifacts=artifacts, metadata=summary)
 
+    def _load_previous_watchlist(self, context: StageContext) -> pd.DataFrame:
+        if context.registry is None:
+            return pd.DataFrame()
+        try:
+            artifacts = context.registry.get_latest_artifact(
+                stage_name="investigator",
+                artifact_type="active_watchlist",
+                limit=1,
+                exclude_run_id=context.run_id,
+            )
+            if artifacts:
+                previous = _read_csv(Path(artifacts[0].uri))
+                if not previous.empty:
+                    return eligible_previous_watchlist(previous)
+        except Exception:
+            pass
+        try:
+            with context.registry._reader() as conn:  # noqa: SLF001
+                previous = conn.execute(
+                    """
+                    WITH latest AS (
+                        SELECT * EXCLUDE (_latest_row)
+                        FROM (
+                            SELECT
+                                *,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY symbol_id
+                                    ORDER BY trade_date DESC NULLS LAST, run_id DESC, attempt_number DESC
+                                ) AS _latest_row
+                            FROM investigator_lifecycle
+                            WHERE run_id <> ?
+                        )
+                        WHERE _latest_row = 1
+                    )
+                    SELECT
+                        latest.*,
+                        scores.stage_label,
+                        scores.pattern_state,
+                        scores.hard_trap_flag
+                    FROM latest
+                    LEFT JOIN investigator_scores AS scores
+                      ON scores.run_id = latest.run_id
+                     AND scores.attempt_number = latest.attempt_number
+                     AND scores.symbol_id = latest.symbol_id
+                    """,
+                    [context.run_id],
+                ).fetchdf()
+            return eligible_previous_watchlist(previous)
+        except Exception:
+            return pd.DataFrame()
+
     def _load_history(self, context: StageContext) -> pd.DataFrame:
         if context.registry is None:
             return pd.DataFrame()
@@ -229,7 +307,11 @@ class InvestigatorService:
                         rank_position,
                         final_score,
                         sector,
-                        trigger_reason
+                        trigger_reason,
+                        candidate_sources,
+                        primary_candidate_source,
+                        candidate_source_count,
+                        new_candidate_today
                     FROM investigator_scores
                     WHERE trade_date >= CAST(? AS DATE) - INTERVAL 60 DAY
                       AND trade_date < CAST(? AS DATE)
@@ -367,6 +449,7 @@ class InvestigatorService:
         performance_summary: dict[str, Any] | None = None,
         investigator_early_accumulation: pd.DataFrame | None = None,
         stage_pattern_context: dict[str, Any] | None = None,
+        intake_diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         verdict_counts = scores.get("verdict", pd.Series(dtype=str)).value_counts().to_dict() if not scores.empty else {}
         status_counts = active.get("status", pd.Series(dtype=str)).value_counts().to_dict() if not active.empty else {}
@@ -395,16 +478,23 @@ class InvestigatorService:
             else 0,
             "stage_pattern_context": stage_pattern_context or {},
             "performance": performance_summary or {},
+            **(intake_diagnostics or {}),
         }
 
 
-def _merge_optional(gainers: pd.DataFrame, *frames: pd.DataFrame | None) -> pd.DataFrame:
-    out = gainers.copy()
-    for frame in frames:
-        if frame is None or frame.empty or "symbol_id" not in frame.columns:
+def _refresh_market_snapshot(candidates: pd.DataFrame, snapshot: pd.DataFrame) -> pd.DataFrame:
+    if candidates.empty or snapshot is None or snapshot.empty or "symbol_id" not in snapshot.columns:
+        return candidates
+    fresh = snapshot.drop(columns=["trigger_reason"], errors="ignore").drop_duplicates("symbol_id", keep="first")
+    out = candidates.merge(fresh, on="symbol_id", how="left", suffixes=("", "_snapshot"))
+    for column in fresh.columns:
+        if column == "symbol_id":
             continue
-        cols = ["symbol_id"] + [col for col in frame.columns if col != "symbol_id" and col not in out.columns]
-        out = out.merge(frame[cols], on="symbol_id", how="left")
+        snapshot_column = f"{column}_snapshot"
+        if snapshot_column not in out.columns:
+            continue
+        out.loc[:, column] = out[snapshot_column].where(out[snapshot_column].notna(), out[column])
+        out = out.drop(columns=[snapshot_column])
     return out
 
 
@@ -553,6 +643,34 @@ INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS = [
     "breakout_qualified",
     "graduation_status",
     "watchlist_reason",
+    "exchange",
+    "trade_date",
+    "sma_200",
+    "close_vs_sma200_pct",
+    "sma200_slope_20d_pct",
+    "days_since_200dma_reclaim",
+    "trend_score",
+    "adx_14",
+    "sma50_slope_20d_pct",
+    "delivery_pct",
+    "delivery_pct_score",
+    "delivery_pct_imputed",
+    "volume_ratio_20",
+    "volume_zscore_20",
+    "momentum_acceleration",
+    "return_20",
+    "return_60",
+    "rel_strength_score",
+    "relative_strength_score_early",
+    "trend_repair_score",
+    "active_rank",
+    "composite_score",
+    "composite_score_adjusted",
+    "breakout_type",
+    "breakout_score",
+    "pattern_state",
+    "pattern_signal_date",
+    "pattern_count_60d",
 ]
 
 
@@ -563,7 +681,10 @@ def _normalise_investigator_early_accumulation(frame: pd.DataFrame | None) -> pd
     rename_map = {
         "sector_name": "sector",
         "top_pattern_family": "pattern_family",
+        "top_pattern_state": "pattern_state",
+        "top_pattern_signal_date": "pattern_signal_date",
         "top_pattern_age_days": "pattern_age_days",
+        "date": "trade_date",
     }
     out = out.rename(columns={src: dst for src, dst in rename_map.items() if src in out.columns and dst not in out.columns})
     if "symbol_id" not in out.columns:
@@ -588,6 +709,28 @@ def _normalise_investigator_early_accumulation(frame: pd.DataFrame | None) -> pd
         "momentum_recovery_score",
         "volume_confirmation_score",
         "active_rank_pctile",
+        "sma_200",
+        "close_vs_sma200_pct",
+        "sma200_slope_20d_pct",
+        "days_since_200dma_reclaim",
+        "trend_score",
+        "adx_14",
+        "sma50_slope_20d_pct",
+        "delivery_pct",
+        "delivery_pct_score",
+        "volume_ratio_20",
+        "volume_zscore_20",
+        "momentum_acceleration",
+        "return_20",
+        "return_60",
+        "rel_strength_score",
+        "relative_strength_score_early",
+        "trend_repair_score",
+        "active_rank",
+        "composite_score",
+        "composite_score_adjusted",
+        "breakout_score",
+        "pattern_count_60d",
     ):
         out.loc[:, column] = pd.to_numeric(out[column], errors="coerce")
     out.loc[:, "breakout_qualified"] = out["breakout_qualified"].fillna(False).astype(bool)

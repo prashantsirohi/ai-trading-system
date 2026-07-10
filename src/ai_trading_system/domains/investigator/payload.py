@@ -76,7 +76,7 @@ def build_investigator_payload(
         trap_evidence=evidence,
         run_date=run_date,
     )
-    return {
+    decision = {
         "run_id": run_id or str(summary.get("run_id") or ""),
         "run_date": run_date or str(summary.get("run_date") or ""),
         "data_trust_status": data_trust_status,
@@ -107,6 +107,7 @@ def build_investigator_payload(
         },
         "row_details": _row_details(active, repeat_tracker, traps, archive_with_traps),
     }
+    return decision
 
 
 def _sort_investigator_early_accumulation(frame: pd.DataFrame | None) -> pd.DataFrame:
@@ -269,7 +270,7 @@ def _decision_summary(
     evidence_count = int(len(trap_evidence)) if trap_evidence is not None else traps_count
     fresh_trap_today = _fresh_trap_count(trap_evidence, run_date)
     repeat_trap = _repeat_trap_count(trap_evidence)
-    return {
+    decision = {
         "total_intake": total_intake,
         "total_intake_count": total_intake,
         "daily_gainers": total_intake,
@@ -291,15 +292,31 @@ def _decision_summary(
         "investigator_early_accumulation_count": int(summary.get("investigator_early_accumulation_count", 0) or 0),
         "archived": int(summary.get("archived_count", len(archive))),
     }
+    for key in (
+        "candidate_union_rows",
+        "event_candidate_rows",
+        "early_accumulation_candidate_rows",
+        "early_accumulation_only_rows",
+        "previous_watchlist_rows",
+        "multi_source_candidate_rows",
+        "candidate_source_counts",
+    ):
+        if key in summary:
+            decision[key] = summary[key]
+    return decision
 
 
 def _summary_deltas(current: dict[str, Any], previous: dict[str, Any] | None) -> dict[str, int]:
     previous = previous or {}
-    return {
-        key: int(value) - int(previous.get(key, previous.get(_legacy_summary_key(key), 0)) or 0)
-        for key, value in current.items()
-        if key != "trap_rate"
-    }
+    output: dict[str, int] = {}
+    for key, value in current.items():
+        if key == "trap_rate":
+            continue
+        try:
+            output[key] = int(value) - int(previous.get(key, previous.get(_legacy_summary_key(key), 0)) or 0)
+        except (TypeError, ValueError):
+            continue
+    return output
 
 
 def _legacy_summary_key(key: str) -> str:

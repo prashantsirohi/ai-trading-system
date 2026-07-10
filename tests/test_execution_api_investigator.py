@@ -36,6 +36,8 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
                 {"symbol_id": "LOWPRI", "repeat_score": 99, "appearance_count_20d": 6, "high_priority_repeat": False},
                 {
                     "symbol_id": "AAA",
+                    "primary_candidate_source": "EARLY_ACCUMULATION",
+                    "candidate_sources": "EARLY_ACCUMULATION|PREVIOUS_WATCHLIST",
                     "repeat_score": 60,
                     "appearance_count_20d": 4,
                     "price_progression_pct": 8,
@@ -50,6 +52,8 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
                 {"symbol_id": "WATCH", "status": "Watchlist", "verdict": "WATCH_ONLY", "score_current": 45, "rank_change_20d": 20},
                 {
                     "symbol_id": "AAA",
+                    "primary_candidate_source": "EARLY_ACCUMULATION",
+                    "candidate_sources": "EARLY_ACCUMULATION|PREVIOUS_WATCHLIST",
                     "status": "Active Research",
                     "verdict": "MEDIUM_CONVICTION",
                     "score_current": 70,
@@ -165,6 +169,8 @@ def test_investigator_endpoint_returns_latest_artifacts(tmp_path: Path, monkeypa
     assert body["decision_queue"][0]["symbol_id"] == "AAA"
     assert body["decision_queue"][0]["s1_promotion_state"] == "S1_TO_S2_TRANSITION"
     assert body["decision_queue"][0]["pattern_score"] == 72
+    assert body["decision_queue"][0]["primary_candidate_source"] == "EARLY_ACCUMULATION"
+    assert body["active_watchlist"][0]["candidate_sources"] == "EARLY_ACCUMULATION|PREVIOUS_WATCHLIST"
     assert body["closest_to_high_conviction"][0]["symbol_id"] == "AAA"
     assert body["pattern_confirmation"]["scanned_count"] == 1
     assert body["pattern_confirmation"]["failed_s1"] == 0

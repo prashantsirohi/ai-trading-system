@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from ai_trading_system.domains.investigator.candidate_union import is_trigger_observation
+
 
 def build_repeat_tracker(
     *,
@@ -33,16 +35,30 @@ def build_repeat_tracker(
                     "final_score",
                     "sector",
                     "trigger_reason",
+                    "candidate_sources",
+                    "primary_candidate_source",
+                    "candidate_source_count",
+                    "new_candidate_today",
                 )
                 if col in current.columns
             ]
         ].copy()
-        current_log.loc[:, "appeared"] = True
+        current_log.loc[:, "appeared"] = current_log.get(
+            "candidate_sources", pd.Series("", index=current_log.index)
+        ).map(is_trigger_observation)
         history = current_log if history.empty else pd.concat([history, current_log], ignore_index=True)
     if history.empty or "symbol_id" not in history.columns:
         return _empty()
     history.loc[:, "trade_date"] = pd.to_datetime(history["trade_date"], errors="coerce")
     history = history.dropna(subset=["symbol_id", "trade_date"])
+    derived_appeared = history.get(
+        "candidate_sources", pd.Series("", index=history.index)
+    ).map(is_trigger_observation)
+    if "appeared" not in history.columns:
+        history.loc[:, "appeared"] = derived_appeared.astype(bool)
+    else:
+        history.loc[:, "appeared"] = history["appeared"].where(history["appeared"].notna(), derived_appeared)
+        history.loc[:, "appeared"] = history["appeared"].map(lambda value: True if pd.isna(value) else bool(value))
     latest_date = history["trade_date"].max()
     if pd.isna(latest_date):
         return _empty()
@@ -52,14 +68,18 @@ def build_repeat_tracker(
     rows: list[dict[str, object]] = []
     for symbol, group in window.groupby("symbol_id", sort=True):
         group = group.sort_values("trade_date", kind="stable")
+        observations = group.loc[group["appeared"]].copy()
+        if observations.empty:
+            observations = group.head(1).copy()
         last = group.iloc[-1]
-        first = group.iloc[0]
+        first = observations.iloc[0]
+        last_observation = observations.iloc[-1]
         rows.append(
             {
                 "symbol_id": symbol,
                 "first_seen_date": str(first["trade_date"].date()),
-                "last_seen_date": str(last["trade_date"].date()),
-                "days_since_last_seen": int((latest_date - last["trade_date"]).days),
+                "last_seen_date": str(last_observation["trade_date"].date()),
+                "days_since_last_seen": int((latest_date - last_observation["trade_date"]).days),
                 "appearance_count_5d": _count_since(group, latest_date, 5),
                 "appearance_count_10d": _count_since(group, latest_date, 10),
                 "appearance_count_15d": _count_since(group, latest_date, 15),
@@ -96,7 +116,8 @@ def build_repeat_tracker(
 
 
 def _count_since(group: pd.DataFrame, latest_date: pd.Timestamp, days: int) -> int:
-    return int((group["trade_date"] >= latest_date - pd.Timedelta(days=int(days))).sum())
+    appeared = group.get("appeared", pd.Series(True, index=group.index)).map(lambda value: True if pd.isna(value) else bool(value))
+    return int(((group["trade_date"] >= latest_date - pd.Timedelta(days=int(days))) & appeared).sum())
 
 
 def _count_trigger_since(group: pd.DataFrame, latest_date: pd.Timestamp, days: int, trigger_reason: str) -> int:
@@ -104,7 +125,8 @@ def _count_trigger_since(group: pd.DataFrame, latest_date: pd.Timestamp, days: i
         return 0
     in_window = group["trade_date"] >= latest_date - pd.Timedelta(days=int(days))
     triggers = group["trigger_reason"].fillna("").astype(str).str.upper().eq(trigger_reason)
-    return int((in_window & triggers).sum())
+    appeared = group.get("appeared", pd.Series(True, index=group.index)).map(lambda value: True if pd.isna(value) else bool(value))
+    return int((in_window & triggers & appeared).sum())
 
 
 def _attach_sector_peer_counts(frame: pd.DataFrame) -> pd.DataFrame:

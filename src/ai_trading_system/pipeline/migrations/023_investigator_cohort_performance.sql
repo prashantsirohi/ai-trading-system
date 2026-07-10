@@ -42,6 +42,9 @@ DROP INDEX IF EXISTS idx_investigator_cohort_sector;
 DROP INDEX IF EXISTS idx_investigator_cohort_data_quality_status;
 DROP INDEX IF EXISTS idx_investigator_cohort_symbol_date;
 DROP INDEX IF EXISTS idx_investigator_cohort_date_verdict;
+DROP INDEX IF EXISTS idx_investigator_cohort_stage_label;
+DROP INDEX IF EXISTS idx_investigator_cohort_pattern_family;
+DROP INDEX IF EXISTS idx_investigator_cohort_candidate_tier;
 
 ALTER TABLE investigator_cohort_performance ALTER COLUMN data_quality_status SET DEFAULT 'PENDING';
 

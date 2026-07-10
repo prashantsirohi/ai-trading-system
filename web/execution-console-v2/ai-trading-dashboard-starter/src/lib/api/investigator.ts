@@ -82,6 +82,8 @@ const FALLBACK: InvestigatorSnapshot = {
   decision_queue: [
     {
       symbol_id: 'KICL',
+      primary_candidate_source: 'EARLY_ACCUMULATION',
+      candidate_sources: 'EARLY_ACCUMULATION|PREVIOUS_WATCHLIST',
       decision_verdict: 'Investigate',
       decision_reason: 'Repeat + price holding',
       investigator_score: 78,
@@ -150,6 +152,8 @@ const FALLBACK: InvestigatorSnapshot = {
     {
       symbol: 'KICL',
       symbol_id: 'KICL',
+      primary_candidate_source: 'EARLY_ACCUMULATION',
+      candidate_sources: 'EARLY_ACCUMULATION|PREVIOUS_WATCHLIST',
       sector: 'Industrials',
       close: 126,
       early_accumulation_score: 82,
@@ -228,7 +232,7 @@ const FALLBACK: InvestigatorSnapshot = {
     { symbol_id: 'KILBURN', pattern_family: 'cup_handle', pattern_state: 'watchlist', pattern_lifecycle_state: 'watchlist', pattern_score: 66, setup_quality: 61, s1_promotion_state: 'S1_NEAR_BREAKOUT', promotion_reason: 'Pattern quality near breakout threshold' },
   ],
   active_watchlist: [
-    { symbol_id: 'KICL', decision_verdict: 'Investigate', decision_reason: 'Repeat + price holding', investigator_score: 78, appearance_count_20d: 5, price_progression_pct: 8.8, rank_change_20d: -10, volume_signal: 'Rising', sector: 'Industrials', setup: 'Weekly Gainer', days_since_last_seen: 0, pattern_family: 'round_bottom', pattern_state: 'watchlist', pattern_score: 72, setup_quality: 63, s1_promotion_state: 'S1_TO_S2_TRANSITION', promotion_reason: 'High pattern score with volume confirmation' },
+    { symbol_id: 'KICL', primary_candidate_source: 'EARLY_ACCUMULATION', candidate_sources: 'EARLY_ACCUMULATION|PREVIOUS_WATCHLIST', decision_verdict: 'Investigate', decision_reason: 'Repeat + price holding', investigator_score: 78, appearance_count_20d: 5, price_progression_pct: 8.8, rank_change_20d: -10, volume_signal: 'Rising', sector: 'Industrials', setup: 'Weekly Gainer', days_since_last_seen: 0, pattern_family: 'round_bottom', pattern_state: 'watchlist', pattern_score: 72, setup_quality: 63, s1_promotion_state: 'S1_TO_S2_TRANSITION', promotion_reason: 'High pattern score with volume confirmation' },
     { symbol_id: 'KILBURN', decision_verdict: 'Watch', decision_reason: 'Repeat but rank slipping', investigator_score: 71, appearance_count_20d: 4, price_progression_pct: 8.8, rank_change_20d: 44, volume_signal: 'Flat', sector: 'Capital Goods', setup: 'Repeat Gainer', days_since_last_seen: 1, pattern_family: 'cup_handle', pattern_state: 'watchlist', pattern_score: 66, setup_quality: 61, s1_promotion_state: 'S1_NEAR_BREAKOUT', promotion_reason: 'Pattern quality near breakout threshold' },
   ],
   archive_summary: { count: 1, by_reason: { ONE_CANDLE_DRAMA: 1 }, rows: [{ symbol_id: 'XYZ', drop_reason: 'ONE_CANDLE_DRAMA', verdict: 'WATCH_ONLY' }] },

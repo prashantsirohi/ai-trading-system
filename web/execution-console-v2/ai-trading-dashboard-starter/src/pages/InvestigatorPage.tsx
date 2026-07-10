@@ -286,6 +286,7 @@ function ActionQueue({ rows, fallback, highConvictionCount, onOpen }: { rows: Ro
                 <th className="px-3 py-2">Symbol</th>
                 <th className="px-3 py-2">Verdict</th>
                 <th className="px-3 py-2">Reason</th>
+                <th className="px-3 py-2">Source</th>
                 <th className="px-3 py-2">S1 State</th>
                 <th className="px-3 py-2">Pattern</th>
                 <th className="px-3 py-2 text-right">Pattern Score</th>
@@ -303,6 +304,7 @@ function ActionQueue({ rows, fallback, highConvictionCount, onOpen }: { rows: Ro
                   <td className="px-3 py-2 font-semibold">{symbolOf(row)}</td>
                   <td className="px-3 py-2"><VerdictBadge value={row.decision_verdict} /></td>
                   <td className="px-3 py-2 text-slate-300">{text(row.decision_reason)}</td>
+                  <td className="px-3 py-2">{text(row.primary_candidate_source, '-')}</td>
                   <td className="px-3 py-2"><S1StateBadge value={row.s1_promotion_state} /></td>
                   <td className="px-3 py-2">{text(row.pattern_family)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fixed(row.pattern_score)}</td>
@@ -533,7 +535,7 @@ function ActiveTable({ rows, filters, trapFilter, onClearTrapFilter, onToggleFil
           <table className="min-w-[1320px] text-left text-xs">
             <thead className="uppercase text-slate-500">
               <tr>
-                {['Symbol', 'Verdict', 'S1 State', 'Pattern', 'Pattern Score', 'Setup', 'Sector', 'Score', 'Repeat', 'Price vs First', 'Rank Change', 'Volume', 'Days Stale', 'Trap Flags', 'Last Seen', 'Action'].map((head) => (
+                {['Symbol', 'Verdict', 'Source', 'S1 State', 'Pattern', 'Pattern Score', 'Setup', 'Sector', 'Score', 'Repeat', 'Price vs First', 'Rank Change', 'Volume', 'Days Stale', 'Trap Flags', 'Last Seen', 'Action'].map((head) => (
                   <th key={head} className="px-3 py-2">{head}</th>
                 ))}
               </tr>
@@ -543,6 +545,7 @@ function ActiveTable({ rows, filters, trapFilter, onClearTrapFilter, onToggleFil
                 <tr key={symbolOf(row)} className="text-slate-200 hover:bg-slate-800/35">
                   <td className="px-3 py-2 font-semibold">{symbolOf(row)}</td>
                   <td className="px-3 py-2"><VerdictBadge value={row.decision_verdict} /></td>
+                  <td className="px-3 py-2">{text(row.primary_candidate_source, '-')}</td>
                   <td className="px-3 py-2"><S1StateBadge value={row.s1_promotion_state} /></td>
                   <td className="px-3 py-2">{text(row.pattern_family)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fixed(row.pattern_score)}</td>
@@ -597,6 +600,7 @@ function InvestigatorDrawer({ row, details, onClose }: { row: Row | null; detail
             <p className="text-xs uppercase tracking-wide text-slate-500">Investigator Case</p>
             <h2 className="text-xl font-semibold text-white">{symbol}</h2>
             <p className="mt-1 text-sm text-slate-400">{text(summary.sector)} | {text(summary.decision_reason)}</p>
+            <p className="mt-1 text-xs text-slate-500">Sources: {text(summary.candidate_sources, text(summary.primary_candidate_source, '-'))}</p>
             <div className="mt-2"><S1StateBadge value={summary.s1_promotion_state} /></div>
           </div>
           <button type="button" className="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800" onClick={onClose}>Close</button>
