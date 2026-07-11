@@ -22,6 +22,36 @@ def test_early_accumulation_only_enters_union() -> None:
     assert diagnostics["early_accumulation_only_rows"] == 1
 
 
+def test_only_eligible_canonical_stage1_rows_enter_union() -> None:
+    candidates, diagnostics = build_candidate_union(
+        event_intake=pd.DataFrame(),
+        early_accumulation=pd.DataFrame([
+            {"symbol_id": "KEEP", "stage1_maturity_score": 72, "stage1_eligible": True},
+            {"symbol_id": "BLOCK", "stage1_maturity_score": 85, "stage1_eligible": False},
+        ]),
+    )
+    assert candidates["symbol_id"].tolist() == ["KEEP"]
+    assert candidates.iloc[0]["primary_candidate_source"] == "STAGE1_SCAN"
+    assert candidates.iloc[0]["trigger_reason"] == "STAGE1_SCAN"
+    assert diagnostics["candidate_source_counts"]["STAGE1_SCAN"] == 1
+
+
+def test_blocked_stage1_context_reaches_independently_admitted_event() -> None:
+    candidates, _ = build_candidate_union(
+        event_intake=pd.DataFrame([{"symbol_id": "BLOCK", "trigger_reason": "DAILY_GAINER"}]),
+        early_accumulation=pd.DataFrame([{
+            "symbol_id": "BLOCK", "stage1_maturity_score": 84,
+            "stage1_eligible": False, "stage1_substate": "NOT_STAGE1",
+            "stage1_block_reasons": '["STAGE4_HARD_GUARD"]',
+        }]),
+    )
+    row = candidates.iloc[0]
+    assert row["primary_candidate_source"] == "DAILY_GAINER"
+    assert "STAGE1_SCAN" not in row["candidate_sources"]
+    assert row["stage1_substate"] == "NOT_STAGE1"
+    assert row["stage1_block_reasons"] == '["STAGE4_HARD_GUARD"]'
+
+
 def test_duplicate_multi_source_candidate_is_deterministic_and_complete() -> None:
     event = pd.DataFrame(
         [

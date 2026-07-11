@@ -59,6 +59,16 @@ def load_fundamental_snapshot(
 def score_fundamentals(frame: pd.DataFrame, fundamental_snapshot: pd.DataFrame | None) -> pd.DataFrame:
     out = frame.copy()
     if fundamental_snapshot is not None and not fundamental_snapshot.empty:
+        # Rank/Stage-1 contexts can carry prior optional fundamentals fields.
+        # The Investigator snapshot is authoritative; clear stale merge
+        # variants so pandas never produces recursively suffixed duplicates.
+        snapshot_columns = set(fundamental_snapshot.columns) - {"symbol_id"}
+        stale_columns = [
+            column for column in out.columns
+            if column in snapshot_columns
+            or any(column == f"{name}_{suffix}" for name in snapshot_columns for suffix in ("x", "y"))
+        ]
+        out = out.drop(columns=stale_columns, errors="ignore")
         out = out.merge(fundamental_snapshot, on="symbol_id", how="left")
     if "fundamental_status" not in out.columns:
         out.loc[:, "fundamental_status"] = "MISSING"

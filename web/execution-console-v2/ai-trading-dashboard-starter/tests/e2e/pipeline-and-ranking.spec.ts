@@ -89,7 +89,7 @@ test.describe('execution-console-v2 smoke', () => {
     await expect(page.getByText('Fresh Traps').first()).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Pattern Confirmation' })).toBeVisible();
     await expect(page.getByText('S1 TO S2 TRANSITION').first()).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Investigator Early Accumulation' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Investigator Stage-1 Emerging Leaders' })).toBeVisible();
     await expect(page.getByText('pattern confirmed').first()).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Action Queue' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'Source' }).first()).toBeVisible();

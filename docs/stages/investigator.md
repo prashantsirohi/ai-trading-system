@@ -109,6 +109,13 @@ $DATA_ROOT/pipeline_runs/<run_id>/investigator/attempt_<n>/
 | `investigator_summary` | `investigator_summary.json` | Counts and run metadata. |
 | `investigator_payload` | `investigator_payload.json` | API/dashboard decision-board payload. |
 
+Eligible rows from rank's canonical `stage1_scan` enter with source
+`STAGE1_SCAN`. Score band, structural substate, maturity/emerging scores,
+Golden Cross/MA-gap diagnostics, and promotion guards remain research-only.
+Independently admitted event rows retain blocked Stage-1 diagnostic context but
+cannot be promoted by it. Investigator continues to force
+`execution_eligible = False`.
+
 ## Persistent Tables
 
 The stage persists selected artifact rows to the control-plane registry database when `context.registry` is available.

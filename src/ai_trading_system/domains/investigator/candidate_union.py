@@ -11,14 +11,15 @@ SOURCE_PRIORITY = (
     "DAILY_GAINER",
     "WEEKLY_GAINER",
     "STEALTH_ACCUMULATION",
+    "STAGE1_SCAN",
     "EARLY_ACCUMULATION",
     "PREVIOUS_WATCHLIST",
     "BREAKOUT_CONTEXT",
     "RANK_CONTEXT",
     "STOCK_SCAN_CONTEXT",
 )
-ADMISSION_SOURCES = frozenset(SOURCE_PRIORITY[:5])
-CURRENT_ADMISSION_SOURCES = frozenset(SOURCE_PRIORITY[:4])
+ADMISSION_SOURCES = frozenset(SOURCE_PRIORITY[:6])
+CURRENT_ADMISSION_SOURCES = frozenset(SOURCE_PRIORITY[:5])
 ACTIVE_STATUSES = frozenset({"NEW_TRIGGER", "TRACKING", "ACTIVE_RESEARCH", "HIGH_CONVICTION", "WATCHLIST"})
 
 
@@ -35,6 +36,13 @@ def build_candidate_union(
 
     event = _normalise(event_intake)
     early = _normalise(early_accumulation)
+    early_context = early.copy()
+    if (
+        "stage1_maturity_score" in early.columns
+        and pd.to_numeric(early["stage1_maturity_score"], errors="coerce").notna().any()
+        and "stage1_eligible" in early.columns
+    ):
+        early = early.loc[_boolish(early, "stage1_eligible")].reset_index(drop=True)
     previous = eligible_previous_watchlist(previous_watchlist)
     ranked_context = _normalise(ranked)
     stock_context = _normalise(stock_scan)
@@ -47,7 +55,9 @@ def build_candidate_union(
 
     frames = {
         "event": _collapse(event),
-        "early": _collapse(early),
+        # All Stage-1 rows remain enrichments for independently admitted event
+        # candidates; only eligible rows are permitted to admit by STAGE1_SCAN.
+        "early": _collapse(early_context),
         "stock": _collapse(stock_context),
         "ranked": _collapse(ranked_context),
         "breakout": _collapse(breakout_context),
@@ -70,7 +80,13 @@ def build_candidate_union(
         row["symbol_id"] = symbol
         sources = set(event_sources.get(symbol, ()))
         if symbol in early_symbols:
-            sources.add("EARLY_ACCUMULATION")
+            eligible = lookups["early"].get(symbol, {}).get("stage1_eligible")
+            maturity = lookups["early"].get(symbol, {}).get("stage1_maturity_score")
+            is_stage1 = pd.notna(pd.to_numeric(pd.Series([maturity]), errors="coerce").iloc[0])
+            if is_stage1 and str(eligible).strip().lower() in {"true", "1", "yes", "y"}:
+                sources.add("STAGE1_SCAN")
+            elif not is_stage1:
+                sources.add("EARLY_ACCUMULATION")
         if symbol in previous_symbols:
             sources.add("PREVIOUS_WATCHLIST")
         if symbol in _symbols(breakout_context):
@@ -150,8 +166,8 @@ def eligible_previous_watchlist(frame: pd.DataFrame | None) -> pd.DataFrame:
     stage1 = (
         stage.isin({"STAGE_1_BASE", "STAGE_2_EARLY"})
         | (s1_state.str.startswith("S1_") & ~s1_state.eq("FAILED_S1"))
-        | sources.str.contains(r"(?:^|\|)EARLY_ACCUMULATION(?:\||$)", regex=True)
-        | primary.eq("EARLY_ACCUMULATION")
+        | sources.str.contains(r"(?:^|\|)(?:STAGE1_SCAN|EARLY_ACCUMULATION)(?:\||$)", regex=True)
+        | primary.isin({"STAGE1_SCAN", "EARLY_ACCUMULATION"})
         | ~has_stage_evidence
     )
     return _collapse(out.loc[safe & stage1].copy())
@@ -211,7 +227,7 @@ def _event_sources(frame: pd.DataFrame) -> dict[str, tuple[str, ...]]:
         return {}
     for _, row in frame.iterrows():
         source = str(row.get("trigger_reason") or "").strip().upper()
-        if source not in CURRENT_ADMISSION_SOURCES - {"EARLY_ACCUMULATION"}:
+        if source not in CURRENT_ADMISSION_SOURCES - {"EARLY_ACCUMULATION", "STAGE1_SCAN"}:
             continue
         found.setdefault(str(row["symbol_id"]), set()).add(source)
     return {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import json
 from math import isfinite
 from typing import Any
 
@@ -40,6 +41,8 @@ def build_investigator_payload(
     previous_summary: dict[str, Any] | None = None,
     data_trust_status: str = "unknown",
     stage_status: dict[str, str] | None = None,
+    stage1_watchlist: pd.DataFrame | None = None,
+    stage1_transitions: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     summary = summary or {}
     stage_status = stage_status or {}
@@ -92,6 +95,8 @@ def build_investigator_payload(
         "summary_deltas": _summary_deltas(decision_summary, previous_summary) if previous_summary else {},
         "decision_queue": decision_queue,
         "investigator_early_accumulation": _records(early_accumulation, limit=100),
+        "stage1_watchlist": _records(stage1_watchlist if stage1_watchlist is not None else pd.DataFrame(), limit=200),
+        "stage1_transitions": _records(stage1_transitions if stage1_transitions is not None else pd.DataFrame(), limit=200),
         "final_3q_gate": _records(final_3q_gate if final_3q_gate is not None else pd.DataFrame(), limit=50),
         "performance_summary": performance_summary or {},
         "threshold_recommendations": threshold_recommendations or {},
@@ -158,7 +163,11 @@ def _attach_decision_fields(frame: pd.DataFrame, repeat_tracker: pd.DataFrame) -
 
 
 def _attach_trap_category(frame: pd.DataFrame) -> pd.DataFrame:
-    return attach_trap_category(frame)
+    # Stage context may be merged from several artifacts. Collapse duplicate
+    # labels before category enrichment so trap/archive evidence can be
+    # concatenated safely for the decision board.
+    safe = frame.loc[:, ~frame.columns.duplicated()].copy()
+    return attach_trap_category(safe)
 
 
 def _investigator_score(frame: pd.DataFrame) -> pd.Series:
@@ -569,7 +578,21 @@ def _records(frame: pd.DataFrame, limit: int | None = None) -> list[dict[str, An
     safe = frame.head(limit).copy() if limit else frame.copy()
     safe = safe.loc[:, ~safe.columns.duplicated()].copy()
     safe = safe.where(safe.notna(), None)
-    return [_json_safe(row) for row in safe.to_dict(orient="records")]
+    return [_json_safe(_decode_stage1_reason_arrays(row)) for row in safe.to_dict(orient="records")]
+
+
+def _decode_stage1_reason_arrays(row: dict[str, Any]) -> dict[str, Any]:
+    """Expose deterministic CSV JSON strings as arrays in payload/API records."""
+    for column in ("stage1_block_reasons", "stage1_adjustment_reasons", "promotion_block_reasons"):
+        value = row.get(column)
+        if not isinstance(value, str):
+            continue
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = [item for item in value.split("|") if item]
+        row[column] = parsed if isinstance(parsed, list) else []
+    return row
 
 
 def _sort_for_records(frame: pd.DataFrame, columns: list[str], ascending: list[bool]) -> pd.DataFrame:

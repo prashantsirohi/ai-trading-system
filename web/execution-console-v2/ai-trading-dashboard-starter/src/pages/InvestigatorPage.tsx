@@ -195,6 +195,8 @@ function PatternConfirmationPanel({ confirmation }: { confirmation?: Row }) {
 
 function InvestigatorEarlyAccumulationPanel({ rows }: { rows: Row[] }) {
   const display = [...rows].sort((a, b) => {
+    const emergingRankDelta = num(a.stage1_emerging_rank, Infinity) - num(b.stage1_emerging_rank, Infinity);
+    if (emergingRankDelta !== 0) return emergingRankDelta;
     const rankDelta = num(a.early_accumulation_rank, Infinity) - num(b.early_accumulation_rank, Infinity);
     if (rankDelta !== 0) return rankDelta;
     const scoreDelta = num(b.early_accumulation_score, -Infinity) - num(a.early_accumulation_score, -Infinity);
@@ -202,7 +204,7 @@ function InvestigatorEarlyAccumulationPanel({ rows }: { rows: Row[] }) {
     return symbolOf(a).localeCompare(symbolOf(b));
   });
   return (
-    <SectionCard title="Investigator Early Accumulation" description="Emerging bases kept in Investigator watchlist context.">
+    <SectionCard title="Investigator Stage-1 Emerging Leaders" description="Research-only structural maturity and emerging-velocity ranking.">
       {display.length === 0 ? (
         <EmptyState message="No early accumulation artifact available for this run." />
       ) : (
@@ -214,6 +216,15 @@ function InvestigatorEarlyAccumulationPanel({ rows }: { rows: Row[] }) {
                   'Symbol',
                   'Sector',
                   'Close',
+                  'S1 Substate',
+                  'Score Band',
+                  'Operational',
+                  'Maturity',
+                  'Emerging',
+                  'Emerging Rank',
+                  'Confidence',
+                  'Golden Cross',
+                  'MA Gap Flag',
                   'Score',
                   'Rank',
                   'Bucket',
@@ -239,6 +250,15 @@ function InvestigatorEarlyAccumulationPanel({ rows }: { rows: Row[] }) {
                   <td className="px-3 py-2 font-semibold">{symbolOf(row)}</td>
                   <td className="px-3 py-2">{text(row.sector)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fixed(row.close, 2)}</td>
+                  <td className="px-3 py-2">{text(row.stage1_substate, '-')}</td>
+                  <td className="px-3 py-2">{text(row.stage1_score_band, '-')}</td>
+                  <td className="px-3 py-2">{text(row.stage1_operational_status, '-')}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.stage1_maturity_score)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.stage1_emerging_score)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fixed(row.stage1_emerging_rank)}</td>
+                  <td className="px-3 py-2">{text(row.stage1_score_confidence, '-')}</td>
+                  <td className="px-3 py-2">{text(row.golden_cross_status, '-')}</td>
+                  <td className="px-3 py-2">{text(row.ma_gap_quality_flag, '-')}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fixed(row.early_accumulation_score)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fixed(row.early_accumulation_rank)}</td>
                   <td className="px-3 py-2">{text(row.early_purity_bucket)}</td>
@@ -258,6 +278,22 @@ function InvestigatorEarlyAccumulationPanel({ rows }: { rows: Row[] }) {
             </tbody>
           </table>
         </div>
+      )}
+    </SectionCard>
+  );
+}
+
+function Stage1LifecyclePanel({ rows }: { rows: Row[] }) {
+  const [state, setState] = useState('ALL');
+  const states = ['ALL', 'BASE_BUILDING', 'ACCUMULATING', 'LATE_STAGE1', 'BREAKOUT_READY', 'REGRESSED', 'STALE_BASE', 'INVALIDATED'];
+  const visible = rows.filter((row) => state === 'ALL' || String(row.stage1_lifecycle_state) === state);
+  return (
+    <SectionCard title="Persistent Stage-1 Lifecycle" description="Research-only longitudinal watchlist. It does not alter execution eligibility.">
+      <div className="mb-3 flex flex-wrap gap-2">
+        {states.map((item) => <button key={item} type="button" onClick={() => setState(item)} className={cn('rounded border px-2 py-1 text-[11px]', state === item ? 'border-cyan-400 bg-cyan-400/10 text-cyan-200' : 'border-slate-700 text-slate-400')}>{text(item)}</button>)}
+      </div>
+      {visible.length === 0 ? <EmptyState message="No persistent Stage-1 lifecycle candidates available." /> : (
+        <div className="overflow-x-auto"><table className="min-w-[1440px] text-left text-xs"><thead className="uppercase text-slate-500"><tr>{['Symbol', 'Lifecycle', 'Substate', 'Score', '5D Δ', '20D Δ', 'Emerging Rank', '20D Rank Improve', 'Golden Cross', 'Pattern', 'Pivot Distance', 'Days in State', 'First Seen', 'Last Transition'].map((label) => <th key={label} className="px-3 py-2">{label}</th>)}</tr></thead><tbody className="divide-y divide-slate-800">{visible.map((row) => <tr key={symbolOf(row)} className="text-slate-200"><td className="px-3 py-2 font-semibold">{symbolOf(row)}</td><td className="px-3 py-2"><StatusBadge status={text(row.stage1_lifecycle_state)} label={text(row.stage1_lifecycle_state)} /></td><td className="px-3 py-2">{text(row.stage1_substate)}</td><td className="px-3 py-2">{fixed(row.stage1_maturity_score)}</td><td className="px-3 py-2">{delta(row.stage1_score_delta_5d)}</td><td className="px-3 py-2">{delta(row.stage1_score_delta_20d)}</td><td className="px-3 py-2">{fixed(row.stage1_emerging_rank)}</td><td className="px-3 py-2">{delta(row.emerging_rank_improvement_20d)}</td><td className="px-3 py-2">{text(row.golden_cross_status)}</td><td className="px-3 py-2">{text(row.pattern_promotion_state)}</td><td className="px-3 py-2">{pct(row.distance_to_pivot_pct)}</td><td className="px-3 py-2">{fixed(row.stage1_days_in_lifecycle_state)}</td><td className="px-3 py-2">{text(row.stage1_first_seen_date)}</td><td className="px-3 py-2">{text(row.stage1_last_transition_date)}</td></tr>)}</tbody></table></div>
       )}
     </SectionCard>
   );
@@ -777,6 +813,7 @@ export default function InvestigatorPage() {
           </SectionCard>
           <PatternConfirmationPanel confirmation={data.pattern_confirmation as Row | undefined} />
           <InvestigatorEarlyAccumulationPanel rows={data.investigator_early_accumulation ?? []} />
+          <Stage1LifecyclePanel rows={data.stage1_watchlist ?? []} />
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.5fr_1fr_1fr]">
             <ActionQueue rows={decisionRows} fallback={fallbackRows} highConvictionCount={num(summary.high_conviction)} onOpen={setSelected} />

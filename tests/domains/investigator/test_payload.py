@@ -77,6 +77,33 @@ def test_payload_derives_decision_scores_and_trap_categories() -> None:
     assert payload["charts"]["trend"][0]["traps"] == 1
 
 
+def test_payload_deduplicates_trap_columns_before_building_radar() -> None:
+    traps = pd.DataFrame([["TRAP", "TRAP", "NOISE_TRAP"]], columns=["symbol_id", "symbol_id", "verdict"])
+    payload = build_investigator_payload(
+        run_id="run-1", run_date="2026-05-07", summary={},
+        today_gainers=pd.DataFrame(), scores=pd.DataFrame(), repeat_tracker=pd.DataFrame(),
+        active_watchlist=pd.DataFrame(), trap_log=traps, archive=pd.DataFrame(),
+    )
+    assert payload["trap_radar"][0]["count"] == 1
+
+
+def test_payload_decodes_stage1_reason_json_arrays() -> None:
+    active = pd.DataFrame([{
+        "symbol_id": "AAA", "stage1_block_reasons": '["STAGE4_HARD_GUARD"]',
+        "stage1_adjustment_reasons": '["STRUCTURAL_PENALTY"]',
+        "promotion_block_reasons": '["STAGE4_HARD_GUARD","PATTERN_NOT_READY"]',
+    }])
+    payload = build_investigator_payload(
+        run_id="run-1", run_date="2026-05-07", summary={}, today_gainers=pd.DataFrame(),
+        scores=active, repeat_tracker=pd.DataFrame(), active_watchlist=active,
+        trap_log=pd.DataFrame(), archive=pd.DataFrame(),
+    )
+    row = payload["decision_queue"][0]
+    assert row["stage1_block_reasons"] == ["STAGE4_HARD_GUARD"]
+    assert row["stage1_adjustment_reasons"] == ["STRUCTURAL_PENALTY"]
+    assert row["promotion_block_reasons"] == ["STAGE4_HARD_GUARD", "PATTERN_NOT_READY"]
+
+
 def test_payload_uses_total_intake_for_summary_and_funnel() -> None:
     payload = build_investigator_payload(
         run_id="run-1",

@@ -35,6 +35,11 @@ from ai_trading_system.domains.investigator.stage_pattern_context import (
     normalise_pattern_context,
     rank_pattern_symbols,
 )
+from ai_trading_system.domains.investigator.stage1_lifecycle import (
+    ACTIVE_STATES,
+    Stage1LifecycleConfig,
+    build_stage1_lifecycle,
+)
 from ai_trading_system.domains.investigator.trap_summary import build_trap_summary_metrics
 from ai_trading_system.domains.investigator.volume_anatomy import score_volume_anatomy
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
@@ -49,8 +54,9 @@ class InvestigatorService:
         breakout = _read_optional(context.artifact_for("rank", "breakout_scan"))
         rank_pattern_scan = _read_optional(context.artifact_for("rank", "pattern_scan"))
         stock_scan = _read_optional(context.artifact_for("rank", "stock_scan"))
+        stage1_artifact = context.artifact_for("rank", "stage1_scan")
         early_accumulation = _normalise_investigator_early_accumulation(
-            _read_optional(context.artifact_for("rank", "early_accumulation_scan"))
+            _read_optional(stage1_artifact or context.artifact_for("rank", "early_accumulation_scan"))
         )
         rank_context = stock_scan if not stock_scan.empty else ranked
         sector_dashboard = _read_optional(context.artifact_for("rank", "sector_dashboard"))
@@ -67,6 +73,7 @@ class InvestigatorService:
             min_market_cap_cr=float(context.params.get("investigator_min_market_cap_cr", 500.0)),
         )
         previous_watchlist = self._load_previous_watchlist(context)
+        previous_stage1_state = self._load_previous_stage1_state(context)
         candidates, intake_diagnostics = build_candidate_union(
             event_intake=gainers,
             early_accumulation=early_accumulation,
@@ -147,6 +154,13 @@ class InvestigatorService:
                 investigator_payload=payload,
                 investigator_performance_summary_json=performance_summary,
                 investigator_threshold_recommendations=threshold_recommendations,
+                stage1_watchlist=empty,
+                stage1_current_state=empty,
+                stage1_transitions=empty,
+                stage1_invalidations=empty,
+                stage1_stale_candidates=empty,
+                stage1_regressions=empty,
+                stage1_lifecycle_summary={"stage1_active_count": 0},
             )
             return StageResult(artifacts=artifacts, metadata=summary)
         candidates = score_price_structure(candidates)
@@ -175,6 +189,15 @@ class InvestigatorService:
         best_patterns = best_pattern_by_symbol(_combine_pattern_sources(rank_patterns_for_merge, investigator_patterns))
         active = _merge_best_patterns(active, best_patterns)
         scores = _merge_best_patterns(scores, best_patterns)
+        stage1_state, stage1_transitions, stage1_lifecycle_summary = build_stage1_lifecycle(
+            scores, previous_stage1_state, run_date=str(context.run_date),
+            config=Stage1LifecycleConfig.from_params(context.params),
+        )
+        stage1_watchlist = stage1_state.loc[stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).isin(ACTIVE_STATES)].copy()
+        stage1_invalidations = stage1_state.loc[stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).eq("INVALIDATED")].copy()
+        stage1_stale_candidates = stage1_state.loc[stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).eq("STALE_BASE")].copy()
+        stage1_regressions = stage1_state.loc[stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).eq("REGRESSED")].copy()
+        scores = _attach_stage1_lifecycle(scores, stage1_state)
         traps = scores.loc[scores.get("verdict", pd.Series(dtype=str)).eq("NOISE_TRAP") | scores.get("hard_trap_flag", pd.Series(False, index=scores.index)).fillna(False)].copy()
         gate = final_gate(scores)
         gate = self._attach_exit_monitoring(context, gate)
@@ -198,6 +221,7 @@ class InvestigatorService:
                 "investigator_pattern_scanned_rows": int(len(investigator_patterns)),
                 "pattern_scan_skipped_existing_rows": int(len(active) - len(active_for_pattern_scan)),
             }, performance_frame),
+            stage1_lifecycle_summary=stage1_lifecycle_summary,
         )
         payload = build_investigator_payload(
             run_id=context.run_id,
@@ -216,6 +240,8 @@ class InvestigatorService:
             threshold_recommendations=threshold_recommendations,
             data_trust_status=str(context.params.get("data_trust_status", "unknown")),
             stage_status={"rank": "completed", "investigator": "completed", "publish": "pending"},
+            stage1_watchlist=stage1_watchlist,
+            stage1_transitions=stage1_transitions,
         )
         artifacts = self._write_artifacts(
             context=context,
@@ -233,6 +259,13 @@ class InvestigatorService:
             investigator_payload=payload,
             investigator_performance_summary_json=performance_summary,
             investigator_threshold_recommendations=threshold_recommendations,
+            stage1_watchlist=stage1_watchlist,
+            stage1_current_state=stage1_state,
+            stage1_transitions=stage1_transitions,
+            stage1_invalidations=stage1_invalidations,
+            stage1_stale_candidates=stage1_stale_candidates,
+            stage1_regressions=stage1_regressions,
+            stage1_lifecycle_summary=stage1_lifecycle_summary,
         )
         self._persist_tables(context, artifacts)
         return StageResult(artifacts=artifacts, metadata=summary)
@@ -290,6 +323,22 @@ class InvestigatorService:
 
     def _load_history(self, context: StageContext) -> pd.DataFrame:
         if context.registry is None:
+            return pd.DataFrame()
+
+    def _load_previous_stage1_state(self, context: StageContext) -> pd.DataFrame:
+        if context.registry is None:
+            return pd.DataFrame()
+        try:
+            with context.registry._reader() as conn:  # noqa: SLF001
+                return conn.execute(
+                    """
+                    SELECT * EXCLUDE (_rn) FROM (
+                      SELECT *, ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY trade_date DESC, created_at DESC) AS _rn
+                      FROM investigator_stage1_state WHERE trade_date < CAST(? AS DATE)
+                    ) WHERE _rn = 1
+                    """, [context.run_date]
+                ).fetchdf()
+        except Exception:
             return pd.DataFrame()
         try:
             with context.registry._reader() as conn:  # noqa: SLF001
@@ -362,6 +411,9 @@ class InvestigatorService:
             "investigator_pattern_scan": "investigator_pattern_scan",
             "final_3q_gate": "investigator_final_gate",
             "archived_investigator": "investigator_archive",
+            "stage1_watchlist": "investigator_stage1_state",
+            "stage1_current_state": "investigator_stage1_state",
+            "stage1_transitions": "investigator_stage1_transition",
         }
         by_type = {artifact.artifact_type: artifact for artifact in artifacts}
         with context.registry._writer() as conn:  # noqa: SLF001
@@ -381,8 +433,9 @@ class InvestigatorService:
                 columns = [row[1] for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()]
                 selected = [col for col in columns if col in frame.columns]
                 if selected:
+                    verb = "INSERT OR REPLACE" if table in {"investigator_stage1_state", "investigator_stage1_transition"} else "INSERT"
                     conn.execute(
-                        f"INSERT INTO {table} ({', '.join(selected)}) SELECT {', '.join(selected)} FROM investigator_stage_frame"
+                        f"{verb} INTO {table} ({', '.join(selected)}) SELECT {', '.join(selected)} FROM investigator_stage_frame"
                     )
                 conn.execute("DROP TABLE investigator_stage_frame")
 
@@ -451,6 +504,7 @@ class InvestigatorService:
         investigator_early_accumulation: pd.DataFrame | None = None,
         stage_pattern_context: dict[str, Any] | None = None,
         intake_diagnostics: dict[str, Any] | None = None,
+        stage1_lifecycle_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         stage_pattern_context = stage_pattern_context or {}
         candidate_rows = int((intake_diagnostics or {}).get("candidate_union_rows", len(scores)) or 0)
@@ -502,6 +556,7 @@ class InvestigatorService:
             **(intake_diagnostics or {}),
             **{key: stage_pattern_context[key] for key in stage_summary_keys if key in stage_pattern_context},
             **trap_metrics,
+            **(stage1_lifecycle_summary or {}),
         }
 
 
@@ -584,6 +639,22 @@ def _edge_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     columns = ["group_type", "group_value", "horizon", "sample_count", "avg_return", "edge_vs_baseline", "expectancy"]
     available = [column for column in columns if column in frame.columns]
     return frame[available].where(frame[available].notna(), None).to_dict(orient="records")
+
+
+def _attach_stage1_lifecycle(scores: pd.DataFrame, state: pd.DataFrame) -> pd.DataFrame:
+    """Expose the durable lifecycle context on the Investigator score artifact."""
+    if scores.empty or state.empty or "symbol_id" not in scores or "symbol_id" not in state:
+        return scores
+    fields = [
+        "symbol_id", "stage1_lifecycle_state", "stage1_previous_lifecycle_state", "stage1_first_seen_date",
+        "stage1_state_entry_date", "stage1_last_transition_date", "stage1_days_in_lifecycle_state",
+        "stage1_days_since_first_seen", "stage1_score_delta_5d", "stage1_score_delta_20d",
+        "emerging_rank_improvement_5d", "emerging_rank_improvement_20d", "stage1_emerging_rank_best",
+        "golden_cross_status_previous", "stage1_evaluation_status", "stage1_lifecycle_reason_codes",
+        "stage1_lifecycle_model_version", "stage1_lifecycle_config_hash", "distance_to_pivot_pct",
+    ]
+    available = [field for field in fields if field in state]
+    return scores.merge(state[available], on="symbol_id", how="left", suffixes=("", "_lifecycle"))
 
 
 def _merge_best_patterns(frame: pd.DataFrame, best_patterns: pd.DataFrame) -> pd.DataFrame:
@@ -694,7 +765,57 @@ INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS = [
     "pattern_state",
     "pattern_signal_date",
     "pattern_count_60d",
+    "stage1_substate",
+    "stage1_score_band",
+    "stage1_maturity_score",
+    "stage1_emerging_score",
+    "stage1_emerging_rank",
+    "stage1_eligible",
+    "stage1_block_reasons",
+    "stage1_bonus_score",
+    "stage1_penalty_score",
+    "stage1_adjustment_reasons",
+    "stage1_data_completeness_pct",
+    "stage1_missing_components",
+    "stage1_score_confidence",
+    "pattern_promotion_state",
+    "stage1_operational_status",
+    "promotion_eligibility",
+    "promotion_block_reasons",
+    "stage2_review_candidate",
+    "stage1_formula_name",
+    "stage1_model_version",
+    "stage1_config_hash",
+    "model_status",
+    "execution_eligible",
+    "golden_cross_status",
+    "golden_cross_status_legacy",
+    "golden_cross_imminent",
+    "golden_cross_quality",
+    "sma50_sma200_gap_pct",
+    "sma50_sma200_gap_delta_5d",
+    "sma50_sma200_gap_delta_20d",
+    "sma50_sma200_gap_delta_60d",
+    "ma_gap_quality_flag",
 ]
+
+for _component in (
+    "structural_repair", "accumulation", "rs_acceleration", "base_quality",
+    "sector_rotation", "pattern_readiness", "golden_cross_progression",
+):
+    INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS.extend([
+        f"stage1_{_component}_raw", f"stage1_{_component}_score",
+        f"stage1_{_component}_max", f"stage1_{_component}_complete",
+    ])
+for _component in (
+    "rs_acceleration", "structural_repair_velocity", "accumulation_improvement",
+    "sector_rotation", "base_improvement", "golden_cross_progression",
+    "pattern_progression",
+):
+    INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS.extend([
+        f"stage1_emerging_{_component}_score", f"stage1_emerging_{_component}_max",
+        f"stage1_emerging_{_component}_complete",
+    ])
 
 
 def _normalise_investigator_early_accumulation(frame: pd.DataFrame | None) -> pd.DataFrame:
@@ -754,14 +875,27 @@ def _normalise_investigator_early_accumulation(frame: pd.DataFrame | None) -> pd
         "composite_score_adjusted",
         "breakout_score",
         "pattern_count_60d",
+        "stage1_maturity_score",
+        "stage1_emerging_score",
+        "stage1_emerging_rank",
+        "stage1_bonus_score",
+        "stage1_penalty_score",
+        "stage1_data_completeness_pct",
+        "golden_cross_quality",
+        "sma50_sma200_gap_pct",
+        "sma50_sma200_gap_delta_5d",
+        "sma50_sma200_gap_delta_20d",
+        "sma50_sma200_gap_delta_60d",
     ):
         out.loc[:, column] = pd.to_numeric(out[column], errors="coerce")
     out.loc[:, "breakout_qualified"] = out["breakout_qualified"].fillna(False).astype(bool)
+    for column in ("stage1_eligible", "promotion_eligibility", "stage2_review_candidate", "execution_eligible", "golden_cross_imminent"):
+        out.loc[:, column] = out[column].astype("string").str.lower().isin({"true", "1", "yes", "y"}).fillna(False)
     out = out.loc[:, INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS].copy()
     if not out.empty:
         out = out.sort_values(
-            ["early_accumulation_rank", "early_accumulation_score", "symbol_id"],
-            ascending=[True, False, True],
+            ["stage1_emerging_rank", "early_accumulation_rank", "stage1_emerging_score", "symbol_id"],
+            ascending=[True, True, False, True],
             na_position="last",
             kind="stable",
         )

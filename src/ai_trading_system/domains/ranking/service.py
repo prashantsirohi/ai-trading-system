@@ -45,6 +45,7 @@ TASK_FILE_MAP = {
     "breakout_scan": ("breakout_scan", "csv"),
     "pattern_scan": ("pattern_scan", "csv"),
     "early_accumulation_scan": ("early_accumulation_scan", "csv"),
+    "stage1_scan": ("stage1_scan", "csv"),
     "stock_scan": ("stock_scan", "csv"),
     "sector_dashboard": ("sector_dashboard", "csv"),
     "sector_rotation": ("sector_rotation", "csv"),
@@ -454,6 +455,7 @@ class RankOrchestrationService:
             ("watchlist_digest", "watchlist_digest.md"),
             ("watchlist_catalyst", "watchlist_catalyst.json"),
             ("early_accumulation_summary", "early_accumulation_summary.json"),
+            ("stage1_summary", "stage1_summary.json"),
         ):
             sidecar_path = output_dir / filename
             if not sidecar_path.exists():
@@ -1133,6 +1135,17 @@ class RankOrchestrationService:
             context.write_json("early_accumulation_summary.json", early_summary)
         except Exception as exc:
             warnings.append(f"early_accumulation summary unavailable: {exc}")
+
+        from ai_trading_system.domains.ranking.stage1 import Stage1ModelConfig, build_stage1_scan
+
+        stage1_config = Stage1ModelConfig.from_params(effective_params)
+        # Phase 3: retain existing Stage-1 names in the scan universe so a
+        # quiet base gets fresh facts instead of disappearing with its trigger.
+        stage1_seed = _with_active_stage1_lifecycle_symbols(context, early_accumulation_df, ranked_universe)
+        stage1_df, stage1_summary = build_stage1_scan(stage1_seed, config=stage1_config)
+        outputs["stage1_scan"] = stage1_df
+        stage1_summary["artifact_path"] = str(context.output_dir() / "stage1_scan.csv")
+        context.write_json("stage1_summary.json", stage1_summary)
 
         legacy_stock_scan_df, stock_status = self.execute_rank_task(
             context=context,
@@ -2142,3 +2155,30 @@ class RankOrchestrationService:
             error=detail,
         )
         return empty_result, failure_record
+
+
+def _with_active_stage1_lifecycle_symbols(
+    context: StageContext,
+    early: pd.DataFrame,
+    ranked_universe: pd.DataFrame,
+) -> pd.DataFrame:
+    """Union today’s triggers with active persisted Stage-1 candidates.
+
+    Failure to read the optional lifecycle ledger must never block Rank; the
+    canonical Phase-2 scan remains the fallback.
+    """
+    if context.registry is None or ranked_universe is None or ranked_universe.empty or "symbol_id" not in ranked_universe:
+        return early
+    try:
+        with context.registry._reader() as conn:  # noqa: SLF001
+            rows = conn.execute(
+                """SELECT DISTINCT symbol_id FROM investigator_stage1_state
+                   WHERE stage1_lifecycle_state IN ('BASE_BUILDING','ACCUMULATING','LATE_STAGE1','BREAKOUT_READY','PROMOTION_PENDING','REGRESSED','STALE_BASE')"""
+            ).fetchdf()
+        symbols = set(rows.get("symbol_id", pd.Series(dtype=str)).astype(str).str.upper())
+        carry = ranked_universe.loc[ranked_universe["symbol_id"].astype(str).str.upper().isin(symbols)].copy()
+        if carry.empty:
+            return early
+        return pd.concat([early, carry], ignore_index=True, sort=False).drop_duplicates("symbol_id", keep="first")
+    except Exception:
+        return early

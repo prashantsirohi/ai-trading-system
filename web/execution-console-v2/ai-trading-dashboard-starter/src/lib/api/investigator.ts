@@ -13,6 +13,8 @@ export interface InvestigatorSnapshot {
   closest_to_high_conviction?: Array<Record<string, unknown>>;
   repeat_quality?: Array<Record<string, unknown>>;
   investigator_early_accumulation?: Array<Record<string, unknown>>;
+  stage1_watchlist?: Array<Record<string, unknown>>;
+  stage1_transitions?: Array<Record<string, unknown>>;
   trap_radar?: Array<Record<string, unknown>>;
   archive_today?: Array<Record<string, unknown>>;
   charts?: {

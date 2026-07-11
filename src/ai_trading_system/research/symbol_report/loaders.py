@@ -339,6 +339,7 @@ def load_artifact_timeline(
         stock_scan_rows = _symbol_rows(read_csv_if_nonempty(attempt_dir / "stock_scan.csv"), symbol)
         pattern_rows = _symbol_rows(read_csv_if_nonempty(attempt_dir / "pattern_scan.csv"), symbol)
         breakout_rows = _symbol_rows(read_csv_if_nonempty(attempt_dir / "breakout_scan.csv"), symbol)
+        stage1_rows = _symbol_rows(read_csv_if_nonempty(attempt_dir / "stage1_scan.csv"), symbol)
 
         record: dict[str, object] = {
             "timestamp": pd.Timestamp(run_date),
@@ -350,6 +351,7 @@ def load_artifact_timeline(
             "stock_scan_emitted": not stock_scan_rows.empty,
             "pattern_emitted": not pattern_rows.empty,
             "breakout_emitted": not breakout_rows.empty,
+            "stage1_emitted": not stage1_rows.empty,
         }
 
         if not ranked_rows.empty:
@@ -422,6 +424,20 @@ def load_artifact_timeline(
                     "breakout_score": breakout_row.get("breakout_score"),
                 }
             )
+
+        if not stage1_rows.empty:
+            stage1_row = stage1_rows.iloc[0].to_dict()
+            for column in (
+                "stage1_score_band", "stage1_substate", "stage1_maturity_score", "stage1_emerging_score",
+                "stage1_emerging_rank", "stage1_eligible", "stage1_block_reasons",
+                "stage1_data_completeness_pct", "stage1_score_confidence", "stage1_bonus_score",
+                "stage1_penalty_score", "stage1_adjustment_reasons", "ma_gap_quality_flag",
+                "pattern_promotion_state", "stage1_operational_status",
+                "promotion_eligibility", "promotion_block_reasons",
+                "golden_cross_status", "golden_cross_status_legacy", "golden_cross_quality", "stage1_model_version",
+                "stage1_config_hash", "model_status", "execution_eligible",
+            ):
+                record[column] = stage1_row.get(column)
 
         rows.append(record)
 

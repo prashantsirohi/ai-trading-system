@@ -93,6 +93,24 @@ def get_investigator_pattern_history(
     }
 
 
+def get_stage1_lifecycle_history(symbol_id: str, lookback_days: int = 180, *, project_root: Path | str | None = None) -> dict[str, Any]:
+    """Return durable Stage-1 snapshots and state transitions for one symbol."""
+    symbol = str(symbol_id or "").strip().upper()
+    if not symbol:
+        return {"symbol_id": symbol, "state": [], "transitions": []}
+    paths = get_domain_paths(project_root=project_root, data_domain="operational")
+    db_path = paths.root_dir / "control_plane.duckdb"
+    if not db_path.exists():
+        return {"symbol_id": symbol, "state": [], "transitions": []}
+    try:
+        with duckdb.connect(str(db_path), read_only=True) as conn:
+            state = conn.execute("""SELECT * FROM investigator_stage1_state WHERE UPPER(symbol_id) = ? ORDER BY trade_date DESC LIMIT ?""", [symbol, max(1, int(lookback_days))]).fetchdf()
+            transitions = conn.execute("""SELECT * FROM investigator_stage1_transition WHERE UPPER(symbol_id) = ? ORDER BY trade_date DESC LIMIT ?""", [symbol, max(1, int(lookback_days))]).fetchdf()
+        return {"symbol_id": symbol, "state": _records(state), "transitions": _records(transitions)}
+    except Exception:
+        return {"symbol_id": symbol, "state": [], "transitions": []}
+
+
 def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
     artifacts = _latest_artifacts(project_root)
     frames = {
@@ -104,6 +122,8 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         "archive": _read_csv(artifacts.get("archived_investigator")),
         "investigator_pattern_scan": _read_csv(artifacts.get("investigator_pattern_scan")),
         "investigator_early_accumulation": _read_csv(artifacts.get("investigator_early_accumulation")),
+        "stage1_watchlist": _read_csv(artifacts.get("stage1_watchlist")),
+        "stage1_transitions": _read_csv(artifacts.get("stage1_transitions")),
         "final_3q_gate": _read_csv(artifacts.get("final_3q_gate")),
         "investigator_performance_summary": _read_csv(artifacts.get("investigator_performance_summary")),
     }
@@ -146,6 +166,8 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
             payload["summary"].setdefault("investigator_early_accumulation_count", int(len(frames["investigator_early_accumulation"])))
         payload.setdefault("performance_summary", _read_json(artifacts.get("investigator_performance_summary_json")))
         payload.setdefault("threshold_recommendations", _read_json(artifacts.get("investigator_threshold_recommendations")))
+        payload.setdefault("stage1_watchlist", _records(frames["stage1_watchlist"], limit=200))
+        payload.setdefault("stage1_transitions", _records(frames["stage1_transitions"], limit=200))
 
     compatible = {
         "summary": summary,
@@ -156,6 +178,8 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         "active_watchlist": _records(_sort_active_watchlist(frames["active_watchlist"])),
         "investigator_pattern_scan": _records(frames["investigator_pattern_scan"]),
         "investigator_early_accumulation": _records(_sort_early_accumulation(frames["investigator_early_accumulation"]), limit=100),
+        "stage1_watchlist": _records(frames["stage1_watchlist"], limit=200),
+        "stage1_transitions": _records(frames["stage1_transitions"], limit=200),
         "final_3q_gate": _records(frames["final_3q_gate"], limit=100),
         "investigator_performance_summary": _records(frames["investigator_performance_summary"], limit=200),
         "investigator_performance_summary_json": _read_json(artifacts.get("investigator_performance_summary_json")),
@@ -181,6 +205,8 @@ def _latest_artifacts(project_root: Path) -> dict[str, Path | None]:
         "archived_investigator",
         "investigator_pattern_scan",
         "investigator_early_accumulation",
+        "stage1_watchlist",
+        "stage1_transitions",
         "final_3q_gate",
         "investigator_performance_summary",
         "investigator_summary",

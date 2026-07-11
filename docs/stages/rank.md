@@ -41,6 +41,8 @@ Under `data/pipeline_runs/<run_id>/rank/attempt_<n>/`:
 | `volume_shockers` | `volume_shockers.csv` | `domains/ranking/volume_shocker.py::detect_volume_shockers` (`service.py:570`) |
 | `breakout_scan` | `breakout_scan.csv` | `domains/ranking/breakout.py::scan_breakouts` (`service.py:595`) |
 | `pattern_scan` | `pattern_scan.csv` | `domains/ranking/patterns/` + `analytics/patterns/build_pattern_signals` (`service.py:426`–`427`) |
+| `stage1_scan` | `stage1_scan.csv` | Canonical research-only maturity/eligibility scan. Score bands remain diagnostic; operational substates and promotion require structural eligibility. |
+| `early_accumulation_scan` | `early_accumulation_scan.csv` | Compatibility output feeding the Stage-1 model during migration. |
 | `stock_scan` | `stock_scan.csv` | `domains/ranking/stock_scan.py` (integrated view from `build_integrated_stock_scan_view`, `service.py:179`) |
 | `sector_dashboard` | `sector_dashboard.csv` | `domains/ranking/sector_dashboard.py` |
 | `watchlist_prefilter` | `watchlist_prefilter.csv` | `domains/ranking/watchlist.py` |

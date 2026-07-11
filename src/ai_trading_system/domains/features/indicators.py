@@ -45,6 +45,14 @@ _STAGE2_OUTPUT_COLS = (
     "sma_150",
     "sma150_slope_20d_pct",
     "sma200_slope_20d_pct",
+    "sma50_sma200_gap_pct",
+    "sma50_sma200_gap_delta_5d",
+    "sma50_sma200_gap_delta_20d",
+    "sma50_sma200_gap_delta_60d",
+    "sma20_sma50_gap_pct",
+    "sma20_sma50_gap_delta_10d",
+    "golden_cross_days_since",
+    "golden_cross_failed",
     "stage2_score",
     "is_stage2_structural",
     "is_stage2_candidate",
@@ -162,6 +170,23 @@ def add_stage2_features(df: pd.DataFrame) -> pd.DataFrame:
     out.loc[:, "sma50_slope_20d_pct"] = ((sma_50 / sma_50.shift(20)) - 1.0) * 100.0
     out.loc[:, "sma150_slope_20d_pct"] = ((sma_150 / sma_150.shift(20)) - 1.0) * 100.0
     out.loc[:, "sma200_slope_20d_pct"] = ((sma_200 / sma_200.shift(20)) - 1.0) * 100.0
+
+    # Point-in-time MA progression. All deltas use only the current and prior
+    # observations; no future bar participates in cross classification.
+    sma_20 = close.rolling(20, min_periods=20).mean()
+    gap_50_200 = ((sma_50 / sma_200.replace(0, np.nan)) - 1.0) * 100.0
+    gap_20_50 = ((sma_20 / sma_50.replace(0, np.nan)) - 1.0) * 100.0
+    out.loc[:, "sma50_sma200_gap_pct"] = gap_50_200
+    for days in (5, 20, 60):
+        out.loc[:, f"sma50_sma200_gap_delta_{days}d"] = gap_50_200 - gap_50_200.shift(days)
+    out.loc[:, "sma20_sma50_gap_pct"] = gap_20_50
+    out.loc[:, "sma20_sma50_gap_delta_10d"] = gap_20_50 - gap_20_50.shift(10)
+    cross_up = gap_50_200.ge(0) & gap_50_200.shift(1).lt(0)
+    cross_down = gap_50_200.lt(0) & gap_50_200.shift(1).ge(0)
+    cross_group = cross_up.cumsum()
+    bars_since = out.groupby(cross_group, sort=False).cumcount().where(cross_group.gt(0))
+    out.loc[:, "golden_cross_days_since"] = bars_since.where(gap_50_200.ge(0))
+    out.loc[:, "golden_cross_failed"] = cross_down & out["golden_cross_days_since"].shift(1).le(20)
 
     # ── Optional fields — use defaults when absent ────────────────────────
     near_52w = pd.to_numeric(
