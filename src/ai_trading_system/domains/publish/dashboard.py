@@ -31,6 +31,10 @@ INVESTIGATOR_SHEET = "06_Investigator"
 INVESTIGATOR_ACTION_QUEUE_SHEET = "investigator"
 FINAL_3Q_GATE_SHEET = "Final 3Q Gate"
 INVESTIGATOR_PERFORMANCE_SHEET = "Investigator Performance"
+STAGE1_CURRENT_SHEET = "Stage1 Current"
+STAGE1_CHANGES_SHEET = "Stage1 Changes"
+STAGE1_ACTION_QUEUE_SHEET = "Stage1 Action Queue"
+STAGE1_EXITS_SHEET = "Stage1 Exits"
 DATA_BREADTH_SHEET = "_DATA_BREADTH"
 DATA_SECTOR_HISTORY_SHEET = "_DATA_SECTOR_HISTORY"
 DATA_INVESTIGATOR_SHEET = "_DATA_INVESTIGATOR"
@@ -38,7 +42,7 @@ VISIBLE_SHEET_MAX_ROWS = 60
 DAILY_REPORT_MAX_ROWS = 140
 VISIBLE_SHEET_MAX_COLS = 14
 DAILY_REPORT_MAX_COLS = 26
-INVESTIGATOR_ACTIVE_MAX_COLS = 16
+INVESTIGATOR_ACTIVE_MAX_COLS = 21
 DATA_BREADTH_MAX_ROWS = 250
 DATA_SECTOR_HISTORY_MAX_ROWS = 500
 DATA_INVESTIGATOR_MAX_ROWS = 300
@@ -50,6 +54,10 @@ OPERATOR_TAB_ORDER = [
     SECTOR_LEADERSHIP_SHEET,
     INDUSTRY_ROTATION_SHEET,
     INVESTIGATOR_ACTION_QUEUE_SHEET,
+    STAGE1_ACTION_QUEUE_SHEET,
+    STAGE1_CURRENT_SHEET,
+    STAGE1_CHANGES_SHEET,
+    STAGE1_EXITS_SHEET,
     FINAL_3Q_GATE_SHEET,
     INVESTIGATOR_PERFORMANCE_SHEET,
 ]
@@ -250,6 +258,153 @@ def _sheet_cell(value: Any) -> Any:
     if isinstance(value, (int, float)):
         return value
     return str(value)
+
+
+def _stage1_rows(bundle: dict[str, Any] | None, key: str) -> pd.DataFrame:
+    part = (bundle or {}).get(key, {})
+    rows = part.get("rows", []) if isinstance(part, dict) else []
+    return pd.DataFrame([row for row in rows if isinstance(row, dict)])
+
+
+def _stage1_series(frame: pd.DataFrame, *names: str) -> pd.Series:
+    for name in names:
+        if name in frame.columns:
+            return frame[name]
+    return pd.Series("", index=frame.index, dtype="object")
+
+
+def _stage1_audit(frame: pd.DataFrame, bundle: dict[str, Any] | None, run_id: str | None) -> dict[str, Any]:
+    summary = (bundle or {}).get("summary", {}) if isinstance(bundle, dict) else {}
+    first = frame.iloc[0] if not frame.empty else pd.Series(dtype=object)
+    return {
+        "Pipeline Run ID": run_id or first.get("run_id", ""),
+        "Trade Date": summary.get("as_of") or first.get("trade_date", ""),
+        "Published At": first.get("updated_at") or first.get("created_at", ""),
+        "Stage-1 Model Version": first.get("stage1_model_version", ""),
+        "Stage-1 Config Hash": first.get("stage1_config_hash", ""),
+        "Lifecycle Model Version": first.get("stage1_lifecycle_model_version", ""),
+    }
+
+
+def _with_stage1_audit(out: pd.DataFrame, source: pd.DataFrame, bundle: dict[str, Any] | None, run_id: str | None) -> pd.DataFrame:
+    audit = _stage1_audit(source, bundle, run_id)
+    for column, value in audit.items():
+        out.loc[:, column] = value
+    return out
+
+
+def _stage1_current_frame(bundle: dict[str, Any] | None, run_id: str | None) -> pd.DataFrame:
+    source = _stage1_rows(bundle, "current")
+    columns = ["Priority", "Symbol", "Lifecycle", "Substate", "Operator Status", "Operator Action",
+               "Stage-1 Score", "Score Δ5D", "Score Δ20D", "Emerging Score", "Emerging Rank",
+               "Rank Improvement 20D", "Pattern", "Pattern Promotion", "Golden Cross", "MA Gap %",
+               "MA Gap Δ20D", "Pivot Distance %", "RS Acceleration", "Accumulation", "Sector Rotation",
+               "Days in State", "First Seen", "Last Transition", "Operator Reason"]
+    if source.empty:
+        return pd.DataFrame(columns=columns + list(_stage1_audit(source, bundle, run_id)))
+    out = pd.DataFrame({
+        "Priority": _stage1_series(source, "operator_priority"), "Symbol": _stage1_series(source, "symbol_id"),
+        "Lifecycle": _stage1_series(source, "stage1_lifecycle_state"), "Substate": _stage1_series(source, "stage1_substate"),
+        "Operator Status": _stage1_series(source, "operator_status"), "Operator Action": _stage1_series(source, "operator_action"),
+        "Stage-1 Score": _stage1_series(source, "stage1_maturity_score"), "Score Δ5D": _stage1_series(source, "stage1_score_delta_5d"),
+        "Score Δ20D": _stage1_series(source, "stage1_score_delta_20d"), "Emerging Score": _stage1_series(source, "stage1_emerging_score"),
+        "Emerging Rank": _stage1_series(source, "stage1_emerging_rank"), "Rank Improvement 20D": _stage1_series(source, "emerging_rank_improvement_20d"),
+        "Pattern": _stage1_series(source, "pattern_state", "pattern_family"), "Pattern Promotion": _stage1_series(source, "pattern_promotion_state"),
+        "Golden Cross": _stage1_series(source, "golden_cross_status"), "MA Gap %": _stage1_series(source, "sma50_sma200_gap_pct"),
+        "MA Gap Δ20D": _stage1_series(source, "sma50_sma200_gap_delta_20d"), "Pivot Distance %": _stage1_series(source, "distance_to_pivot_pct"),
+        "RS Acceleration": _stage1_series(source, "stage1_rs_acceleration_score", "stage1_emerging_rs_acceleration_score"),
+        "Accumulation": _stage1_series(source, "stage1_accumulation_score", "stage1_emerging_accumulation_score"),
+        "Sector Rotation": _stage1_series(source, "stage1_sector_rotation_score", "sector_support_score"),
+        "Days in State": _stage1_series(source, "stage1_days_in_lifecycle_state"), "First Seen": _stage1_series(source, "stage1_first_seen_date"),
+        "Last Transition": _stage1_series(source, "stage1_last_transition_date"), "Operator Reason": _stage1_series(source, "operator_reason"),
+    })
+    return _with_stage1_audit(out, source, bundle, run_id)
+
+
+def _stage1_action_queue_frame(bundle: dict[str, Any] | None, run_id: str | None) -> pd.DataFrame:
+    source = _stage1_rows(bundle, "current")
+    if not source.empty and "operator_queue_eligible" in source:
+        source = source.loc[source["operator_queue_eligible"].astype(str).str.lower().isin({"true", "1", "yes"})].copy()
+    current_bundle = dict(bundle or {})
+    current_bundle["current"] = {"rows": source.to_dict(orient="records")}
+    full = _stage1_current_frame(current_bundle, run_id)
+    wanted = ["Priority", "Symbol", "Operator Status", "Lifecycle", "Stage-1 Score", "Emerging Rank",
+              "Pattern Promotion", "Golden Cross", "Pivot Distance %", "Score Δ5D", "RS Acceleration",
+              "Accumulation", "Operator Action", "Operator Reason", *list(_stage1_audit(source, bundle, run_id))]
+    return full.reindex(columns=wanted)
+
+
+def _stage1_changes_frame(bundle: dict[str, Any] | None, run_id: str | None) -> pd.DataFrame:
+    source = _stage1_rows(bundle, "transitions")
+    columns = ["Date", "Symbol", "Previous Lifecycle", "New Lifecycle", "Previous Substate", "New Substate",
+               "Score Before", "Score After", "Score Change", "Rank Before", "Rank After", "Rank Improvement",
+               "Golden Cross Before", "Golden Cross After", "Pattern Before", "Pattern After", "Transition Reason",
+               "Operator Interpretation"]
+    if source.empty:
+        return pd.DataFrame(columns=columns + list(_stage1_audit(source, bundle, run_id)))
+    context = (bundle or {}).get("context_by_symbol", {})
+    out = pd.DataFrame({
+        "Date": _stage1_series(source, "trade_date"), "Symbol": _stage1_series(source, "symbol_id"),
+        "Previous Lifecycle": _stage1_series(source, "from_lifecycle_state"), "New Lifecycle": _stage1_series(source, "to_lifecycle_state"),
+        "Previous Substate": _stage1_series(source, "from_stage1_substate"), "New Substate": _stage1_series(source, "to_stage1_substate"),
+        "Score Before": _stage1_series(source, "stage1_score_before"), "Score After": _stage1_series(source, "stage1_score_after"),
+        "Rank Before": _stage1_series(source, "emerging_rank_before"), "Rank After": _stage1_series(source, "emerging_rank_after"),
+        "Golden Cross Before": _stage1_series(source, "golden_cross_status_before"), "Golden Cross After": _stage1_series(source, "golden_cross_status_after"),
+        "Pattern Before": _stage1_series(source, "pattern_promotion_state_before"), "Pattern After": _stage1_series(source, "pattern_promotion_state_after"),
+        "Transition Reason": _stage1_series(source, "transition_reason_codes", "transition_summary"),
+    })
+    out.loc[:, "Score Change"] = pd.to_numeric(out["Score After"], errors="coerce") - pd.to_numeric(out["Score Before"], errors="coerce")
+    out.loc[:, "Rank Improvement"] = pd.to_numeric(out["Rank Before"], errors="coerce") - pd.to_numeric(out["Rank After"], errors="coerce")
+    out.loc[:, "Operator Interpretation"] = out["Symbol"].map(lambda symbol: (context.get(str(symbol).upper(), {}) or {}).get("operator_reason", ""))
+    order = {"PROMOTION_PENDING": 0, "BREAKOUT_READY": 1, "LATE_STAGE1": 2, "ACCUMULATING": 3, "REGRESSED": 4, "INVALIDATED": 5}
+    out.loc[:, "_order"] = out["New Lifecycle"].map(order).fillna(99)
+    out = out.sort_values(["Date", "_order", "Symbol"], ascending=[False, True, True], kind="stable").drop(columns="_order")
+    return _with_stage1_audit(out, source, bundle, run_id)
+
+
+def _stage1_exits_frame(bundle: dict[str, Any] | None, run_id: str | None) -> pd.DataFrame:
+    source = _stage1_rows(bundle, "exits")
+    columns = ["Date", "Symbol", "Exit Type", "Previous Lifecycle", "Current State", "Reason", "Price",
+               "Last Stage-1 Score", "Peak Stage-1 Score", "Golden Cross", "Pattern State", "Operator Note"]
+    if source.empty:
+        return pd.DataFrame(columns=columns + list(_stage1_audit(source, bundle, run_id)))
+    lifecycle = _stage1_series(source, "stage1_lifecycle_state").astype(str)
+    exit_type = lifecycle.replace({"STALE_BASE": "STALE"})
+    reason = source.apply(lambda row: row.get("regression_reason") or row.get("stale_reason") or row.get("invalidation_reason") or row.get("stage1_lifecycle_reason_codes") or "", axis=1)
+    out = pd.DataFrame({
+        "Date": _stage1_series(source, "trade_date"), "Symbol": _stage1_series(source, "symbol_id"), "Exit Type": exit_type,
+        "Previous Lifecycle": _stage1_series(source, "stage1_previous_lifecycle_state"), "Current State": lifecycle,
+        "Reason": reason, "Price": _stage1_series(source, "close"), "Last Stage-1 Score": _stage1_series(source, "stage1_maturity_score"),
+        "Peak Stage-1 Score": _stage1_series(source, "stage1_score_peak"), "Golden Cross": _stage1_series(source, "golden_cross_status"),
+        "Pattern State": _stage1_series(source, "pattern_promotion_state", "pattern_state"), "Operator Note": _stage1_series(source, "operator_reason"),
+    })
+    return _with_stage1_audit(out, source, bundle, run_id)
+
+
+def _stage1_summary_frames(bundle: dict[str, Any] | None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    summary = (bundle or {}).get("summary", {})
+    metrics = [("Active Stage-1", "active_count"), ("Base Building", "base_building_count"),
+               ("Accumulating", "accumulating_count"), ("Late Stage-1", "late_stage1_count"),
+               ("Breakout Ready", "breakout_ready_count"), ("Promotion Pending", "promotion_pending_count"),
+               ("Progressions Today", "progressions_today"), ("Regressions Today", "regressions_today"),
+               ("Invalidations Today", "invalidated_today")]
+    counts = pd.DataFrame([{"Metric": label, "Value": summary.get(key, 0)} for label, key in metrics])
+    leaders = pd.DataFrame(summary.get("top_emerging_candidates") or [])
+    top = pd.DataFrame({"Symbol": _stage1_series(leaders, "symbol_id"), "Lifecycle": _stage1_series(leaders, "stage1_lifecycle_state"),
+                        "Stage-1 Score": _stage1_series(leaders, "stage1_maturity_score"), "Emerging Rank": _stage1_series(leaders, "stage1_emerging_rank"),
+                        "Golden Cross": _stage1_series(leaders, "golden_cross_status"), "Pivot Distance %": _stage1_series(leaders, "distance_to_pivot_pct")})
+    return counts, top.head(5)
+
+
+def _enrich_investigator_with_stage1(frame: pd.DataFrame, bundle: dict[str, Any] | None) -> pd.DataFrame:
+    out = frame.copy()
+    context = (bundle or {}).get("context_by_symbol", {})
+    symbol_column = "Symbol" if "Symbol" in out else "symbol_id" if "symbol_id" in out else None
+    fields = {"Stage-1 Lifecycle": "stage1_lifecycle_state", "Stage-1 Score": "stage1_maturity_score",
+              "Emerging Rank": "stage1_emerging_rank", "Golden Cross": "golden_cross_status", "Operator Status": "operator_status"}
+    for display, source in fields.items():
+        out.loc[:, display] = out[symbol_column].map(lambda value: (context.get(str(value).upper(), {}) or {}).get(source, "")) if symbol_column else ""
+    return out
 
 
 def _cap_visible_frame(frame: pd.DataFrame, *, rows: int | None = None, cols: int | None = None) -> pd.DataFrame:
@@ -685,6 +840,9 @@ def _write_table_sheet(
     frame: pd.DataFrame,
     min_rows: int = VISIBLE_SHEET_MAX_ROWS,
     max_cols: int = VISIBLE_SHEET_MAX_COLS,
+    frozen_cols: int = 0,
+    enable_filter: bool = False,
+    extra_request_builder: Callable[[Any, list[str], int], list[dict[str, Any]]] | None = None,
 ) -> tuple[Any, int]:
     safe = frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
     safe = safe.iloc[:, :max_cols].copy()
@@ -703,17 +861,68 @@ def _write_table_sheet(
         if not manager.write_dataframe(safe.fillna(""), sheet_name, include_header=True, clear_sheet=True):
             raise RuntimeError(f"Dashboard publish failed writing sheet '{sheet_name}': {manager.last_error or 'unknown error'}")
     if hasattr(manager, "batch_update"):
-        manager.batch_update(
-            {
-                "requests": _grid_layout_requests(
+        requests = _grid_layout_requests(
                     worksheet,
                     [{"title": sheet_name, "title_row": 1, "header_row": 1, "row_count": len(safe), "col_count": cols}],
                     max_rows=rows,
                     max_cols=cols,
+                    frozen_cols=frozen_cols,
                 )
-            }
-        )
+        if enable_filter and len(safe):
+            requests.append({"setBasicFilter": {"filter": {"range": {"sheetId": int(worksheet.id), "startRowIndex": 0, "endRowIndex": len(safe) + 1, "startColumnIndex": 0, "endColumnIndex": cols}}}})
+        if extra_request_builder is not None:
+            requests.extend(extra_request_builder(worksheet, list(safe.columns), len(safe)))
+        manager.batch_update({"requests": requests})
     return worksheet, len(grid)
+
+
+def _stage1_table_format_requests(manager: GoogleSheetsManager, worksheet: Any, columns: list[str], row_count: int) -> list[dict[str, Any]]:
+    sheet_id, start, end = int(worksheet.id), 1, row_count + 1
+    requests = _clear_conditional_format_requests(manager, worksheet)
+    decimal = {"Stage-1 Score", "Score Δ5D", "Score Δ20D", "Emerging Score", "RS Acceleration", "Accumulation", "Sector Rotation", "Score Before", "Score After",
+               "Score Change", "Price", "Last Stage-1 Score", "Peak Stage-1 Score"}
+    percentages = {"MA Gap %", "MA Gap Δ20D", "Pivot Distance %"}
+    integers = {"Emerging Rank", "Rank Improvement 20D", "Days in State", "Rank Before", "Rank After", "Rank Improvement"}
+    for index, column in enumerate(columns):
+        pattern = '0.00"%"' if column in percentages else "0.0" if column in decimal else "0" if column in integers else None
+        if pattern:
+            requests.append({"repeatCell": {"range": {"sheetId": sheet_id, "startRowIndex": start, "endRowIndex": end, "startColumnIndex": index, "endColumnIndex": index + 1}, "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": pattern}}}, "fields": "userEnteredFormat.numberFormat"}})
+    def column_range(name: str) -> dict[str, int] | None:
+        if name not in columns:
+            return None
+        index = columns.index(name)
+        return {"sheetId": sheet_id, "startRowIndex": start, "endRowIndex": end, "startColumnIndex": index, "endColumnIndex": index + 1}
+    priority_range = column_range("Priority")
+    if priority_range:
+        requests.extend([_text_condition_request(priority_range, "CRITICAL", {"red": 0.93, "green": 0.76, "blue": 0.76}), _text_condition_request(priority_range, "HIGH", {"red": 1.0, "green": 0.88, "blue": 0.70}), _text_condition_request(priority_range, "MEDIUM", {"red": 1.0, "green": 0.93, "blue": 0.74})])
+    lifecycle_range = column_range("Lifecycle") or column_range("New Lifecycle") or column_range("Current State")
+    if lifecycle_range:
+        for value, color in [("PROMOTION_PENDING", {"red": 0.82, "green": 0.94, "blue": 0.82}), ("BREAKOUT_READY", {"red": 0.82, "green": 0.94, "blue": 0.82}), ("LATE_STAGE1", {"red": 0.83, "green": 0.90, "blue": 1.0}), ("ACCUMULATING", {"red": 0.88, "green": 0.96, "blue": 1.0}), ("REGRESSED", {"red": 1.0, "green": 0.88, "blue": 0.70}), ("DATA_PENDING", {"red": 1.0, "green": 0.93, "blue": 0.74}), ("STALE_BASE", {"red": 0.95, "green": 0.95, "blue": 0.95})]:
+            requests.append(_text_condition_request(lifecycle_range, value, color))
+    status_range = column_range("Operator Status")
+    if status_range:
+        requests.extend([_text_condition_request(status_range, "ACT_NOW", {"red": 0.82, "green": 0.94, "blue": 0.82}), _text_condition_request(status_range, "WATCH_CLOSELY", {"red": 0.83, "green": 0.90, "blue": 1.0}), _text_condition_request(status_range, "REGRESSED", {"red": 1.0, "green": 0.88, "blue": 0.70}), _text_condition_request(status_range, "DATA_PENDING", {"red": 1.0, "green": 0.93, "blue": 0.74})])
+    for name in ("Score Δ5D", "Score Change", "Rank Improvement 20D", "Rank Improvement"):
+        value_range = column_range(name)
+        if value_range:
+            requests.extend([_number_condition_request(value_range, "NUMBER_GREATER", "0", {"red": 0.82, "green": 0.94, "blue": 0.82}), _number_condition_request(value_range, "NUMBER_LESS", "0", {"red": 0.93, "green": 0.76, "blue": 0.76})])
+    golden_range = column_range("Golden Cross") or column_range("Golden Cross After")
+    if golden_range:
+        requests.extend([_text_condition_request(golden_range, "IMMINENT", {"red": 1.0, "green": 0.93, "blue": 0.74}), _text_condition_request(golden_range, "CROSSED_RECENTLY", {"red": 0.82, "green": 0.94, "blue": 0.82}), _text_condition_request(golden_range, "FAILED_CROSS", {"red": 0.93, "green": 0.76, "blue": 0.76})])
+    return requests
+
+
+def _stage1_empty_message(frame: pd.DataFrame, message: str, bundle: dict[str, Any] | None, run_id: str | None) -> pd.DataFrame:
+    if not frame.empty:
+        return frame
+    row = {column: "" for column in frame.columns}
+    target = next((column for column in ("Operator Reason", "Operator Interpretation", "Operator Note", "Symbol") if column in row), None)
+    if target:
+        row[target] = message
+    for column, value in _stage1_audit(pd.DataFrame(), bundle, run_id).items():
+        if column in row:
+            row[column] = value
+    return pd.DataFrame([row], columns=frame.columns)
 
 
 def _combine_frames(frames: list[tuple[str, pd.DataFrame]]) -> pd.DataFrame:
@@ -1817,6 +2026,7 @@ def publish_dashboard_payload(
     run_id: str | None = None,
     rank_summary: dict[str, Any] | None = None,
     prior_watchlist_df: pd.DataFrame | None = None,
+    stage1_operator_bundle: dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Write compact operator workbook tabs without using Sheets as storage."""
     manager = GoogleSheetsManager()
@@ -1845,7 +2055,9 @@ def publish_dashboard_payload(
     investigator_today = _investigator_frame(investigator_scores_df)
     investigator_repeat = _investigator_repeat_frame(investigator_repeat_df)
     investigator_active = _investigator_active_frame(investigator_active_source)
-    active_investigator_list = _active_investigator_list_frame(investigator_active_source)
+    active_investigator_list = _enrich_investigator_with_stage1(
+        _active_investigator_list_frame(investigator_active_source), stage1_operator_bundle
+    )
     investigator_traps = _investigator_trap_frame(investigator_trap_df)
     investigator_final_gate = _investigator_final_gate_frame(investigator_final_gate_df)
     investigator_performance = _investigator_performance_frame(investigator_performance_summary_df)
@@ -1883,6 +2095,9 @@ def publish_dashboard_payload(
     )
     daily_sections = list(daily_report.sections)
     daily_sections.insert(2, ("MARKET BREADTH SNAPSHOT", breadth_snapshot))
+    stage1_counts, stage1_leaders = _stage1_summary_frames(stage1_operator_bundle)
+    daily_sections.insert(3, ("STAGE-1 SUMMARY", stage1_counts))
+    daily_sections.insert(4, ("TOP 5 EMERGING LEADERS", stage1_leaders))
     _daily_worksheet, _daily_layouts, daily_rows = _write_visible_grid_sheet(
         manager=manager,
         sheet_name=sheet_name,
@@ -1966,6 +2181,34 @@ def publish_dashboard_payload(
         frame=active_investigator_list,
         max_cols=INVESTIGATOR_ACTIVE_MAX_COLS,
     )
+    stage1_current = _stage1_current_frame(stage1_operator_bundle, run_id)
+    stage1_changes = _stage1_changes_frame(stage1_operator_bundle, run_id)
+    stage1_action_queue = _stage1_action_queue_frame(stage1_operator_bundle, run_id)
+    stage1_exits = _stage1_exits_frame(stage1_operator_bundle, run_id)
+    stage1_current = _stage1_empty_message(stage1_current, "No active Stage-1 candidates", stage1_operator_bundle, run_id)
+    stage1_changes = _stage1_empty_message(stage1_changes, "No Stage-1 transitions today", stage1_operator_bundle, run_id)
+    stage1_action_queue = _stage1_empty_message(stage1_action_queue, "No Stage-1 candidates require action", stage1_operator_bundle, run_id)
+    stage1_exits = _stage1_empty_message(stage1_exits, "No Stage-1 regressions or exits", stage1_operator_bundle, run_id)
+    _stage1_current_worksheet, stage1_current_rows = _write_table_sheet(
+        manager=manager, sheet_name=STAGE1_CURRENT_SHEET, frame=stage1_current,
+        min_rows=max(VISIBLE_SHEET_MAX_ROWS, len(stage1_current) + 1), max_cols=len(stage1_current.columns),
+        frozen_cols=2, enable_filter=True, extra_request_builder=lambda ws, cols, count: _stage1_table_format_requests(manager, ws, cols, count),
+    )
+    _stage1_changes_worksheet, stage1_changes_rows = _write_table_sheet(
+        manager=manager, sheet_name=STAGE1_CHANGES_SHEET, frame=stage1_changes,
+        min_rows=max(VISIBLE_SHEET_MAX_ROWS, len(stage1_changes) + 1), max_cols=len(stage1_changes.columns),
+        frozen_cols=2, enable_filter=True, extra_request_builder=lambda ws, cols, count: _stage1_table_format_requests(manager, ws, cols, count),
+    )
+    _stage1_queue_worksheet, stage1_action_queue_rows = _write_table_sheet(
+        manager=manager, sheet_name=STAGE1_ACTION_QUEUE_SHEET, frame=stage1_action_queue,
+        min_rows=max(VISIBLE_SHEET_MAX_ROWS, len(stage1_action_queue) + 1), max_cols=len(stage1_action_queue.columns),
+        frozen_cols=2, enable_filter=True, extra_request_builder=lambda ws, cols, count: _stage1_table_format_requests(manager, ws, cols, count),
+    )
+    _stage1_exits_worksheet, stage1_exits_rows = _write_table_sheet(
+        manager=manager, sheet_name=STAGE1_EXITS_SHEET, frame=stage1_exits,
+        min_rows=max(VISIBLE_SHEET_MAX_ROWS, len(stage1_exits) + 1), max_cols=len(stage1_exits.columns),
+        frozen_cols=2, enable_filter=True, extra_request_builder=lambda ws, cols, count: _stage1_table_format_requests(manager, ws, cols, count),
+    )
     _final_gate_worksheet, final_gate_rows = _write_table_sheet(
         manager=manager,
         sheet_name=FINAL_3Q_GATE_SHEET,
@@ -2044,6 +2287,15 @@ def publish_dashboard_payload(
         "investigator_performance_sheet_name": INVESTIGATOR_PERFORMANCE_SHEET,
         "investigator_performance_rows_written": int(investigator_performance_rows),
         "investigator_data_sheet_name": DATA_INVESTIGATOR_SHEET,
+        "stage1_current_sheet_name": STAGE1_CURRENT_SHEET,
+        "stage1_current_rows_written": int(stage1_current_rows),
+        "stage1_changes_sheet_name": STAGE1_CHANGES_SHEET,
+        "stage1_changes_rows_written": int(stage1_changes_rows),
+        "stage1_action_queue_sheet_name": STAGE1_ACTION_QUEUE_SHEET,
+        "stage1_action_queue_rows_written": int(stage1_action_queue_rows),
+        "stage1_exits_sheet_name": STAGE1_EXITS_SHEET,
+        "stage1_exits_rows_written": int(stage1_exits_rows),
+        "stage1_trade_date": ((stage1_operator_bundle or {}).get("summary") or {}).get("as_of"),
         "hidden_data_sheets": [DATA_BREADTH_SHEET, DATA_SECTOR_HISTORY_SHEET, DATA_INVESTIGATOR_SHEET],
         "cleanup": cleanup,
         "daily_report": daily_report.metadata,

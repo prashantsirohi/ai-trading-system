@@ -1,1475 +1,3353 @@
 {
-  "components": {
-    "schemas": {
-      "HTTPValidationError": {
-        "properties": {
-          "detail": {
-            "items": {
-              "$ref": "#/components/schemas/ValidationError"
-            },
-            "title": "Detail",
-            "type": "array"
-          }
-        },
-        "title": "HTTPValidationError",
-        "type": "object"
-      },
-      "PipelineRunRequest": {
-        "description": "Body for ``POST /api/execution/pipeline/run``.",
-        "properties": {
-          "label": {
-            "default": "Execution API pipeline run",
-            "title": "Label",
-            "type": "string"
-          },
-          "params": {
-            "additionalProperties": true,
-            "title": "Params",
-            "type": "object"
-          },
-          "run_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Date"
-          },
-          "run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          },
-          "stages": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Stages",
-            "type": "array"
-          }
-        },
-        "title": "PipelineRunRequest",
-        "type": "object"
-      },
-      "PublishRetryRequest": {
-        "description": "Body for ``POST /api/execution/pipeline/publish-retry``.",
-        "properties": {
-          "local_publish": {
-            "default": false,
-            "title": "Local Publish",
-            "type": "boolean"
-          },
-          "run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          }
-        },
-        "title": "PublishRetryRequest",
-        "type": "object"
-      },
-      "ShadowRunRequest": {
-        "description": "Body for ``POST /api/execution/shadow/run``.",
-        "properties": {
-          "backfill_days": {
-            "default": 0,
-            "title": "Backfill Days",
-            "type": "integer"
-          },
-          "label": {
-            "default": "Shadow refresh",
-            "title": "Label",
-            "type": "string"
-          },
-          "prediction_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Prediction Date"
-          }
-        },
-        "title": "ShadowRunRequest",
-        "type": "object"
-      },
-      "ValidationError": {
-        "properties": {
-          "loc": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
+    "openapi": "3.1.0",
+    "info": {
+        "title": "AI Trading Execution API",
+        "version": "0.1.0"
+    },
+    "paths": {
+        "/api/execution/summary": {
+            "get": {
+                "tags": [
+                    "health"
+                ],
+                "summary": "Execution Summary",
+                "operationId": "execution_summary_api_execution_summary_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Execution Summary Api Execution Summary Get"
+                                }
+                            }
+                        }
+                    }
                 }
-              ]
-            },
-            "title": "Location",
-            "type": "array"
-          },
-          "msg": {
-            "title": "Message",
-            "type": "string"
-          },
-          "type": {
-            "title": "Error Type",
-            "type": "string"
-          }
+            }
         },
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
-        "title": "ValidationError",
-        "type": "object"
-      }
+        "/api/execution/health": {
+            "get": {
+                "tags": [
+                    "health"
+                ],
+                "summary": "Execution Health",
+                "operationId": "execution_health_api_execution_health_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Execution Health Api Execution Health Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/fundamentals/latest": {
+            "get": {
+                "tags": [
+                    "fundamentals"
+                ],
+                "summary": "Latest Fundamentals",
+                "operationId": "latest_fundamentals_api_execution_fundamentals_latest_get",
+                "parameters": [
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 100,
+                            "minimum": 1,
+                            "default": 25,
+                            "title": "Limit"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Latest Fundamentals Api Execution Fundamentals Latest Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/fundamentals/dashboard": {
+            "get": {
+                "tags": [
+                    "fundamentals"
+                ],
+                "summary": "Fundamentals Dashboard",
+                "operationId": "fundamentals_dashboard_api_execution_fundamentals_dashboard_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Fundamentals Dashboard Api Execution Fundamentals Dashboard Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/insight/latest": {
+            "get": {
+                "tags": [
+                    "insight"
+                ],
+                "summary": "Execution Latest Insight",
+                "operationId": "execution_latest_insight_api_execution_insight_latest_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Execution Latest Insight Api Execution Insight Latest Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/investigator": {
+            "get": {
+                "tags": [
+                    "investigator"
+                ],
+                "summary": "Execution Investigator",
+                "operationId": "execution_investigator_api_execution_investigator_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Execution Investigator Api Execution Investigator Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/investigator/stage1/summary": {
+            "get": {
+                "tags": [
+                    "investigator"
+                ],
+                "summary": "Execution Investigator Stage1 Summary",
+                "operationId": "execution_investigator_stage1_summary_api_execution_investigator_stage1_summary_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Execution Investigator Stage1 Summary Api Execution Investigator Stage1 Summary Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/investigator/stage1/current": {
+            "get": {
+                "tags": [
+                    "investigator"
+                ],
+                "summary": "Execution Investigator Stage1 Current",
+                "operationId": "execution_investigator_stage1_current_api_execution_investigator_stage1_current_get",
+                "parameters": [
+                    {
+                        "name": "lifecycle_state",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Lifecycle State"
+                        }
+                    },
+                    {
+                        "name": "operator_status",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Operator Status"
+                        }
+                    },
+                    {
+                        "name": "operator_priority",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Operator Priority"
+                        }
+                    },
+                    {
+                        "name": "sector",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Sector"
+                        }
+                    },
+                    {
+                        "name": "golden_cross_status",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Golden Cross Status"
+                        }
+                    },
+                    {
+                        "name": "pattern_promotion_state",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Pattern Promotion State"
+                        }
+                    },
+                    {
+                        "name": "promotion_eligibility",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "boolean"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Promotion Eligibility"
+                        }
+                    },
+                    {
+                        "name": "search",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Search"
+                        }
+                    },
+                    {
+                        "name": "include_blocked",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "boolean",
+                            "default": false,
+                            "title": "Include Blocked"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 500,
+                            "minimum": 1,
+                            "default": 100,
+                            "title": "Limit"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0,
+                            "title": "Offset"
+                        }
+                    },
+                    {
+                        "name": "sort_by",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Sort By"
+                        }
+                    },
+                    {
+                        "name": "sort_direction",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^(asc|desc)$",
+                            "default": "asc",
+                            "title": "Sort Direction"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Investigator Stage1 Current Api Execution Investigator Stage1 Current Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/investigator/stage1/transitions": {
+            "get": {
+                "tags": [
+                    "investigator"
+                ],
+                "summary": "Execution Investigator Stage1 Transitions",
+                "operationId": "execution_investigator_stage1_transitions_api_execution_investigator_stage1_transitions_get",
+                "parameters": [
+                    {
+                        "name": "trade_date",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Trade Date"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 1000,
+                            "minimum": 1,
+                            "default": 200,
+                            "title": "Limit"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Investigator Stage1 Transitions Api Execution Investigator Stage1 Transitions Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/investigator/stage1/exits": {
+            "get": {
+                "tags": [
+                    "investigator"
+                ],
+                "summary": "Execution Investigator Stage1 Exits",
+                "operationId": "execution_investigator_stage1_exits_api_execution_investigator_stage1_exits_get",
+                "parameters": [
+                    {
+                        "name": "trade_date",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Trade Date"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 1000,
+                            "minimum": 1,
+                            "default": 200,
+                            "title": "Limit"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Investigator Stage1 Exits Api Execution Investigator Stage1 Exits Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/investigator/stage1/{symbol_id}": {
+            "get": {
+                "tags": [
+                    "investigator"
+                ],
+                "summary": "Execution Investigator Stage1 History",
+                "operationId": "execution_investigator_stage1_history_api_execution_investigator_stage1__symbol_id__get",
+                "parameters": [
+                    {
+                        "name": "symbol_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Symbol Id"
+                        }
+                    },
+                    {
+                        "name": "lookback_days",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 730,
+                            "minimum": 1,
+                            "default": 180,
+                            "title": "Lookback Days"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Investigator Stage1 History Api Execution Investigator Stage1  Symbol Id  Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/ranking": {
+            "get": {
+                "tags": [
+                    "snapshots"
+                ],
+                "summary": "Execution Ranking",
+                "operationId": "execution_ranking_api_execution_ranking_get",
+                "parameters": [
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 2500,
+                            "minimum": 1,
+                            "default": 25,
+                            "title": "Limit"
+                        }
+                    },
+                    {
+                        "name": "stage2_only",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "boolean",
+                            "default": false,
+                            "title": "Stage2 Only"
+                        }
+                    },
+                    {
+                        "name": "stage2_min_score",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "number",
+                                    "maximum": 100.0,
+                                    "minimum": 0.0
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Stage2 Min Score"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Ranking Api Execution Ranking Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/market": {
+            "get": {
+                "tags": [
+                    "snapshots"
+                ],
+                "summary": "Execution Market",
+                "operationId": "execution_market_api_execution_market_get",
+                "parameters": [
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 200,
+                            "minimum": 1,
+                            "default": 25,
+                            "title": "Limit"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Market Api Execution Market Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/market/breadth": {
+            "get": {
+                "tags": [
+                    "snapshots"
+                ],
+                "summary": "Execution Market Breadth",
+                "operationId": "execution_market_breadth_api_execution_market_breadth_get",
+                "parameters": [
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 10000,
+                            "minimum": 0,
+                            "description": "Most recent rows to return. Use 0 for all operational history.",
+                            "default": 0,
+                            "title": "Limit"
+                        },
+                        "description": "Most recent rows to return. Use 0 for all operational history."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Market Breadth Api Execution Market Breadth Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/workspace/pipeline": {
+            "get": {
+                "tags": [
+                    "snapshots"
+                ],
+                "summary": "Execution Workspace Pipeline",
+                "operationId": "execution_workspace_pipeline_api_execution_workspace_pipeline_get",
+                "parameters": [
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 200,
+                            "minimum": 1,
+                            "default": 20,
+                            "title": "Limit"
+                        }
+                    },
+                    {
+                        "name": "stage2_only",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "boolean",
+                            "default": false,
+                            "title": "Stage2 Only"
+                        }
+                    },
+                    {
+                        "name": "stage2_min_score",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "number",
+                                    "maximum": 100.0,
+                                    "minimum": 0.0
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Stage2 Min Score"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Workspace Pipeline Api Execution Workspace Pipeline Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/shadow": {
+            "get": {
+                "tags": [
+                    "snapshots"
+                ],
+                "summary": "Execution Shadow",
+                "operationId": "execution_shadow_api_execution_shadow_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Execution Shadow Api Execution Shadow Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/workspace/snapshot": {
+            "get": {
+                "tags": [
+                    "snapshots"
+                ],
+                "summary": "Execution Workspace Snapshot",
+                "description": "Slim Control Tower payload \u2014 top-N actions + summary cards + leaders.\n\nUse ``/workspace/pipeline`` for the heavier tabbed workspace view; this\nendpoint exists to keep the landing page responsive without round-tripping\nthe full ranked / breakout / pattern / sector tables.",
+                "operationId": "execution_workspace_snapshot_api_execution_workspace_snapshot_get",
+                "parameters": [
+                    {
+                        "name": "top_n",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 10,
+                            "minimum": 1,
+                            "description": "How many top actions / sector leaders to surface.",
+                            "default": 3,
+                            "title": "Top N"
+                        },
+                        "description": "How many top actions / sector leaders to surface."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Workspace Snapshot Api Execution Workspace Snapshot Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/workspace/sector-rotation": {
+            "get": {
+                "tags": [
+                    "snapshots"
+                ],
+                "summary": "Execution Workspace Sector Rotation",
+                "operationId": "execution_workspace_sector_rotation_api_execution_workspace_sector_rotation_get",
+                "parameters": [
+                    {
+                        "name": "group_type",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^(sector|industry)$",
+                            "default": "industry",
+                            "title": "Group Type"
+                        }
+                    },
+                    {
+                        "name": "lookback",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 120,
+                            "minimum": 5,
+                            "default": 20,
+                            "title": "Lookback"
+                        }
+                    },
+                    {
+                        "name": "date",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Date"
+                        }
+                    },
+                    {
+                        "name": "sector",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Sector"
+                        }
+                    },
+                    {
+                        "name": "show_stocks",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "boolean",
+                            "default": true,
+                            "title": "Show Stocks"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Workspace Sector Rotation Api Execution Workspace Sector Rotation Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/runs": {
+            "get": {
+                "tags": [
+                    "runs"
+                ],
+                "summary": "Execution Runs",
+                "operationId": "execution_runs_api_execution_runs_get",
+                "parameters": [
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 200,
+                            "minimum": 1,
+                            "default": 20,
+                            "title": "Limit"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Runs Api Execution Runs Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/runs/{run_id}": {
+            "get": {
+                "tags": [
+                    "runs"
+                ],
+                "summary": "Execution Run Details",
+                "operationId": "execution_run_details_api_execution_runs__run_id__get",
+                "parameters": [
+                    {
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Run Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Run Details Api Execution Runs  Run Id  Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/runs/{run_id}/dq": {
+            "get": {
+                "tags": [
+                    "runs"
+                ],
+                "summary": "Execution Run Dq",
+                "description": "Return DQ rule results for ``run_id`` plus per-severity aggregates.",
+                "operationId": "execution_run_dq_api_execution_runs__run_id__dq_get",
+                "parameters": [
+                    {
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Run Id"
+                        }
+                    },
+                    {
+                        "name": "severity",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Filter to a single severity tier (e.g. 'warn', 'error').",
+                            "title": "Severity"
+                        },
+                        "description": "Filter to a single severity tier (e.g. 'warn', 'error')."
+                    },
+                    {
+                        "name": "stage",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Filter to a single pipeline stage (e.g. 'ingest', 'features').",
+                            "title": "Stage"
+                        },
+                        "description": "Filter to a single pipeline stage (e.g. 'ingest', 'features')."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Run Dq Api Execution Runs  Run Id  Dq Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/runs/{run_id}/artifacts": {
+            "get": {
+                "tags": [
+                    "runs"
+                ],
+                "summary": "Execution Run Artifacts",
+                "description": "Return the artifact registry for ``run_id``, grouped by stage.",
+                "operationId": "execution_run_artifacts_api_execution_runs__run_id__artifacts_get",
+                "parameters": [
+                    {
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Run Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Run Artifacts Api Execution Runs  Run Id  Artifacts Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/artifacts/{run_id}/{stage}/{name}": {
+            "get": {
+                "tags": [
+                    "artifacts"
+                ],
+                "summary": "Download Artifact",
+                "description": "Serve an artifact file, gated by the registry + path-containment check.",
+                "operationId": "download_artifact_api_execution_artifacts__run_id___stage___name__get",
+                "parameters": [
+                    {
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Run Id"
+                        }
+                    },
+                    {
+                        "name": "stage",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Stage"
+                        }
+                    },
+                    {
+                        "name": "name",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Name"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/stocks/{symbol}": {
+            "get": {
+                "tags": [
+                    "stocks"
+                ],
+                "summary": "Execution Stock Detail",
+                "description": "Return the consolidated detail payload for ``symbol``.\n\nAlways returns 200 even when sources are missing \u2014 the UI inspects\n``available`` and the per-block ``None``-ness to decide what to render.",
+                "operationId": "execution_stock_detail_api_execution_stocks__symbol__get",
+                "parameters": [
+                    {
+                        "name": "symbol",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Symbol"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Stock Detail Api Execution Stocks  Symbol  Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/stocks/{symbol}/ohlcv": {
+            "get": {
+                "tags": [
+                    "stocks"
+                ],
+                "summary": "Execution Stock Ohlcv",
+                "description": "Return OHLCV + delivery candles for ``symbol`` in ascending time order.",
+                "operationId": "execution_stock_ohlcv_api_execution_stocks__symbol__ohlcv_get",
+                "parameters": [
+                    {
+                        "name": "symbol",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Symbol"
+                        }
+                    },
+                    {
+                        "name": "from",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Inclusive lower bound (ISO date, ``YYYY-MM-DD``).",
+                            "title": "From"
+                        },
+                        "description": "Inclusive lower bound (ISO date, ``YYYY-MM-DD``)."
+                    },
+                    {
+                        "name": "to",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Inclusive upper bound (ISO date, ``YYYY-MM-DD``).",
+                            "title": "To"
+                        },
+                        "description": "Inclusive upper bound (ISO date, ``YYYY-MM-DD``)."
+                    },
+                    {
+                        "name": "interval",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "Candle interval; only ``daily`` is supported today.",
+                            "default": "daily",
+                            "title": "Interval"
+                        },
+                        "description": "Candle interval; only ``daily`` is supported today."
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "integer",
+                                    "maximum": 2000,
+                                    "minimum": 1
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Maximum candles to return; keeps the most recent rows.",
+                            "title": "Limit"
+                        },
+                        "description": "Maximum candles to return; keeps the most recent rows."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Stock Ohlcv Api Execution Stocks  Symbol  Ohlcv Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/ranking/{symbol}": {
+            "get": {
+                "tags": [
+                    "ranking-detail"
+                ],
+                "summary": "Execution Ranking Detail",
+                "operationId": "execution_ranking_detail_api_execution_ranking__symbol__get",
+                "parameters": [
+                    {
+                        "name": "symbol",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Symbol"
+                        }
+                    },
+                    {
+                        "name": "run_id",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Pin the response to a specific run; defaults to the latest.",
+                            "title": "Run Id"
+                        },
+                        "description": "Pin the response to a specific run; defaults to the latest."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Ranking Detail Api Execution Ranking  Symbol  Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/ranking/{symbol}/history": {
+            "get": {
+                "tags": [
+                    "ranking-detail"
+                ],
+                "summary": "Execution Ranking History",
+                "operationId": "execution_ranking_history_api_execution_ranking__symbol__history_get",
+                "parameters": [
+                    {
+                        "name": "symbol",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Symbol"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 200,
+                            "minimum": 1,
+                            "description": "Maximum number of historical runs to return (newest first).",
+                            "default": 20,
+                            "title": "Limit"
+                        },
+                        "description": "Maximum number of historical runs to return (newest first)."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Ranking History Api Execution Ranking  Symbol  History Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/tasks": {
+            "get": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Execution Tasks",
+                "operationId": "execution_tasks_api_execution_tasks_get",
+                "parameters": [
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 300,
+                            "minimum": 1,
+                            "default": 50,
+                            "title": "Limit"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Tasks Api Execution Tasks Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/tasks/{task_id}": {
+            "get": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Execution Task",
+                "operationId": "execution_task_api_execution_tasks__task_id__get",
+                "parameters": [
+                    {
+                        "name": "task_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Task Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Task Api Execution Tasks  Task Id  Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/tasks/{task_id}/logs": {
+            "get": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Execution Task Logs",
+                "operationId": "execution_task_logs_api_execution_tasks__task_id__logs_get",
+                "parameters": [
+                    {
+                        "name": "task_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Task Id"
+                        }
+                    },
+                    {
+                        "name": "after",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0,
+                            "title": "After"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 1000,
+                            "minimum": 1,
+                            "default": 300,
+                            "title": "Limit"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Task Logs Api Execution Tasks  Task Id  Logs Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/tasks/{task_id}/events": {
+            "get": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Execution Task Events",
+                "operationId": "execution_task_events_api_execution_tasks__task_id__events_get",
+                "parameters": [
+                    {
+                        "name": "task_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Task Id"
+                        }
+                    },
+                    {
+                        "name": "cursor",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0,
+                            "title": "Cursor"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/tasks/{task_id}/terminate": {
+            "post": {
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Execution Terminate Task",
+                "operationId": "execution_terminate_task_api_execution_tasks__task_id__terminate_post",
+                "parameters": [
+                    {
+                        "name": "task_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Task Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Terminate Task Api Execution Tasks  Task Id  Terminate Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/processes": {
+            "get": {
+                "tags": [
+                    "processes"
+                ],
+                "summary": "Execution Processes",
+                "operationId": "execution_processes_api_execution_processes_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Execution Processes Api Execution Processes Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/processes/{pid}/terminate": {
+            "post": {
+                "tags": [
+                    "processes"
+                ],
+                "summary": "Execution Terminate Process",
+                "operationId": "execution_terminate_process_api_execution_processes__pid__terminate_post",
+                "parameters": [
+                    {
+                        "name": "pid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Pid"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Execution Terminate Process Api Execution Processes  Pid  Terminate Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/pipeline/run": {
+            "post": {
+                "tags": [
+                    "actions"
+                ],
+                "summary": "Execution Pipeline Run",
+                "operationId": "execution_pipeline_run_api_execution_pipeline_run_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/PipelineRunRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Execution Pipeline Run Api Execution Pipeline Run Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/pipeline/publish-retry": {
+            "post": {
+                "tags": [
+                    "actions"
+                ],
+                "summary": "Execution Publish Retry",
+                "operationId": "execution_publish_retry_api_execution_pipeline_publish_retry_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/PublishRetryRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Execution Publish Retry Api Execution Pipeline Publish Retry Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/shadow/run": {
+            "post": {
+                "tags": [
+                    "actions"
+                ],
+                "summary": "Execution Shadow Run",
+                "operationId": "execution_shadow_run_api_execution_shadow_run_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ShadowRunRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Execution Shadow Run Api Execution Shadow Run Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/sectors": {
+            "get": {
+                "tags": [
+                    "sectors"
+                ],
+                "summary": "List Sectors",
+                "description": "All sectors with RS, momentum, quadrant, and stage distribution.",
+                "operationId": "list_sectors_api_execution_sectors_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/sectors/{sector}/constituents": {
+            "get": {
+                "tags": [
+                    "sectors"
+                ],
+                "summary": "Sector Constituents",
+                "description": "All NSE stocks in *sector* with latest price, technicals, and stage label.",
+                "operationId": "sector_constituents_api_execution_sectors__sector__constituents_get",
+                "parameters": [
+                    {
+                        "name": "sector",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Sector"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/backtest/profiles": {
+            "get": {
+                "tags": [
+                    "backtest"
+                ],
+                "summary": "Backtest Profiles",
+                "description": "List all risk profiles available under ``config/risk_profiles/*.yaml``.",
+                "operationId": "backtest_profiles_api_execution_backtest_profiles_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Backtest Profiles Api Execution Backtest Profiles Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/backtest/run": {
+            "post": {
+                "tags": [
+                    "backtest"
+                ],
+                "summary": "Backtest Run",
+                "description": "Run an engine-driven backtest and return summary + trade rows inline.",
+                "operationId": "backtest_run_api_execution_backtest_run_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/BacktestRunRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Backtest Run Api Execution Backtest Run Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/backtest/winner-capture": {
+            "post": {
+                "tags": [
+                    "backtest"
+                ],
+                "summary": "Winner Capture",
+                "description": "Run yearly top-gainer capture analysis against research dynamic rankings.",
+                "operationId": "winner_capture_api_execution_backtest_winner_capture_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/WinnerCaptureRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": true,
+                                    "type": "object",
+                                    "title": "Response Winner Capture Api Execution Backtest Winner Capture Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/coverage": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Coverage",
+                "description": "Date-range + row-count summary, including excluded-row visibility.",
+                "operationId": "coverage_api_execution_perf_tracker_coverage_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/cohorts": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Cohorts",
+                "description": "Per-cohort forward returns + hit rates.",
+                "operationId": "cohorts_api_execution_perf_tracker_cohorts_get",
+                "parameters": [
+                    {
+                        "name": "lookback_days",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 10000,
+                            "minimum": 0,
+                            "description": "Window for the aggregate (0 = use all rows).",
+                            "default": 90,
+                            "title": "Lookback Days"
+                        },
+                        "description": "Window for the aggregate (0 = use all rows)."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/buckets": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Buckets",
+                "description": "Watchlist bucket attribution (TRIGGERED_TODAY / CORE_MOMENTUM / \u2026).",
+                "operationId": "buckets_api_execution_perf_tracker_buckets_get",
+                "parameters": [
+                    {
+                        "name": "lookback_days",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 10000,
+                            "minimum": 0,
+                            "description": "Window for the aggregate (0 = use all rows).",
+                            "default": 90,
+                            "title": "Lookback Days"
+                        },
+                        "description": "Window for the aggregate (0 = use all rows)."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/bucket-coverage": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Bucket Coverage",
+                "description": "Date + symbol coverage by watchlist bucket, including unassigned history.",
+                "operationId": "bucket_coverage_api_execution_perf_tracker_bucket_coverage_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/buckets/same-date": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Same Date Buckets",
+                "description": "Bucket attribution against controls from the same bucket-aware dates.",
+                "operationId": "same_date_buckets_api_execution_perf_tracker_buckets_same_date_get",
+                "parameters": [
+                    {
+                        "name": "lookback_days",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 10000,
+                            "minimum": 0,
+                            "description": "Window for the aggregate (0 = use all rows).",
+                            "default": 90,
+                            "title": "Lookback Days"
+                        },
+                        "description": "Window for the aggregate (0 = use all rows)."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/factor-ic": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Factor Ic",
+                "description": "Spearman rank correlation of each factor score vs 5d/10d/20d returns.",
+                "operationId": "factor_ic_api_execution_perf_tracker_factor_ic_get",
+                "parameters": [
+                    {
+                        "name": "windows",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Comma-separated lookbacks in days (default: 30,90,180).",
+                            "title": "Windows"
+                        },
+                        "description": "Comma-separated lookbacks in days (default: 30,90,180)."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/factor-ic/conditional": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Conditional Factor Ic",
+                "description": "Spearman IC for every factor within rank cohorts, across multiple horizons.",
+                "operationId": "conditional_factor_ic_api_execution_perf_tracker_factor_ic_conditional_get",
+                "parameters": [
+                    {
+                        "name": "windows",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Comma-separated lookbacks in days (default: 30,90,180).",
+                            "title": "Windows"
+                        },
+                        "description": "Comma-separated lookbacks in days (default: 30,90,180)."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/factor-coverage": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Factor Coverage",
+                "description": "Null-rate diagnostics for every tracked factor column.",
+                "operationId": "factor_coverage_api_execution_perf_tracker_factor_coverage_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/drift": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Drift",
+                "description": "Flag factors whose recent IC has dropped by more than ``threshold_pct`` vs baseline.\n\nSample-size guardrails (per spec, Part 7):\n  * recent_n < 1500            \u2192 ``insufficient_sample`` (no alert)\n  * 1500 \u2264 recent_n < 3000     \u2192 at most ``watch`` (no warning/critical)\n  * recent_n \u2265 3000            \u2192 warning/critical allowed\n\nFactors whose coverage_pct is below 80 are tagged ``unreliable_coverage``\nregardless of the IC delta, so the UI can de-emphasise them.",
+                "operationId": "drift_api_execution_perf_tracker_drift_get",
+                "parameters": [
+                    {
+                        "name": "recent_window",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 10000,
+                            "minimum": 1,
+                            "default": 30,
+                            "title": "Recent Window"
+                        }
+                    },
+                    {
+                        "name": "baseline_window",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 10000,
+                            "minimum": 1,
+                            "default": 180,
+                            "title": "Baseline Window"
+                        }
+                    },
+                    {
+                        "name": "threshold_pct",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "number",
+                            "maximum": 1000.0,
+                            "minimum": 0.0,
+                            "default": 30.0,
+                            "title": "Threshold Pct"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/buckets/composition": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Buckets Composition",
+                "description": "Average factor state at assignment time, per bucket.\n\nOnly emits AVG() for columns that exist on rank_cohort_performance \u2014 missing\ncolumns are reported as ``null`` so the UI can still render the slot.",
+                "operationId": "buckets_composition_api_execution_perf_tracker_buckets_composition_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/buckets/daily": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Buckets Daily",
+                "description": "Per-(run_date, bucket) rows for daily attribution.",
+                "operationId": "buckets_daily_api_execution_perf_tracker_buckets_daily_get",
+                "parameters": [
+                    {
+                        "name": "lookback_days",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 10000,
+                            "minimum": 0,
+                            "description": "Window for the daily aggregate (0 = use all rows).",
+                            "default": 90,
+                            "title": "Lookback Days"
+                        },
+                        "description": "Window for the daily aggregate (0 = use all rows)."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/concentration": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Concentration",
+                "description": "Rank-band concentration: top-10/50/200 vs 51-200/201+ deltas.\n\nAdds an interpretation ``signal`` (weak/strong/mixed) summarising whether\ntop-10 picks meaningfully outperform the broader top-200.",
+                "operationId": "concentration_api_execution_perf_tracker_concentration_get",
+                "parameters": [
+                    {
+                        "name": "lookback_days",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 10000,
+                            "minimum": 0,
+                            "description": "Window for the aggregate (0 = use all rows).",
+                            "default": 90,
+                            "title": "Lookback Days"
+                        },
+                        "description": "Window for the aggregate (0 = use all rows)."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/digests": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "List Digests",
+                "description": "List markdown digests under data/research/perf_digests/ sorted by mtime desc.",
+                "operationId": "list_digests_api_execution_perf_tracker_digests_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/perf-tracker/digests/{filename}": {
+            "get": {
+                "tags": [
+                    "perf-tracker"
+                ],
+                "summary": "Get Digest",
+                "description": "Return the markdown body of a single digest file (path-traversal guarded).",
+                "operationId": "get_digest_api_execution_perf_tracker_digests__filename__get",
+                "parameters": [
+                    {
+                        "name": "filename",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Filename"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/optimization/runs": {
+            "get": {
+                "tags": [
+                    "optimization"
+                ],
+                "summary": "Optimization Runs",
+                "operationId": "optimization_runs_api_execution_optimization_runs_get",
+                "parameters": [
+                    {
+                        "name": "recipe",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Filter by recipe_name (exact match).",
+                            "title": "Recipe"
+                        },
+                        "description": "Filter by recipe_name (exact match)."
+                    },
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Filter by run status: pending | running | completed | failed | cancelled.",
+                            "title": "Status"
+                        },
+                        "description": "Filter by run status: pending | running | completed | failed | cancelled."
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 500,
+                            "minimum": 1,
+                            "default": 50,
+                            "title": "Limit"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Optimization Runs Api Execution Optimization Runs Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/optimization/runs/{optimization_run_id}": {
+            "get": {
+                "tags": [
+                    "optimization"
+                ],
+                "summary": "Optimization Run Detail",
+                "operationId": "optimization_run_detail_api_execution_optimization_runs__optimization_run_id__get",
+                "parameters": [
+                    {
+                        "name": "optimization_run_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Optimization Run Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Optimization Run Detail Api Execution Optimization Runs  Optimization Run Id  Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/optimization/runs/{optimization_run_id}/trials": {
+            "get": {
+                "tags": [
+                    "optimization"
+                ],
+                "summary": "Optimization Run Trials",
+                "operationId": "optimization_run_trials_api_execution_optimization_runs__optimization_run_id__trials_get",
+                "parameters": [
+                    {
+                        "name": "optimization_run_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Optimization Run Id"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 2000,
+                            "minimum": 1,
+                            "default": 200,
+                            "title": "Limit"
+                        }
+                    },
+                    {
+                        "name": "sort",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "Sort column: iteration|fitness|cagr|sharpe|max_drawdown_pct|win_rate|trade_count|total_return_pct (unknown values fall back to iteration).",
+                            "default": "iteration",
+                            "title": "Sort"
+                        },
+                        "description": "Sort column: iteration|fitness|cagr|sharpe|max_drawdown_pct|win_rate|trade_count|total_return_pct (unknown values fall back to iteration)."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Optimization Run Trials Api Execution Optimization Runs  Optimization Run Id  Trials Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/optimization/leaderboard": {
+            "get": {
+                "tags": [
+                    "optimization"
+                ],
+                "summary": "Optimization Leaderboard",
+                "operationId": "optimization_leaderboard_api_execution_optimization_leaderboard_get",
+                "parameters": [
+                    {
+                        "name": "metric",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "description": "Metric to rank champions by: fitness|cagr|sharpe|win_rate|total_return_pct|trade_count.",
+                            "default": "sharpe",
+                            "title": "Metric"
+                        },
+                        "description": "Metric to rank champions by: fitness|cagr|sharpe|win_rate|total_return_pct|trade_count."
+                    },
+                    {
+                        "name": "top",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "maximum": 200,
+                            "minimum": 1,
+                            "default": 20,
+                            "title": "Top"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Optimization Leaderboard Api Execution Optimization Leaderboard Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/optimization/runs/{optimization_run_id}/promote": {
+            "post": {
+                "tags": [
+                    "optimization"
+                ],
+                "summary": "Optimization Run Promote",
+                "description": "Promote the champion of a completed run to a later lifecycle status.\n\nThin wrapper over ``research.optimization.promote`` (the same logic the\n``ai-trading-optimize-promote promote-latest`` CLI uses). Lifecycle\ntransitions are one-way; attempting to move backwards returns 422.\n\nErrors:\n  - 404 if the run is unknown OR has no champion (e.g. all trials were\n    rejected).\n  - 422 if ``body.to`` is not a known lifecycle status, or the\n    transition would move the champion backwards on the ladder.",
+                "operationId": "optimization_run_promote_api_execution_optimization_runs__optimization_run_id__promote_post",
+                "parameters": [
+                    {
+                        "name": "optimization_run_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Optimization Run Id"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/PromoteRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Optimization Run Promote Api Execution Optimization Runs  Optimization Run Id  Promote Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/execution/optimization/runs/{optimization_run_id}/report": {
+            "get": {
+                "tags": [
+                    "optimization"
+                ],
+                "summary": "Optimization Run Report",
+                "description": "Return the auto-written markdown report for a run, if present.\n\nThe runner writes the report to\n``reports/optimization/<recipe>/<run_id>.md`` after a successful run\n(see ``research/optimization/runner.py::_write_run_report``). If the\nreport is missing (run failed, ``--no-report`` was passed, or the file\nwas deleted) this returns 404.",
+                "operationId": "optimization_run_report_api_execution_optimization_runs__optimization_run_id__report_get",
+                "parameters": [
+                    {
+                        "name": "optimization_run_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Optimization Run Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Optimization Run Report Api Execution Optimization Runs  Optimization Run Id  Report Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "BacktestRunRequest": {
+                "properties": {
+                    "profile": {
+                        "type": "string",
+                        "title": "Profile",
+                        "description": "Risk profile name"
+                    },
+                    "data_source": {
+                        "type": "string",
+                        "title": "Data Source",
+                        "description": "pipeline_replay or research_dynamic",
+                        "default": "pipeline_replay"
+                    },
+                    "from_date": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "From Date",
+                        "description": "ISO date (inclusive)"
+                    },
+                    "to_date": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "To Date",
+                        "description": "ISO date (inclusive)"
+                    },
+                    "equity": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "title": "Equity",
+                        "default": 1000000.0
+                    },
+                    "persist": {
+                        "type": "boolean",
+                        "title": "Persist",
+                        "default": true
+                    },
+                    "custom_config": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": true,
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Custom Config"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "profile"
+                ],
+                "title": "BacktestRunRequest"
+            },
+            "HTTPValidationError": {
+                "properties": {
+                    "detail": {
+                        "items": {
+                            "$ref": "#/components/schemas/ValidationError"
+                        },
+                        "type": "array",
+                        "title": "Detail"
+                    }
+                },
+                "type": "object",
+                "title": "HTTPValidationError"
+            },
+            "PipelineRunRequest": {
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "title": "Label",
+                        "default": "Execution API pipeline run"
+                    },
+                    "stages": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "title": "Stages"
+                    },
+                    "params": {
+                        "additionalProperties": true,
+                        "type": "object",
+                        "title": "Params"
+                    },
+                    "run_id": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Run Id"
+                    },
+                    "run_date": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Run Date"
+                    }
+                },
+                "type": "object",
+                "title": "PipelineRunRequest",
+                "description": "Body for ``POST /api/execution/pipeline/run``."
+            },
+            "PromoteRequest": {
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "title": "To",
+                        "description": "Target lifecycle status. Must be one of: ['draft', 'backtested', 'walkforward_passed', 'shadow', 'paper_approved', 'production_candidate', 'active'].",
+                        "default": "shadow"
+                    }
+                },
+                "type": "object",
+                "title": "PromoteRequest",
+                "description": "Body for ``POST /runs/{run_id}/promote``."
+            },
+            "PublishRetryRequest": {
+                "properties": {
+                    "local_publish": {
+                        "type": "boolean",
+                        "title": "Local Publish",
+                        "default": false
+                    },
+                    "run_id": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Run Id"
+                    }
+                },
+                "type": "object",
+                "title": "PublishRetryRequest",
+                "description": "Body for ``POST /api/execution/pipeline/publish-retry``."
+            },
+            "ShadowRunRequest": {
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "title": "Label",
+                        "default": "Shadow refresh"
+                    },
+                    "backfill_days": {
+                        "type": "integer",
+                        "title": "Backfill Days",
+                        "default": 0
+                    },
+                    "prediction_date": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Prediction Date"
+                    }
+                },
+                "type": "object",
+                "title": "ShadowRunRequest",
+                "description": "Body for ``POST /api/execution/shadow/run``."
+            },
+            "ValidationError": {
+                "properties": {
+                    "loc": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "type": "array",
+                        "title": "Location"
+                    },
+                    "msg": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "type": {
+                        "type": "string",
+                        "title": "Error Type"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "loc",
+                    "msg",
+                    "type"
+                ],
+                "title": "ValidationError"
+            },
+            "WinnerCaptureRequest": {
+                "properties": {
+                    "year": {
+                        "type": "integer",
+                        "maximum": 2100.0,
+                        "minimum": 1990.0,
+                        "title": "Year"
+                    },
+                    "exchange": {
+                        "type": "string",
+                        "title": "Exchange",
+                        "default": "NSE"
+                    },
+                    "top_gainers": {
+                        "type": "integer",
+                        "maximum": 500.0,
+                        "minimum": 1.0,
+                        "title": "Top Gainers",
+                        "default": 50
+                    },
+                    "rank_cutoff": {
+                        "type": "integer",
+                        "maximum": 500.0,
+                        "minimum": 1.0,
+                        "title": "Rank Cutoff",
+                        "default": 50
+                    },
+                    "persist": {
+                        "type": "boolean",
+                        "title": "Persist",
+                        "default": true
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "year"
+                ],
+                "title": "WinnerCaptureRequest"
+            }
+        }
     }
-  },
-  "info": {
-    "title": "AI Trading Execution API",
-    "version": "0.1.0"
-  },
-  "openapi": "3.1.0",
-  "paths": {
-    "/api/execution/artifacts/{run_id}/{stage}/{name}": {
-      "get": {
-        "description": "Serve an artifact file, gated by the registry + path-containment check.",
-        "operationId": "download_artifact_api_execution_artifacts__run_id___stage___name__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "stage",
-            "required": true,
-            "schema": {
-              "title": "Stage",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Download Artifact",
-        "tags": [
-          "artifacts"
-        ]
-      }
-    },
-    "/api/execution/health": {
-      "get": {
-        "operationId": "execution_health_api_execution_health_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Health Api Execution Health Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Execution Health",
-        "tags": [
-          "health"
-        ]
-      }
-    },
-    "/api/execution/market": {
-      "get": {
-        "operationId": "execution_market_api_execution_market_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 25,
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Market Api Execution Market Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Market",
-        "tags": [
-          "snapshots"
-        ]
-      }
-    },
-    "/api/execution/pipeline/publish-retry": {
-      "post": {
-        "operationId": "execution_publish_retry_api_execution_pipeline_publish_retry_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PublishRetryRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Publish Retry Api Execution Pipeline Publish Retry Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Publish Retry",
-        "tags": [
-          "actions"
-        ]
-      }
-    },
-    "/api/execution/pipeline/run": {
-      "post": {
-        "operationId": "execution_pipeline_run_api_execution_pipeline_run_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PipelineRunRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Pipeline Run Api Execution Pipeline Run Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Pipeline Run",
-        "tags": [
-          "actions"
-        ]
-      }
-    },
-    "/api/execution/processes": {
-      "get": {
-        "operationId": "execution_processes_api_execution_processes_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Processes Api Execution Processes Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Execution Processes",
-        "tags": [
-          "processes"
-        ]
-      }
-    },
-    "/api/execution/processes/{pid}/terminate": {
-      "post": {
-        "operationId": "execution_terminate_process_api_execution_processes__pid__terminate_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pid",
-            "required": true,
-            "schema": {
-              "title": "Pid",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Terminate Process Api Execution Processes  Pid  Terminate Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Terminate Process",
-        "tags": [
-          "processes"
-        ]
-      }
-    },
-    "/api/execution/ranking": {
-      "get": {
-        "operationId": "execution_ranking_api_execution_ranking_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 25,
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "stage2_only",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Stage2 Only",
-              "type": "boolean"
-            }
-          },
-          {
-            "in": "query",
-            "name": "stage2_min_score",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maximum": 100.0,
-                  "minimum": 0.0,
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Stage2 Min Score"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Ranking Api Execution Ranking Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Ranking",
-        "tags": [
-          "snapshots"
-        ]
-      }
-    },
-    "/api/execution/ranking/{symbol}": {
-      "get": {
-        "operationId": "execution_ranking_detail_api_execution_ranking__symbol__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "symbol",
-            "required": true,
-            "schema": {
-              "title": "Symbol",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Pin the response to a specific run; defaults to the latest.",
-            "in": "query",
-            "name": "run_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Pin the response to a specific run; defaults to the latest.",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Ranking Detail Api Execution Ranking  Symbol  Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Ranking Detail",
-        "tags": [
-          "ranking-detail"
-        ]
-      }
-    },
-    "/api/execution/ranking/{symbol}/history": {
-      "get": {
-        "operationId": "execution_ranking_history_api_execution_ranking__symbol__history_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "symbol",
-            "required": true,
-            "schema": {
-              "title": "Symbol",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Maximum number of historical runs to return (newest first).",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 20,
-              "description": "Maximum number of historical runs to return (newest first).",
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Ranking History Api Execution Ranking  Symbol  History Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Ranking History",
-        "tags": [
-          "ranking-detail"
-        ]
-      }
-    },
-    "/api/execution/runs": {
-      "get": {
-        "operationId": "execution_runs_api_execution_runs_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 20,
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Runs Api Execution Runs Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Runs",
-        "tags": [
-          "runs"
-        ]
-      }
-    },
-    "/api/execution/runs/{run_id}": {
-      "get": {
-        "operationId": "execution_run_details_api_execution_runs__run_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Run Details Api Execution Runs  Run Id  Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Run Details",
-        "tags": [
-          "runs"
-        ]
-      }
-    },
-    "/api/execution/runs/{run_id}/artifacts": {
-      "get": {
-        "description": "Return the artifact registry for ``run_id``, grouped by stage.",
-        "operationId": "execution_run_artifacts_api_execution_runs__run_id__artifacts_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Run Artifacts Api Execution Runs  Run Id  Artifacts Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Run Artifacts",
-        "tags": [
-          "runs"
-        ]
-      }
-    },
-    "/api/execution/runs/{run_id}/dq": {
-      "get": {
-        "description": "Return DQ rule results for ``run_id`` plus per-severity aggregates.",
-        "operationId": "execution_run_dq_api_execution_runs__run_id__dq_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter to a single severity tier (e.g. 'warn', 'error').",
-            "in": "query",
-            "name": "severity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Filter to a single severity tier (e.g. 'warn', 'error').",
-              "title": "Severity"
-            }
-          },
-          {
-            "description": "Filter to a single pipeline stage (e.g. 'ingest', 'features').",
-            "in": "query",
-            "name": "stage",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Filter to a single pipeline stage (e.g. 'ingest', 'features').",
-              "title": "Stage"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Run Dq Api Execution Runs  Run Id  Dq Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Run Dq",
-        "tags": [
-          "runs"
-        ]
-      }
-    },
-    "/api/execution/shadow": {
-      "get": {
-        "operationId": "execution_shadow_api_execution_shadow_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Shadow Api Execution Shadow Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Execution Shadow",
-        "tags": [
-          "snapshots"
-        ]
-      }
-    },
-    "/api/execution/shadow/run": {
-      "post": {
-        "operationId": "execution_shadow_run_api_execution_shadow_run_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ShadowRunRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Shadow Run Api Execution Shadow Run Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Shadow Run",
-        "tags": [
-          "actions"
-        ]
-      }
-    },
-    "/api/execution/stocks/{symbol}": {
-      "get": {
-        "description": "Return the consolidated detail payload for ``symbol``.\n\nAlways returns 200 even when sources are missing \u2014 the UI inspects\n``available`` and the per-block ``None``-ness to decide what to render.",
-        "operationId": "execution_stock_detail_api_execution_stocks__symbol__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "symbol",
-            "required": true,
-            "schema": {
-              "title": "Symbol",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Stock Detail Api Execution Stocks  Symbol  Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Stock Detail",
-        "tags": [
-          "stocks"
-        ]
-      }
-    },
-    "/api/execution/stocks/{symbol}/ohlcv": {
-      "get": {
-        "description": "Return OHLCV + delivery candles for ``symbol`` in ascending time order.",
-        "operationId": "execution_stock_ohlcv_api_execution_stocks__symbol__ohlcv_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "symbol",
-            "required": true,
-            "schema": {
-              "title": "Symbol",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Inclusive lower bound (ISO date, ``YYYY-MM-DD``).",
-            "in": "query",
-            "name": "from",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Inclusive lower bound (ISO date, ``YYYY-MM-DD``).",
-              "title": "From"
-            }
-          },
-          {
-            "description": "Inclusive upper bound (ISO date, ``YYYY-MM-DD``).",
-            "in": "query",
-            "name": "to",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Inclusive upper bound (ISO date, ``YYYY-MM-DD``).",
-              "title": "To"
-            }
-          },
-          {
-            "description": "Candle interval; only ``daily`` is supported today.",
-            "in": "query",
-            "name": "interval",
-            "required": false,
-            "schema": {
-              "default": "daily",
-              "description": "Candle interval; only ``daily`` is supported today.",
-              "title": "Interval",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Maximum candles to return; keeps the most recent rows.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maximum": 2000,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Maximum candles to return; keeps the most recent rows.",
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Stock Ohlcv Api Execution Stocks  Symbol  Ohlcv Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Stock Ohlcv",
-        "tags": [
-          "stocks"
-        ]
-      }
-    },
-    "/api/execution/summary": {
-      "get": {
-        "operationId": "execution_summary_api_execution_summary_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Summary Api Execution Summary Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Execution Summary",
-        "tags": [
-          "health"
-        ]
-      }
-    },
-    "/api/execution/tasks": {
-      "get": {
-        "operationId": "execution_tasks_api_execution_tasks_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "maximum": 300,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Tasks Api Execution Tasks Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Tasks",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/api/execution/tasks/{task_id}": {
-      "get": {
-        "operationId": "execution_task_api_execution_tasks__task_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Task Api Execution Tasks  Task Id  Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Task",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/api/execution/tasks/{task_id}/events": {
-      "get": {
-        "operationId": "execution_task_events_api_execution_tasks__task_id__events_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "cursor",
-            "required": false,
-            "schema": {
-              "default": 0,
-              "minimum": 0,
-              "title": "Cursor",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Task Events",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/api/execution/tasks/{task_id}/logs": {
-      "get": {
-        "operationId": "execution_task_logs_api_execution_tasks__task_id__logs_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "after",
-            "required": false,
-            "schema": {
-              "default": 0,
-              "minimum": 0,
-              "title": "After",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 300,
-              "maximum": 1000,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Task Logs Api Execution Tasks  Task Id  Logs Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Task Logs",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/api/execution/tasks/{task_id}/terminate": {
-      "post": {
-        "operationId": "execution_terminate_task_api_execution_tasks__task_id__terminate_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Terminate Task Api Execution Tasks  Task Id  Terminate Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Terminate Task",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/api/execution/workspace/pipeline": {
-      "get": {
-        "operationId": "execution_workspace_pipeline_api_execution_workspace_pipeline_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 20,
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "stage2_only",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Stage2 Only",
-              "type": "boolean"
-            }
-          },
-          {
-            "in": "query",
-            "name": "stage2_min_score",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maximum": 100.0,
-                  "minimum": 0.0,
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Stage2 Min Score"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Workspace Pipeline Api Execution Workspace Pipeline Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Workspace Pipeline",
-        "tags": [
-          "snapshots"
-        ]
-      }
-    },
-    "/api/execution/workspace/snapshot": {
-      "get": {
-        "description": "Slim Control Tower payload \u2014 top-N actions + summary cards + leaders.\n\nUse ``/workspace/pipeline`` for the heavier tabbed workspace view; this\nendpoint exists to keep the landing page responsive without round-tripping\nthe full ranked / breakout / pattern / sector tables.",
-        "operationId": "execution_workspace_snapshot_api_execution_workspace_snapshot_get",
-        "parameters": [
-          {
-            "description": "How many top actions / sector leaders to surface.",
-            "in": "query",
-            "name": "top_n",
-            "required": false,
-            "schema": {
-              "default": 3,
-              "description": "How many top actions / sector leaders to surface.",
-              "maximum": 10,
-              "minimum": 1,
-              "title": "Top N",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Execution Workspace Snapshot Api Execution Workspace Snapshot Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Execution Workspace Snapshot",
-        "tags": [
-          "snapshots"
-        ]
-      }
-    }
-  }
 }

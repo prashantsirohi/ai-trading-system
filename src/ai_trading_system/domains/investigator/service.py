@@ -333,8 +333,11 @@ class InvestigatorService:
                 return conn.execute(
                     """
                     SELECT * EXCLUDE (_rn) FROM (
-                      SELECT *, ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY trade_date DESC, created_at DESC) AS _rn
-                      FROM investigator_stage1_state WHERE trade_date < CAST(? AS DATE)
+                      SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY trade_date DESC, attempt_number DESC NULLS LAST
+                      ) AS _rn
+                      FROM investigator_stage1_state WHERE trade_date <= CAST(? AS DATE)
                     ) WHERE _rn = 1
                     """, [context.run_date]
                 ).fetchdf()
@@ -430,6 +433,18 @@ class InvestigatorService:
                 frame.loc[:, "artifact_uri"] = artifact.uri
                 conn.execute("CREATE TEMP TABLE investigator_stage_frame AS SELECT * FROM frame")
                 conn.execute("DELETE FROM " + table + " WHERE run_id = ? AND attempt_number = ?", [context.run_id, context.attempt_number])
+                if table == "investigator_stage1_transition":
+                    conn.execute(
+                        """
+                        DELETE FROM investigator_stage1_transition AS target
+                        USING investigator_stage_frame AS incoming
+                        WHERE target.symbol_id = incoming.symbol_id
+                          AND target.trade_date = CAST(incoming.trade_date AS DATE)
+                          AND target.from_lifecycle_state IS NOT DISTINCT FROM incoming.from_lifecycle_state
+                          AND target.to_lifecycle_state = incoming.to_lifecycle_state
+                          AND target.transition_type = incoming.transition_type
+                        """
+                    )
                 columns = [row[1] for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()]
                 selected = [col for col in columns if col in frame.columns]
                 if selected:

@@ -13,6 +13,7 @@ import pandas as pd
 
 from ai_trading_system.domains.investigator.payload import build_investigator_payload
 from ai_trading_system.platform.db.paths import get_domain_paths, resolve_artifact_path
+from ai_trading_system.ui.execution_api.services.readmodels.stage1_operator import get_stage1_context_by_symbol
 
 
 def get_investigator_pattern_history(
@@ -191,7 +192,25 @@ def get_investigator_snapshot(project_root: Path) -> dict[str, Any]:
         },
         "source_artifacts": {key: str(value) for key, value in artifacts.items() if value is not None},
     }
-    return _json_safe({**compatible, **payload, "raw_summary": summary, "decision_payload": payload})
+    response = {**compatible, **payload, "raw_summary": summary, "decision_payload": payload}
+    stage1_context = get_stage1_context_by_symbol(project_root)
+    context_fields = (
+        "stage1_lifecycle_state", "stage1_substate", "stage1_maturity_score",
+        "stage1_emerging_rank", "golden_cross_status", "operator_status",
+        "operator_priority", "operator_action", "operator_reason",
+    )
+    for collection in ("decision_queue", "active_watchlist", "closest_to_high_conviction"):
+        rows = response.get(collection)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            context = stage1_context.get(str(row.get("symbol_id") or row.get("symbol") or "").upper())
+            if context:
+                for field in context_fields:
+                    row[field] = context.get(field)
+    return _json_safe(response)
 
 
 def _latest_artifacts(project_root: Path) -> dict[str, Path | None]:

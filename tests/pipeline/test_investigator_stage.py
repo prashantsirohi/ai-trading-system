@@ -418,6 +418,25 @@ def test_investigator_stage_reloads_previous_stage1_watchlist(tmp_path: Path, mo
     active_artifact = next(artifact for artifact in first_result.artifacts if artifact.artifact_type == "active_watchlist")
     first_active = pd.read_csv(active_artifact.uri)
     assert "EARLY" in set(first_active["symbol_id"])
+    with registry._writer() as conn:  # noqa: SLF001
+        conn.execute(
+            """INSERT INTO investigator_stage1_state
+               (symbol_id, trade_date, stage1_lifecycle_state, attempt_number)
+               VALUES ('SAME_DAY_STAGE1', DATE '2026-05-07', 'BASE_BUILDING', 1)"""
+        )
+    retry_context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "ohlcv.duckdb",
+        run_id=first_run_id,
+        run_date="2026-05-07",
+        stage_name="investigator",
+        attempt_number=2,
+        registry=registry,
+        params={},
+        artifacts=first_context.artifacts,
+    )
+    same_day_previous = investigator_service_module.InvestigatorService()._load_previous_stage1_state(retry_context)  # noqa: SLF001
+    assert "SAME_DAY_STAGE1" in set(same_day_previous["symbol_id"])
 
     monkeypatch.setattr(registry, "get_latest_artifact", lambda **_: [active_artifact])
     second_run_id = "pipeline-2026-05-08-second"

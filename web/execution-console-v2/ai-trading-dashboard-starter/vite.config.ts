@@ -1,4 +1,5 @@
-import { defineConfig, loadEnv } from 'vite';
+import { loadEnv } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 
@@ -10,6 +11,7 @@ export default defineConfig(({ mode }) => {
   const base = env.VITE_BASE_URL || '/';
 
   return {
+    test: { environment: 'jsdom', setupFiles: './src/test/setup.ts', exclude: ['tests/e2e/**', 'node_modules/**'] },
     base,
     plugins: [react()],
     resolve: {

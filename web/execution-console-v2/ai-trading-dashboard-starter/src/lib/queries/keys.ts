@@ -34,6 +34,11 @@ export const queryKeys = {
   sectorRotation: (params: unknown = {}) => ['execution', 'sector-rotation', params] as const,
   fundamentalsDashboard: () => ['execution', 'fundamentals-dashboard'] as const,
   investigator: () => ['execution', 'investigator'] as const,
+  stage1Summary: () => ['execution', 'stage1', 'summary'] as const,
+  stage1Current: (params: unknown) => ['execution', 'stage1', 'current', params] as const,
+  stage1Transitions: () => ['execution', 'stage1', 'transitions'] as const,
+  stage1Exits: () => ['execution', 'stage1', 'exits'] as const,
+  stage1Detail: (symbol: string) => ['execution', 'stage1', 'detail', symbol] as const,
   shadow: () => ['execution', 'shadow'] as const,
   riskProfiles: () => ['execution', 'risk-profiles'] as const,
   backtestRun: (profile: string, fromDate: string | null, toDate: string | null, equity: number) =>

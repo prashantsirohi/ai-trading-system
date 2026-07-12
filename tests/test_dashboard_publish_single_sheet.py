@@ -548,6 +548,28 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             },
         },
     }
+    stage1_row = {
+        "run_id": "pipeline-2026-04-09-demo", "symbol_id": "WATCH", "trade_date": "2026-04-09",
+        "stage1_lifecycle_state": "BREAKOUT_READY", "stage1_substate": "STAGE_1_BREAKOUT_READY",
+        "stage1_maturity_score": 78.0, "stage1_score_delta_5d": 4.0, "stage1_score_delta_20d": 9.0,
+        "stage1_emerging_score": 82.0, "stage1_emerging_rank": 2, "emerging_rank_improvement_20d": 18,
+        "pattern_promotion_state": "CONFIRMED", "golden_cross_status": "IMMINENT",
+        "distance_to_pivot_pct": 1.5, "operator_priority": "HIGH", "operator_status": "WATCH_CLOSELY",
+        "operator_action": "WATCH_CLOSELY", "operator_reason": "Breakout ready near pivot",
+        "operator_queue_eligible": True, "stage1_lifecycle_model_version": "v1",
+    }
+    stage1_bundle = {
+        "summary": {"as_of": "2026-04-09", "active_count": 1, "base_building_count": 0,
+                    "accumulating_count": 0, "late_stage1_count": 0, "breakout_ready_count": 1,
+                    "promotion_pending_count": 0, "progressions_today": 1, "regressions_today": 0,
+                    "invalidated_today": 0, "top_emerging_candidates": [stage1_row]},
+        "current": {"rows": [stage1_row]},
+        "transitions": {"rows": [{"trade_date": "2026-04-09", "symbol_id": "WATCH",
+            "from_lifecycle_state": "LATE_STAGE1", "to_lifecycle_state": "BREAKOUT_READY",
+            "stage1_score_before": 69, "stage1_score_after": 78, "emerging_rank_before": 20,
+            "emerging_rank_after": 2, "transition_summary": "LATE_STAGE1 → BREAKOUT_READY"}]},
+        "exits": {"rows": []}, "context_by_symbol": {"WATCH": stage1_row},
+    }
     _FakeManager.preexisting_titles = {"DATA", "FILTER", "Publish_Log", "02_Watchlist_Current", "05_Market_Breadth", "2026-04-08"}
     try:
         result = publish_dashboard_payload(
@@ -569,7 +591,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             sector_rotation_df=sector_rotation_df,
             industry_rotation_df=industry_rotation_df,
             investigator_payload=investigator_payload,
-            ranking_feedback={
+                ranking_feedback={
                 "status": "ok",
                 "rank_bucket_rows": [
                     {"horizon": "20d", "rank_bucket": "top-10", "avg_return": 4.2},
@@ -588,6 +610,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
                 "recommendations": [],
                 "warnings": [],
             },
+            stage1_operator_bundle=stage1_bundle,
         )
     finally:
         _FakeManager.preexisting_titles = set()
@@ -604,6 +627,8 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert result["investigator_sheet_name"] == "investigator"
     assert result["final_3q_gate_sheet_name"] == "Final 3Q Gate"
     assert result["investigator_data_sheet_name"] == "_DATA_INVESTIGATOR"
+    assert result["stage1_current_sheet_name"] == "Stage1 Current"
+    assert result["stage1_trade_date"] == "2026-04-09"
     assert {"DATA", "FILTER", "Publish_Log", "02_Watchlist_Current", "05_Market_Breadth", "2026-04-08"}.issubset(set(manager.spreadsheet.deleted))
 
     visible_titles = {"01_Daily_Report", "Diagnostics", "Model_Feedback", "04_Sector_Leadership", "industry rotation", "investigator", "Final 3Q Gate", "Investigator Performance"}
@@ -620,6 +645,20 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     investigator_grid = visible_updates["investigator"][0][1]
     final_gate_grid = visible_updates["Final 3Q Gate"][0][1]
     performance_grid = visible_updates["Investigator Performance"][0][1]
+    for stage1_title in ("Stage1 Current", "Stage1 Changes", "Stage1 Action Queue", "Stage1 Exits"):
+        assert len([update for update in manager.sheets[stage1_title].updates if update[0] == "A1"]) == 1
+    stage1_current_grid = manager.sheets["Stage1 Current"].updates[0][1]
+    assert stage1_current_grid[0][:6] == ["Priority", "Symbol", "Lifecycle", "Substate", "Operator Status", "Operator Action"]
+    assert stage1_current_grid[1][1] == "WATCH"
+    requests = [request for batch in manager.spreadsheet.batch_requests for request in batch.get("requests", [])]
+    assert any("setBasicFilter" in request for request in requests)
+    assert any("addConditionalFormatRule" in request for request in requests)
+    stage1_sheet_id = manager.sheets["Stage1 Current"].id
+    assert any(
+        request.get("updateSheetProperties", {}).get("properties", {}).get("sheetId") == stage1_sheet_id
+        and request.get("updateSheetProperties", {}).get("properties", {}).get("gridProperties", {}).get("frozenColumnCount") == 2
+        for request in requests
+    )
     assert len(daily_grid) == 140
     assert len(diagnostics_grid) >= 10
     assert len(model_feedback_grid) >= 4
@@ -653,8 +692,14 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         "Trap Flags",
         "Last Seen",
         "Action",
+        "Stage-1 Lifecycle",
+        "Stage-1 Score",
+        "Emerging Rank",
+        "Golden Cross",
+        "Operator Status",
     ]
     assert investigator_grid[1][0] == "WATCH"
+    assert investigator_grid[1][16:21] == ["BREAKOUT_READY", 78.0, 2, "IMMINENT", "WATCH_CLOSELY"]
     assert investigator_grid[1][1] == "Watch"
     assert investigator_grid[1][2] == "S1_BASE_FORMING"
     assert investigator_grid[1][9] == "0.0%"
@@ -723,6 +768,8 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "STUDY WATCHLIST TOP 10" in daily_text
     assert "DIAGNOSTICS" not in daily_text
     assert "MARKET BREADTH SNAPSHOT" in daily_text
+    assert "STAGE-1 SUMMARY" in daily_text
+    assert "TOP 5 EMERGING LEADERS" in daily_text
     assert "% Above SMA200" in daily_text
     assert "PE 5Y Percentile" in daily_text
     assert "New High / Low" in daily_text

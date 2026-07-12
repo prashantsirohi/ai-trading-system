@@ -22,6 +22,7 @@ import TrustBanner from '@/components/control-tower/TrustBanner';
 import OutputSummaryCards from '@/components/control-tower/OutputSummaryCards';
 import AdvancedBreadthChart from '@/components/control-tower/AdvancedBreadthChart';
 import MarketDirectionCard from '@/components/control-tower/MarketDirectionCard';
+import Stage1Widget from '@/components/control-tower/Stage1Widget';
 import { useMarketBreadth, useWorkspaceSnapshot } from '@/lib/queries';
 
 export default function ControlTowerPage() {
@@ -55,6 +56,7 @@ export default function ControlTowerPage() {
           <MarketDirectionCard snapshot={data} />
           <AdvancedBreadthChart rows={breadthQuery.data ?? []} />
           <OutputSummaryCards snapshot={data} />
+          <Stage1Widget />
         </div>
       )}
     </PageFrame>

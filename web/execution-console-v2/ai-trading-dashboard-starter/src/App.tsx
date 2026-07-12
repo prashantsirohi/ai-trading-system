@@ -19,6 +19,7 @@ import SectorDetailPage from '@/pages/SectorDetailPage';
 import SymbolPage from '@/pages/SymbolPage';
 import FundamentalsPage from '@/pages/FundamentalsPage';
 import InvestigatorPage from '@/pages/InvestigatorPage';
+import Stage1Page from '@/pages/Stage1Page';
 
 export default function App() {
   return (
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="/sector-rotation" element={<SectorRotationPage />} />
           <Route path="/fundamentals" element={<FundamentalsPage />} />
           <Route path="/investigator" element={<InvestigatorPage />} />
+          <Route path="/investigator/stage1" element={<Stage1Page />} />
           <Route path="/sectors/:sector" element={<SectorDetailPage />} />
           <Route path="/execution" element={<ExecutionPage />} />
           <Route path="/runs" element={<RunsPage />} />

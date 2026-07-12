@@ -91,6 +91,8 @@ import { getWorkspaceSnapshot } from '@/lib/api/workspace';
 import type { WorkspaceSnapshot } from '@/lib/api/workspace';
 import { getFundamentalsDashboard, type FundamentalsDashboard } from '@/lib/api/fundamentals';
 import { getInvestigatorSnapshot, type InvestigatorSnapshot } from '@/lib/api/investigator';
+import { getStage1Current, getStage1Detail, getStage1Exits, getStage1Summary, getStage1Transitions,
+  type Stage1Detail, type Stage1Params, type Stage1RowsResponse, type Stage1Summary } from '@/lib/api/stage1';
 import type {
   PatternResponse,
   PipelineWorkspaceResponse,
@@ -299,6 +301,22 @@ export function useInvestigatorSnapshot(
     ...LIVE_QUERY_DEFAULTS,
     ...options,
   });
+}
+
+export function useStage1Summary(): UseQueryResult<Stage1Summary, Error> {
+  return useQuery({ queryKey: queryKeys.stage1Summary(), queryFn: getStage1Summary, ...LIVE_QUERY_DEFAULTS });
+}
+export function useStage1Current(params: Stage1Params): UseQueryResult<Stage1RowsResponse, Error> {
+  return useQuery({ queryKey: queryKeys.stage1Current(params), queryFn: () => getStage1Current(params), ...LIVE_QUERY_DEFAULTS });
+}
+export function useStage1Transitions(): UseQueryResult<Stage1RowsResponse, Error> {
+  return useQuery({ queryKey: queryKeys.stage1Transitions(), queryFn: getStage1Transitions, ...LIVE_QUERY_DEFAULTS });
+}
+export function useStage1Exits(): UseQueryResult<Stage1RowsResponse, Error> {
+  return useQuery({ queryKey: queryKeys.stage1Exits(), queryFn: getStage1Exits, ...LIVE_QUERY_DEFAULTS });
+}
+export function useStage1Detail(symbol?: string | null): UseQueryResult<Stage1Detail, Error> {
+  return useQuery({ queryKey: queryKeys.stage1Detail(symbol ?? '__none__'), queryFn: () => getStage1Detail(symbol as string), enabled: Boolean(symbol) });
 }
 
 export function useStockDetail(

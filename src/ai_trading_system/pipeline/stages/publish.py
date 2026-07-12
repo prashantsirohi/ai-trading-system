@@ -421,6 +421,28 @@ class PublishStage:
             ].copy()
         else:
             datasets["investigator_high_conviction"] = pd.DataFrame()
+        from ai_trading_system.ui.execution_api.services.readmodels.stage1_operator import (
+            get_stage1_context_by_symbol,
+            get_stage1_current,
+            get_stage1_exits,
+            get_stage1_summary,
+            get_stage1_transitions,
+        )
+
+        stage1_summary = get_stage1_summary(context.project_root)
+        datasets["stage1_operator_bundle"] = {
+            "summary": stage1_summary,
+            "current": get_stage1_current(
+                context.project_root, limit=500, sort_by="operator_priority", sort_direction="asc"
+            ),
+            "transitions": get_stage1_transitions(
+                context.project_root, trade_date=stage1_summary.get("as_of"), limit=1000
+            ),
+            "exits": get_stage1_exits(
+                context.project_root, trade_date=stage1_summary.get("as_of"), limit=1000
+            ),
+            "context_by_symbol": get_stage1_context_by_symbol(context.project_root),
+        }
 
     def _read_json_artifact_safe(self, artifact: StageArtifact | None) -> Dict[str, Any]:
         if artifact is None:
@@ -695,6 +717,7 @@ class PublishStage:
             run_id=context.run_id,
             rank_summary=rank_summary,
             prior_watchlist_df=prior_watchlist_df,
+            stage1_operator_bundle=datasets.get("stage1_operator_bundle"),
         )
         return {
             "report_id": "dashboard_sheet",

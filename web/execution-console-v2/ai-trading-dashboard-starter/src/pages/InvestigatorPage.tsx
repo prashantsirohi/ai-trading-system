@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Bar,
   BarChart,
@@ -36,6 +37,7 @@ const FILTERS = [
   { key: 's1Near', label: 'S1 Near Breakout+' },
   { key: 'newToday', label: 'New today' },
   { key: 'stale', label: 'Stale >5d' },
+  { key: 'stage1Active', label: 'Stage-1 active only' },
 ] as const;
 
 const VERDICT_TONES: Record<string, 'good' | 'warn' | 'bad' | 'neutral'> = {
@@ -571,7 +573,7 @@ function ActiveTable({ rows, filters, trapFilter, onClearTrapFilter, onToggleFil
           <table className="min-w-[1320px] text-left text-xs">
             <thead className="uppercase text-slate-500">
               <tr>
-                {['Symbol', 'Verdict', 'Source', 'S1 State', 'Pattern', 'Pattern Score', 'Setup', 'Sector', 'Score', 'Repeat', 'Price vs First', 'Rank Change', 'Volume', 'Days Stale', 'Trap Flags', 'Last Seen', 'Action'].map((head) => (
+                {['Symbol', 'Verdict', 'Source', 'S1 State', 'Lifecycle', 'Stage-1 Score', 'Emerging Rank', 'Golden Cross', 'Operator Status', 'Pattern', 'Pattern Score', 'Setup', 'Sector', 'Score', 'Repeat', 'Price vs First', 'Rank Change', 'Volume', 'Days Stale', 'Trap Flags', 'Last Seen', 'Action'].map((head) => (
                   <th key={head} className="px-3 py-2">{head}</th>
                 ))}
               </tr>
@@ -583,6 +585,11 @@ function ActiveTable({ rows, filters, trapFilter, onClearTrapFilter, onToggleFil
                   <td className="px-3 py-2"><VerdictBadge value={row.decision_verdict} /></td>
                   <td className="px-3 py-2">{text(row.primary_candidate_source, '-')}</td>
                   <td className="px-3 py-2"><S1StateBadge value={row.s1_promotion_state} /></td>
+                  <td className="px-3 py-2">{row.stage1_lifecycle_state ? <StatusBadge status={text(row.stage1_lifecycle_state)} label={text(row.stage1_lifecycle_state)} /> : '—'}</td>
+                  <td className="px-3 py-2 text-right">{hasValue(row, 'stage1_maturity_score') ? fixed(row.stage1_maturity_score) : '—'}</td>
+                  <td className="px-3 py-2 text-right">{hasValue(row, 'stage1_emerging_rank') ? fixed(row.stage1_emerging_rank) : '—'}</td>
+                  <td className="px-3 py-2">{text(row.golden_cross_status, '—')}</td>
+                  <td className="px-3 py-2">{row.operator_status ? <StatusBadge status={text(row.operator_status)} label={text(row.operator_status)} /> : '—'}</td>
                   <td className="px-3 py-2">{text(row.pattern_family)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fixed(row.pattern_score)}</td>
                   <td className="px-3 py-2">{text(row.setup ?? row.move_tag)}</td>
@@ -746,6 +753,7 @@ function InvestigatorDrawer({ row, details, onClose }: { row: Row | null; detail
 }
 
 function passesFilters(row: Row, filters: Set<string>): boolean {
+  if (filters.has('stage1Active') && !['BASE_BUILDING', 'ACCUMULATING', 'LATE_STAGE1', 'BREAKOUT_READY', 'PROMOTION_PENDING', 'REGRESSED', 'STALE_BASE'].includes(String(row.stage1_lifecycle_state ?? ''))) return false;
   if (filters.has('repeat') && num(row.appearance_count_20d) < 3) return false;
   if (filters.has('price') && num(row.price_progression_pct ?? row.price_vs_first_trigger_pct) <= 0) return false;
   if (filters.has('rank') && num(row.rank_change_20d) >= 0) return false;
@@ -786,7 +794,7 @@ export default function InvestigatorPage() {
   };
 
   return (
-    <PageFrame title="Investigator" description="Decision board for repeat strength, trap evidence, and action-ready post-rank candidates." compactHeader>
+    <PageFrame title="Investigator" description="Decision board for repeat strength, trap evidence, and action-ready post-rank candidates." headerAside={<Link className="text-sm text-cyan-300" to="/investigator/stage1">Stage-1 Emerging Leaders →</Link>} compactHeader>
       {query.isLoading ? (
         <CardSkeleton />
       ) : query.error ? (
