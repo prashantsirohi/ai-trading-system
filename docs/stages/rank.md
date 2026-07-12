@@ -55,6 +55,8 @@ Under `data/pipeline_runs/<run_id>/rank/attempt_<n>/`:
 
 Per-task statuses are persisted to `task_status.json` for resumability (`service.py:1283`).
 
+Before final rank artifacts are emitted, the rank stage transactionally upserts the current run into `control_plane.duckdb::{rank_history,stage_history,stage1_history,pattern_history}`. `decision_persistence_summary.json` records write counts and validation status. The CSV files are materialized run outputs, not historical storage.
+
 ## Main modules
 
 - `domains/ranking/service.py::RankOrchestrationService` — orchestrates resumable tasks, dashboard payload assembly, ML overlay, registry writes.

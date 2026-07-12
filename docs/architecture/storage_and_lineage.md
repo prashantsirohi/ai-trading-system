@@ -35,6 +35,17 @@ data/feature_store/<symbol_id>/features_<start_date>_<end_date>.parquet
 
 Columnar Parquet (RSI, MACD, Supertrend, ATR, EMA_20/50/200, VWAP, volume_ratio, swing_low_20, sector_rs, etc.). Written by the `features` stage; read by `rank`, `candidates`, and downstream readmodels.
 
+## Decision history
+
+Derived decision facts are durable in `control_plane.duckdb` and are not reconstructed from pipeline directories:
+
+- `rank_history`, `stage_history`, `stage1_history`, and `pattern_history` hold versioned daily analytical facts.
+- `investigator_stage1_state` is the dated lifecycle snapshot history.
+- `investigator_stage1_current` is the authoritative one-row-per-symbol/exchange operational state.
+- `investigator_stage1_transition` is the idempotent lifecycle event ledger.
+
+Rank and investigator CSV/JSON files remain per-attempt snapshots and publish/debug inputs. `decision_write_mode` defaults to `LIVE`; `REPLAY` and `BACKFILL` write history without replacing current state, while `REBUILD_CURRENT` explicitly permits current-state reconstruction.
+
 ## Pipeline run artifacts
 
 Every stage attempt gets a deterministic directory:

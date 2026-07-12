@@ -105,6 +105,13 @@ class InvestigatorService:
         candidates = _mark_top_ranked_context(candidates, ranked)
         if candidates.empty:
             empty = pd.DataFrame()
+            decision_persistence = None
+            if context.registry is not None:
+                from ai_trading_system.domains.ranking.decision_history import DecisionHistoryRepository
+
+                decision_persistence = DecisionHistoryRepository(context.registry).persist_lifecycle(
+                    context, empty, empty
+                )
             performance_frame, performance_summary, threshold_recommendations = self._performance_outputs(context)
             summary = self._summary(
                 context=context,
@@ -120,6 +127,8 @@ class InvestigatorService:
                 intake_diagnostics=intake_diagnostics,
                 stage_pattern_context=_stage_pattern_summary(stage_pattern_context, performance_frame),
             )
+            if decision_persistence is not None:
+                summary["decision_persistence"] = decision_persistence
             payload = build_investigator_payload(
                 run_id=context.run_id,
                 run_date=context.run_date,
@@ -161,6 +170,7 @@ class InvestigatorService:
                 stage1_stale_candidates=empty,
                 stage1_regressions=empty,
                 stage1_lifecycle_summary={"stage1_active_count": 0},
+                **({"decision_persistence_summary": decision_persistence} if decision_persistence is not None else {}),
             )
             return StageResult(artifacts=artifacts, metadata=summary)
         candidates = score_price_structure(candidates)
@@ -189,10 +199,14 @@ class InvestigatorService:
         best_patterns = best_pattern_by_symbol(_combine_pattern_sources(rank_patterns_for_merge, investigator_patterns))
         active = _merge_best_patterns(active, best_patterns)
         scores = _merge_best_patterns(scores, best_patterns)
+        lifecycle_config = Stage1LifecycleConfig.from_params(context.params)
         stage1_state, stage1_transitions, stage1_lifecycle_summary = build_stage1_lifecycle(
             scores, previous_stage1_state, run_date=str(context.run_date),
-            config=Stage1LifecycleConfig.from_params(context.params),
+            config=lifecycle_config,
         )
+        if not stage1_transitions.empty:
+            stage1_transitions.loc[:, "stage1_lifecycle_model_version"] = lifecycle_config.model_version
+            stage1_transitions.loc[:, "stage1_lifecycle_config_hash"] = lifecycle_config.config_hash
         stage1_watchlist = stage1_state.loc[stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).isin(ACTIVE_STATES)].copy()
         stage1_invalidations = stage1_state.loc[stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).eq("INVALIDATED")].copy()
         stage1_stale_candidates = stage1_state.loc[stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).eq("STALE_BASE")].copy()
@@ -243,6 +257,14 @@ class InvestigatorService:
             stage1_watchlist=stage1_watchlist,
             stage1_transitions=stage1_transitions,
         )
+        decision_persistence = None
+        if context.registry is not None:
+            from ai_trading_system.domains.ranking.decision_history import DecisionHistoryRepository
+
+            decision_persistence = DecisionHistoryRepository(context.registry).persist_lifecycle(
+                context, stage1_state, stage1_transitions
+            )
+            summary["decision_persistence"] = decision_persistence
         artifacts = self._write_artifacts(
             context=context,
             daily_gainer_log=gainers,
@@ -266,6 +288,7 @@ class InvestigatorService:
             stage1_stale_candidates=stage1_stale_candidates,
             stage1_regressions=stage1_regressions,
             stage1_lifecycle_summary=stage1_lifecycle_summary,
+            **({"decision_persistence_summary": decision_persistence} if decision_persistence is not None else {}),
         )
         self._persist_tables(context, artifacts)
         return StageResult(artifacts=artifacts, metadata=summary)
@@ -324,25 +347,6 @@ class InvestigatorService:
     def _load_history(self, context: StageContext) -> pd.DataFrame:
         if context.registry is None:
             return pd.DataFrame()
-
-    def _load_previous_stage1_state(self, context: StageContext) -> pd.DataFrame:
-        if context.registry is None:
-            return pd.DataFrame()
-        try:
-            with context.registry._reader() as conn:  # noqa: SLF001
-                return conn.execute(
-                    """
-                    SELECT * EXCLUDE (_rn) FROM (
-                      SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY symbol_id
-                        ORDER BY trade_date DESC, attempt_number DESC NULLS LAST
-                      ) AS _rn
-                      FROM investigator_stage1_state WHERE trade_date <= CAST(? AS DATE)
-                    ) WHERE _rn = 1
-                    """, [context.run_date]
-                ).fetchdf()
-        except Exception:
-            return pd.DataFrame()
         try:
             with context.registry._reader() as conn:  # noqa: SLF001
                 return conn.execute(
@@ -371,6 +375,47 @@ class InvestigatorService:
                     """,
                     [context.run_date, context.run_date],
                 ).fetchdf()
+        except Exception:
+            return pd.DataFrame()
+
+    def _load_previous_stage1_state(self, context: StageContext) -> pd.DataFrame:
+        if context.registry is None:
+            return pd.DataFrame()
+        try:
+            with context.registry._reader() as conn:  # noqa: SLF001
+                current = conn.execute(
+                    """
+                    SELECT
+                        * EXCLUDE (as_of_trade_date, lifecycle_model_version, lifecycle_config_hash),
+                        as_of_trade_date AS trade_date,
+                        lifecycle_model_version AS stage1_lifecycle_model_version,
+                        lifecycle_config_hash AS stage1_lifecycle_config_hash
+                    FROM investigator_stage1_current
+                    WHERE as_of_trade_date <= CAST(? AS DATE)
+                    """, [context.run_date]
+                ).fetchdf()
+                # Compatibility for rows written directly to the dated table
+                # by pre-029 code/tests before current-state reconciliation.
+                dated = conn.execute(
+                    """
+                    SELECT * EXCLUDE (_rn) FROM (
+                        SELECT *, ROW_NUMBER() OVER (
+                            PARTITION BY symbol_id, COALESCE(exchange, 'NSE')
+                            ORDER BY trade_date DESC, attempt_number DESC NULLS LAST
+                        ) AS _rn
+                        FROM investigator_stage1_state
+                        WHERE trade_date <= CAST(? AS DATE)
+                    ) WHERE _rn = 1
+                    """,
+                    [context.run_date],
+                ).fetchdf()
+                if current.empty:
+                    return dated
+                if dated.empty:
+                    return current
+                combined = pd.concat([current, dated], ignore_index=True, sort=False)
+                combined.loc[:, "exchange"] = combined.get("exchange", pd.Series("NSE", index=combined.index)).fillna("NSE")
+                return combined.drop_duplicates(["symbol_id", "exchange"], keep="first")
         except Exception:
             return pd.DataFrame()
 
@@ -414,9 +459,6 @@ class InvestigatorService:
             "investigator_pattern_scan": "investigator_pattern_scan",
             "final_3q_gate": "investigator_final_gate",
             "archived_investigator": "investigator_archive",
-            "stage1_watchlist": "investigator_stage1_state",
-            "stage1_current_state": "investigator_stage1_state",
-            "stage1_transitions": "investigator_stage1_transition",
         }
         by_type = {artifact.artifact_type: artifact for artifact in artifacts}
         with context.registry._writer() as conn:  # noqa: SLF001

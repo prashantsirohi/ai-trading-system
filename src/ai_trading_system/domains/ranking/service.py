@@ -408,10 +408,31 @@ class RankOrchestrationService:
             dashboard_payload=dashboard_payload,
         )
 
+        # Decision history is the durable source of truth.  Run artifacts are
+        # emitted only after this transaction validates and commits.
+        decision_persistence = None
+        if context.registry is not None:
+            from ai_trading_system.domains.ranking.decision_history import DecisionHistoryRepository
+
+            decision_persistence = DecisionHistoryRepository(context.registry).persist_rank_outputs(context, outputs)
+
         artifacts = []
         metadata = {"completed_at": datetime.now(timezone.utc).isoformat()}
         output_dir = context.output_dir()
         artifact_uris: Dict[str, str] = {}
+
+        if decision_persistence is not None:
+            persistence_path = context.write_json("decision_persistence_summary.json", decision_persistence)
+            artifacts.append(
+                StageArtifact.from_file(
+                    "decision_persistence_summary",
+                    persistence_path,
+                    row_count=1,
+                    metadata=decision_persistence,
+                    attempt_number=context.attempt_number,
+                )
+            )
+            metadata["decision_persistence"] = decision_persistence
 
         for artifact_type, df in outputs.items():
             if df is None:
