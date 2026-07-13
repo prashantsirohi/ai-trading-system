@@ -2,10 +2,10 @@
 
 - **Purpose:** Run the pipeline reliably on a Mac mini with 16 GB RAM, scheduled around NSE market hours.
 - **Audience:** Operator.
-- **Last verified:** 2026-05-16
-- **Source of truth:** [`docs/operations/installation.md`](../_legacy/archived_2026-05-16/operations_installation.md), [`docs/reference/commands.md`](../reference/commands.md), [`docs/_audit/current_code_truth_map.md`](../_audit/current_code_truth_map.md).
+- **Last verified:** 2026-07-13
+- **Source of truth:** [`docs/reference/commands.md`](../reference/commands.md), [`docs/reference/configuration.md`](../reference/configuration.md), and current runtime code.
 
-> Honest scope note: the truth map does not document a tested launchd configuration. The cron and launchd snippets below are **starting points**, not verified setups. Adapt and test before relying on them.
+> Honest scope note: the repository does not contain a tested launchd deployment fixture. The cron and launchd snippets below are **starting points**, not verified setups. Adapt and test before relying on them.
 
 ---
 

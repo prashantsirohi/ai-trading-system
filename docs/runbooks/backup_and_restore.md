@@ -1,102 +1,105 @@
 # Backup and Restore
 
-- **Purpose:** Back up and restore the operational data stores. `data/pipeline_runs/` is reproducible — only the stateful stores need backup.
-- **Audience:** Operator.
-- **Last verified:** 2026-05-16
-- **Source of truth:** [`docs/_audit/current_code_truth_map.md`](../_audit/current_code_truth_map.md) section 4 (Storage), [`docs/architecture/storage_and_lineage.md`](../architecture/storage_and_lineage.md).
+- **Purpose:** Back up and restore stateful runtime stores resolved through `DATA_ROOT`.
+- **Audience:** Operators preparing a repair, migration, or recovery.
+- **Last verified:** 2026-07-13
+- **Source of truth:** [storage and lineage](../architecture/storage_and_lineage.md) and `src/ai_trading_system/platform/db/paths.py`.
 
 ---
 
-## What to back up
+## Safety contract
 
-| Path | Purpose | Back up? |
+Stop every pipeline, API, collector, and research process using the affected stores before copying DuckDB files. A filesystem copy of an actively written DuckDB file is not a valid backup. Do not terminate an unknown lock owner; coordinate a maintenance window.
+
+Load the operator environment and require the configured root:
+
+```bash
+set -a
+source .env
+set +a
+: "${DATA_ROOT:?DATA_ROOT must be configured}"
+```
+
+Never substitute a repo-local `data/` tree for an unavailable configured root.
+
+## Stateful content
+
+| Resolved path | Owner/content | Backup policy |
 |---|---|---|
-| `data/ohlcv.duckdb` | Operational OHLCV catalog | Yes |
-| `data/control_plane.duckdb` | Pipeline governance (runs, stages, artifacts, DQ, model registry, watchlist/event tables, delivery log) | Yes |
-| `data/execution.duckdb` | `execution_order`, `execution_fill`, drawdown snapshots | Yes |
-| `data/research.duckdb` | `rank_cohort_performance` (perf_tracker) | Yes |
-| `data/research_ohlcv.duckdb` | Research-domain OHLCV isolation | Yes if research is in use |
-| `data/feature_store/` | Per-symbol parquet feature files | Yes |
-| `data/masterdata.db` | Symbol master | Yes |
-| `data/market_intel.duckdb` | Populated by external runner; read-only consumer | Skip — rebuilt by the runner |
-| `data/pipeline_runs/` | Per-run artifacts | Reproducible; back up only for audit |
+| `$DATA_ROOT/ohlcv.duckdb` | operational market, trust, provenance, and feature metadata | required |
+| `$DATA_ROOT/control_plane.duckdb` | runs, attempts, artifacts, DQ, alerts, models, and operator state | required |
+| `$DATA_ROOT/execution.duckdb` | orders, fills, stops, positions, and drawdown ledger | required when execution is used |
+| `$DATA_ROOT/candidate_tracker.duckdb` | candidate lifecycle state | required when tracker is used |
+| `$DATA_ROOT/masterdata.db` | shared instrument identity | required |
+| `$DATA_ROOT/fundamentals/` | imported fundamental snapshots/read models | required when used |
+| `$DATA_ROOT/feature_store/` and `$DATA_ROOT/stage_store/` | durable feature/stage materializations | required for fast exact recovery |
+| `$DATA_ROOT/research/` and research stores | isolated research state | required when research is used |
+| `$DATA_ROOT/pipeline_runs/` | attempt artifacts referenced by registry rows | retain for lineage/audit and retry recovery |
+| `$DATA_ROOT/cache/`, `$DATA_ROOT/exports/` | disposable cache and explicit exports | optional |
 
-## Backup procedure
+Back up control-plane registry rows and referenced `pipeline_runs` artifacts together. Restoring only one side leaves broken lineage.
 
-Stop the pipeline before backing up DuckDB files to avoid copying mid-write state. The simplest safe path is to back up between runs.
+## Backup
+
+Choose a destination outside `DATA_ROOT`, verify free space, then copy the stopped runtime tree:
 
 ```bash
-DEST=backups/$(date +%Y-%m-%d_%H%M)
+BACKUP_PARENT="${BACKUP_ROOT:-$PWD/backups}"
+DEST="$BACKUP_PARENT/$(date +%Y-%m-%d_%H%M%S)"
 mkdir -p "$DEST"
-cp data/ohlcv.duckdb         "$DEST/"
-cp data/control_plane.duckdb "$DEST/"
-cp data/execution.duckdb     "$DEST/"
-cp data/research.duckdb      "$DEST/"
-cp data/research_ohlcv.duckdb "$DEST/" 2>/dev/null || true
-cp data/masterdata.db        "$DEST/"
-cp -R data/feature_store     "$DEST/feature_store"
+du -sh "$DATA_ROOT"
+df -h "$BACKUP_PARENT"
+rsync -a "$DATA_ROOT/" "$DEST/data/"
 ```
 
-### Verify backup integrity
+Record hashes for database files and probe each DuckDB copy read-only:
 
 ```bash
-for f in "$DEST"/*.duckdb; do
-  echo "--- $f"
-  duckdb "$f" "SELECT 1;"
-done
-du -sh "$DEST"
+: > "$DEST/database.sha256"
+find "$DEST/data" -type f \( -name '*.duckdb' -o -name '*.db' \) -print \
+  | while IFS= read -r path; do shasum -a 256 "$path"; done \
+  >> "$DEST/database.sha256"
+
+BACKUP_DATA_ROOT="$DEST/data" ./.venv/bin/python - <<'PY'
+import os
+from pathlib import Path
+import duckdb
+
+root = Path(os.environ["BACKUP_DATA_ROOT"])
+for path in sorted(root.rglob("*.duckdb")):
+    connection = duckdb.connect(str(path), read_only=True)
+    try:
+        connection.execute("SELECT 1").fetchone()
+    finally:
+        connection.close()
+    print(path)
+PY
 ```
 
-### Offsite / rotation
+Preserve the manifest with the backup and apply the operator retention/offsite policy.
 
-Compress and move offsite per your retention policy:
+## Restore rehearsal or recovery
+
+Restore into a new directory first; never overwrite the active root in place:
 
 ```bash
-tar -czf "$DEST.tgz" -C backups "$(basename "$DEST")"
+SRC='<chosen-backup>/data'
+RESTORE_ROOT="${TMPDIR:-/tmp}/ai-trading-restore-$(date +%s)"
+mkdir -p "$RESTORE_ROOT"
+rsync -a "$SRC/" "$RESTORE_ROOT/"
 ```
 
-> Current code status: no in-repo backup CLI is documented. Use the shell commands above as a starting point and adapt to your environment.
+Verify the stored hashes from the backup directory and repeat the read-only DuckDB probes against `RESTORE_ROOT`. Then run the [copied-data canary](copied_data_canary.md) with the restored directory as its source or temporary runtime root.
 
-## Restore procedure
+For an actual replacement:
 
-1. Stop any pipeline, API, or React console processes touching the data directory.
-2. Move the current `data/` aside (do not delete until restore is verified):
-   ```bash
-   mv data data.broken.$(date +%s)
-   mkdir data
-   ```
-3. Copy backed-up files into place:
-   ```bash
-   SRC=backups/<chosen-backup>
-   cp "$SRC"/ohlcv.duckdb         data/
-   cp "$SRC"/control_plane.duckdb data/
-   cp "$SRC"/execution.duckdb     data/
-   cp "$SRC"/research.duckdb      data/
-   cp "$SRC"/research_ohlcv.duckdb data/ 2>/dev/null || true
-   cp "$SRC"/masterdata.db        data/
-   cp -R "$SRC"/feature_store     data/feature_store
-   ```
-4. Re-create runtime directories:
-   ```bash
-   python -m ai_trading_system.interfaces.cli.bootstrap_runtime_data
-   ```
-5. Spot-check:
-   ```bash
-   duckdb data/ohlcv.duckdb "SELECT MAX(timestamp), COUNT(*) FROM _catalog;"
-   duckdb data/control_plane.duckdb "SELECT COUNT(*) FROM pipeline_run;"
-   duckdb data/execution.duckdb "SELECT COUNT(*) FROM execution_order;"
-   ```
-6. Run a safe canary:
-   ```bash
-   python -m ai_trading_system.pipeline.orchestrator --canary --skip-preflight --stages ingest,features,rank,publish --local-publish
-   ```
-7. After verification, delete `data.broken.*`.
+1. keep all live writers stopped;
+2. take one final backup of the current root;
+3. rename the current root to a timestamped quarantine path on the same filesystem;
+4. place the verified restored tree at the configured `DATA_ROOT`;
+5. run bootstrap only to create missing directories, never to synthesize market data;
+6. run read-only health probes, then the operator-approved canary;
+7. resume services one at a time and monitor lock, DQ, and path diagnostics;
+8. retain the quarantined prior root until recovery acceptance is complete.
 
-## What `data/pipeline_runs/` contains
-
-It is the historical log of per-run, per-stage artifacts. The pipeline can produce future runs without it. Treat it as audit history, not state. If you need to rerun a specific historical `run_id` (e.g., publish retry), `pipeline_runs/<run_id>/` must still exist — back it up only if you anticipate that need.
-
-## Notes
-
-- `data/market_intel.duckdb` is owned by an external always-on runner; restoring stale data here will be overwritten.
-- `pipeline_artifact` rows in `control_plane.duckdb` reference paths under `data/pipeline_runs/`. If you restore one but not the other, artifact lookups may return paths that no longer exist on disk.
+If any store fails to open, schema/migration compatibility fails, artifact paths resolve outside the restored root, or DQ blocks, stop and restore the quarantined prior root. Database repair or migration requires its own explicit authorization and backup.

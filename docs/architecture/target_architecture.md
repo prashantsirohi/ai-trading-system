@@ -2,12 +2,12 @@
 
 - **Purpose:** Describes the *current* canonical package layout (which is already the target — the migration is largely done) and enumerates remaining legacy outside `src/`.
 - **Audience:** Developer, future agents.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-07-13
 - **Source of truth:**
   - `src/ai_trading_system/` filesystem layout
   - `pyproject.toml`
   - Root-level legacy modules (`analytics/`, `audit_rank.py`, `scripts/`, `tools/`)
-  - [`docs/_audit/current_code_truth_map.md`](../_audit/current_code_truth_map.md)
+  - [`docs/SYSTEM_GUIDE.md`](../SYSTEM_GUIDE.md)
 
 ---
 
@@ -103,7 +103,7 @@ See [`docs/architecture/storage_and_lineage.md`](storage_and_lineage.md) for the
 
 ## Open gaps
 
-Tracked in [`docs/_audit/current_code_truth_map.md`](../_audit/current_code_truth_map.md) §"Things flagged as unknown":
+Historical unknowns were recorded in the retired truth-map audit; verify each item against current code before acting:
 
 1. `models/` (root) — purpose not yet read.
 2. `interfaces/api/` — described as "mostly empty"; verify before docs imply otherwise.

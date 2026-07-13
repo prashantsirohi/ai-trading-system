@@ -2,7 +2,7 @@
 
 - **Purpose:** Complete catalog of FastAPI endpoints exposed by the execution console backend.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-07-13
 - **Source of truth:** `src/ai_trading_system/ui/execution_api/app.py`, `src/ai_trading_system/ui/execution_api/routes/*.py`, `src/ai_trading_system/ui/execution_api/schemas/requests.py`, `src/ai_trading_system/ui/execution_api/routes/_deps.py`.
 
 ---
@@ -43,7 +43,7 @@ Resolved per-request via `project_root()` (`routes/_deps.py:22-25`), honoring op
 
 ### Router registration
 
-All 14 routers are listed in `routes/__init__.py:3-35` and mounted in order via `for router in ALL_ROUTERS: app.include_router(router)` (`app.py:65-66`). Each router declares its own `prefix=` — there is no app-level prefix.
+`routes/__init__.py` imports 17 route modules and exposes 18 router objects because `decision_history` contributes both its API router and a diagnostics router. The app mounts every object in `ALL_ROUTERS` via `app.include_router(...)`. Each router declares its own prefix; there is no app-level prefix.
 
 ---
 
@@ -70,7 +70,7 @@ All 14 routers are listed in `routes/__init__.py:3-35` and mounted in order via 
 
 Request schemas (from `schemas/requests.py`):
 
-- **`PipelineRunRequest`**: `label: str = "Execution API pipeline run"`, `stages: list[str]` (default `["ingest","features","rank","publish","perf_tracker"]`), `params: dict[str, Any] = {}`, `run_id: str | None`, `run_date: str | None`.
+- **`PipelineRunRequest`**: `label: str = "Execution API pipeline run"`, `stages: list[str]` (default `["ingest","features","rank","investigator","publish","perf_tracker"]`), `params: dict[str, Any] = {}`, `run_id: str | None`, `run_date: str | None`.
 - **`PublishRetryRequest`**: `local_publish: bool = False`, `run_id: str | None`.
 - **`ShadowRunRequest`**: `label: str = "Shadow refresh"`, `backfill_days: int = 0`, `prediction_date: str | None`.
 
@@ -238,6 +238,40 @@ Factor columns scanned (`perf_tracker.py:42-50`): `factor_rs`, `factor_vol`, `fa
 | POST | `/api/execution/optimization/runs/{run_id}/promote` | Promote the run's champion along the lifecycle ladder (Wave 5b). Body: `{"to": "shadow"}` (default `shadow`; must be one of the LIFECYCLE_ORDER values). 404 if run/champion unknown; 422 if `to` is unknown or the transition moves backwards. Returns `{optimization_run_id, rule_pack_id, previous_status, new_status}`. | Backed by `research.optimization.promote` — same lifecycle gate as the `ai-trading-optimize-promote` CLI. |
 
 Auth header: `x-api-key` (same as every `/api/*` route). Missing/blank `EXECUTION_API_KEY` on the server still returns 500.
+
+---
+
+## Router: investigator
+
+- **Source:** `src/ai_trading_system/ui/execution_api/routes/investigator.py`
+- **Prefix:** `/api/execution` (tags `["investigator"]`)
+
+| Method | Path | Purpose | Main bounds |
+|---|---|---|---|
+| GET | `/api/execution/investigator` | Latest investigator snapshot. | — |
+| GET | `/api/execution/investigator/stage1/summary` | Stage 1 operator summary. | — |
+| GET | `/api/execution/investigator/stage1/current` | Filtered/paginated current Stage 1 state. | `limit` 1–500; non-negative `offset` |
+| GET | `/api/execution/investigator/stage1/transitions` | Transition history, optionally by trade date. | `limit` 1–1000 |
+| GET | `/api/execution/investigator/stage1/exits` | Exit history, optionally by trade date. | `limit` 1–1000 |
+| GET | `/api/execution/investigator/stage1/{symbol_id}` | Per-symbol Stage 1 history/detail. | `lookback_days` 1–730 |
+| GET | `/api/execution/investigator/stage1/{symbol_id}/analytics-history` | Version/config-filtered daily analytics history. | `limit` 1–2000 |
+
+## Routers: decision history and diagnostics
+
+- **Source:** `src/ai_trading_system/ui/execution_api/routes/decision_history.py`
+- **Prefixes:** `/api/stocks` and `/api/health`
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/stocks/{symbol}/rank-history` | Dated/versioned rank decisions. |
+| GET | `/api/stocks/{symbol}/stage-history` | Dated/versioned market-stage history. |
+| GET | `/api/stocks/{symbol}/stage1-history` | Dated/versioned Stage 1 analytics. |
+| GET | `/api/stocks/{symbol}/pattern-history` | Pattern history with optional family filter. |
+| GET | `/api/stocks/{symbol}/transitions` | Candidate lifecycle transitions. |
+| GET | `/api/stocks/{symbol}/decision-history` | Unified operator decision history. |
+| GET | `/api/health/decision-read-sources` | Read-source availability and error summary. |
+
+History endpoints accept bounded `limit`/`offset` values and optional `from`, `to`, exchange, model-version, and config-hash filters as implemented by the route. Responses remain dictionary contracts rather than Pydantic response models.
 
 ---
 

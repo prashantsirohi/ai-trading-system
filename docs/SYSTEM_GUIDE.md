@@ -131,6 +131,8 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
   --canary --symbol-limit 25 --local-publish
 ```
 
+The command above uses the configured runtime stores. When validation must not mutate live stores, follow the [copied-data canary](runbooks/copied_data_canary.md) maintenance-window procedure instead.
+
 Retry one stage for an existing run:
 
 ```bash
@@ -160,7 +162,7 @@ duckdb "$DATA_ROOT/ohlcv.duckdb" -cmd \
   "SELECT MIN(date), MAX(date), COUNT(*) FROM _catalog"
 ```
 
-Before a repair or migration, follow [backup and restore](runbooks/backup_and_restore.md). The exhaustive command and flag inventory is [commands](reference/commands.md); routine verification is in [daily operations](runbooks/daily_operations.md), and recovery starts with [troubleshooting](runbooks/troubleshooting.md).
+Before a repair or migration, follow [backup and restore](runbooks/backup_and_restore.md). The exhaustive command and flag inventory is [commands](reference/commands.md); isolated production-shaped validation is in [copied-data canary](runbooks/copied_data_canary.md), and recovery starts with [troubleshooting](runbooks/troubleshooting.md).
 
 ## Where to go deeper
 

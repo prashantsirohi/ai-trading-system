@@ -2,7 +2,7 @@
 
 - **Purpose:** Hold historical documentation that has been replaced by the new docs structure. Nothing here is current. Read for context only.
 - **Audience:** Anyone investigating "why was this designed this way" or "what did the old version say".
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-07-13
 
 > **Do not link to files in this directory from current docs.** If you find content here that is still relevant, migrate it into the appropriate current doc and link from there.
 
@@ -18,6 +18,10 @@ git show <commit>:docs/archive/<old-path>                          # view old co
 For files moved (not deleted), the current location is `docs/_legacy/archived_<date>/<file>`.
 
 ## Archival waves
+
+### `archived_2026-07-13/` — Stale truth-map retirement
+
+`docs/_audit/current_code_truth_map.md` was archived after the July deep review confirmed that its pipeline, persistence, and API claims no longer matched runtime code. The original path now contains only a tombstone pointing to `docs/SYSTEM_GUIDE.md`.
 
 ### `archived_2026-05-16/` — Documentation cleanup wave
 

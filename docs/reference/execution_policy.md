@@ -2,7 +2,7 @@
 
 - **Purpose:** Describe how the execute stage turns ranked signals into orders, which risk gates run, and where the paper / live boundary sits.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-07-13
 - **Source of truth:** `src/ai_trading_system/domains/execution/`, `src/ai_trading_system/domains/risk/`, `config/risk_profiles/`.
 
 > **Disclaimer — live trading is NOT verified.** Paper trading is the only execution path that has been smoke-tested end-to-end. The live Dhan adapter is disabled at the adapter level: `src/ai_trading_system/domains/execution/adapters/dhan.py:63-65` raises `RuntimeError("Live Dhan execution is intentionally disabled...")` unless the adapter is constructed with `dry_run=True`. Production guardrails for live execution (margin checks, kill-switch, broker error handling, sandbox parity) have not been audited. **Do not enable live execution from these docs.**
@@ -91,11 +91,13 @@ After all gates pass, the initial stop is computed via `calculate_initial_stop` 
 
 ### Trailing stops
 
-**Not implemented as a separate trailing-stop primitive.** The engine relies on the DMA exit (`close_below_<window>dma`) as a coarse trailing mechanism — as the symbol climbs, its DMA climbs with it and the exit threshold ratchets up. There is no per-position "raise stop after X% gain" code path in `src/ai_trading_system/domains/risk/` as of 2026-05-16. The persisted `execution_position_stop` row is set once at entry and updated only for streak metadata; the `stop_price` itself is never moved by the engine.
+`ExecutionService.maintain_trailing_stops(...)` evaluates each ACTIVE stop that has a current price, a positive `atr_14`, and an open position. It computes `candidate_stop = current_price - (atr_multiplier * atr_14)` and persists the candidate only when it is above the existing stop, so a trailing stop never moves down. The execute stage calls this after a non-preview, execution-enabled autotrader cycle. Preview and disabled-execution paths do not update trailing stops.
+
+The persisted metadata records the trailing reference price, ATR, prior stop, and update flag. DMA exits remain an independent engine exit path; they are not the trailing-stop implementation.
 
 ### Stop persistence
 
-Active stops live in DuckDB table `execution_position_stop` (in `data/control_plane.duckdb`). The autotrader marks them `INACTIVE` after a confirmed engine-driven or `stop_triggered:`-prefixed SELL (`autotrader.py:299-307`).
+Active stops live in DuckDB table `execution_position_stop` in `$DATA_ROOT/execution.duckdb`. The current autotrader deactivates a stop after a submitted SELL result unless the result is `REJECTED` or `ERROR`; this still assumes immediate final fills and must be corrected before live execution.
 
 ---
 
@@ -219,8 +221,8 @@ Unknown keys in each section are silently dropped by `_coerce` (`config.py:82-86
 
 | Artifact | Destination |
 |---|---|
-| `trade_actions.csv`, `executed_orders.csv`, `fills.csv` | `data/pipeline_runs/<run_id>/execute/attempt_<n>/` |
-| `execution_order`, `execution_fill`, `execution_position_stop` tables | `data/control_plane.duckdb` (no separate `execution.duckdb` — older runbook references to that file are stale; see `docs/_audit/current_code_truth_map.md:185`) |
+| `trade_actions.csv`, `executed_orders.csv`, `executed_fills.csv`, `positions.csv`, `execute_summary.json` | `$DATA_ROOT/pipeline_runs/<run_id>/execute/attempt_<n>/` |
+| `execution_order`, `execution_fill`, `execution_position_stop`, `execution_drawdown` tables | `$DATA_ROOT/execution.duckdb` via `ExecutionStore` |
 
 ---
 

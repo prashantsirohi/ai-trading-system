@@ -67,6 +67,7 @@
 - [dq_failure_response](runbooks/dq_failure_response.md)
 - [publish_retry](runbooks/publish_retry.md)
 - [backup_and_restore](runbooks/backup_and_restore.md)
+- [copied_data_canary](runbooks/copied_data_canary.md)
 - [deployment_mac_mini](runbooks/deployment_mac_mini.md)
 - [optimization](runbooks/optimization.md)
 
@@ -92,7 +93,21 @@
 ## Audit
 - [documentation_inventory](_audit/documentation_inventory.md)
 - [stale_reference_report](_audit/stale_reference_report.md)
-- [current_code_truth_map](_audit/current_code_truth_map.md)
+- [retired code-truth-map tombstone](_audit/current_code_truth_map.md)
+
+### July 2026 deep codebase review
+
+- [executive summary](audits/codebase_deep_review/00_EXECUTIVE_SUMMARY.md)
+- [repository and runtime map](audits/codebase_deep_review/01_REPOSITORY_AND_RUNTIME_MAP.md)
+- [confirmed findings](audits/codebase_deep_review/02_CONFIRMED_FINDINGS.md)
+- [performance and scaling](audits/codebase_deep_review/03_PERFORMANCE_AND_SCALING.md)
+- [maintainability and target architecture](audits/codebase_deep_review/04_MAINTAINABILITY_AND_TARGET_ARCHITECTURE.md)
+- [security and execution safety](audits/codebase_deep_review/05_SECURITY_AND_EXECUTION_SAFETY.md)
+- [test and CI gaps](audits/codebase_deep_review/06_TEST_AND_CI_GAPS.md)
+- [documentation drift](audits/codebase_deep_review/07_DOCUMENTATION_DRIFT.md)
+- [prioritized remediation roadmap](audits/codebase_deep_review/08_PRIORITIZED_REMEDIATION_ROADMAP.md)
+- [quick wins](audits/codebase_deep_review/09_QUICK_WINS.md)
+- [deferred or rejected ideas](audits/codebase_deep_review/10_DEFERRED_OR_REJECTED_IDEAS.md)
 
 ## Legacy / archive
 - [_legacy/](_legacy/README.md)

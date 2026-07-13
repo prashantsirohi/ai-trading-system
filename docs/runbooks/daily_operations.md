@@ -1,22 +1,13 @@
 # Daily Operations
 
-- **Purpose:** Pre-run checklist, run command, verify command, expected artifacts.
+- **Purpose:** Redirect operators to the maintained daily commands while this detailed checklist remains incomplete.
 - **Audience:** Operator.
-- **Last verified:** _pending — populate when content is written_
-- **Source of truth:** See [`docs/_audit/current_code_truth_map.md`](../_audit/current_code_truth_map.md). Verify against code before publishing.
+- **Last verified:** 2026-07-13
+- **Source of truth:** [`docs/SYSTEM_GUIDE.md`](../SYSTEM_GUIDE.md), [`docs/reference/commands.md`](../reference/commands.md), and current runtime code.
 
 
 ---
 
-## Pre-run checklist
+This detailed checklist has not yet been populated. Do not infer operational steps from the empty historical headings.
 
-## Run command
-
-## Verify command
-
-## Expected artifacts
-
-## Trust check
-
-## Publish check
-
+Use the [System Guide](../SYSTEM_GUIDE.md#operator-commands) for the maintained run, canary, retry, UI, and diagnostic commands. Use [data trust and DQ](../architecture/data_trust_and_dq.md) for trust interpretation and [troubleshooting](troubleshooting.md) for failures.
