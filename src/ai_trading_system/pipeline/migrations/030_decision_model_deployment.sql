@@ -46,32 +46,104 @@ WHERE current_state.symbol_id = analytics.symbol_id
 
 -- Bootstrap versions already produced by successful pipeline runs. Operators can
 -- supersede these records explicitly; reads never infer ordering from version text.
-INSERT OR IGNORE INTO decision_model_deployment
+-- Filter deployed keys before the insert: DuckDB 1.1.3 can crash while resolving
+-- duplicate INSERT OR IGNORE rows produced by a grouped, parallel source scan.
+WITH source AS (
+    SELECT rank_model_version AS model_version,
+           rank_config_hash AS config_hash,
+           MIN(trade_date) AS effective_from
+    FROM rank_history
+    GROUP BY rank_model_version, rank_config_hash
+)
+INSERT INTO decision_model_deployment
     (decision_domain, model_version, config_hash, environment, effective_from, status, approved_by, notes)
-SELECT 'rank', rank_model_version, rank_config_hash, 'production', MIN(trade_date),
+SELECT 'rank', source.model_version, source.config_hash, 'production', source.effective_from,
        'approved', 'migration-030', 'Bootstrapped from persisted rank history'
-FROM rank_history GROUP BY rank_model_version, rank_config_hash;
+FROM source
+LEFT JOIN decision_model_deployment AS deployed
+  ON deployed.decision_domain = 'rank'
+ AND deployed.model_version = source.model_version
+ AND deployed.config_hash = source.config_hash
+ AND deployed.environment = 'production'
+ AND deployed.effective_from = source.effective_from
+WHERE deployed.decision_domain IS NULL;
 
-INSERT OR IGNORE INTO decision_model_deployment
+WITH source AS (
+    SELECT stage_model_version AS model_version,
+           stage_config_hash AS config_hash,
+           MIN(trade_date) AS effective_from
+    FROM stage_history
+    GROUP BY stage_model_version, stage_config_hash
+)
+INSERT INTO decision_model_deployment
     (decision_domain, model_version, config_hash, environment, effective_from, status, approved_by, notes)
-SELECT 'stage', stage_model_version, stage_config_hash, 'production', MIN(trade_date),
+SELECT 'stage', source.model_version, source.config_hash, 'production', source.effective_from,
        'approved', 'migration-030', 'Bootstrapped from persisted stage history'
-FROM stage_history GROUP BY stage_model_version, stage_config_hash;
+FROM source
+LEFT JOIN decision_model_deployment AS deployed
+  ON deployed.decision_domain = 'stage'
+ AND deployed.model_version = source.model_version
+ AND deployed.config_hash = source.config_hash
+ AND deployed.environment = 'production'
+ AND deployed.effective_from = source.effective_from
+WHERE deployed.decision_domain IS NULL;
 
-INSERT OR IGNORE INTO decision_model_deployment
+WITH source AS (
+    SELECT stage1_model_version AS model_version,
+           stage1_config_hash AS config_hash,
+           MIN(trade_date) AS effective_from
+    FROM stage1_history
+    GROUP BY stage1_model_version, stage1_config_hash
+)
+INSERT INTO decision_model_deployment
     (decision_domain, model_version, config_hash, environment, effective_from, status, approved_by, notes)
-SELECT 'stage1', stage1_model_version, stage1_config_hash, 'production', MIN(trade_date),
+SELECT 'stage1', source.model_version, source.config_hash, 'production', source.effective_from,
        'approved', 'migration-030', 'Bootstrapped from persisted Stage-1 history'
-FROM stage1_history GROUP BY stage1_model_version, stage1_config_hash;
+FROM source
+LEFT JOIN decision_model_deployment AS deployed
+  ON deployed.decision_domain = 'stage1'
+ AND deployed.model_version = source.model_version
+ AND deployed.config_hash = source.config_hash
+ AND deployed.environment = 'production'
+ AND deployed.effective_from = source.effective_from
+WHERE deployed.decision_domain IS NULL;
 
-INSERT OR IGNORE INTO decision_model_deployment
+WITH source AS (
+    SELECT pattern_model_version AS model_version,
+           pattern_config_hash AS config_hash,
+           MIN(trade_date) AS effective_from
+    FROM pattern_history
+    GROUP BY pattern_model_version, pattern_config_hash
+)
+INSERT INTO decision_model_deployment
     (decision_domain, model_version, config_hash, environment, effective_from, status, approved_by, notes)
-SELECT 'pattern', pattern_model_version, pattern_config_hash, 'production', MIN(trade_date),
+SELECT 'pattern', source.model_version, source.config_hash, 'production', source.effective_from,
        'approved', 'migration-030', 'Bootstrapped from persisted pattern history'
-FROM pattern_history GROUP BY pattern_model_version, pattern_config_hash;
+FROM source
+LEFT JOIN decision_model_deployment AS deployed
+  ON deployed.decision_domain = 'pattern'
+ AND deployed.model_version = source.model_version
+ AND deployed.config_hash = source.config_hash
+ AND deployed.environment = 'production'
+ AND deployed.effective_from = source.effective_from
+WHERE deployed.decision_domain IS NULL;
 
-INSERT OR IGNORE INTO decision_model_deployment
+WITH source AS (
+    SELECT lifecycle_model_version AS model_version,
+           lifecycle_config_hash AS config_hash,
+           MIN(as_of_trade_date) AS effective_from
+    FROM investigator_stage1_current
+    GROUP BY lifecycle_model_version, lifecycle_config_hash
+)
+INSERT INTO decision_model_deployment
     (decision_domain, model_version, config_hash, environment, effective_from, status, approved_by, notes)
-SELECT 'stage1_lifecycle', lifecycle_model_version, lifecycle_config_hash, 'production', MIN(as_of_trade_date),
+SELECT 'stage1_lifecycle', source.model_version, source.config_hash, 'production', source.effective_from,
        'approved', 'migration-030', 'Bootstrapped from persisted Stage-1 current state'
-FROM investigator_stage1_current GROUP BY lifecycle_model_version, lifecycle_config_hash;
+FROM source
+LEFT JOIN decision_model_deployment AS deployed
+  ON deployed.decision_domain = 'stage1_lifecycle'
+ AND deployed.model_version = source.model_version
+ AND deployed.config_hash = source.config_hash
+ AND deployed.environment = 'production'
+ AND deployed.effective_from = source.effective_from
+WHERE deployed.decision_domain IS NULL;

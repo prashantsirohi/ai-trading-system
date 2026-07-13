@@ -148,3 +148,70 @@ def test_migration_backfills_current_and_is_repeatable(tmp_path: Path) -> None:
     assert row[1] == "ACCUMULATING"
     assert history_count == 1
     assert transition_ids == 2
+
+
+def test_model_deployment_migration_is_repeatable_with_populated_history(tmp_path: Path) -> None:
+    _, registry = _repo(tmp_path)
+    migration = (
+        Path(__file__).parents[1]
+        / "src/ai_trading_system/pipeline/migrations/030_decision_model_deployment.sql"
+    ).read_text(encoding="utf-8")
+
+    with registry._writer() as conn:  # noqa: SLF001
+        conn.execute(
+            """INSERT INTO rank_history
+               (symbol_id, exchange, trade_date, universe_id,
+                rank_model_version, rank_formula_name, rank_config_hash,
+                pipeline_run_id, source_attempt)
+               SELECT 'SYM' || CAST(i AS VARCHAR), 'NSE', DATE '2026-07-11', 'NSE_OPERATIONAL',
+                      'rank-v1', 'baseline', 'rank-cfg', 'run-1', 1
+               FROM range(40) AS symbols(i)"""
+        )
+        conn.execute(
+            """INSERT INTO stage_history
+               (symbol_id, exchange, trade_date, stage_model_version, stage_config_hash,
+                pipeline_run_id, source_attempt)
+               VALUES ('ABC', 'NSE', DATE '2026-07-11', 'stage-v1', 'stage-cfg', 'run-1', 1)"""
+        )
+        conn.execute(
+            """INSERT INTO stage1_history
+               (symbol_id, exchange, trade_date, stage1_model_version, stage1_config_hash,
+                pipeline_run_id, source_attempt)
+               VALUES ('ABC', 'NSE', DATE '2026-07-11', 'stage1-v1', 'stage1-cfg', 'run-1', 1)"""
+        )
+        conn.execute(
+            """INSERT INTO pattern_history
+               (symbol_id, exchange, trade_date, pattern_family,
+                pattern_model_version, pattern_config_hash, pipeline_run_id, source_attempt)
+               VALUES ('ABC', 'NSE', DATE '2026-07-11', 'VCP',
+                       'pattern-v1', 'pattern-cfg', 'run-1', 1)"""
+        )
+        conn.execute(
+            """INSERT INTO investigator_stage1_current
+               (symbol_id, exchange, as_of_trade_date, stage1_lifecycle_state,
+                lifecycle_model_version, lifecycle_config_hash, pipeline_run_id, source_attempt)
+               VALUES ('ABC', 'NSE', DATE '2026-07-11', 'BASE_BUILDING',
+                       'lifecycle-v1', 'lifecycle-cfg', 'run-1', 1)"""
+        )
+
+        conn.execute(migration)
+        first = conn.execute(
+            """SELECT decision_domain, model_version, config_hash, effective_from
+               FROM decision_model_deployment
+               ORDER BY decision_domain"""
+        ).fetchall()
+        conn.execute(migration)
+        second = conn.execute(
+            """SELECT decision_domain, model_version, config_hash, effective_from
+               FROM decision_model_deployment
+               ORDER BY decision_domain"""
+        ).fetchall()
+
+    assert first == second
+    assert {row[0] for row in second} == {
+        "pattern",
+        "rank",
+        "stage",
+        "stage1",
+        "stage1_lifecycle",
+    }

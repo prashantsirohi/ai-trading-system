@@ -9,8 +9,12 @@ description = "Technical NSE trading pipeline with staged orchestration, DQ, and
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "dhanhq==2.0.2",
   "duckdb==1.1.3",
   "fastapi==0.115.8",
+  "google-auth>=2.0",
+  "google-auth-oauthlib>=1.0",
+  "gspread>=5.0",
   "jinja2>=3.1",
   "markdown-it-py>=4.0",
   "mplfinance>=0.12",
@@ -22,6 +26,8 @@ dependencies = [
   "pyarrow",
   "pydantic",
   "python-dotenv",
+  "python-telegram-bot==22.7",
+  "pyotp>=2.9.0",
   "quantstats==0.0.64",
   "requests",
   "uvicorn==0.34.0",
@@ -34,6 +40,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "black",
+  "httpx",
   "mypy",
   "pytest",
   "pytest-cov",

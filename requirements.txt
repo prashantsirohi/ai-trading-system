@@ -25,4 +25,5 @@ loguru>=0.7.0
 gspread>=5.0
 google-auth>=2.0
 google-auth-oauthlib>=1.0
+python-telegram-bot==22.7
 quantstats==0.0.64
