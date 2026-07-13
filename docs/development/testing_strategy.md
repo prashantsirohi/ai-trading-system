@@ -21,6 +21,10 @@
 
 ## Running tests
 
+The locked `dev` extra includes LightGBM so the research-engine tests run in the
+normal quality environment instead of depending on an operator's global Python
+installation.
+
 ```bash
 # Whole suite (slow)
 pytest

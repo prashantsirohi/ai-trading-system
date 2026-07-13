@@ -197,7 +197,7 @@ def test_execution_summary_read_model_combines_snapshot_and_health(tmp_path: Pat
         lambda *_args, **_kwargs: {"status": "ok", "freshness": "good"},
     )
     monkeypatch.setattr(
-        "ai_trading_system.ui.execution_api.services.readmodels.pipeline_status.RegistryStore.get_latest_data_repair_run",
+        "ai_trading_system.ui.execution_api.services.readmodels.pipeline_status._latest_data_repair_run",
         lambda *_args, **_kwargs: {"run_id": "repair-1"},
     )
     monkeypatch.setattr(
@@ -220,12 +220,14 @@ def test_execution_summary_read_model_combines_snapshot_and_health(tmp_path: Pat
 
 def test_execution_data_trust_snapshot_attaches_latest_repair_run(tmp_path: Path, monkeypatch) -> None:
     _seed_ohlcv_db(tmp_path / "data" / "ohlcv.duckdb")
+    control_plane_db = tmp_path / "data" / "control_plane.duckdb"
+    duckdb.connect(str(control_plane_db)).close()
     monkeypatch.setattr(
         "ai_trading_system.ui.execution_api.services.readmodels.pipeline_status.load_data_trust_summary",
         lambda *_args, **_kwargs: {"status": "ok"},
     )
     monkeypatch.setattr(
-        "ai_trading_system.ui.execution_api.services.readmodels.pipeline_status.RegistryStore.get_latest_data_repair_run",
+        "ai_trading_system.ui.execution_api.services.readmodels.pipeline_status._latest_data_repair_run",
         lambda *_args, **_kwargs: {"run_id": "repair-2"},
     )
 

@@ -41,10 +41,14 @@ dependencies = [
 dev = [
   "black",
   "httpx",
+  "lightgbm>=4.0",
   "mypy",
   "pytest",
   "pytest-cov",
   "ruff",
+]
+research = [
+  "lightgbm>=4.0",
 ]
 
 [project.scripts]

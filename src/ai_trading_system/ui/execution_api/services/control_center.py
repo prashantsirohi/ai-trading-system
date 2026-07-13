@@ -47,18 +47,32 @@ def _now() -> str:
     return utc_naive_now_string()
 
 
-def _registry(project_root: str | Path | None = None) -> RegistryStore:
+def _registry(
+    project_root: str | Path | None = None,
+    *,
+    initialize: bool = False,
+) -> RegistryStore:
     return RegistryStore(
         Path(project_root) if project_root else DEFAULT_PROJECT_ROOT,
-        initialize=False,
+        initialize=initialize,
     )
+
+
+def _read_registry(project_root: str | Path | None = None) -> RegistryStore | None:
+    registry = _registry(project_root)
+    return registry if registry.db_path.exists() else None
 
 
 def _task_snapshot(task_id: str, project_root: str | Path | None = None) -> Dict[str, Any]:
     with _TASK_LOCK:
         cached = dict(_TASKS.get(task_id, {}))
+    registry = _read_registry(project_root)
+    if registry is None:
+        if cached and "task_id" not in cached:
+            cached["task_id"] = task_id
+        return cached
     try:
-        stored = _registry(project_root).get_operator_task(task_id)
+        stored = registry.get_operator_task(task_id)
     except KeyError:
         if cached and "task_id" not in cached:
             cached["task_id"] = task_id
@@ -85,7 +99,11 @@ def _process_exists(pid: int) -> bool:
 
 
 def _latest_task_log_rows(task_id: str, project_root: str | Path | None = None, limit: int = 10) -> List[Dict[str, Any]]:
-    return _registry(project_root).get_operator_task_logs(task_id, after=0, limit=max(1, int(limit)))[-int(limit) :]
+    registry = _read_registry(project_root)
+    if registry is None:
+        return []
+    rows = registry.get_operator_task_logs(task_id, after=0, limit=max(1, int(limit)))
+    return rows[-int(limit) :]
 
 
 def _derive_task_terminal_state(task_id: str, task: Dict[str, Any], project_root: str | Path | None = None) -> Dict[str, Any]:
@@ -157,7 +175,8 @@ def reconcile_operator_task(task_id: str, project_root: str | Path | None = None
 
 
 def list_operator_tasks(project_root: str | Path | None = None) -> List[Dict[str, Any]]:
-    rows = _registry(project_root).list_operator_tasks()
+    registry = _read_registry(project_root)
+    rows = registry.list_operator_tasks() if registry is not None else []
     with _TASK_LOCK:
         legacy_rows = []
         for task_id, payload in _TASKS.items():
@@ -221,7 +240,7 @@ def _create_task(
 ) -> str:
     task_id = f"task-{uuid.uuid4().hex[:8]}"
     started_at = _now()
-    _registry(project_root).create_operator_task(
+    _registry(project_root, initialize=True).create_operator_task(
         task_id=task_id,
         task_type=task_type,
         label=label,

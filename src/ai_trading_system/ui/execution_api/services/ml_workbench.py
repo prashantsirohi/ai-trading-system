@@ -261,7 +261,8 @@ def load_recipe_results(
         return frame
 
     registry = RegistryStore(root, initialize=False)
-    active_deployments = pd.DataFrame(registry.list_deployments(limit=200, status="active"))
+    deployments = registry.list_deployments(limit=200, status="active") if registry.db_path.exists() else []
+    active_deployments = pd.DataFrame(deployments)
     if not active_deployments.empty:
         active = active_deployments[["model_id", "environment"]].rename(columns={"environment": "active_environment"})
         frame = frame.merge(active, on="model_id", how="left")

@@ -9,7 +9,7 @@ import pandas as pd
 
 from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.pipeline.contracts import StageArtifact, StageResult
-from ai_trading_system.pipeline.orchestrator import PipelineOrchestrator
+from ai_trading_system.pipeline.orchestrator import FEATURE_SUBSTAGES, PipelineOrchestrator
 from ai_trading_system.pipeline.stages import FeaturesStage, IngestStage, PublishStage, RankStage
 
 
@@ -138,7 +138,20 @@ def test_orchestrator_smoke_runs_all_stages_and_registers_artifacts(tmp_path: Pa
     # pipeline produced all stage artifacts. Hard-floor failures still surface
     # as raised exceptions; reaching this assertion means none of those fired.
     assert result["status"] in ("completed", "completed_with_dq_relaxations")
-    assert [row["stage_name"] for row in result["stages"]] == ["ingest", "features", "rank", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
+    assert [row["stage_name"] for row in result["stages"]] == [
+        "ingest",
+        *FEATURE_SUBSTAGES,
+        "rank",
+        "investigator",
+        "candidates",
+        "candidate_tracker",
+        "events",
+        "execute",
+        "insight",
+        "narrative",
+        "publish",
+        "perf_tracker",
+    ]
     assert all(row["status"] == "completed" for row in result["stages"])
 
     run_id = result["run_id"]
