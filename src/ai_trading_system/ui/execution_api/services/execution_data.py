@@ -3,27 +3,37 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict
 
 import pandas as pd
 
 from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_snapshot import (
-    ExecutionContext,
     get_execution_context,
     load_execution_payload,
     load_latest_rank_frames,
 )
 from ai_trading_system.ui.execution_api.services.readmodels.pipeline_status import (
-    get_execution_data_trust_snapshot,
     get_execution_db_stats,
     get_execution_health,
-    get_execution_ops_health_snapshot,
 )
+
+__all__ = [
+    "get_execution_context",
+    "get_execution_db_stats",
+    "get_execution_health",
+    "load_execution_payload",
+    "load_latest_rank_frames",
+    "load_shadow_overlay_frame",
+    "load_shadow_summary_frame",
+    "pivot_shadow_summary_frame",
+]
 
 
 def load_shadow_overlay_frame(project_root: str | Path | None = None) -> pd.DataFrame:
-    registry = RegistryStore(Path(project_root) if project_root else Path(__file__).resolve().parents[5])
+    registry = RegistryStore(
+        Path(project_root) if project_root else Path(__file__).resolve().parents[5],
+        initialize=False,
+    )
     rows = registry.get_shadow_overlay()
     if not rows:
         return pd.DataFrame()
@@ -39,7 +49,10 @@ def load_shadow_summary_frame(
     periods: int = 12,
     project_root: str | Path | None = None,
 ) -> pd.DataFrame:
-    registry = RegistryStore(Path(project_root) if project_root else Path(__file__).resolve().parents[5])
+    registry = RegistryStore(
+        Path(project_root) if project_root else Path(__file__).resolve().parents[5],
+        initialize=False,
+    )
     grain_aliases = {
         "weekly": "week",
         "week": "week",

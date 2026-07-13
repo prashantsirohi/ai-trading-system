@@ -19,7 +19,6 @@ import duckdb
 from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.platform.db.paths import find_latest_pipeline_artifact, get_domain_paths, resolve_artifact_path
 from ai_trading_system.platform.db.timestamps import utc_naive_now_string
-from ai_trading_system.platform.logging.logger import logger
 
 
 DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[5]
@@ -49,7 +48,10 @@ def _now() -> str:
 
 
 def _registry(project_root: str | Path | None = None) -> RegistryStore:
-    return RegistryStore(Path(project_root) if project_root else DEFAULT_PROJECT_ROOT)
+    return RegistryStore(
+        Path(project_root) if project_root else DEFAULT_PROJECT_ROOT,
+        initialize=False,
+    )
 
 
 def _task_snapshot(task_id: str, project_root: str | Path | None = None) -> Dict[str, Any]:
@@ -453,7 +455,7 @@ def launch_shadow_monitor_task(
             reports_dir.mkdir(parents=True, exist_ok=True)
             latest_overlay_path = reports_dir / "ml_rank_overlay.csv"
             dated_overlay_path = reports_dir / f"ml_rank_overlay_{prediction_ts.date().isoformat()}.csv"
-            registry = RegistryStore(project_root)
+            registry = RegistryStore(project_root, initialize=False)
 
             inserted_predictions = 0
             for prediction_day, frame in sorted(prediction_frames.items()):
@@ -627,7 +629,7 @@ def find_latest_publishable_run(project_root: str | Path, limit: int = 50) -> Di
 
 def get_run_details(project_root: str | Path, run_id: str) -> Dict[str, Any]:
     """Return stage runs, alerts, and delivery logs for one pipeline run."""
-    registry = RegistryStore(project_root)
+    registry = RegistryStore(project_root, initialize=False)
     return {
         "run": registry.get_run(run_id),
         "stages": registry.get_stage_runs(run_id),

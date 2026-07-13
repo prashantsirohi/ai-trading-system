@@ -50,6 +50,12 @@ def _seed(tmp_path: Path, monkeypatch) -> TestClient:
              sector_support_score, execution_eligible)
             VALUES ('READY','2026-07-11',100,'Industrials',80,70,60,FALSE),
                    ('LATE','2026-07-11',90,'Technology',70,65,55,FALSE)""")
+        # Current operator views use the physical one-row-per-symbol table.
+        conn.execute("UPDATE investigator_stage1_state SET run_id = 'fixture-run', attempt_number = 1")
+        migration_029 = Path("src/ai_trading_system/pipeline/migrations/029_decision_history.sql").read_text()
+        conn.execute(migration_029)
+        migration_030 = Path("src/ai_trading_system/pipeline/migrations/030_decision_model_deployment.sql").read_text()
+        conn.execute(migration_030)
     return TestClient(create_app())
 
 

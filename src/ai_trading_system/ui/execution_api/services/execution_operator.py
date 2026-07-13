@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -11,8 +11,6 @@ from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.ui.execution_api.services.control_center import (
     find_latest_publishable_run,
     get_operator_task,
-    get_recent_runs,
-    get_run_details,
     launch_pipeline_task,
     launch_shadow_monitor_task,
     list_operator_tasks,
@@ -68,7 +66,7 @@ def _records(frame: pd.DataFrame, *, limit: Optional[int] = None) -> list[dict[s
 
 
 def _task_registry(project_root: str | Path) -> RegistryStore:
-    return RegistryStore(Path(project_root))
+    return RegistryStore(Path(project_root), initialize=False)
 
 
 def _infer_operator_action_type(task: dict[str, Any]) -> str | None:

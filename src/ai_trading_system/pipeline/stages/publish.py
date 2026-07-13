@@ -151,6 +151,8 @@ class PublishStage:
             run_id=context.run_id,
             stage_name=self.name,
             fundamental_artifact_types=FUNDAMENTAL_ARTIFACT_TYPES,
+            project_root=context.project_root,
+            run_date=context.run_date,
         )
         self._attach_event_datasets(context, datasets)
         self._attach_insight_datasets(context, datasets)

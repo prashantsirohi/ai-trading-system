@@ -14,6 +14,7 @@ export interface Stage1Summary {
   top_score_improvers: Stage1Row[]; top_rank_improvers: Stage1Row[];
 }
 export interface Stage1RowsResponse { as_of?: string; total?: number; limit?: number; offset?: number; rows: Stage1Row[] }
+export interface Stage1AnalyticsResponse { metadata: Record<string, unknown>; rows: Stage1Row[] }
 export interface Stage1Detail { symbol_id: string; current?: Stage1Row | null; state: Stage1Row[]; transitions: Stage1Row[]; histories: Record<string, Stage1Row[]> }
 export interface Stage1Params {
   lifecycle_state?: string; operator_status?: string; operator_priority?: string; sector?: string;
@@ -38,3 +39,4 @@ export const getStage1Current = (params: Stage1Params = {}) => fetchDashboardJso
 export const getStage1Transitions = () => fetchDashboardJsonStrict<Stage1RowsResponse>('/api/execution/investigator/stage1/transitions', EMPTY_ROWS);
 export const getStage1Exits = () => fetchDashboardJsonStrict<Stage1RowsResponse>('/api/execution/investigator/stage1/exits', EMPTY_ROWS);
 export const getStage1Detail = (symbol: string) => fetchDashboardJsonStrict<Stage1Detail>(`/api/execution/investigator/stage1/${encodeURIComponent(symbol)}`, { symbol_id: symbol, state: [], transitions: [], histories: {} });
+export const getStage1Analytics = (symbol: string) => fetchDashboardJsonStrict<Stage1AnalyticsResponse>(`/api/execution/investigator/stage1/${encodeURIComponent(symbol)}/analytics-history`, { metadata: {}, rows: [] });

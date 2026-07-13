@@ -3,6 +3,7 @@
 from ai_trading_system.ui.execution_api.routes import (
     artifacts,
     backtest,
+    decision_history,
     fundamentals,
     health,
     insight,
@@ -36,6 +37,8 @@ ALL_ROUTERS = (
     backtest.router,
     perf_tracker.router,
     optimization.router,
+    decision_history.router,
+    decision_history.diagnostics_router,
 )
 
 
@@ -43,6 +46,7 @@ __all__ = [
     "ALL_ROUTERS",
     "artifacts",
     "backtest",
+    "decision_history",
     "fundamentals",
     "health",
     "insight",

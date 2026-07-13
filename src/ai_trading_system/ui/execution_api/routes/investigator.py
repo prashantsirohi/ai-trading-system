@@ -14,6 +14,7 @@ from ai_trading_system.ui.execution_api.services.readmodels.stage1_operator impo
     get_stage1_current, get_stage1_detail, get_stage1_exits, get_stage1_summary,
     get_stage1_transitions,
 )
+from ai_trading_system.ui.execution_api.services.readmodels.decision_reads import Stage1AnalyticsReadRepository
 
 
 router = APIRouter(prefix="/api/execution", tags=["investigator"])
@@ -59,6 +60,21 @@ def execution_investigator_stage1_exits(trade_date: str | None = None, limit: in
 @router.get("/investigator/stage1/{symbol_id}")
 def execution_investigator_stage1_history(symbol_id: str, lookback_days: int = Query(180, ge=1, le=730)) -> dict[str, Any]:
     return get_stage1_detail(symbol_id, lookback_days, project_root())
+
+
+@router.get("/investigator/stage1/{symbol_id}/analytics-history")
+def execution_investigator_stage1_analytics_history(
+    symbol_id: str,
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+    model_version: str | None = None,
+    config_hash: str | None = None,
+    limit: int = Query(500, ge=1, le=2000),
+) -> dict[str, Any]:
+    return Stage1AnalyticsReadRepository(project_root()).get_stage1_daily_history(
+        symbol_id, start_date=from_date, end_date=to_date,
+        model_version=model_version, config_hash=config_hash, limit=limit,
+    )
 
 
 __all__ = ["router"]

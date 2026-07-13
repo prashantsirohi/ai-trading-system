@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict
 
 import pandas as pd
@@ -116,6 +117,8 @@ def build_publish_datasets(
     run_id: str | None = None,
     stage_name: str | None = "publish",
     fundamental_artifact_types: set[str] | frozenset[str] | None = None,
+    project_root: Path | str | None = None,
+    run_date: str | None = None,
 ) -> Dict[str, Any]:
     """Load publish datasets from rank-stage artifacts with compatibility defaults."""
     fundamental_types = set(fundamental_artifact_types or DEFAULT_FUNDAMENTAL_ARTIFACT_TYPES)
@@ -134,6 +137,45 @@ def build_publish_datasets(
     candidate_tracker_artifact = context_artifact_for("candidate_tracker_current")
 
     ranked_df = read_artifact(ranked_signals_artifact)
+    pattern_df = read_artifact(pattern_artifact) if pattern_artifact else pd.DataFrame()
+    stage_df = read_artifact(scan_artifact) if scan_artifact else pd.DataFrame()
+    decision_read_sources: list[dict[str, Any]] = []
+    if project_root is not None:
+        from ai_trading_system.ui.execution_api.services.readmodels.decision_reads import (
+            DecisionReadError, PatternHistoryReadRepository,
+            RankHistoryReadRepository, StageHistoryReadRepository,
+        )
+
+        repository_calls = {
+            "rank": lambda: RankHistoryReadRepository(project_root).get_current_rankings(trade_date=run_date),
+            "stage": lambda: StageHistoryReadRepository(project_root).get_current_stage_snapshot(trade_date=run_date),
+            "pattern": lambda: PatternHistoryReadRepository(project_root).get_current_patterns(trade_date=run_date),
+        }
+        for domain, call in repository_calls.items():
+            try:
+                payload = call()
+                frame = pd.DataFrame(payload["rows"])
+                if not frame.empty:
+                    if domain == "rank":
+                        frame = frame.copy()
+                        frame.loc[:, "rank"] = frame.get("rank_position")
+                        ranked_df = frame
+                    elif domain == "stage":
+                        stage_df = frame
+                    else:
+                        pattern_df = frame
+                    decision_read_sources.append(payload["metadata"])
+                    continue
+                reason = "DuckDB returned no rows"
+            except (DecisionReadError, Exception) as exc:  # publisher remains available through explicit fallback
+                reason = str(exc)
+            decision_read_sources.append({
+                "domain": domain, "data_source": "ARTIFACT_FALLBACK",
+                "as_of_date": run_date, "model_version": None,
+                "row_count": len({"rank": ranked_df, "stage": stage_df, "pattern": pattern_df}[domain]),
+                "fallback_used": True, "fallback_reason": reason,
+                "fallback_run_id": run_id, "error": reason,
+            })
     stage2_summary = _build_stage2_summary(ranked_df)
     dashboard_payload = read_json_artifact(dashboard_payload_artifact) if dashboard_payload_artifact else {}
     fundamental_artifacts = {
@@ -202,8 +244,8 @@ def build_publish_datasets(
     datasets: Dict[str, Any] = {
         "ranked_signals": ranked_df,
         "breakout_scan": read_artifact(breakout_artifact) if breakout_artifact else pd.DataFrame(),
-        "pattern_scan": read_artifact(pattern_artifact) if pattern_artifact else pd.DataFrame(),
-        "stock_scan": read_artifact(scan_artifact) if scan_artifact else pd.DataFrame(),
+        "pattern_scan": pattern_df,
+        "stock_scan": stage_df,
         "sector_dashboard": read_artifact(dashboard_artifact) if dashboard_artifact else pd.DataFrame(),
         "sector_rotation": read_artifact(sector_rotation_artifact) if sector_rotation_artifact else pd.DataFrame(),
         "industry_rotation": read_artifact(industry_rotation_artifact) if industry_rotation_artifact else pd.DataFrame(),
@@ -223,6 +265,7 @@ def build_publish_datasets(
         "publish_trust_status": trust_status,
         "stage2_summary": stage2_summary,
         "stage2_breakdown_symbols": stage2_summary.get("top_symbols", []),
+        "decision_read_source_summary": decision_read_sources,
     }
     for artifact_type, artifact in fundamental_artifacts.items():
         if artifact_type == "fundamental_dashboard_payload":

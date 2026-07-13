@@ -379,6 +379,22 @@ def get_stock_detail(
     breakout_row = _frame_row_for_symbol(breakouts, canonical_symbol)
     pattern_row = _frame_row_for_symbol(patterns, canonical_symbol)
     scan_row = _frame_row_for_symbol(stock_scan, canonical_symbol)
+    persisted_history: dict[str, Any] | None = None
+    try:
+        from ai_trading_system.ui.execution_api.services.readmodels.decision_reads import DecisionOperatorReadService
+        persisted_history = DecisionOperatorReadService(project_root or Path.cwd()).decision_history(canonical_symbol, limit=500)
+        persisted_rank = persisted_history.get("histories", {}).get("rank", {}).get("rows", [])
+        persisted_stage = persisted_history.get("histories", {}).get("stage", {}).get("rows", [])
+        persisted_patterns = persisted_history.get("histories", {}).get("pattern", {}).get("rows", [])
+        if persisted_rank:
+            rank_row = persisted_rank[-1]
+            rank_pos = _scalar_or_none(rank_row.get("rank_position"))
+        if persisted_stage:
+            scan_row = persisted_stage[-1]
+        if persisted_patterns:
+            pattern_row = persisted_patterns[-1]
+    except Exception:
+        persisted_history = None
 
     universe_size = int(len(ranked.index)) if ranked is not None else 0
 
@@ -419,6 +435,7 @@ def get_stock_detail(
         "latest_quote": latest_quote,
         "ranking": ranking_block,
         "lifecycle": lifecycle,
+        "decision_history": persisted_history,
     }
 
 

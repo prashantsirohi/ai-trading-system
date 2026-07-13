@@ -517,6 +517,19 @@ def get_ranking_snapshot_read_model(
     ranked_universe = current_snapshot.frames.get("ranked_universe", pd.DataFrame())
     stock_scan = current_snapshot.frames.get("stock_scan", pd.DataFrame())
     patterns = current_snapshot.frames.get("pattern_scan", pd.DataFrame())
+    decision_sources: dict[str, Any] = {}
+    try:
+        from ai_trading_system.ui.execution_api.services.readmodels.decision_reads import DecisionOperatorReadService
+        decision = DecisionOperatorReadService(project_root).current(limit=max(limit, 500))
+        persisted = pd.DataFrame(decision["rows"])
+        if not persisted.empty:
+            rank_positions = pd.to_numeric(persisted.get("rank_position"), errors="coerce")
+            ranked = persisted.loc[rank_positions.notna()].copy()
+            ranked = ranked.sort_values("rank_position", kind="stable")
+            ranked.loc[:, "rank"] = ranked.get("rank_position")
+        decision_sources = decision["sources"]
+    except Exception as exc:
+        decision_sources = {"rank": {"data_source": "ARTIFACT_FALLBACK", "fallback_used": True, "fallback_reason": str(exc)}}
     ranked = _enrich_operator_rank_fields(ranked, patterns)
     ranked = _enrich_rank_with_fundamentals(
         ranked,
@@ -544,6 +557,7 @@ def get_ranking_snapshot_read_model(
         "visible_count": int(len(filtered_ranked.index)) if filtered_ranked is not None else 0,
         "stage2_summary": stage2_summary,
         "stage2_filter": stage2_filter,
+        "decision_read_sources": decision_sources,
     }
 
 
@@ -580,6 +594,19 @@ def get_pipeline_workspace_snapshot_read_model(
     ranked = current_snapshot.frames.get("ranked_signals", pd.DataFrame())
     ranked_universe = current_snapshot.frames.get("ranked_universe", pd.DataFrame())
     patterns = current_snapshot.frames.get("pattern_scan", pd.DataFrame())
+    decision_sources: dict[str, Any] = {}
+    try:
+        from ai_trading_system.ui.execution_api.services.readmodels.decision_reads import DecisionOperatorReadService
+        decision = DecisionOperatorReadService(project_root).current(limit=max(limit, 500))
+        persisted = pd.DataFrame(decision["rows"])
+        if not persisted.empty:
+            ranked = persisted.copy()
+            ranked.loc[:, "rank"] = ranked.get("rank_position")
+            persisted_patterns = [pattern for row in decision["rows"] for pattern in row.get("patterns", [])]
+            patterns = pd.DataFrame(persisted_patterns)
+        decision_sources = decision["sources"]
+    except Exception as exc:
+        decision_sources = {"operator": {"data_source": "ARTIFACT_FALLBACK", "fallback_used": True, "fallback_reason": str(exc)}}
     ranked = _enrich_operator_rank_fields(ranked, patterns)
     ranked = _enrich_rank_with_fundamentals(
         ranked,
@@ -672,6 +699,7 @@ def get_pipeline_workspace_snapshot_read_model(
         "breakout_candidates": breakout_candidates,
         "stage2_summary": stage2_summary,
         "stage2_filter": stage2_filter,
+        "decision_read_sources": decision_sources,
         "counts": {
             "ranked": int(len(ranked.index)) if ranked is not None else 0,
             "ranked_universe": int(len(ranked_universe.index)) if ranked_universe is not None else 0,

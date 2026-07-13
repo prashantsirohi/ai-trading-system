@@ -39,6 +39,7 @@ export const queryKeys = {
   stage1Transitions: () => ['execution', 'stage1', 'transitions'] as const,
   stage1Exits: () => ['execution', 'stage1', 'exits'] as const,
   stage1Detail: (symbol: string) => ['execution', 'stage1', 'detail', symbol] as const,
+  stage1Analytics: (symbol: string) => ['execution', 'stage1', 'analytics', symbol] as const,
   shadow: () => ['execution', 'shadow'] as const,
   riskProfiles: () => ['execution', 'risk-profiles'] as const,
   backtestRun: (profile: string, fromDate: string | null, toDate: string | null, equity: number) =>

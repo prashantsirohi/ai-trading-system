@@ -284,9 +284,18 @@ def get_stage1_detail(
 def _latest_rows(
     project_root: Path | str, trade_date: str | None = None
 ) -> tuple[list[dict[str, Any]], str | None]:
-    state, as_of = _table_frame(project_root, "investigator_stage1_state", trade_date)
+    # Current operator surfaces must use the physical current-state table. A
+    # dated request remains a history request and deliberately uses state.
+    current_table = "investigator_stage1_current" if trade_date is None else "investigator_stage1_state"
+    state, as_of = _table_frame(project_root, current_table, trade_date)
     if state.empty:
         return [], as_of
+    if current_table == "investigator_stage1_current":
+        state = state.rename(columns={
+            "as_of_trade_date": "trade_date",
+            "lifecycle_model_version": "stage1_lifecycle_model_version",
+            "lifecycle_config_hash": "stage1_lifecycle_config_hash",
+        })
     scores, _ = _table_frame(project_root, "investigator_scores", as_of)
     score_fields = [
         "symbol_id",
@@ -336,6 +345,7 @@ def _table_frame(
     latest_only: bool = True,
 ) -> tuple[pd.DataFrame, str | None]:
     allowed = {
+        "investigator_stage1_current",
         "investigator_stage1_state",
         "investigator_stage1_transition",
         "investigator_scores",
@@ -354,14 +364,15 @@ def _table_frame(
             if table not in tables:
                 return pd.DataFrame(), trade_date
             as_of = trade_date
+            date_column = "as_of_trade_date" if table == "investigator_stage1_current" else "trade_date"
             if latest_only and not as_of:
                 result = conn.execute(
-                    f"SELECT MAX(trade_date) FROM {table}"
+                    f"SELECT MAX({date_column}) FROM {table}"
                 ).fetchone()  # trusted constant
                 as_of = str(result[0]) if result and result[0] else None
             clauses, params = [], []
             if latest_only and as_of:
-                clauses.append("trade_date = CAST(? AS DATE)")
+                clauses.append(f"{date_column} = CAST(? AS DATE)")
                 params.append(as_of)
             if symbol:
                 clauses.append("UPPER(symbol_id) = ?")

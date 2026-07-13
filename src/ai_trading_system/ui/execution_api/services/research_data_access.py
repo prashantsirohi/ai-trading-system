@@ -681,7 +681,7 @@ def load_data_trust_snapshot(project_root: str) -> Dict[str, object]:
     """Load current operational data trust summary plus latest repair metadata."""
     paths = get_domain_paths(project_root, "operational")
     summary = load_data_trust_summary(paths.ohlcv_db_path)
-    registry = RegistryStore(project_root)
+    registry = RegistryStore(project_root, initialize=False)
     summary["latest_repair_run"] = registry.get_latest_data_repair_run("NSE")
     return summary
 

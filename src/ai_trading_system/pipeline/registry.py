@@ -376,7 +376,13 @@ _INITIALIZED_DB_PATHS: set[str] = set()
 class RegistryStore:
     """Persists run metadata and governance records into DuckDB."""
 
-    def __init__(self, project_root: Path | str, db_path: Optional[Path | str] = None):
+    def __init__(
+        self,
+        project_root: Path | str,
+        db_path: Optional[Path | str] = None,
+        *,
+        initialize: bool = True,
+    ):
         self.project_root = canonicalize_project_root(project_root)
         # Keep governance/control-plane metadata in a dedicated database so
         # live OHLCV writers and long-running readers do not block alerting,
@@ -384,7 +390,8 @@ class RegistryStore:
         self.db_path = Path(db_path) if db_path else get_domain_paths(self.project_root).root_dir / "control_plane.duckdb"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._write_lock = threading.RLock()
-        self._ensure_initialized()
+        if initialize:
+            self._ensure_initialized()
 
     def _connect(self, read_only: bool = False) -> duckdb.DuckDBPyConnection:
         return duckdb.connect(str(self.db_path), read_only=read_only)

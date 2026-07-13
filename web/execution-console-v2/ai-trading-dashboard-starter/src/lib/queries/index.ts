@@ -91,8 +91,8 @@ import { getWorkspaceSnapshot } from '@/lib/api/workspace';
 import type { WorkspaceSnapshot } from '@/lib/api/workspace';
 import { getFundamentalsDashboard, type FundamentalsDashboard } from '@/lib/api/fundamentals';
 import { getInvestigatorSnapshot, type InvestigatorSnapshot } from '@/lib/api/investigator';
-import { getStage1Current, getStage1Detail, getStage1Exits, getStage1Summary, getStage1Transitions,
-  type Stage1Detail, type Stage1Params, type Stage1RowsResponse, type Stage1Summary } from '@/lib/api/stage1';
+import { getStage1Analytics, getStage1Current, getStage1Detail, getStage1Exits, getStage1Summary, getStage1Transitions,
+  type Stage1AnalyticsResponse, type Stage1Detail, type Stage1Params, type Stage1RowsResponse, type Stage1Summary } from '@/lib/api/stage1';
 import type {
   PatternResponse,
   PipelineWorkspaceResponse,
@@ -317,6 +317,9 @@ export function useStage1Exits(): UseQueryResult<Stage1RowsResponse, Error> {
 }
 export function useStage1Detail(symbol?: string | null): UseQueryResult<Stage1Detail, Error> {
   return useQuery({ queryKey: queryKeys.stage1Detail(symbol ?? '__none__'), queryFn: () => getStage1Detail(symbol as string), enabled: Boolean(symbol) });
+}
+export function useStage1Analytics(symbol?: string | null): UseQueryResult<Stage1AnalyticsResponse, Error> {
+  return useQuery({ queryKey: queryKeys.stage1Analytics(symbol ?? '__none__'), queryFn: () => getStage1Analytics(symbol as string), enabled: Boolean(symbol) });
 }
 
 export function useStockDetail(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,16 +12,54 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.analytics.data_trust import load_data_trust_summary
-from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.ui.execution_api.services.control_center import get_recent_runs
 from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_snapshot import (
     LatestOperationalSnapshot,
-    ExecutionContext,
     get_execution_context,
     load_latest_operational_snapshot,
 )
 
 _SCHEMA_REPAIR_HINT = "Run `ai-trading-repair-ingest-schema --apply`."
+
+
+def _latest_data_repair_run(control_plane_db: Path, exchange: str) -> dict[str, Any] | None:
+    """Read repair lineage without triggering registry migrations in an API request."""
+
+    conn = duckdb.connect(str(control_plane_db), read_only=True)
+    try:
+        row = conn.execute(
+            """
+            SELECT repair_run_id, created_at, from_date, to_date, exchange, status,
+                   repaired_row_count, unresolved_symbol_count, unresolved_date_count,
+                   report_uri, metadata_json
+            FROM data_repair_run
+            WHERE exchange = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            [exchange],
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    try:
+        metadata = json.loads(row[10]) if row[10] else {}
+    except (TypeError, json.JSONDecodeError):
+        metadata = {}
+    return {
+        "repair_run_id": row[0],
+        "created_at": str(row[1]) if row[1] is not None else None,
+        "from_date": str(row[2]) if row[2] is not None else None,
+        "to_date": str(row[3]) if row[3] is not None else None,
+        "exchange": row[4],
+        "status": row[5],
+        "repaired_row_count": int(row[6] or 0),
+        "unresolved_symbol_count": int(row[7] or 0),
+        "unresolved_date_count": int(row[8] or 0),
+        "report_uri": row[9],
+        "metadata": metadata,
+    }
 
 
 def _schema_check_detail(table_name: str, swapped_rows: int) -> str:
@@ -276,8 +315,11 @@ def get_execution_ops_health_snapshot(
 def get_execution_data_trust_snapshot(project_root: str | Path | None = None) -> dict[str, Any]:
     ctx = get_execution_context(project_root)
     summary = load_data_trust_summary(ctx.ohlcv_db)
-    registry = RegistryStore(ctx.project_root)
-    summary["latest_repair_run"] = registry.get_latest_data_repair_run("NSE")
+    summary["latest_repair_run"] = (
+        _latest_data_repair_run(ctx.control_plane_db, "NSE")
+        if ctx.control_plane_db is not None and ctx.control_plane_db.exists()
+        else None
+    )
     return summary
 
 

@@ -260,7 +260,7 @@ def load_recipe_results(
     if frame.empty:
         return frame
 
-    registry = RegistryStore(root)
+    registry = RegistryStore(root, initialize=False)
     active_deployments = pd.DataFrame(registry.list_deployments(limit=200, status="active"))
     if not active_deployments.empty:
         active = active_deployments[["model_id", "environment"]].rename(columns={"environment": "active_environment"})
@@ -327,7 +327,7 @@ def load_workbench_datasets(
     *,
     limit: int = 100,
 ) -> pd.DataFrame:
-    registry = RegistryStore(_project_root(project_root))
+    registry = RegistryStore(_project_root(project_root), initialize=False)
     rows = registry.list_datasets(limit=limit, data_domain="research")
     if not rows:
         return pd.DataFrame()
@@ -345,7 +345,7 @@ def approve_workbench_model(
     model_id: str,
     project_root: str | Path | None = None,
 ) -> Dict[str, Any]:
-    registry = RegistryStore(_project_root(project_root))
+    registry = RegistryStore(_project_root(project_root), initialize=False)
     before = registry.get_model_record(model_id)
     registry.approve_model(model_id)
     after = registry.get_model_record(model_id)
@@ -357,7 +357,7 @@ def load_workbench_models(
     *,
     limit: int = 100,
 ) -> pd.DataFrame:
-    registry = RegistryStore(_project_root(project_root))
+    registry = RegistryStore(_project_root(project_root), initialize=False)
     rows = registry.list_models(limit=limit)
     if not rows:
         return pd.DataFrame()
@@ -381,7 +381,7 @@ def load_workbench_deployments(
     *,
     limit: int = 50,
 ) -> pd.DataFrame:
-    registry = RegistryStore(_project_root(project_root))
+    registry = RegistryStore(_project_root(project_root), initialize=False)
     deployments = pd.DataFrame(registry.list_deployments(limit=limit))
     if deployments.empty:
         return deployments
@@ -403,7 +403,7 @@ def deploy_workbench_model(
     notes: str | None = None,
     project_root: str | Path | None = None,
 ) -> Dict[str, Any]:
-    registry = RegistryStore(_project_root(project_root))
+    registry = RegistryStore(_project_root(project_root), initialize=False)
     deployment_id = registry.deploy_model(
         model_id=model_id,
         environment=environment,
@@ -423,7 +423,7 @@ def rollback_workbench_deployment(
     notes: str | None = None,
     project_root: str | Path | None = None,
 ) -> Dict[str, Any]:
-    registry = RegistryStore(_project_root(project_root))
+    registry = RegistryStore(_project_root(project_root), initialize=False)
     deployment_id = registry.rollback_model_deployment(
         environment=environment,
         approved_by=approved_by,
@@ -441,7 +441,7 @@ def load_model_workbench_detail(
     *,
     lookback_days: int = 60,
 ) -> Dict[str, Any]:
-    registry = RegistryStore(_project_root(project_root))
+    registry = RegistryStore(_project_root(project_root), initialize=False)
     model_record = registry.get_model_record(model_id)
     metadata = model_record.get("metadata", {}) or {}
     horizon = metadata.get("horizon")

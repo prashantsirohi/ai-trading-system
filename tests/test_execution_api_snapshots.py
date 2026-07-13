@@ -18,7 +18,7 @@ def _normalize_value(value, project_root: Path):
         normalized_dict = {
             key: _normalize_value(item, project_root)
             for key, item in value.items()
-            if key != "trust_confidence"
+            if key not in {"trust_confidence", "decision_read_sources"}
         }
         return normalized_dict
     if isinstance(value, list):
