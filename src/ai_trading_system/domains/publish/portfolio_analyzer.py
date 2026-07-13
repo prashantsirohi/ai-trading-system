@@ -1,17 +1,16 @@
 import os
+import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
 import pandas as pd
-import numpy as np
 from ai_trading_system.platform.utils.env import load_project_env
+from ai_trading_system.platform.logging.logger import logger
 
 load_project_env(__file__)
-
-from ai_trading_system.platform.logging.logger import logger
 
 
 class PositionType(Enum):

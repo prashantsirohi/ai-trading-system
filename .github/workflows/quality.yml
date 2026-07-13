@@ -1,0 +1,67 @@
+name: Python quality baseline
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install locked development environment
+        run: uv sync --locked --extra dev
+
+      - name: Reject fatal Python errors
+        run: uv run ruff check src tests scripts --select E9,F63,F7,F82
+
+      - name: Select comparison base
+        id: base
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "ref=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            echo "ref=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=HEAD^" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ruff changed Python files
+        shell: bash
+        run: |
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR "${{ steps.base.outputs.ref }}" HEAD -- '*.py')
+          if (( ${#files[@]} )); then
+            uv run ruff check "${files[@]}"
+          fi
+
+      - name: Collect tests
+        run: uv run python -m pytest --collect-only -q
+
+      - name: Build wheel
+        run: uv build
+
+      - name: Install wheel in clean environment
+        shell: bash
+        run: |
+          uv venv /tmp/ai-trading-wheel-smoke --python 3.11
+          uv pip install --python /tmp/ai-trading-wheel-smoke/bin/python dist/*.whl
+          /tmp/ai-trading-wheel-smoke/bin/python -c "import ai_trading_system"
+          /tmp/ai-trading-wheel-smoke/bin/ai-trading-pipeline --help

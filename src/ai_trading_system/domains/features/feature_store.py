@@ -1,7 +1,6 @@
 import os
 import time
 import sqlite3
-import duckdb
 import pandas as pd
 import numpy as np
 from ai_trading_system.domains.features import repository as features_repository
@@ -192,64 +191,82 @@ class FeatureStore:
     def create_snapshot(self, description: str = None) -> int:
         """Create snapshot of current state."""
         conn = self._get_conn()
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS _snapshots (
+                    snapshot_id BIGINT,
+                    snapshot_ts TIMESTAMP,
+                    symbols_processed BIGINT,
+                    rows_written BIGINT,
+                    from_date DATE,
+                    to_date DATE,
+                    status VARCHAR,
+                    note VARCHAR
+                )
+                """
+            )
+            ohlcv_range = conn.execute(
+                """
+                SELECT MIN(timestamp)::date, MAX(timestamp)::date,
+                       COUNT(DISTINCT symbol_id)
+                FROM _catalog_feature_source
+                """
+            ).fetchone()
+            features_count = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM _feature_registry
+                WHERE status = 'completed'
+                """
+            ).fetchone()[0]
+            result = conn.execute(
+                "SELECT COALESCE(MAX(snapshot_id), 0) + 1 FROM _snapshots"
+            ).fetchone()[0]
 
-        # Get OHLCV range
-        ohlcv_range = conn.execute("""
-            SELECT MIN(timestamp)::date, MAX(timestamp)::date, COUNT(DISTINCT symbol_id)
-            FROM _catalog_feature_source
-        """).fetchone()
-
-        # Get features count
-        features_count = conn.execute("""
-            SELECT COUNT(*) FROM _feature_registry WHERE status = 'completed'
-        """).fetchone()[0]
-
-        # Get next snapshot_id
-        conn.execute("SELECT COALESCE(MAX(snapshot_id), 0) + 1 FROM _snapshots")
-        result = conn.execute(
-            "SELECT COALESCE(MAX(snapshot_id), 0) + 1 FROM _snapshots"
-        ).fetchone()[0]
-
-        # Update existing running snapshot to completed
-        conn.execute("""
-            UPDATE _snapshots 
-            SET status = 'completed', snapshot_ts = CURRENT_TIMESTAMP
-            WHERE status = 'running'
-        """)
-
-        # Create new snapshot
-        conn.execute(
-            """
-            INSERT INTO _snapshots (snapshot_id, snapshot_ts, symbols_processed, rows_written, from_date, to_date, status, note)
-            VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, 'completed', ?)
-        """,
-            (
+            conn.execute(
+                """
+                UPDATE _snapshots
+                SET status = 'completed', snapshot_ts = CURRENT_TIMESTAMP
+                WHERE status = 'running'
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO _snapshots (
+                    snapshot_id, snapshot_ts, symbols_processed, rows_written,
+                    from_date, to_date, status, note
+                )
+                VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, 'completed', ?)
+                """,
+                (
+                    result,
+                    ohlcv_range[2],
+                    features_count,
+                    str(ohlcv_range[0]),
+                    str(ohlcv_range[1]),
+                    description or "Daily snapshot",
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE _feature_registry
+                SET snapshot_id = ?
+                WHERE snapshot_id IS NULL
+                """,
+                [result],
+            )
+            conn.commit()
+            logger.info(
+                "Created snapshot: %s (%s symbols, OHLCV: %s to %s)",
                 result,
                 ohlcv_range[2],
-                features_count,
-                str(ohlcv_range[0]),
-                str(ohlcv_range[1]),
-                description or f"Daily snapshot",
-            ),
-        )
-
-        # Update all features with snapshot_id
-        conn.execute(f"""
-            UPDATE _feature_registry 
-            SET snapshot_id = {result}
-            WHERE snapshot_id IS NULL
-        """)
-
-        conn.commit()
-
-        logger.info(
-            f"Created snapshot: {result} ({ohlcv_range[2]} symbols, OHLCV: {ohlcv_range[0]} to {ohlcv_range[1]})"
-        )
-
-        return result
-        conn.commit()
-        conn.close()
-        logger.info("Feature registry initialized")
+                ohlcv_range[0],
+                ohlcv_range[1],
+            )
+            return int(result)
+        finally:
+            conn.close()
 
     def register_feature(
         self,
@@ -371,33 +388,6 @@ class FeatureStore:
         finally:
             conn.close()
 
-    def create_snapshot(self, description: str = None) -> int:
-        conn = self._get_conn()
-        try:
-            if feature_name:
-                df = conn.execute(
-                    """
-                    SELECT feature_id, feature_name, symbol_id, exchange,
-                           computed_at, rows_computed, lookback_days, params,
-                           feature_file, status, note
-                    FROM _feature_registry
-                    WHERE feature_name = ?
-                    ORDER BY computed_at DESC
-                """,
-                    (feature_name,),
-                ).fetchdf()
-            else:
-                df = conn.execute("""
-                    SELECT feature_id, feature_name, symbol_id, exchange,
-                           computed_at, rows_computed, lookback_days, params,
-                           feature_file, status, note
-                    FROM _feature_registry
-                    ORDER BY feature_name, computed_at DESC
-                """).fetchdf()
-            return df
-        finally:
-            conn.close()
-
     # ------------------------------------------------------------------ #
     #  Incremental computation helpers                                   #
     # ------------------------------------------------------------------ #
@@ -432,15 +422,13 @@ class FeatureStore:
             compute_method: Function to compute the feature
             lookback_days: Days of historical data to include for rolling calculations
         """
-        import datetime
-
         last_date = self.get_last_feature_date(feature_name, symbol_id, exchange)
 
         if last_date:
             # Add lookback days for rolling calculations
-            last_dt = datetime.datetime.strptime(
-                last_date, "%Y-%m-%d"
-            ) - datetime.timedelta(days=lookback_days)
+            last_dt = datetime.strptime(last_date, "%Y-%m-%d") - timedelta(
+                days=lookback_days
+            )
             start_date = last_dt.strftime("%Y-%m-%d")
             df = compute_method(symbol_id, exchange, start_date=start_date)
         else:

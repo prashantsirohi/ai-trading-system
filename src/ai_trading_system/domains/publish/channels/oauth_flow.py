@@ -13,9 +13,9 @@ Steps:
 6. Token will be saved to 'token.json'
 """
 
-import os
 from pathlib import Path
 from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
 SCOPES = [

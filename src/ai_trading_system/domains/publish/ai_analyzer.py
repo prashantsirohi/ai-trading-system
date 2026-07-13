@@ -1,14 +1,12 @@
 import os
 import json
-from pathlib import Path
+import logging
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
-from datetime import datetime
 from ai_trading_system.platform.utils.env import load_project_env
+from ai_trading_system.platform.logging.logger import logger
 
 load_project_env(__file__)
-
-from ai_trading_system.platform.logging.logger import logger
 
 
 @dataclass
