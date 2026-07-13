@@ -7,6 +7,10 @@ from typing import Iterable
 
 from dotenv import load_dotenv
 
+from ai_trading_system.platform.utils.secret_permissions import (
+    warn_if_insecure_secret_file,
+)
+
 _LOADED_ENV_PATHS: set[str] = set()
 
 
@@ -33,6 +37,7 @@ def load_project_env(anchor: str | Path | None = None, override: bool = False) -
     env_path = find_project_env(anchor)
     if env_path is None:
         return None
+    warn_if_insecure_secret_file(env_path)
 
     cache_key = str(env_path.resolve())
     if not override and cache_key in _LOADED_ENV_PATHS:

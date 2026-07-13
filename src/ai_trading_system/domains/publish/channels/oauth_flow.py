@@ -18,6 +18,11 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
+from ai_trading_system.platform.utils.secret_permissions import (
+    warn_if_insecure_secret_file,
+    write_private_text,
+)
+
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -28,6 +33,7 @@ TOKEN_FILE = "token.json"
 
 
 def run_oauth_flow():
+    warn_if_insecure_secret_file(CLIENT_SECRETS_FILE)
     if not Path(CLIENT_SECRETS_FILE).exists():
         print(f"ERROR: {CLIENT_SECRETS_FILE} not found!")
         print("\n1. Go to https://console.cloud.google.com/apis/credentials")
@@ -43,16 +49,15 @@ def run_oauth_flow():
 
     credentials = flow.run_local_server(port=0, access_type="offline", prompt="consent")
 
-    with open(TOKEN_FILE, "w") as f:
-        f.write(credentials.to_json())
+    write_private_text(TOKEN_FILE, credentials.to_json())
 
     print(f"\nSUCCESS! Token saved to {TOKEN_FILE}")
-    print(f"Refresh token: {credentials.refresh_token[:20]}...")
 
     return credentials
 
 
 def check_token():
+    warn_if_insecure_secret_file(TOKEN_FILE)
     if Path(TOKEN_FILE).exists():
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
         if creds and creds.valid:
@@ -61,8 +66,7 @@ def check_token():
         elif creds and creds.refresh_token:
             print("Token expired. Refreshing...")
             creds.refresh(Request())
-            with open(TOKEN_FILE, "w") as f:
-                f.write(creds.to_json())
+            write_private_text(TOKEN_FILE, creds.to_json())
             print("Token refreshed!")
             return creds
         else:

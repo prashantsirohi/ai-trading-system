@@ -11,6 +11,10 @@ from typing import Callable, Optional, List, Dict, Any, Union
 import pandas as pd
 from ai_trading_system.platform.utils.runtime_config import GoogleSheetsRuntimeConfig
 from ai_trading_system.platform.utils.env import load_project_env
+from ai_trading_system.platform.utils.secret_permissions import (
+    warn_if_insecure_secret_file,
+    write_private_text,
+)
 
 load_project_env(__file__)
 
@@ -135,6 +139,9 @@ class GoogleSheetsManager:
         else:
             self.token_path = runtime.token_path
 
+        warn_if_insecure_secret_file(self.credentials_path)
+        warn_if_insecure_secret_file(self.token_path)
+
         self.spreadsheet_id = spreadsheet_id or runtime.spreadsheet_id
         self.client = None
         self.spreadsheet = None
@@ -226,8 +233,7 @@ class GoogleSheetsManager:
                     return
                 elif creds and creds.refresh_token:
                     creds.refresh(Request())
-                    with open(self.token_path, "w") as f:
-                        f.write(creds.to_json())
+                    write_private_text(self.token_path, creds.to_json())
                     self.client = gspread.authorize(creds)
                     logger.info("Token refreshed and authenticated")
                     self.last_error = None

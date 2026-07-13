@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ai_trading_system.platform.utils.env import load_project_env
+from ai_trading_system.platform.utils.secret_permissions import (
+    warn_if_insecure_secret_file,
+)
 
 load_project_env(__file__)
 
@@ -75,8 +78,11 @@ class GoogleSheetsRuntimeConfig:
         root = Path(project_root).resolve() if project_root else Path(__file__).resolve().parents[5]
         credentials_path = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
         token_path = os.getenv("GOOGLE_TOKEN_PATH")
-        return cls(
+        config = cls(
             spreadsheet_id=os.getenv("GOOGLE_SPREADSHEET_ID", ""),
             credentials_path=Path(credentials_path) if credentials_path else root / "client_secret.json",
             token_path=Path(token_path) if token_path else root / "token.json",
         )
+        warn_if_insecure_secret_file(config.credentials_path)
+        warn_if_insecure_secret_file(config.token_path)
+        return config
