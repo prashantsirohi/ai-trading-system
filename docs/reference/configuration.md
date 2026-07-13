@@ -35,7 +35,7 @@ Primary selectors on `ai-trading-pipeline` (orchestrator):
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--stages` | `ingest,features,rank,events,execute,insight,publish` | Comma-separated stage subset. Full 11-stage set: `ingest,features,rank,fundamentals,candidates,events,execute,insight,narrative,publish,perf_tracker` |
+| `--stages` | `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker` | Comma-separated logical stage subset. `features` expands to seven internal substages; `narrative` is available but is not in the current CLI default list. |
 | `--run-id <id>` | new UUID | Reuse an existing run (mainly for stage retries) |
 | `--run-date YYYY-MM-DD` | today | Logical trading date |
 | `--data-domain operational\|research` | `operational` | Selects DuckDB paths via `platform/db/paths.py` |

@@ -72,6 +72,6 @@ The React app talks to FastAPI through the `/api/*` surface, sending the API key
 
 ## Related
 
-- [overview.md](./overview.md) — where the UI fits in the larger system.
+- [System Guide](../SYSTEM_GUIDE.md) — where the UI fits in the larger system.
 - [operational_data_flow.md](./operational_data_flow.md) — what the UI is showing.
 - [storage_and_lineage.md](./storage_and_lineage.md) — the DuckDB readmodels that back the routers (`ui/execution_api/services/readmodels/`).

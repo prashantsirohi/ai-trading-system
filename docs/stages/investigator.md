@@ -62,6 +62,13 @@ Smoke mode is disabled. If `context.params["smoke"]` is set, the stage raises:
 Smoke mode is disabled because synthetic investigator artifacts are not allowed.
 ```
 
+## Main modules
+
+- `pipeline/stages/investigator.py` owns stage artifact resolution and registration.
+- `domains/investigator/service.py` coordinates intake, scoring, lifecycle, pattern scanning, summaries, and persistence.
+- The remaining `domains/investigator/` modules own the component models named in this document's source-of-truth header.
+- Execution API investigator read models resolve the operator-facing current view.
+
 ## Input Data
 
 ### Required
@@ -133,7 +140,7 @@ The stage persists selected artifact rows to the control-plane registry database
 Rows are scoped by `run_id` and `attempt_number`. On rerun of the same attempt, existing rows for that scope are deleted and reinserted.
 `investigator_cohort_performance` is keyed by `trade_date`, `symbol_id`, and `exchange`; upserts are idempotent and preserve already matured forward returns.
 
-## High-Level Flow
+## Process flow
 
 ```mermaid
 flowchart TD
@@ -573,7 +580,7 @@ Key tests:
 
 Covered behaviors include artifact writing, table persistence, multi-trigger intake, non-Stage-2 investigator pattern scanning, payload building, scoring/lifecycle rules, API read model, and publish integration.
 
-## Operational Checks
+## Commands
 
 Use `$DATA_ROOT`; do not inspect repo-local `data/` for live runs.
 
@@ -582,7 +589,8 @@ set -a
 source .env
 set +a
 
-PYTHONPATH=. ./.venv/bin/python -m run.orchestrator --stages rank,investigator --local-publish
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
+  --stages rank,investigator --local-publish
 ```
 
 Inspect latest artifacts:

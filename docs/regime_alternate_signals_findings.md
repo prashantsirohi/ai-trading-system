@@ -1,5 +1,12 @@
 # Alternate-signal investigation — findings
 
+- **Purpose:** Record reproducible findings from the alternate breadth-signal investigation.
+- **Audience:** Researchers and ranking developers.
+- **Last verified:** 2026-07-13
+- **Source of truth:** `scripts/investigate_alternate_signals.py` and its referenced research outputs.
+
+---
+
 Phase 7 found that **breadth-LEVEL regime** does not predict UNIV_TOP1000
 forward returns — `risk_off` (= sharp breadth drawdowns) mean-reverts
 strongly, so the naïve "size up in bull, size down in risk_off" rule is

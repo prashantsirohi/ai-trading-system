@@ -98,7 +98,7 @@ Fully idempotent — DELETE+INSERT keyed on `(run_date, symbol_id, exchange)`. S
 ## Commands
 
 ```bash
-# Part of the full 11-stage pipeline
+# Part of the canonical pipeline
 ai-trading-pipeline
 
 # Backfill from scratch (e.g., after schema change)

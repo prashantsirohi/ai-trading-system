@@ -1,6 +1,6 @@
 # Adding a New Pipeline Stage
 
-- **Purpose:** Checklist for adding a new stage to the 11-stage pipeline.
+- **Purpose:** Checklist for adding a new stage to the canonical pipeline.
 - **Audience:** Developer.
 - **Last verified:** 2026-05-16
 - **Source of truth:** Existing stage wrappers under `src/ai_trading_system/pipeline/stages/`; `pipeline/orchestrator.py:41` `PIPELINE_ORDER`.
@@ -59,7 +59,7 @@ If the work fits inside an existing stage's responsibility, extend the existing 
 
 ### Update the architecture doc
 
-Update `docs/architecture/operational_data_flow.md` to reflect the new 12th (or more) stage and update the Mermaid diagram.
+Update `docs/SYSTEM_GUIDE.md` and `docs/architecture/operational_data_flow.md` to reflect the new stage and update their diagrams/tables.
 
 ## See also
 

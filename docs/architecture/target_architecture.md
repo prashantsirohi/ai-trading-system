@@ -113,7 +113,7 @@ Tracked in [`docs/_audit/current_code_truth_map.md`](../_audit/current_code_trut
 
 ## See also
 
-- [`docs/architecture/overview.md`](overview.md)
+- [`docs/SYSTEM_GUIDE.md`](../SYSTEM_GUIDE.md)
 - [`docs/architecture/storage_and_lineage.md`](storage_and_lineage.md)
 - [`docs/development/package_migration.md`](../development/package_migration.md)
 - [`docs/development/legacy_cleanup_plan.md`](../development/legacy_cleanup_plan.md)

@@ -138,4 +138,4 @@ python -m ai_trading_system.domains.fundamentals.enrich_rank \
   --run-id <run_id>
 ```
 
-> **Status:** This stage is part of the canonical 11-stage `ai-trading-pipeline` (`PIPELINE_ORDER`, `orchestrator.py:41`) but is registered as **optional** (`OPTIONAL_STAGES`, `orchestrator.py:44`). The legacy `ai-trading-daily` 5-stage wrapper does not invoke it.
+> **Status:** This stage is part of the canonical `ai-trading-pipeline` order but is registered as optional. The current orchestrator CLI enables it by default; explicit stage lists and daily-wrapper behavior depend on their current flags/defaults.

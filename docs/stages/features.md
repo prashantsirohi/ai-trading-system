@@ -108,7 +108,7 @@ The `TrustConfidenceEnvelope` written into `feature_snapshot.json` (`service.py:
 
 From `pyproject.toml [project.scripts]`:
 
-- `ai-trading-pipeline` — full 11-stage orchestrator (`ai_trading_system.pipeline.orchestrator:main`); features runs second. See [../reference/commands.md](../reference/commands.md).
+- `ai-trading-pipeline` — canonical orchestrator (`ai_trading_system.pipeline.orchestrator:main`); the `features` alias expands after ingest. See [../reference/commands.md](../reference/commands.md).
 - `ai-trading-daily` — legacy 5-stage wrapper (`ai_trading_system.pipeline.daily_pipeline:main`); features is the second stage in this wrapper too.
 
 There is no dedicated `ai-trading-features` script. To recompute features standalone, invoke the orchestrator with stage filters (see [../reference/commands.md](../reference/commands.md)) or call `daily_update_runner.run(features_only=True, ...)` from a Python session.

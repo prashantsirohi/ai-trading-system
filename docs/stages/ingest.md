@@ -116,7 +116,7 @@ Hard-floor rules are never relaxed by `dq_mode=relaxed`; repairable rules are do
 
 From `pyproject.toml [project.scripts]`:
 
-- `ai-trading-pipeline` — full 11-stage orchestrator (`ai_trading_system.pipeline.orchestrator:main`); ingest runs first. See [../reference/commands.md](../reference/commands.md).
+- `ai-trading-pipeline` — canonical orchestrator (`ai_trading_system.pipeline.orchestrator:main`); ingest runs first. See [../reference/commands.md](../reference/commands.md).
 - `ai-trading-daily` — legacy 5-stage wrapper (`ai_trading_system.pipeline.daily_pipeline:main`) that also runs ingest first.
 - `ai-trading-repair-ingest-schema` — schema-repair CLI (`ai_trading_system.interfaces.cli.repair_ingest_schema:main`) for fixing structural drift in `_catalog` / trust tables.
 - `ai-trading-bootstrap-data` — bootstraps masterdata used by `SymbolMaster.from_masterdb` and the universe-index path.

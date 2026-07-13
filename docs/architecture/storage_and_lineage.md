@@ -1,97 +1,97 @@
 # Storage and Lineage
 
-- **Purpose:** Catalog every persistent store the pipeline touches, the directory layout for artifacts, and how runs/stages/attempts/artifacts are tied together.
-- **Audience:** Operators recovering from a failed run, engineers adding a new artifact, reviewers tracing data lineage.
-- **Last verified:** 2026-05-16
-- **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/execution/store.py:29`, `src/ai_trading_system/pipeline/registry.py:300`, `src/ai_trading_system/pipeline/migrations/001_pipeline_governance.sql` through `017_strategy_optimizer_rename.sql`, `grep -rn duckdb.connect src/`.
+- **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
+- **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
+- **Last verified:** 2026-07-13
+- **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
-## DuckDB stores
+---
 
-| Store | Path | Owner / writer | Purpose |
+Start with the [System Guide](../SYSTEM_GUIDE.md). This document owns detailed persistence and lineage behavior.
+
+## Root resolution
+
+`get_domain_paths()` loads the project environment and resolves `DATA_ROOT`, `REPORTS_ROOT`, `LOGS_ROOT`, and `MODELS_ROOT`. With the operator's `.env`, operational runtime data lives on external storage. When `DATA_ROOT` is set but unavailable, guarded pipeline paths must fail instead of silently recreating the mount path.
+
+Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset. That fallback is not the operational deployment contract and must not be hardcoded into application code or documentation commands.
+
+## Operational stores
+
+| Store | Canonical path | Primary owner | Purpose |
 |---|---|---|---|
-| Operational OHLCV | `data/ohlcv.duckdb` | `domains/ingest/*`, `platform/db/paths.py:98` | Source-of-record price/volume data for the operational domain. |
-| Control plane | `data/control_plane.duckdb` | `pipeline/registry.py:300`, orchestrator, pattern cache, fundamentals readmodel, UI services | Pipeline governance (`pipeline_run`, `pipeline_stage_run`, `pipeline_artifact`, `dq_rule`, `dq_result`), model registry, pattern cache, watchlist/event tables. |
-| Execution ledger | `data/execution.duckdb` | `domains/execution/store.py:29` (default `project_root / "data" / "execution.duckdb"`) | `execution_order`, `execution_fill` tables written by the `execute` stage. |
-| Research OHLCV | `data/research/research_ohlcv.duckdb` | `platform/db/paths.py:107-111` (research domain) | Isolated OHLCV when `DATA_DOMAIN=research`. |
-| Master data | `data/masterdata.db` | `platform/db/paths.py:101` | Shared between operational and research domains (`paths.py:113`). |
+| OHLCV | `$DATA_ROOT/ohlcv.duckdb` | Ingest, trust, features | Price/volume, delivery, provenance, quarantine, source freshness, and feature metadata. |
+| Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, alerts, models, operator state, pattern/cache metadata, and decision history. |
+| Execution ledger | `$DATA_ROOT/execution.duckdb` | `ExecutionStore` | Orders, fills, positions, stops, and broker/paper execution state supported by the active code. |
+| Candidate tracker | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate tracker domain | Candidate episodes, transitions, snapshots, fundamental reviews, alerts, and current lifecycle state. |
+| Master data | `$DATA_ROOT/masterdata.db` | Ingest/master-data services | Shared instrument and symbol identity data. |
+| Fundamentals | `$DATA_ROOT/fundamentals/` | Fundamentals domain | Imported source snapshots and fundamental read models. |
 
-### Notes on the execution store
+Do not infer that execution or candidate-tracker tables live in the control plane merely because their artifacts are registered there.
 
-The earlier audit truth map asserted that `execution_order` / `execution_fill` live inside `data/control_plane.duckdb`. The current code disagrees: `ExecutionStore` in `domains/execution/store.py:29` defaults to `data/execution.duckdb` and the `execute` stage instantiates it without overriding `db_path` (`pipeline/stages/execute.py:183`). A separate file is the today-truth. Verify on disk before relying on the older docs.
+## Runtime trees
 
-### Research-domain path resolution
+| Tree | Layout and use |
+|---|---|
+| Raw inputs | `$DATA_ROOT/raw/` for provider-native downloads and source snapshots. |
+| Feature store | `$DATA_ROOT/feature_store/<symbol_id>/features_<start>_<end>.parquet`. |
+| Stage store | `$DATA_ROOT/stage_store/` for stage-owned durable materializations. |
+| Pipeline attempts | `$DATA_ROOT/pipeline_runs/<run_id>/<stage>/attempt_<n>/`. |
+| Training datasets | `$DATA_ROOT/training_datasets/`. |
+| Cache and exports | `$DATA_ROOT/cache/` and `$DATA_ROOT/exports/`. |
+| Models, reports, logs | Resolved independently through `MODELS_ROOT`, `REPORTS_ROOT`, and `LOGS_ROOT`, falling back to repository roots when unset. |
 
-`get_domain_paths` returns different layouts per domain (`platform/db/paths.py:94-118`):
-- `operational` → flat `data/` layout (legacy-compatible).
-- `research` → re-rooted under `data/research/` with its own `research_ohlcv.duckdb`, `feature_store/`, `pipeline_runs/`, `training_datasets/`; `models/` and `reports/` re-root under `models/research/` and `reports/research/`.
+## Research-domain isolation
 
-There is no `data/research.duckdb` referenced in `platform/db/paths.py`. If you see one on disk, it is legacy; the canonical research OHLCV path is `data/research/research_ohlcv.duckdb`.
+With `DATA_DOMAIN=research`, `get_domain_paths()` re-roots domain-owned data under `$DATA_ROOT/research/`:
 
-## Feature store layout
-
+```text
+$DATA_ROOT/research/research_ohlcv.duckdb
+$DATA_ROOT/research/feature_store/
+$DATA_ROOT/research/pipeline_runs/
+$DATA_ROOT/research/training_datasets/
+$DATA_ROOT/research/optuna/
 ```
-data/feature_store/<symbol_id>/features_<start_date>_<end_date>.parquet
-```
 
-Columnar Parquet (RSI, MACD, Supertrend, ATR, EMA_20/50/200, VWAP, volume_ratio, swing_low_20, sector_rs, etc.). Written by the `features` stage; read by `rank`, `candidates`, and downstream readmodels.
+Research model, report, and log roots are similarly namespaced beneath their configured roots. `masterdata.db` remains shared at `$DATA_ROOT/masterdata.db`. Operational stages must not write research results into operational OHLCV or feature stores.
 
-## Decision history
+## Attempt artifacts
 
-Derived decision facts are durable in `control_plane.duckdb` and are not reconstructed from pipeline directories:
+Every executed stage gets an attempt directory:
 
-- `rank_history`, `stage_history`, `stage1_history`, and `pattern_history` hold versioned daily analytical facts.
-- `investigator_stage1_state` is the dated lifecycle snapshot history.
-- `investigator_stage1_current` is the authoritative one-row-per-symbol/exchange operational state.
-- `investigator_stage1_transition` is the idempotent lifecycle event ledger.
-
-Rank and investigator CSV/JSON files remain per-attempt snapshots and publish/debug inputs. `decision_write_mode` defaults to `LIVE`; `REPLAY` and `BACKFILL` write history without replacing current state, while `REBUILD_CURRENT` explicitly permits current-state reconstruction.
-
-## Pipeline run artifacts
-
-Every stage attempt gets a deterministic directory:
-
-```
-data/pipeline_runs/<run_id>/<stage>/attempt_<n>/<artifact_file>
+```text
+$DATA_ROOT/pipeline_runs/<run_id>/<stage>/attempt_<n>/<artifact>
 ```
 
 Examples:
-- `data/pipeline_runs/<run_id>/ingest/attempt_1/ohlc.csv`
-- `data/pipeline_runs/<run_id>/rank/attempt_1/ranked_signals.csv`
-- `data/pipeline_runs/<run_id>/execute/attempt_2/executed_orders.csv`
 
-The orchestrator creates the directory at the start of each attempt; stage wrappers write artifacts; the artifact registry records the URI and content hash.
+```text
+$DATA_ROOT/pipeline_runs/<run_id>/ingest/attempt_1/ohlc.csv
+$DATA_ROOT/pipeline_runs/<run_id>/features_snapshot/attempt_1/feature_snapshot.json
+$DATA_ROOT/pipeline_runs/<run_id>/rank/attempt_1/ranked_signals.csv
+$DATA_ROOT/pipeline_runs/<run_id>/candidate_tracker/attempt_1/candidate_tracker_current.csv
+$DATA_ROOT/pipeline_runs/<run_id>/execute/attempt_2/executed_orders.csv
+```
 
-## Run / stage / attempt semantics
+The exact artifact registry is documented in [artifacts](../reference/artifacts.md). Partial files can remain after a failed attempt; their presence does not make them authoritative.
 
-Defined in `pipeline/migrations/001_pipeline_governance.sql` and refined by 002–005:
+## Control-plane lineage
 
-- **`pipeline_run`** — one row per orchestrator invocation. Holds run id, run date, data domain, started/finished timestamps, final status, and a JSON `metadata` blob (which carries the preflight result among other things).
-- **`pipeline_stage_run`** — one row per *(run, stage, attempt)*. Records start/finish, status, retry reason, and links back to `pipeline_run.run_id`.
-- **`pipeline_artifact`** — registry of every artifact: URI, content hash, producing stage attempt, optional schema/version. Downstream stages resolve inputs through this table so re-runs are idempotent.
+- `pipeline_run` stores the logical run identity, date, domain, status, timing, and metadata.
+- `pipeline_stage_run` stores each `(run, stage, attempt)` lifecycle.
+- `pipeline_artifact` stores registered output URIs, content hashes, producer identity, and optional schema/version metadata.
+- `dq_result` stores rule outcomes per run/stage/attempt.
+- Publisher delivery rows and alerts record downstream operational outcomes.
 
-Migration 002 hardens these tables post-refactor; 003 adds the preflight/alerts tables; 004 adds shadow-monitoring rows; 005 adds ML dataset registration.
+Use `pipeline_artifact` to discover completed outputs. Filesystem search is a fallback for diagnostics and explicitly supported recovery helpers, not the primary lineage contract.
 
-## DQ persistence
+## Durable decision state versus attempt snapshots
 
-- **`dq_rule`** — per-stage rule definitions (rule_id, severity, optional SQL).
-- **`dq_result`** — one row per *(run, stage, rule, attempt)* outcome, with status, failed_count, message, band (`green | amber | red_repairable | red_block`), and `relaxed_from` when downgraded.
+CSV and JSON artifacts are immutable-attempt evidence and publish/debug inputs. Durable current or historical decision facts live in control-plane tables owned by their read/write models. Candidate lifecycle facts live in `candidate_tracker.duckdb`; orders and fills live in `execution.duckdb`.
 
-See [data_trust_and_dq.md](./data_trust_and_dq.md).
+Write modes that distinguish live updates, replay/backfill, and current-state rebuild must preserve their domain's current-state contract. Do not reconstruct or replace current state merely because an older artifact exists.
 
-## Model registry & adjacent tables
+## Backup and mutation safety
 
-Migrations 005–007 introduce `model_registry`, monitoring tables, and guardrails. Migration 015–017 add strategy-optimizer tables (then rename them). Migration 011 adds pattern cache (read/written via `domains/ranking/patterns/cache.py`). Migration 016 adds universe-index tables.
+At minimum, back up OHLCV, control-plane, execution, candidate-tracker, master-data, fundamentals, and feature-store state before migrations or repairs. Treat `pipeline_runs/` as audit evidence even where upstream stores can reproduce some artifacts.
 
-## Artifact registry contract
-
-`pipeline_artifact` rows are the only authoritative way to discover what an attempt produced. Filesystem listing under `data/pipeline_runs/...` is convenient but not guaranteed to be complete (e.g., quarantined attempts may leave partial files). Always join through `pipeline_artifact` when reading lineage.
-
-## Snapshot model
-
-- **OHLCV snapshot** — the latest validated trade date per exchange is captured inside `_catalog` / `_catalog_quarantine` (`domains/ingest/trust.py`), exposed via `load_data_trust_summary`.
-- **Feature snapshot** — `(symbol_id, start_date, end_date)` triple is encoded in the Parquet filename; older snapshots are not deleted automatically.
-- **Rank snapshot** — captured via the rank stage's attempt directory; the UI's "latest operational snapshot" readmodel (`ui/execution_api/services/readmodels/latest_operational_snapshot.py:56`) resolves it from `control_plane.duckdb`.
-
-## Backup
-
-See [../runbooks/backup_and_restore.md](../runbooks/backup_and_restore.md) (when present) for backup cadence and restore procedure. At minimum, treat `data/ohlcv.duckdb`, `data/control_plane.duckdb`, `data/execution.duckdb`, and `data/feature_store/` as the must-back-up set; `data/pipeline_runs/` is reproducible from those plus the SQL migrations.
+Never run repair or migration commands against live stores without explicit task scope and a verified backup. Follow [backup and restore](../runbooks/backup_and_restore.md).

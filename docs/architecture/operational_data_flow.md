@@ -1,81 +1,105 @@
 # Operational Data Flow
 
-- **Purpose:** End-to-end run flow across the 11-stage operational pipeline, with stage purpose, key artifact, preflight, and failure boundaries.
-- **Audience:** Operators debugging a run, engineers wiring new stages, reviewers tracking artifact lineage.
-- **Last verified:** 2026-05-16
-- **Source of truth:** `src/ai_trading_system/pipeline/orchestrator.py` (`PIPELINE_ORDER` line 41, preflight wiring lines 123/307-324), `src/ai_trading_system/pipeline/preflight.py`, `src/ai_trading_system/pipeline/stages/*.py`, `src/ai_trading_system/pipeline/migrations/001_pipeline_governance.sql` through `005_ml_datasets.sql`, `src/ai_trading_system/pipeline/daily_pipeline.py`.
+- **Purpose:** Detailed execution, handoff, DQ, and retry flow for the current operational pipeline.
+- **Audience:** Operators debugging a run, engineers changing a stage, and reviewers tracing artifacts.
+- **Last verified:** 2026-07-13
+- **Source of truth:** `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/pipeline/preflight.py`, `src/ai_trading_system/pipeline/contracts.py`, and `src/ai_trading_system/pipeline/stages/`.
 
-## Entrypoints
+---
 
-| Command | Module | What it runs |
-|---|---|---|
-| `ai-trading-pipeline` | `pipeline.orchestrator:main` | Full 11-stage `PIPELINE_ORDER` (`orchestrator.py:41`); `fundamentals` skipped unless enabled. |
-| `ai-trading-daily` | `pipeline.daily_pipeline:main` | Defaults to 10 stages: `ingest,features,rank,candidates,events,execute,insight,narrative,publish,perf_tracker` (`daily_pipeline.py:472`). In `--canary` mode this collapses to `ingest,features,rank` (`daily_pipeline.py:88-90`). |
+Start with the [System Guide](../SYSTEM_GUIDE.md). This document expands only the pipeline execution contract.
 
-> **Note.** Earlier docs called `ai-trading-daily` a "5-stage legacy wrapper" (`ingest→features→rank→execute→publish`). The current code default is 10 stages and only collapses to 3 in canary mode. Verify before publishing any 5-stage claim.
+## Entrypoints and stage selection
 
-## Stage sequence (Mermaid)
+| Entrypoint | Behavior |
+|---|---|
+| `ai-trading-pipeline` / `python -m ai_trading_system.pipeline.orchestrator` | Canonical orchestrator. The CLI default names logical stages and expands `features` into seven substages. |
+| `ai-trading-daily` / `python -m ai_trading_system.pipeline.daily_pipeline` | Daily-operations wrapper around the same orchestrator; verify its current defaults before changing operator automation. |
+
+The canonical logical order is:
+
+```text
+ingest -> features -> rank -> investigator -> fundamentals -> candidates
+       -> candidate_tracker -> events -> execute -> insight -> narrative
+       -> publish -> perf_tracker
+```
+
+The persisted `PIPELINE_ORDER` expands `features`:
+
+```text
+ingest
+-> features_technical
+-> features_sector_rs
+-> features_valuation
+-> features_stock_valuation_bands
+-> features_sector_earnings
+-> features_phase1
+-> features_snapshot
+-> rank -> investigator -> fundamentals -> candidates -> candidate_tracker
+-> events -> execute -> insight -> narrative -> publish -> perf_tracker
+```
+
+`fundamentals` is declared optional. The current CLI enables it by default, and an available fundamental-scores source can also activate it. `candidate_tracker` is enabled by default. Explicit `--stages` values are expanded and validated against `PIPELINE_ORDER`; the orchestrator does not silently add omitted dependencies.
+
+## End-to-end handoff
 
 ```mermaid
 flowchart LR
-    ingest[ingest] --> features[features]
-    features --> rank[rank]
-    rank --> fundamentals[fundamentals*]
-    rank --> candidates[candidates]
-    fundamentals -.optional.-> candidates
-    candidates --> events[events]
-    events --> execute[execute]
-    execute --> insight[insight]
-    insight --> narrative[narrative]
-    narrative --> publish[publish]
-    publish --> perf_tracker[perf_tracker]
+    I["ingest"] --> F["features (7 substages)"]
+    F --> R["rank"]
+    R --> V["investigator"]
+    R --> U["fundamentals (optional)"]
+    R --> C["candidates"]
+    U -. "enrichment" .-> C
+    C --> T["candidate_tracker"]
+    C --> E["events"]
+    E --> X["execute"]
+    X --> S["insight"]
+    S --> N["narrative"]
+    N --> P["publish"]
+    P --> Q["perf_tracker"]
 ```
 
-## Preflight
+| Stage | Required handoff | Important outputs | Failure boundary |
+|---|---|---|---|
+| `ingest` | Provider data and master-data mapping | Trusted OHLCV, provenance/quarantine, ingest artifacts | Trust/DQ can block all downstream work. |
+| `features_*` | Trusted catalog plus earlier feature substages | Technical, sector, valuation, earnings, derived features, final snapshot | Each substage is a separately persisted attempt; final snapshot DQ gates rank. |
+| `rank` | Feature snapshot | Ranked signals, Stage 1, breakouts, patterns, stock/sector dashboards | Empty or invalid canonical rank output can block downstream work. |
+| `investigator` | Registered rank artifacts | Investigation queue, lifecycle/gate artifacts, decision history | Non-executable; optional evidence degrades rather than authorizes execution. |
+| `fundamentals` | Configured fundamentals sources | Scores, watchlists, enrichment artifacts | Optional in the orchestrator contract. |
+| `candidates` | `ranked_signals`; optional rank/fundamental evidence | `final_candidates.csv` and summary | Required rank artifact is a hard gate. |
+| `candidate_tracker` | `final_candidates` | Durable tracker state, alerts, reviews, snapshots | Tracker persistence is independent of execution ledger state. |
+| `events` | Candidate/rank context | Event packet and enriched evidence | Missing optional enrichment must remain distinguishable from trusted evidence. |
+| `execute` | Candidate/event inputs plus trust and policy context | Actions, orders, fills, positions | Paper is safe default; critical DQ and risk gates block dispatch. |
+| `insight` | Upstream decision and execution artifacts | Structured analyst brief | Consumes artifacts; does not recompute upstream stages. |
+| `narrative` | Insight artifact and LLM configuration | Market report | Can be omitted from an explicit stage list. |
+| `publish` | Registered materialized artifacts | External/local deliveries and summary | Retryable for the same `run_id`; must not recompute upstream data. |
+| `perf_tracker` | Published/ranked cohort context | Research-domain cohort updates | Operational and research persistence remain separated. |
 
-Before stage execution, `PipelineOrchestrator.run()` invokes `PreflightChecker.run()` (`orchestrator.py:307-324`) unless `--skip-preflight` is passed (`orchestrator.py:805-813`). Preflight returns `status: passed | failed | …`; any non-`passed` status raises a `PreflightFailed` error, fires a `preflight_failed` alert, and aborts the run before any stage starts. `--skip-publish-network-checks` independently disables Telegram/Google DNS probes (`orchestrator.py:844`). Preflight results are persisted into `run_metadata["preflight"]`.
+Per-stage files, field contracts, and recovery details are under [stages](../INDEX.md#stages-13).
 
-## Per-stage flow
+## Preflight, trust, and DQ
 
-Each row: stage → purpose → key artifact written (also see [`../stages/<stage>.md`](../stages/)).
+The CLI currently skips preflight by default; `--run-preflight` enables local readiness checks. A non-passing preflight result aborts before stage execution and is retained in run metadata. Network publish checks can be controlled separately by the current CLI flags.
 
-| # | Stage | Purpose | Key artifact / write target | Stage doc |
-|---|---|---|---|---|
-| 1 | `ingest` | Pull NSE bhavcopy (source-of-record), Dhan (fallback + delivery), yfinance (last resort); validate, quarantine, compute trust summary | `data/ohlcv.duckdb::ohlcv` + `ohlc.csv` under attempt dir | [ingest](../stages/ingest.md) |
-| 2 | `features` | Compute indicators (RSI, MACD, Supertrend, ATR, EMA, VWAP, etc.), sector RS, universe index, pattern features | Per-symbol Parquet under `data/feature_store/<symbol_id>/` | [features](../stages/features.md) |
-| 3 | `rank` | Composite scoring, breakout detection, stage classifier, sector dashboard, optional LightGBM overlay | `ranked_signals.csv`, `breakout_signals.csv`, `pattern_signals.csv`, `stock_scan_output.csv`, `sector_dashboard.csv` | [rank](../stages/rank.md) |
-| 4 | `fundamentals` * | (Optional) Screener.in import + scoring; enrich rank | `fundamental_scores.csv`, `fundamental_summary.csv` | [fundamentals](../stages/fundamentals.md) |
-| 5 | `candidates` | Deterministic filter from rank outputs into executable candidate set with entry/exit logic | `candidates.json` | [candidates](../stages/candidates.md) |
-| 6 | `events` | Trigger collector + event packet builder + LLM router + noise filter + enrichment | `event_packet.json`, `event_enriched_rank.csv` | [events](../stages/events.md) |
-| 7 | `execute` | Risk gates → adapter dispatch (paper or Dhan live); writes order/fill ledger | `trade_actions.csv`, `executed_orders.csv`, `fills.csv`; `execution_order` + `execution_fill` tables in `data/execution.duckdb` (default in `domains/execution/store.py:29`) | [execute](../stages/execute.md) |
-| 8 | `insight` | Build analyst brief from rank + execution context | `market_insight.json` | [insight](../stages/insight.md) |
-| 9 | `narrative` | LLM-rendered market narrative from insight (config: `config/llm_brain.yaml`, override via `LLM_BRAIN_CONFIG`) | `market_report.json` | [narrative](../stages/narrative.md) |
-| 10 | `publish` | Multi-channel delivery: Telegram, Google Sheets, QuantStats, PDF, daily-gainers, watchlist digest | External delivery + `publish_summary.json` | [publish](../stages/publish.md) |
-| 11 | `perf_tracker` | Forward-return cohort tracker across the research domain | `rank_cohort_performance` rows in research DuckDB | [perf_tracker](../stages/perf_tracker.md) |
+DQ evaluation persists rule outcomes. `red_block` failures abort; repairable failures follow the configured DQ mode and may be downgraded in relaxed mode with their original band retained. Details and repair paths are in [data trust and DQ](data_trust_and_dq.md) and [DQ failure response](../runbooks/dq_failure_response.md).
 
-`*` `fundamentals` is in `OPTIONAL_STAGES` (`orchestrator.py:44`) and skipped unless explicitly enabled.
+## Run, stage, attempt, and artifact lifecycle
 
-## Failure / retry boundaries — the run/stage/attempt model
+- A `pipeline_run` identifies one logical run and its final state.
+- A `pipeline_stage_run` identifies one stage attempt. Feature substages appear independently.
+- A retry creates a new `attempt_<n>` directory and stage-attempt record.
+- A `pipeline_artifact` records the output URI, producer, content hash, and available schema metadata.
+- Downstream resolution uses registered artifacts, including selected latest-artifact fallback behavior in the orchestrator; directory scanning is diagnostic only.
 
-Per `pipeline/migrations/001_pipeline_governance.sql` (and follow-ups 002–005):
+Same-date runs can auto-resume. `--new-run` creates a fresh run ID, while `--force-rerun` creates new attempts for requested completed stages. Reusing `--run-id` is the normal way to retry publish or another isolated stage.
 
-- **`pipeline_run`** — one row per orchestrator invocation; tracks lifecycle and final status.
-- **`pipeline_stage_run`** — one row per *(run, stage, attempt)*. A failed stage can be re-attempted; each attempt gets its own row and its own artifact directory `data/pipeline_runs/<run_id>/<stage>/attempt_<n>/`.
-- **`pipeline_artifact`** — registry of every artifact written, keyed by URI and `content_hash`. Used for downstream lookup and integrity checks.
-- **`dq_result`** — per-rule outcomes for the stage's DQ evaluation (see [data_trust_and_dq.md](./data_trust_and_dq.md)).
+## Failure and recovery boundaries
 
-Failure semantics from `pipeline/dq/engine.py`:
-- A `red_block` DQ failure raises `DataQualityCriticalError` and aborts the run; no retry will succeed without an upstream fix.
-- A `red_repairable` DQ failure raises `DataQualityRepairableError`; in `dq_mode=relaxed` (default) these are downgraded to `amber` and the stage proceeds.
-- A `publish` channel may raise `PublishStageError`. Channel-level blocking vs non-blocking semantics live in `domains/publish/delivery_manager.py` — re-verify before documenting individual channel roles (the audit truth map's taxonomy of `publish_of_record / publish_auxiliary / publish_optional / informational / diagnostic` could not be confirmed by a grep of `delivery_manager.py` at the time of writing).
+- Fix `red_block` trust/DQ failures upstream before retrying downstream stages.
+- Retry a deterministic stage against the same registered inputs when its failure was local or transient.
+- Retry `publish` for the existing run after a channel outage; do not rerun rank merely to republish.
+- Back up live databases before schema repair, backfill, or migration.
+- Never use synthetic data to make a canary pass.
 
-## ai-trading-pipeline vs ai-trading-daily — when to use which
-
-- `ai-trading-pipeline` is the canonical full run; use it whenever you need the complete 11-stage flow including `fundamentals` (when enabled) and `insight/narrative`.
-- `ai-trading-daily` is a thinner wrapper around the same orchestrator with daily-operations defaults (logging, run-id resolution for the trading date, canary mode); it still calls the same stage wrappers. Its default stage list omits `fundamentals` and `--canary` reduces the run to `ingest,features,rank`.
-
-## Related reading
-
-- [overview.md](./overview.md) — high-level system mental model.
-- [storage_and_lineage.md](./storage_and_lineage.md) — where artifacts land and how lineage is tracked.
-- [data_trust_and_dq.md](./data_trust_and_dq.md) — DQ semantics and recovery.
+See [daily operations](../runbooks/daily_operations.md), [troubleshooting](../runbooks/troubleshooting.md), and [publish retry](../runbooks/publish_retry.md).

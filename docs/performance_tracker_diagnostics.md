@@ -1,5 +1,12 @@
 # Performance Tracker — diagnostics reference
 
+- **Purpose:** Explain the performance-tracker diagnostics and their operator interpretation.
+- **Audience:** Operators, researchers, and developers.
+- **Last verified:** 2026-07-13
+- **Source of truth:** Research performance read models and the current Research page implementation.
+
+---
+
 The Research page is purely observational. It does not change ranking weights,
 paper-trading rules, bucket thresholds, or any production config. It reads
 `data/research.duckdb` through `rank_cohort_performance_trusted`: quarantined

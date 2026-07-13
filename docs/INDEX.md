@@ -2,28 +2,30 @@
 
 - **Purpose:** Complete map of all documentation under `docs/`.
 - **Audience:** Anyone navigating the docs.
-- **Last verified:** 2026-05-16
-- **Source of truth:** This file is itself the source of truth for the doc layout. When adding a doc, link it here.
+- **Last verified:** 2026-07-13
+- **Source of truth:** This file is the source of truth for the doc inventory; `SYSTEM_GUIDE.md` is the source of truth for system orientation.
 
-> All current docs have verified content as of 2026-05-16. See [`development/legacy_cleanup_plan.md`](development/legacy_cleanup_plan.md) for the cleanup history.
+> Each document records its own verification date. See [`development/legacy_cleanup_plan.md`](development/legacy_cleanup_plan.md) for the cleanup history.
 
 ## Landing
-- [README](README.md) — documentation landing page (Phase 3 rewrite pending)
+- [SYSTEM_GUIDE](SYSTEM_GUIDE.md) — canonical system orientation and operating contract
+- [README](README.md) — role-based documentation landing page
 
 ## Architecture
-- [overview](architecture/overview.md)
 - [operational_data_flow](architecture/operational_data_flow.md)
 - [storage_and_lineage](architecture/storage_and_lineage.md)
 - [data_trust_and_dq](architecture/data_trust_and_dq.md)
 - [ui_architecture](architecture/ui_architecture.md)
 - [target_architecture](architecture/target_architecture.md)
 
-## Stages (11)
+## Stages (13)
 - [ingest](stages/ingest.md)
 - [features](stages/features.md)
 - [rank](stages/rank.md)
+- [investigator](stages/investigator.md)
 - [fundamentals](stages/fundamentals.md)
 - [candidates](stages/candidates.md)
+- [candidate_tracker](stages/candidate_tracker.md)
 - [events](stages/events.md)
 - [execute](stages/execute.md)
 - [insight](stages/insight.md)
