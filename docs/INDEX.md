@@ -18,6 +18,7 @@
 - [ui_architecture](architecture/ui_architecture.md)
 - [target_architecture](architecture/target_architecture.md)
 - [opportunity_lifecycle_contracts](architecture/opportunity_lifecycle_contracts.md)
+- [opportunity_registry](architecture/opportunity_registry.md)
 
 ## Stages (13)
 - [ingest](stages/ingest.md)

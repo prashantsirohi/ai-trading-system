@@ -3,7 +3,7 @@
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
 - **Last verified:** 2026-07-14
-- **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
+- **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
 
@@ -20,13 +20,13 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 | Store | Canonical path | Primary owner | Purpose |
 |---|---|---|---|
 | OHLCV | `$DATA_ROOT/ohlcv.duckdb` | Ingest, trust, features | Price/volume, delivery, provenance, quarantine, source freshness, and feature metadata. |
-| Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, alerts, models, operator state, pattern/cache metadata, and decision history. |
+| Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, alerts, models, operator state, pattern/cache metadata, decision history, and canonical opportunity-registry history written through the Phase 2 API. |
 | Execution ledger | `$DATA_ROOT/execution.duckdb` | `ExecutionStore` | Orders, fills, positions, stops, and broker/paper execution state supported by the active code. |
 | Candidate tracker | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate tracker domain | Candidate episodes, transitions, snapshots, fundamental reviews, alerts, and current lifecycle state. |
 | Master data | `$DATA_ROOT/masterdata.db` | Ingest/master-data services | Shared instrument and symbol identity data. |
 | Fundamentals | `$DATA_ROOT/fundamentals/` | Fundamentals domain | Imported source snapshots and fundamental read models. |
 
-Do not infer that execution or candidate-tracker tables live in the control plane merely because their artifacts are registered there.
+Do not infer that execution or legacy candidate-tracker tables live in the control plane merely because their artifacts are registered there. The canonical opportunity registry is a distinct control-plane model and does not migrate or synchronize the existing tracker.
 
 ## Runtime trees
 
@@ -103,7 +103,7 @@ back to a failed attempt merely because its file is newer.
 
 ## Durable decision state versus attempt snapshots
 
-CSV and JSON artifacts are immutable-attempt evidence and publish/debug inputs. Durable current or historical decision facts live in control-plane tables owned by their read/write models. Candidate lifecycle facts live in `candidate_tracker.duckdb`; orders and fills live in `execution.duckdb`.
+CSV and JSON artifacts are immutable-attempt evidence and publish/debug inputs. Durable current or historical decision facts live in control-plane tables owned by their read/write models. The current pipeline's mutable candidate lifecycle facts remain in `candidate_tracker.duckdb`; canonical episode history written through the Phase 2 opportunity-registry API lives in `control_plane.duckdb`. No pipeline synchronization exists between those stores. Orders and fills live in `execution.duckdb`.
 
 Write modes that distinguish live updates, replay/backfill, and current-state rebuild must preserve their domain's current-state contract. Do not reconstruct or replace current state merely because an older artifact exists.
 

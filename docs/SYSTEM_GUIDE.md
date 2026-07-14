@@ -26,6 +26,11 @@ opportunity, Investigator evidence, candidate lifecycle, and stock/sector
 structural stage as separate axes; its policy guards are pure and are not wired
 to execution. See [opportunity lifecycle contracts](architecture/opportunity_lifecycle_contracts.md).
 
+The Phase 2 [opportunity registry](architecture/opportunity_registry.md) adds an
+append-oriented, historically reconstructable control-plane store for callers
+of the new registry API. It is not wired into the pipeline. The existing
+candidate tracker remains the current pipeline's operational lifecycle store.
+
 ## Safety and operating invariants
 
 - Resolve live data through the existing path helpers and `$DATA_ROOT`; never hardcode a repo-local `data/...` path in application code.
@@ -130,7 +135,7 @@ Canonical operational paths are resolved beneath `$DATA_ROOT`:
 | Store or tree | Responsibility |
 |---|---|
 | `$DATA_ROOT/ohlcv.duckdb` | Operational OHLCV, delivery, trust/provenance, quarantine, registries, and feature metadata. |
-| `$DATA_ROOT/control_plane.duckdb` | Pipeline runs, stage attempts, artifacts, DQ, alerts, models, operator state, and durable decision history. |
+| `$DATA_ROOT/control_plane.duckdb` | Pipeline runs, stage attempts, artifacts, DQ, alerts, models, operator state, durable decision history, and canonical opportunity-registry history written through its Phase 2 API. |
 | `$DATA_ROOT/execution.duckdb` | Orders, fills, positions, and execution ledger state. |
 | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate episodes, snapshots, reviews, alerts, and current lifecycle state. |
 | `$DATA_ROOT/masterdata.db` | Shared instrument/master data. |
@@ -207,6 +212,7 @@ Before a repair or migration, follow [backup and restore](runbooks/backup_and_re
 |---|---|
 | How does a complete run move data? | [Operational data flow](architecture/operational_data_flow.md) |
 | Where is data persisted and how is lineage resolved? | [Storage and lineage](architecture/storage_and_lineage.md) |
+| How are canonical candidate episodes reconstructed? | [Opportunity registry](architecture/opportunity_registry.md) |
 | Why was a run degraded or blocked? | [Data trust and DQ](architecture/data_trust_and_dq.md) and [DQ response](runbooks/dq_failure_response.md) |
 | What does one stage read, write, and retry? | The relevant document under [stages](INDEX.md#stages-13) |
 | Which configuration, schema, artifact, or CLI contract applies? | [Reference documents](INDEX.md#reference) |
