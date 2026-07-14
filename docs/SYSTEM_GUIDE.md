@@ -27,6 +27,11 @@ The main surfaces are:
 - NSE bhavcopy is the operational OHLC source of record. Provider fallback and quarantine behavior are defined in [data sources](reference/data_sources.md) and [trust and DQ](architecture/data_trust_and_dq.md).
 - Synthetic smoke data is disabled. Canary runs use a reduced real symbol universe.
 - Critical trust or DQ failures block downstream execution.
+- Historical OHLCV repair and research-to-operational backfill project candidate
+  rows together with adjacent retained observations before writing. A proposed
+  batch with at least 10 symbols showing simultaneous raw-close gaps of 30% or
+  more is rejected before delete, upsert, or insert. The corresponding ingest
+  DQ result records the affected dates and a JSON symbol sample.
 - Historical ranking is point-in-time: market, return, volume, delivery, sector,
   stage, benchmark, and persisted feature inputs cannot read observations after
   the requested run date. One immutable `RankInputSnapshot` owns that cutoff and

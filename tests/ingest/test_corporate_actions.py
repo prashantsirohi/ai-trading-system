@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -752,7 +753,10 @@ def test_dq_large_raw_gap_near_action_requires_adjustment_marker(tmp_path: Path)
     assert passed.status == "passed"
 
 
-def test_dq_bulk_raw_price_basis_shift_detects_simultaneous_gaps(tmp_path: Path) -> None:
+def test_dq_bulk_raw_price_basis_shift_detects_simultaneous_gaps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data"))
     db_path = tmp_path / "ohlcv.duckdb"
     _seed_catalog(db_path)
     conn = duckdb.connect(str(db_path))
@@ -787,3 +791,15 @@ def test_dq_bulk_raw_price_basis_shift_detects_simultaneous_gaps(tmp_path: Path)
 
     assert outcome.status == "failed"
     assert outcome.failed_count == 1
+    assert outcome.sample_uri is not None
+    sample = json.loads(Path(outcome.sample_uri).read_text(encoding="utf-8"))
+    assert sample["suspicious_dates"] == [
+        {
+            "max_abs_pct_change": 100.0,
+            "median_abs_pct_change": 100.0,
+            "symbol_count": 2,
+            "symbols": ["AAA", "BBB"],
+            "trade_date": "2026-01-02",
+        }
+    ]
+    assert "2026-01-02 (2 symbols)" in outcome.message

@@ -14,7 +14,9 @@ from ai_trading_system.domains.ingest.repair import (
     _compare_trade_frames,
     _delete_window_rows,
     _fetch_symbol_frames,
+    _validate_repair_price_continuity,
 )
+from ai_trading_system.domains.ingest.price_continuity import BulkRawPriceBasisShiftError
 
 
 def _init_catalog(db_path: Path, rows: list[tuple]) -> None:
@@ -182,3 +184,45 @@ def test_repair_window_requires_symbols_for_repair(tmp_path: Path) -> None:
             to_date="2026-04-06",
             apply_changes=False,
         )
+
+
+def test_repair_continuity_gate_rejects_broad_boundary_shift_before_write(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    prior_rows = [
+        (
+            f"SYM{index:02d}",
+            str(index),
+            "NSE",
+            "2026-01-01 00:00:00",
+            10.0,
+            10.0,
+            10.0,
+            10.0,
+            100,
+        )
+        for index in range(10)
+    ]
+    _init_catalog(db_path, prior_rows)
+    api_frame_map: dict[str, pd.DataFrame] = {}
+    for index in range(10):
+        symbol = f"SYM{index:02d}"
+        frame = pd.DataFrame(
+            [{"timestamp": "2026-01-02", "close": 100.0}]
+        ).set_index("timestamp")
+        api_frame_map[symbol] = frame
+
+    with pytest.raises(BulkRawPriceBasisShiftError, match=r"2026-01-02 \(10 symbols\)"):
+        _validate_repair_price_continuity(
+            db_path=db_path,
+            api_frame_map=api_frame_map,
+            symbol_ids=api_frame_map,
+            exchange="NSE",
+            from_date="2026-01-02",
+            to_date="2026-01-02",
+        )
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM _catalog").fetchone() == (10,)
+    finally:
+        conn.close()

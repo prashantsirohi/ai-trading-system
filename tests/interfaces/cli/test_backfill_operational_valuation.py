@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
+import pytest
 
+from ai_trading_system.domains.ingest.price_continuity import BulkRawPriceBasisShiftError
 from ai_trading_system.interfaces.cli.backfill_operational_valuation import (
     copy_ohlcv_backfill,
     copy_ohlcv_chunk,
@@ -250,3 +252,70 @@ def test_validation_summary_handles_missing_valuation_tables(tmp_path: Path) -> 
     assert by_table["_catalog"].min_date == "2016-01-01"
     assert by_table["fundamental_ttm"].rows == 0
     assert by_table["valuation_cycle_features"].max_date is None
+
+
+def test_copy_rejects_broad_candidate_basis_shift_without_writing(tmp_path: Path) -> None:
+    source = tmp_path / "research.duckdb"
+    target = tmp_path / "operational.duckdb"
+    _create_source(source)
+    _create_target(target)
+    source_conn = duckdb.connect(str(source))
+    target_conn = duckdb.connect(str(target))
+    try:
+        source_conn.execute("DELETE FROM _catalog")
+        target_conn.execute("DELETE FROM _catalog")
+        rows = []
+        for index in range(10):
+            symbol = f"SYM{index:02d}"
+            security_id = str(index)
+            rows.extend(
+                [
+                    (
+                        symbol,
+                        security_id,
+                        "NSE",
+                        "2026-01-01",
+                        10.0,
+                        10.0,
+                        10.0,
+                        10.0,
+                        100,
+                        f"research/{symbol}.parquet",
+                        index * 2,
+                        "2026-01-03",
+                    ),
+                    (
+                        symbol,
+                        security_id,
+                        "NSE",
+                        "2026-01-02",
+                        100.0,
+                        100.0,
+                        100.0,
+                        100.0,
+                        100,
+                        f"research/{symbol}.parquet",
+                        index * 2 + 1,
+                        "2026-01-03",
+                    ),
+                ]
+            )
+        source_conn.executemany("INSERT INTO _catalog VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    finally:
+        source_conn.close()
+        target_conn.close()
+
+    with pytest.raises(BulkRawPriceBasisShiftError, match=r"2026-01-02 \(10 symbols\)"):
+        copy_ohlcv_chunk(
+            source_db_path=source,
+            target_db_path=target,
+            from_date="2026-01-01",
+            to_date="2026-01-02",
+            run_id="test_run",
+        )
+
+    conn = duckdb.connect(str(target), read_only=True)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM _catalog").fetchone() == (0,)
+    finally:
+        conn.close()

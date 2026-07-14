@@ -15,11 +15,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Iterable
 
 import duckdb
 import pandas as pd
@@ -36,6 +35,9 @@ from ai_trading_system.domains.ingest.daily_update_runner import (
     _fetch_nse_bhavcopy_rows,
     _fetch_yfinance_rows,
     _rows_to_symbol_frames,
+)
+from ai_trading_system.domains.ingest.price_continuity import (
+    require_no_bulk_raw_price_basis_shifts,
 )
 from ai_trading_system.domains.ingest.providers.dhan import DhanCollector
 from ai_trading_system.platform.utils.env import load_project_env
@@ -209,6 +211,103 @@ def _load_db_window(
         ).fetchdf()
     finally:
         conn.close()
+
+
+def _load_adjacent_catalog_rows(
+    *,
+    db_path: Path,
+    symbol_ids: Iterable[str],
+    exchange: str,
+    from_date: str,
+    to_date: str,
+) -> pd.DataFrame:
+    """Load one retained observation on either side of a replacement window."""
+
+    symbols = sorted({str(symbol_id) for symbol_id in symbol_ids if symbol_id})
+    if not symbols:
+        return pd.DataFrame(columns=["symbol_id", "timestamp", "close"])
+    placeholders = ", ".join(["?"] * len(symbols))
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        return conn.execute(
+            f"""
+            WITH before_rows AS (
+                SELECT
+                    symbol_id,
+                    timestamp,
+                    close,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp DESC
+                    ) AS row_number
+                FROM _catalog
+                WHERE exchange = ?
+                  AND CAST(timestamp AS DATE) < CAST(? AS DATE)
+                  AND symbol_id IN ({placeholders})
+            ),
+            after_rows AS (
+                SELECT
+                    symbol_id,
+                    timestamp,
+                    close,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY symbol_id
+                        ORDER BY timestamp ASC
+                    ) AS row_number
+                FROM _catalog
+                WHERE exchange = ?
+                  AND CAST(timestamp AS DATE) > CAST(? AS DATE)
+                  AND symbol_id IN ({placeholders})
+            )
+            SELECT symbol_id, timestamp, close
+            FROM before_rows
+            WHERE row_number = 1
+            UNION ALL
+            SELECT symbol_id, timestamp, close
+            FROM after_rows
+            WHERE row_number = 1
+            """,
+            [exchange, from_date, *symbols, exchange, to_date, *symbols],
+        ).fetchdf()
+    finally:
+        conn.close()
+
+
+def _validate_repair_price_continuity(
+    *,
+    db_path: Path,
+    api_frame_map: dict[str, pd.DataFrame],
+    symbol_ids: Iterable[str],
+    exchange: str,
+    from_date: str,
+    to_date: str,
+) -> None:
+    """Reject a repair batch that would create a broad raw-price basis shift."""
+
+    symbols = sorted({str(symbol_id) for symbol_id in symbol_ids if symbol_id})
+    candidate_parts: list[pd.DataFrame] = []
+    for symbol_id in symbols:
+        frame = api_frame_map.get(symbol_id)
+        if frame is None or frame.empty:
+            continue
+        part = frame.reset_index().copy()
+        part["symbol_id"] = symbol_id
+        candidate_parts.append(part.loc[:, ["symbol_id", "timestamp", "close"]])
+    if not candidate_parts:
+        return
+
+    adjacent = _load_adjacent_catalog_rows(
+        db_path=db_path,
+        symbol_ids=symbols,
+        exchange=exchange,
+        from_date=from_date,
+        to_date=to_date,
+    )
+    candidate_rows = pd.concat([adjacent, *candidate_parts], ignore_index=True)
+    require_no_bulk_raw_price_basis_shifts(
+        candidate_rows,
+        operation=f"OHLCV repair {from_date}..{to_date}",
+    )
 
 
 def _backup_current_rows(
@@ -477,6 +576,14 @@ def repair_window(
 
     if apply_changes and (mismatched_symbols or unresolved_symbols):
         rewrite_symbols = [symbol for symbol in mismatched_symbols if symbol in api_frame_map]
+        _validate_repair_price_continuity(
+            db_path=paths.ohlcv_db_path,
+            api_frame_map=api_frame_map,
+            symbol_ids=rewrite_symbols,
+            exchange=exchange,
+            from_date=from_date,
+            to_date=to_date,
+        )
         backup_path = _backup_current_rows(
             db_path=paths.ohlcv_db_path,
             report_dir=report_dir,

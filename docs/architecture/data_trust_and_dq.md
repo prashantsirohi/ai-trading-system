@@ -2,7 +2,7 @@
 
 - **Purpose:** Explain how ingest assigns a per-run trust status, how quarantine works, how the DQ engine classifies rule failures, and what blocks the pipeline vs what is recorded and ignored.
 - **Audience:** Operators triaging a failed run; engineers writing or relaxing a DQ rule.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-07-14
 - **Source of truth:** `src/ai_trading_system/domains/ingest/trust.py` (lines 868–1095, 424–500, 750–860), `src/ai_trading_system/pipeline/contracts.py` (`TrustConfidenceEnvelope` from line 12), `src/ai_trading_system/pipeline/dq/engine.py`, `src/ai_trading_system/pipeline/stages/narrative.py:174-176`, `src/ai_trading_system/pipeline/orchestrator.py:1249-1290`.
 
 ## Trust statuses
@@ -62,6 +62,30 @@ Severity is the rule author's tag (`severity` column on `dq_rule`); band is the 
 
 Beyond `critical`, the engine treats severity as opaque metadata. Severity labels seen in code include `critical`; other tiers (`high`, `medium`, `low`) are not enforced by the engine itself and should be considered author-defined hints. Migration `013_events_enrichment_log.sql:28` documents an events-specific `severity` column with values `low-info | medium | high`, but that is independent of the DQ engine's banding.
 
+## Raw-price basis continuity
+
+`ingest_bulk_raw_price_basis_shift` scans NSE equity raw closes for dates where
+at least 10 distinct symbols move by at least 30% from their preceding stored
+observation. Both thresholds remain configurable through
+`dq_bulk_raw_gap_symbol_count` and `dq_bulk_raw_gap_pct`. A failure stores a JSON
+sample URI in `dq_result`; the sample lists each suspicious date, symbol count,
+symbols, median absolute move, and maximum absolute move.
+
+The same default thresholds protect historical write tools before mutation:
+
+- OHLCV repair combines fetched candidate rows with the immediately preceding
+  and following retained observation for every rewritten symbol. Validation
+  runs before backup, delete, provenance write, or upsert.
+- Research-to-operational backfill builds the projected target series from
+  missing candidates, retained rows in the selected chunk, and the adjacent
+  retained observations. Only gaps involving a candidate row are considered.
+  Validation runs before insert.
+
+A broad failure rejects the entire proposed write with the affected dates and
+counts. Do not bypass the gate by splitting one unsafe batch into smaller symbol
+batches. Investigate provider basis, corporate actions, and source archives;
+then retry from a verified consistent source.
+
 ## dq_mode
 
 Driven by `context.params['dq_mode']` (`engine.py:69`), default `relaxed`. CLI plumbing is in the orchestrator entrypoint. The only effect today: `relaxed` mode downgrades non-hard-floor `red_repairable` failures to `amber`.
@@ -76,6 +100,8 @@ Queries:
 - "Which rules failed for this run?" — `SELECT rule_id, band, status, message FROM dq_result WHERE run_id = ? ORDER BY stage_name`.
 - "What was relaxed?" — `SELECT * FROM dq_result WHERE relaxed_from IS NOT NULL`.
 - "What blocked the run?" — `SELECT * FROM dq_result WHERE band = 'red_block' AND status = 'failed'`.
+- "Which symbols caused a bulk basis failure?" — read the JSON file referenced
+  by `sample_uri` for `ingest_bulk_raw_price_basis_shift`.
 
 The control plane store is `data/control_plane.duckdb`.
 

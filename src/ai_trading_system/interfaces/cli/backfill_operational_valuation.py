@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
+from statistics import median
 from typing import Any, Iterable
 
 import duckdb
@@ -16,6 +18,12 @@ from ai_trading_system.domains.features.valuation_cycle import refresh_valuation
 from ai_trading_system.domains.features.valuation_index import DEFAULT_UNIVERSES, refresh_valuation_index
 from ai_trading_system.domains.features.valuation_ttm import refresh_fundamental_ttm
 from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
+from ai_trading_system.domains.ingest.price_continuity import (
+    DEFAULT_BULK_RAW_GAP_PCT,
+    DEFAULT_BULK_RAW_GAP_SYMBOL_COUNT,
+    BulkRawPriceBasisShift,
+    BulkRawPriceBasisShiftError,
+)
 from ai_trading_system.platform.db.paths import get_domain_paths
 
 
@@ -176,6 +184,17 @@ def copy_ohlcv_chunk(
         )
         if dry_run or missing_rows == 0:
             return CopyChunkResult(from_date, to_date, source_rows, missing_rows, 0, dry_run)
+
+        shifts = _candidate_bulk_raw_price_basis_shifts(
+            conn,
+            from_date=from_date,
+            to_date=to_date,
+        )
+        if shifts:
+            raise BulkRawPriceBasisShiftError(
+                f"Operational OHLCV backfill {from_date}..{to_date}",
+                shifts,
+            )
 
         target_columns = _table_columns(conn, "_catalog")
         select_list = _catalog_select_list(target_columns, run_id=run_id or _default_run_id())
@@ -498,6 +517,145 @@ def _missing_source_daily_sql() -> str:
               AND CAST(t.timestamp AS DATE) = s.trade_date
         )
     """
+
+
+def _candidate_bulk_raw_price_basis_shifts(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    from_date: str,
+    to_date: str,
+    gap_pct: float = DEFAULT_BULK_RAW_GAP_PCT,
+    symbol_count: int = DEFAULT_BULK_RAW_GAP_SYMBOL_COUNT,
+) -> list[BulkRawPriceBasisShift]:
+    """Find broad gaps involving rows proposed by a research backfill."""
+
+    rows = conn.execute(
+        f"""
+        WITH candidate_rows AS (
+            SELECT symbol_id, exchange, timestamp, trade_date, close, TRUE AS is_candidate
+            FROM ({_missing_source_daily_sql()})
+            WHERE trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+        ),
+        affected_symbols AS (
+            SELECT DISTINCT symbol_id, exchange
+            FROM candidate_rows
+        ),
+        target_window AS (
+            SELECT
+                t.symbol_id,
+                t.exchange,
+                t.timestamp,
+                CAST(t.timestamp AS DATE) AS trade_date,
+                t.close,
+                FALSE AS is_candidate
+            FROM _catalog t
+            INNER JOIN affected_symbols a
+                    ON a.symbol_id = t.symbol_id
+                   AND a.exchange = t.exchange
+            WHERE CAST(t.timestamp AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+        ),
+        target_before AS (
+            SELECT symbol_id, exchange, timestamp, trade_date, close, is_candidate
+            FROM (
+                SELECT
+                    t.symbol_id,
+                    t.exchange,
+                    t.timestamp,
+                    CAST(t.timestamp AS DATE) AS trade_date,
+                    t.close,
+                    FALSE AS is_candidate,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY t.symbol_id, t.exchange
+                        ORDER BY t.timestamp DESC
+                    ) AS row_number
+                FROM _catalog t
+                INNER JOIN affected_symbols a
+                        ON a.symbol_id = t.symbol_id
+                       AND a.exchange = t.exchange
+                WHERE CAST(t.timestamp AS DATE) < CAST(? AS DATE)
+            )
+            WHERE row_number = 1
+        ),
+        target_after AS (
+            SELECT symbol_id, exchange, timestamp, trade_date, close, is_candidate
+            FROM (
+                SELECT
+                    t.symbol_id,
+                    t.exchange,
+                    t.timestamp,
+                    CAST(t.timestamp AS DATE) AS trade_date,
+                    t.close,
+                    FALSE AS is_candidate,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY t.symbol_id, t.exchange
+                        ORDER BY t.timestamp ASC
+                    ) AS row_number
+                FROM _catalog t
+                INNER JOIN affected_symbols a
+                        ON a.symbol_id = t.symbol_id
+                       AND a.exchange = t.exchange
+                WHERE CAST(t.timestamp AS DATE) > CAST(? AS DATE)
+            )
+            WHERE row_number = 1
+        ),
+        projected AS (
+            SELECT * FROM candidate_rows
+            UNION ALL
+            SELECT * FROM target_window
+            UNION ALL
+            SELECT * FROM target_before
+            UNION ALL
+            SELECT * FROM target_after
+        ),
+        ordered AS (
+            SELECT
+                symbol_id,
+                trade_date,
+                close,
+                is_candidate,
+                LAG(close) OVER (
+                    PARTITION BY symbol_id, exchange
+                    ORDER BY timestamp
+                ) AS prev_close,
+                LAG(is_candidate) OVER (
+                    PARTITION BY symbol_id, exchange
+                    ORDER BY timestamp
+                ) AS prev_is_candidate
+            FROM projected
+        )
+        SELECT
+            trade_date,
+            symbol_id,
+            ABS(((close / NULLIF(prev_close, 0)) - 1) * 100.0) AS abs_pct_change
+        FROM ordered
+        WHERE prev_close IS NOT NULL
+          AND close IS NOT NULL
+          AND (is_candidate OR COALESCE(prev_is_candidate, FALSE))
+          AND ABS(((close / NULLIF(prev_close, 0)) - 1) * 100.0) >= ?
+        ORDER BY trade_date, symbol_id
+        """,
+        [from_date, to_date, from_date, to_date, from_date, to_date, gap_pct],
+    ).fetchall()
+
+    by_date: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    for trade_date, symbol_id, abs_pct_change in rows:
+        by_date[str(trade_date)].append((str(symbol_id), float(abs_pct_change)))
+
+    shifts: list[BulkRawPriceBasisShift] = []
+    for trade_date, date_rows in sorted(by_date.items()):
+        symbol_changes = {symbol: change for symbol, change in date_rows}
+        if len(symbol_changes) < int(symbol_count):
+            continue
+        changes = list(symbol_changes.values())
+        shifts.append(
+            BulkRawPriceBasisShift(
+                trade_date=trade_date,
+                symbols=tuple(sorted(symbol_changes)),
+                median_abs_pct_change=round(float(median(changes)), 4),
+                max_abs_pct_change=round(float(max(changes)), 4),
+            )
+        )
+    return shifts
 
 
 def _catalog_select_list(target_columns: list[str], *, run_id: str) -> str:

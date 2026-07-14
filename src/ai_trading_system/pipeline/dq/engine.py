@@ -13,6 +13,7 @@ from ai_trading_system.domains.ingest.trust import (
     load_critical_symbol_universe,
     load_data_trust_summary,
 )
+from ai_trading_system.domains.ingest.price_continuity import BulkRawPriceBasisShift
 from ai_trading_system.analytics.registry import RegistryStore
 from ai_trading_system.pipeline.contracts import (
     DataQualityCriticalError,
@@ -475,7 +476,7 @@ class DataQualityEngine:
     ) -> DQRuleFailure:
         threshold = float(context.params.get("dq_bulk_raw_gap_pct", 30.0) or 30.0)
         symbol_threshold = int(context.params.get("dq_bulk_raw_gap_symbol_count", 10) or 10)
-        query = f"""
+        query = """
             WITH ordered AS (
                 SELECT
                     symbol_id,
@@ -491,21 +492,62 @@ class DataQualityEngine:
                   AND COALESCE(instrument_type, 'equity') = 'equity'
             ),
             raw_gaps AS (
-                SELECT trade_date, symbol_id
+                SELECT
+                    trade_date,
+                    symbol_id,
+                    ABS(((close / NULLIF(prev_close, 0)) - 1) * 100.0) AS abs_pct_change
                 FROM ordered
                 WHERE prev_close IS NOT NULL
                   AND close IS NOT NULL
-                  AND ABS(((close / NULLIF(prev_close, 0)) - 1) * 100.0) >= {threshold}
-            )
-            SELECT COUNT(*)
-            FROM (
+                  AND ABS(((close / NULLIF(prev_close, 0)) - 1) * 100.0) >= ?
+            ),
+            suspicious_dates AS (
                 SELECT trade_date
                 FROM raw_gaps
                 GROUP BY trade_date
-                HAVING COUNT(DISTINCT symbol_id) >= {symbol_threshold}
-            ) suspicious_dates
+                HAVING COUNT(DISTINCT symbol_id) >= ?
+            )
+            SELECT g.trade_date, g.symbol_id, g.abs_pct_change
+            FROM raw_gaps g
+            INNER JOIN suspicious_dates s USING (trade_date)
+            ORDER BY g.trade_date, g.symbol_id
         """
-        failed_count = self._scalar(context.db_path, query)
+        conn = duckdb.connect(str(context.db_path), read_only=True)
+        try:
+            rows = conn.execute(query, [threshold, symbol_threshold]).fetchall()
+        finally:
+            conn.close()
+
+        grouped: dict[str, list[tuple[str, float]]] = {}
+        for trade_date, symbol_id, abs_pct_change in rows:
+            grouped.setdefault(str(trade_date), []).append((str(symbol_id), float(abs_pct_change)))
+        shifts = [
+            BulkRawPriceBasisShift(
+                trade_date=trade_date,
+                symbols=tuple(sorted({symbol for symbol, _ in date_rows})),
+                median_abs_pct_change=round(
+                    float(pd.Series([change for _, change in date_rows]).median()), 4
+                ),
+                max_abs_pct_change=round(max(change for _, change in date_rows), 4),
+            )
+            for trade_date, date_rows in sorted(grouped.items())
+        ]
+        failed_count = len(shifts)
+        sample_uri = None
+        if shifts:
+            sample_path = context.write_json(
+                "ingest_bulk_raw_price_basis_shift_sample.json",
+                {
+                    "rule_id": "ingest_bulk_raw_price_basis_shift",
+                    "gap_pct_threshold": threshold,
+                    "symbol_count_threshold": symbol_threshold,
+                    "suspicious_dates": [shift.to_dict() for shift in shifts],
+                },
+            )
+            sample_uri = str(sample_path)
+        details = "; ".join(
+            f"{shift.trade_date} ({shift.symbol_count} symbols)" for shift in shifts[:5]
+        )
         return self._make_result(
             "ingest_bulk_raw_price_basis_shift",
             severity,
@@ -513,9 +555,10 @@ class DataQualityEngine:
             "No broad simultaneous raw-price basis shifts detected."
             if failed_count == 0
             else (
-                "Found trade dates with broad simultaneous raw-price gaps; "
+                f"Found broad simultaneous raw-price gaps on {details}; "
                 "inspect provider cutovers before using adjusted history."
             ),
+            sample_uri=sample_uri,
         )
 
     def _rule_ingest_unresolved_dates_present(
