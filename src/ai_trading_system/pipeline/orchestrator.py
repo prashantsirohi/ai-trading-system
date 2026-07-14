@@ -965,6 +965,12 @@ class PipelineOrchestrator:
                             )
                             self.dq_engine.evaluate(dq_context, result)
 
+                        self.registry.mark_attempt_artifacts_dq_passed(
+                            run_id,
+                            stage_name,
+                            attempt_number,
+                        )
+
                         if stage_name == "ingest":
                             skip_plan = self._plan_downstream_stage_skips(
                                 run_id=run_id,

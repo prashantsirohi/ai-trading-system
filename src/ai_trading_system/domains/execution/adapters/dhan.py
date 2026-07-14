@@ -26,6 +26,7 @@ class DhanExecutionAdapter(ExecutionAdapter):
         self.access_token = access_token
         self.api_key = api_key
         self.dry_run = dry_run
+        self._submissions: dict[str, tuple[OrderRecord, list[FillRecord]]] = {}
 
     def place_order(
         self,
@@ -58,8 +59,18 @@ class DhanExecutionAdapter(ExecutionAdapter):
                     "note": "Live Dhan execution is intentionally disabled until sandbox/live validation is completed.",
                 },
             )
-            return order, []
+            result = (order, [])
+            if intent.correlation_id:
+                self._submissions[str(intent.correlation_id)] = result
+            return result
 
         raise RuntimeError(
             "Live Dhan execution is intentionally disabled. Validate sandbox/live order behavior before enabling broker placement."
         )
+
+    def find_order_by_correlation_id(
+        self,
+        correlation_id: str,
+    ) -> tuple[OrderRecord, list[FillRecord]] | None:
+        """Resolve dry-run outcomes; live broker lookup remains intentionally disabled."""
+        return self._submissions.get(str(correlation_id)) if self.dry_run else None

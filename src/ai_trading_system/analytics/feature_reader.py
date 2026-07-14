@@ -4,7 +4,7 @@ Reads from DuckDB-backed partitioned parquet files efficiently.
 Handles both per-symbol parquet files and DuckDB partitioned parquet files.
 """
 
-import os
+from pathlib import Path
 import duckdb
 import pandas as pd
 from typing import Optional, List
@@ -25,7 +25,16 @@ class FeatureReader:
         return duckdb.connect(self.ohlcv_db_path)
 
     def _glob_pattern(self, feature: str, exchange: str) -> str:
-        return os.path.join(self.feature_store_dir, feature, exchange, "*.parquet")
+        return str(self._contained_path(feature, exchange) / "*.parquet")
+
+    def _contained_path(self, *parts: str) -> Path:
+        root = Path(self.feature_store_dir).expanduser().resolve()
+        candidate = root.joinpath(*(str(part) for part in parts)).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("Feature path escapes the configured feature store") from exc
+        return candidate
 
     def read_feature(
         self,
@@ -42,19 +51,24 @@ class FeatureReader:
         pattern = self._glob_pattern(feature, exchange)
         conn = self._conn()
         try:
-            query = f"SELECT * FROM read_parquet('{pattern}')"
+            query = "SELECT * FROM read_parquet(?)"
+            params: list[object] = [pattern]
+            conditions: list[str] = []
             if symbols:
-                sym_list = ",".join(f"'{s}'" for s in symbols)
-                query += f" WHERE symbol_id IN ({sym_list})"
+                placeholders = ", ".join("?" for _ in symbols)
+                conditions.append(f"symbol_id IN ({placeholders})")
+                params.extend(symbols)
             if date:
-                query += (
-                    f" WHERE timestamp <= '{date}'"
-                    if not symbols
-                    else f" AND timestamp <= '{date}'"
-                )
-            if limit:
-                query += f" LIMIT {limit}"
-            return conn.execute(query).fetchdf()
+                conditions.append("timestamp <= CAST(? AS TIMESTAMP)")
+                params.append(date)
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            if limit is not None:
+                if int(limit) < 0 or int(limit) > 1_000_000:
+                    raise ValueError("limit must be between 0 and 1000000")
+                query += " LIMIT ?"
+                params.append(int(limit))
+            return conn.execute(query, params).fetchdf()
         finally:
             conn.close()
 
@@ -71,21 +85,24 @@ class FeatureReader:
         pattern = self._glob_pattern(feature, exchange)
         conn = self._conn()
         try:
-            query = f"""
+            query = """
                 SELECT * FROM (
                     SELECT *, ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp DESC) AS rn
-                    FROM read_parquet('{pattern}')
+                    FROM read_parquet(?)
                 """
+            params: list[object] = [pattern]
             conditions = []
             if symbols:
-                sym_list = ",".join(f"'{s}'" for s in symbols)
-                conditions.append(f"symbol_id IN ({sym_list})")
+                placeholders = ", ".join("?" for _ in symbols)
+                conditions.append(f"symbol_id IN ({placeholders})")
+                params.extend(symbols)
             if cutoff_date:
-                conditions.append(f"timestamp <= '{cutoff_date}'")
+                conditions.append("timestamp <= CAST(? AS TIMESTAMP)")
+                params.append(cutoff_date)
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
             query += ") sub WHERE rn = 1"
-            return conn.execute(query).fetchdf()
+            return conn.execute(query, params).fetchdf()
         finally:
             conn.close()
 
@@ -98,13 +115,16 @@ class FeatureReader:
         """Read raw OHLCV data from DuckDB."""
         conn = self._conn()
         try:
-            query = f"SELECT * FROM _catalog WHERE exchange = '{exchange}'"
+            query = "SELECT * FROM _catalog WHERE exchange = ?"
+            params: list[object] = [exchange]
             if symbols:
-                sym_list = ",".join(f"'{s}'" for s in symbols)
-                query += f" AND symbol_id IN ({sym_list})"
+                placeholders = ", ".join("?" for _ in symbols)
+                query += f" AND symbol_id IN ({placeholders})"
+                params.extend(symbols)
             if date:
-                query += f" AND timestamp <= '{date}'"
-            return conn.execute(query).fetchdf()
+                query += " AND timestamp <= CAST(? AS TIMESTAMP)"
+                params.append(date)
+            return conn.execute(query, params).fetchdf()
         finally:
             conn.close()
 
@@ -118,16 +138,15 @@ class FeatureReader:
         Read feature for a single symbol.
         Tries per-symbol parquet first, falls back to DuckDB partitioned query.
         """
-        per_sym = os.path.join(
-            self.feature_store_dir, feature, exchange, f"{symbol_id}.parquet"
-        )
-        if os.path.exists(per_sym):
+        per_sym = self._contained_path(feature, exchange, f"{symbol_id}.parquet")
+        if per_sym.exists():
             return pd.read_parquet(per_sym)
         pattern = self._glob_pattern(feature, exchange)
         conn = self._conn()
         try:
             return conn.execute(
-                f"SELECT * FROM read_parquet('{pattern}') WHERE symbol_id = '{symbol_id}'"
+                "SELECT * FROM read_parquet(?) WHERE symbol_id = ?",
+                [pattern, symbol_id],
             ).fetchdf()
         finally:
             conn.close()

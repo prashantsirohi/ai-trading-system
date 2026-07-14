@@ -67,6 +67,7 @@ class PaperExecutionAdapter(ExecutionAdapter):
     def __init__(self, *, slippage_bps: float = 5.0, include_costs: bool = True):
         self.slippage_bps = float(slippage_bps)
         self.include_costs = include_costs
+        self._submissions: dict[str, tuple[OrderRecord, list[FillRecord]]] = {}
 
     def place_order(
         self,
@@ -94,7 +95,17 @@ class PaperExecutionAdapter(ExecutionAdapter):
             requested_price=intent.requested_price,
             metadata={**intent.metadata, "simulator": "paper"},
         )
-        return self.refresh_order(order, market_price=market_price)
+        result = self.refresh_order(order, market_price=market_price)
+        if intent.correlation_id:
+            self._submissions[str(intent.correlation_id)] = result
+        return result
+
+    def find_order_by_correlation_id(
+        self,
+        correlation_id: str,
+    ) -> tuple[OrderRecord, list[FillRecord]] | None:
+        """Return a submission known to this simulator instance for reconciliation."""
+        return self._submissions.get(str(correlation_id))
 
     def refresh_order(
         self,

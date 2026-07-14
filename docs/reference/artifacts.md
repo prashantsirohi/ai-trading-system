@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-07-14
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -13,7 +13,11 @@ Per-run stage artifacts are written under:
 - `data/pipeline_runs/<run_id>/<stage>/attempt_<n>/`
 - `data/research/pipeline_runs/<run_id>/<stage>/attempt_<n>/` for research-domain runs
 
-These directories are the authoritative materialized outputs for a specific pipeline run and stage attempt.
+These directories contain materialized evidence for a specific pipeline run and
+stage attempt. A registered file is authoritative for default downstream
+resolution only after its registry lifecycle reaches `promoted` and the exact
+producing stage attempt is `completed`. Failed or interrupted attempts remain
+diagnostic evidence even when their files are intact.
 
 ## Stage artifacts
 

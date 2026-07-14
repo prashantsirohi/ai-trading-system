@@ -76,7 +76,13 @@ The exact artifact registry is documented in [artifacts](../reference/artifacts.
 Partial files and registered artifact rows can remain after a failed attempt;
 their presence does not make them authoritative. Default artifact maps and
 latest-artifact reads join the exact `(run_id, stage_name, attempt_number)`
-producer and require `pipeline_stage_run.status = 'completed'`.
+producer, require `pipeline_stage_run.status = 'completed'`, and require the
+artifact lifecycle to be `promoted`.
+
+Artifact rows begin as `written`. After applicable DQ succeeds they become
+`dq_passed`; completing the exact stage attempt promotes them in the same
+registry transaction that records stage completion. A crash or failure before
+promotion leaves diagnostic evidence but no downstream authority.
 
 Failed-attempt evidence remains available explicitly through
 `RegistryStore.get_attempt_artifacts(run_id, stage_name, attempt_number)`. This
@@ -106,3 +112,9 @@ Write modes that distinguish live updates, replay/backfill, and current-state re
 At minimum, back up OHLCV, control-plane, execution, candidate-tracker, master-data, fundamentals, and feature-store state before migrations or repairs. Treat `pipeline_runs/` as audit evidence even where upstream stores can reproduce some artifacts.
 
 Never run repair or migration commands against live stores without explicit task scope and a verified backup. Follow [backup and restore](../runbooks/backup_and_restore.md).
+
+The execution ledger also stores durable submission intents before adapter
+dispatch. A reserved intent without a linked order represents an unknown outcome
+that must be reconciled; retries do not create another order. Execution batches
+and submissions use store-adjacent lock files to serialize competing processes
+for this ledger without changing broker state.

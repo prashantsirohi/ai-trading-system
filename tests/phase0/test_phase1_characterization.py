@@ -169,6 +169,18 @@ def test_aud_002_failed_attempt_artifact_is_not_authoritative(tmp_path: Path) ->
         artifact_type="ranked_signals",
         run_status=None,
     ) == []
+    conn = duckdb.connect(str(tmp_path / "control_plane.duckdb"), read_only=True)
+    try:
+        failed_lifecycle = conn.execute(
+            """
+            SELECT lifecycle_status FROM pipeline_artifact
+            WHERE run_id = ? AND stage_name = ? AND attempt_number = ?
+            """,
+            [run_id, "rank", 1],
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert failed_lifecycle == "written"
 
     successful_stage_run_id = registry.start_stage(run_id, "rank", 2)
     successful_artifact_path = tmp_path / "ranked_signals_attempt_2.csv"
@@ -187,6 +199,19 @@ def test_aud_002_failed_attempt_artifact_is_not_authoritative(tmp_path: Path) ->
             attempt_number=2,
         ),
     )
+    assert registry.mark_attempt_artifacts_dq_passed(run_id, "rank", 2) == 1
+    conn = duckdb.connect(str(tmp_path / "control_plane.duckdb"), read_only=True)
+    try:
+        dq_lifecycle = conn.execute(
+            """
+            SELECT lifecycle_status FROM pipeline_artifact
+            WHERE run_id = ? AND stage_name = ? AND attempt_number = ?
+            """,
+            [run_id, "rank", 2],
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert dq_lifecycle == "dq_passed"
     registry.finish_stage(successful_stage_run_id, "completed")
 
     promoted_artifact = registry.get_artifact_map(run_id)["rank"]["ranked_signals"]
@@ -201,6 +226,18 @@ def test_aud_002_failed_attempt_artifact_is_not_authoritative(tmp_path: Path) ->
     assert promoted_artifact.attempt_number == 2
     assert latest_promoted_artifact.uri == str(successful_artifact_path)
     assert failed_attempt_artifacts["ranked_signals"].uri == str(artifact_path)
+    conn = duckdb.connect(str(tmp_path / "control_plane.duckdb"), read_only=True)
+    try:
+        promoted_lifecycle = conn.execute(
+            """
+            SELECT lifecycle_status FROM pipeline_artifact
+            WHERE run_id = ? AND stage_name = ? AND attempt_number = ?
+            """,
+            [run_id, "rank", 2],
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert promoted_lifecycle == "promoted"
 
 
 class _FixedRiskManager:

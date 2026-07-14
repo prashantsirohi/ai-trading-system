@@ -29,18 +29,26 @@ The main surfaces are:
 - Critical trust or DQ failures block downstream execution.
 - Historical ranking is point-in-time: market, return, volume, delivery, sector,
   stage, benchmark, and persisted feature inputs cannot read observations after
-  the requested run date.
+  the requested run date. One immutable `RankInputSnapshot` owns that cutoff and
+  caches repeated factor reads for the decision.
 - Default artifact resolution promotes only outputs whose exact producing stage
   attempt completed. Failed-attempt files remain immutable forensic evidence but
-  cannot feed retries, execution, or publishing.
+  cannot feed retries, execution, or publishing. Registered artifacts advance
+  through `written` → `dq_passed` → `promoted` lifecycle states.
 - Paper execution is the safe default. Do not enable live broker placement without explicit operator authorization, and do not describe the live path as production-certified.
 - New buys are checked against projected cumulative portfolio heat before
   submission. Risk reserved by earlier accepted buys in the same execution
   batch counts toward the threshold, including orders not yet represented as
-  open fills.
+  open fills. A store-scoped inter-process batch lock serializes competing
+  decision batches against the same execution ledger.
 - Execution submissions carrying a non-empty correlation ID are idempotent:
   an identical retry returns the original order and fills without dispatching
   again, while reuse of that key for a different order payload is rejected.
+  The durable intent is reserved before dispatch; unknown broker outcomes require
+  reconciliation and are never blindly resubmitted.
+- Position stops follow confirmed cumulative fills. Open/unfilled buys create no
+  stop, partial fills protect only filled quantity, and exits deactivate
+  protection only after the net position reaches zero.
 - Preview, diagnostics, documentation checks, and tests must not mutate broker state or live DuckDB files.
 
 ## Operational design and stages

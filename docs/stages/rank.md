@@ -79,9 +79,12 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
 
 1. Resolve effective params, load data-trust summary; abort if `trust_summary.status == "blocked"` and `allow_untrusted_rank` is not set (`service.py:441`).
 2. Resolve market stage and merge `StrategyConfig` (rank_mode, breakout activation, weekly stage gate, execution regime) into `effective_params` (`service.py:465`–`494`).
-3. Build every dated rank input using an inclusive run-date cutoff. The current
-   default decision-history version is `point_in_time_v2`, and the rank-core task
-   fingerprint includes this input contract so retries cannot reuse pre-fix output.
+3. Build one `RankInputSnapshot` with an inclusive run-date cutoff and route the
+   market, return, volume, ADX, SMA, highs, delivery, sector, Stage 2, weekly-stage,
+   and persisted Phase 1 reads through it. Repeated reads such as SMA are cached
+   within that decision. The current default decision-history version is
+   `point_in_time_v2`, and the rank-core task fingerprint includes this input
+   contract so retries cannot reuse pre-fix output.
 4. Run resumable tasks in order — each is fingerprinted, persisted in `task_status.json`, and skipped on retry if the fingerprint matches (`service.py:495`–end of `run_default`):
    - `rank_core` → `ranked_signals.csv`
    - volume shockers → `volume_shockers.csv`

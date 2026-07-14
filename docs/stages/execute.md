@@ -42,7 +42,7 @@ Written under `data/pipeline_runs/<run_id>/execute/attempt_<n>/`:
 | `positions` | `positions.csv` | Open positions after the cycle |
 | `execute_summary` | `execute_summary.json` | Full metadata: counts, regime, trust, drawdown, params |
 
-Persistent state written to **`data/execution.duckdb`** (default in [`store.py:29`](../../src/ai_trading_system/domains/execution/store.py)) — tables: `execution_order`, `execution_fill`, `execution_trade_note`, `execution_position_stop`, plus drawdown snapshots. (Note: the truth map listed `control_plane.duckdb`; the actual default path is `data/execution.duckdb` per `ExecutionStore.__init__`.)
+Persistent state written to **`data/execution.duckdb`** (default in [`store.py`](../../src/ai_trading_system/domains/execution/store.py)) — tables: `execution_submission_intent`, `execution_order`, `execution_fill`, `execution_trade_note`, `execution_position_stop`, plus drawdown snapshots.
 
 ## Main modules
 
@@ -63,7 +63,7 @@ Persistent state written to **`data/execution.duckdb`** (default in [`store.py:2
 3. Resolve risk profile (`risk_profile` param or `RISK_PROFILE` env). If set, `TradingRuleEngine` drives entries/exits/sizing/stops; else fall back to legacy `build_trade_actions`.
 4. Detect market regime (`RegimeDetector`) — used for sizing multiplier.
 5. Construct `ExecutionStore` → `PortfolioManager` → `ExecutionService(PaperExecutionAdapter)` → `AutoTrader`.
-6. `AutoTrader.run(...)` produces `actions`, `executions`, `positions_before/after`. Defaults: order_type=MARKET, product_type=INTRADAY, validity=DAY. Pipeline-generated correlation IDs are scoped to `run_id`, so a retry of the same run is stable while a later run can legitimately trade the symbol again. Before adapter dispatch, `ExecutionService` replays the original persisted result for an identical non-empty correlation ID and rejects reuse of that key with a different order payload.
+6. `AutoTrader.run(...)` holds the execution-ledger batch lock while producing `actions`, `executions`, and `positions_before/after`. Defaults: order_type=MARKET, product_type=INTRADAY, validity=DAY. Pipeline-generated correlation IDs are scoped to `run_id`, so a retry of the same run is stable while a later run can legitimately trade the symbol again. Before adapter dispatch, `ExecutionService` durably reserves the intent, replays a completed identical key, rejects conflicting reuse, and leaves unknown outcomes for explicit reconciliation without redispatch.
 7. If `execution_enabled` and not preview: refresh trailing stops via `service.maintain_trailing_stops(...)` using current prices + ATR from ranked df.
 8. Compute MTM portfolio value, record intraday drawdown snapshot (and EOD if `is_eod`).
 9. Write CSVs + `execute_summary.json`.
@@ -77,6 +77,9 @@ Persistent state written to **`data/execution.duckdb`** (default in [`store.py:2
   risk reserved by earlier accepted buys in the same batch. The buy is rejected
   when projected cumulative heat exceeds the threshold; rejected orders do not
   consume a reservation.
+- Competing AutoTrader batches for the same execution store are serialized by a
+  store-adjacent inter-process lock, so each batch reloads positions and heat
+  after the prior batch finishes.
 - Risk-profile-driven gates: position count cap, sector exposure cap, single-stock weight cap (all in `ExecutionRequest`).
 - `canary` mode: when `context.params["canary"]` is truthy and `canary_blocked` is set, blocks execution and records `canary_blocked: true` in metadata.
 
@@ -90,7 +93,12 @@ Persistent state written to **`data/execution.duckdb`** (default in [`store.py:2
 
 ## Retry behavior
 
-Each invocation writes to a fresh `attempt_<n>` directory; orchestrator retry policy is per-stage (see [`pipeline/orchestrator.py`](../../src/ai_trading_system/pipeline/orchestrator.py)). Order submission is idempotent when the caller supplies a non-empty correlation ID: identical retries return the first persisted order/fills without reaching the adapter, and conflicting payloads are rejected. Calls without a correlation ID retain normal create-new-order behavior. DuckDB record writes also retain primary-key conflict handling for `order_id`, `fill_id`, and `position_key`.
+Each invocation writes to a fresh `attempt_<n>` directory; orchestrator retry policy is per-stage. Order submission is idempotent when the caller supplies a non-empty correlation ID: the durable intent is reserved before dispatch, identical completed retries return the first persisted order/fills, conflicting payloads are rejected, and an unknown outcome returns `RECONCILIATION_REQUIRED`. `ExecutionService.reconcile_submission()` asks a capable adapter for the original outcome and never submits a replacement. Calls without a correlation ID retain normal create-new-order behavior.
+
+Stops are reconciled from the cumulative fill ledger after submit, refresh,
+cancel, and recovered outcomes. Unfilled orders do not change stop state; partial
+buys protect filled quantity; partial sells retain protection for remaining
+quantity; zero net position deactivates the stop.
 
 ## Downstream consumers
 

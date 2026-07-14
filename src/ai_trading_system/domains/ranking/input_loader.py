@@ -114,8 +114,8 @@ class RankerInputLoader:
     ) -> pd.DataFrame:
         normalized_exchanges, exchange_placeholders = self._query_exchanges(exchanges)
         history_bars = int(history_bars)
-        if history_bars < 1:
-            raise ValueError("history_bars must be positive")
+        if history_bars < 1 or history_bars > 5_000:
+            raise ValueError("history_bars must be between 1 and 5000")
         conn = self.get_conn()
         try:
             history = conn.execute(
@@ -148,10 +148,10 @@ class RankerInputLoader:
                       AND timestamp IS NOT NULL
                       AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
                 ) latest
-                WHERE rn_desc <= {history_bars}
+                WHERE rn_desc <= ?
                 ORDER BY symbol_id, exchange, timestamp
                 """,
-                [*normalized_exchanges, date],
+                [*normalized_exchanges, date, history_bars],
             ).fetchdf()
         finally:
             conn.close()
@@ -424,15 +424,15 @@ class RankerInputLoader:
         conn = self.get_conn()
         try:
             adx_latest = conn.execute(
-                f"""
+                """
                 SELECT *
-                FROM read_parquet('{adx_path}/*.parquet', union_by_name = true)
+                FROM read_parquet(?, union_by_name = true)
                 WHERE CAST(timestamp AS DATE) <= CAST(? AS DATE)
                 QUALIFY ROW_NUMBER() OVER (
                     PARTITION BY symbol_id ORDER BY timestamp DESC
                 ) = 1
                 """,
-                [date],
+                [str(adx_path / "*.parquet"), date],
             ).fetchdf()
         finally:
             conn.close()
@@ -491,8 +491,8 @@ class RankerInputLoader:
 
     def load_latest_highs(self, *, date: str, window: int) -> pd.DataFrame:
         window = int(window)
-        if window < 1:
-            raise ValueError("window must be positive")
+        if window < 1 or window > 5_000:
+            raise ValueError("window must be between 1 and 5000")
         conn = self.get_conn()
         try:
             highs = conn.execute(

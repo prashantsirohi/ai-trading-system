@@ -828,6 +828,28 @@ class RegistryStore:
                     """,
                     [status, error_class, error_message, self._json(metadata), checkpoint_json, stage_run_id],
                 )
+            if status == "completed":
+                conn.execute(
+                    """
+                    UPDATE pipeline_artifact
+                    SET lifecycle_status = 'promoted',
+                        dq_passed_at = COALESCE(
+                            dq_passed_at,
+                            (current_timestamp AT TIME ZONE 'UTC')
+                        ),
+                        promoted_at = (current_timestamp AT TIME ZONE 'UTC')
+                    WHERE lifecycle_status IN ('written', 'dq_passed')
+                      AND EXISTS (
+                          SELECT 1
+                          FROM pipeline_stage_run
+                          WHERE stage_run_id = ?
+                            AND pipeline_stage_run.run_id = pipeline_artifact.run_id
+                            AND pipeline_stage_run.stage_name = pipeline_artifact.stage_name
+                            AND pipeline_stage_run.attempt_number = pipeline_artifact.attempt_number
+                      )
+                    """,
+                    [stage_run_id],
+                )
 
     def heartbeat_stage(self, stage_run_id: str, checkpoint: Optional[Dict[str, Any]] = None) -> None:
         with self._writer() as conn:
@@ -889,8 +911,9 @@ class RegistryStore:
             conn.execute(
                 """
                 INSERT INTO pipeline_artifact
-                (artifact_id, run_id, stage_name, attempt_number, artifact_type, uri, content_hash, row_count, created_at, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?)
+                (artifact_id, run_id, stage_name, attempt_number, artifact_type, uri,
+                 content_hash, row_count, created_at, metadata_json, lifecycle_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?, 'written')
                 """,
                 [
                     artifact_id,
@@ -904,6 +927,41 @@ class RegistryStore:
                     self._json(artifact.metadata),
                 ],
             )
+
+    def mark_attempt_artifacts_dq_passed(
+        self,
+        run_id: str,
+        stage_name: str,
+        attempt_number: int,
+    ) -> int:
+        """Advance written attempt artifacts after all applicable DQ checks pass."""
+        with self._writer() as conn:
+            count = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM pipeline_artifact
+                    WHERE run_id = ?
+                      AND stage_name = ?
+                      AND attempt_number = ?
+                      AND lifecycle_status = 'written'
+                    """,
+                    [run_id, stage_name, int(attempt_number)],
+                ).fetchone()[0]
+            )
+            conn.execute(
+                """
+                UPDATE pipeline_artifact
+                SET lifecycle_status = 'dq_passed',
+                    dq_passed_at = (current_timestamp AT TIME ZONE 'UTC')
+                WHERE run_id = ?
+                  AND stage_name = ?
+                  AND attempt_number = ?
+                  AND lifecycle_status = 'written'
+                """,
+                [run_id, stage_name, int(attempt_number)],
+            )
+            return count
 
     def get_artifact_map(self, run_id: str) -> Dict[str, Dict[str, StageArtifact]]:
         """Resolve artifacts produced by completed stage attempts only."""
@@ -920,6 +978,7 @@ class RegistryStore:
                  AND s.attempt_number = a.attempt_number
                  AND s.status = 'completed'
                 WHERE a.run_id = ?
+                  AND a.lifecycle_status = 'promoted'
                 ORDER BY a.created_at, a.attempt_number
                 """,
                 [run_id],
@@ -1007,6 +1066,7 @@ class RegistryStore:
         clauses = [
             "a.stage_name = ?",
             "a.artifact_type = ?",
+            "a.lifecycle_status = 'promoted'",
         ]
         params: List[Any] = [stage_name, artifact_type]
         if exclude_run_id is not None:

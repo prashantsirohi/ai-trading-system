@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
@@ -11,6 +13,8 @@ import duckdb
 
 from ai_trading_system.domains.execution.models import FillRecord, OrderRecord
 from ai_trading_system.platform.db.paths import get_domain_paths
+
+_FALLBACK_EXECUTION_LOCK = threading.RLock()
 
 
 def _load_json(value: str | None) -> dict:
@@ -60,6 +64,20 @@ class ExecutionStore:
                     avg_fill_price DOUBLE,
                     filled_quantity INTEGER NOT NULL,
                     metadata_json TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS execution_submission_intent (
+                    correlation_id TEXT PRIMARY KEY,
+                    payload_hash TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    order_id TEXT,
+                    created_at TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP NOT NULL,
+                    last_error TEXT,
+                    payload_json TEXT
                 )
                 """
             )
@@ -132,10 +150,151 @@ class ExecutionStore:
         finally:
             conn.close()
 
-    def upsert_order(self, order: OrderRecord) -> None:
+    @contextmanager
+    def _file_lock(self, suffix: str):
+        lock_path = self.db_path.with_suffix(f"{self.db_path.suffix}.{suffix}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("a+")
+        try:
+            try:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            except ImportError:  # pragma: no cover - Windows fallback
+                _FALLBACK_EXECUTION_LOCK.acquire()
+            yield
+        finally:
+            try:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except ImportError:  # pragma: no cover - Windows fallback
+                _FALLBACK_EXECUTION_LOCK.release()
+            handle.close()
+
+    def submission_lock(self):
+        return self._file_lock("submission")
+
+    def execution_batch_lock(self):
+        return self._file_lock("batch")
+
+    def reserve_submission_intent(
+        self,
+        *,
+        correlation_id: str,
+        payload_hash: str,
+        payload: dict,
+    ) -> tuple[dict, bool]:
+        conn = self._connect()
+        try:
+            inserted = conn.execute(
+                """
+                INSERT INTO execution_submission_intent (
+                    correlation_id, payload_hash, status, order_id,
+                    created_at, updated_at, last_error, payload_json
+                )
+                VALUES (?, ?, 'reserved', NULL,
+                        (current_timestamp AT TIME ZONE 'UTC'),
+                        (current_timestamp AT TIME ZONE 'UTC'), NULL, ?)
+                ON CONFLICT(correlation_id) DO NOTHING
+                RETURNING correlation_id
+                """,
+                [correlation_id, payload_hash, json.dumps(payload, sort_keys=True)],
+            ).fetchone()
+            row = conn.execute(
+                """
+                SELECT correlation_id, payload_hash, status, order_id,
+                       created_at, updated_at, last_error, payload_json
+                FROM execution_submission_intent
+                WHERE correlation_id = ?
+                """,
+                [correlation_id],
+            ).fetchone()
+            columns = [item[0] for item in conn.description]
+            return dict(zip(columns, row)), inserted is not None
+        finally:
+            conn.close()
+
+    def complete_submission(
+        self,
+        *,
+        correlation_id: str,
+        order: OrderRecord,
+        fills: Iterable[FillRecord],
+    ) -> None:
+        fill_rows = list(fills)
+        conn = self._connect()
+        try:
+            conn.begin()
+            self._upsert_order_on_connection(conn, order)
+            for fill in fill_rows:
+                self._append_fill_on_connection(conn, fill)
+            conn.execute(
+                """
+                UPDATE execution_submission_intent
+                SET status = 'completed', order_id = ?,
+                    updated_at = (current_timestamp AT TIME ZONE 'UTC'),
+                    last_error = NULL
+                WHERE correlation_id = ?
+                """,
+                [order.order_id, correlation_id],
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def mark_submission_reconciliation_required(
+        self,
+        correlation_id: str,
+        error: str,
+    ) -> None:
         conn = self._connect()
         try:
             conn.execute(
+                """
+                UPDATE execution_submission_intent
+                SET status = 'reconciliation_required',
+                    updated_at = (current_timestamp AT TIME ZONE 'UTC'),
+                    last_error = ?
+                WHERE correlation_id = ? AND order_id IS NULL
+                """,
+                [str(error), correlation_id],
+            )
+        finally:
+            conn.close()
+
+    def get_submission_intent(self, correlation_id: str) -> dict | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT correlation_id, payload_hash, status, order_id,
+                       created_at, updated_at, last_error, payload_json
+                FROM execution_submission_intent
+                WHERE correlation_id = ?
+                """,
+                [str(correlation_id).strip()],
+            ).fetchone()
+            if row is None:
+                return None
+            columns = [item[0] for item in conn.description]
+            return dict(zip(columns, row))
+        finally:
+            conn.close()
+
+    def upsert_order(self, order: OrderRecord) -> None:
+        conn = self._connect()
+        try:
+            self._upsert_order_on_connection(conn, order)
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _upsert_order_on_connection(conn: duckdb.DuckDBPyConnection, order: OrderRecord) -> None:
+        conn.execute(
                 """
                 INSERT INTO execution_order (
                     order_id, broker, symbol_id, quantity, side, exchange, order_type,
@@ -188,8 +347,6 @@ class ExecutionStore:
                     json.dumps(order.metadata or {}, sort_keys=True),
                 ],
             )
-        finally:
-            conn.close()
 
     def append_fills(self, fills: Iterable[FillRecord]) -> None:
         rows = list(fills)
@@ -198,7 +355,13 @@ class ExecutionStore:
         conn = self._connect()
         try:
             for fill in rows:
-                conn.execute(
+                self._append_fill_on_connection(conn, fill)
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _append_fill_on_connection(conn: duckdb.DuckDBPyConnection, fill: FillRecord) -> None:
+        conn.execute(
                     """
                     INSERT INTO execution_fill (
                         fill_id, order_id, broker, symbol_id, quantity, price,
@@ -221,8 +384,6 @@ class ExecutionStore:
                         json.dumps(fill.metadata or {}, sort_keys=True),
                     ],
                 )
-        finally:
-            conn.close()
 
     def get_order(self, order_id: str) -> Optional[OrderRecord]:
         conn = self._connect()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from functools import wraps
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -18,6 +19,15 @@ from ai_trading_system.domains.risk import RiskPolicyConfig
 logger = logging.getLogger(__name__)
 
 
+def _serialized_execution_batch(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self.service.store.execution_batch_lock():
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
+
 class AutoTrader:
     """Drive buy/sell actions from ranked universes and current positions."""
 
@@ -25,6 +35,7 @@ class AutoTrader:
         self.service = service
         self.portfolio = portfolio
 
+    @_serialized_execution_batch
     def run(
         self,
         *,
@@ -342,15 +353,6 @@ class AutoTrader:
                     ),
                     market_price=float(action.requested_price or 0.0),
                 )
-                if result.get("status") not in {"REJECTED", "ERROR"}:
-                    is_engine_exit = (action.metadata or {}).get("intent_kind") == "exit"
-                    if action.reason.startswith("stop_triggered:") or is_engine_exit:
-                        position_key = (
-                            str((action.metadata or {}).get("stop_position_key") or "").strip()
-                            or f"{action.exchange.upper()}:{action.symbol_id.upper()}"
-                        )
-                        if position_key:
-                            self.service.store.deactivate_stop(position_key)
             executions.append(
                 {
                     "action": action.to_dict(),

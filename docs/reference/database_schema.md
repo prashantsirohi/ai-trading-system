@@ -109,7 +109,7 @@ Additional tables co-located in `ohlcv.duckdb` and ensured at startup. Read each
 
 ## `data/control_plane.duckdb` — pipeline governance
 
-Schema source: 17 SQL migrations under `src/ai_trading_system/pipeline/migrations/`, applied by the registry initializer. Migrations are additive (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`).
+Schema source: SQL migrations under `src/ai_trading_system/pipeline/migrations/`, applied by the registry initializer. Migrations are additive (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`).
 
 ### Table: `pipeline_run`
 - **DDL source:** `pipeline/migrations/001_pipeline_governance.sql`
@@ -145,7 +145,7 @@ Schema source: 17 SQL migrations under `src/ai_trading_system/pipeline/migration
 Index: `idx_pipeline_stage_attempt(run_id, stage_name, attempt_number)` UNIQUE.
 
 ### Table: `pipeline_artifact`
-- **DDL source:** `migrations/001_pipeline_governance.sql`
+- **DDL source:** `migrations/001_pipeline_governance.sql`, lifecycle columns in `031_artifact_lifecycle.sql`
 
 | Column | Type | Notes |
 |---|---|---|
@@ -153,6 +153,13 @@ Index: `idx_pipeline_stage_attempt(run_id, stage_name, attempt_number)` UNIQUE.
 | run_id, stage_name | VARCHAR | NOT NULL. |
 | attempt_number | INTEGER | NOT NULL. |
 | artifact_type | VARCHAR | NOT NULL. |
+| uri | VARCHAR | NOT NULL. |
+| content_hash | VARCHAR | |
+| row_count | BIGINT | |
+| created_at | TIMESTAMP | |
+| metadata_json | VARCHAR | |
+| lifecycle_status | VARCHAR | `written`, `dq_passed`, or `promoted`. |
+| dq_passed_at, promoted_at | TIMESTAMP | Lifecycle transition timestamps. |
 | uri | VARCHAR | NOT NULL. |
 | content_hash | VARCHAR | |
 | row_count | BIGINT | |
@@ -594,6 +601,19 @@ Schema source: `src/ai_trading_system/domains/execution/store.py::ExecutionStore
 | filled_quantity | INTEGER | NOT NULL. |
 | metadata_json | TEXT | |
 
+### Table: `execution_submission_intent`
+- **DDL source:** `domains/execution/store.py::_init_db`
+
+| Column | Type | Notes |
+|---|---|---|
+| correlation_id | TEXT | PK; durable idempotency key. |
+| payload_hash | TEXT | Hash of broker-relevant normalized order fields. |
+| status | TEXT | `reserved`, `completed`, or `reconciliation_required`. |
+| order_id | TEXT | Linked only after the original outcome is persisted. |
+| created_at, updated_at | TIMESTAMP | NOT NULL. |
+| last_error | TEXT | Diagnostic reason for unknown outcomes. |
+| payload_json | TEXT | Normalized payload used for conflict detection/reconciliation. |
+
 ### Table: `execution_fill`
 - **DDL source:** `domains/execution/store.py:67-80`
 
@@ -627,9 +647,8 @@ Schema source: `src/ai_trading_system/domains/execution/store.py::ExecutionStore
 | quantity | INTEGER | NOT NULL. |
 | entry_price, stop_price, atr_multiplier | DOUBLE | NOT NULL. |
 | status | TEXT | Default `'ACTIVE'`. |
-| created_at | TIMESTAMP | NOT NULL. |
-
-(Additional columns may exist past line 115 — verify the file before relying on the full shape.)
+| created_at, updated_at | TIMESTAMP | NOT NULL. |
+| metadata_json | TEXT | Stop method and originating signal context. |
 
 ### Table: `execution_drawdown`
 - **DDL source:** `domains/execution/store.py:118-129`

@@ -41,6 +41,7 @@ from ai_trading_system.domains.ranking.factors import (
     compute_penalty_score,
 )
 from ai_trading_system.domains.ranking.input_loader import RankerInputLoader
+from ai_trading_system.domains.ranking.input_snapshot import RankInputSnapshot
 from ai_trading_system.domains.ranking.stage_store import read_latest_snapshot
 
 
@@ -91,9 +92,6 @@ class StockRanker:
     def _normalize_symbol_exchange_columns(self, data: pd.DataFrame) -> pd.DataFrame:
         return self.input_loader.normalize_symbol_exchange_columns(data)
 
-    def _load_sector_inputs(self) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, str]]:
-        return self.input_loader.load_sector_inputs()
-
     def rank_all(
         self,
         date: str = None,
@@ -135,27 +133,31 @@ class StockRanker:
             logger.warning("Unknown rank_mode=%s; falling back to default", rank_mode)
             rank_mode = "default"
 
-        scores = self.input_loader.load_latest_market_data(
-            as_of=date,
-            exchanges=exchanges,
-        )
+        inputs = RankInputSnapshot(self.input_loader, str(date), tuple(exchanges))
+        scores = inputs.market()
         if scores.empty:
             logger.warning("No data available for ranking")
             return pd.DataFrame()
 
-        scores = self._compute_relative_strength(scores, date, benchmark_symbol, exchanges)
+        scores = self._compute_relative_strength(
+            scores,
+            date,
+            benchmark_symbol,
+            exchanges,
+            inputs=inputs,
+        )
         scores = apply_momentum_acceleration(scores)
-        scores = self._compute_volume_intensity(scores, date, exchanges)
-        scores = self._compute_trend_persistence(scores, date)
-        scores = self._compute_proximity_highs(scores, date)
-        scores = self._compute_delivery(scores, date)
-        scores = self._compute_sector_strength(scores, date)
-        scores = self._compute_above_200dma(scores, date)
+        scores = self._compute_volume_intensity(scores, date, exchanges, inputs)
+        scores = self._compute_trend_persistence(scores, date, inputs)
+        scores = self._compute_proximity_highs(scores, date, inputs=inputs)
+        scores = self._compute_delivery(scores, date, inputs)
+        scores = self._compute_sector_strength(scores, date, inputs)
+        scores = self._compute_above_200dma(scores, date, inputs)
         scores = compute_factor_scores(scores, weights=weights)
-        scores = self._compute_stage2(scores, date, exchanges)
-        scores = self._attach_weekly_stage_context(scores, date)
+        scores = self._compute_stage2(scores, date, exchanges, inputs)
+        scores = self._attach_weekly_stage_context(scores, date, inputs)
         if weekly_stage_gate:
-            scores = self._apply_weekly_stage_gate(scores, date)
+            scores = self._apply_weekly_stage_gate(scores, date, inputs)
         scores.loc[:, "rank_mode"] = rank_mode
 
         # ── Stage 2 enrichment (additive, non-breaking) ──────────────────
@@ -203,7 +205,7 @@ class StockRanker:
             scores.loc[:, "composite_score"] = scores["composite_score_adjusted"]
         # scores = self._apply_1yr_penalty(scores, weights)
         scores = filter_ranked_scores(scores, min_score=min_score, top_n=top_n)
-        scores = self._attach_phase1_symbol_features(scores, date, exchanges)
+        scores = self._attach_phase1_symbol_features(scores, date, exchanges, inputs)
         return select_rank_output_columns(scores)
 
     def _apply_1yr_penalty(
@@ -272,13 +274,18 @@ class StockRanker:
         benchmark_symbol: str,
         exchanges: List[str],
         periods: List[int] = None,
+        inputs: RankInputSnapshot | None = None,
     ) -> pd.DataFrame:
         period_list = periods or [5, 10, 20, 60, 120]
         try:
-            return_frame = self.input_loader.load_return_frame_multi(
-                as_of=date,
-                periods=period_list,
-                exchanges=exchanges,
+            return_frame = (
+                inputs.returns(period_list)
+                if inputs is not None
+                else self.input_loader.load_return_frame_multi(
+                    as_of=date,
+                    periods=period_list,
+                    exchanges=exchanges,
+                )
             )
         except Exception as exc:
             logger.warning("Could not compute relative strength: %s", exc)
@@ -296,6 +303,7 @@ class StockRanker:
                 date=date,
                 benchmark_symbol=benchmark_symbol,
                 periods=period_list,
+                inputs=inputs,
             )
         except Exception as exc:  # pragma: no cover — defensive
             logger.warning("NIFTY-relative RS blend skipped: %s", exc)
@@ -308,14 +316,19 @@ class StockRanker:
         date: str,
         benchmark_symbol: str,
         periods: List[int],
+        inputs: RankInputSnapshot | None = None,
     ) -> pd.DataFrame:
         if data.empty:
             return data
-        benchmark_returns = self._load_benchmark_returns(
-            loader=self.input_loader,
-            date=date,
-            benchmark_symbol=benchmark_symbol,
-            periods=periods,
+        benchmark_returns = (
+            inputs.benchmark_returns(benchmark_symbol, periods)
+            if inputs is not None
+            else self._load_benchmark_returns(
+                loader=self.input_loader,
+                date=date,
+                benchmark_symbol=benchmark_symbol,
+                periods=periods,
+            )
         )
         if not benchmark_returns:
             return data
@@ -415,11 +428,13 @@ class StockRanker:
         data: pd.DataFrame,
         date: str,
         exchanges: List[str],
+        inputs: RankInputSnapshot | None = None,
     ) -> pd.DataFrame:
         try:
-            volume_frame = self.input_loader.load_volume_frame(
-                as_of=date,
-                exchanges=exchanges,
+            volume_frame = (
+                inputs.volume()
+                if inputs is not None
+                else self.input_loader.load_volume_frame(as_of=date, exchanges=exchanges)
             )
         except Exception as exc:
             logger.warning("Could not compute volume intensity: %s", exc)
@@ -432,15 +447,16 @@ class StockRanker:
         self,
         data: pd.DataFrame,
         date: str,
+        inputs: RankInputSnapshot | None = None,
     ) -> pd.DataFrame:
         try:
-            adx_frame = self.input_loader.load_latest_adx(date=date)
+            adx_frame = inputs.adx() if inputs is not None else self.input_loader.load_latest_adx(date=date)
         except Exception as exc:
             logger.warning("ADX load failed: %s", exc)
             adx_frame = pd.DataFrame(columns=["symbol_id", "exchange", "adx_14"])
 
         try:
-            sma_frame = self.input_loader.load_latest_sma(date=date)
+            sma_frame = inputs.sma() if inputs is not None else self.input_loader.load_latest_sma(date=date)
         except Exception as exc:
             logger.warning("Could not compute SMA: %s", exc)
             sma_frame = pd.DataFrame(columns=["symbol_id", "exchange", "sma_20", "sma_50"])
@@ -451,9 +467,10 @@ class StockRanker:
         self,
         data: pd.DataFrame,
         date: str,
+        inputs: RankInputSnapshot | None = None,
     ) -> pd.DataFrame:
         try:
-            sma_frame = self.input_loader.load_latest_sma(date=date)
+            sma_frame = inputs.sma() if inputs is not None else self.input_loader.load_latest_sma(date=date)
         except Exception as exc:
             logger.warning("Could not load sma_200 for above_200dma factor: %s", exc)
             sma_frame = pd.DataFrame(columns=["symbol_id", "exchange", "sma_200", "sma_200_bars"])
@@ -464,9 +481,10 @@ class StockRanker:
         data: pd.DataFrame,
         date: str,
         window: int = 252,
+        inputs: RankInputSnapshot | None = None,
     ) -> pd.DataFrame:
         try:
-            highs_frame = self.input_loader.load_latest_highs(date=date, window=window)
+            highs_frame = inputs.highs(window) if inputs is not None else self.input_loader.load_latest_highs(date=date, window=window)
         except Exception as exc:
             logger.warning("Could not compute proximity highs: %s", exc)
             highs_frame = pd.DataFrame(columns=["symbol_id", "exchange", "high_52w"])
@@ -476,9 +494,10 @@ class StockRanker:
         self,
         data: pd.DataFrame,
         date: str,
+        inputs: RankInputSnapshot | None = None,
     ) -> pd.DataFrame:
         try:
-            delivery_frame = self.input_loader.load_latest_delivery(date=date)
+            delivery_frame = inputs.delivery() if inputs is not None else self.input_loader.load_latest_delivery(date=date)
         except Exception as exc:
             logger.warning("Could not compute delivery factor: %s", exc)
             delivery_frame = pd.DataFrame(columns=["symbol_id", "exchange", "delivery_pct"])
@@ -488,8 +507,11 @@ class StockRanker:
         self,
         data: pd.DataFrame,
         date: str,
+        inputs: RankInputSnapshot | None = None,
     ) -> pd.DataFrame:
-        sector_rs, stock_vs_sector, sector_map = self._load_sector_inputs()
+        sector_rs, stock_vs_sector, sector_map = (
+            inputs.sector_inputs() if inputs is not None else self.input_loader.load_sector_inputs()
+        )
         return apply_sector_strength(
             data,
             sector_rs=sector_rs,
@@ -502,12 +524,13 @@ class StockRanker:
         self,
         data: pd.DataFrame,
         date: str,
+        inputs: RankInputSnapshot | None = None,
     ) -> pd.DataFrame:
         """Join latest weekly stage snapshot onto rank candidates."""
         if data.empty:
             return data
         try:
-            snap = read_latest_snapshot(self.ohlcv_db_path, asof=date)
+            snap = inputs.weekly_stage(self.ohlcv_db_path) if inputs is not None else read_latest_snapshot(self.ohlcv_db_path, asof=date)
         except Exception as exc:
             logger.warning("Could not load weekly stage snapshot: %s", exc)
             return data
@@ -551,9 +574,10 @@ class StockRanker:
         self,
         data: pd.DataFrame,
         date: str,
+        inputs: RankInputSnapshot | None = None,
     ) -> pd.DataFrame:
         """Join latest weekly stage snapshot and leave gate columns for eligibility."""
-        merged = data if "weekly_stage_label" in data.columns else self._attach_weekly_stage_context(data, date)
+        merged = data if "weekly_stage_label" in data.columns else self._attach_weekly_stage_context(data, date, inputs)
         if "weekly_stage_label" not in merged.columns:
             logger.info("weekly_stage_gate: no snapshot rows for asof=%s — gate skipped", date)
             return merged
@@ -593,12 +617,17 @@ class StockRanker:
         data: pd.DataFrame,
         date: str,
         exchanges: List[str],
+        inputs: RankInputSnapshot | None = None,
     ) -> pd.DataFrame:
         try:
-            stage2_frame = self.input_loader.load_latest_stage2(
-                date=date,
-                exchanges=exchanges,
-                rel_strength_frame=data,
+            stage2_frame = (
+                inputs.stage2(data)
+                if inputs is not None
+                else self.input_loader.load_latest_stage2(
+                    date=date,
+                    exchanges=exchanges,
+                    rel_strength_frame=data,
+                )
             )
         except Exception as exc:
             logger.warning("Could not compute Stage 2 enrichment: %s", exc)
@@ -658,6 +687,7 @@ class StockRanker:
         data: pd.DataFrame,
         date: str,
         exchanges: List[str],
+        inputs: RankInputSnapshot | None = None,
     ) -> pd.DataFrame:
         """Attach persisted Phase 1 features after scoring so composite_score is unchanged."""
         if data.empty:
@@ -665,7 +695,11 @@ class StockRanker:
         frames = []
         for exchange in exchanges or ["NSE"]:
             try:
-                frame = self.input_loader.load_latest_phase1_symbol_features(date=date, exchange=exchange)
+                frame = (
+                    inputs.phase1_symbol_features(exchange)
+                    if inputs is not None
+                    else self.input_loader.load_latest_phase1_symbol_features(date=date, exchange=exchange)
+                )
             except Exception as exc:
                 logger.warning("Could not load Phase 1 symbol features: %s", exc)
                 continue

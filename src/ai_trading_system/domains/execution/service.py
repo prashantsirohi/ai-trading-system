@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+import hashlib
+import json
 from typing import Any, Dict, Optional
 
 from ai_trading_system.domains.execution.adapters.base import ExecutionAdapter
@@ -39,31 +41,114 @@ class ExecutionService:
         market_price: float | None = None,
     ) -> Dict[str, Any]:
         correlation_id = str(intent.correlation_id or "").strip()
-        if correlation_id:
-            intent = replace(intent, correlation_id=correlation_id)
+        if not correlation_id:
+            order, fills = self.adapter.place_order(intent, market_price=market_price)
+            self.store.upsert_order(order)
+            self.store.append_fills(fills)
+            self._reconcile_stop_state(order)
+            return _build_order_result(order, fills)
+
+        intent = replace(intent, correlation_id=correlation_id)
+        payload = _idempotency_payload(intent)
+        payload_hash = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        with self.store.submission_lock():
             existing = self.store.get_order_by_correlation_id(correlation_id)
             if existing is not None:
-                if not _intent_matches_order(intent, existing):
-                    return {
-                        "status": "REJECTED",
-                        "reason": "idempotency_key_conflict",
-                        "correlation_id": correlation_id,
-                        "order": existing.to_dict(),
-                        "fills": self.store.list_fills(order_id=existing.order_id),
-                        "idempotent_replay": False,
-                    }
+                return self._replay_or_reject(intent, existing)
+
+            reservation, created = self.store.reserve_submission_intent(
+                correlation_id=correlation_id,
+                payload_hash=payload_hash,
+                payload=payload,
+            )
+            if reservation["payload_hash"] != payload_hash:
                 return {
-                    "status": existing.status,
-                    "order": existing.to_dict(),
-                    "fills": self.store.list_fills(order_id=existing.order_id),
+                    "status": "REJECTED",
+                    "reason": "idempotency_key_conflict",
+                    "correlation_id": correlation_id,
+                    "order": None,
+                    "fills": [],
+                    "idempotent_replay": False,
+                }
+            if not created:
+                order_id = reservation.get("order_id")
+                if order_id:
+                    persisted = self.store.get_order(str(order_id))
+                    if persisted is not None:
+                        return self._replay_or_reject(intent, persisted)
+                return {
+                    "status": "RECONCILIATION_REQUIRED",
+                    "reason": "submission_outcome_unknown",
+                    "correlation_id": correlation_id,
+                    "order": None,
+                    "fills": [],
                     "idempotent_replay": True,
                 }
-        order, fills = self.adapter.place_order(intent, market_price=market_price)
-        self.store.upsert_order(order)
-        self.store.append_fills(fills)
+
+            try:
+                order, fills = self.adapter.place_order(intent, market_price=market_price)
+                self.store.complete_submission(
+                    correlation_id=correlation_id,
+                    order=order,
+                    fills=fills,
+                )
+                self._reconcile_stop_state(order)
+            except Exception as exc:
+                self.store.mark_submission_reconciliation_required(correlation_id, str(exc))
+                raise
         result = _build_order_result(order, fills)
-        if correlation_id:
-            result["idempotent_replay"] = False
+        result["idempotent_replay"] = False
+        return result
+
+    def _replay_or_reject(self, intent: OrderIntent, existing: Any) -> Dict[str, Any]:
+        if not _intent_matches_order(intent, existing):
+            return {
+                "status": "REJECTED",
+                "reason": "idempotency_key_conflict",
+                "correlation_id": intent.correlation_id,
+                "order": existing.to_dict(),
+                "fills": self.store.list_fills(order_id=existing.order_id),
+                "idempotent_replay": False,
+            }
+        return {
+            "status": existing.status,
+            "order": existing.to_dict(),
+            "fills": self.store.list_fills(order_id=existing.order_id),
+            "idempotent_replay": True,
+        }
+
+    def reconcile_submission(self, correlation_id: str) -> Dict[str, Any]:
+        """Recover an unknown submission outcome without dispatching a new order."""
+        normalized = str(correlation_id or "").strip()
+        reservation = self.store.get_submission_intent(normalized)
+        if reservation is None:
+            return {"status": "NOT_FOUND", "correlation_id": normalized}
+        if reservation.get("order_id"):
+            order = self.store.get_order(str(reservation["order_id"]))
+            if order is not None:
+                return self._replay_or_reject(
+                    _intent_from_payload(json.loads(reservation["payload_json"]), normalized),
+                    order,
+                )
+        resolver = getattr(self.adapter, "find_order_by_correlation_id", None)
+        recovered = resolver(normalized) if callable(resolver) else None
+        if recovered is None:
+            return {
+                "status": "RECONCILIATION_REQUIRED",
+                "reason": "broker_outcome_unavailable",
+                "correlation_id": normalized,
+            }
+        order, fills = recovered
+        self.store.complete_submission(
+            correlation_id=normalized,
+            order=order,
+            fills=fills,
+        )
+        self._reconcile_stop_state(order)
+        result = _build_order_result(order, fills)
+        result["reconciled"] = True
         return result
 
     def refresh_order(self, order_id: str, *, market_price: float | None = None) -> Dict[str, Any]:
@@ -73,7 +158,17 @@ class ExecutionService:
         refreshed, fills = self.adapter.refresh_order(order, market_price=market_price)
         self.store.upsert_order(refreshed)
         self.store.append_fills(fills)
+        self._reconcile_stop_state(refreshed)
         return _build_order_result(refreshed, fills)
+
+    def cancel_order(self, order_id: str) -> Dict[str, Any]:
+        order = self.store.get_order(order_id)
+        if order is None:
+            raise ValueError(f"Unknown order_id: {order_id}")
+        cancelled = self.adapter.cancel_order(order)
+        self.store.upsert_order(cancelled)
+        self._reconcile_stop_state(cancelled)
+        return _build_order_result(cancelled, [])
 
     def execute_signal(
         self,
@@ -155,33 +250,43 @@ class ExecutionService:
                 "stop_method": signal.get("stop_method"),
                 "rank_at_entry": signal.get("rank_at_entry"),
                 "score_at_entry": signal.get("score_at_entry"),
+                "atr_14": _maybe_float(signal.get("atr_14")),
+                "atr_multiple": _maybe_float(signal.get("atr_multiple")),
+                "exit_atr_multiple": _maybe_float(signal.get("exit_atr_multiple")),
+                "sector": signal.get("sector"),
             },
         )
         result = self.submit_order(intent, market_price=price)
         if risk_payload is not None:
             result["risk"] = risk_payload
-        self._persist_stop_on_fill(
-            symbol_id=symbol_id,
-            exchange=exchange,
-            quantity=intent.quantity,
-            fill_price=price,
-            side=side,
-            signal=signal,
-        )
         return result
 
-    def _persist_stop_on_fill(
-        self,
-        *,
-        symbol_id: str,
-        exchange: str,
-        quantity: int,
-        fill_price: float,
-        side: str,
-        signal: dict,
-    ) -> None:
-        if side.upper() != "BUY" or quantity <= 0:
+    def _reconcile_stop_state(self, order: Any) -> None:
+        from ai_trading_system.domains.execution.portfolio import PortfolioManager
+
+        position_key = f"{order.exchange.upper()}:{order.symbol_id.upper()}"
+        position = PortfolioManager(self.store).open_positions().get(order.symbol_id)
+        existing = self.store.get_position_stop(position_key)
+        if position is None:
+            if existing is not None:
+                self.store.deactivate_stop(position_key)
             return
+        if order.side.upper() != "BUY":
+            if existing is not None:
+                self.store.upsert_position_stop(
+                    position_key=position_key,
+                    symbol_id=order.symbol_id,
+                    exchange=order.exchange,
+                    quantity=position.quantity,
+                    entry_price=float(existing["entry_price"]),
+                    stop_price=float(existing["stop_price"]),
+                    atr_multiplier=float(existing.get("atr_multiplier") or 0.0),
+                    status="ACTIVE",
+                    metadata=_json_dict(existing.get("metadata_json")),
+                )
+            return
+
+        signal = dict(order.metadata or {})
         # Prefer the engine-emitted stop when present so backtest and paper agree.
         engine_stop = _maybe_float(signal.get("initial_stop"))
         engine_method = signal.get("stop_method")
@@ -196,15 +301,26 @@ class ExecutionService:
                 or 2.0
             )
             if atr is None or atr <= 0:
+                if existing is not None:
+                    self.store.upsert_position_stop(
+                        position_key=position_key,
+                        symbol_id=order.symbol_id,
+                        exchange=order.exchange,
+                        quantity=position.quantity,
+                        entry_price=position.avg_entry_price,
+                        stop_price=float(existing["stop_price"]),
+                        atr_multiplier=float(existing.get("atr_multiplier") or 0.0),
+                        status="ACTIVE",
+                        metadata=_json_dict(existing.get("metadata_json")),
+                    )
                 return
-            stop_price = round(fill_price - (atr_multiple * atr), 4)
-        position_key = f"{exchange.upper()}:{symbol_id.upper()}"
+            stop_price = round(position.avg_entry_price - (atr_multiple * atr), 4)
         self.store.upsert_position_stop(
             position_key=position_key,
-            symbol_id=symbol_id,
-            exchange=exchange,
-            quantity=quantity,
-            entry_price=fill_price,
+            symbol_id=order.symbol_id,
+            exchange=order.exchange,
+            quantity=position.quantity,
+            entry_price=position.avg_entry_price,
             stop_price=stop_price,
             atr_multiplier=atr_multiple,
             status="ACTIVE",
@@ -330,6 +446,49 @@ def _build_order_result(order: Any, fills: list[Any]) -> Dict[str, Any]:
         "order": order.to_dict(),
         "fills": [fill.to_dict() for fill in fills],
     }
+
+
+def _idempotency_payload(intent: OrderIntent) -> dict[str, Any]:
+    return {
+        "symbol_id": str(intent.symbol_id).strip().upper(),
+        "quantity": int(intent.quantity),
+        "side": str(intent.side).strip().upper(),
+        "exchange": str(intent.exchange).strip().upper(),
+        "order_type": str(intent.order_type).strip().upper(),
+        "product_type": str(intent.product_type).strip().upper(),
+        "validity": str(intent.validity).strip().upper(),
+        "limit_price": _maybe_float(intent.limit_price),
+        "stop_price": _maybe_float(intent.stop_price),
+        "requested_price": _maybe_float(intent.requested_price),
+    }
+
+
+def _intent_from_payload(payload: dict[str, Any], correlation_id: str) -> OrderIntent:
+    return OrderIntent(
+        symbol_id=str(payload["symbol_id"]),
+        quantity=int(payload["quantity"]),
+        side=str(payload["side"]),
+        exchange=str(payload["exchange"]),
+        order_type=str(payload["order_type"]),
+        product_type=str(payload["product_type"]),
+        validity=str(payload["validity"]),
+        limit_price=_maybe_float(payload.get("limit_price")),
+        stop_price=_maybe_float(payload.get("stop_price")),
+        requested_price=_maybe_float(payload.get("requested_price")),
+        correlation_id=correlation_id,
+    )
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _intent_matches_order(intent: OrderIntent, order: Any) -> bool:

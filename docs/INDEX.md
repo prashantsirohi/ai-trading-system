@@ -108,6 +108,7 @@
 - [prioritized remediation roadmap](audits/codebase_deep_review/08_PRIORITIZED_REMEDIATION_ROADMAP.md)
 - [quick wins](audits/codebase_deep_review/09_QUICK_WINS.md)
 - [deferred or rejected ideas](audits/codebase_deep_review/10_DEFERRED_OR_REJECTED_IDEAS.md)
+- [Phase 1 closeout](audits/codebase_deep_review/11_PHASE1_CLOSEOUT.md)
 
 ## Legacy / archive
 - [_legacy/](_legacy/README.md)

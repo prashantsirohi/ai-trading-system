@@ -34,3 +34,10 @@ class ExecutionAdapter(ABC):
     def cancel_order(self, order: OrderRecord) -> OrderRecord:
         """Cancel an order when supported."""
         return order
+
+    def find_order_by_correlation_id(
+        self,
+        correlation_id: str,
+    ) -> Tuple[OrderRecord, List[FillRecord]] | None:
+        """Resolve a prior broker outcome for reconciliation when supported."""
+        return None
