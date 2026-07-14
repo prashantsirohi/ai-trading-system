@@ -14,6 +14,7 @@ from ai_trading_system.domains.ingest.repair import (
     _compare_trade_frames,
     _delete_window_rows,
     _fetch_symbol_frames,
+    _load_verified_trade_dates,
     _validate_repair_price_continuity,
 )
 from ai_trading_system.domains.ingest.price_continuity import BulkRawPriceBasisShiftError
@@ -173,6 +174,58 @@ def test_historical_repair_does_not_use_yfinance_fallback_by_default(
             symbols=[{"symbol_id": "AAA", "security_id": "1", "exchange": "NSE"}],
             from_date="2022-08-08",
             to_date="2022-08-08",
+        )
+
+
+def test_fetch_symbol_frames_uses_verified_trade_dates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        repair_ohlcv_window,
+        "get_domain_paths",
+        lambda **_: SimpleNamespace(raw_dir=tmp_path / "raw", master_db_path=tmp_path / "master.db"),
+    )
+
+    def fail_business_dates(*_: object, **__: object) -> list[str]:
+        raise AssertionError("Verified manifests must bypass the incomplete holiday calendar.")
+
+    captured: list[str] = []
+
+    def fetch_rows(**kwargs: object) -> tuple[pd.DataFrame, list[str], list[str]]:
+        captured.extend(kwargs["trade_dates"])  # type: ignore[arg-type]
+        return pd.DataFrame(), [], []
+
+    monkeypatch.setattr(repair_ohlcv_window, "_business_dates", fail_business_dates)
+    monkeypatch.setattr(repair_ohlcv_window, "_fetch_nse_bhavcopy_rows", fetch_rows)
+
+    frames = _fetch_symbol_frames(
+        project_root=tmp_path,
+        symbols=[{"symbol_id": "AAA", "security_id": "1", "exchange": "NSE"}],
+        from_date="2006-01-01",
+        to_date="2006-01-31",
+        verified_trade_dates=["2006-01-03", "2006-01-02", "2006-01-03"],
+    )
+
+    assert frames == []
+    assert captured == ["2006-01-02", "2006-01-03"]
+
+
+def test_load_verified_trade_dates_validates_range(tmp_path: Path) -> None:
+    manifest = tmp_path / "dates.txt"
+    manifest.write_text("# verified\n2006-01-03\n2006-01-02\n2006-01-03\n", encoding="utf-8")
+
+    assert _load_verified_trade_dates(
+        manifest,
+        from_date="2006-01-01",
+        to_date="2006-01-31",
+    ) == ["2006-01-02", "2006-01-03"]
+
+    manifest.write_text("2005-12-30\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="outside repair window"):
+        _load_verified_trade_dates(
+            manifest,
+            from_date="2006-01-01",
+            to_date="2006-01-31",
         )
 
 

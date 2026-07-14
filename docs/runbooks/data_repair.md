@@ -2,7 +2,7 @@
 
 - **Purpose:** Repair OHLCV gaps, inspect quarantine, and re-ingest a date window safely.
 - **Audience:** Operator.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-07-14
 - **Source of truth:** [`docs/stages/ingest.md`](../stages/ingest.md), [`docs/reference/commands.md`](../reference/commands.md), `src/ai_trading_system/domains/ingest/reset_reingest_validate.py`, `src/ai_trading_system/domains/ingest/trust.py`.
 
 ---
@@ -54,6 +54,24 @@ Notes from the legacy runbook (`docs/_legacy/archived_2026-05-16/ohlcv_reset_rei
 
 - A pre-delete window backup (`catalog_window_backup.parquet`) is written by default. Do not pass `--skip-backup` unless you accept loss of rollback safety.
 - Final validation is a critical gate; failure aborts the apply step.
+
+For a historical rebuild whose dates predate the maintained holiday calendar,
+prepare a verified one-date-per-line session manifest from standard NSE equity
+bhavcopy archives and use the dedicated repair command:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.domains.ingest.repair \
+  --from-date 2006-01-01 \
+  --to-date 2015-12-31 \
+  --verified-trade-dates-file /path/to/verified_trade_dates.txt \
+  --apply
+```
+
+The manifest bypasses the runtime holiday table but does not relax source
+availability: any listed session that cannot be read from the canonical NSE
+cache or standard archive aborts before rewriting. Repair reports honor
+`REPORTS_ROOT`. Do not create a manifest from weekday inference alone; record
+successful standard-archive retrieval and checksums first.
 
 ### Stricter validation thresholds (optional)
 

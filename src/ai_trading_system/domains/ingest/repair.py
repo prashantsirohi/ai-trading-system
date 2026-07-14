@@ -389,12 +389,17 @@ def _fetch_symbol_frames(
     ingest_run_id: str | None = None,
     repair_batch_id: str | None = None,
     allow_yfinance_fallback: bool = False,
+    verified_trade_dates: list[str] | None = None,
 ) -> list[pd.DataFrame]:
     security_map = {str(row["symbol_id"]): row for row in symbols}
     paths = get_domain_paths(project_root=project_root, data_domain="operational")
     raw_dir = paths.raw_dir / "NSE_EQ"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    trade_dates = _business_dates(from_date, to_date, masterdb_path=str(paths.master_db_path))
+    trade_dates = (
+        sorted({str(item) for item in verified_trade_dates})
+        if verified_trade_dates is not None
+        else _business_dates(from_date, to_date, masterdb_path=str(paths.master_db_path))
+    )
     nse_rows, _, missing_dates = _fetch_nse_bhavcopy_rows(
         raw_dir=raw_dir,
         trade_dates=trade_dates,
@@ -516,6 +521,7 @@ def repair_window(
     recompute_features: bool = True,
     feature_tail_bars: int = 252,
     allow_yfinance_fallback: bool = False,
+    verified_trade_dates: list[str] | None = None,
 ) -> dict[str, Any]:
     paths = ensure_domain_layout(project_root=project_root, data_domain="operational")
     collector = DhanCollector(
@@ -535,7 +541,7 @@ def repair_window(
         raise RuntimeError("No symbols available for repair window.")
 
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    report_dir = project_root / "reports" / "data_repairs" / f"{from_date}_to_{to_date}_{run_stamp}"
+    report_dir = paths.reports_dir / "data_repairs" / f"{from_date}_to_{to_date}_{run_stamp}"
     report_dir.mkdir(parents=True, exist_ok=True)
 
     fetched_frames = _fetch_symbol_frames(
@@ -546,6 +552,7 @@ def repair_window(
         ingest_run_id=None,
         repair_batch_id=run_stamp,
         allow_yfinance_fallback=allow_yfinance_fallback,
+        verified_trade_dates=verified_trade_dates,
     )
 
     api_frame_map: dict[str, pd.DataFrame] = {}
@@ -734,6 +741,14 @@ def main() -> None:
     parser.add_argument("--apply", action="store_true", help="Rewrite mismatched OHLCV rows and recompute features.")
     parser.add_argument("--skip-features", action="store_true", help="Skip feature/sector recomputation after repair.")
     parser.add_argument(
+        "--verified-trade-dates-file",
+        default=None,
+        help=(
+            "Optional one-date-per-line manifest of verified source sessions. "
+            "Use for historical rebuilds when the runtime holiday calendar is incomplete."
+        ),
+    )
+    parser.add_argument(
         "--allow-yfinance-fallback",
         action="store_true",
         help="Allow adjusted Yahoo candles when NSE bhavcopy is unavailable. Avoid for raw historical rebuilds.",
@@ -742,6 +757,13 @@ def main() -> None:
 
     project_root = Path(__file__).resolve().parents[4]
     load_project_env(project_root)
+    verified_trade_dates = None
+    if args.verified_trade_dates_file:
+        verified_trade_dates = _load_verified_trade_dates(
+            Path(args.verified_trade_dates_file),
+            from_date=args.from_date,
+            to_date=args.to_date,
+        )
     report = repair_window(
         project_root=project_root,
         from_date=args.from_date,
@@ -754,8 +776,39 @@ def main() -> None:
         recompute_features=not bool(args.skip_features),
         feature_tail_bars=max(30, int(args.feature_tail_bars)),
         allow_yfinance_fallback=bool(args.allow_yfinance_fallback),
+        verified_trade_dates=verified_trade_dates,
     )
     print(json.dumps(report, indent=2))
+
+
+def _load_verified_trade_dates(
+    path: Path,
+    *,
+    from_date: str,
+    to_date: str,
+) -> list[str]:
+    """Load and validate an explicit source-session manifest."""
+
+    lower = datetime.fromisoformat(from_date).date()
+    upper = datetime.fromisoformat(to_date).date()
+    dates: list[str] = []
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        value = raw_line.strip()
+        if not value or value.startswith("#"):
+            continue
+        try:
+            parsed = datetime.fromisoformat(value).date()
+        except ValueError as exc:
+            raise ValueError(f"Invalid trade date at {path}:{line_number}: {value}") from exc
+        if parsed < lower or parsed > upper:
+            raise ValueError(
+                f"Verified trade date outside repair window at {path}:{line_number}: {value}"
+            )
+        dates.append(parsed.isoformat())
+    unique_dates = sorted(set(dates))
+    if not unique_dates:
+        raise ValueError(f"Verified trade-date manifest is empty: {path}")
+    return unique_dates
 
 
 if __name__ == "__main__":
