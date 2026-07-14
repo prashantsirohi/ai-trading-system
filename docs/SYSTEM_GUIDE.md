@@ -38,6 +38,9 @@ The main surfaces are:
   submission. Risk reserved by earlier accepted buys in the same execution
   batch counts toward the threshold, including orders not yet represented as
   open fills.
+- Execution submissions carrying a non-empty correlation ID are idempotent:
+  an identical retry returns the original order and fills without dispatching
+  again, while reuse of that key for a different order payload is rejected.
 - Preview, diagnostics, documentation checks, and tests must not mutate broker state or live DuckDB files.
 
 ## Operational design and stages

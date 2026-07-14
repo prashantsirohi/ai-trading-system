@@ -53,6 +53,7 @@ class AutoTrader:
         risk_config: RiskPolicyConfig | None = None,
         market_extras: dict[str, dict] | None = None,
         risk_per_trade_pct: float | None = None,
+        submission_scope: str | None = None,
     ) -> Dict[str, Any]:
         # Phase 6: when the caller supplies risk_per_trade_pct (typically
         # from a regime profile), it overrides anything carried on the
@@ -250,7 +251,7 @@ class AutoTrader:
                             else signal.get("risk_per_trade_pct", 0.01)
                         ),
                         "atr_multiple": signal.get("atr_multiple", exit_atr_multiple),
-                        "correlation_id": f"{action.strategy_mode}:{action.symbol_id}:{action.reason}",
+                        "correlation_id": _action_correlation_id(submission_scope, action),
                         # Forward engine-emitted reasons / stops so service can persist them.
                         "intent_kind": action_meta.get("intent_kind"),
                         "reason": action.reason,
@@ -336,7 +337,7 @@ class AutoTrader:
                         quantity=int(action.quantity or 0),
                         side="SELL",
                         requested_price=action.requested_price,
-                        correlation_id=f"{action.strategy_mode}:{action.symbol_id}:{action.reason}",
+                        correlation_id=_action_correlation_id(submission_scope, action),
                         metadata={"reason": action.reason, **(action.metadata or {})},
                     ),
                     market_price=float(action.requested_price or 0.0),
@@ -373,6 +374,13 @@ class AutoTrader:
 
 def _serialize_positions(positions: dict[str, Any]) -> list[dict]:
     return [position.to_dict() for position in positions.values()]
+
+
+def _action_correlation_id(scope: str | None, action: Any) -> str | None:
+    normalized_scope = str(scope or "").strip()
+    if not normalized_scope:
+        return None
+    return f"{normalized_scope}:{action.strategy_mode}:{action.symbol_id}:{action.reason}"
 
 
 def _bump_streaks_in_stop_record(

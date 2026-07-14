@@ -6,7 +6,6 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
-import pytest
 
 from ai_trading_system.domains.execution import (
     AutoTrader,
@@ -280,10 +279,6 @@ def test_aud_004_batch_orders_cannot_exceed_portfolio_heat(tmp_path: Path) -> No
     assert heat_ok is True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUD-005: execution submission does not yet enforce idempotency keys",
-)
 def test_aud_005_repeated_submission_creates_one_order_and_fill(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path)
     service = ExecutionService(store, PaperExecutionAdapter(slippage_bps=0))
@@ -295,8 +290,11 @@ def test_aud_005_repeated_submission_creates_one_order_and_fill(tmp_path: Path) 
         correlation_id="phase0-idempotency-key",
     )
 
-    service.submit_order(intent, market_price=100.0)
-    service.submit_order(intent, market_price=100.0)
+    first = service.submit_order(intent, market_price=100.0)
+    replay = service.submit_order(intent, market_price=100.0)
 
     assert len(store.list_orders()) == 1
     assert len(store.list_fills()) == 1
+    assert replay["idempotent_replay"] is True
+    assert replay["order"]["order_id"] == first["order"]["order_id"]
+    assert replay["fills"][0]["fill_id"] == first["fills"][0]["fill_id"]

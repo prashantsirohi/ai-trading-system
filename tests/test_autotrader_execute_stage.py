@@ -211,6 +211,8 @@ def test_execute_stage_runs_hybrid_confirm_and_writes_artifacts(tmp_path: Path) 
     actions = pd.read_csv(context.output_dir() / "trade_actions.csv")
     assert actions["symbol_id"].tolist() == ["AAA"]
     assert actions["action"].tolist() == ["BUY"]
+    orders = pd.read_csv(context.output_dir() / "executed_orders.csv")
+    assert orders.iloc[0]["correlation_id"].startswith(f"{context.run_id}:")
 
     summary = json.loads((context.output_dir() / "execute_summary.json").read_text(encoding="utf-8"))
     assert summary["summary"]["open_position_count"] == 1

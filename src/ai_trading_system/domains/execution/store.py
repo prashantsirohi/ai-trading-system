@@ -242,6 +242,29 @@ class ExecutionStore:
         finally:
             conn.close()
 
+    def get_order_by_correlation_id(self, correlation_id: str) -> Optional[OrderRecord]:
+        normalized_id = str(correlation_id or "").strip()
+        if not normalized_id:
+            return None
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM execution_order
+                WHERE trim(correlation_id) = ?
+                ORDER BY submitted_at ASC, order_id ASC
+                LIMIT 1
+                """,
+                [normalized_id],
+            ).fetchone()
+            if row is None:
+                return None
+            columns = [item[0] for item in conn.description]
+            return self._order_from_row(dict(zip(columns, row)))
+        finally:
+            conn.close()
+
     def list_orders(self) -> List[dict]:
         conn = self._connect()
         try:

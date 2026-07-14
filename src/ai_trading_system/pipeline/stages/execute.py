@@ -6,7 +6,6 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict
 
 import pandas as pd
@@ -323,6 +322,7 @@ class ExecuteStage:
             # Phase 6: profile-driven risk_per_trade_pct override. None
             # preserves the legacy "signal payload sets it" behavior.
             risk_per_trade_pct=effective_risk_per_trade_pct,
+            submission_scope=context.run_id,
         )
         trailing_summary = {"updated_count": 0, "evaluated_count": 0}
         if request.execution_enabled and not request.preview_only:

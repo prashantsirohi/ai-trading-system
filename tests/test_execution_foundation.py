@@ -71,6 +71,39 @@ def test_paper_execution_limit_order_can_be_refreshed_into_fill(tmp_path: Path) 
     assert len(store.list_fills(order_id=pending["order"]["order_id"])) == 1
 
 
+def test_submission_rejects_idempotency_key_reused_for_different_order(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path)
+    service = ExecutionService(store, PaperExecutionAdapter(slippage_bps=0))
+    first = service.submit_order(
+        OrderIntent(
+            symbol_id="TCS",
+            exchange="NSE",
+            quantity=5,
+            side="BUY",
+            correlation_id="daily:TCS:entry",
+        ),
+        market_price=100.0,
+    )
+
+    conflict = service.submit_order(
+        OrderIntent(
+            symbol_id="TCS",
+            exchange="NSE",
+            quantity=10,
+            side="BUY",
+            correlation_id="daily:TCS:entry",
+        ),
+        market_price=100.0,
+    )
+
+    assert first["status"] == "FILLED"
+    assert conflict["status"] == "REJECTED"
+    assert conflict["reason"] == "idempotency_key_conflict"
+    assert conflict["order"]["order_id"] == first["order"]["order_id"]
+    assert len(store.list_orders()) == 1
+    assert len(store.list_fills()) == 1
+
+
 def test_dhan_executor_stays_safe_and_returns_simulated_order(tmp_path: Path) -> None:
     executor = DhanExecutor(
         api_key="key",

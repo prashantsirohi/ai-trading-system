@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, Dict, Optional
 
 from ai_trading_system.domains.execution.adapters.base import ExecutionAdapter
@@ -37,10 +38,33 @@ class ExecutionService:
         *,
         market_price: float | None = None,
     ) -> Dict[str, Any]:
+        correlation_id = str(intent.correlation_id or "").strip()
+        if correlation_id:
+            intent = replace(intent, correlation_id=correlation_id)
+            existing = self.store.get_order_by_correlation_id(correlation_id)
+            if existing is not None:
+                if not _intent_matches_order(intent, existing):
+                    return {
+                        "status": "REJECTED",
+                        "reason": "idempotency_key_conflict",
+                        "correlation_id": correlation_id,
+                        "order": existing.to_dict(),
+                        "fills": self.store.list_fills(order_id=existing.order_id),
+                        "idempotent_replay": False,
+                    }
+                return {
+                    "status": existing.status,
+                    "order": existing.to_dict(),
+                    "fills": self.store.list_fills(order_id=existing.order_id),
+                    "idempotent_replay": True,
+                }
         order, fills = self.adapter.place_order(intent, market_price=market_price)
         self.store.upsert_order(order)
         self.store.append_fills(fills)
-        return _build_order_result(order, fills)
+        result = _build_order_result(order, fills)
+        if correlation_id:
+            result["idempotent_replay"] = False
+        return result
 
     def refresh_order(self, order_id: str, *, market_price: float | None = None) -> Dict[str, Any]:
         order = self.store.get_order(order_id)
@@ -306,3 +330,20 @@ def _build_order_result(order: Any, fills: list[Any]) -> Dict[str, Any]:
         "order": order.to_dict(),
         "fills": [fill.to_dict() for fill in fills],
     }
+
+
+def _intent_matches_order(intent: OrderIntent, order: Any) -> bool:
+    """Return whether an idempotent retry carries the original order payload."""
+    return (
+        str(intent.symbol_id).strip().upper() == str(order.symbol_id).strip().upper()
+        and int(intent.quantity) == int(order.quantity)
+        and str(intent.side).strip().upper() == str(order.side).strip().upper()
+        and str(intent.exchange).strip().upper() == str(order.exchange).strip().upper()
+        and str(intent.order_type).strip().upper() == str(order.order_type).strip().upper()
+        and str(intent.product_type).strip().upper()
+        == str(order.product_type).strip().upper()
+        and str(intent.validity).strip().upper() == str(order.validity).strip().upper()
+        and _maybe_float(intent.limit_price) == _maybe_float(order.limit_price)
+        and _maybe_float(intent.stop_price) == _maybe_float(order.stop_price)
+        and _maybe_float(intent.requested_price) == _maybe_float(order.requested_price)
+    )
