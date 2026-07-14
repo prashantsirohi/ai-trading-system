@@ -2,7 +2,7 @@
 
 - **Purpose:** Build the canonical ranked-signal artifact set (composite ranking, breakout scan, pattern scan, sector dashboard, dashboard payload) consumed by every downstream stage.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-07-14
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/rank.py`
   - `src/ai_trading_system/domains/ranking/service.py` (`RankOrchestrationService`)
@@ -25,7 +25,9 @@ The rank stage turns the per-symbol feature store into a prioritized list of tra
 
 ## Input data
 
-- `data/ohlcv.duckdb::ohlcv` — accessed via `StockRanker(ohlcv_db_path=…)` (`service.py:455`).
+- `data/ohlcv.duckdb::_catalog` — accessed via `StockRanker(ohlcv_db_path=…)`.
+  The base market snapshot, return windows, volume windows, delivery, stage,
+  benchmark, and persisted feature reads are bounded to the requested rank date.
 - Feature store Parquet under `data/feature_store/<symbol_id>/` — passed via `ensure_domain_layout(...).feature_store_dir` (`service.py:436`).
 - Prior rank artifacts (last 8) from the registry to compute factor turnover / load resumable task state (`service.py:530`–`555`, `service.py:1290`).
 - Data-trust summary from `control_plane.duckdb` via `analytics.data_trust.load_data_trust_summary` (`service.py:440`).
@@ -77,7 +79,10 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
 
 1. Resolve effective params, load data-trust summary; abort if `trust_summary.status == "blocked"` and `allow_untrusted_rank` is not set (`service.py:441`).
 2. Resolve market stage and merge `StrategyConfig` (rank_mode, breakout activation, weekly stage gate, execution regime) into `effective_params` (`service.py:465`–`494`).
-3. Run resumable tasks in order — each is fingerprinted, persisted in `task_status.json`, and skipped on retry if the fingerprint matches (`service.py:495`–end of `run_default`):
+3. Build every dated rank input using an inclusive run-date cutoff. The current
+   default decision-history version is `point_in_time_v2`, and the rank-core task
+   fingerprint includes this input contract so retries cannot reuse pre-fix output.
+4. Run resumable tasks in order — each is fingerprinted, persisted in `task_status.json`, and skipped on retry if the fingerprint matches (`service.py:495`–end of `run_default`):
    - `rank_core` → `ranked_signals.csv`
    - volume shockers → `volume_shockers.csv`
    - `breakout_scan` (no-op DataFrame when market stage disables breakouts)
@@ -86,8 +91,8 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
    - `sector_dashboard`
    - `watchlist_prefilter` / `watchlist_catalyst` / `watchlist_final` (+ markdown digest)
    - dashboard payload assembly
-4. Apply optional ML overlay (`service.py:1141`, see below).
-5. Write all DataFrames as CSVs, sidecar JSON/MD, then `rank_summary.json`. Register every file as a `StageArtifact` (`service.py:340`–`414`).
+5. Apply optional ML overlay (`service.py:1141`, see below).
+6. Write all DataFrames as CSVs, sidecar JSON/MD, then `rank_summary.json`. Register every file as a `StageArtifact` (`service.py:340`–`414`).
 
 ## ML overlay (optional)
 
@@ -120,6 +125,13 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
 - Each task is fingerprinted by `(task_name, payload)` (`service.py:1325`). On retry, prior attempts' `task_status.json` is read (`previous_task_snapshot`, `service.py:1290`); tasks whose fingerprint matches a `completed` previous attempt are skipped and their CSV/JSON re-used.
 - `RankStage.__init__` accepts an injectable `operation` and `ml_overlay_builder` for tests.
 - The stage itself is invoked by the orchestrator with the standard attempt loop; per-stage retry/backoff lives in `pipeline/orchestrator.py`.
+
+## Rebuild impact
+
+AUD-001 changes historical rank inputs but not feature formulas. A full feature
+rebuild is not required. Historical rank and research artifacts created with the
+old latest-row behavior must be recomputed under `point_in_time_v2`; retain the
+old immutable attempts as superseded evidence rather than overwriting them.
 
 ## Downstream consumers
 

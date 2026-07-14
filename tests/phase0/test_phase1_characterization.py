@@ -17,6 +17,7 @@ from ai_trading_system.domains.execution import (
 )
 from ai_trading_system.domains.execution.models import OrderIntent
 from ai_trading_system.domains.ranking.input_loader import RankerInputLoader
+from ai_trading_system.domains.ranking.ranker import StockRanker
 from ai_trading_system.pipeline.contracts import StageArtifact
 from ai_trading_system.pipeline.registry import RegistryStore
 
@@ -41,6 +42,8 @@ def _seed_rank_catalog(db_path: Path) -> None:
         conn.execute(
             """
             INSERT INTO _catalog VALUES
+                ('ACME', 'NSE', TIMESTAMP '2026-01-01 15:30:00',
+                 89, 92, 88, 90, 800),
                 ('ACME', 'NSE', TIMESTAMP '2026-01-02 15:30:00',
                  99, 102, 98, 100, 1000)
             """
@@ -49,11 +52,7 @@ def _seed_rank_catalog(db_path: Path) -> None:
         conn.close()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUD-001: dated ranking inputs are not yet point-in-time",
-)
-def test_aud_001_future_rows_do_not_change_historical_rank_base(tmp_path: Path) -> None:
+def test_aud_001_future_rows_do_not_change_historical_rank_inputs_or_result(tmp_path: Path) -> None:
     db_path = tmp_path / "ohlcv.duckdb"
     _seed_rank_catalog(db_path)
     loader = RankerInputLoader(
@@ -62,7 +61,28 @@ def test_aud_001_future_rows_do_not_change_historical_rank_base(tmp_path: Path) 
         master_db_path=str(tmp_path / "masterdata.db"),
     )
 
-    historical_base = loader.load_latest_market_data(exchanges=["NSE"])
+    historical_base = loader.load_latest_market_data(
+        as_of="2026-01-02",
+        exchanges=["NSE"],
+    )
+    historical_returns = loader.load_return_frame_multi(
+        as_of="2026-01-02",
+        periods=[1],
+        exchanges=["NSE"],
+    )
+    historical_volume = loader.load_volume_frame(
+        as_of="2026-01-02",
+        exchanges=["NSE"],
+    )
+    ranker = StockRanker(
+        ohlcv_db_path=str(db_path),
+        feature_store_dir=str(tmp_path / "features"),
+    )
+    historical_rank = ranker.rank_all(
+        date="2026-01-02",
+        exchanges=["NSE"],
+        min_score=0,
+    )
     conn = duckdb.connect(str(db_path))
     try:
         conn.execute(
@@ -75,12 +95,42 @@ def test_aud_001_future_rows_do_not_change_historical_rank_base(tmp_path: Path) 
     finally:
         conn.close()
     historical_base_after_future_ingest = loader.load_latest_market_data(
-        exchanges=["NSE"]
+        as_of="2026-01-02",
+        exchanges=["NSE"],
+    )
+    historical_returns_after_future_ingest = loader.load_return_frame_multi(
+        as_of="2026-01-02",
+        periods=[1],
+        exchanges=["NSE"],
+    )
+    historical_volume_after_future_ingest = loader.load_volume_frame(
+        as_of="2026-01-02",
+        exchanges=["NSE"],
+    )
+    historical_rank_after_future_ingest = ranker.rank_all(
+        date="2026-01-02",
+        exchanges=["NSE"],
+        min_score=0,
     )
 
     pd.testing.assert_frame_equal(
         historical_base,
         historical_base_after_future_ingest,
+        check_like=True,
+    )
+    pd.testing.assert_frame_equal(
+        historical_returns,
+        historical_returns_after_future_ingest,
+        check_like=True,
+    )
+    pd.testing.assert_frame_equal(
+        historical_volume,
+        historical_volume_after_future_ingest,
+        check_like=True,
+    )
+    pd.testing.assert_frame_equal(
+        historical_rank,
+        historical_rank_after_future_ingest,
         check_like=True,
     )
 

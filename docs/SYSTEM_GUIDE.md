@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-07-13
+- **Last verified:** 2026-07-14
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -27,6 +27,9 @@ The main surfaces are:
 - NSE bhavcopy is the operational OHLC source of record. Provider fallback and quarantine behavior are defined in [data sources](reference/data_sources.md) and [trust and DQ](architecture/data_trust_and_dq.md).
 - Synthetic smoke data is disabled. Canary runs use a reduced real symbol universe.
 - Critical trust or DQ failures block downstream execution.
+- Historical ranking is point-in-time: market, return, volume, delivery, sector,
+  stage, benchmark, and persisted feature inputs cannot read observations after
+  the requested run date.
 - Paper execution is the safe default. Do not enable live broker placement without explicit operator authorization, and do not describe the live path as production-certified.
 - Preview, diagnostics, documentation checks, and tests must not mutate broker state or live DuckDB files.
 

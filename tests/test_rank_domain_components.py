@@ -278,7 +278,7 @@ def test_apply_delivery_imputes_from_sector_then_universe_median():
     assert scored.loc[scored["symbol_id"] == "DDD", "delivery_pct"].iloc[0] == pytest.approx(40.0)
     assert scored.loc[scored["symbol_id"] == "BBB", "delivery_pct_imputed"].iloc[0]
     assert scored.loc[scored["symbol_id"] == "DDD", "delivery_pct_imputed"].iloc[0]
-    assert scored.loc[scored["symbol_id"] == "AAA", "delivery_pct_imputed"].iloc[0] == False
+    assert not scored.loc[scored["symbol_id"] == "AAA", "delivery_pct_imputed"].iloc[0]
     assert scored.loc[scored["symbol_id"] == "DDD", "delivery_pct_filled"].iloc[0] == pytest.approx(40.0)
 
 
@@ -594,7 +594,7 @@ def test_stock_ranker_rank_all_preserves_stage2_columns_from_stage2_enrichment(t
         feature_store_dir=str(tmp_path / "feature_store"),
     )
 
-    ranker.input_loader.load_latest_market_data = lambda exchanges: pd.DataFrame(
+    ranker.input_loader.load_latest_market_data = lambda as_of, exchanges: pd.DataFrame(
         [
             {
                 "symbol_id": "AAA",
@@ -618,13 +618,13 @@ def test_stock_ranker_rank_all_preserves_stage2_columns_from_stage2_enrichment(t
             },
         ]
     )
-    ranker.input_loader.load_return_frame_multi = lambda periods: pd.DataFrame(
+    ranker.input_loader.load_return_frame_multi = lambda as_of, periods, exchanges: pd.DataFrame(
         [
             {"symbol_id": "AAA", "exchange": "NSE", "return_20": 8.0, "return_60": 16.0, "return_120": 24.0},
             {"symbol_id": "BBB", "exchange": "NSE", "return_20": 10.0, "return_60": 18.0, "return_120": 28.0},
         ]
     )
-    ranker.input_loader.load_volume_frame = lambda: pd.DataFrame(
+    ranker.input_loader.load_volume_frame = lambda as_of, exchanges: pd.DataFrame(
         [
             {"symbol_id": "AAA", "exchange": "NSE", "vol_20_avg": 1000.0, "vol_20_max": 1500.0},
             {"symbol_id": "BBB", "exchange": "NSE", "vol_20_avg": 1100.0, "vol_20_max": 1700.0},

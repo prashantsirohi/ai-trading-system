@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import pandas as pd
 
@@ -135,14 +135,17 @@ class StockRanker:
             logger.warning("Unknown rank_mode=%s; falling back to default", rank_mode)
             rank_mode = "default"
 
-        scores = self.input_loader.load_latest_market_data(exchanges=exchanges)
+        scores = self.input_loader.load_latest_market_data(
+            as_of=date,
+            exchanges=exchanges,
+        )
         if scores.empty:
             logger.warning("No data available for ranking")
             return pd.DataFrame()
 
-        scores = self._compute_relative_strength(scores, date, benchmark_symbol)
+        scores = self._compute_relative_strength(scores, date, benchmark_symbol, exchanges)
         scores = apply_momentum_acceleration(scores)
-        scores = self._compute_volume_intensity(scores)
+        scores = self._compute_volume_intensity(scores, date, exchanges)
         scores = self._compute_trend_persistence(scores, date)
         scores = self._compute_proximity_highs(scores, date)
         scores = self._compute_delivery(scores, date)
@@ -267,11 +270,16 @@ class StockRanker:
         data: pd.DataFrame,
         date: str,
         benchmark_symbol: str,
+        exchanges: List[str],
         periods: List[int] = None,
     ) -> pd.DataFrame:
         period_list = periods or [5, 10, 20, 60, 120]
         try:
-            return_frame = self.input_loader.load_return_frame_multi(periods=period_list)
+            return_frame = self.input_loader.load_return_frame_multi(
+                as_of=date,
+                periods=period_list,
+                exchanges=exchanges,
+            )
         except Exception as exc:
             logger.warning("Could not compute relative strength: %s", exc)
             cols = ["symbol_id", "exchange"] + [f"return_{p}" for p in period_list]
@@ -374,7 +382,8 @@ class StockRanker:
             history = conn.execute(
                 """
                 SELECT timestamp, close FROM ohlcv
-                WHERE symbol_id = ? AND timestamp <= CAST(? AS TIMESTAMP)
+                WHERE symbol_id = ?
+                  AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
                 ORDER BY timestamp DESC LIMIT 250
                 """,
                 [benchmark_symbol, date or "9999-12-31"],
@@ -401,9 +410,17 @@ class StockRanker:
             out[int(period)] = (latest_close - past_close) / past_close * 100.0
         return out
 
-    def _compute_volume_intensity(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _compute_volume_intensity(
+        self,
+        data: pd.DataFrame,
+        date: str,
+        exchanges: List[str],
+    ) -> pd.DataFrame:
         try:
-            volume_frame = self.input_loader.load_volume_frame()
+            volume_frame = self.input_loader.load_volume_frame(
+                as_of=date,
+                exchanges=exchanges,
+            )
         except Exception as exc:
             logger.warning("Could not compute volume intensity: %s", exc)
             volume_frame = pd.DataFrame(

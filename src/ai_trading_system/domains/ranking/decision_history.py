@@ -9,6 +9,8 @@ from typing import Any, Iterable
 import duckdb
 import pandas as pd
 
+from ai_trading_system.domains.ranking.contracts import RANK_INPUT_CONTRACT_VERSION
+
 
 _JSON_COLUMNS = {
     "stage_input_missing_fields", "stage1_block_reasons", "stage1_adjustment_reasons",
@@ -103,7 +105,10 @@ class DecisionHistoryRepository:
         stage1 = _base(outputs.get("stage1_scan", pd.DataFrame()), run_date=context.run_date)
         pattern = _base(outputs.get("pattern_scan", pd.DataFrame()), run_date=context.run_date)
         universe_id = str(params.get("universe_id") or params.get("rank_universe_id") or "NSE_OPERATIONAL")
-        rank_version = str(params.get("rank_model_version") or params.get("rank_mode") or "baseline_v1")
+        rank_version = str(
+            params.get("rank_model_version")
+            or RANK_INPUT_CONTRACT_VERSION
+        )
         rank_formula = str(params.get("rank_formula_name") or "WEIGHTED_COMPOSITE")
         rank_hash = _hash({"rank_model_version": rank_version, "rank_mode": params.get("rank_mode"), "factor_weights": params.get("rank_factor_weights")})
         stage_version = str(params.get("stage_model_version") or "daily_stage_v1")

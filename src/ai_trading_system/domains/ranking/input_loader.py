@@ -58,7 +58,20 @@ class RankerInputLoader:
             normalized.loc[swap_mask, "exchange"] = original_symbol.astype(str)
         return normalized
 
-    def load_latest_market_data(self, *, exchanges: list[str]) -> pd.DataFrame:
+    @staticmethod
+    def _query_exchanges(exchanges: list[str]) -> tuple[list[str], str]:
+        normalized = [str(exchange).strip().upper() for exchange in exchanges if str(exchange).strip()]
+        if not normalized:
+            raise ValueError("At least one exchange is required for ranking inputs")
+        return normalized, ",".join("?" for _ in normalized)
+
+    def load_latest_market_data(
+        self,
+        *,
+        as_of: str,
+        exchanges: list[str],
+    ) -> pd.DataFrame:
+        normalized_exchanges, exchange_placeholders = self._query_exchanges(exchanges)
         conn = self.get_conn()
         try:
             frame = conn.execute(
@@ -73,10 +86,12 @@ class RankerInputLoader:
                     arg_max(low, timestamp) AS low,
                     arg_max(open, timestamp) AS open
                 FROM _catalog
-                WHERE exchange IN ({",".join(f"'{exchange}'" for exchange in exchanges)})
+                WHERE exchange IN ({exchange_placeholders})
                   AND timestamp IS NOT NULL
+                  AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
                 GROUP BY symbol_id, exchange
-                """
+                """,
+                [*normalized_exchanges, as_of],
             ).fetchdf()
         finally:
             conn.close()
@@ -84,6 +99,9 @@ class RankerInputLoader:
         if frame.empty:
             return frame
         frame.loc[:, "timestamp"] = pd.to_datetime(frame["timestamp"])
+        cutoff_date = pd.Timestamp(as_of).date()
+        if frame["timestamp"].dt.date.gt(cutoff_date).any():
+            raise RuntimeError(f"Rank market input contains rows after as_of={cutoff_date}")
         return self.normalize_symbol_exchange_columns(frame)
 
     def load_latest_stage2(
@@ -94,10 +112,12 @@ class RankerInputLoader:
         rel_strength_frame: pd.DataFrame | None = None,
         history_bars: int = 300,
     ) -> pd.DataFrame:
+        normalized_exchanges, exchange_placeholders = self._query_exchanges(exchanges)
+        history_bars = int(history_bars)
+        if history_bars < 1:
+            raise ValueError("history_bars must be positive")
         conn = self.get_conn()
         try:
-            cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
-            exchange_list = ",".join(f"'{exchange}'" for exchange in exchanges)
             history = conn.execute(
                 f"""
                 SELECT
@@ -124,13 +144,14 @@ class RankerInputLoader:
                             ORDER BY timestamp DESC
                         ) AS rn_desc
                     FROM _catalog
-                    WHERE exchange IN ({exchange_list})
+                    WHERE exchange IN ({exchange_placeholders})
                       AND timestamp IS NOT NULL
-                      AND timestamp <= '{cutoff_ts}'
+                      AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
                 ) latest
-                WHERE rn_desc <= {int(history_bars)}
+                WHERE rn_desc <= {history_bars}
                 ORDER BY symbol_id, exchange, timestamp
-                """
+                """,
+                [*normalized_exchanges, date],
             ).fetchdf()
         finally:
             conn.close()
@@ -241,7 +262,17 @@ class RankerInputLoader:
         ]
         return latest[[column for column in keep_cols if column in latest.columns]].reset_index(drop=True)
 
-    def load_return_frame(self, *, period: int) -> pd.DataFrame:
+    def load_return_frame(
+        self,
+        *,
+        period: int,
+        as_of: str,
+        exchanges: list[str] | None = None,
+    ) -> pd.DataFrame:
+        period = int(period)
+        if period < 1:
+            raise ValueError("period must be positive")
+        normalized_exchanges, exchange_placeholders = self._query_exchanges(exchanges or ["NSE"])
         conn = self.get_conn()
         try:
             ret_data = conn.execute(
@@ -251,9 +282,12 @@ class RankerInputLoader:
                     close,
                     LAG(close, {period}) OVER w AS close_{period}_ago
                 FROM _catalog
-                WHERE exchange = 'NSE'
-                WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
-                """
+                WHERE exchange IN ({exchange_placeholders})
+                  AND timestamp IS NOT NULL
+                  AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
+                WINDOW w AS (PARTITION BY symbol_id, exchange ORDER BY timestamp)
+                """,
+                [*normalized_exchanges, as_of],
             ).fetchdf()
         finally:
             conn.close()
@@ -272,8 +306,17 @@ class RankerInputLoader:
         ret_data = ret_data.drop_duplicates(["symbol_id", "exchange"], keep="last")
         return ret_data[["symbol_id", "exchange", "return_pct"]]
 
-    def load_return_frame_multi(self, *, periods: list[int] = None) -> pd.DataFrame:
-        periods = periods or [20, 60, 120]
+    def load_return_frame_multi(
+        self,
+        *,
+        as_of: str,
+        periods: list[int] | None = None,
+        exchanges: list[str] | None = None,
+    ) -> pd.DataFrame:
+        periods = [int(period) for period in (periods or [20, 60, 120])]
+        if any(period < 1 for period in periods):
+            raise ValueError("periods must contain only positive values")
+        normalized_exchanges, exchange_placeholders = self._query_exchanges(exchanges or ["NSE"])
         conn = self.get_conn()
         try:
             lag_clauses = ", ".join([f"LAG(close, {p}) OVER w AS close_{p}_ago" for p in periods])
@@ -283,9 +326,12 @@ class RankerInputLoader:
                     symbol_id, exchange, timestamp, close,
                     {lag_clauses}
                 FROM _catalog
-                WHERE exchange = 'NSE'
-                WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
-                """
+                WHERE exchange IN ({exchange_placeholders})
+                  AND timestamp IS NOT NULL
+                  AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
+                WINDOW w AS (PARTITION BY symbol_id, exchange ORDER BY timestamp)
+                """,
+                [*normalized_exchanges, as_of],
             ).fetchdf()
         finally:
             conn.close()
@@ -312,11 +358,17 @@ class RankerInputLoader:
         existing_cols = [c for c in return_cols if c in ret_data.columns]
         return ret_data[existing_cols]
 
-    def load_volume_frame(self) -> pd.DataFrame:
+    def load_volume_frame(
+        self,
+        *,
+        as_of: str,
+        exchanges: list[str] | None = None,
+    ) -> pd.DataFrame:
+        normalized_exchanges, exchange_placeholders = self._query_exchanges(exchanges or ["NSE"])
         conn = self.get_conn()
         try:
             volume = conn.execute(
-                """
+                f"""
                 WITH volume_features AS (
                     SELECT
                         symbol_id,
@@ -328,15 +380,17 @@ class RankerInputLoader:
                         AVG(volume) OVER w_prior AS vol_20_avg_prior,
                         STDDEV_SAMP(volume) OVER w_prior AS vol_20_std_prior
                     FROM _catalog
-                    WHERE exchange = 'NSE'
+                    WHERE exchange IN ({exchange_placeholders})
+                      AND timestamp IS NOT NULL
+                      AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
                     WINDOW
                         w_current AS (
-                            PARTITION BY symbol_id
+                            PARTITION BY symbol_id, exchange
                             ORDER BY timestamp
                             ROWS BETWEEN 20 PRECEDING AND CURRENT ROW
                         ),
                         w_prior AS (
-                            PARTITION BY symbol_id
+                            PARTITION BY symbol_id, exchange
                             ORDER BY timestamp
                             ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
                         )
@@ -353,9 +407,10 @@ class RankerInputLoader:
                     END AS volume_zscore_20
                 FROM volume_features
                 QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY symbol_id ORDER BY timestamp DESC
+                    PARTITION BY symbol_id, exchange ORDER BY timestamp DESC
                 ) = 1
-                """
+                """,
+                [*normalized_exchanges, as_of],
             ).fetchdf()
         finally:
             conn.close()
@@ -368,16 +423,16 @@ class RankerInputLoader:
 
         conn = self.get_conn()
         try:
-            cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
             adx_latest = conn.execute(
                 f"""
                 SELECT *
                 FROM read_parquet('{adx_path}/*.parquet', union_by_name = true)
-                WHERE timestamp <= '{cutoff_ts}'
+                WHERE CAST(timestamp AS DATE) <= CAST(? AS DATE)
                 QUALIFY ROW_NUMBER() OVER (
                     PARTITION BY symbol_id ORDER BY timestamp DESC
                 ) = 1
-                """
+                """,
+                [date],
             ).fetchdf()
         finally:
             conn.close()
@@ -393,9 +448,8 @@ class RankerInputLoader:
     def load_latest_sma(self, *, date: str) -> pd.DataFrame:
         conn = self.get_conn()
         try:
-            cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
             sma_latest = conn.execute(
-                f"""
+                """
                 SELECT symbol_id, exchange, close, sma_20, sma_50, sma_200, sma_200_bars, timestamp
                 FROM (
                     SELECT
@@ -423,21 +477,24 @@ class RankerInputLoader:
                     FROM _catalog
                     WHERE exchange = 'NSE'
                       AND timestamp IS NOT NULL
-                      AND timestamp <= '{cutoff_ts}'
+                      AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
                 ) sub
                 QUALIFY ROW_NUMBER() OVER (
                     PARTITION BY symbol_id ORDER BY timestamp DESC
                 ) = 1
-                """
+                """,
+                [date],
             ).fetchdf()
         finally:
             conn.close()
         return sma_latest
 
     def load_latest_highs(self, *, date: str, window: int) -> pd.DataFrame:
+        window = int(window)
+        if window < 1:
+            raise ValueError("window must be positive")
         conn = self.get_conn()
         try:
-            cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
             highs = conn.execute(
                 f"""
                 SELECT symbol_id, exchange, close, high_52w, prox_lookback_days, timestamp
@@ -449,7 +506,7 @@ class RankerInputLoader:
                     FROM _catalog
                     WHERE exchange = 'NSE'
                       AND timestamp IS NOT NULL
-                      AND timestamp <= '{cutoff_ts}'
+                      AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
                     WINDOW w AS (
                         PARTITION BY symbol_id
                         ORDER BY timestamp
@@ -459,7 +516,8 @@ class RankerInputLoader:
                 QUALIFY ROW_NUMBER() OVER (
                     PARTITION BY symbol_id ORDER BY timestamp DESC
                 ) = 1
-                """
+                """,
+                [date],
             ).fetchdf()
         finally:
             conn.close()
@@ -468,17 +526,17 @@ class RankerInputLoader:
     def load_latest_delivery(self, *, date: str) -> pd.DataFrame:
         conn = self.get_conn()
         try:
-            cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
             delivery = conn.execute(
-                f"""
+                """
                 SELECT symbol_id, exchange, delivery_pct
                 FROM _delivery
-                WHERE timestamp <= '{cutoff_ts}'
+                WHERE CAST(timestamp AS DATE) <= CAST(? AS DATE)
                 QUALIFY ROW_NUMBER() OVER (
                     PARTITION BY symbol_id, exchange
                     ORDER BY timestamp DESC
                 ) = 1
-                """
+                """,
+                [date],
             ).fetchdf()
         finally:
             conn.close()
@@ -496,19 +554,18 @@ class RankerInputLoader:
             )
             if not exists:
                 return pd.DataFrame(columns=columns)
-            cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
             frame = conn.execute(
                 f"""
                 SELECT {", ".join(columns)}
                 FROM feat_phase1_symbol_features
                 WHERE exchange = ?
-                  AND timestamp <= CAST(? AS TIMESTAMP)
+                  AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
                 QUALIFY ROW_NUMBER() OVER (
                     PARTITION BY symbol_id, exchange
                     ORDER BY timestamp DESC
                 ) = 1
                 """,
-                [exchange, cutoff_ts],
+                [exchange, date],
             ).fetchdf()
         finally:
             conn.close()
@@ -526,17 +583,16 @@ class RankerInputLoader:
             )
             if not exists:
                 return pd.DataFrame(columns=columns)
-            cutoff_ts = pd.to_datetime(date).strftime("%Y-%m-%d")
             return conn.execute(
                 f"""
                 SELECT {", ".join(columns)}
                 FROM feat_phase1_market_breadth
                 WHERE exchange = ?
-                  AND timestamp <= CAST(? AS TIMESTAMP)
+                  AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
                 ORDER BY timestamp DESC
                 LIMIT 1
                 """,
-                [exchange, cutoff_ts],
+                [exchange, date],
             ).fetchdf()
         finally:
             conn.close()

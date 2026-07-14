@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+RANK_INPUT_CONTRACT_VERSION = "point_in_time_v2"
+
+
 @dataclass(frozen=True)
 class RankFactorDefinition:
     """Describe a raw factor input and its normalized score column."""

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
+from ai_trading_system.domains.ranking.contracts import RANK_INPUT_CONTRACT_VERSION
 from ai_trading_system.domains.ranking.decision_history import DecisionHistoryRepository
 from ai_trading_system.pipeline.registry import RegistryStore
 
@@ -61,6 +62,25 @@ def test_rank_decision_histories_are_versioned_and_idempotent(tmp_path: Path) ->
         assert conn.execute("SELECT COUNT(*) FROM pattern_history").fetchone()[0] == 1
     assert len(repo.get_stage1_history("ABC")) == 1
     assert len(repo.get_stage1_cohort("2026-07-10", minimum_score=70)) == 1
+
+
+def test_rank_decision_history_defaults_to_point_in_time_contract(tmp_path: Path) -> None:
+    repo, registry = _repo(tmp_path)
+    context = _context(registry)
+    context.params.pop("rank_model_version")
+
+    repo.persist_rank_outputs(
+        context,
+        {
+            "ranked_signals": pd.DataFrame(
+                [{"symbol_id": "ABC", "exchange": "NSE", "composite_score": 80.0}]
+            )
+        },
+    )
+
+    with registry._reader() as conn:  # noqa: SLF001
+        version = conn.execute("SELECT rank_model_version FROM rank_history").fetchone()[0]
+    assert version == RANK_INPUT_CONTRACT_VERSION
 
 
 def _state(date: str, state: str = "BASE_BUILDING") -> pd.DataFrame:

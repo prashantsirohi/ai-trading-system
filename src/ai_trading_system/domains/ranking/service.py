@@ -25,6 +25,7 @@ from ai_trading_system.domains.ranking.payloads import (
     build_dashboard_payload,
     summarize_task_statuses,
 )
+from ai_trading_system.domains.ranking.contracts import RANK_INPUT_CONTRACT_VERSION
 from ai_trading_system.domains.features.phase1 import PHASE1_SYMBOL_COLUMNS
 from ai_trading_system.analytics.regime import (
     MarketRegimeSnapshot,
@@ -669,6 +670,7 @@ class RankOrchestrationService:
             label="Build ranked_signals",
             fingerprint_payload={
                 "task": "rank_core",
+                "input_contract_version": RANK_INPUT_CONTRACT_VERSION,
                 "run_date": context.run_date,
                 "data_domain": effective_params.get("data_domain", "operational"),
                 "min_score": float(effective_params.get("min_score", 0.0)),
@@ -831,7 +833,7 @@ class RankOrchestrationService:
         _breakout_active = cfg.breakout_active
         _bt_market_stage = stage_info["market_stage"]
         if _breakout_active:
-            breakout_builder = lambda: scan_breakouts(
+            breakout_builder = lambda: scan_breakouts(  # noqa: E731
                 ohlcv_db_path=str(context.db_path),
                 feature_store_dir=str(paths.feature_store_dir),
                 master_db_path=str(paths.master_db_path),
@@ -861,7 +863,7 @@ class RankOrchestrationService:
                 market_stage=_bt_market_stage,
             )
         else:
-            breakout_builder = lambda: pd.DataFrame()
+            breakout_builder = lambda: pd.DataFrame()  # noqa: E731
         breakout_df, breakout_status = self.execute_rank_task(
             context=context,
             task_name="breakout_scan",
