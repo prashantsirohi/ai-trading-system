@@ -9,6 +9,8 @@ EXPECTED_LOGICAL_STAGES = [
     "ingest",
     "features",
     "rank",
+    "weekly_stage",
+    "scan_router",
     "investigator",
     "opportunities",
     "fundamentals",

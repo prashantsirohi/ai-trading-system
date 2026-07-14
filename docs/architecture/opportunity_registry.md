@@ -11,7 +11,7 @@ Start with the [System Guide](../SYSTEM_GUIDE.md). The persistence-free vocabula
 
 ## Purpose and ownership
 
-The opportunity registry is an append-oriented governance history in `$DATA_ROOT/control_plane.duckdb`. It records only data written through `OpportunityRegistryService`. The optional Phase 3 shadow stage writes through that service; no execution stage depends on the registry.
+The opportunity registry is an append-oriented governance history in `$DATA_ROOT/control_plane.duckdb`. It records only data written through `OpportunityRegistryService`. The optional Phase 3A shadow stage and Phase 3B shadow extensions write through that service; no execution stage depends on the registry.
 
 The existing `$DATA_ROOT/candidate_tracker.duckdb` remains the operational mutable tracker for the current `candidate_tracker` stage. Phase 2 does not migrate, synchronize, or replace that store. For new canonical registry callers, the control-plane tables are authoritative; for the current pipeline, the tracker database remains authoritative.
 
@@ -81,7 +81,7 @@ Closing is explicit. An identical repeated close is idempotent; a different repe
 
 Rollback means disabling future registry consumers while retaining the tables and history. There is no destructive down migration.
 
-The registry itself does not infer admissions or transitions. Phase 3 supplies optional shadow adapters and policies, but backfill, API/UI surfaces, ranking changes, execution eligibility, sizing, order generation, and broker access remain outside the registry contract.
+The registry itself does not infer admissions or transitions. Phase 3A supplies optional shadow adapters and policies; Phase 3B supplies stage/routing lineage and conservative position-state recovery. Backfill, API/UI surfaces, ranking changes, execution eligibility, sizing, order generation, and broker access remain outside the registry contract.
 
 ## Example timeline
 

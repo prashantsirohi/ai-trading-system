@@ -1,13 +1,13 @@
 # Opportunity Shadow Orchestration
 
-- **Purpose:** Define the non-authoritative Phase 3 adapter, admission, lifecycle, retention, and registry-write workflow.
+- **Purpose:** Define the non-authoritative Phase 3A adapter, admission, lifecycle, retention, and registry-write workflow.
 - **Audience:** Engineers operating or changing canonical opportunity reconciliation.
 - **Last verified:** 2026-07-14
 - **Source of truth:** `src/ai_trading_system/domains/opportunities/adapters/`, `src/ai_trading_system/domains/opportunities/orchestration/`, and `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
 
-Start with the [System Guide](../SYSTEM_GUIDE.md). Phase 1 owns the [domain contracts](opportunity_lifecycle_contracts.md), Phase 2 owns the [registry](opportunity_registry.md), and this document defines their optional pipeline integration.
+Start with the [System Guide](../SYSTEM_GUIDE.md). Phase 1 — Canonical Opportunity Contracts owns the [domain contracts](opportunity_lifecycle_contracts.md), Phase 2 — Persistent Candidate Registry owns the [registry](opportunity_registry.md), and this document defines Phase 3A — Shadow Lifecycle Orchestration. Phase 3B — Universe Coverage and Scan Routing extends it without replacing it; Phase 4 — Read-Only Operator Surfaces remains deferred.
 
 ## Purpose and boundary
 
@@ -25,7 +25,7 @@ flowchart TD
     L --> D["OpportunityRegistryService"]
     L --> F["Shadow audit artifacts"]
     D --> CP["control_plane.duckdb canonical history"]
-    CP -. "not consumed in Phase 3" .-> X["Execution"]
+    CP -. "not consumed in Phase 3A or 3B" .-> X["Execution"]
 ```
 
 ## Source adapters and unknown values
@@ -46,7 +46,7 @@ Every admission records a named reason, `setup-family-v1` family, rule version, 
 
 `lifecycle-policy-v1` is pure and persists at most one transition per candidate per shadow run. Monitoring states may collapse to the strongest fully satisfied pre-trigger state. Trigger and terminal semantics are not skipped. A direct `TRIGGERED → CONFIRMED` is allowed only when the first later observation already contains explicit confirmed follow-through; transition metadata records the collapsed pending observation.
 
-Normal trigger requires locked stock Stage 2. A provisional S1→S2 trigger requires confidence 75, locked sector Stage 2, evidence 80, low extension risk, and an allowed market regime. Stage 3 weakens active candidates; Stage 4 fails and closes position-free candidates. Phase 3 does not recover position-only episodes.
+Normal trigger requires locked stock Stage 2. A provisional S1→S2 trigger requires confidence 75, locked sector Stage 2, evidence 80, low extension risk, and an allowed market regime. Stage 3 weakens active candidates; Stage 4 fails and closes position-free candidates. Phase 3A alone does not recover position-only episodes; Phase 3B shadow mode may recover them from fill-derived active-position state.
 
 Progress uses only comparable values. Two positives mean improving, two negatives or a hard structural event mean deteriorating, comparable non-material movement is stable, and absent comparisons remain unknown. Retention applies the Phase 1 age and stagnation limits independently. Rank decline alone cannot close a confirmed candidate.
 
@@ -71,4 +71,4 @@ Months  a new admission identity opens episode 2
 
 ## Non-goals
 
-Phase 3 does not generate orders, eligibility, sizing, portfolio allocation, broker calls, API/UI surfaces, notifications, historical backfills, model updates, or synchronization with `candidate_tracker.duckdb`.
+Phase 3A does not generate orders, eligibility, sizing, portfolio allocation, broker calls, API/UI surfaces, notifications, historical backfills, model updates, or synchronization with `candidate_tracker.duckdb`.

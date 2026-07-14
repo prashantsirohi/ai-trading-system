@@ -26,11 +26,15 @@ opportunity, Investigator evidence, candidate lifecycle, and stock/sector
 structural stage as separate axes; its policy guards are pure and are not wired
 to execution. See [opportunity lifecycle contracts](architecture/opportunity_lifecycle_contracts.md).
 
-The Phase 2 [opportunity registry](architecture/opportunity_registry.md) adds an
+Phase 1 is [Canonical Opportunity Contracts](architecture/opportunity_lifecycle_contracts.md).
+Phase 2 [Persistent Candidate Registry](architecture/opportunity_registry.md) adds an
 append-oriented, historically reconstructable control-plane store. The optional
-Phase 3 [opportunity shadow stage](architecture/opportunity_shadow_orchestration.md)
+Phase 3A [Shadow Lifecycle Orchestration](architecture/opportunity_shadow_orchestration.md)
 writes that history when explicitly enabled; execution does not consume it. The
 existing candidate tracker remains the current pipeline's operational lifecycle store.
+Phase 3B adds optional full-universe [weekly structural coverage](stages/weekly_stage.md)
+and [shadow scan routing](stages/scan_router.md). Phase 4 read-only operator surfaces
+remain deferred.
 
 ## Safety and operating invariants
 
@@ -75,15 +79,15 @@ existing candidate tracker remains the current pipeline's operational lifecycle 
 
 ## Operational design and stages
 
-<!-- system-guide-logical-stages: ingest,features,rank,investigator,opportunities,fundamentals,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker -->
+<!-- system-guide-logical-stages: ingest,features,rank,weekly_stage,scan_router,investigator,opportunities,fundamentals,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker -->
 
 ```text
-ingest -> features -> rank -> investigator -> opportunities* -> fundamentals* -> candidates
+ingest -> features -> rank -> weekly_stage* -> scan_router* -> investigator -> opportunities* -> fundamentals* -> candidates
        -> candidate_tracker -> events -> execute -> insight -> narrative
        -> publish -> perf_tracker
 ```
 
-`PIPELINE_ORDER` contains all 14 logical stages above. The current CLI default omits `opportunities` and `narrative`, so its normal stage list remains `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker`. Shadow mode inserts `opportunities` immediately after `investigator`. Canary mode replaces the unchanged default with `ingest,features,rank`.
+`PIPELINE_ORDER` contains all 16 logical stages above. The current CLI default omits `weekly_stage`, `scan_router`, `opportunities`, and `narrative`, so its normal stage list remains `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker`. Phase 3B `compare` or `shadow` mode inserts `weekly_stage,scan_router` after `rank`; registry shadow mode inserts `opportunities` after `investigator`. Canary mode replaces the unchanged default with `ingest,features,rank`.
 
 `fundamentals` is optional in the orchestrator's implicit-stage contract, but the CLI's default stage string names it explicitly. To omit it from a CLI run, pass an explicit `--stages` list without `fundamentals`; the current `--no-enable-fundamentals` flag does not remove it from that default string. `candidate_tracker` is enabled by default and `--no-enable-candidate-tracker` removes it from the default CLI list. Any other explicit `--stages` list runs only the requested stages after expanding the `features` alias.
 
@@ -92,6 +96,8 @@ ingest -> features -> rank -> investigator -> opportunities* -> fundamentals* ->
 | `ingest` | Refresh, validate, provenance-tag, and quarantine operational OHLCV/delivery data. | Trusted catalog and ingest artifacts | [ingest](stages/ingest.md) |
 | `features` | Compute technical, sector, valuation, earnings, and derived feature snapshots. | Feature Parquet and snapshot metadata | [features](stages/features.md) |
 | `rank` | Score the universe and materialize ranking, breakout, pattern, stock, sector, and Stage 1 evidence. | Rank artifact family | [rank](stages/rank.md) |
+| `weekly_stage` | Classify full-universe stock and sector structure and run light Stage 1 discovery. | Universal stage history and coverage artifacts | [weekly stage](stages/weekly_stage.md) |
+| `scan_router` | Resolve rank, stage, candidate, active-position, and recent-exit coverage. | Routing and comparison artifacts | [scan router](stages/scan_router.md) |
 | `investigator` | Build a non-executable operator investigation queue from post-rank evidence. | Investigator artifacts and control-plane history | [investigator](stages/investigator.md) |
 | `opportunities` | Optionally reconcile canonical candidate episodes in non-authoritative shadow mode. | Opportunity registry and audit artifacts | [opportunities](stages/opportunities.md) |
 | `fundamentals` | Optionally import and score fundamental evidence. | Fundamental scores and watchlists | [fundamentals](stages/fundamentals.md) |
@@ -173,6 +179,22 @@ Run a reduced real-data canary without network publishing:
 ```bash
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
   --canary --symbol-limit 25 --local-publish
+```
+
+Run Phase 3B comparison without changing registry, execution, or published payloads:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
+  --opportunity-scan-routing-mode compare --local-publish
+```
+
+Run Phase 3A plus Phase 3B shadow persistence:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
+  --opportunity-registry-mode shadow \
+  --opportunity-scan-routing-mode shadow \
+  --local-publish
 ```
 
 The command above uses the configured runtime stores. When validation must not mutate live stores, follow the [copied-data canary](runbooks/copied_data_canary.md) maintenance-window procedure instead.

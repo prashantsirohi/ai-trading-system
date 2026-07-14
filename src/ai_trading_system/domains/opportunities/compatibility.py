@@ -31,6 +31,7 @@ class LegacyWeeklyStageResult:
 
 
 _STAGE_VALUES = {
+    **{stage.value.upper(): stage for stage in WeinsteinStage},
     "S1": WeinsteinStage.STAGE_1,
     "STAGE_1": WeinsteinStage.STAGE_1,
     "STAGE_1_BASE": WeinsteinStage.STAGE_1,

@@ -19,7 +19,7 @@ Start with the [System Guide](../SYSTEM_GUIDE.md). This document expands only th
 The canonical logical order is:
 
 ```text
-ingest -> features -> rank -> investigator -> opportunities -> fundamentals -> candidates
+ingest -> features -> rank -> weekly_stage -> scan_router -> investigator -> opportunities -> fundamentals -> candidates
        -> candidate_tracker -> events -> execute -> insight -> narrative
        -> publish -> perf_tracker
 ```
@@ -35,11 +35,11 @@ ingest
 -> features_sector_earnings
 -> features_phase1
 -> features_snapshot
--> rank -> investigator -> opportunities -> fundamentals -> candidates -> candidate_tracker
+-> rank -> weekly_stage -> scan_router -> investigator -> opportunities -> fundamentals -> candidates -> candidate_tracker
 -> events -> execute -> insight -> narrative -> publish -> perf_tracker
 ```
 
-`fundamentals` and `opportunities` are declared optional. The current CLI enables fundamentals by default but leaves opportunities off unless shadow mode is selected. `candidate_tracker` is enabled by default. Explicit `--stages` values are expanded and validated against `PIPELINE_ORDER`; the orchestrator does not silently add omitted dependencies.
+`weekly_stage`, `scan_router`, `fundamentals`, and `opportunities` are optional. The CLI enables fundamentals by default. Phase 3B compare/shadow mode inserts weekly coverage and routing; registry shadow mode inserts opportunities. `candidate_tracker` remains enabled by default. Explicit `--stages` values are authoritative.
 
 ## End-to-end handoff
 
@@ -47,7 +47,9 @@ ingest
 flowchart LR
     I["ingest"] --> F["features (7 substages)"]
     F --> R["rank"]
-    R --> V["investigator"]
+    R --> W["weekly_stage (optional Phase 3B)"]
+    W --> SR["scan_router (optional Phase 3B)"]
+    SR --> V["investigator"]
     V --> O["opportunities (optional shadow)"]
     R --> U["fundamentals (optional)"]
     R --> C["candidates"]
@@ -66,6 +68,8 @@ flowchart LR
 | `ingest` | Provider data and master-data mapping | Trusted OHLCV, provenance/quarantine, ingest artifacts | Trust/DQ can block all downstream work. |
 | `features_*` | Trusted catalog plus earlier feature substages | Technical, sector, valuation, earnings, derived features, final snapshot | Each substage is a separately persisted attempt; final snapshot DQ gates rank. |
 | `rank` | Feature snapshot | Ranked signals, Stage 1, breakouts, patterns, stock/sector dashboards | Empty or invalid canonical rank output can block downstream work. |
+| `weekly_stage` | As-of OHLCV and latest sector mapping | Universal stock/sector history and light discovery | No rank cap; append-only control-plane history. |
+| `scan_router` | Rank, stage, lifecycle, and fill-derived positions | Routing, coverage, monitor, and comparison artifacts | No broker calls; active-position coverage is invariant. |
 | `investigator` | Registered rank artifacts | Investigation queue, lifecycle/gate artifacts, decision history | Non-executable; optional evidence degrades rather than authorizes execution. |
 | `opportunities` | Registered rank and optional Investigator artifacts | Canonical registry history and shadow audit artifacts | Required-source failure is recorded but does not block execution or publish. |
 | `fundamentals` | Configured fundamentals sources | Scores, watchlists, enrichment artifacts | Optional in the orchestrator contract. |

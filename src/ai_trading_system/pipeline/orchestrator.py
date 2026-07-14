@@ -42,7 +42,7 @@ from ai_trading_system.platform.db.paths import (
 from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
-from ai_trading_system.pipeline.stages import CandidateTrackerStage, CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, InvestigatorStage, NarrativeStage, OpportunityStage, PerfTrackerStage, PublishStage, RankStage
+from ai_trading_system.pipeline.stages import CandidateTrackerStage, CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, InvestigatorStage, NarrativeStage, OpportunityStage, PerfTrackerStage, PublishStage, RankStage, ScanRouterStage, WeeklyStageCoverageStage
 from ai_trading_system.pipeline.stages.opportunities import OpportunityStageError
 
 load_project_env(__file__)
@@ -70,10 +70,10 @@ FEATURE_SUBSTAGE_LABELS = {
     "features_phase1": "phase1 derived features",
     "features_snapshot": "feature snapshot and DQ",
 }
-PIPELINE_ORDER = ["ingest", *FEATURE_SUBSTAGES, "rank", "investigator", "opportunities", "fundamentals", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
+PIPELINE_ORDER = ["ingest", *FEATURE_SUBSTAGES, "rank", "weekly_stage", "scan_router", "investigator", "opportunities", "fundamentals", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
 # Stages dropped from the default order unless explicitly enabled (e.g. by a flag
 # or by a detected input). They remain valid when named in an explicit stage list.
-OPTIONAL_STAGES = frozenset({"fundamentals", "opportunities"})
+OPTIONAL_STAGES = frozenset({"fundamentals", "weekly_stage", "scan_router", "opportunities"})
 DEFAULT_CLI_STAGES = "ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker"
 
 
@@ -548,6 +548,8 @@ class PipelineOrchestrator:
             "features_phase1": FeaturesStage(),
             "features_snapshot": FeaturesStage(),
             "rank": RankStage(),
+            "weekly_stage": WeeklyStageCoverageStage(),
+            "scan_router": ScanRouterStage(),
             "investigator": InvestigatorStage(),
             "opportunities": OpportunityStage(),
             "fundamentals": FundamentalsStage(),
@@ -579,6 +581,8 @@ class PipelineOrchestrator:
             "features_phase1": "features 6/7: phase1 derived features",
             "features_snapshot": "features 7/7: snapshot and feature DQ",
             "rank": "scoring symbols and building ranked outputs",
+            "weekly_stage": "classifying full-universe weekly structure",
+            "scan_router": "routing rank, stage and position monitoring coverage",
             "investigator": "investigating daily gainers and ageing active watchlist",
             "opportunities": "reconciling canonical candidate episodes in shadow mode",
             "fundamentals": "enriching ranked candidates with Screener fundamentals",
@@ -744,6 +748,7 @@ class PipelineOrchestrator:
             fundamental_scores_path=params.get("fundamental_scores_path"),
             enable_candidate_tracker=bool(params.get("enable_candidate_tracker", True)),
             opportunity_registry_mode=str(params.get("opportunity_registry_mode", "off")),
+            opportunity_scan_routing_mode=str(params.get("opportunity_scan_routing_mode", "off")),
         )
         data_domain = params.get("data_domain", "operational")
         run_date = run_date or date.today().isoformat()
@@ -1169,6 +1174,7 @@ class PipelineOrchestrator:
         fundamental_scores_path: object | None = None,
         enable_candidate_tracker: bool = True,
         opportunity_registry_mode: str = "off",
+        opportunity_scan_routing_mode: str = "off",
     ) -> List[str]:
         def _expand_features(stages: Iterable[str]) -> list[str]:
             expanded: list[str] = []
@@ -1189,6 +1195,7 @@ class PipelineOrchestrator:
                 if stage not in OPTIONAL_STAGES
                 or (stage == "fundamentals" and fundamentals_enabled)
                 or (stage == "opportunities" and str(opportunity_registry_mode).lower() == "shadow")
+                or (stage in {"weekly_stage", "scan_router"} and str(opportunity_scan_routing_mode).lower() in {"compare", "shadow"})
                 if stage != "candidate_tracker" or bool(enable_candidate_tracker)
             ]
         requested = _expand_features(stage_names)
@@ -1391,6 +1398,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Evaluate opportunity shadow reconciliation and write audit artifacts without registry writes.",
     )
+    parser.add_argument(
+        "--opportunity-scan-routing-mode",
+        choices=("off", "compare", "shadow"),
+        default="off",
+        help="Enable Phase 3B universe coverage and non-authoritative scan routing.",
+    )
+    parser.add_argument("--rank-deep-scan-limit", type=int, default=250)
+    parser.add_argument("--stage-promoted-scan-limit", type=int, default=75)
+    parser.add_argument("--stage-discovery-confidence-threshold", type=float, default=75.0)
+    parser.add_argument("--stage-promotion-confidence-threshold", type=float, default=75.0)
+    parser.add_argument("--recent-exit-cooling-sessions", type=int, choices=range(10, 21), default=15)
+    parser.add_argument("--minimum-sector-constituents", type=int, default=5)
+    parser.add_argument("--minimum-sector-stage-coverage-ratio", type=float, default=0.70)
+    parser.add_argument("--recover-position-only-episodes", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--run-date",
         default=date.today().isoformat(),
@@ -1912,6 +1933,9 @@ def main() -> None:
         stage_names = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
         if not args.enable_candidate_tracker and args.stages == DEFAULT_CLI_STAGES:
             stage_names = [stage for stage in stage_names if stage != "candidate_tracker"]
+        if args.opportunity_scan_routing_mode in {"compare", "shadow"} and args.stages == DEFAULT_CLI_STAGES:
+            rank_index = stage_names.index("rank")
+            stage_names[rank_index + 1:rank_index + 1] = ["weekly_stage", "scan_router"]
         if args.opportunity_registry_mode == "shadow" and args.stages == DEFAULT_CLI_STAGES:
             investigator_index = stage_names.index("investigator")
             stage_names.insert(investigator_index + 1, "opportunities")
@@ -1940,6 +1964,15 @@ def main() -> None:
         "enable_candidate_tracker": bool(args.enable_candidate_tracker),
         "opportunity_registry_mode": args.opportunity_registry_mode,
         "opportunity_registry_dry_run": bool(args.opportunity_registry_dry_run),
+        "opportunity_scan_routing_mode": args.opportunity_scan_routing_mode,
+        "rank_deep_scan_limit": args.rank_deep_scan_limit,
+        "stage_promoted_scan_limit": args.stage_promoted_scan_limit,
+        "stage_discovery_confidence_threshold": args.stage_discovery_confidence_threshold,
+        "stage_promotion_confidence_threshold": args.stage_promotion_confidence_threshold,
+        "recent_exit_cooling_sessions": args.recent_exit_cooling_sessions,
+        "minimum_sector_constituents": args.minimum_sector_constituents,
+        "minimum_sector_stage_coverage_ratio": args.minimum_sector_stage_coverage_ratio,
+        "recover_position_only_episodes": args.recover_position_only_episodes,
         "candidate_tracker_max_age_days": int(args.candidate_tracker_max_age_days),
         "candidate_tracker_review_window_days": int(args.candidate_tracker_review_window_days),
         "candidate_tracker_archive_failures": bool(args.candidate_tracker_archive_failures),

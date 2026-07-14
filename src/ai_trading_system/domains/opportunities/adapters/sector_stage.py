@@ -24,22 +24,24 @@ def adapt_sector_stage_rows(rows: Sequence[Mapping[str, Any]], *, source: Source
         if not sector:
             rejected.append(RejectedSourceRow(source.artifact_type, identity, "missing sector mapping", ("sector",)))
             continue
-        raw_stage = first(row, "sector_stage", "sector_stage_label", "weekly_sector_stage")
+        raw_stage = first(row, "effective_stage", "sector_stage", "sector_stage_label", "weekly_sector_stage")
         mapped = map_legacy_stage(raw_stage).value if raw_stage is not None else WeinsteinStage.UNKNOWN
-        confidence = as_float(first(row, "sector_stage_confidence", "stage_confidence")) or 0.0
+        confidence = as_float(first(row, "stage_confidence_score", "sector_stage_confidence", "stage_confidence")) or 0.0
         if confidence <= 1 and raw_stage is not None:
             confidence *= 100
         explicit = str(first(row, "sector_stage_status", "stage_status") or "").lower()
         week_end = as_date(first(row, "source_week_end", "week_end_date"), as_of.date())
         week_start = as_date(first(row, "source_week_start"), week_end - timedelta(days=week_end.weekday()))
-        locked = explicit == "locked" or (mapped is not WeinsteinStage.UNKNOWN and explicit != "provisional" and week_end < as_of.date())
-        locked_at_raw = first(row, "stage_locked_at", "sector_stage_locked_at", "created_at")
+        locked = mapped is not WeinsteinStage.UNKNOWN and (
+            explicit == "locked" or (explicit != "provisional" and week_end < as_of.date())
+        )
+        locked_at_raw = first(row, "stage_locked_at", "sector_stage_locked_at", "created_at", "as_of")
         if locked and locked_at_raw is None:
             rejected.append(RejectedSourceRow(source.artifact_type, identity, "locked sector stage lacks a source lock/creation timestamp", ("sector_stage_locked_at", "created_at")))
             continue
         if mapped is WeinsteinStage.UNKNOWN:
             warnings.append(AdapterWarning(source.artifact_type, identity, "sector_structural_stage_unavailable", "sector RS/rotation does not imply a Weinstein stage"))
-        status = StageStatus.LOCKED if locked else StageStatus.PROVISIONAL if mapped is not WeinsteinStage.UNKNOWN else StageStatus.UNKNOWN
+        status = StageStatus.UNKNOWN if mapped is WeinsteinStage.UNKNOWN else StageStatus.LOCKED if locked else StageStatus.PROVISIONAL
         provisional = WeinsteinStage.UNKNOWN if locked else mapped
         locked_stage = mapped if locked else WeinsteinStage.UNKNOWN
         stage = StageSnapshot(
@@ -58,7 +60,7 @@ def adapt_sector_stage_rows(rows: Sequence[Mapping[str, Any]], *, source: Source
             weeks_in_locked_stage=0,
             provisional_persistence_days=0,
             transition_reason=StageTransitionReason.UNKNOWN,
-            classifier_version=str(first(row, "sector_stage_classifier_version") or "sector-stage-unavailable-v1"),
+            classifier_version=str(first(row, "aggregation_rule_version", "sector_stage_classifier_version") or "sector-stage-unavailable-v1"),
             confidence_formula_version=LEGACY_STAGE_CONFIDENCE_VERSION,
         )
         sector_id = str(first(row, "sector_id") or sector).strip().upper().replace(" ", "_")

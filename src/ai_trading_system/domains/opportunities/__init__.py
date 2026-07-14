@@ -17,6 +17,18 @@ from .compatibility import (
 from . import contracts as _contracts
 from .contracts import *  # noqa: F403
 from .policy import evaluate_early_entry_stage_guard, evaluate_normal_entry_stage_guard
+from .routing import (
+    OpportunityScanRoutingMode,
+    PositionMonitoringConfig,
+    ScanProfile,
+    ScanReason,
+    ScanRoutingConfig,
+    ScanRoutingDecision,
+    ScanTier,
+    StageCoverageConfig,
+    StageDiscoveryReason,
+    decide_scan_route,
+)
 from .serialization import from_dict, to_dict, to_json
 from .validation import (
     calculate_stage_confidence,
@@ -51,4 +63,14 @@ __all__ = [
     "derive_monitoring_stage",
     "select_stage_for_use",
     "validate_candidate_decision",
+    "OpportunityScanRoutingMode",
+    "PositionMonitoringConfig",
+    "ScanProfile",
+    "ScanReason",
+    "ScanRoutingConfig",
+    "ScanRoutingDecision",
+    "ScanTier",
+    "StageCoverageConfig",
+    "StageDiscoveryReason",
+    "decide_scan_route",
 ]

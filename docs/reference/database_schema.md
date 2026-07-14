@@ -701,6 +701,14 @@ Schema is identical to `data/ohlcv.duckdb` (created by the same `initialize_inge
 
 ## Notes on migration application
 
+Migration `033_opportunity_phase3b.sql` adds three append-only control-plane tables:
+
+| Table | Purpose |
+|---|---|
+| `weekly_stock_stage_history` | Candidate-independent provisional and locked symbol stage observations. |
+| `weekly_sector_stage_history` | Full-constituent sector stage and coverage observations. |
+| `opportunity_scan_routing_history` | Idempotent per-run symbol routing decisions with source hashes. |
+
 - Control-plane DDL is applied by the registry initializer at `src/ai_trading_system/pipeline/registry.py:300` (`self.db_path = ... / "data" / "control_plane.duckdb"`); the executor reads the 17 SQL files from `pipeline/migrations/` in lexicographic order.
 - DuckDB does not enforce foreign keys; relationships above are by convention and are not constrained at the database level.
 - Several control-plane tables are extended by later migrations (002 → `dq_rule`, `model_registry`; 012 → `data_repair_run` index; 017 → `strategy_iteration_result`). Treat the final shape as the merge of all referenced migrations.

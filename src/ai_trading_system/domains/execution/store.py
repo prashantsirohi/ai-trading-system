@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
@@ -15,6 +16,18 @@ from ai_trading_system.domains.execution.models import FillRecord, OrderRecord
 from ai_trading_system.platform.db.paths import get_domain_paths
 
 _FALLBACK_EXECUTION_LOCK = threading.RLock()
+
+
+@dataclass(frozen=True, slots=True)
+class PositionCycle:
+    """Read-only fill-derived position cycle used by shadow monitoring."""
+
+    symbol_id: str
+    exchange: str
+    net_quantity: int
+    cycle_opened_at: str | None
+    last_exited_at: str | None
+    active: bool
 
 
 def _load_json(value: str | None) -> dict:
@@ -29,11 +42,12 @@ def _load_json(value: str | None) -> dict:
 class ExecutionStore:
     """Lightweight DuckDB-backed store for execution events."""
 
-    def __init__(self, project_root: Path | str, db_path: Optional[Path | str] = None):
+    def __init__(self, project_root: Path | str, db_path: Optional[Path | str] = None, *, initialize: bool = True):
         self.project_root = Path(project_root)
         self.db_path = Path(db_path) if db_path else get_domain_paths(self.project_root).root_dir / "execution.duckdb"
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+        if initialize:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._init_db()
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
         return duckdb.connect(str(self.db_path))
@@ -495,6 +509,63 @@ class ExecutionStore:
             ]
         finally:
             conn.close()
+
+    def list_position_cycles(self) -> List[PositionCycle]:
+        """Reconstruct active cycles and the latest flat transition from fills."""
+        if not self.db_path.exists():
+            return []
+        fills = self.list_fills()
+        by_symbol: dict[tuple[str, str], list[dict]] = {}
+        for fill in fills:
+            key = (str(fill.get("symbol_id") or "").upper(), str(fill.get("exchange") or "NSE").upper())
+            by_symbol.setdefault(key, []).append(fill)
+        cycles: list[PositionCycle] = []
+        for (symbol, exchange), rows in sorted(by_symbol.items()):
+            rows.sort(key=lambda row: (str(row.get("filled_at") or ""), str(row.get("fill_id") or "")))
+            net = 0
+            opened: str | None = None
+            last_exit: str | None = None
+            for row in rows:
+                before = net
+                quantity = int(row.get("quantity") or 0)
+                net += quantity if str(row.get("side") or "").upper() == "BUY" else -quantity
+                filled_at = str(row.get("filled_at") or "") or None
+                if before == 0 and net != 0:
+                    opened = filled_at
+                if before != 0 and net == 0:
+                    last_exit = filled_at
+                    opened = None
+            cycles.append(PositionCycle(symbol, exchange, net, opened, last_exit, net != 0))
+        return cycles
+
+    def list_recently_exited_positions(
+        self,
+        *,
+        ohlcv_db_path: Path | str,
+        as_of: str,
+        cooling_sessions: int = 15,
+    ) -> List[PositionCycle]:
+        """Return currently flat cycles whose last exit is inside a trading-session window."""
+        candidates = [cycle for cycle in self.list_position_cycles() if not cycle.active and cycle.last_exited_at]
+        if not candidates or not Path(ohlcv_db_path).exists():
+            return []
+        conn = duckdb.connect(str(ohlcv_db_path), read_only=True)
+        try:
+            sessions = [row[0] for row in conn.execute(
+                """SELECT DISTINCT CAST(timestamp AS DATE) AS session_date FROM _catalog
+                   WHERE CAST(timestamp AS DATE) <= CAST(? AS DATE)
+                   ORDER BY session_date DESC LIMIT ?""",
+                [as_of, int(cooling_sessions)],
+            ).fetchall()]
+        finally:
+            conn.close()
+        if not sessions:
+            return []
+        first = min(sessions)
+        return [
+            cycle for cycle in candidates
+            if datetime.fromisoformat(str(cycle.last_exited_at).replace("Z", "+00:00")).date() >= first
+        ]
 
     def upsert_trade_note(
         self,

@@ -20,7 +20,7 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 | Store | Canonical path | Primary owner | Purpose |
 |---|---|---|---|
 | OHLCV | `$DATA_ROOT/ohlcv.duckdb` | Ingest, trust, features | Price/volume, delivery, provenance, quarantine, source freshness, and feature metadata. |
-| Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, alerts, models, operator state, pattern/cache metadata, decision history, and canonical opportunity-registry history written through the Phase 2 API. |
+| Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, alerts, models, operator state, pattern/cache metadata, decision history, canonical opportunity-registry history, and Phase 3B universal stage/routing history. |
 | Execution ledger | `$DATA_ROOT/execution.duckdb` | `ExecutionStore` | Orders, fills, positions, stops, and broker/paper execution state supported by the active code. |
 | Candidate tracker | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate tracker domain | Candidate episodes, transitions, snapshots, fundamental reviews, alerts, and current lifecycle state. |
 | Master data | `$DATA_ROOT/masterdata.db` | Ingest/master-data services | Shared instrument and symbol identity data. |
@@ -103,7 +103,7 @@ back to a failed attempt merely because its file is newer.
 
 ## Durable decision state versus attempt snapshots
 
-CSV and JSON artifacts are immutable-attempt evidence and publish/debug inputs. Durable current or historical decision facts live in control-plane tables owned by their read/write models. The current pipeline's mutable candidate lifecycle facts remain in `candidate_tracker.duckdb`; canonical episode history written through the opportunity-registry API lives in `control_plane.duckdb`. The optional Phase 3 shadow stage is a writer to that canonical history, but no synchronization or execution dependency exists between the stores. Orders and fills live in `execution.duckdb`.
+CSV and JSON artifacts are immutable-attempt evidence and publish/debug inputs. Durable current or historical decision facts live in control-plane tables owned by their read/write models. The current pipeline's mutable candidate lifecycle facts remain in `candidate_tracker.duckdb`; canonical episode history written through the opportunity-registry API lives in `control_plane.duckdb`. The optional Phase 3A/3B shadow stages write canonical and universal structural history, but no synchronization or execution dependency exists between the stores. Orders and fills live in `execution.duckdb` and are read without mutation for Phase 3B monitoring.
 
 Write modes that distinguish live updates, replay/backfill, and current-state rebuild must preserve their domain's current-state contract. Do not reconstruct or replace current state merely because an older artifact exists.
 

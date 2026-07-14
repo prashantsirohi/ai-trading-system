@@ -61,9 +61,68 @@ def _opportunity_shadow_count(registry: RegistryStore) -> int:
 def test_pipeline_order_and_cli_defaults_are_feature_flagged(tmp_path):
     parser = build_parser()
     assert parser.parse_args([]).opportunity_registry_mode == "off"
+    assert parser.parse_args([]).opportunity_scan_routing_mode == "off"
     assert "opportunities" not in DEFAULT_CLI_STAGES.split(",")
     assert PIPELINE_ORDER.index("opportunities") == PIPELINE_ORDER.index("investigator") + 1
     orchestrator = PipelineOrchestrator(tmp_path)
     assert "opportunities" not in orchestrator._normalize_stage_names(None)
     enabled = orchestrator._normalize_stage_names(None, opportunity_registry_mode="shadow")
     assert enabled.index("opportunities") == enabled.index("investigator") + 1
+    routed = orchestrator._normalize_stage_names(None, opportunity_scan_routing_mode="compare")
+    assert routed.index("weekly_stage") == routed.index("rank") + 1
+    assert routed.index("scan_router") == routed.index("weekly_stage") + 1
+
+
+def test_phase3b_recovers_position_only_episode_without_transition_history(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path / "runtime"))
+    context = _context(tmp_path, mode="shadow")
+    routing = tmp_path / "scan_routing.csv"
+    routing.write_text(
+        "symbol_id,exchange,scan_tier,scan_reasons,active_position,recently_exited,position_cycle_opened_at\n"
+        "ABC,NSE,position_monitor,['active_position'],true,false,2026-07-01T10:00:00+00:00\n",
+        encoding="utf-8",
+    )
+    context.params.update({
+        "opportunity_registry_dry_run": False,
+        "opportunity_scan_routing_mode": "shadow",
+        "recover_position_only_episodes": True,
+    })
+    context.artifacts["scan_router"] = {
+        "scan_routing": StageArtifact.from_file("scan_routing", routing, row_count=1)
+    }
+    OpportunityStage().run(context)
+    with context.registry._reader() as conn:  # noqa: SLF001
+        episode = conn.execute(
+            "SELECT setup_family, episode_type, opening_reason FROM candidate_episode"
+        ).fetchone()
+        snapshot = conn.execute(
+            "SELECT lifecycle_state, active_position FROM candidate_snapshot"
+        ).fetchone()
+        transitions = conn.execute("SELECT COUNT(*) FROM candidate_transition").fetchone()[0]
+    assert episode == ("position_state_recovery", "position_state_recovery", "position_state_recovery")
+    assert snapshot == ("confirmed", True)
+    assert transitions == 0
+
+
+def test_phase3b_sector_membership_comes_from_full_universe_stock_rows(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path / "runtime"))
+    context = _context(tmp_path, mode="shadow")
+    context.params["opportunity_scan_routing_mode"] = "shadow"
+    stock = tmp_path / "weekly_stock_stage_universe.csv"
+    stock.write_text(
+        "symbol_id,exchange,sector_name,effective_stage,stage_status,stage_confidence_score,source_week_start,source_week_end,as_of\n"
+        "ABC,NSE,Capital Goods,stage_1_basing,provisional,80,2026-07-13,2026-07-14,2026-07-14T00:00:00+00:00\n",
+        encoding="utf-8",
+    )
+    sector = tmp_path / "weekly_sector_stage_universe.csv"
+    sector.write_text(
+        "sector_name,effective_stage,stage_status,stage_confidence_score,source_week_start,source_week_end,as_of\n"
+        "Capital Goods,stage_1_basing,provisional,80,2026-07-13,2026-07-14,2026-07-14T00:00:00+00:00\n",
+        encoding="utf-8",
+    )
+    context.artifacts["weekly_stage"] = {
+        "weekly_stock_stage_universe": StageArtifact.from_file("weekly_stock_stage_universe", stock),
+        "weekly_sector_stage_universe": StageArtifact.from_file("weekly_sector_stage_universe", sector),
+    }
+    result = OpportunityStage().run(context)
+    assert result.metadata["unmatched_sector_mappings"] == 0

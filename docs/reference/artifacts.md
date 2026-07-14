@@ -238,3 +238,11 @@ Convenience outputs:
 - `execute_summary.json`
 - QuantStats HTML wrappers
 - latest ML overlay CSV copies in `reports/`
+
+## Phase 3B shadow artifacts
+
+`weekly_stage` writes `weekly_stock_stage_universe.csv`, `weekly_sector_stage_universe.csv`, `weekly_stage_exclusions.csv`, `weekly_stage_summary.json`, `light_pattern_scan.csv`, and `stage_promotion_candidates.csv`.
+
+`scan_router` writes `scan_routing.csv`, `stage_discovery_candidates.csv`, `deep_scan_universe.csv`, `position_monitor_universe.csv`, `routing_conflicts.csv`, `scan_coverage_summary.json`, and `scan_routing_comparison.json`.
+
+When routing is enabled, Investigator additionally writes `routed_investigator_scores.csv`, `routed_pattern_scan.csv`, and `position_risk_monitor.csv`. Existing Investigator artifacts and publish consumers are unchanged.

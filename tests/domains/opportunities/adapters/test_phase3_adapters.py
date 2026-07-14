@@ -73,3 +73,18 @@ def test_sector_rotation_does_not_imply_structural_stage():
     assert snapshot.stage_snapshot.effective_stage is WeinsteinStage.UNKNOWN
     assert snapshot.sector_rotation_state == "Leading"
     assert any(item.code == "sector_structural_stage_unavailable" for item in result.warnings)
+
+
+def test_locked_unknown_stage_remains_canonical_unknown():
+    result = adapt_sector_stage_rows(
+        [{
+            "sector_name": "Capital Goods", "effective_stage": "unknown",
+            "stage_status": "locked", "stage_confidence_score": 0,
+            "source_week_end": "2026-07-10", "as_of": "2026-07-10T12:00:00+00:00",
+        }],
+        source=SOURCE,
+        as_of=NOW,
+    )
+    stage = result.records[0].value.stage_snapshot
+    assert stage.stage_status is StageStatus.UNKNOWN
+    assert stage.effective_stage is WeinsteinStage.UNKNOWN

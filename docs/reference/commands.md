@@ -83,7 +83,7 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator --new-run
 ```
 
-The default CLI stage string includes `fundamentals` and `candidate_tracker` but omits `opportunities` and `narrative`. `--opportunity-registry-mode shadow` inserts the non-authoritative opportunity stage after Investigator; add `--opportunity-registry-dry-run` to suppress registry writes. `--no-enable-candidate-tracker` removes the tracker from the default list. Although `--no-enable-fundamentals` exists, the current default stage string explicitly names `fundamentals`; omit it with an explicit `--stages` list. Run `--help` for the full current flag set.
+The default CLI stage string includes `fundamentals` and `candidate_tracker` but omits `weekly_stage`, `scan_router`, `opportunities`, and `narrative`. `--opportunity-scan-routing-mode compare|shadow` inserts Phase 3B after rank. `--opportunity-registry-mode shadow` inserts Phase 3A after Investigator. Existing execution and publish consumers are unchanged.
 
 Opportunity shadow run and isolated retry:
 
@@ -94,6 +94,17 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
   --run-id <run_id> --stages opportunities \
   --opportunity-registry-mode shadow --opportunity-registry-dry-run
+```
+
+Phase 3B comparison and full shadow:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
+  --opportunity-scan-routing-mode compare --local-publish
+
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
+  --opportunity-registry-mode shadow \
+  --opportunity-scan-routing-mode shadow --local-publish
 ```
 
 ## Publish and recovery

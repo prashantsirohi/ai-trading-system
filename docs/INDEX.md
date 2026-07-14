@@ -21,10 +21,12 @@
 - [opportunity_registry](architecture/opportunity_registry.md)
 - [opportunity_shadow_orchestration](architecture/opportunity_shadow_orchestration.md)
 
-## Stages (14)
+## Stages (16)
 - [ingest](stages/ingest.md)
 - [features](stages/features.md)
 - [rank](stages/rank.md)
+- [weekly_stage](stages/weekly_stage.md)
+- [scan_router](stages/scan_router.md)
 - [investigator](stages/investigator.md)
 - [opportunities](stages/opportunities.md)
 - [fundamentals](stages/fundamentals.md)

@@ -38,6 +38,12 @@ Primary selectors on `ai-trading-pipeline` (orchestrator):
 | `--stages` | `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker` | Comma-separated logical stage subset. `features` expands to seven internal substages; `narrative` is available but is not in the current CLI default list. |
 | `--opportunity-registry-mode` | `off` | `shadow` inserts the optional canonical opportunity reconciliation stage after Investigator; it never feeds execution. |
 | `--opportunity-registry-dry-run` | false | Runs adapters, admission, lifecycle, retention, and audit output without opportunity-registry writes. |
+| `--opportunity-scan-routing-mode` | `off` | `compare` writes Phase 3B sidecars; `shadow` also supplies them to opportunity reconciliation. |
+| `--rank-deep-scan-limit` | 250 | Rank-selected daily deep-scan allocation. |
+| `--stage-promoted-scan-limit` | 75 | Additional stage-promoted allocation; position/follow-through overrides are uncapped. |
+| `--recent-exit-cooling-sessions` | 15 | Trading-session cooling window; accepted range is 10–20. |
+| `--minimum-sector-constituents` | 5 | Minimum constituents for a known sector stage. |
+| `--minimum-sector-stage-coverage-ratio` | 0.70 | Minimum classified constituent coverage. |
 | `--run-id <id>` | new UUID | Reuse an existing run (mainly for stage retries) |
 | `--run-date YYYY-MM-DD` | today | Logical trading date |
 | `--data-domain operational\|research` | `operational` | Selects DuckDB paths via `platform/db/paths.py` |

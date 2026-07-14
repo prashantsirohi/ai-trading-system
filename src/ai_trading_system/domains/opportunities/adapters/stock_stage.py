@@ -27,8 +27,8 @@ def adapt_stock_stage_rows(
         if not symbol:
             rejected.append(RejectedSourceRow(source.artifact_type, identity, "missing stock-stage symbol", ("symbol_id",)))
             continue
-        label = first(row, "weekly_stage_label", "stage_label", "stage")
-        confidence_raw = as_float(first(row, "weekly_stage_confidence", "stage_confidence", "confidence"))
+        label = first(row, "effective_stage", "provisional_stage", "weekly_stage_label", "stage_label", "stage")
+        confidence_raw = as_float(first(row, "stage_confidence_score", "weekly_stage_confidence", "stage_confidence", "confidence"))
         if confidence_raw is None:
             confidence_raw = 0.0
         try:
@@ -43,16 +43,20 @@ def adapt_stock_stage_rows(
         week_end = as_date(first(row, "source_week_end", "week_end_date", "trade_date"), as_of.date())
         week_start = as_date(first(row, "source_week_start"), week_end - timedelta(days=week_end.weekday()))
         explicit_status = str(first(row, "stage_status", "lock_status") or "").strip().lower()
-        locked_at_value = first(row, "stage_locked_at", "locked_at", "created_at")
-        locked = explicit_status == "locked" or (explicit_status != "provisional" and week_end < as_of.date())
+        locked_at_value = first(row, "stage_locked_at", "locked_at", "created_at", "as_of")
+        locked = mapped is not WeinsteinStage.UNKNOWN and (
+            explicit_status == "locked" or (explicit_status != "provisional" and week_end < as_of.date())
+        )
         if locked and locked_at_value is None:
             rejected.append(RejectedSourceRow(source.artifact_type, identity, "locked stage lacks a source lock/creation timestamp", ("stage_locked_at", "created_at")))
             continue
         locked_at = as_datetime(locked_at_value, as_of) if locked_at_value is not None else (as_of if locked else None)
         previous = map_legacy_stage(first(row, "previous_locked_stage", "previous_stage")).value if first(row, "previous_locked_stage", "previous_stage") else prior.get((exchange, symbol))
-        provisional = WeinsteinStage.UNKNOWN if locked else mapped
-        locked_stage = mapped if locked else (prior.get((exchange, symbol)) or WeinsteinStage.UNKNOWN)
-        status = StageStatus.LOCKED if locked else StageStatus.PROVISIONAL if mapped is not WeinsteinStage.UNKNOWN else StageStatus.UNKNOWN
+        explicit_provisional = map_legacy_stage(first(row, "provisional_stage")).value if first(row, "provisional_stage") else None
+        explicit_locked = map_legacy_stage(first(row, "locked_stage")).value if first(row, "locked_stage") else None
+        provisional = explicit_provisional if explicit_provisional is not None else (WeinsteinStage.UNKNOWN if locked else mapped)
+        locked_stage = explicit_locked if explicit_locked is not None else (mapped if locked else (prior.get((exchange, symbol)) or WeinsteinStage.UNKNOWN))
+        status = StageStatus.UNKNOWN if mapped is WeinsteinStage.UNKNOWN else StageStatus.LOCKED if locked else StageStatus.PROVISIONAL
         snapshot = StageSnapshot(
             provisional_stage=provisional,
             locked_stage=locked_stage,

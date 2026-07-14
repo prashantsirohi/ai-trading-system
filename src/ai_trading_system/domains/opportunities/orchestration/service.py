@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 import hashlib
 import time
+import ast
+from dataclasses import replace
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +28,10 @@ from ai_trading_system.domains.opportunities.contracts import (
     ProgressSnapshot,
     ProgressStatus,
     WeinsteinStage,
+    OpportunitySnapshot,
+    EvidenceSnapshot,
+    EvidenceVerdict,
+    RiskLevel,
 )
 from ai_trading_system.domains.opportunities.registry import (
     DuckDBOpportunityRegistryStore,
@@ -78,6 +84,7 @@ class OpportunityArtifactSet:
     stock_scan: StageArtifact | None = None
     sector_dashboard: StageArtifact | None = None
     lifecycle_state: StageArtifact | None = None
+    scan_routing: StageArtifact | None = None
 
 
 class OpportunityShadowOrchestrator:
@@ -112,6 +119,7 @@ class OpportunityShadowOrchestrator:
         raw_stock = _read_csv(artifacts.stock_scan)
         raw_sector = _read_csv(artifacts.sector_dashboard)
         raw_lifecycle = _read_csv(artifacts.lifecycle_state)
+        raw_routing = _read_csv(artifacts.scan_routing)
         if raw_stock and ohlcv_db_path is not None:
             raw_stock = _enrich_stock_stage(raw_stock, ohlcv_db_path, as_of)
 
@@ -133,7 +141,7 @@ class OpportunityShadowOrchestrator:
         sector_result = adapt_sector_stage_rows(raw_sector, source=descriptors["sector"], as_of=as_of) if descriptors["sector"] else None
         lifecycle_result = adapt_lifecycle_rows(raw_lifecycle, source=descriptors["lifecycle"], as_of=as_of) if descriptors["lifecycle"] else None
         results = tuple(item for item in (rank_result, evidence_result, breakout_result, pattern_result, stock_result, sector_result, lifecycle_result) if item is not None)
-        bundles = _reconcile(results, raw_rank, as_of)
+        bundles = _attach_routing(_reconcile(results, raw_rank, raw_stock, as_of), raw_routing, as_of)
         adapter_seconds = time.perf_counter() - adapter_started
 
         rows: dict[str, list[dict[str, Any]]] = {name: [] for name in (
@@ -153,6 +161,9 @@ class OpportunityShadowOrchestrator:
         for bundle in bundles:
             matching_for_symbol = [episode for episode in open_episodes if episode.exchange == bundle.exchange and episode.symbol_id == bundle.symbol_id]
             admission = evaluate_admission(bundle, config)
+            recovery = config.recover_position_only_episodes and bundle.active_position and not matching_for_symbol
+            if recovery:
+                bundle = _recovery_bundle(bundle)
             if matching_for_symbol and not admission.admitted:
                 if len(matching_for_symbol) == 1:
                     episode = matching_for_symbol[0]
@@ -161,6 +172,9 @@ class OpportunityShadowOrchestrator:
                     _conflict(rows, bundle, "multiple open episodes require an explicit setup-family match")
                     counters["registry_conflicts"] += 1
                     continue
+            elif recovery:
+                match_outcome = SetupMatchOutcome.NEW_EPISODE
+                episode = None
             elif admission.admitted and admission.setup_family:
                 match = match_open_episode(
                     exchange=bundle.exchange, symbol_id=bundle.symbol_id, setup_family=admission.setup_family,
@@ -181,15 +195,25 @@ class OpportunityShadowOrchestrator:
             lineage = _combined_lineage(bundle, run_id, stage_attempt)
             episode_request = None
             if episode is None:
-                assert admission.admission_identity and admission.setup_family and admission.reason
+                if recovery:
+                    setup_family = "position_state_recovery"
+                    opening_reason = "position_state_recovery"
+                    admission_identity = hashlib.sha256(f"{bundle.exchange}|{bundle.symbol_id}|{bundle.position_cycle_opened_at or bundle.as_of.isoformat()}|position_state_recovery".encode()).hexdigest()
+                    episode_started_at = _aware_datetime(bundle.position_cycle_opened_at, as_of)
+                else:
+                    assert admission.admission_identity and admission.setup_family and admission.reason
+                    setup_family = admission.setup_family.value
+                    opening_reason = admission.reason.value
+                    admission_identity = admission.admission_identity
+                    episode_started_at = as_of
                 request = OpenEpisodeRequest(
                     symbol_id=bundle.symbol_id, exchange=bundle.exchange,
-                    setup_family=admission.setup_family.value, admission_identity=admission.admission_identity,
-                    episode_started_at=as_of, episode_type="analytical_shadow",
-                    opening_reason=admission.reason.value, lineage=lineage,
+                    setup_family=setup_family, admission_identity=admission_identity,
+                    episode_started_at=episode_started_at, episode_type="position_state_recovery" if recovery else "analytical_shadow",
+                    opening_reason=opening_reason, lineage=lineage,
                     contract_version=OPPORTUNITY_CONTRACT_VERSION,
                 )
-                setup_id = make_setup_id(exchange=bundle.exchange, symbol_id=bundle.symbol_id, setup_family=admission.setup_family.value, admission_identity=admission.admission_identity, episode_started_at=as_of)
+                setup_id = make_setup_id(exchange=bundle.exchange, symbol_id=bundle.symbol_id, setup_family=setup_family, admission_identity=admission_identity, episode_started_at=episode_started_at)
                 candidate_id = make_candidate_id(setup_id)
                 prior_episode = self.registry.get_candidate_episode(candidate_id)
                 if prior_episode is not None and prior_episode.episode_status is not EpisodeStatus.OPEN:
@@ -201,8 +225,8 @@ class OpportunityShadowOrchestrator:
                 counters["new_episodes_opened"] += 1
                 rows["candidate_admissions"].append({
                     "candidate_id": candidate_id, "setup_id": setup_id, "exchange": bundle.exchange,
-                    "symbol_id": bundle.symbol_id, "reason": admission.reason.value,
-                    "setup_family": admission.setup_family.value, "rule_version": admission.rule_version,
+                    "symbol_id": bundle.symbol_id, "reason": opening_reason,
+                    "setup_family": setup_family, "rule_version": admission.rule_version,
                 })
             else:
                 counters["existing_episodes_matched"] += 1
@@ -216,11 +240,11 @@ class OpportunityShadowOrchestrator:
                 counters["registry_duplicates"] += 1
                 rows["candidate_reconciliation"].append(_reconciliation_row(bundle, "exact_run_replay", episode.candidate_id))
                 continue
-            previous_state = CandidateState(current.current_lifecycle_state) if current and current.current_lifecycle_state else CandidateState.DISCOVERED
+            previous_state = CandidateState(current.current_lifecycle_state) if current and current.current_lifecycle_state else (CandidateState.CONFIRMED if recovery else CandidateState.DISCOVERED)
             progress = _progress_from_current(bundle, current)
             days_without_progress = 0 if progress.status is ProgressStatus.IMPROVING else int(current.days_without_progress or 0) + 1 if current else 0
             days_in_state = max((as_of - current.last_transition_at).days, 0) if current and current.last_transition_at else int(current.days_in_state or 0) if current else 0
-            active_position = False
+            active_position = bundle.active_position
             transition = evaluate_transition(previous_state, bundle, progress_status=progress.status, active_position=active_position, config=config)
             lifecycle_state = transition.proposed_state if transition.allowed else previous_state
             snapshot = assemble_candidate_snapshot(
@@ -398,12 +422,26 @@ def _direction(current: float, prior: float, *, lower_is_better: bool = False) -
     return current < prior if lower_is_better else current > prior
 
 
-def _reconcile(results: Iterable[Any], raw_rank: list[dict[str, Any]], as_of: datetime) -> tuple[OpportunitySourceBundle, ...]:
+def _reconcile(
+    results: Iterable[Any],
+    raw_rank: list[dict[str, Any]],
+    raw_stock: list[dict[str, Any]],
+    as_of: datetime,
+) -> tuple[OpportunitySourceBundle, ...]:
     by_key: dict[tuple[str, str], dict[str, Any]] = {}
     sector_by_key = {
         (str(row.get("exchange") or "NSE").upper(), str(row.get("symbol_id") or row.get("symbol") or "").upper()): str(row.get("sector_name") or row.get("sector") or "unknown")
         for row in raw_rank
     }
+    for row in raw_stock:
+        sector_name = str(row.get("sector_name") or row.get("sector") or "").strip()
+        if sector_name.lower() in {"", "nan", "none", "<na>"}:
+            continue
+        key = (
+            str(row.get("exchange") or "NSE").upper(),
+            str(row.get("symbol_id") or row.get("symbol") or "").upper(),
+        )
+        sector_by_key[key] = sector_name
     sector_records: dict[str, Any] = {}
     for result in results:
         for record in result.records:
@@ -447,6 +485,77 @@ def _reconcile(results: Iterable[Any], raw_rank: list[dict[str, Any]], as_of: da
             source_row_identities=tuple(sorted(item["rows"])), sector_name=sector_name,
         ))
     return tuple(bundles)
+
+
+def _attach_routing(
+    bundles: tuple[OpportunitySourceBundle, ...],
+    rows: list[dict[str, Any]],
+    as_of: datetime,
+) -> tuple[OpportunitySourceBundle, ...]:
+    routing = {
+        (str(row.get("exchange") or "NSE").upper(), str(row.get("symbol_id") or "").upper()): row
+        for row in rows if str(row.get("symbol_id") or "").strip()
+    }
+    by_key = {(bundle.exchange, bundle.symbol_id): bundle for bundle in bundles}
+    for key, row in routing.items():
+        reasons = row.get("scan_reasons") or ()
+        if isinstance(reasons, str):
+            try:
+                reasons = ast.literal_eval(reasons)
+            except (SyntaxError, ValueError):
+                reasons = [item for item in reasons.split("|") if item]
+        existing = by_key.get(key, OpportunitySourceBundle(symbol_id=key[1], exchange=key[0], as_of=as_of))
+        by_key[key] = replace(
+            existing,
+            scan_tier=str(row.get("scan_tier") or "stage_only"),
+            scan_reasons=tuple(str(item) for item in reasons),
+            active_position=str(row.get("active_position") or "").lower() in {"true", "1"},
+            recently_exited=str(row.get("recently_exited") or "").lower() in {"true", "1"},
+            position_cycle_opened_at=str(row.get("position_cycle_opened_at") or "") or None,
+        )
+    return tuple(by_key[key] for key in sorted(by_key))
+
+
+def _recovery_bundle(bundle: OpportunitySourceBundle) -> OpportunitySourceBundle:
+    opportunity = bundle.opportunity or OpportunitySnapshot(
+        opportunity_score=0.0,
+        rank_position=1,
+        rank_percentile=0.0,
+        rank_velocity=None,
+        rank_velocity_state=ProgressStatus.UNKNOWN,
+        factor_scores={},
+        rank_model_version="position-state-recovery-v1",
+        ranked_at=bundle.as_of,
+    )
+    evidence = bundle.evidence or EvidenceSnapshot(
+        evidence_score=0.0,
+        investigator_verdict=EvidenceVerdict.UNKNOWN,
+        accumulation_score=None,
+        pattern_score=None,
+        breakout_quality=None,
+        volume_quality=None,
+        delivery_quality=None,
+        sector_alignment=None,
+        market_alignment=None,
+        extension_risk=RiskLevel.UNKNOWN,
+        failure_risk=RiskLevel.UNKNOWN,
+        positive_evidence=("active execution position",),
+        negative_evidence=(),
+        missing_evidence=("pre-entry opportunity history unavailable",),
+        evidence_model_version="position-state-recovery-v1",
+        evaluated_at=bundle.as_of,
+    )
+    return replace(bundle, opportunity=opportunity, evidence=evidence, lifecycle_hint=CandidateState.CONFIRMED)
+
+
+def _aware_datetime(value: str | None, fallback: datetime) -> datetime:
+    if not value:
+        return fallback
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=fallback.tzinfo)
+    except ValueError:
+        return fallback
 
 
 def _read_csv(artifact: StageArtifact | None) -> list[dict[str, Any]]:
@@ -507,7 +616,20 @@ def _initial_counts(*args: Any) -> dict[str, Any]:
 
 
 def _reconciliation_row(bundle: OpportunitySourceBundle, outcome: str, detail: str) -> dict[str, Any]:
-    return {"exchange": bundle.exchange, "symbol_id": bundle.symbol_id, "outcome": outcome, "detail": detail, "as_of": bundle.as_of.isoformat()}
+    return {
+        "exchange": bundle.exchange,
+        "symbol_id": bundle.symbol_id,
+        "outcome": outcome,
+        "detail": detail,
+        "as_of": bundle.as_of.isoformat(),
+        "scan_tier": bundle.scan_tier,
+        "scan_reasons": "|".join(bundle.scan_reasons),
+        "position_selected": bundle.active_position,
+        "recent_exit_selected": bundle.recently_exited,
+        "rank_selected": "rank_selected" in bundle.scan_reasons,
+        "stage_selected": any(reason.startswith("stage_") for reason in bundle.scan_reasons),
+        "followthrough_selected": any(reason in {"triggered_candidate", "pending_followthrough"} for reason in bundle.scan_reasons),
+    }
 
 
 def _conflict(rows: dict[str, list[dict[str, Any]]], bundle: OpportunitySourceBundle, message: str, exc: OpportunityRegistryConflictError | None = None) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 from typing import Any
 
 import pandas as pd
@@ -292,6 +293,75 @@ class InvestigatorService:
         )
         self._persist_tables(context, artifacts)
         return StageResult(artifacts=artifacts, metadata=summary)
+
+    def run_routed_shadow(self, context: StageContext) -> StageResult:
+        """Evaluate an externally routed universe without replacing legacy outputs."""
+        routing_artifact = context.artifact_for("scan_router", "deep_scan_universe")
+        if routing_artifact is None:
+            return StageResult(metadata={"routed_shadow": "skipped", "reason": "routing artifact unavailable"})
+        routing = _read_csv(Path(routing_artifact.uri))
+        if routing.empty or "symbol_id" not in routing:
+            return StageResult(metadata={"routed_shadow": "completed", "routed_symbols": 0})
+        ranked = _read_csv(Path(context.require_artifact("rank", "ranked_signals").uri))
+        symbols = routing["symbol_id"].dropna().astype(str).str.upper().drop_duplicates().tolist()
+        candidates = load_investigator_snapshot(
+            ohlcv_db_path=context.db_path,
+            ranked_signals=ranked,
+            symbols=symbols,
+            as_of=context.run_date,
+        )
+        if candidates.empty:
+            scores = pd.DataFrame({"symbol_id": symbols})
+            patterns = pd.DataFrame()
+        else:
+            candidates = score_price_structure(candidates)
+            candidates = score_volume_anatomy(candidates)
+            fundamentals = load_fundamental_snapshot(project_root=context.project_root, symbols=symbols)
+            candidates = score_fundamentals(candidates, fundamentals)
+            candidates = classify_move(candidates)
+            candidates = score_buyer_fingerprint(candidates)
+            scores = finalize_scores(candidates)
+            routed_context = replace(
+                context,
+                params={**context.params, "investigator_pattern_max_symbols": len(symbols)},
+            )
+            patterns = build_investigator_pattern_scan(
+                context=routed_context,
+                active_watchlist=scores,
+                ranked_df=ranked,
+            )
+            scores = _merge_best_patterns(scores, best_pattern_by_symbol(patterns))
+        route_columns = [
+            column for column in (
+                "symbol_id", "scan_tier", "scan_reasons", "rank_selected", "stage_selected",
+                "position_selected", "recent_exit_selected", "followthrough_selected",
+                "stock_stage", "structural_long_blocked", "market_data_available",
+            ) if column in routing
+        ]
+        scores = scores.merge(routing[route_columns].drop_duplicates("symbol_id"), on="symbol_id", how="right")
+        position_risk = scores.loc[scores.get("scan_tier", pd.Series(dtype=str)).eq("position_monitor")].copy()
+        if not position_risk.empty:
+            position_risk.loc[:, "monitoring_recommendation"] = "review"
+            position_risk.loc[position_risk.get("hard_trap_flag", pd.Series(False, index=position_risk.index)).fillna(False), "monitoring_recommendation"] = "risk_review"
+        output = context.output_dir()
+        artifacts: list[StageArtifact] = []
+        for artifact_type, filename, frame in (
+            ("routed_investigator_scores", "routed_investigator_scores.csv", scores),
+            ("routed_pattern_scan", "routed_pattern_scan.csv", patterns),
+            ("position_risk_monitor", "position_risk_monitor.csv", position_risk),
+        ):
+            path = output / filename
+            frame.to_csv(path, index=False)
+            artifacts.append(StageArtifact.from_file(artifact_type, path, row_count=len(frame), attempt_number=context.attempt_number))
+        return StageResult(
+            artifacts=artifacts,
+            metadata={
+                "routed_shadow": "completed",
+                "routed_symbols": len(symbols),
+                "routed_score_rows": len(scores),
+                "position_monitor_rows": len(position_risk),
+            },
+        )
 
     def _load_previous_watchlist(self, context: StageContext) -> pd.DataFrame:
         if context.registry is None:

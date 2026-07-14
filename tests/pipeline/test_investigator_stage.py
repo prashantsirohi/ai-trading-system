@@ -820,4 +820,6 @@ def test_investigator_pattern_history_keeps_multiple_states_across_dates(tmp_pat
 
 
 def test_pipeline_order_places_investigator_after_rank() -> None:
-    assert PIPELINE_ORDER.index("investigator") == PIPELINE_ORDER.index("rank") + 1
+    assert PIPELINE_ORDER.index("weekly_stage") == PIPELINE_ORDER.index("rank") + 1
+    assert PIPELINE_ORDER.index("scan_router") == PIPELINE_ORDER.index("weekly_stage") + 1
+    assert PIPELINE_ORDER.index("investigator") == PIPELINE_ORDER.index("scan_router") + 1

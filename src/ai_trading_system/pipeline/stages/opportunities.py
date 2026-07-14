@@ -25,14 +25,16 @@ class OpportunityStage:
         ranked = context.artifact_for("rank", "ranked_signals")
         if ranked is None:
             raise OpportunityStageError("shadow opportunities requires the registered rank/ranked_signals artifact")
+        phase3b_shadow = str(context.params.get("opportunity_scan_routing_mode", "off")).lower() == "shadow"
         artifact_set = OpportunityArtifactSet(
             ranked_signals=ranked,
-            investigator_scores=context.artifact_for("investigator", "investigator_scores"),
+            investigator_scores=(context.artifact_for("investigator", "routed_investigator_scores") if phase3b_shadow else None) or context.artifact_for("investigator", "investigator_scores"),
             breakout_scan=context.artifact_for("rank", "breakout_scan"),
-            pattern_scan=context.artifact_for("rank", "pattern_scan"),
-            stock_scan=context.artifact_for("rank", "stock_scan"),
-            sector_dashboard=context.artifact_for("rank", "sector_dashboard"),
+            pattern_scan=(context.artifact_for("investigator", "routed_pattern_scan") if phase3b_shadow else None) or context.artifact_for("rank", "pattern_scan"),
+            stock_scan=(context.artifact_for("weekly_stage", "weekly_stock_stage_universe") if phase3b_shadow else None) or context.artifact_for("rank", "stock_scan"),
+            sector_dashboard=(context.artifact_for("weekly_stage", "weekly_sector_stage_universe") if phase3b_shadow else None) or context.artifact_for("rank", "sector_dashboard"),
             lifecycle_state=(context.artifact_for("investigator", "stage1_current_state") or context.artifact_for("investigator", "stage1_state")),
+            scan_routing=context.artifact_for("scan_router", "scan_routing") if phase3b_shadow else None,
         )
         as_of = datetime.combine(date.fromisoformat(context.run_date), time.min, tzinfo=timezone.utc)
         try:

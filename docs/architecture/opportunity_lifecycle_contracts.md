@@ -35,7 +35,7 @@ Lifecycle is not a ranking factor. Weinstein stage is not an Investigator score.
 
 `SymbolIdentity` is the listed security identified by `exchange` and `symbol_id`. `CandidateEpisodeIdentity` adds `candidate_id`, `setup_id`, and an aware `episode_started_at` timestamp. A symbol can therefore have multiple independent episodes without reusing its symbol as an episode ID.
 
-Phase 1 defines these values but does not generate IDs or persist episodes. The existing candidate-tracker store remains unchanged.
+Phase 1 — Canonical Opportunity Contracts defines these values but does not generate IDs or persist episodes. Phase 2 is Persistent Candidate Registry, Phase 3A is Shadow Lifecycle Orchestration, Phase 3B is Universe Coverage and Scan Routing, and Phase 4 Read-Only Operator Surfaces remains deferred. The existing candidate-tracker store remains unchanged.
 
 ## Ranking and evidence snapshots
 

@@ -43,6 +43,7 @@ class AdmissionReason(str, Enum):
     QUALIFIED_BREAKOUT = "qualified_breakout"
     STAGE_TRANSITION = "stage_transition"
     MANUAL_IMPORT = "manual_import"
+    POSITION_STATE_RECOVERY = "position_state_recovery"
 
 
 class SetupFamily(str, Enum):
@@ -54,6 +55,7 @@ class SetupFamily(str, Enum):
     PULLBACK_REENTRY = "pullback_reentry"
     MOMENTUM_LEADER = "momentum_leader"
     MANUAL = "manual"
+    POSITION_STATE_RECOVERY = "position_state_recovery"
 
 
 class ClosureReason(str, Enum):
@@ -178,6 +180,11 @@ class OpportunitySourceBundle:
     sector_name: str = "unknown"
     market_regime: str = "unknown"
     sector_regime: str = "unknown"
+    scan_tier: str = "stage_only"
+    scan_reasons: tuple[str, ...] = ()
+    active_position: bool = False
+    recently_exited: bool = False
+    position_cycle_opened_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,6 +251,7 @@ class OpportunityShadowConfig:
     early_trigger_stage_confidence_threshold: float = 75.0
     setup_progression_max_days: int = 30
     close_stage_4_without_position: bool = True
+    recover_position_only_episodes: bool = True
     archive_failed_after_days: int = 0
     allowed_market_regimes: tuple[str, ...] = ("cautious_bull", "bull", "strong_bull")
     retention_policy: CandidateRetentionPolicy | None = None
@@ -254,6 +262,7 @@ class OpportunityShadowConfig:
         return cls(
             mode=mode,
             dry_run=bool(values.get("opportunity_registry_dry_run", False)),
+            recover_position_only_episodes=bool(values.get("recover_position_only_episodes", True)),
             rank_admission_percentile=float(values.get("opportunity_rank_admission_percentile", 90.0)),
             rank_velocity_floor=float(values.get("opportunity_rank_velocity_floor", -5.0)),
             rank_velocity_percentile_floor=float(values.get("opportunity_rank_velocity_percentile_floor", 75.0)),

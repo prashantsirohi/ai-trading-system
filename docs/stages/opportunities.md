@@ -50,7 +50,7 @@ Exact same-run source replay is detected before writes and leaves current histor
 
 ## Downstream consumers
 
-Phase 3 has no execution, publish, candidate-tracker, API, or UI consumer. Registry query callers and audit review are the only consumers.
+Phase 3A and Phase 3B have no execution, publish, candidate-tracker, API, or UI consumer. Registry query callers and audit review are the only consumers. In Phase 3B shadow mode, routing lineage is added to reconciliation, routed Investigator sidecars may supply evidence, and position-only active episodes may be recovered without broker calls.
 
 ## Commands
 
