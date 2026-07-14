@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-07-13
+- **Last verified:** 2026-07-14
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -83,7 +83,18 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator --new-run
 ```
 
-The default CLI stage string includes `fundamentals` and `candidate_tracker` but omits `narrative`. `--no-enable-candidate-tracker` removes the tracker from the default list. Although `--no-enable-fundamentals` exists, the current default stage string explicitly names `fundamentals`; omit it with an explicit `--stages` list. Run `--help` for the full current flag set.
+The default CLI stage string includes `fundamentals` and `candidate_tracker` but omits `opportunities` and `narrative`. `--opportunity-registry-mode shadow` inserts the non-authoritative opportunity stage after Investigator; add `--opportunity-registry-dry-run` to suppress registry writes. `--no-enable-candidate-tracker` removes the tracker from the default list. Although `--no-enable-fundamentals` exists, the current default stage string explicitly names `fundamentals`; omit it with an explicit `--stages` list. Run `--help` for the full current flag set.
+
+Opportunity shadow run and isolated retry:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
+  --opportunity-registry-mode shadow
+
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
+  --run-id <run_id> --stages opportunities \
+  --opportunity-registry-mode shadow --opportunity-registry-dry-run
+```
 
 ## Publish and recovery
 

@@ -10,6 +10,7 @@ EXPECTED_LOGICAL_STAGES = [
     "features",
     "rank",
     "investigator",
+    "opportunities",
     "fundamentals",
     "candidates",
     "candidate_tracker",

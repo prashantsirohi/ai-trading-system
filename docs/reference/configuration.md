@@ -2,7 +2,7 @@
 
 - **Purpose:** Configuration sources, CLI flags, and mode selectors. For env vars see [`environment_variables.md`](environment_variables.md). For commands see [`commands.md`](commands.md).
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-07-14
 - **Source of truth:** `argparse` parsers in `pipeline/orchestrator.py` and `pipeline/daily_pipeline.py`; env loading in `platform/`; config files under `config/`.
 
 ---
@@ -36,6 +36,8 @@ Primary selectors on `ai-trading-pipeline` (orchestrator):
 | Flag | Default | Effect |
 |---|---|---|
 | `--stages` | `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker` | Comma-separated logical stage subset. `features` expands to seven internal substages; `narrative` is available but is not in the current CLI default list. |
+| `--opportunity-registry-mode` | `off` | `shadow` inserts the optional canonical opportunity reconciliation stage after Investigator; it never feeds execution. |
+| `--opportunity-registry-dry-run` | false | Runs adapters, admission, lifecycle, retention, and audit output without opportunity-registry writes. |
 | `--run-id <id>` | new UUID | Reuse an existing run (mainly for stage retries) |
 | `--run-date YYYY-MM-DD` | today | Logical trading date |
 | `--data-domain operational\|research` | `operational` | Selects DuckDB paths via `platform/db/paths.py` |

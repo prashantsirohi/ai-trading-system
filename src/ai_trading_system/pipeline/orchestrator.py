@@ -42,7 +42,8 @@ from ai_trading_system.platform.db.paths import (
 from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
-from ai_trading_system.pipeline.stages import CandidateTrackerStage, CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, InvestigatorStage, NarrativeStage, PerfTrackerStage, PublishStage, RankStage
+from ai_trading_system.pipeline.stages import CandidateTrackerStage, CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, InvestigatorStage, NarrativeStage, OpportunityStage, PerfTrackerStage, PublishStage, RankStage
+from ai_trading_system.pipeline.stages.opportunities import OpportunityStageError
 
 load_project_env(__file__)
 
@@ -69,10 +70,10 @@ FEATURE_SUBSTAGE_LABELS = {
     "features_phase1": "phase1 derived features",
     "features_snapshot": "feature snapshot and DQ",
 }
-PIPELINE_ORDER = ["ingest", *FEATURE_SUBSTAGES, "rank", "investigator", "fundamentals", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
+PIPELINE_ORDER = ["ingest", *FEATURE_SUBSTAGES, "rank", "investigator", "opportunities", "fundamentals", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
 # Stages dropped from the default order unless explicitly enabled (e.g. by a flag
 # or by a detected input). They remain valid when named in an explicit stage list.
-OPTIONAL_STAGES = frozenset({"fundamentals"})
+OPTIONAL_STAGES = frozenset({"fundamentals", "opportunities"})
 DEFAULT_CLI_STAGES = "ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker"
 
 
@@ -548,6 +549,7 @@ class PipelineOrchestrator:
             "features_snapshot": FeaturesStage(),
             "rank": RankStage(),
             "investigator": InvestigatorStage(),
+            "opportunities": OpportunityStage(),
             "fundamentals": FundamentalsStage(),
             "candidates": CandidatesStage(),
             "candidate_tracker": CandidateTrackerStage(),
@@ -578,6 +580,7 @@ class PipelineOrchestrator:
             "features_snapshot": "features 7/7: snapshot and feature DQ",
             "rank": "scoring symbols and building ranked outputs",
             "investigator": "investigating daily gainers and ageing active watchlist",
+            "opportunities": "reconciling canonical candidate episodes in shadow mode",
             "fundamentals": "enriching ranked candidates with Screener fundamentals",
             "candidates": "selecting deterministic final candidates from rank and enrichment",
             "candidate_tracker": "updating live candidate lifecycle status",
@@ -740,6 +743,7 @@ class PipelineOrchestrator:
             enable_fundamentals=bool(params.get("enable_fundamentals", False)),
             fundamental_scores_path=params.get("fundamental_scores_path"),
             enable_candidate_tracker=bool(params.get("enable_candidate_tracker", True)),
+            opportunity_registry_mode=str(params.get("opportunity_registry_mode", "off")),
         )
         data_domain = params.get("data_domain", "operational")
         run_date = run_date or date.today().isoformat()
@@ -826,6 +830,7 @@ class PipelineOrchestrator:
                     raise RuntimeError(message)
 
             final_status = "completed"
+            opportunity_stage_failed = False
             planned_stage_skips: dict[str, dict[str, object]] = {}
 
             for stage_name in stage_names:
@@ -862,7 +867,7 @@ class PipelineOrchestrator:
 
                 artifacts = self.registry.get_artifact_map(run_id)
                 self._alias_feature_snapshot_artifact(artifacts)
-                if stage_name in {"investigator", "events", "execute", "insight", "publish"}:
+                if stage_name in {"investigator", "opportunities", "events", "execute", "insight", "publish"}:
                     self._attach_latest_rank_artifacts(artifacts, run_id=run_id)
                     self._alias_feature_snapshot_artifact(artifacts)
 
@@ -1066,6 +1071,29 @@ class PipelineOrchestrator:
                                 detail=str(exc),
                             )
                         break
+                    except OpportunityStageError as exc:
+                        opportunity_stage_failed = True
+                        self.alert_manager.emit(
+                            run_id=run_id,
+                            alert_type="opportunity_shadow_degraded",
+                            severity="warning",
+                            stage_name=stage_name,
+                            message=str(exc),
+                        )
+                        self.registry.finish_stage(
+                            stage_run_id,
+                            status="failed",
+                            error_class=exc.__class__.__name__,
+                            error_message=str(exc),
+                            metadata={"non_blocking": True, "mode": "shadow"},
+                        )
+                        if self.progress_renderer is not None:
+                            self.progress_renderer.emit_stage(
+                                stage_name=stage_name,
+                                status="fail",
+                                detail=f"non-blocking shadow failure: {exc}",
+                            )
+                        continue
                     except Exception as exc:
                         final_status = "failed"
                         is_dq_exc = exc.__class__.__name__ in (
@@ -1115,6 +1143,8 @@ class PipelineOrchestrator:
                         message="One or more critical DQ rules were relaxed (dq_mode=relaxed). "
                                 "See dq_result.relaxed_from for details.",
                     )
+                if opportunity_stage_failed:
+                    final_status = "completed_with_opportunity_errors"
                 self.registry.update_run(
                     run_id,
                     status=final_status,
@@ -1138,6 +1168,7 @@ class PipelineOrchestrator:
         enable_fundamentals: bool = False,
         fundamental_scores_path: object | None = None,
         enable_candidate_tracker: bool = True,
+        opportunity_registry_mode: str = "off",
     ) -> List[str]:
         def _expand_features(stages: Iterable[str]) -> list[str]:
             expanded: list[str] = []
@@ -1157,6 +1188,7 @@ class PipelineOrchestrator:
                 for stage in PIPELINE_ORDER
                 if stage not in OPTIONAL_STAGES
                 or (stage == "fundamentals" and fundamentals_enabled)
+                or (stage == "opportunities" and str(opportunity_registry_mode).lower() == "shadow")
                 if stage != "candidate_tracker" or bool(enable_candidate_tracker)
             ]
         requested = _expand_features(stage_names)
@@ -1347,6 +1379,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--stages",
         default=DEFAULT_CLI_STAGES,
         help="Comma-separated stage list. Example: publish",
+    )
+    parser.add_argument(
+        "--opportunity-registry-mode",
+        choices=("off", "shadow"),
+        default="off",
+        help="Enable the non-authoritative canonical opportunity registry shadow stage.",
+    )
+    parser.add_argument(
+        "--opportunity-registry-dry-run",
+        action="store_true",
+        help="Evaluate opportunity shadow reconciliation and write audit artifacts without registry writes.",
     )
     parser.add_argument(
         "--run-date",
@@ -1869,6 +1912,9 @@ def main() -> None:
         stage_names = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
         if not args.enable_candidate_tracker and args.stages == DEFAULT_CLI_STAGES:
             stage_names = [stage for stage in stage_names if stage != "candidate_tracker"]
+        if args.opportunity_registry_mode == "shadow" and args.stages == DEFAULT_CLI_STAGES:
+            investigator_index = stage_names.index("investigator")
+            stage_names.insert(investigator_index + 1, "opportunities")
     run_id = args.run_id
     if run_id is None and stage_names == ["publish"]:
         resolved_run_id = _resolve_latest_publishable_run_id(project_root, limit=50)
@@ -1892,6 +1938,8 @@ def main() -> None:
         "min_score": args.min_score,
         "enable_fundamentals": bool(args.enable_fundamentals),
         "enable_candidate_tracker": bool(args.enable_candidate_tracker),
+        "opportunity_registry_mode": args.opportunity_registry_mode,
+        "opportunity_registry_dry_run": bool(args.opportunity_registry_dry_run),
         "candidate_tracker_max_age_days": int(args.candidate_tracker_max_age_days),
         "candidate_tracker_review_window_days": int(args.candidate_tracker_review_window_days),
         "candidate_tracker_archive_failures": bool(args.candidate_tracker_archive_failures),

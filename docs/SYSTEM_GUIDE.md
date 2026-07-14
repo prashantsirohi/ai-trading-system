@@ -27,9 +27,10 @@ structural stage as separate axes; its policy guards are pure and are not wired
 to execution. See [opportunity lifecycle contracts](architecture/opportunity_lifecycle_contracts.md).
 
 The Phase 2 [opportunity registry](architecture/opportunity_registry.md) adds an
-append-oriented, historically reconstructable control-plane store for callers
-of the new registry API. It is not wired into the pipeline. The existing
-candidate tracker remains the current pipeline's operational lifecycle store.
+append-oriented, historically reconstructable control-plane store. The optional
+Phase 3 [opportunity shadow stage](architecture/opportunity_shadow_orchestration.md)
+writes that history when explicitly enabled; execution does not consume it. The
+existing candidate tracker remains the current pipeline's operational lifecycle store.
 
 ## Safety and operating invariants
 
@@ -74,15 +75,15 @@ candidate tracker remains the current pipeline's operational lifecycle store.
 
 ## Operational design and stages
 
-<!-- system-guide-logical-stages: ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker -->
+<!-- system-guide-logical-stages: ingest,features,rank,investigator,opportunities,fundamentals,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker -->
 
 ```text
-ingest -> features -> rank -> investigator -> fundamentals* -> candidates
+ingest -> features -> rank -> investigator -> opportunities* -> fundamentals* -> candidates
        -> candidate_tracker -> events -> execute -> insight -> narrative
        -> publish -> perf_tracker
 ```
 
-`PIPELINE_ORDER` contains all 13 logical stages above. The current CLI default omits `narrative`, so its normal stage list is `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker`. Canary mode replaces that default with `ingest,features,rank`.
+`PIPELINE_ORDER` contains all 14 logical stages above. The current CLI default omits `opportunities` and `narrative`, so its normal stage list remains `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker`. Shadow mode inserts `opportunities` immediately after `investigator`. Canary mode replaces the unchanged default with `ingest,features,rank`.
 
 `fundamentals` is optional in the orchestrator's implicit-stage contract, but the CLI's default stage string names it explicitly. To omit it from a CLI run, pass an explicit `--stages` list without `fundamentals`; the current `--no-enable-fundamentals` flag does not remove it from that default string. `candidate_tracker` is enabled by default and `--no-enable-candidate-tracker` removes it from the default CLI list. Any other explicit `--stages` list runs only the requested stages after expanding the `features` alias.
 
@@ -92,6 +93,7 @@ ingest -> features -> rank -> investigator -> fundamentals* -> candidates
 | `features` | Compute technical, sector, valuation, earnings, and derived feature snapshots. | Feature Parquet and snapshot metadata | [features](stages/features.md) |
 | `rank` | Score the universe and materialize ranking, breakout, pattern, stock, sector, and Stage 1 evidence. | Rank artifact family | [rank](stages/rank.md) |
 | `investigator` | Build a non-executable operator investigation queue from post-rank evidence. | Investigator artifacts and control-plane history | [investigator](stages/investigator.md) |
+| `opportunities` | Optionally reconcile canonical candidate episodes in non-authoritative shadow mode. | Opportunity registry and audit artifacts | [opportunities](stages/opportunities.md) |
 | `fundamentals` | Optionally import and score fundamental evidence. | Fundamental scores and watchlists | [fundamentals](stages/fundamentals.md) |
 | `candidates` | Deterministically select the operator/execution shortlist. | `final_candidates.csv` | [candidates](stages/candidates.md) |
 | `candidate_tracker` | Maintain durable lifecycle episodes, reviews, alerts, and current candidate state. | Tracker DB and tracker artifacts | [candidate tracker](stages/candidate_tracker.md) |

@@ -40,6 +40,8 @@ from .models import (
     EpisodeStatus,
     EvidenceObservation,
     OpenEpisodeRequest,
+    OrchestrationBundle,
+    OrchestrationBundleResult,
     OpportunityObservation,
     OpportunityRegistryConflictError,
     ProgressObservation,
@@ -77,6 +79,10 @@ class OpportunityRegistryStore(Protocol):
     def current_state(self, candidate_id: str) -> CandidateCurrentState | None: ...
     def state_as_of(self, candidate_id: str, as_of: datetime) -> CandidateCurrentState | None: ...
     def timeline(self, candidate_id: str) -> CandidateTimeline: ...
+    def list_open_candidates(self) -> tuple[CandidateCurrentState, ...]: ...
+    def list_open_episodes(self) -> tuple[CandidateEpisodeRecord, ...]: ...
+    def append_orchestration_bundle(self, bundle: OrchestrationBundle) -> OrchestrationBundleResult: ...
+    def observation_hashes_for_run(self, run_id: str) -> dict[str, tuple[str, ...]]: ...
 
 
 def _db_time(value: datetime) -> datetime:
@@ -194,6 +200,34 @@ class DuckDBOpportunityRegistryStore:
             names = [item[0] for item in cursor.description]
             return tuple(self._current_from_row(dict(zip(names, row, strict=True))) for row in cursor.fetchall())
 
+    def list_open_episodes(self) -> tuple[CandidateEpisodeRecord, ...]:
+        with self.registry._reader() as conn:  # noqa: SLF001
+            cursor = conn.execute(
+                "SELECT * FROM candidate_episode WHERE episode_status = 'OPEN' "
+                "ORDER BY exchange, symbol_id, episode_started_at, candidate_id"
+            )
+            names = [item[0] for item in cursor.description]
+            return tuple(self._episode_from_row(dict(zip(names, row, strict=True))) for row in cursor.fetchall())
+
+    def observation_hashes_for_run(self, run_id: str) -> dict[str, tuple[str, ...]]:
+        """Return persisted semantic source hashes for exact-run replay checks."""
+        _require_text(run_id, "run_id")
+        tables = (
+            "candidate_snapshot", "candidate_stage_observation", "candidate_evidence_observation",
+            "candidate_opportunity_observation", "candidate_transition", "candidate_progress_observation",
+            "candidate_decision_context", "candidate_outcome_attribution",
+        )
+        query = " UNION ALL ".join(
+            f"SELECT candidate_id, source_artifact_hash FROM {table} WHERE run_id = ?"  # noqa: S608
+            for table in tables
+        )
+        with self.registry._reader() as conn:  # noqa: SLF001
+            rows = conn.execute(query, [run_id] * len(tables)).fetchall()
+        grouped: dict[str, set[str]] = {}
+        for candidate_id, source_hash in rows:
+            grouped.setdefault(str(candidate_id), set()).add(str(source_hash))
+        return {candidate_id: tuple(sorted(values)) for candidate_id, values in grouped.items()}
+
     def query_current_states(
         self,
         *,
@@ -308,34 +342,44 @@ class DuckDBOpportunityRegistryStore:
             raise ValueError("close status must be terminal")
         _require_text(closing_reason, "closing_reason")
         with self._transaction() as conn:
-            episode = self._require_open_or_closed(conn, candidate_id, allow_closed=True)
-            requested = (status, _db_time(closed_at), closing_reason, lineage.run_id, lineage.stage_name)
-            if episode.episode_status is not EpisodeStatus.OPEN:
-                existing = (
-                    episode.episode_status, _db_time(episode.episode_closed_at), episode.closing_reason,
-                    episode.closed_run_id, episode.closed_stage,
-                )
-                if existing == requested:
-                    return episode
-                raise OpportunityRegistryConflictError(
-                    record_type="candidate_episode_close", candidate_id=candidate_id,
-                    idempotency_key=stable_digest(requested), existing_payload_hash=stable_digest(existing),
-                    incoming_payload_hash=stable_digest(requested),
-                )
-            if closed_at < episode.episode_started_at:
-                raise ValueError("episode close cannot precede episode start")
-            conn.execute(
-                """
-                UPDATE candidate_episode SET episode_closed_at = ?, episode_status = ?, closing_reason = ?,
-                    closed_run_id = ?, closed_stage = ?, updated_at = (current_timestamp AT TIME ZONE 'UTC')
-                WHERE candidate_id = ?
-                """,
-                [_db_time(closed_at), status.value, closing_reason, lineage.run_id,
-                 lineage.stage_name, candidate_id],
+            return self._close_episode(conn, candidate_id, status=status, closed_at=closed_at,
+                                       closing_reason=closing_reason, lineage=lineage)
+
+    def _close_episode(
+        self, conn: duckdb.DuckDBPyConnection, candidate_id: str, *, status: EpisodeStatus,
+        closed_at: datetime, closing_reason: str, lineage: SourceLineage,
+    ) -> CandidateEpisodeRecord:
+        require_aware(closed_at, "closed_at")
+        if status is EpisodeStatus.OPEN:
+            raise ValueError("close status must be terminal")
+        _require_text(closing_reason, "closing_reason")
+        episode = self._require_open_or_closed(conn, candidate_id, allow_closed=True)
+        requested = (status, _db_time(closed_at), closing_reason, lineage.run_id, lineage.stage_name)
+        if episode.episode_status is not EpisodeStatus.OPEN:
+            existing = (
+                episode.episode_status, _db_time(episode.episode_closed_at), episode.closing_reason,
+                episode.closed_run_id, episode.closed_stage,
             )
-            result = self._get_episode(conn, candidate_id)
-            assert result is not None
-            return result
+            if existing == requested:
+                return episode
+            raise OpportunityRegistryConflictError(
+                record_type="candidate_episode_close", candidate_id=candidate_id,
+                idempotency_key=stable_digest(requested), existing_payload_hash=stable_digest(existing),
+                incoming_payload_hash=stable_digest(requested),
+            )
+        if closed_at < episode.episode_started_at:
+            raise ValueError("episode close cannot precede episode start")
+        conn.execute(
+            """
+            UPDATE candidate_episode SET episode_closed_at = ?, episode_status = ?, closing_reason = ?,
+                closed_run_id = ?, closed_stage = ?, updated_at = (current_timestamp AT TIME ZONE 'UTC')
+            WHERE candidate_id = ?
+            """,
+            [_db_time(closed_at), status.value, closing_reason, lineage.run_id, lineage.stage_name, candidate_id],
+        )
+        result = self._get_episode(conn, candidate_id)
+        assert result is not None
+        return result
 
     def _require_open_or_closed(
         self, conn: duckdb.DuckDBPyConnection, candidate_id: str, *, allow_closed: bool = False
@@ -734,6 +778,53 @@ class DuckDBOpportunityRegistryStore:
 
     def append_evidence_observations_batch(self, observations: Iterable[EvidenceObservation]) -> BatchAppendResult:
         return self._batch(observations, self._append_evidence)
+
+    def append_opportunity_observations_batch(self, observations: Iterable[OpportunityObservation]) -> BatchAppendResult:
+        return self._batch(observations, self._append_opportunity)
+
+    def append_progress_observations_batch(self, observations: Iterable[ProgressObservation]) -> BatchAppendResult:
+        return self._batch(observations, self._append_progress)
+
+    def append_orchestration_bundle(self, bundle: OrchestrationBundle) -> OrchestrationBundleResult:
+        """Atomically apply one Phase 3 candidate write intent."""
+        from dataclasses import replace
+
+        with self._transaction() as conn:
+            episode = (
+                self._open_episode(conn, bundle.episode_request)
+                if bundle.episode_request is not None
+                else self._require_open_or_closed(conn, bundle.candidate_id)
+            )
+            if episode.candidate_id != bundle.candidate_id:
+                raise ValueError("orchestration bundle candidate_id does not match episode identity")
+            results: list[AppendResult] = []
+            if bundle.opportunity is not None:
+                results.append(self._append_opportunity(conn, bundle.opportunity))
+            if bundle.evidence is not None:
+                results.append(self._append_evidence(conn, bundle.evidence))
+            results.extend(self._append_stage(conn, item) for item in bundle.stages)
+            if bundle.progress is not None:
+                results.append(self._append_progress(conn, bundle.progress))
+            if bundle.snapshot is not None:
+                snapshot_result = self._append_snapshot(conn, bundle.snapshot)
+                results.append(snapshot_result)
+                if bundle.transition is not None:
+                    results.append(self._append_transition(
+                        conn, replace(bundle.transition, triggering_snapshot_id=snapshot_result.record_id)
+                    ))
+            elif bundle.transition is not None:
+                raise ValueError("orchestration transition requires a triggering snapshot")
+            closed = False
+            if bundle.closure is not None:
+                self._close_episode(
+                    conn, bundle.candidate_id, status=bundle.closure.status,
+                    closed_at=bundle.closure.closed_at, closing_reason=bundle.closure.closing_reason,
+                    lineage=bundle.closure.lineage,
+                )
+                closed = True
+            result_episode = self._get_episode(conn, bundle.candidate_id)
+            assert result_episode is not None
+            return OrchestrationBundleResult(result_episode, tuple(results), closed)
 
     def append_snapshot_bundle(
         self, *, snapshot: SnapshotObservation, stock_stage: StageObservation, sector_stage: StageObservation

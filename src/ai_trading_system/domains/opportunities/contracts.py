@@ -318,7 +318,7 @@ class StageSnapshot:
     stage_status: StageStatus
     confidence_score: float
     confidence_band: StageConfidenceBand
-    confidence_components: StageConfidenceComponents
+    confidence_components: StageConfidenceComponents | None
     stage_as_of: datetime
     stage_locked_at: datetime | None
     source_week_start: date
@@ -340,6 +340,11 @@ class StageSnapshot:
         )
         if not unknown_confidence and self.confidence_band is not _confidence_band(self.confidence_score):
             raise ValueError("confidence_band must match confidence_score")
+        if (
+            self.confidence_formula_version == STAGE_CONFIDENCE_FORMULA_VERSION
+            and self.confidence_components is None
+        ):
+            raise ValueError("canonical stage confidence requires confidence_components")
         _require_aware(self.stage_as_of, "stage_as_of")
         _require_aware(self.stage_locked_at, "stage_locked_at")
         if self.stage_status is StageStatus.LOCKED and self.stage_locked_at is None:
@@ -403,13 +408,13 @@ class OpportunitySnapshot:
 class EvidenceSnapshot:
     evidence_score: float
     investigator_verdict: EvidenceVerdict
-    accumulation_score: float
-    pattern_score: float
-    breakout_quality: float
-    volume_quality: float
-    delivery_quality: float
-    sector_alignment: float
-    market_alignment: float
+    accumulation_score: float | None
+    pattern_score: float | None
+    breakout_quality: float | None
+    volume_quality: float | None
+    delivery_quality: float | None
+    sector_alignment: float | None
+    market_alignment: float | None
     extension_risk: RiskLevel
     failure_risk: RiskLevel
     positive_evidence: tuple[str, ...]
@@ -430,7 +435,9 @@ class EvidenceSnapshot:
             "sector_alignment",
             "market_alignment",
         ):
-            _require_range(getattr(self, field_name), field_name)
+            value = getattr(self, field_name)
+            if value is not None:
+                _require_range(value, field_name)
         _require_text(self.evidence_model_version, "evidence_model_version")
         _require_aware(self.evaluated_at, "evaluated_at")
 

@@ -14,6 +14,7 @@ from .models import (
     OpenEpisodeRequest,
     OpportunityObservation,
     ProgressObservation,
+    OrchestrationBundle,
     SnapshotObservation,
     SourceLineage,
     StageObservation,
@@ -71,6 +72,9 @@ class OpportunityRegistryService:
     def get_candidate_current_state(self, candidate_id: str):
         return self.store.current_state(candidate_id)
 
+    def get_candidate_episode(self, candidate_id: str):
+        return self.store.get_episode(candidate_id)
+
     def get_candidate_state_as_of(self, candidate_id: str, as_of: datetime):
         return self.store.state_as_of(candidate_id, as_of)
 
@@ -79,6 +83,12 @@ class OpportunityRegistryService:
 
     def list_open_candidates(self):
         return self.store.list_open_candidates()
+
+    def list_open_episodes(self):
+        return self.store.list_open_episodes()
+
+    def observation_hashes_for_run(self, run_id: str):
+        return self.store.observation_hashes_for_run(run_id)
 
     def query_current_states(self, **filters):
         return self.store.query_current_states(**filters)
@@ -91,6 +101,15 @@ class OpportunityRegistryService:
 
     def append_evidence_observations_batch(self, observations: Iterable[EvidenceObservation]):
         return self.store.append_evidence_observations_batch(observations)
+
+    def append_opportunity_observations_batch(self, observations: Iterable[OpportunityObservation]):
+        return self.store.append_opportunity_observations_batch(observations)
+
+    def append_progress_observations_batch(self, observations: Iterable[ProgressObservation]):
+        return self.store.append_progress_observations_batch(observations)
+
+    def apply_orchestration_bundle(self, bundle: OrchestrationBundle):
+        return self.store.append_orchestration_bundle(bundle)
 
     def append_snapshot_bundle(
         self, *, snapshot: SnapshotObservation, stock_stage: StageObservation, sector_stage: StageObservation

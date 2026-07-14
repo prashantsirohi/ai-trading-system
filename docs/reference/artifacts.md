@@ -83,6 +83,29 @@ Authority:
 
 See [`docs/stages/fundamentals.md`](../stages/fundamentals.md).
 
+### `opportunities` (optional shadow)
+
+Writes under `data/pipeline_runs/<run_id>/opportunities/attempt_<n>/`:
+
+- `opportunity_shadow_summary.json`
+- `candidate_admissions.csv`
+- `candidate_updates.csv`
+- `candidate_transitions.csv`
+- `candidate_closures.csv`
+- `candidate_reconciliation.csv`
+- `adapter_warnings.csv`
+- `adapter_rejections.csv`
+- `registry_conflicts.csv`
+- `current_candidate_state.csv`
+
+Authority:
+
+- audit and reconciliation evidence for the attempt
+- canonical episode history in `control_plane.duckdb` remains authoritative
+- these files are not execution or publish inputs
+
+See [`docs/stages/opportunities.md`](../stages/opportunities.md).
+
 ### `candidates`
 
 Writes (under `data/pipeline_runs/<run_id>/candidates/attempt_<n>/`):

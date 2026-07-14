@@ -2,7 +2,7 @@
 
 - **Purpose:** Complete map of all documentation under `docs/`.
 - **Audience:** Anyone navigating the docs.
-- **Last verified:** 2026-07-13
+- **Last verified:** 2026-07-14
 - **Source of truth:** This file is the source of truth for the doc inventory; `SYSTEM_GUIDE.md` is the source of truth for system orientation.
 
 > Each document records its own verification date. See [`development/legacy_cleanup_plan.md`](development/legacy_cleanup_plan.md) for the cleanup history.
@@ -19,12 +19,14 @@
 - [target_architecture](architecture/target_architecture.md)
 - [opportunity_lifecycle_contracts](architecture/opportunity_lifecycle_contracts.md)
 - [opportunity_registry](architecture/opportunity_registry.md)
+- [opportunity_shadow_orchestration](architecture/opportunity_shadow_orchestration.md)
 
-## Stages (13)
+## Stages (14)
 - [ingest](stages/ingest.md)
 - [features](stages/features.md)
 - [rank](stages/rank.md)
 - [investigator](stages/investigator.md)
+- [opportunities](stages/opportunities.md)
 - [fundamentals](stages/fundamentals.md)
 - [candidates](stages/candidates.md)
 - [candidate_tracker](stages/candidate_tracker.md)

@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed execution, handoff, DQ, and retry flow for the current operational pipeline.
 - **Audience:** Operators debugging a run, engineers changing a stage, and reviewers tracing artifacts.
-- **Last verified:** 2026-07-13
+- **Last verified:** 2026-07-14
 - **Source of truth:** `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/pipeline/preflight.py`, `src/ai_trading_system/pipeline/contracts.py`, and `src/ai_trading_system/pipeline/stages/`.
 
 ---
@@ -19,7 +19,7 @@ Start with the [System Guide](../SYSTEM_GUIDE.md). This document expands only th
 The canonical logical order is:
 
 ```text
-ingest -> features -> rank -> investigator -> fundamentals -> candidates
+ingest -> features -> rank -> investigator -> opportunities -> fundamentals -> candidates
        -> candidate_tracker -> events -> execute -> insight -> narrative
        -> publish -> perf_tracker
 ```
@@ -35,11 +35,11 @@ ingest
 -> features_sector_earnings
 -> features_phase1
 -> features_snapshot
--> rank -> investigator -> fundamentals -> candidates -> candidate_tracker
+-> rank -> investigator -> opportunities -> fundamentals -> candidates -> candidate_tracker
 -> events -> execute -> insight -> narrative -> publish -> perf_tracker
 ```
 
-`fundamentals` is declared optional. The current CLI enables it by default, and an available fundamental-scores source can also activate it. `candidate_tracker` is enabled by default. Explicit `--stages` values are expanded and validated against `PIPELINE_ORDER`; the orchestrator does not silently add omitted dependencies.
+`fundamentals` and `opportunities` are declared optional. The current CLI enables fundamentals by default but leaves opportunities off unless shadow mode is selected. `candidate_tracker` is enabled by default. Explicit `--stages` values are expanded and validated against `PIPELINE_ORDER`; the orchestrator does not silently add omitted dependencies.
 
 ## End-to-end handoff
 
@@ -48,6 +48,7 @@ flowchart LR
     I["ingest"] --> F["features (7 substages)"]
     F --> R["rank"]
     R --> V["investigator"]
+    V --> O["opportunities (optional shadow)"]
     R --> U["fundamentals (optional)"]
     R --> C["candidates"]
     U -. "enrichment" .-> C
@@ -66,6 +67,7 @@ flowchart LR
 | `features_*` | Trusted catalog plus earlier feature substages | Technical, sector, valuation, earnings, derived features, final snapshot | Each substage is a separately persisted attempt; final snapshot DQ gates rank. |
 | `rank` | Feature snapshot | Ranked signals, Stage 1, breakouts, patterns, stock/sector dashboards | Empty or invalid canonical rank output can block downstream work. |
 | `investigator` | Registered rank artifacts | Investigation queue, lifecycle/gate artifacts, decision history | Non-executable; optional evidence degrades rather than authorizes execution. |
+| `opportunities` | Registered rank and optional Investigator artifacts | Canonical registry history and shadow audit artifacts | Required-source failure is recorded but does not block execution or publish. |
 | `fundamentals` | Configured fundamentals sources | Scores, watchlists, enrichment artifacts | Optional in the orchestrator contract. |
 | `candidates` | `ranked_signals`; optional rank/fundamental evidence | `final_candidates.csv` and summary | Required rank artifact is a hard gate. |
 | `candidate_tracker` | `final_candidates` | Durable tracker state, alerts, reviews, snapshots | Tracker persistence is independent of execution ledger state. |
@@ -76,7 +78,7 @@ flowchart LR
 | `publish` | Registered materialized artifacts | External/local deliveries and summary | Retryable for the same `run_id`; must not recompute upstream data. |
 | `perf_tracker` | Published/ranked cohort context | Research-domain cohort updates | Operational and research persistence remain separated. |
 
-Per-stage files, field contracts, and recovery details are under [stages](../INDEX.md#stages-13).
+Per-stage files, field contracts, and recovery details are under [stages](../INDEX.md#stages-14).
 
 ## Preflight, trust, and DQ
 

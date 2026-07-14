@@ -32,6 +32,7 @@ __all__ = [
     "ProgressObservation", "TransitionObservation", "DecisionContextObservation",
     "AttributionObservation", "AppendResult", "BatchAppendResult", "CandidateCurrentState",
     "TimelineEntry", "CandidateTimeline", "OpportunityRegistryConflictError",
+    "EpisodeClosure", "OrchestrationBundle", "OrchestrationBundleResult",
 ]
 
 
@@ -226,6 +227,34 @@ class BatchAppendResult:
     duplicates: int
     conflicts: int = 0
     rejected: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodeClosure:
+    status: EpisodeStatus
+    closed_at: datetime
+    closing_reason: str
+    lineage: SourceLineage
+
+
+@dataclass(frozen=True, slots=True)
+class OrchestrationBundle:
+    candidate_id: str
+    episode_request: OpenEpisodeRequest | None = None
+    opportunity: OpportunityObservation | None = None
+    evidence: EvidenceObservation | None = None
+    stages: tuple[StageObservation, ...] = ()
+    progress: ProgressObservation | None = None
+    snapshot: SnapshotObservation | None = None
+    transition: TransitionObservation | None = None
+    closure: EpisodeClosure | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OrchestrationBundleResult:
+    episode: CandidateEpisodeRecord
+    append_results: tuple[AppendResult, ...]
+    closed: bool
 
 
 @dataclass(frozen=True, slots=True)

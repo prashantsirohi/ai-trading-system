@@ -103,7 +103,7 @@ back to a failed attempt merely because its file is newer.
 
 ## Durable decision state versus attempt snapshots
 
-CSV and JSON artifacts are immutable-attempt evidence and publish/debug inputs. Durable current or historical decision facts live in control-plane tables owned by their read/write models. The current pipeline's mutable candidate lifecycle facts remain in `candidate_tracker.duckdb`; canonical episode history written through the Phase 2 opportunity-registry API lives in `control_plane.duckdb`. No pipeline synchronization exists between those stores. Orders and fills live in `execution.duckdb`.
+CSV and JSON artifacts are immutable-attempt evidence and publish/debug inputs. Durable current or historical decision facts live in control-plane tables owned by their read/write models. The current pipeline's mutable candidate lifecycle facts remain in `candidate_tracker.duckdb`; canonical episode history written through the opportunity-registry API lives in `control_plane.duckdb`. The optional Phase 3 shadow stage is a writer to that canonical history, but no synchronization or execution dependency exists between the stores. Orders and fills live in `execution.duckdb`.
 
 Write modes that distinguish live updates, replay/backfill, and current-state rebuild must preserve their domain's current-state contract. Do not reconstruct or replace current state merely because an older artifact exists.
 
