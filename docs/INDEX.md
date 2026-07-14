@@ -17,6 +17,7 @@
 - [data_trust_and_dq](architecture/data_trust_and_dq.md)
 - [ui_architecture](architecture/ui_architecture.md)
 - [target_architecture](architecture/target_architecture.md)
+- [opportunity_lifecycle_contracts](architecture/opportunity_lifecycle_contracts.md)
 
 ## Stages (13)
 - [ingest](stages/ingest.md)

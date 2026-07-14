@@ -1,0 +1,54 @@
+"""Canonical opportunity lifecycle contracts and pure policy semantics."""
+
+# ruff: noqa: F401, F403
+
+from .attribution import AttributionEvaluation, evaluate_stage_attribution
+from .compatibility import (
+    CompatibilityResult,
+    LegacyWeeklyStageResult,
+    adapt_legacy_weekly_stage,
+    map_candidate_tracker_progress,
+    map_investigator_status,
+    map_legacy_evidence_verdict,
+    map_legacy_followthrough,
+    map_legacy_stage,
+    map_stage1_lifecycle,
+)
+from . import contracts as _contracts
+from .contracts import *  # noqa: F403
+from .policy import evaluate_early_entry_stage_guard, evaluate_normal_entry_stage_guard
+from .serialization import from_dict, to_dict, to_json
+from .validation import (
+    calculate_stage_confidence,
+    confidence_band_for_score,
+    default_candidate_retention_policy,
+    derive_monitoring_stage,
+    select_stage_for_use,
+    validate_candidate_decision,
+)
+
+__all__ = [
+    *_contracts.__all__,
+    "AttributionEvaluation",
+    "evaluate_stage_attribution",
+    "CompatibilityResult",
+    "LegacyWeeklyStageResult",
+    "adapt_legacy_weekly_stage",
+    "map_candidate_tracker_progress",
+    "map_investigator_status",
+    "map_legacy_evidence_verdict",
+    "map_legacy_followthrough",
+    "map_legacy_stage",
+    "map_stage1_lifecycle",
+    "evaluate_early_entry_stage_guard",
+    "evaluate_normal_entry_stage_guard",
+    "from_dict",
+    "to_dict",
+    "to_json",
+    "calculate_stage_confidence",
+    "confidence_band_for_score",
+    "default_candidate_retention_policy",
+    "derive_monitoring_stage",
+    "select_stage_for_use",
+    "validate_candidate_decision",
+]

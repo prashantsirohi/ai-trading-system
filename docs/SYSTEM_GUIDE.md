@@ -20,6 +20,12 @@ The main surfaces are:
 - The React operator console under `web/execution-console-v2/ai-trading-dashboard-starter/`.
 - External runtime storage resolved from `.env`, normally through `DATA_ROOT`.
 
+The canonical, persistence-free vocabulary for future opportunity management is
+owned by `src/ai_trading_system/domains/opportunities/`. It keeps ranking
+opportunity, Investigator evidence, candidate lifecycle, and stock/sector
+structural stage as separate axes; its policy guards are pure and are not wired
+to execution. See [opportunity lifecycle contracts](architecture/opportunity_lifecycle_contracts.md).
+
 ## Safety and operating invariants
 
 - Resolve live data through the existing path helpers and `$DATA_ROOT`; never hardcode a repo-local `data/...` path in application code.
