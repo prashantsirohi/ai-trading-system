@@ -11,7 +11,7 @@ from ai_trading_system.pipeline.stages.ingest import IngestStage
 def test_ingest_bhavcopy_parser_handles_series_with_whitespace(tmp_path: Path) -> None:
     raw_dir = tmp_path / "data" / "raw" / "NSE_EQ"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = raw_dir / "nse_07APR2026.csv"
+    csv_path = raw_dir / "nse_canonical_07APR2026.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,

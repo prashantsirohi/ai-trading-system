@@ -30,14 +30,17 @@ class NSECollector:
         ddmmyyyy = dt.strftime("%d%m%Y")
         ddmonyyyy = dt.strftime("%d%b%Y").upper()
         return [
+            f"https://nsearchives.nseindia.com/content/historical/EQUITIES/{dt.year}/{dt.strftime('%b').upper()}/cm{ddmonyyyy}bhav.csv.zip",
             f"https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{ddmmyyyy}.csv",
-            f"https://archives.nseindia.com/content/historical/EQUITIES/{dt.year}/{dt.strftime('%b').upper()}/cm{ddmonyyyy}bhav.csv.zip",
             f"https://www.nseindia.com/content/nsccl/CM{date_compact}bhav.csv.zip",
         ]
 
     def _local_bhavcopy_path(self, date: str) -> str:
         dt = datetime.fromisoformat(date)
-        filename = f"nse_{dt.strftime('%d%b%Y').upper()}.csv"
+        # Keep the collector cache separate from legacy generic archives. A
+        # generic ``nse_<date>.csv`` may have been populated by the lower-priority
+        # security-full endpoint and must not override the canonical URL order.
+        filename = f"nse_canonical_{dt.strftime('%d%b%Y').upper()}.csv"
         return os.path.join(self.data_dir, filename)
 
     def _read_bhavcopy_response(self, response: requests.Response) -> pd.DataFrame:

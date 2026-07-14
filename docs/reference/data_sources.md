@@ -2,7 +2,7 @@
 
 - **Purpose:** Catalogue every external data source the operational pipeline reads, with its role, endpoint, auth, and failure mode.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-07-14
 - **Source of truth:** `src/ai_trading_system/domains/ingest/`, `src/ai_trading_system/domains/fundamentals/import_screener.py`, `src/ai_trading_system/domains/catalysts/collector.py`, `src/ai_trading_system/integrations/market_intel_client.py`.
 
 > **Source-of-record order.** NSE bhavcopy is the source-of-record for OHLCV. Dhan is the fallback provider for prices and is also mandatory for live execution and (via the NSE MTO/security-wise scrapers in `domains/ingest/delivery.py`) for delivery data. yfinance is last-resort fill. The older "Dhan-first ingest" claim in legacy docs is **wrong** — confirm by reading `domains/ingest/service.py` before changing this ordering.
@@ -13,12 +13,19 @@
 
 - **Module:** `src/ai_trading_system/domains/ingest/providers/nse.py` (`NSECollector`)
 - **Role:** source-of-record (OHLCV for NSE equities)
-- **Endpoint or input:** Two URL candidates tried in order (`nse.py:23-30`):
-  - `https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_<DDMMYYYY>.csv`
+- **Endpoint or input:** URL candidates tried in order (`nse.py::_candidate_bhavcopy_urls`):
+  - standard historical equity bhavcopy:
+    `https://nsearchives.nseindia.com/content/historical/EQUITIES/<YYYY>/<MON>/cm<DDMONYYYY>bhav.csv.zip`
+  - security-full fallback:
+    `https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_<DDMMYYYY>.csv`
   - `https://www.nseindia.com/content/nsccl/CM<YYYYMMDD>bhav.csv.zip`
   - Plus historical OHLC via `https://www.nseindia.com/api/historical/cm/equity/<symbol>` (`nse.py:142`).
 - **Auth:** None. Uses a browser-like `User-Agent` (`nse.py:50-55`); no API key.
-- **Rate limits:** None enforced in code; relies on NSE's anonymous rate limits. Local caching at `data/raw/NSE_EQ/nse_<DDMmmYYYY>.csv` (`nse.py:32-35, 68-73`) avoids redundant downloads.
+- **Rate limits:** None enforced in code; relies on NSE's anonymous rate limits.
+  Collector-owned canonical responses are cached as
+  `data/raw/NSE_EQ/nse_canonical_<DDMONYYYY>.csv`. Legacy generic
+  `nse_<DDMONYYYY>.csv` archives are not used as the collector cache because
+  they may have been populated by a lower-priority report format.
 - **Failure behavior:** Each URL returning 404 is skipped (`nse.py:78-79`); any other exception is caught and logged, returning an empty `DataFrame` (`nse.py:89-91`). Ingest stage downstream then escalates to Dhan / yfinance fallback per `IngestOrchestrationService`.
 - **Used by stage(s):** `ingest`.
 

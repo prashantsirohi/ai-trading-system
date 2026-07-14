@@ -35,15 +35,77 @@ def test_business_dates_exclude_nse_holidays(tmp_path: Path) -> None:
     assert dates == ["2026-04-01", "2026-04-02", "2026-04-06", "2026-04-07"]
 
 
-def test_nse_collector_includes_legacy_equity_archive_url(tmp_path: Path) -> None:
+def test_nse_collector_prefers_standard_historical_equity_archive(tmp_path: Path) -> None:
     collector = NSECollector(data_dir=str(tmp_path))
 
     urls = collector._candidate_bhavcopy_urls("2022-08-08")
 
-    assert (
-        "https://archives.nseindia.com/content/historical/EQUITIES/2022/AUG/cm08AUG2022bhav.csv.zip"
-        in urls
+    assert urls[:2] == [
+        "https://nsearchives.nseindia.com/content/historical/EQUITIES/2022/AUG/cm08AUG2022bhav.csv.zip",
+        "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_08082022.csv",
+    ]
+
+
+def test_nse_collector_standard_archive_prevents_security_full_basis_drift(
+    tmp_path: Path,
+) -> None:
+    collector = NSECollector(data_dir=str(tmp_path))
+    calls: list[str] = []
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class Session:
+        def get(self, url: str, timeout: int) -> Response:
+            calls.append(url)
+            return Response()
+
+    collector.session = Session()  # type: ignore[assignment]
+    collector._read_bhavcopy_response = lambda _: pd.DataFrame(  # type: ignore[method-assign]
+        [{"SYMBOL": "AAA", "CLOSE": 100.0}]
     )
+
+    frame = collector.get_bhavcopy("2019-09-30")
+
+    assert len(calls) == 1
+    assert "/content/historical/EQUITIES/2019/SEP/cm30SEP2019bhav.csv.zip" in calls[0]
+    assert frame.iloc[0]["CLOSE"] == 100.0
+
+
+def test_nse_collector_does_not_treat_legacy_generic_archive_as_canonical(
+    tmp_path: Path,
+) -> None:
+    pd.DataFrame([{"SYMBOL": "STALE", "CLOSE": 999.0}]).to_csv(
+        tmp_path / "nse_30SEP2019.csv",
+        index=False,
+    )
+    collector = NSECollector(data_dir=str(tmp_path))
+    calls: list[str] = []
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class Session:
+        def get(self, url: str, timeout: int) -> Response:
+            calls.append(url)
+            return Response()
+
+    collector.session = Session()  # type: ignore[assignment]
+    collector._read_bhavcopy_response = lambda _: pd.DataFrame(  # type: ignore[method-assign]
+        [{"SYMBOL": "CANONICAL", "CLOSE": 100.0}]
+    )
+
+    frame = collector.get_bhavcopy("2019-09-30")
+
+    assert len(calls) == 1
+    assert list(frame["SYMBOL"]) == ["CANONICAL"]
+    assert (tmp_path / "nse_canonical_30SEP2019.csv").exists()
 
 
 def test_nse_collector_tries_next_archive_candidate_after_error(tmp_path: Path) -> None:

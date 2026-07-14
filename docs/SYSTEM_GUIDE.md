@@ -24,7 +24,12 @@ The main surfaces are:
 
 - Resolve live data through the existing path helpers and `$DATA_ROOT`; never hardcode a repo-local `data/...` path in application code.
 - The local operator setting is `DATA_ROOT=/Volumes/MacData/Trading/data`. If `DATA_ROOT` is unset, code retains a legacy repo-local fallback; operational work must load `.env` and use the configured external root.
-- NSE bhavcopy is the operational OHLC source of record. Provider fallback and quarantine behavior are defined in [data sources](reference/data_sources.md) and [trust and DQ](architecture/data_trust_and_dq.md).
+- NSE bhavcopy is the operational OHLC source of record. Historical collection
+  prefers the standard NSE equity bhavcopy ZIP before the security-full report;
+  collector-owned canonical caches are isolated from legacy generic archives so
+  a stale fallback file cannot override that order. Provider fallback and
+  quarantine behavior are defined in [data sources](reference/data_sources.md)
+  and [trust and DQ](architecture/data_trust_and_dq.md).
 - Synthetic smoke data is disabled. Canary runs use a reduced real symbol universe.
 - Critical trust or DQ failures block downstream execution.
 - Historical OHLCV repair and research-to-operational backfill project candidate
