@@ -2,7 +2,7 @@
 
 - **Purpose:** Convert ranked signals into paper (or live-scaffold) orders, persist fills, and update portfolio state.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-07-14
 - **Source of truth:** [`src/ai_trading_system/pipeline/stages/execute.py`](../../src/ai_trading_system/pipeline/stages/execute.py), [`src/ai_trading_system/domains/execution/`](../../src/ai_trading_system/domains/execution/), [`src/ai_trading_system/domains/risk/`](../../src/ai_trading_system/domains/risk/)
 
 ---
@@ -72,7 +72,11 @@ Persistent state written to **`data/execution.duckdb`** (default in [`store.py:2
 
 - `data_trust_status` and `trust_confidence` propagated from rank/candidate stage into summary metadata.
 - Stage-2 (`stage2_gate`), breakout-linkage tier counts surfaced in summary.
-- Heat gate: `execution_heat_gate_threshold` (default `0.08`) — blocks new entries when portfolio heat exceeds threshold.
+- Heat gate: `execution_heat_gate_threshold` (default `0.08`) — before each
+  buy submission, projects existing risk plus the candidate's stop risk and
+  risk reserved by earlier accepted buys in the same batch. The buy is rejected
+  when projected cumulative heat exceeds the threshold; rejected orders do not
+  consume a reservation.
 - Risk-profile-driven gates: position count cap, sector exposure cap, single-stock weight cap (all in `ExecutionRequest`).
 - `canary` mode: when `context.params["canary"]` is truthy and `canary_blocked` is set, blocks execution and records `canary_blocked: true` in metadata.
 

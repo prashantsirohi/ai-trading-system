@@ -72,6 +72,7 @@ class AutoTrader:
             capital=capital,
             threshold=heat_gate_threshold,
         )
+        reserved_risk_amount = max(0.0, float(open_risk) * float(capital))
 
         stop_loss_actions = []
         if execution_enabled and not preview_only:
@@ -227,19 +228,6 @@ class AutoTrader:
                             }
                         )
                         continue
-                if not heat_gate_ok:
-                    executions.append(
-                        {
-                            "action": action.to_dict(),
-                            "result": {
-                                "status": "REJECTED",
-                                "reason": "heat_gate_exceeded",
-                                "open_risk": open_risk,
-                                "threshold": heat_gate_threshold,
-                            },
-                        }
-                    )
-                    continue
                 action_meta = action.metadata or {}
                 signal.update(
                     {
@@ -273,14 +261,56 @@ class AutoTrader:
                         "sector": action_meta.get("sector") or signal.get("sector_name"),
                     }
                 )
+                requested_price = float(
+                    action.requested_price or signal.get("close") or 0.0
+                )
+                candidate_risk_amount = _estimate_buy_risk_amount(
+                    signal=signal,
+                    explicit_quantity=int(action.quantity or buy_quantity or 0),
+                    requested_price=requested_price,
+                    capital=capital,
+                    regime=regime,
+                    regime_multiplier=regime_multiplier,
+                    use_atr_position_sizing=use_atr_position_sizing,
+                    risk_manager=self.service.risk_manager,
+                )
+                projected_risk = (
+                    (reserved_risk_amount + candidate_risk_amount) / float(capital)
+                    if float(capital) > 0
+                    else 0.0
+                )
+                if not heat_gate_ok or projected_risk > float(heat_gate_threshold):
+                    executions.append(
+                        {
+                            "action": action.to_dict(),
+                            "result": {
+                                "status": "REJECTED",
+                                "reason": "heat_gate_exceeded",
+                                "open_risk": round(
+                                    reserved_risk_amount / float(capital), 4
+                                )
+                                if float(capital) > 0
+                                else 0.0,
+                                "candidate_risk": round(
+                                    candidate_risk_amount / float(capital), 4
+                                )
+                                if float(capital) > 0
+                                else 0.0,
+                                "projected_risk": round(projected_risk, 4),
+                                "threshold": heat_gate_threshold,
+                            },
+                        }
+                    )
+                    continue
                 result = self.service.execute_signal(
                     signal,
-                    price=float(action.requested_price or signal.get("close") or 0.0),
+                    price=requested_price,
                     capital=capital,
                     regime=regime,
                     regime_multiplier=regime_multiplier,
                 )
                 if result.get("status") not in {"REJECTED", "ERROR"}:
+                    reserved_risk_amount += candidate_risk_amount
                     portfolio_state = _project_portfolio_state_for_buy(
                         portfolio_state=portfolio_state,
                         candidate=signal,
@@ -501,6 +531,62 @@ def _estimate_buy_quantity(
         regime_multiplier=regime_multiplier,
     )
     return int((risk_payload or {}).get("shares", 0) or 0)
+
+
+def _estimate_buy_risk_amount(
+    *,
+    signal: dict[str, Any],
+    explicit_quantity: int,
+    requested_price: float,
+    capital: float,
+    regime: str,
+    regime_multiplier: float,
+    use_atr_position_sizing: bool,
+    risk_manager: Any,
+) -> float:
+    """Estimate capital at risk for a candidate before submitting its order."""
+    quantity = _estimate_buy_quantity(
+        signal=signal,
+        explicit_quantity=explicit_quantity,
+        requested_price=requested_price,
+        capital=capital,
+        regime=regime,
+        regime_multiplier=regime_multiplier,
+        use_atr_position_sizing=use_atr_position_sizing,
+        risk_manager=risk_manager,
+    )
+    if quantity <= 0:
+        return 0.0
+
+    initial_stop = _maybe_float(signal.get("initial_stop"))
+    if initial_stop is not None and initial_stop > 0:
+        return max(0.0, float(requested_price) - initial_stop) * quantity
+
+    atr = _maybe_float(signal.get("atr_14"))
+    if atr is not None and atr > 0:
+        atr_multiple = _maybe_float(signal.get("atr_multiple")) or 2.0
+        return max(0.0, atr * atr_multiple) * quantity
+
+    if (
+        risk_manager is not None
+        and explicit_quantity <= 0
+        and not use_atr_position_sizing
+    ):
+        risk_payload = risk_manager.compute_position_size(
+            str(signal.get("symbol_id") or "").strip(),
+            exchange=str(signal.get("exchange") or "NSE"),
+            capital=capital,
+            regime=regime,
+            regime_multiplier=regime_multiplier,
+        )
+        risk_amount = _maybe_float((risk_payload or {}).get("risk_amount"))
+        if risk_amount is not None:
+            return max(0.0, risk_amount)
+        stop_loss = _maybe_float((risk_payload or {}).get("stop_loss"))
+        if stop_loss is not None:
+            return max(0.0, float(requested_price) - stop_loss) * quantity
+
+    return max(0.0, float(requested_price) * 0.10) * quantity
 
 
 def _maybe_float(value: Any) -> float | None:

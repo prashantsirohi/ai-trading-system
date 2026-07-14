@@ -217,10 +217,6 @@ class _FixedRiskManager:
         }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUD-004: portfolio heat is not yet reserved within a buy batch",
-)
 def test_aud_004_batch_orders_cannot_exceed_portfolio_heat(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path)
     service = ExecutionService(
@@ -262,13 +258,25 @@ def test_aud_004_batch_orders_cannot_exceed_portfolio_heat(tmp_path: Path) -> No
         if item["action"]["action"] == "BUY"
         and item["result"].get("status") not in {"REJECTED", "ERROR"}
     ]
+    rejected_buy = next(
+        item
+        for item in result["executions"]
+        if item["action"]["action"] == "BUY"
+        and item["result"].get("status") == "REJECTED"
+    )
     heat_ok, _ = portfolio.check_heat_gate(
         portfolio.open_positions(),
         capital=1_000.0,
         threshold=0.15,
     )
 
-    assert len(accepted_buys) <= 1
+    assert len(accepted_buys) == 1
+    assert rejected_buy["result"]["reason"] == "heat_gate_exceeded"
+    assert rejected_buy["result"]["open_risk"] == 0.1
+    assert rejected_buy["result"]["candidate_risk"] == 0.1
+    assert rejected_buy["result"]["projected_risk"] == 0.2
+    assert len(store.list_orders()) == 1
+    assert len(store.list_fills()) == 1
     assert heat_ok is True
 
 

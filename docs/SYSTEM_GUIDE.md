@@ -34,6 +34,10 @@ The main surfaces are:
   attempt completed. Failed-attempt files remain immutable forensic evidence but
   cannot feed retries, execution, or publishing.
 - Paper execution is the safe default. Do not enable live broker placement without explicit operator authorization, and do not describe the live path as production-certified.
+- New buys are checked against projected cumulative portfolio heat before
+  submission. Risk reserved by earlier accepted buys in the same execution
+  batch counts toward the threshold, including orders not yet represented as
+  open fills.
 - Preview, diagnostics, documentation checks, and tests must not mutate broker state or live DuckDB files.
 
 ## Operational design and stages
