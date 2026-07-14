@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-07-13
+- **Last verified:** 2026-07-14
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -72,17 +72,28 @@ $DATA_ROOT/pipeline_runs/<run_id>/candidate_tracker/attempt_1/candidate_tracker_
 $DATA_ROOT/pipeline_runs/<run_id>/execute/attempt_2/executed_orders.csv
 ```
 
-The exact artifact registry is documented in [artifacts](../reference/artifacts.md). Partial files can remain after a failed attempt; their presence does not make them authoritative.
+The exact artifact registry is documented in [artifacts](../reference/artifacts.md).
+Partial files and registered artifact rows can remain after a failed attempt;
+their presence does not make them authoritative. Default artifact maps and
+latest-artifact reads join the exact `(run_id, stage_name, attempt_number)`
+producer and require `pipeline_stage_run.status = 'completed'`.
+
+Failed-attempt evidence remains available explicitly through
+`RegistryStore.get_attempt_artifacts(run_id, stage_name, attempt_number)`. This
+diagnostic path does not promote the files for downstream consumption.
 
 ## Control-plane lineage
 
 - `pipeline_run` stores the logical run identity, date, domain, status, timing, and metadata.
 - `pipeline_stage_run` stores each `(run, stage, attempt)` lifecycle.
-- `pipeline_artifact` stores registered output URIs, content hashes, producer identity, and optional schema/version metadata.
+- `pipeline_artifact` stores registered output URIs, content hashes, producer identity, and optional schema/version metadata. Authority is derived from the matching completed `pipeline_stage_run`; it is not inferred from the artifact row alone.
 - `dq_result` stores rule outcomes per run/stage/attempt.
 - Publisher delivery rows and alerts record downstream operational outcomes.
 
-Use `pipeline_artifact` to discover completed outputs. Filesystem search is a fallback for diagnostics and explicitly supported recovery helpers, not the primary lineage contract.
+Use the registry's completed-attempt resolution to discover authoritative
+outputs. Filesystem search is a fallback only when no control-plane database is
+available; when the control plane exists, publish-only resolution must not fall
+back to a failed attempt merely because its file is newer.
 
 ## Durable decision state versus attempt snapshots
 

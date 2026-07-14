@@ -2736,6 +2736,48 @@ def test_main_publish_only_without_run_id_resolves_latest_publishable_run(monkey
     assert run_calls[0]["stage_names"] == ["publish"]
 
 
+def test_latest_publishable_run_ignores_failed_rank_attempt(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    registry = RegistryStore(
+        tmp_path,
+        db_path=data_root / "control_plane.duckdb",
+    )
+
+    completed_run_id = "pipeline-2026-07-10-completed-rank"
+    registry.create_run(completed_run_id, "daily", "2026-07-10")
+    completed_stage_run_id = registry.start_stage(completed_run_id, "rank", 1)
+    completed_path = data_root / "pipeline_runs" / completed_run_id / "rank" / "attempt_1" / "ranked_signals.csv"
+    completed_path.parent.mkdir(parents=True)
+    completed_path.write_text("symbol_id,composite_score\nGOOD,90\n", encoding="utf-8")
+    registry.record_artifact(
+        completed_run_id,
+        "rank",
+        1,
+        StageArtifact.from_file("ranked_signals", completed_path, row_count=1),
+    )
+    registry.finish_stage(completed_stage_run_id, "completed")
+
+    failed_run_id = "pipeline-2026-07-11-failed-rank"
+    registry.create_run(failed_run_id, "daily", "2026-07-11")
+    failed_stage_run_id = registry.start_stage(failed_run_id, "rank", 1)
+    failed_path = data_root / "pipeline_runs" / failed_run_id / "rank" / "attempt_1" / "ranked_signals.csv"
+    failed_path.parent.mkdir(parents=True)
+    failed_path.write_text("symbol_id,composite_score\nBAD,99\n", encoding="utf-8")
+    registry.record_artifact(
+        failed_run_id,
+        "rank",
+        1,
+        StageArtifact.from_file("ranked_signals", failed_path, row_count=1),
+    )
+    registry.finish_stage(failed_stage_run_id, "failed", error_class="DataQualityError")
+
+    resolved = orchestrator_module._resolve_latest_publishable_run_id(tmp_path)
+
+    assert resolved == completed_run_id
+
+
 def test_main_publish_only_without_run_id_exits_when_no_publishable_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     class FakeOrchestrator:
         def __init__(self, project_root: Path) -> None:

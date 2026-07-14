@@ -30,6 +30,9 @@ The main surfaces are:
 - Historical ranking is point-in-time: market, return, volume, delivery, sector,
   stage, benchmark, and persisted feature inputs cannot read observations after
   the requested run date.
+- Default artifact resolution promotes only outputs whose exact producing stage
+  attempt completed. Failed-attempt files remain immutable forensic evidence but
+  cannot feed retries, execution, or publishing.
 - Paper execution is the safe default. Do not enable live broker placement without explicit operator authorization, and do not describe the live path as production-certified.
 - Preview, diagnostics, documentation checks, and tests must not mutate broker state or live DuckDB files.
 

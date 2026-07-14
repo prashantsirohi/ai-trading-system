@@ -1292,19 +1292,16 @@ def _safe_stage_runs(orchestrator: object, run_id: str) -> list[dict[str, object
 
 
 def _resolve_latest_publishable_run_id(project_root: Path, *, limit: int = 50) -> str | None:
-    disk_candidate = find_latest_pipeline_artifact(
-        project_root=project_root,
-        data_domain="operational",
-        stage_name="rank",
-        filename="ranked_signals.csv",
-        limit=max(int(limit), 200),
-    )
-    if disk_candidate is not None:
-        return disk_candidate[0]
-
     control_plane_db = get_domain_paths(project_root).root_dir / "control_plane.duckdb"
     if not control_plane_db.exists():
-        return None
+        disk_candidate = find_latest_pipeline_artifact(
+            project_root=project_root,
+            data_domain="operational",
+            stage_name="rank",
+            filename="ranked_signals.csv",
+            limit=max(int(limit), 200),
+        )
+        return disk_candidate[0] if disk_candidate is not None else None
     import duckdb
 
     conn = duckdb.connect(str(control_plane_db), read_only=True)
@@ -1317,6 +1314,11 @@ def _resolve_latest_publishable_run_id(project_root: Path, *, limit: int = 50) -
               ON a.run_id = r.run_id
              AND a.stage_name = 'rank'
              AND a.artifact_type = 'ranked_signals'
+            JOIN pipeline_stage_run s
+              ON s.run_id = a.run_id
+             AND s.stage_name = a.stage_name
+             AND s.attempt_number = a.attempt_number
+             AND s.status = 'completed'
             ORDER BY r.started_at DESC NULLS LAST
             LIMIT ?
             """,

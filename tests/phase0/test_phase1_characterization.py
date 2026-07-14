@@ -135,10 +135,6 @@ def test_aud_001_future_rows_do_not_change_historical_rank_inputs_or_result(tmp_
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUD-002: failed-DQ artifacts are not yet excluded from resolution",
-)
 def test_aud_002_failed_attempt_artifact_is_not_authoritative(tmp_path: Path) -> None:
     registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
     run_id = "phase0-artifact-promotion"
@@ -165,8 +161,47 @@ def test_aud_002_failed_attempt_artifact_is_not_authoritative(tmp_path: Path) ->
     )
 
     artifact_map = registry.get_artifact_map(run_id)
+    failed_attempt_artifacts = registry.get_attempt_artifacts(run_id, "rank", 1)
 
     assert "ranked_signals" not in artifact_map.get("rank", {})
+    assert failed_attempt_artifacts["ranked_signals"].uri == str(artifact_path)
+    assert registry.get_latest_artifact(
+        stage_name="rank",
+        artifact_type="ranked_signals",
+        run_status=None,
+    ) == []
+
+    successful_stage_run_id = registry.start_stage(run_id, "rank", 2)
+    successful_artifact_path = tmp_path / "ranked_signals_attempt_2.csv"
+    successful_artifact_path.write_text(
+        "symbol_id,composite_score\nACME,95\n",
+        encoding="utf-8",
+    )
+    registry.record_artifact(
+        run_id,
+        "rank",
+        2,
+        StageArtifact.from_file(
+            "ranked_signals",
+            successful_artifact_path,
+            row_count=1,
+            attempt_number=2,
+        ),
+    )
+    registry.finish_stage(successful_stage_run_id, "completed")
+
+    promoted_artifact = registry.get_artifact_map(run_id)["rank"]["ranked_signals"]
+    failed_attempt_artifacts = registry.get_attempt_artifacts(run_id, "rank", 1)
+    latest_promoted_artifact = registry.get_latest_artifact(
+        stage_name="rank",
+        artifact_type="ranked_signals",
+        run_status=None,
+    )[0]
+
+    assert promoted_artifact.uri == str(successful_artifact_path)
+    assert promoted_artifact.attempt_number == 2
+    assert latest_promoted_artifact.uri == str(successful_artifact_path)
+    assert failed_attempt_artifacts["ranked_signals"].uri == str(artifact_path)
 
 
 class _FixedRiskManager:

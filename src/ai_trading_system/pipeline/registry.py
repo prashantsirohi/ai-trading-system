@@ -906,13 +906,21 @@ class RegistryStore:
             )
 
     def get_artifact_map(self, run_id: str) -> Dict[str, Dict[str, StageArtifact]]:
+        """Resolve artifacts produced by completed stage attempts only."""
+
         with self._reader() as conn:
             rows = conn.execute(
                 """
-                SELECT stage_name, artifact_type, uri, row_count, content_hash, metadata_json, attempt_number
-                FROM pipeline_artifact
-                WHERE run_id = ?
-                ORDER BY created_at, attempt_number
+                SELECT a.stage_name, a.artifact_type, a.uri, a.row_count,
+                       a.content_hash, a.metadata_json, a.attempt_number
+                FROM pipeline_artifact a
+                JOIN pipeline_stage_run s
+                  ON s.run_id = a.run_id
+                 AND s.stage_name = a.stage_name
+                 AND s.attempt_number = a.attempt_number
+                 AND s.status = 'completed'
+                WHERE a.run_id = ?
+                ORDER BY a.created_at, a.attempt_number
                 """,
                 [run_id],
             ).fetchall()
@@ -930,6 +938,38 @@ class RegistryStore:
                 attempt_number=attempt_number,
             )
         return artifacts
+
+    def get_attempt_artifacts(
+        self,
+        run_id: str,
+        stage_name: str,
+        attempt_number: int,
+    ) -> Dict[str, StageArtifact]:
+        """Return immutable evidence for one attempt regardless of its status."""
+
+        with self._reader() as conn:
+            rows = conn.execute(
+                """
+                SELECT artifact_type, uri, row_count, content_hash, metadata_json
+                FROM pipeline_artifact
+                WHERE run_id = ?
+                  AND stage_name = ?
+                  AND attempt_number = ?
+                ORDER BY created_at
+                """,
+                [run_id, stage_name, int(attempt_number)],
+            ).fetchall()
+        return {
+            row[0]: StageArtifact(
+                artifact_type=row[0],
+                uri=str(resolve_artifact_path(row[1], project_root=self.project_root)),
+                row_count=row[2],
+                content_hash=row[3],
+                metadata=self._loads(row[4]),
+                attempt_number=int(attempt_number),
+            )
+            for row in rows
+        }
 
     def get_rules_for_stage(self, stage_name: str) -> List[Dict[str, Any]]:
         with self._reader() as conn:
@@ -983,6 +1023,11 @@ class RegistryStore:
                 SELECT a.uri, a.row_count, a.content_hash, a.metadata_json, a.attempt_number
                 FROM pipeline_artifact a
                 JOIN pipeline_run r ON r.run_id = a.run_id
+                JOIN pipeline_stage_run s
+                  ON s.run_id = a.run_id
+                 AND s.stage_name = a.stage_name
+                 AND s.attempt_number = a.attempt_number
+                 AND s.status = 'completed'
                 WHERE {where_sql}
                 ORDER BY r.started_at DESC, a.created_at DESC
                 LIMIT ?
