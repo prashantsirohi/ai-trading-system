@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
+import pytest
 
 from ai_trading_system.domains.investigator.service import InvestigatorService
 from ai_trading_system.domains.opportunities.contracts import (
@@ -26,6 +27,7 @@ from ai_trading_system.domains.opportunities.routing import (
     REASON_MINIMUM_TIER,
     RoutingConflictCode,
     SCAN_ROUTING_POLICY_VERSION,
+    ScanRoutingDecision,
     ScanReason,
     ScanTier,
     decide_scan_route,
@@ -78,9 +80,12 @@ def test_winning_reason_is_deterministic_and_permutation_independent() -> None:
         stock_stage=WeinsteinStage.STAGE_2,
     )
     assert first.scan_tier is ScanTier.FULL_INVESTIGATOR
+    assert first.effective_scan_tier is ScanTier.FULL_INVESTIGATOR
     assert first.winning_reason is ScanReason.PENDING_FOLLOWTHROUGH
     assert first.reasons == second.reasons
     assert first.winning_reason is second.winning_reason
+    assert first.routing_input_hash == second.routing_input_hash
+    assert first.routing_decision_id == second.routing_decision_id
 
 
 def test_active_recent_and_followthrough_cannot_be_downgraded() -> None:
@@ -107,6 +112,7 @@ def test_active_recent_and_followthrough_cannot_be_downgraded() -> None:
         decided_at=NOW,
     )
     assert active.scan_tier is ScanTier.POSITION_MONITOR
+    assert active.effective_scan_tier is ScanTier.POSITION_MONITOR
     assert {conflict.code for conflict in active.validation_conflicts} >= {
         RoutingConflictCode.INVALID_MANUAL_OVERRIDE,
         RoutingConflictCode.ACTIVE_POSITION_DEMOTION,
@@ -121,6 +127,7 @@ def test_active_recent_and_followthrough_cannot_be_downgraded() -> None:
         decided_at=NOW,
     )
     assert followthrough.scan_tier is ScanTier.FULL_INVESTIGATOR
+    assert followthrough.effective_scan_tier is ScanTier.FULL_INVESTIGATOR
     assert RoutingConflictCode.FOLLOWTHROUGH_DEMOTION in {
         conflict.code for conflict in followthrough.validation_conflicts
     }
@@ -141,6 +148,7 @@ def test_manual_override_can_only_elevate() -> None:
         decided_at=NOW,
     )
     assert decision.scan_tier is ScanTier.FULL_INVESTIGATOR
+    assert decision.effective_scan_tier is ScanTier.FULL_INVESTIGATOR
     assert decision.winning_reason is ScanReason.MANUAL_OVERRIDE
     assert ScanReason.MANUAL_OVERRIDE in decision.reasons
 
@@ -152,9 +160,64 @@ def test_manual_override_can_only_elevate() -> None:
         decided_at=NOW,
     )
     assert invalid.scan_tier is ScanTier.STAGE_ONLY
+    assert invalid.effective_scan_tier is ScanTier.STAGE_ONLY
     assert RoutingConflictCode.INVALID_MANUAL_OVERRIDE in {
         conflict.code for conflict in invalid.validation_conflicts
     }
+
+
+@pytest.mark.parametrize(
+    ("stage", "severity"),
+    (
+        (WeinsteinStage.STAGE_3, "HIGH"),
+        (WeinsteinStage.TRANSITION_3_TO_4, "CRITICAL"),
+        (WeinsteinStage.STAGE_4, "CRITICAL"),
+    ),
+)
+def test_active_structural_stages_route_to_position_monitor_with_risk(
+    stage: WeinsteinStage, severity: str
+) -> None:
+    decision = decide_scan_route(
+        symbol_id="AAA",
+        active_position=True,
+        stock_stage=stage,
+    )
+    assert decision.effective_scan_tier is ScanTier.POSITION_MONITOR
+    assert decision.winning_reason is ScanReason.ACTIVE_POSITION
+    assert set(decision.all_selection_reasons) == {
+        ScanReason.ACTIVE_POSITION,
+        ScanReason.FULL_UNIVERSE_STRUCTURAL,
+    }
+    assert decision.new_long_structural_blocked is True
+    assert decision.structural_long_blocked is True
+    assert decision.active_position_structural_risk is True
+    assert decision.structural_risk_severity == severity
+
+
+def test_active_stage4_rank_selected_keeps_rank_but_active_wins() -> None:
+    decision = decide_scan_route(
+        symbol_id="AAA",
+        active_position=True,
+        rank_selected=True,
+        rank_position=12,
+        stock_stage=WeinsteinStage.STAGE_4,
+    )
+    replay = decide_scan_route(
+        symbol_id="AAA",
+        rank_selected=True,
+        rank_position=12,
+        active_position=True,
+        stock_stage=WeinsteinStage.STAGE_4,
+    )
+    assert decision.effective_scan_tier is ScanTier.POSITION_MONITOR
+    assert decision.winning_reason is ScanReason.ACTIVE_POSITION
+    assert ScanReason.RANK_SELECTED in decision.all_selection_reasons
+    assert ScanReason.ACTIVE_POSITION in decision.all_selection_reasons
+    assert decision.new_long_structural_blocked is True
+    assert decision.active_position_structural_risk is True
+    assert decision.structural_risk_severity == "CRITICAL"
+    assert decision.routing_input_hash == replay.routing_input_hash
+    assert decision.routing_decision_id == replay.routing_decision_id
 
 
 def test_structural_policy_splits_new_long_block_from_active_risk() -> None:
@@ -166,6 +229,7 @@ def test_structural_policy_splits_new_long_block_from_active_risk() -> None:
         symbol_id="AAA", active_position=True, stock_stage=WeinsteinStage.STAGE_3
     )
     assert active_stage3.scan_tier is ScanTier.POSITION_MONITOR
+    assert active_stage3.effective_scan_tier is ScanTier.POSITION_MONITOR
     assert active_stage3.new_long_structural_blocked is True
     assert active_stage3.active_position_structural_risk is True
     assert active_stage3.structural_risk_severity == "HIGH"
@@ -176,6 +240,31 @@ def test_structural_policy_splits_new_long_block_from_active_risk() -> None:
         stock_stage=WeinsteinStage.TRANSITION_3_TO_4,
     )
     assert active_stage4.structural_risk_severity == "CRITICAL"
+
+
+def test_invalid_active_position_full_investigator_construction_raises() -> None:
+    with pytest.raises(ValueError, match="EFFECTIVE_TIER_TOO_LOW"):
+        ScanRoutingDecision(
+            symbol_id="AAA",
+            exchange="NSE",
+            scan_tier=ScanTier.FULL_INVESTIGATOR,
+            effective_scan_tier=ScanTier.FULL_INVESTIGATOR,
+            winning_reason=ScanReason.ACTIVE_POSITION,
+            reasons=(ScanReason.ACTIVE_POSITION,),
+            all_selection_reasons=(ScanReason.ACTIVE_POSITION,),
+            rank_selected=False,
+            stage_selected=False,
+            position_selected=True,
+            recent_exit_selected=False,
+            followthrough_selected=False,
+            rank_position=None,
+            stock_stage=WeinsteinStage.STAGE_2,
+            sector_stage=WeinsteinStage.UNKNOWN,
+            active_position=True,
+            recently_exited=False,
+            structural_long_blocked=False,
+            market_data_available=True,
+        )
 
 
 def test_routing_row_validation_rejects_unknowns_and_downgrades() -> None:
@@ -283,12 +372,18 @@ def test_provisional_early_entry_sector_policy_fails_closed(
     )
 
     unknown = replace(base, sector_stage=None)
-    assert (
-        "sector_stage_unknown"
-        in evaluate_transition(
-            CandidateState.READY, unknown, config=OpportunityShadowConfig()
-        ).blockers
+    unknown_result = evaluate_transition(
+        CandidateState.READY, unknown, config=OpportunityShadowConfig()
     )
+    assert "sector_stage_unknown" in unknown_result.blockers
+    monitoring_route = decide_scan_route(
+        symbol_id="AAA",
+        stage_discovery=True,
+        stock_stage=WeinsteinStage.TRANSITION_1_TO_2,
+        sector_stage=WeinsteinStage.UNKNOWN,
+    )
+    assert monitoring_route.effective_scan_tier is ScanTier.LIGHT_PATTERN
+    assert not monitoring_route.validation_conflicts
 
     provisional_sector = replace(
         base,
