@@ -16,6 +16,8 @@ import pandas as pd
 STAGE_GOVERNANCE_POLICY_VERSION = "stage-governance-v1"
 SECTOR_MEMBERSHIP_POLICY_VERSION = "sector-membership-v1"
 CORRECTION_IMPACT_POLICY_VERSION = "stage-correction-impact-v1"
+STAGE_GOVERNANCE_AUTHORITY_POLICY_VERSION = "stage-governance-authority-v1"
+CORRECTION_IMPACT_MATCH_RULE_VERSION = "stage-correction-impact-match-v1"
 
 
 class MembershipTrust(str, Enum):
@@ -31,9 +33,58 @@ class StageGovernanceAction(str, Enum):
     LEGACY_ANNOTATION = "LEGACY_ANNOTATION"
 
 
+class CorrectionAuthority(str, Enum):
+    REVIEWED_OPERATOR_CORRECTION = "reviewed_operator_correction"
+    DATA_REPAIR_PIPELINE = "data_repair_pipeline"
+    CLASSIFIER_VERSION_MIGRATION = "classifier_version_migration"
+    ORIGINAL_OBSERVATION = "original_observation"
+
+
+AUTHORITY_PRECEDENCE: dict[CorrectionAuthority, int] = {
+    CorrectionAuthority.REVIEWED_OPERATOR_CORRECTION: 40,
+    CorrectionAuthority.DATA_REPAIR_PIPELINE: 30,
+    CorrectionAuthority.CLASSIFIER_VERSION_MIGRATION: 20,
+    CorrectionAuthority.ORIGINAL_OBSERVATION: 10,
+}
+
+
+class CorrectionImpactLinkStatus(str, Enum):
+    LINKED = "linked"
+    UNRESOLVED_LEGACY_NO_MATCH = "unresolved_legacy_no_match"
+    UNRESOLVED_LEGACY_AMBIGUOUS = "unresolved_legacy_ambiguous"
+
+
 class CorrectionImpactStatus(str, Enum):
     REVIEW_REQUIRED = "REVIEW_REQUIRED"
     UNRESOLVED_LEGACY = "UNRESOLVED_LEGACY"
+
+
+class StageGovernanceValidationError(ValueError):
+    """Raised when a stage-governance event violates identity or authority rules."""
+
+
+class StageGovernanceCycleError(StageGovernanceValidationError):
+    """Raised when a supersession edge would create a cycle."""
+
+
+class StageGovernanceConflictError(RuntimeError):
+    """Raised when as-of resolution cannot select one authoritative terminal."""
+
+    def __init__(self, conflict: StageGovernanceConflict):
+        super().__init__(conflict.conflict_reason)
+        self.conflict = conflict
+
+
+@dataclass(frozen=True, slots=True)
+class StageGovernanceConflict:
+    scope: str
+    entity_id: str
+    source_week_end: date
+    requested_as_of: datetime
+    terminal_observation_ids: tuple[str, ...]
+    authorities: tuple[CorrectionAuthority, ...]
+    conflict_reason: str
+    policy_version: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +143,10 @@ class StageGovernanceRecord:
     membership_trust: MembershipTrust
     authoritative: bool
     correction_reason: str | None
-    correction_authority: str
+    correction_authority: CorrectionAuthority
+    authority_reference: str
+    authority_recorded_at: datetime
+    governance_policy_version: str
     policy_version: str
     recorded_at: datetime
     run_id: str
@@ -300,36 +354,55 @@ def append_stage_governance(
     stage_attempt: int,
     supersedes_observation_id: str | None = None,
     correction_reason: str | None = None,
-    correction_authority: str = "pipeline",
+    correction_authority: CorrectionAuthority | str | None = None,
+    authority_reference: str | None = None,
+    authority_recorded_at: datetime | None = None,
+    governance_policy_version: str = STAGE_GOVERNANCE_AUTHORITY_POLICY_VERSION,
     policy_version: str = STAGE_GOVERNANCE_POLICY_VERSION,
 ) -> StageGovernanceRecord:
+    scope_normalized = scope.upper()
+    authority = _coerce_authority(correction_authority, action)
+    authority_time = authority_recorded_at or recorded_at
+    if authority_time.tzinfo is None:
+        raise ValueError("authority_recorded_at must be timezone-aware")
+    reference = authority_reference or run_id
+    if supersedes_observation_id:
+        _validate_stage_supersession(
+            conn,
+            scope=scope_normalized,
+            observation_id=observation_id,
+            supersedes_observation_id=supersedes_observation_id,
+        )
     event_payload = {
-        "scope": scope.upper(), "observation_id": observation_id, "action": action.value,
+        "scope": scope_normalized, "observation_id": observation_id, "action": action.value,
         "supersedes": supersedes_observation_id, "membership_trust": membership_trust.value,
-        "correction_reason": correction_reason, "correction_authority": correction_authority,
-        "policy_version": policy_version,
+        "correction_reason": correction_reason, "correction_authority": authority.value,
+        "authority_reference": reference, "authority_recorded_at": authority_time,
+        "governance_policy_version": governance_policy_version, "policy_version": policy_version,
     }
     event_hash = _digest(event_payload)
     governance_event_id = event_hash
     authoritative = (
         action is not StageGovernanceAction.WITHDRAWAL
-        and (scope.upper() == "STOCK" or membership_trust is not MembershipTrust.LATEST_ONLY_BACKFILL)
+        and (scope_normalized == "STOCK" or membership_trust is not MembershipTrust.LATEST_ONLY_BACKFILL)
     )
     conn.execute(
         """INSERT INTO stage_observation_governance (
                governance_event_id, observation_scope, observation_id, governance_action,
                supersedes_observation_id, membership_trust, authoritative, correction_reason,
-               correction_authority, policy_version, recorded_at, run_id, stage_attempt, event_hash
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               correction_authority, policy_version, recorded_at, run_id, stage_attempt, event_hash,
+               authority_reference, authority_recorded_at, governance_policy_version
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(governance_event_id) DO NOTHING""",
-        [governance_event_id, scope.upper(), observation_id, action.value, supersedes_observation_id,
-         membership_trust.value, authoritative, correction_reason, correction_authority,
-         policy_version, _db_time(recorded_at), run_id, stage_attempt, event_hash],
+        [governance_event_id, scope_normalized, observation_id, action.value, supersedes_observation_id,
+         membership_trust.value, authoritative, correction_reason, authority.value,
+         policy_version, _db_time(recorded_at), run_id, stage_attempt, event_hash,
+         reference, _db_time(authority_time), governance_policy_version],
     )
     return StageGovernanceRecord(
-        governance_event_id, scope.upper(), observation_id, action, supersedes_observation_id,
-        membership_trust, authoritative, correction_reason, correction_authority,
-        policy_version, recorded_at, run_id, stage_attempt,
+        governance_event_id, scope_normalized, observation_id, action, supersedes_observation_id,
+        membership_trust, authoritative, correction_reason, authority, reference, authority_time,
+        governance_policy_version, policy_version, recorded_at, run_id, stage_attempt,
     )
 
 
@@ -373,40 +446,136 @@ def record_correction_impacts(
                WHERE scope = 'SECTOR' AND entity_id = ? AND source_week_end = ?""",
             [entity_id, date.fromisoformat(str(source_week_end)[:10])],
         ).fetchall())
-    affected: set[tuple[str, str, str | None]] = set()
+    affected: dict[tuple[str, str, CorrectionImpactLinkStatus], tuple[str, str, str | None, CorrectionImpactLinkStatus, int, dict[str, Any]]] = {}
     for candidate_id in candidate_ids:
-        affected.add(("candidate_episode", candidate_id, candidate_id))
+        item = (
+            "candidate_episode", candidate_id, candidate_id,
+            CorrectionImpactLinkStatus.LINKED, 1,
+            {"match_basis": "open_or_stage_candidate", "candidate_id": candidate_id},
+        )
+        affected[(item[0], item[1], item[3])] = item
         for table, id_column in (
             ("candidate_snapshot", "snapshot_id"),
             ("candidate_decision_context", "decision_context_id"),
             ("candidate_outcome_attribution", "attribution_id"),
         ):
-            affected.update(
-                (table, str(row[0]), candidate_id)
+            matches = [
+                str(row[0])
                 for row in conn.execute(
                     f"SELECT {id_column} FROM {table} WHERE candidate_id = ?",  # noqa: S608
                     [candidate_id],
                 ).fetchall()
-            )
-    for record_type, record_id, candidate_id in sorted(affected):
+            ]
+            if len(matches) == 1:
+                item = (
+                    table, matches[0], candidate_id, CorrectionImpactLinkStatus.LINKED,
+                    1, {"match_basis": "candidate_id", "candidate_id": candidate_id},
+                )
+                affected[(item[0], item[1], item[3])] = item
+            elif len(matches) == 0:
+                item = (
+                    table, f"{candidate_id}:{table}:unresolved", candidate_id,
+                    CorrectionImpactLinkStatus.UNRESOLVED_LEGACY_NO_MATCH, 0,
+                    {"match_basis": "candidate_id", "candidate_id": candidate_id},
+                )
+                affected[(item[0], item[1], item[3])] = item
+            else:
+                item = (
+                    table, f"{candidate_id}:{table}:ambiguous", candidate_id,
+                    CorrectionImpactLinkStatus.UNRESOLVED_LEGACY_AMBIGUOUS, len(matches),
+                    {"match_basis": "candidate_id", "candidate_id": candidate_id, "matched_record_ids": matches},
+                )
+                affected[(item[0], item[1], item[3])] = item
+    for record_type, record_id, candidate_id, link_status, match_count, evidence in sorted(affected.values()):
         impact_id = _digest({
             "governance_event_id": governance.governance_event_id,
             "affected_record_type": record_type, "affected_record_id": record_id,
+            "link_status": link_status.value, "match_count": match_count,
             "policy_version": CORRECTION_IMPACT_POLICY_VERSION,
         })
+        review_required = link_status is not CorrectionImpactLinkStatus.LINKED
+        calibration_eligible = link_status is CorrectionImpactLinkStatus.LINKED
         conn.execute(
             """INSERT INTO stage_correction_impact (
                    impact_id, correction_governance_event_id, corrected_observation_scope,
                    corrected_observation_id, affected_record_type, affected_record_id,
-                   candidate_id, impact_status, impact_reason, policy_version, detected_at, run_id
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   candidate_id, impact_status, impact_reason, policy_version, detected_at, run_id,
+                   match_count, match_rule_version, match_evidence,
+                   authoritative_calibration_eligible, review_required
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(impact_id) DO NOTHING""",
             [impact_id, governance.governance_event_id, scope, governance.observation_id,
-             record_type, record_id, candidate_id, CorrectionImpactStatus.REVIEW_REQUIRED.value,
-             "stage observation was corrected; append-only candidate history requires review",
-             CORRECTION_IMPACT_POLICY_VERSION, _db_time(governance.recorded_at), governance.run_id],
+             record_type, record_id, candidate_id, link_status.value,
+             _impact_reason(link_status),
+             CORRECTION_IMPACT_POLICY_VERSION, _db_time(governance.recorded_at), governance.run_id,
+             match_count, CORRECTION_IMPACT_MATCH_RULE_VERSION,
+             json.dumps(evidence, sort_keys=True), calibration_eligible, review_required],
         )
     return len(affected)
+
+
+def resolve_stage_observation_payloads(
+    conn: Any,
+    *,
+    scope: str,
+    table: str,
+    as_of: str,
+    available_at: datetime | str,
+    entity_columns: tuple[str, ...],
+    clauses: list[str],
+    params: list[Any],
+) -> list[dict[str, Any]]:
+    """Resolve terminal stage observations with explicit authority conflicts."""
+    scope_normalized = scope.upper()
+    availability = _coerce_datetime(available_at)
+    select_entity = ", ".join(entity_columns)
+    rows = conn.execute(
+        f"""SELECT observation_id, observation_json, source_week_end, stage_status, as_of,
+                   created_at, {select_entity}
+            FROM {table} history
+            WHERE {' AND '.join(clauses)}
+              AND created_at <= CAST(? AS TIMESTAMP)
+              AND NOT EXISTS (
+                  SELECT 1 FROM stage_observation_governance quarantine
+                  WHERE quarantine.observation_scope = ?
+                    AND quarantine.observation_id = history.observation_id
+                    AND NOT quarantine.authoritative
+                    AND quarantine.recorded_at <= CAST(? AS TIMESTAMP)
+              )""",  # noqa: S608
+        [*params, _db_time(availability), scope_normalized, _db_time(availability)],
+    ).fetchall()
+    grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in rows:
+        item = {
+            "observation_id": str(row[0]),
+            "observation_json": str(row[1]),
+            "source_week_end": date.fromisoformat(str(row[2])[:10]),
+            "stage_status": str(row[3]),
+            "as_of": row[4],
+            "created_at": row[5],
+            "entity": tuple(str(value) for value in row[6:]),
+        }
+        grouped.setdefault(item["entity"], []).append(item)
+
+    resolved: list[dict[str, Any]] = []
+    for entity, items in sorted(grouped.items()):
+        max_week = max(item["source_week_end"] for item in items)
+        week_items = [item for item in items if item["source_week_end"] == max_week]
+        status_rank = max(_stage_status_rank(item["stage_status"]) for item in week_items)
+        bucket = [item for item in week_items if _stage_status_rank(item["stage_status"]) == status_rank]
+        max_as_of = max(str(item["as_of"]) for item in bucket)
+        bucket = [item for item in bucket if str(item["as_of"]) == max_as_of]
+        selected = _select_terminal_observation(
+            conn,
+            scope=scope_normalized,
+            table=table,
+            entity_id=":".join(entity),
+            source_week_end=max_week,
+            requested_as_of=availability,
+            candidates=bucket,
+        )
+        resolved.append(json.loads(selected["observation_json"]))
+    return resolved
 
 
 def annotate_legacy_stage_history(
@@ -475,6 +644,233 @@ def preview_legacy_stage_history(db_path: Any) -> dict[str, int]:
         return counts
     finally:
         conn.close()
+
+
+def _coerce_authority(
+    value: CorrectionAuthority | str | None,
+    action: StageGovernanceAction,
+) -> CorrectionAuthority:
+    if action in {StageGovernanceAction.ORIGINAL, StageGovernanceAction.LEGACY_ANNOTATION}:
+        return CorrectionAuthority.ORIGINAL_OBSERVATION
+    if value is None:
+        return CorrectionAuthority.DATA_REPAIR_PIPELINE
+    if isinstance(value, CorrectionAuthority):
+        return value
+    normalized = str(value).strip()
+    legacy_aliases = {
+        "pipeline": CorrectionAuthority.DATA_REPAIR_PIPELINE,
+        "pipeline_weekly_stage": CorrectionAuthority.DATA_REPAIR_PIPELINE,
+        "phase3c1_legacy_annotation": CorrectionAuthority.ORIGINAL_OBSERVATION,
+    }
+    if normalized in legacy_aliases:
+        return legacy_aliases[normalized]
+    try:
+        return CorrectionAuthority(normalized)
+    except ValueError as exc:
+        raise StageGovernanceValidationError(f"unknown correction authority: {value}") from exc
+
+
+def _stage_table(scope: str) -> str:
+    if scope == "STOCK":
+        return "weekly_stock_stage_history"
+    if scope == "SECTOR":
+        return "weekly_sector_stage_history"
+    raise StageGovernanceValidationError(f"unsupported observation scope: {scope}")
+
+
+def _stage_identity(conn: Any, *, scope: str, observation_id: str) -> dict[str, Any]:
+    table = _stage_table(scope)
+    if scope == "STOCK":
+        row = conn.execute(
+            f"""SELECT exchange, symbol_id, source_week_end, stage_status, classifier_version
+                FROM {table} WHERE observation_id = ?""",  # noqa: S608
+            [observation_id],
+        ).fetchone()
+        if row is None:
+            raise StageGovernanceValidationError(f"unknown {scope} observation_id: {observation_id}")
+        return {
+            "entity": (str(row[0]).upper(), str(row[1]).upper()),
+            "source_week_end": date.fromisoformat(str(row[2])[:10]),
+            "stage_status": str(row[3]),
+            "version": str(row[4]),
+        }
+    row = conn.execute(
+        f"""SELECT sector_id, source_week_end, stage_status, aggregation_rule_version
+            FROM {table} WHERE observation_id = ?""",  # noqa: S608
+        [observation_id],
+    ).fetchone()
+    if row is None:
+        raise StageGovernanceValidationError(f"unknown {scope} observation_id: {observation_id}")
+    return {
+        "entity": (str(row[0]),),
+        "source_week_end": date.fromisoformat(str(row[1])[:10]),
+        "stage_status": str(row[2]),
+        "version": str(row[3]),
+    }
+
+
+def _validate_stage_supersession(
+    conn: Any,
+    *,
+    scope: str,
+    observation_id: str,
+    supersedes_observation_id: str,
+) -> None:
+    if observation_id == supersedes_observation_id:
+        raise StageGovernanceCycleError("stage observation cannot supersede itself")
+    current = _stage_identity(conn, scope=scope, observation_id=observation_id)
+    prior = _stage_identity(conn, scope=scope, observation_id=supersedes_observation_id)
+    if current != prior:
+        raise StageGovernanceValidationError(
+            "stage supersession must stay within the same scope, entity, source week, status, and version"
+        )
+    if _has_supersession_path(conn, scope=scope, start=supersedes_observation_id, target=observation_id):
+        raise StageGovernanceCycleError("stage supersession would create a cycle")
+
+
+def _has_supersession_path(conn: Any, *, scope: str, start: str, target: str) -> bool:
+    frontier = [start]
+    seen: set[str] = set()
+    while frontier:
+        current = frontier.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        if current == target:
+            return True
+        rows = conn.execute(
+            """SELECT supersedes_observation_id
+               FROM stage_observation_governance
+               WHERE observation_scope = ?
+                 AND observation_id = ?
+                 AND supersedes_observation_id IS NOT NULL""",
+            [scope, current],
+        ).fetchall()
+        frontier.extend(str(row[0]) for row in rows)
+        if len(seen) > 10000:
+            raise StageGovernanceCycleError("stage supersession graph traversal exceeded safety bound")
+    return False
+
+
+def _detect_cycle_in_edges(edges: dict[str, set[str]]) -> tuple[str, ...] | None:
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    stack: list[str] = []
+
+    def visit(node: str) -> tuple[str, ...] | None:
+        if node in visiting:
+            try:
+                index = stack.index(node)
+            except ValueError:
+                index = 0
+            return tuple(stack[index:] + [node])
+        if node in visited:
+            return None
+        visiting.add(node)
+        stack.append(node)
+        for child in sorted(edges.get(node, ())):
+            cycle = visit(child)
+            if cycle:
+                return cycle
+        stack.pop()
+        visiting.remove(node)
+        visited.add(node)
+        return None
+
+    for node in sorted(edges):
+        cycle = visit(node)
+        if cycle:
+            return cycle
+    return None
+
+
+def _select_terminal_observation(
+    conn: Any,
+    *,
+    scope: str,
+    table: str,
+    entity_id: str,
+    source_week_end: date,
+    requested_as_of: datetime,
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    ids = {item["observation_id"] for item in candidates}
+    if not ids:
+        raise StageGovernanceConflictError(
+            StageGovernanceConflict(
+                scope, entity_id, source_week_end, requested_as_of, (), (),
+                "no terminal stage observations available", STAGE_GOVERNANCE_AUTHORITY_POLICY_VERSION,
+            )
+        )
+    placeholders = ",".join("?" for _ in ids)
+    governance_rows = conn.execute(
+        f"""SELECT observation_id, supersedes_observation_id, correction_authority, recorded_at
+            FROM stage_observation_governance
+            WHERE observation_scope = ?
+              AND recorded_at <= ?
+              AND (observation_id IN ({placeholders})
+                   OR supersedes_observation_id IN ({placeholders}))""",  # noqa: S608
+        [scope, _db_time(requested_as_of), *sorted(ids), *sorted(ids)],
+    ).fetchall()
+    edges: dict[str, set[str]] = {observation_id: set() for observation_id in ids}
+    authorities = {observation_id: CorrectionAuthority.ORIGINAL_OBSERVATION for observation_id in ids}
+    for observation_id, supersedes_id, authority, _recorded_at in governance_rows:
+        observation_id = str(observation_id)
+        if observation_id in ids:
+            authorities[observation_id] = _coerce_authority(str(authority), StageGovernanceAction.CORRECTION)
+        if supersedes_id is not None and observation_id in ids and str(supersedes_id) in ids:
+            edges.setdefault(observation_id, set()).add(str(supersedes_id))
+    cycle = _detect_cycle_in_edges(edges)
+    if cycle:
+        raise StageGovernanceConflictError(
+            StageGovernanceConflict(
+                scope, entity_id, source_week_end, requested_as_of, tuple(cycle),
+                tuple(authorities.get(item, CorrectionAuthority.ORIGINAL_OBSERVATION) for item in cycle),
+                "stage supersession cycle detected during as-of resolution",
+                STAGE_GOVERNANCE_AUTHORITY_POLICY_VERSION,
+            )
+        )
+    superseded = {target for targets in edges.values() for target in targets}
+    terminal_ids = sorted(ids - superseded)
+    if len(terminal_ids) == 1:
+        terminal_id = terminal_ids[0]
+        return next(item for item in candidates if item["observation_id"] == terminal_id)
+    terminal_authorities = {
+        observation_id: authorities.get(observation_id, CorrectionAuthority.ORIGINAL_OBSERVATION)
+        for observation_id in terminal_ids
+    }
+    max_rank = max(AUTHORITY_PRECEDENCE[authority] for authority in terminal_authorities.values())
+    winners = [
+        observation_id for observation_id, authority in terminal_authorities.items()
+        if AUTHORITY_PRECEDENCE[authority] == max_rank
+    ]
+    if len(winners) == 1:
+        winner = winners[0]
+        return next(item for item in candidates if item["observation_id"] == winner)
+    raise StageGovernanceConflictError(
+        StageGovernanceConflict(
+            scope=scope,
+            entity_id=entity_id,
+            source_week_end=source_week_end,
+            requested_as_of=requested_as_of,
+            terminal_observation_ids=tuple(terminal_ids),
+            authorities=tuple(terminal_authorities[observation_id] for observation_id in terminal_ids),
+            conflict_reason="multiple terminal stage observations have no unique authority winner",
+            policy_version=STAGE_GOVERNANCE_AUTHORITY_POLICY_VERSION,
+        )
+    )
+
+
+def _stage_status_rank(value: str) -> int:
+    return 2 if value == "locked" else 1
+
+
+def _impact_reason(status: CorrectionImpactLinkStatus) -> str:
+    if status is CorrectionImpactLinkStatus.LINKED:
+        return "stage observation was corrected; append-only candidate history requires review"
+    if status is CorrectionImpactLinkStatus.UNRESOLVED_LEGACY_NO_MATCH:
+        return "no defensible legacy candidate record match was found for the corrected observation"
+    return "multiple defensible legacy candidate record matches exist; manual review is required"
 
 
 def _append_dependency(conn: Any, sector_id: str, kind: str, dependency_id: str, source_hash: str) -> None:

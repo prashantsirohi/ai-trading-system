@@ -53,6 +53,13 @@ its dependency set even when headline breadth values happen to be unchanged.
 non-superseded observations known by the requested availability time. A later
 correction cannot leak into an earlier reconstruction. Provisional and locked
 rows continue to coexist; locked wins only for the same source-week endpoint.
+When multiple terminal corrections exist for that same endpoint, the resolver
+uses the Phase 3C-1A authority policy
+`reviewed_operator_correction > data_repair_pipeline >
+classifier_version_migration > original_observation`. If that policy does not
+produce a unique winner, the reader raises a governance conflict. Supersession
+cycles are rejected before insert and reported as malformed-governance conflicts
+if imported data already contains a cycle.
 
 ## DQ
 

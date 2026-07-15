@@ -36,7 +36,10 @@ Phase 3B adds optional full-universe [weekly structural coverage](stages/weekly_
 and [shadow scan routing](stages/scan_router.md). Phase 4 read-only operator surfaces
 remain deferred. Phase 3C-1 adds append-only [sector-membership and stage-correction
 governance](stages/weekly_stage.md) without changing execution, publishing, or the
-Phase 3B history payloads.
+Phase 3B history payloads. Phase 3C-1A hardens that governance with explicit
+correction-authority precedence, supersession-cycle rejection, and quarantined
+legacy correction-impact link statuses; the operator store may still contain no
+real Phase 3B weekly-stage rows until Phase 3B has run.
 
 ## Safety and operating invariants
 

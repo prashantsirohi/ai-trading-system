@@ -126,8 +126,23 @@ point-in-time validity.
 Canonical stock and sector readers apply both the effective stage cutoff and a
 separate recorded-availability cutoff. A correction becomes visible only after
 its governance event was recorded, and a superseded observation remains valid
-for earlier reconstructions. Corrections append review impacts; they do not
-rewrite candidate lifecycle, attribution, execution, or published artifacts.
+for earlier reconstructions. Competing terminal corrections are resolved only
+through the versioned authority order `reviewed_operator_correction` >
+`data_repair_pipeline` > `classifier_version_migration` >
+`original_observation`; equal-authority terminal competition raises an explicit
+governance conflict rather than falling back to insertion or hash ordering.
+Supersession cycles are rejected at write time and surfaced as conflicts if
+malformed imported data is encountered during reads. Corrections append review
+impacts; they do not rewrite candidate lifecycle, attribution, execution, or
+published artifacts.
+
+Phase 3C-1A adds additive metadata columns for authority reference/time,
+governance policy version, correction-impact match counts/evidence, and
+calibration quarantine. Legacy impact links use `linked`,
+`unresolved_legacy_no_match`, or `unresolved_legacy_ambiguous`; both unresolved
+states are review-required and excluded from authoritative calibration by
+default. A copied operator store with no `weekly_stage` history is classified as
+`EMPTY_PRE_PHASE3B`, not as a governance defect.
 
 ## Backup and mutation safety
 

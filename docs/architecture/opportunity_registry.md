@@ -51,6 +51,10 @@ in, candidate payloads. `stage_correction_impact` links a corrected universal
 observation to potentially affected open episodes, snapshots, decision contexts,
 and outcome attributions. These links are review markers only: registry rows are
 not updated, transitions are not fabricated, and attribution is not replaced.
+Phase 3C-1A distinguishes `linked`, `unresolved_legacy_no_match`, and
+`unresolved_legacy_ambiguous` links. Unresolved legacy links are review-required
+and not eligible for authoritative calibration unless a later reviewed process
+resolves them.
 
 ## Idempotency and transactions
 
@@ -76,7 +80,11 @@ A Tuesday provisional `transition_1_to_2` observation and a Friday locked `stage
 Universal Phase 3B stock/sector history follows the same non-repainting rule.
 Phase 3C-1 corrections append a new observation plus an explicit supersession
 event. Availability-aware readers continue to return the old observation for a
-cutoff before the correction was recorded.
+cutoff before the correction was recorded. Competing terminal corrections are
+not ordered by insertion time: the authority policy prefers reviewed operator
+corrections, then data-repair pipeline corrections, then classifier-version
+migrations, then original observations. Equal-authority terminal competition and
+supersession cycles are explicit governance conflicts.
 
 ## Reconstruction
 

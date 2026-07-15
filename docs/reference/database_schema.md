@@ -724,6 +724,19 @@ governance relations without altering migration 033 payloads:
 canonical as-of readers. DuckDB relationships remain convention-based rather
 than foreign-key-enforced.
 
+Migration `035_opportunity_phase3c1a_governance_hardening.sql` additively
+extends Phase 3C-1 governance. `stage_observation_governance` gains
+`authority_reference`, `authority_recorded_at`, and
+`governance_policy_version`. The canonical authority policy is
+`reviewed_operator_correction > data_repair_pipeline >
+classifier_version_migration > original_observation`; equal terminal authority
+competition is a governance conflict. `stage_correction_impact` gains
+`match_count`, `match_rule_version`, `match_evidence`,
+`authoritative_calibration_eligible`, and `review_required`. Impact status is
+`linked`, `unresolved_legacy_no_match`, or
+`unresolved_legacy_ambiguous`; unresolved rows are quarantined from
+authoritative calibration by default.
+
 - Control-plane DDL is applied by `RegistryStore`; it reads packaged SQL files from `pipeline/migrations/` in lexicographic order.
 - DuckDB does not enforce foreign keys; relationships above are by convention and are not constrained at the database level.
 - Several control-plane tables are extended by later migrations (002 → `dq_rule`, `model_registry`; 012 → `data_repair_run` index; 017 → `strategy_iteration_result`). Treat the final shape as the merge of all referenced migrations.

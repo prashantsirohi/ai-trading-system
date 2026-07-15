@@ -19,11 +19,13 @@ from ai_trading_system.domains.opportunities.routing import (
     StageDiscoveryReason,
 )
 from ai_trading_system.domains.opportunities.stage_governance import (
+    CorrectionAuthority,
     MembershipTrust,
     StageGovernanceAction,
     append_sector_dependencies,
     append_stage_governance,
     record_correction_impacts,
+    resolve_stage_observation_payloads,
 )
 from ai_trading_system.domains.ranking.stage_classifier import classify_latest
 from ai_trading_system.domains.ranking.weekly import to_weekly
@@ -371,7 +373,7 @@ def persist_stage_history(
     run_id: str,
     attempt: int,
     recorded_at: datetime | None = None,
-    correction_authority: str = "pipeline_weekly_stage",
+    correction_authority: CorrectionAuthority | str = CorrectionAuthority.DATA_REPAIR_PIPELINE,
 ) -> None:
     available_at = recorded_at or datetime.now(timezone.utc)
     with registry._writer() as conn:  # noqa: SLF001
@@ -403,7 +405,11 @@ def persist_stage_history(
                     supersedes_observation_id=prior, membership_trust=trust,
                     recorded_at=available_at, run_id=run_id, stage_attempt=attempt,
                     correction_reason="normalized source data changed" if prior else None,
-                    correction_authority=correction_authority,
+                    correction_authority=(
+                        correction_authority if prior else CorrectionAuthority.ORIGINAL_OBSERVATION
+                    ),
+                    authority_reference=run_id,
+                    authority_recorded_at=available_at,
                 )
                 record_correction_impacts(
                     conn, governance=governance, entity_id=str(row["symbol_id"]),
@@ -439,7 +445,11 @@ def persist_stage_history(
                     supersedes_observation_id=prior, membership_trust=trust,
                     recorded_at=available_at, run_id=run_id, stage_attempt=attempt,
                     correction_reason="constituent stage or membership changed" if prior else None,
-                    correction_authority=correction_authority,
+                    correction_authority=(
+                        correction_authority if prior else CorrectionAuthority.ORIGINAL_OBSERVATION
+                    ),
+                    authority_reference=run_id,
+                    authority_recorded_at=available_at,
                 )
                 record_correction_impacts(
                     conn, governance=governance, entity_id=str(row["sector_id"]),
@@ -472,32 +482,17 @@ def read_stock_stage_as_of(
         clauses.append(f"symbol_id IN ({','.join('?' for _ in symbols)})")
         params.extend(str(symbol).upper() for symbol in symbols)
     with registry._reader() as conn:  # noqa: SLF001
-        rows = conn.execute(
-            f"""SELECT observation_json FROM weekly_stock_stage_history history
-                WHERE {' AND '.join(clauses)}
-                  AND created_at <= CAST(? AS TIMESTAMP)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM stage_observation_governance correction
-                      WHERE correction.observation_scope = 'STOCK'
-                        AND correction.supersedes_observation_id = history.observation_id
-                        AND correction.recorded_at <= CAST(? AS TIMESTAMP)
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1 FROM stage_observation_governance quarantine
-                      WHERE quarantine.observation_scope = 'STOCK'
-                        AND quarantine.observation_id = history.observation_id
-                        AND NOT quarantine.authoritative
-                        AND quarantine.recorded_at <= CAST(? AS TIMESTAMP)
-                  )
-                QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY exchange, symbol_id
-                    ORDER BY source_week_end DESC,
-                             CASE stage_status WHEN 'locked' THEN 2 ELSE 1 END DESC,
-                             as_of DESC, created_at DESC, observation_id DESC
-                ) = 1""",
-            [*params, availability, availability, availability],
-        ).fetchall()
-    return pd.DataFrame([json.loads(row[0]) for row in rows])
+        rows = resolve_stage_observation_payloads(
+            conn,
+            scope="STOCK",
+            table="weekly_stock_stage_history",
+            as_of=as_of,
+            available_at=availability,
+            entity_columns=("exchange", "symbol_id"),
+            clauses=clauses,
+            params=params,
+        )
+    return pd.DataFrame(rows)
 
 
 def read_sector_stage_as_of(
@@ -515,32 +510,17 @@ def read_sector_stage_as_of(
         clauses.append(f"sector_id IN ({','.join('?' for _ in sector_ids)})")
         params.extend(str(sector_id) for sector_id in sector_ids)
     with registry._reader() as conn:  # noqa: SLF001
-        rows = conn.execute(
-            f"""SELECT observation_json FROM weekly_sector_stage_history history
-                WHERE {' AND '.join(clauses)}
-                  AND created_at <= CAST(? AS TIMESTAMP)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM stage_observation_governance correction
-                      WHERE correction.observation_scope = 'SECTOR'
-                        AND correction.supersedes_observation_id = history.observation_id
-                        AND correction.recorded_at <= CAST(? AS TIMESTAMP)
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1 FROM stage_observation_governance quarantine
-                      WHERE quarantine.observation_scope = 'SECTOR'
-                        AND quarantine.observation_id = history.observation_id
-                        AND NOT quarantine.authoritative
-                        AND quarantine.recorded_at <= CAST(? AS TIMESTAMP)
-                  )
-                QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY sector_id
-                    ORDER BY source_week_end DESC,
-                             CASE stage_status WHEN 'locked' THEN 2 ELSE 1 END DESC,
-                             as_of DESC, created_at DESC, observation_id DESC
-                ) = 1""",
-            [*params, availability, availability, availability],
-        ).fetchall()
-    return pd.DataFrame([json.loads(row[0]) for row in rows])
+        rows = resolve_stage_observation_payloads(
+            conn,
+            scope="SECTOR",
+            table="weekly_sector_stage_history",
+            as_of=as_of,
+            available_at=availability,
+            entity_columns=("sector_id",),
+            clauses=clauses,
+            params=params,
+        )
+    return pd.DataFrame(rows)
 
 
 def _base_features(weekly: pd.DataFrame) -> dict[str, Any]:

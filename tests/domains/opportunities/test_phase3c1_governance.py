@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import shutil
+import hashlib
+import json
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -44,8 +46,14 @@ from ai_trading_system.domains.opportunities.registry.models import (
 from ai_trading_system.domains.opportunities.registry.store import DuckDBOpportunityRegistryStore
 from ai_trading_system.domains.opportunities.routing import StageCoverageConfig
 from ai_trading_system.domains.opportunities.stage_governance import (
+    CorrectionAuthority,
+    CorrectionImpactLinkStatus,
     MembershipTrust,
     SectorMembershipRecord,
+    StageGovernanceAction,
+    StageGovernanceConflictError,
+    StageGovernanceCycleError,
+    append_stage_governance,
     annotate_legacy_stage_history,
     append_sector_memberships,
     read_sector_membership_as_of,
@@ -97,6 +105,29 @@ def _stock_row(
         "weekly_ma_30_slope": 0.2, "weekly_ma_30_slope_acceleration": 0.1,
         "weekly_rs_slope": 1.0,
     }
+
+
+def _stock_observation_id(row: dict[str, object]) -> str:
+    return hashlib.sha256(
+        f"stock|{row['exchange']}|{row['symbol_id']}|{row['source_week_end']}|"
+        f"{row['stage_status']}|{row['classifier_version']}|{row['source_artifact_hash']}".encode()
+    ).hexdigest()
+
+
+def _insert_stock_history(conn, row: dict[str, object], *, run_id: str, recorded_at: datetime) -> str:
+    observation_id = _stock_observation_id(row)
+    conn.execute(
+        """INSERT INTO weekly_stock_stage_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(observation_id) DO NOTHING""",
+        [
+            observation_id, row["exchange"], row["symbol_id"], row.get("sector_id"), row.get("sector_name"),
+            row["as_of"], row["source_week_start"], row["source_week_end"], row["stage_status"],
+            row["effective_stage"], row["classifier_version"], row["source_artifact_hash"],
+            json.dumps(row, default=str, sort_keys=True), run_id, 1,
+            recorded_at.astimezone(timezone.utc).replace(tzinfo=None),
+        ],
+    )
+    return observation_id
 
 
 def test_effective_membership_boundaries_corrections_and_overlap_rejection(tmp_path: Path) -> None:
@@ -201,6 +232,130 @@ def test_locked_correction_chain_and_late_availability_are_canonical(tmp_path: P
     assert dict(chain) == {"ORIGINAL": 1, "CORRECTION": 2}
 
 
+def test_competing_terminal_corrections_use_authority_not_insertion_order(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    original = _stock_row(stage=WeinsteinStage.STAGE_1.value)
+    data_repair = _stock_row(stage=WeinsteinStage.STAGE_2.value, source_hash="stock-repair")
+    reviewed = _stock_row(stage=WeinsteinStage.STAGE_3.value, source_hash="stock-reviewed")
+    persist_stage_history(registry, pd.DataFrame([original]), pd.DataFrame(), run_id="run-original", attempt=1, recorded_at=T1)
+    with registry._writer() as conn:  # noqa: SLF001
+        original_id = _stock_observation_id(original)
+        reviewed_id = _insert_stock_history(conn, reviewed, run_id="run-reviewed", recorded_at=T2)
+        append_stage_governance(
+            conn, scope="STOCK", observation_id=reviewed_id,
+            action=StageGovernanceAction.CORRECTION,
+            supersedes_observation_id=original_id,
+            membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED,
+            recorded_at=T2, run_id="run-reviewed", stage_attempt=1,
+            correction_reason="operator reviewed correction",
+            correction_authority=CorrectionAuthority.REVIEWED_OPERATOR_CORRECTION,
+            authority_reference="operator-ticket-1", authority_recorded_at=T2,
+        )
+        repair_id = _insert_stock_history(conn, data_repair, run_id="run-repair", recorded_at=T3)
+        append_stage_governance(
+            conn, scope="STOCK", observation_id=repair_id,
+            action=StageGovernanceAction.CORRECTION,
+            supersedes_observation_id=original_id,
+            membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED,
+            recorded_at=T3, run_id="run-repair", stage_attempt=1,
+            correction_reason="repair replay",
+            correction_authority=CorrectionAuthority.DATA_REPAIR_PIPELINE,
+            authority_reference="repair-run-1", authority_recorded_at=T3,
+        )
+    resolved = read_stock_stage_as_of(registry, as_of="2026-07-17", available_at=T3 + timedelta(seconds=1))
+    assert resolved.iloc[0]["effective_stage"] == WeinsteinStage.STAGE_3.value
+
+
+def test_equal_authority_competing_terminals_raise_conflict(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    original = _stock_row(stage=WeinsteinStage.STAGE_1.value)
+    left = _stock_row(stage=WeinsteinStage.STAGE_2.value, source_hash="stock-left")
+    right = _stock_row(stage=WeinsteinStage.STAGE_3.value, source_hash="stock-right")
+    persist_stage_history(registry, pd.DataFrame([original]), pd.DataFrame(), run_id="run-original", attempt=1, recorded_at=T1)
+    with registry._writer() as conn:  # noqa: SLF001
+        original_id = _stock_observation_id(original)
+        for row, run_id, when in ((left, "run-left", T2), (right, "run-right", T3)):
+            observation_id = _insert_stock_history(conn, row, run_id=run_id, recorded_at=when)
+            append_stage_governance(
+                conn, scope="STOCK", observation_id=observation_id,
+                action=StageGovernanceAction.CORRECTION,
+                supersedes_observation_id=original_id,
+                membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED,
+                recorded_at=when, run_id=run_id, stage_attempt=1,
+                correction_reason="competing repair",
+                correction_authority=CorrectionAuthority.DATA_REPAIR_PIPELINE,
+                authority_reference=run_id, authority_recorded_at=when,
+            )
+    with pytest.raises(StageGovernanceConflictError, match="no unique authority winner") as exc:
+        read_stock_stage_as_of(registry, as_of="2026-07-17", available_at=T3 + timedelta(seconds=1))
+    assert set(exc.value.conflict.terminal_observation_ids) == {
+        _stock_observation_id(left), _stock_observation_id(right)
+    }
+
+
+def test_supersession_cycles_are_rejected_and_malformed_cycles_conflict(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    a = _stock_row(stage=WeinsteinStage.STAGE_1.value, source_hash="stock-a")
+    b = _stock_row(stage=WeinsteinStage.STAGE_2.value, source_hash="stock-b")
+    c = _stock_row(stage=WeinsteinStage.STAGE_3.value, source_hash="stock-c")
+    with registry._writer() as conn:  # noqa: SLF001
+        a_id = _insert_stock_history(conn, a, run_id="run-a", recorded_at=T1)
+        b_id = _insert_stock_history(conn, b, run_id="run-b", recorded_at=T2)
+        c_id = _insert_stock_history(conn, c, run_id="run-c", recorded_at=T3)
+        append_stage_governance(
+            conn, scope="STOCK", observation_id=a_id, action=StageGovernanceAction.ORIGINAL,
+            membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED, recorded_at=T1,
+            run_id="run-a", stage_attempt=1,
+            correction_authority=CorrectionAuthority.ORIGINAL_OBSERVATION,
+        )
+        with pytest.raises(StageGovernanceCycleError, match="cannot supersede itself"):
+            append_stage_governance(
+                conn, scope="STOCK", observation_id=a_id, action=StageGovernanceAction.CORRECTION,
+                supersedes_observation_id=a_id,
+                membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED, recorded_at=T2,
+                run_id="run-self", stage_attempt=1,
+                correction_authority=CorrectionAuthority.DATA_REPAIR_PIPELINE,
+            )
+        before = conn.execute("SELECT COUNT(*) FROM stage_observation_governance").fetchone()[0]
+        append_stage_governance(
+            conn, scope="STOCK", observation_id=b_id, action=StageGovernanceAction.CORRECTION,
+            supersedes_observation_id=a_id,
+            membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED, recorded_at=T2,
+            run_id="run-b", stage_attempt=1,
+            correction_authority=CorrectionAuthority.DATA_REPAIR_PIPELINE,
+        )
+        append_stage_governance(
+            conn, scope="STOCK", observation_id=c_id, action=StageGovernanceAction.CORRECTION,
+            supersedes_observation_id=b_id,
+            membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED, recorded_at=T3,
+            run_id="run-c", stage_attempt=1,
+            correction_authority=CorrectionAuthority.DATA_REPAIR_PIPELINE,
+        )
+        with pytest.raises(StageGovernanceCycleError, match="create a cycle"):
+            append_stage_governance(
+                conn, scope="STOCK", observation_id=a_id, action=StageGovernanceAction.CORRECTION,
+                supersedes_observation_id=c_id,
+                membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED, recorded_at=T3,
+                run_id="run-cycle", stage_attempt=1,
+                correction_authority=CorrectionAuthority.DATA_REPAIR_PIPELINE,
+            )
+        after = conn.execute("SELECT COUNT(*) FROM stage_observation_governance").fetchone()[0]
+        assert after == before + 2
+        conn.execute(
+            """INSERT INTO stage_observation_governance (
+                   governance_event_id, observation_scope, observation_id, governance_action,
+                   supersedes_observation_id, membership_trust, authoritative, correction_reason,
+                   correction_authority, policy_version, recorded_at, run_id, stage_attempt,
+                   event_hash, authority_reference, authority_recorded_at, governance_policy_version
+               ) VALUES (?, 'STOCK', ?, 'CORRECTION', ?, 'POINT_IN_TIME_VERIFIED', TRUE,
+                         'malformed import', 'data_repair_pipeline', 'stage-governance-v1',
+                         ?, 'bad-import', 1, ?, 'bad-import', ?, 'stage-governance-authority-v1')""",
+            ["bad-cycle", a_id, c_id, T3.replace(tzinfo=None), "bad-cycle", T3.replace(tzinfo=None)],
+        )
+    with pytest.raises(StageGovernanceConflictError, match="cycle detected"):
+        read_stock_stage_as_of(registry, as_of="2026-07-17", available_at=T3 + timedelta(seconds=1))
+
+
 def test_membership_change_recalculates_sector_and_records_dependencies(tmp_path: Path) -> None:
     registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
     stock_v1 = pd.DataFrame([_stock_row(membership_id="membership-v1")])
@@ -298,10 +453,92 @@ def test_correction_flags_candidate_snapshot_decision_and_attribution(
         types = {row[0] for row in conn.execute(
             "SELECT affected_record_type FROM stage_correction_impact"
         ).fetchall()}
+        statuses = conn.execute(
+            """SELECT impact_status, authoritative_calibration_eligible, review_required, COUNT(*)
+               FROM stage_correction_impact
+               GROUP BY 1, 2, 3"""
+        ).fetchall()
     assert types == {
         "candidate_episode", "candidate_snapshot", "candidate_decision_context",
         "candidate_outcome_attribution",
     }
+    assert statuses == [(CorrectionImpactLinkStatus.LINKED.value, True, False, 4)]
+
+
+def test_legacy_correction_impact_no_match_and_ambiguous_links_are_quarantined(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    opportunity_store = DuckDBOpportunityRegistryStore(registry)
+    lineage = SourceLineage("candidate-run", "opportunities", 1, "shadow", "/tmp/shadow.csv", "candidate-hash")
+    opportunity_store.open_episode(OpenEpisodeRequest(
+        symbol_id="ABC", exchange="NSE", setup_family="base_building",
+        admission_identity="candidate-run:ABC", episode_started_at=T1,
+        episode_type="analytical_shadow", opening_reason="test", lineage=lineage,
+        contract_version="opportunity-contract-v1",
+    ))
+    first = pd.DataFrame([_stock_row(stage=WeinsteinStage.STAGE_1.value)])
+    corrected = pd.DataFrame([_stock_row(stage=WeinsteinStage.STAGE_2.value, source_hash="stock-v2")])
+    persist_stage_history(registry, first, pd.DataFrame(), run_id="run-1", attempt=1, recorded_at=T1)
+    persist_stage_history(registry, corrected, pd.DataFrame(), run_id="run-2", attempt=1, recorded_at=T2)
+    with registry._reader() as conn:  # noqa: SLF001
+        no_match = conn.execute(
+            """SELECT affected_record_type, impact_status, match_count,
+                      authoritative_calibration_eligible, review_required
+               FROM stage_correction_impact
+               WHERE impact_status = ?
+               ORDER BY affected_record_type""",
+            [CorrectionImpactLinkStatus.UNRESOLVED_LEGACY_NO_MATCH.value],
+        ).fetchall()
+    assert no_match == [
+        ("candidate_decision_context", CorrectionImpactLinkStatus.UNRESOLVED_LEGACY_NO_MATCH.value, 0, False, True),
+        ("candidate_outcome_attribution", CorrectionImpactLinkStatus.UNRESOLVED_LEGACY_NO_MATCH.value, 0, False, True),
+        ("candidate_snapshot", CorrectionImpactLinkStatus.UNRESOLVED_LEGACY_NO_MATCH.value, 0, False, True),
+    ]
+
+    registry2 = RegistryStore(tmp_path, db_path=tmp_path / "ambiguous.duckdb")
+    opportunity_store2 = DuckDBOpportunityRegistryStore(registry2)
+    episode2 = opportunity_store2.open_episode(OpenEpisodeRequest(
+        symbol_id="ABC", exchange="NSE", setup_family="base_building",
+        admission_identity="candidate-run:ABC:ambiguous", episode_started_at=T1,
+        episode_type="analytical_shadow", opening_reason="test", lineage=lineage,
+        contract_version="opportunity-contract-v1",
+    ))
+    with registry2._writer() as conn:  # noqa: SLF001
+        for index in range(2):
+            conn.execute(
+                """INSERT INTO candidate_snapshot (
+                       snapshot_id, candidate_id, setup_id, as_of, observed_at, run_id,
+                       stage_name, stage_attempt, source_artifact_type, source_artifact_path,
+                       source_artifact_hash, lifecycle_state, followthrough_status,
+                       opportunity_score, rank_position, rank_percentile, rank_velocity,
+                       evidence_score, evidence_verdict, days_in_state, days_without_progress,
+                       progress_status, active_position, latest_action, eligibility,
+                       stock_stage_observation_id, sector_stage_observation_id,
+                       contract_version, serialization_version, snapshot_json,
+                       semantic_payload_hash, idempotency_key
+                   ) VALUES (?, ?, ?, ?, ?, 'candidate-run', 'opportunities', 1,
+                             'shadow', '/tmp/shadow.csv', ?, 'discovered',
+                             'not_applicable', 80, 1, 99, 0, 80, 'high_conviction',
+                             1, 0, 'stable', FALSE, 'watch', 'not_applicable',
+                             NULL, NULL, 'opportunity-contract-v1', 'snapshot-v1',
+                             '{}', ?, ?)""",
+                [
+                    f"snapshot-{index}", episode2.candidate_id, episode2.setup_id,
+                    T1.replace(tzinfo=None), T1.replace(tzinfo=None),
+                    f"hash-{index}", f"semantic-{index}", f"idempotency-{index}",
+                ],
+            )
+    persist_stage_history(registry2, first, pd.DataFrame(), run_id="run-1", attempt=1, recorded_at=T1)
+    persist_stage_history(registry2, corrected, pd.DataFrame(), run_id="run-2", attempt=1, recorded_at=T2)
+    with registry2._reader() as conn:  # noqa: SLF001
+        ambiguous = conn.execute(
+            """SELECT impact_status, match_count, authoritative_calibration_eligible,
+                      review_required, match_evidence
+               FROM stage_correction_impact
+               WHERE affected_record_type = 'candidate_snapshot'"""
+        ).fetchone()
+    assert ambiguous[0] == CorrectionImpactLinkStatus.UNRESOLVED_LEGACY_AMBIGUOUS.value
+    assert ambiguous[1:4] == (2, False, True)
+    assert "snapshot-0" in ambiguous[4] and "snapshot-1" in ambiguous[4]
 
 
 def test_copied_store_legacy_annotation_is_idempotent_and_payload_immutable(tmp_path: Path) -> None:
