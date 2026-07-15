@@ -9,7 +9,9 @@ from typing import Any
 import pandas as pd
 from pandas.errors import EmptyDataError
 
-from ai_trading_system.domains.investigator.buyer_fingerprint import score_buyer_fingerprint
+from ai_trading_system.domains.investigator.buyer_fingerprint import (
+    score_buyer_fingerprint,
+)
 from ai_trading_system.domains.investigator.candidate_union import (
     build_candidate_union,
     eligible_previous_watchlist,
@@ -21,11 +23,20 @@ from ai_trading_system.domains.investigator.cohort_performance import (
     upsert_investigator_cohorts,
 )
 from ai_trading_system.domains.investigator.exit_monitor import attach_exit_monitoring
-from ai_trading_system.domains.investigator.fundamentals import load_fundamental_snapshot, score_fundamentals
-from ai_trading_system.domains.investigator.intake import load_investigator_intake, load_investigator_snapshot
+from ai_trading_system.domains.investigator.fundamentals import (
+    load_fundamental_snapshot,
+    score_fundamentals,
+)
+from ai_trading_system.domains.investigator.intake import (
+    load_investigator_intake,
+    load_investigator_snapshot,
+)
 from ai_trading_system.domains.investigator.lifecycle import apply_lifecycle
 from ai_trading_system.domains.investigator.move_classifier import classify_move
-from ai_trading_system.domains.investigator.pattern_scan import best_pattern_by_symbol, build_investigator_pattern_scan
+from ai_trading_system.domains.investigator.pattern_scan import (
+    best_pattern_by_symbol,
+    build_investigator_pattern_scan,
+)
 from ai_trading_system.domains.investigator.payload import build_investigator_payload
 from ai_trading_system.domains.investigator.price_structure import score_price_structure
 from ai_trading_system.domains.investigator.repeat_tracker import build_repeat_tracker
@@ -41,9 +52,16 @@ from ai_trading_system.domains.investigator.stage1_lifecycle import (
     Stage1LifecycleConfig,
     build_stage1_lifecycle,
 )
-from ai_trading_system.domains.investigator.trap_summary import build_trap_summary_metrics
+from ai_trading_system.domains.investigator.trap_summary import (
+    build_trap_summary_metrics,
+)
 from ai_trading_system.domains.investigator.volume_anatomy import score_volume_anatomy
-from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
+from ai_trading_system.domains.opportunities.routing import validate_scan_routing_row
+from ai_trading_system.pipeline.contracts import (
+    StageArtifact,
+    StageContext,
+    StageResult,
+)
 
 
 class InvestigatorService:
@@ -57,21 +75,40 @@ class InvestigatorService:
         stock_scan = _read_optional(context.artifact_for("rank", "stock_scan"))
         stage1_artifact = context.artifact_for("rank", "stage1_scan")
         early_accumulation = _normalise_investigator_early_accumulation(
-            _read_optional(stage1_artifact or context.artifact_for("rank", "early_accumulation_scan"))
+            _read_optional(
+                stage1_artifact
+                or context.artifact_for("rank", "early_accumulation_scan")
+            )
         )
         rank_context = stock_scan if not stock_scan.empty else ranked
-        sector_dashboard = _read_optional(context.artifact_for("rank", "sector_dashboard"))
+        sector_dashboard = _read_optional(
+            context.artifact_for("rank", "sector_dashboard")
+        )
         gainers = load_investigator_intake(
             ohlcv_db_path=context.db_path,
             ranked_signals=rank_context,
             as_of=context.params.get("investigator_as_of") or None,
-            min_return_pct=float(context.params.get("investigator_min_return_pct", 5.0)),
-            min_volume_ratio=float(context.params.get("investigator_min_volume_ratio", 2.0)),
-            weekly_return_pct=float(context.params.get("investigator_weekly_return_pct", 8.0)),
-            stealth_5d_pct=float(context.params.get("investigator_stealth_5d_pct", 3.0)),
-            stealth_20d_pct=float(context.params.get("investigator_stealth_20d_pct", 8.0)),
-            min_green_days_5d=int(context.params.get("investigator_min_green_days_5d", 3)),
-            min_market_cap_cr=float(context.params.get("investigator_min_market_cap_cr", 500.0)),
+            min_return_pct=float(
+                context.params.get("investigator_min_return_pct", 5.0)
+            ),
+            min_volume_ratio=float(
+                context.params.get("investigator_min_volume_ratio", 2.0)
+            ),
+            weekly_return_pct=float(
+                context.params.get("investigator_weekly_return_pct", 8.0)
+            ),
+            stealth_5d_pct=float(
+                context.params.get("investigator_stealth_5d_pct", 3.0)
+            ),
+            stealth_20d_pct=float(
+                context.params.get("investigator_stealth_20d_pct", 8.0)
+            ),
+            min_green_days_5d=int(
+                context.params.get("investigator_min_green_days_5d", 3)
+            ),
+            min_market_cap_cr=float(
+                context.params.get("investigator_min_market_cap_cr", 500.0)
+            ),
         )
         previous_watchlist = self._load_previous_watchlist(context)
         previous_stage1_state = self._load_previous_stage1_state(context)
@@ -86,7 +123,9 @@ class InvestigatorService:
         market_snapshot = load_investigator_snapshot(
             ohlcv_db_path=context.db_path,
             ranked_signals=rank_context,
-            symbols=candidates.get("symbol_id", pd.Series(dtype=str)).astype(str).tolist(),
+            symbols=candidates.get("symbol_id", pd.Series(dtype=str))
+            .astype(str)
+            .tolist(),
             as_of=context.params.get("investigator_as_of") or context.run_date,
         )
         candidates = _refresh_market_snapshot(candidates, market_snapshot)
@@ -94,7 +133,9 @@ class InvestigatorService:
             if "trade_date" not in candidates.columns:
                 candidates.loc[:, "trade_date"] = context.run_date
             else:
-                missing_trade_date = pd.to_datetime(candidates["trade_date"], errors="coerce").isna()
+                missing_trade_date = pd.to_datetime(
+                    candidates["trade_date"], errors="coerce"
+                ).isna()
                 candidates.loc[missing_trade_date, "trade_date"] = context.run_date
         candidates, stage_pattern_context = enrich_investigator_context(
             candidates,
@@ -108,12 +149,16 @@ class InvestigatorService:
             empty = pd.DataFrame()
             decision_persistence = None
             if context.registry is not None:
-                from ai_trading_system.domains.ranking.decision_history import DecisionHistoryRepository
-
-                decision_persistence = DecisionHistoryRepository(context.registry).persist_lifecycle(
-                    context, empty, empty
+                from ai_trading_system.domains.ranking.decision_history import (
+                    DecisionHistoryRepository,
                 )
-            performance_frame, performance_summary, threshold_recommendations = self._performance_outputs(context)
+
+                decision_persistence = DecisionHistoryRepository(
+                    context.registry
+                ).persist_lifecycle(context, empty, empty)
+            performance_frame, performance_summary, threshold_recommendations = (
+                self._performance_outputs(context)
+            )
             summary = self._summary(
                 context=context,
                 gainers=gainers,
@@ -126,7 +171,9 @@ class InvestigatorService:
                 performance_summary=performance_summary,
                 investigator_early_accumulation=early_accumulation,
                 intake_diagnostics=intake_diagnostics,
-                stage_pattern_context=_stage_pattern_summary(stage_pattern_context, performance_frame),
+                stage_pattern_context=_stage_pattern_summary(
+                    stage_pattern_context, performance_frame
+                ),
             )
             if decision_persistence is not None:
                 summary["decision_persistence"] = decision_persistence
@@ -145,8 +192,14 @@ class InvestigatorService:
                 investigator_early_accumulation=early_accumulation,
                 performance_summary=performance_summary,
                 threshold_recommendations=threshold_recommendations,
-                data_trust_status=str(context.params.get("data_trust_status", "unknown")),
-                stage_status={"rank": "completed", "investigator": "completed", "publish": "pending"},
+                data_trust_status=str(
+                    context.params.get("data_trust_status", "unknown")
+                ),
+                stage_status={
+                    "rank": "completed",
+                    "investigator": "completed",
+                    "publish": "pending",
+                },
             )
             artifacts = self._write_artifacts(
                 context=context,
@@ -171,15 +224,25 @@ class InvestigatorService:
                 stage1_stale_candidates=empty,
                 stage1_regressions=empty,
                 stage1_lifecycle_summary={"stage1_active_count": 0},
-                **({"decision_persistence_summary": decision_persistence} if decision_persistence is not None else {}),
+                **(
+                    {"decision_persistence_summary": decision_persistence}
+                    if decision_persistence is not None
+                    else {}
+                ),
             )
             return StageResult(artifacts=artifacts, metadata=summary)
         candidates = score_price_structure(candidates)
         candidates = score_volume_anatomy(candidates)
         fundamentals = load_fundamental_snapshot(
             project_root=context.project_root,
-            symbols=candidates.get("symbol_id", pd.Series(dtype=str)).astype(str).tolist(),
-            fundamentals_db_path=Path(context.params["fundamentals_duckdb_path"]) if context.params.get("fundamentals_duckdb_path") else None,
+            symbols=candidates.get("symbol_id", pd.Series(dtype=str))
+            .astype(str)
+            .tolist(),
+            fundamentals_db_path=(
+                Path(context.params["fundamentals_duckdb_path"])
+                if context.params.get("fundamentals_duckdb_path")
+                else None
+            ),
         )
         candidates = score_fundamentals(candidates, fundamentals)
         candidates = attach_sector_context(candidates, sector_dashboard)
@@ -187,7 +250,9 @@ class InvestigatorService:
         candidates = score_buyer_fingerprint(candidates)
         scores = finalize_scores(candidates)
         history = self._load_history(context)
-        repeat = build_repeat_tracker(current_scores=scores, historical_daily_log=history)
+        repeat = build_repeat_tracker(
+            current_scores=scores, historical_daily_log=history
+        )
         active, archived = apply_lifecycle(scores, repeat)
         rank_scanned_symbols = rank_pattern_symbols(rank_pattern_scan)
         active_for_pattern_scan = _without_symbols(active, rank_scanned_symbols)
@@ -197,27 +262,60 @@ class InvestigatorService:
             ranked_df=ranked,
         )
         rank_patterns_for_merge = normalise_pattern_context(rank_pattern_scan)
-        best_patterns = best_pattern_by_symbol(_combine_pattern_sources(rank_patterns_for_merge, investigator_patterns))
+        best_patterns = best_pattern_by_symbol(
+            _combine_pattern_sources(rank_patterns_for_merge, investigator_patterns)
+        )
         active = _merge_best_patterns(active, best_patterns)
         scores = _merge_best_patterns(scores, best_patterns)
         lifecycle_config = Stage1LifecycleConfig.from_params(context.params)
-        stage1_state, stage1_transitions, stage1_lifecycle_summary = build_stage1_lifecycle(
-            scores, previous_stage1_state, run_date=str(context.run_date),
-            config=lifecycle_config,
+        stage1_state, stage1_transitions, stage1_lifecycle_summary = (
+            build_stage1_lifecycle(
+                scores,
+                previous_stage1_state,
+                run_date=str(context.run_date),
+                config=lifecycle_config,
+            )
         )
         if not stage1_transitions.empty:
-            stage1_transitions.loc[:, "stage1_lifecycle_model_version"] = lifecycle_config.model_version
-            stage1_transitions.loc[:, "stage1_lifecycle_config_hash"] = lifecycle_config.config_hash
-        stage1_watchlist = stage1_state.loc[stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).isin(ACTIVE_STATES)].copy()
-        stage1_invalidations = stage1_state.loc[stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).eq("INVALIDATED")].copy()
-        stage1_stale_candidates = stage1_state.loc[stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).eq("STALE_BASE")].copy()
-        stage1_regressions = stage1_state.loc[stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).eq("REGRESSED")].copy()
+            stage1_transitions.loc[:, "stage1_lifecycle_model_version"] = (
+                lifecycle_config.model_version
+            )
+            stage1_transitions.loc[:, "stage1_lifecycle_config_hash"] = (
+                lifecycle_config.config_hash
+            )
+        stage1_watchlist = stage1_state.loc[
+            stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).isin(
+                ACTIVE_STATES
+            )
+        ].copy()
+        stage1_invalidations = stage1_state.loc[
+            stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).eq(
+                "INVALIDATED"
+            )
+        ].copy()
+        stage1_stale_candidates = stage1_state.loc[
+            stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).eq(
+                "STALE_BASE"
+            )
+        ].copy()
+        stage1_regressions = stage1_state.loc[
+            stage1_state.get("stage1_lifecycle_state", pd.Series(dtype=str)).eq(
+                "REGRESSED"
+            )
+        ].copy()
         scores = _attach_stage1_lifecycle(scores, stage1_state)
-        traps = scores.loc[scores.get("verdict", pd.Series(dtype=str)).eq("NOISE_TRAP") | scores.get("hard_trap_flag", pd.Series(False, index=scores.index)).fillna(False)].copy()
+        traps = scores.loc[
+            scores.get("verdict", pd.Series(dtype=str)).eq("NOISE_TRAP")
+            | scores.get("hard_trap_flag", pd.Series(False, index=scores.index)).fillna(
+                False
+            )
+        ].copy()
         gate = final_gate(scores)
         gate = self._attach_exit_monitoring(context, gate)
         self._persist_cohort_performance(context, gate, scores)
-        performance_frame, performance_summary, threshold_recommendations = self._performance_outputs(context)
+        performance_frame, performance_summary, threshold_recommendations = (
+            self._performance_outputs(context)
+        )
         summary = self._summary(
             context=context,
             gainers=gainers,
@@ -230,12 +328,19 @@ class InvestigatorService:
             performance_summary=performance_summary,
             investigator_early_accumulation=early_accumulation,
             intake_diagnostics=intake_diagnostics,
-            stage_pattern_context=_stage_pattern_summary({
-                **stage_pattern_context,
-                "rank_pattern_reused_rows": int(len(rank_patterns_for_merge)),
-                "investigator_pattern_scanned_rows": int(len(investigator_patterns)),
-                "pattern_scan_skipped_existing_rows": int(len(active) - len(active_for_pattern_scan)),
-            }, performance_frame),
+            stage_pattern_context=_stage_pattern_summary(
+                {
+                    **stage_pattern_context,
+                    "rank_pattern_reused_rows": int(len(rank_patterns_for_merge)),
+                    "investigator_pattern_scanned_rows": int(
+                        len(investigator_patterns)
+                    ),
+                    "pattern_scan_skipped_existing_rows": int(
+                        len(active) - len(active_for_pattern_scan)
+                    ),
+                },
+                performance_frame,
+            ),
             stage1_lifecycle_summary=stage1_lifecycle_summary,
         )
         payload = build_investigator_payload(
@@ -254,17 +359,23 @@ class InvestigatorService:
             performance_summary=performance_summary,
             threshold_recommendations=threshold_recommendations,
             data_trust_status=str(context.params.get("data_trust_status", "unknown")),
-            stage_status={"rank": "completed", "investigator": "completed", "publish": "pending"},
+            stage_status={
+                "rank": "completed",
+                "investigator": "completed",
+                "publish": "pending",
+            },
             stage1_watchlist=stage1_watchlist,
             stage1_transitions=stage1_transitions,
         )
         decision_persistence = None
         if context.registry is not None:
-            from ai_trading_system.domains.ranking.decision_history import DecisionHistoryRepository
-
-            decision_persistence = DecisionHistoryRepository(context.registry).persist_lifecycle(
-                context, stage1_state, stage1_transitions
+            from ai_trading_system.domains.ranking.decision_history import (
+                DecisionHistoryRepository,
             )
+
+            decision_persistence = DecisionHistoryRepository(
+                context.registry
+            ).persist_lifecycle(context, stage1_state, stage1_transitions)
             summary["decision_persistence"] = decision_persistence
         artifacts = self._write_artifacts(
             context=context,
@@ -289,7 +400,11 @@ class InvestigatorService:
             stage1_stale_candidates=stage1_stale_candidates,
             stage1_regressions=stage1_regressions,
             stage1_lifecycle_summary=stage1_lifecycle_summary,
-            **({"decision_persistence_summary": decision_persistence} if decision_persistence is not None else {}),
+            **(
+                {"decision_persistence_summary": decision_persistence}
+                if decision_persistence is not None
+                else {}
+            ),
         )
         self._persist_tables(context, artifacts)
         return StageResult(artifacts=artifacts, metadata=summary)
@@ -298,12 +413,53 @@ class InvestigatorService:
         """Evaluate an externally routed universe without replacing legacy outputs."""
         routing_artifact = context.artifact_for("scan_router", "deep_scan_universe")
         if routing_artifact is None:
-            return StageResult(metadata={"routed_shadow": "skipped", "reason": "routing artifact unavailable"})
+            return StageResult(
+                metadata={
+                    "routed_shadow": "skipped",
+                    "reason": "routing artifact unavailable",
+                }
+            )
         routing = _read_csv(Path(routing_artifact.uri))
         if routing.empty or "symbol_id" not in routing:
-            return StageResult(metadata={"routed_shadow": "completed", "routed_symbols": 0})
+            return StageResult(
+                metadata={"routed_shadow": "completed", "routed_symbols": 0}
+            )
+        conflict_rows: list[dict[str, Any]] = []
+        valid_mask: list[bool] = []
+        for row in routing.to_dict(orient="records"):
+            conflicts = validate_scan_routing_row(row)
+            valid_mask.append(not conflicts)
+            conflict_rows.extend(conflict.as_row() for conflict in conflicts)
+        routing_conflicts = pd.DataFrame(conflict_rows)
+        routing = routing.loc[valid_mask].copy()
+        if routing.empty or "symbol_id" not in routing:
+            output = context.output_dir()
+            path = output / "routed_routing_conflicts.csv"
+            routing_conflicts.to_csv(path, index=False)
+            return StageResult(
+                artifacts=[
+                    StageArtifact.from_file(
+                        "routed_routing_conflicts",
+                        path,
+                        row_count=len(routing_conflicts),
+                        attempt_number=context.attempt_number,
+                    )
+                ],
+                metadata={
+                    "routed_shadow": "degraded",
+                    "routed_symbols": 0,
+                    "routing_conflicts": len(routing_conflicts),
+                },
+            )
         ranked = _read_csv(Path(context.require_artifact("rank", "ranked_signals").uri))
-        symbols = routing["symbol_id"].dropna().astype(str).str.upper().drop_duplicates().tolist()
+        symbols = (
+            routing["symbol_id"]
+            .dropna()
+            .astype(str)
+            .str.upper()
+            .drop_duplicates()
+            .tolist()
+        )
         candidates = load_investigator_snapshot(
             ohlcv_db_path=context.db_path,
             ranked_signals=ranked,
@@ -316,14 +472,19 @@ class InvestigatorService:
         else:
             candidates = score_price_structure(candidates)
             candidates = score_volume_anatomy(candidates)
-            fundamentals = load_fundamental_snapshot(project_root=context.project_root, symbols=symbols)
+            fundamentals = load_fundamental_snapshot(
+                project_root=context.project_root, symbols=symbols
+            )
             candidates = score_fundamentals(candidates, fundamentals)
             candidates = classify_move(candidates)
             candidates = score_buyer_fingerprint(candidates)
             scores = finalize_scores(candidates)
             routed_context = replace(
                 context,
-                params={**context.params, "investigator_pattern_max_symbols": len(symbols)},
+                params={
+                    **context.params,
+                    "investigator_pattern_max_symbols": len(symbols),
+                },
             )
             patterns = build_investigator_pattern_scan(
                 context=routed_context,
@@ -332,27 +493,60 @@ class InvestigatorService:
             )
             scores = _merge_best_patterns(scores, best_pattern_by_symbol(patterns))
         route_columns = [
-            column for column in (
-                "symbol_id", "scan_tier", "scan_reasons", "rank_selected", "stage_selected",
-                "position_selected", "recent_exit_selected", "followthrough_selected",
-                "stock_stage", "structural_long_blocked", "market_data_available",
-            ) if column in routing
+            column
+            for column in (
+                "symbol_id",
+                "scan_tier",
+                "scan_reasons",
+                "rank_selected",
+                "stage_selected",
+                "position_selected",
+                "recent_exit_selected",
+                "followthrough_selected",
+                "stock_stage",
+                "structural_long_blocked",
+                "market_data_available",
+            )
+            if column in routing
         ]
-        scores = scores.merge(routing[route_columns].drop_duplicates("symbol_id"), on="symbol_id", how="right")
-        position_risk = scores.loc[scores.get("scan_tier", pd.Series(dtype=str)).eq("position_monitor")].copy()
+        scores = scores.merge(
+            routing[route_columns].drop_duplicates("symbol_id"),
+            on="symbol_id",
+            how="right",
+        )
+        position_risk = scores.loc[
+            scores.get("scan_tier", pd.Series(dtype=str)).eq("position_monitor")
+        ].copy()
         if not position_risk.empty:
             position_risk.loc[:, "monitoring_recommendation"] = "review"
-            position_risk.loc[position_risk.get("hard_trap_flag", pd.Series(False, index=position_risk.index)).fillna(False), "monitoring_recommendation"] = "risk_review"
+            position_risk.loc[
+                position_risk.get(
+                    "hard_trap_flag", pd.Series(False, index=position_risk.index)
+                ).fillna(False),
+                "monitoring_recommendation",
+            ] = "risk_review"
         output = context.output_dir()
         artifacts: list[StageArtifact] = []
         for artifact_type, filename, frame in (
             ("routed_investigator_scores", "routed_investigator_scores.csv", scores),
             ("routed_pattern_scan", "routed_pattern_scan.csv", patterns),
             ("position_risk_monitor", "position_risk_monitor.csv", position_risk),
+            (
+                "routed_routing_conflicts",
+                "routed_routing_conflicts.csv",
+                routing_conflicts,
+            ),
         ):
             path = output / filename
             frame.to_csv(path, index=False)
-            artifacts.append(StageArtifact.from_file(artifact_type, path, row_count=len(frame), attempt_number=context.attempt_number))
+            artifacts.append(
+                StageArtifact.from_file(
+                    artifact_type,
+                    path,
+                    row_count=len(frame),
+                    attempt_number=context.attempt_number,
+                )
+            )
         return StageResult(
             artifacts=artifacts,
             metadata={
@@ -360,6 +554,8 @@ class InvestigatorService:
                 "routed_symbols": len(symbols),
                 "routed_score_rows": len(scores),
                 "position_monitor_rows": len(position_risk),
+                "routing_conflicts": len(routing_conflicts),
+                "status": "degraded" if len(routing_conflicts) else "completed",
             },
         )
 
@@ -462,7 +658,8 @@ class InvestigatorService:
                         lifecycle_config_hash AS stage1_lifecycle_config_hash
                     FROM investigator_stage1_current
                     WHERE as_of_trade_date <= CAST(? AS DATE)
-                    """, [context.run_date]
+                    """,
+                    [context.run_date],
                 ).fetchdf()
                 # Compatibility for rows written directly to the dated table
                 # by pre-029 code/tests before current-state reconciliation.
@@ -484,12 +681,16 @@ class InvestigatorService:
                 if dated.empty:
                     return current
                 combined = pd.concat([current, dated], ignore_index=True, sort=False)
-                combined.loc[:, "exchange"] = combined.get("exchange", pd.Series("NSE", index=combined.index)).fillna("NSE")
+                combined.loc[:, "exchange"] = combined.get(
+                    "exchange", pd.Series("NSE", index=combined.index)
+                ).fillna("NSE")
                 return combined.drop_duplicates(["symbol_id", "exchange"], keep="first")
         except Exception:
             return pd.DataFrame()
 
-    def _write_artifacts(self, context: StageContext, **frames_and_summary: Any) -> list[StageArtifact]:
+    def _write_artifacts(
+        self, context: StageContext, **frames_and_summary: Any
+    ) -> list[StageArtifact]:
         output_dir = context.output_dir()
         artifacts: list[StageArtifact] = []
         for artifact_type, value in frames_and_summary.items():
@@ -501,7 +702,15 @@ class InvestigatorService:
                     "investigator_threshold_recommendations": "investigator_threshold_recommendations.json",
                 }.get(artifact_type, f"{artifact_type}.json")
                 path = context.write_json(filename, value)
-                artifacts.append(StageArtifact.from_file(artifact_type, path, row_count=1, metadata=value, attempt_number=context.attempt_number))
+                artifacts.append(
+                    StageArtifact.from_file(
+                        artifact_type,
+                        path,
+                        row_count=1,
+                        metadata=value,
+                        attempt_number=context.attempt_number,
+                    )
+                )
                 continue
             assert isinstance(value, pd.DataFrame)
             filename = f"{artifact_type}.csv"
@@ -518,7 +727,9 @@ class InvestigatorService:
             )
         return artifacts
 
-    def _persist_tables(self, context: StageContext, artifacts: list[StageArtifact]) -> None:
+    def _persist_tables(
+        self, context: StageContext, artifacts: list[StageArtifact]
+    ) -> None:
         if context.registry is None:
             return
         mapping = {
@@ -543,11 +754,15 @@ class InvestigatorService:
                 frame.loc[:, "run_id"] = context.run_id
                 frame.loc[:, "attempt_number"] = context.attempt_number
                 frame.loc[:, "artifact_uri"] = artifact.uri
-                conn.execute("CREATE TEMP TABLE investigator_stage_frame AS SELECT * FROM frame")
-                conn.execute("DELETE FROM " + table + " WHERE run_id = ? AND attempt_number = ?", [context.run_id, context.attempt_number])
+                conn.execute(
+                    "CREATE TEMP TABLE investigator_stage_frame AS SELECT * FROM frame"
+                )
+                conn.execute(
+                    "DELETE FROM " + table + " WHERE run_id = ? AND attempt_number = ?",
+                    [context.run_id, context.attempt_number],
+                )
                 if table == "investigator_stage1_transition":
-                    conn.execute(
-                        """
+                    conn.execute("""
                         DELETE FROM investigator_stage1_transition AS target
                         USING investigator_stage_frame AS incoming
                         WHERE target.symbol_id = incoming.symbol_id
@@ -555,25 +770,39 @@ class InvestigatorService:
                           AND target.from_lifecycle_state IS NOT DISTINCT FROM incoming.from_lifecycle_state
                           AND target.to_lifecycle_state = incoming.to_lifecycle_state
                           AND target.transition_type = incoming.transition_type
-                        """
-                    )
-                columns = [row[1] for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()]
+                        """)
+                columns = [
+                    row[1]
+                    for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()
+                ]
                 selected = [col for col in columns if col in frame.columns]
                 if selected:
-                    verb = "INSERT OR REPLACE" if table in {"investigator_stage1_state", "investigator_stage1_transition"} else "INSERT"
+                    verb = (
+                        "INSERT OR REPLACE"
+                        if table
+                        in {
+                            "investigator_stage1_state",
+                            "investigator_stage1_transition",
+                        }
+                        else "INSERT"
+                    )
                     conn.execute(
                         f"{verb} INTO {table} ({', '.join(selected)}) SELECT {', '.join(selected)} FROM investigator_stage_frame"
                     )
                 conn.execute("DROP TABLE investigator_stage_frame")
 
-    def _persist_cohort_performance(self, context: StageContext, gate: pd.DataFrame, scores: pd.DataFrame) -> None:
+    def _persist_cohort_performance(
+        self, context: StageContext, gate: pd.DataFrame, scores: pd.DataFrame
+    ) -> None:
         if context.registry is None or gate.empty:
             return
         with context.registry._writer() as conn:  # noqa: SLF001
             upsert_investigator_cohorts(conn, gate, scores)
             mature_investigator_cohorts(conn, ohlcv_db_path=context.db_path)
 
-    def _attach_exit_monitoring(self, context: StageContext, gate: pd.DataFrame) -> pd.DataFrame:
+    def _attach_exit_monitoring(
+        self, context: StageContext, gate: pd.DataFrame
+    ) -> pd.DataFrame:
         if gate.empty:
             return gate
         conn = None
@@ -590,7 +819,9 @@ class InvestigatorService:
             if conn is not None:
                 conn.close()
 
-    def _performance_outputs(self, context: StageContext) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]]:
+    def _performance_outputs(
+        self, context: StageContext
+    ) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]]:
         if context.registry is None:
             summary = {
                 "total_cohorts": 0,
@@ -598,7 +829,11 @@ class InvestigatorService:
                 "matured_cohorts": 0,
                 "matured_by_horizon": {"3d": 0, "5d": 0, "10d": 0, "20d": 0},
             }
-            return pd.DataFrame(), summary, build_threshold_recommendations(pd.DataFrame(), summary)
+            return (
+                pd.DataFrame(),
+                summary,
+                build_threshold_recommendations(pd.DataFrame(), summary),
+            )
         try:
             with context.registry._writer() as conn:  # noqa: SLF001
                 mature_investigator_cohorts(conn, ohlcv_db_path=context.db_path)
@@ -614,7 +849,11 @@ class InvestigatorService:
                 "matured_cohorts": 0,
                 "matured_by_horizon": {"3d": 0, "5d": 0, "10d": 0, "20d": 0},
             }
-            return pd.DataFrame(), summary, build_threshold_recommendations(pd.DataFrame(), summary)
+            return (
+                pd.DataFrame(),
+                summary,
+                build_threshold_recommendations(pd.DataFrame(), summary),
+            )
 
     def _summary(
         self,
@@ -634,7 +873,9 @@ class InvestigatorService:
         stage1_lifecycle_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         stage_pattern_context = stage_pattern_context or {}
-        candidate_rows = int((intake_diagnostics or {}).get("candidate_union_rows", len(scores)) or 0)
+        candidate_rows = int(
+            (intake_diagnostics or {}).get("candidate_union_rows", len(scores)) or 0
+        )
         trap_metrics = build_trap_summary_metrics(
             current_traps=traps,
             archive=archived,
@@ -653,9 +894,21 @@ class InvestigatorService:
             "stage_label_counts",
             "stage_input_confidence_counts",
         )
-        verdict_counts = scores.get("verdict", pd.Series(dtype=str)).value_counts().to_dict() if not scores.empty else {}
-        status_counts = active.get("status", pd.Series(dtype=str)).value_counts().to_dict() if not active.empty else {}
-        trigger_counts = gainers.get("trigger_reason", pd.Series(dtype=str)).value_counts().to_dict() if not gainers.empty else {}
+        verdict_counts = (
+            scores.get("verdict", pd.Series(dtype=str)).value_counts().to_dict()
+            if not scores.empty
+            else {}
+        )
+        status_counts = (
+            active.get("status", pd.Series(dtype=str)).value_counts().to_dict()
+            if not active.empty
+            else {}
+        )
+        trigger_counts = (
+            gainers.get("trigger_reason", pd.Series(dtype=str)).value_counts().to_dict()
+            if not gainers.empty
+            else {}
+        )
         return {
             "status": "completed",
             "run_id": context.run_id,
@@ -664,7 +917,9 @@ class InvestigatorService:
             "total_intake_count": int(len(gainers)),
             "daily_gainer_count": int(trigger_counts.get("DAILY_GAINER", 0)),
             "weekly_gainer_count": int(trigger_counts.get("WEEKLY_GAINER", 0)),
-            "stealth_accumulation_count": int(trigger_counts.get("STEALTH_ACCUMULATION", 0)),
+            "stealth_accumulation_count": int(
+                trigger_counts.get("STEALTH_ACCUMULATION", 0)
+            ),
             "scored_count": int(len(scores)),
             "active_count": int(len(active)),
             "trap_count": trap_metrics["unique_trap_symbols"],
@@ -672,38 +927,63 @@ class InvestigatorService:
             "final_gate_pending_count": int(len(gate)),
             "high_conviction_count": int(verdict_counts.get("HIGH_CONVICTION", 0)),
             "medium_conviction_count": int(verdict_counts.get("MEDIUM_CONVICTION", 0)),
-            "repeat_accumulation_count": int(repeat.get("high_priority_repeat", pd.Series(dtype=bool)).sum()) if not repeat.empty else 0,
+            "repeat_accumulation_count": (
+                int(repeat.get("high_priority_repeat", pd.Series(dtype=bool)).sum())
+                if not repeat.empty
+                else 0
+            ),
             "verdict_counts": {str(k): int(v) for k, v in verdict_counts.items()},
             "status_counts": {str(k): int(v) for k, v in status_counts.items()},
-            "investigator_early_accumulation_count": int(len(investigator_early_accumulation))
-            if investigator_early_accumulation is not None
-            else 0,
+            "investigator_early_accumulation_count": (
+                int(len(investigator_early_accumulation))
+                if investigator_early_accumulation is not None
+                else 0
+            ),
             "stage_pattern_context": stage_pattern_context,
             "performance": performance_summary or {},
             **(intake_diagnostics or {}),
-            **{key: stage_pattern_context[key] for key in stage_summary_keys if key in stage_pattern_context},
+            **{
+                key: stage_pattern_context[key]
+                for key in stage_summary_keys
+                if key in stage_pattern_context
+            },
             **trap_metrics,
             **(stage1_lifecycle_summary or {}),
         }
 
 
-def _refresh_market_snapshot(candidates: pd.DataFrame, snapshot: pd.DataFrame) -> pd.DataFrame:
-    if candidates.empty or snapshot is None or snapshot.empty or "symbol_id" not in snapshot.columns:
+def _refresh_market_snapshot(
+    candidates: pd.DataFrame, snapshot: pd.DataFrame
+) -> pd.DataFrame:
+    if (
+        candidates.empty
+        or snapshot is None
+        or snapshot.empty
+        or "symbol_id" not in snapshot.columns
+    ):
         return candidates
-    fresh = snapshot.drop(columns=["trigger_reason"], errors="ignore").drop_duplicates("symbol_id", keep="first")
-    out = candidates.merge(fresh, on="symbol_id", how="left", suffixes=("", "_snapshot"))
+    fresh = snapshot.drop(columns=["trigger_reason"], errors="ignore").drop_duplicates(
+        "symbol_id", keep="first"
+    )
+    out = candidates.merge(
+        fresh, on="symbol_id", how="left", suffixes=("", "_snapshot")
+    )
     for column in fresh.columns:
         if column == "symbol_id":
             continue
         snapshot_column = f"{column}_snapshot"
         if snapshot_column not in out.columns:
             continue
-        out.loc[:, column] = out[snapshot_column].where(out[snapshot_column].notna(), out[column])
+        out.loc[:, column] = out[snapshot_column].where(
+            out[snapshot_column].notna(), out[column]
+        )
         out = out.drop(columns=[snapshot_column])
     return out
 
 
-def _mark_top_ranked_context(candidates: pd.DataFrame, ranked: pd.DataFrame | None) -> pd.DataFrame:
+def _mark_top_ranked_context(
+    candidates: pd.DataFrame, ranked: pd.DataFrame | None
+) -> pd.DataFrame:
     out = candidates.copy()
     if out.empty:
         out.loc[:, "in_ranked_signals"] = pd.Series(dtype=bool)
@@ -712,7 +992,9 @@ def _mark_top_ranked_context(candidates: pd.DataFrame, ranked: pd.DataFrame | No
     if ranked is None or ranked.empty or "symbol_id" not in ranked.columns:
         return out
     ranked_symbols = set(ranked["symbol_id"].astype(str).str.upper())
-    out.loc[:, "in_ranked_signals"] = out["symbol_id"].astype(str).str.upper().isin(ranked_symbols)
+    out.loc[:, "in_ranked_signals"] = (
+        out["symbol_id"].astype(str).str.upper().isin(ranked_symbols)
+    )
     return out
 
 
@@ -724,17 +1006,25 @@ def _without_symbols(frame: pd.DataFrame, symbols: set[str]) -> pd.DataFrame:
 
 
 def _combine_pattern_sources(*frames: pd.DataFrame | None) -> pd.DataFrame:
-    available = [frame.copy() for frame in frames if isinstance(frame, pd.DataFrame) and not frame.empty]
+    available = [
+        frame.copy()
+        for frame in frames
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    ]
     if not available:
         return pd.DataFrame()
     out = pd.concat(available, ignore_index=True, sort=False)
     if "symbol_id" in out.columns:
-        out.loc[:, "symbol_id"] = out["symbol_id"].fillna("").astype(str).str.strip().str.upper()
+        out.loc[:, "symbol_id"] = (
+            out["symbol_id"].fillna("").astype(str).str.strip().str.upper()
+        )
         out = out.loc[out["symbol_id"].ne("")].copy()
     return out.reset_index(drop=True)
 
 
-def _stage_pattern_summary(context: dict[str, Any], performance_frame: pd.DataFrame | None) -> dict[str, Any]:
+def _stage_pattern_summary(
+    context: dict[str, Any], performance_frame: pd.DataFrame | None
+) -> dict[str, Any]:
     out = dict(context or {})
     out.setdefault("rank_pattern_reused_rows", 0)
     out.setdefault("investigator_pattern_scanned_rows", 0)
@@ -747,13 +1037,27 @@ def _stage_pattern_summary(context: dict[str, Any], performance_frame: pd.DataFr
         out["warnings"] = sorted(set(str(item) for item in warnings))
         return out
     frame = performance_frame.copy()
-    frame.loc[:, "_sample_count"] = pd.to_numeric(frame.get("sample_count"), errors="coerce").fillna(0)
-    frame.loc[:, "_edge"] = pd.to_numeric(frame.get("edge_vs_baseline"), errors="coerce")
+    frame.loc[:, "_sample_count"] = pd.to_numeric(
+        frame.get("sample_count"), errors="coerce"
+    ).fillna(0)
+    frame.loc[:, "_edge"] = pd.to_numeric(
+        frame.get("edge_vs_baseline"), errors="coerce"
+    )
     eligible = frame.loc[frame["_sample_count"].ge(20) & frame["_edge"].notna()].copy()
     if eligible.empty:
         warnings.append("no group has sample_count >= 20")
-    positive = eligible.loc[eligible["_edge"].gt(0)].sort_values(["_edge", "_sample_count"], ascending=[False, False], kind="stable").head(5)
-    negative = eligible.loc[eligible["_edge"].lt(0)].sort_values(["_edge", "_sample_count"], ascending=[True, False], kind="stable").head(5)
+    positive = (
+        eligible.loc[eligible["_edge"].gt(0)]
+        .sort_values(
+            ["_edge", "_sample_count"], ascending=[False, False], kind="stable"
+        )
+        .head(5)
+    )
+    negative = (
+        eligible.loc[eligible["_edge"].lt(0)]
+        .sort_values(["_edge", "_sample_count"], ascending=[True, False], kind="stable")
+        .head(5)
+    )
     out["top_positive_edges"] = _edge_records(positive)
     out["top_negative_edges"] = _edge_records(negative)
     out["warnings"] = sorted(set(str(item) for item in warnings))
@@ -763,29 +1067,67 @@ def _stage_pattern_summary(context: dict[str, Any], performance_frame: pd.DataFr
 def _edge_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     if frame.empty:
         return []
-    columns = ["group_type", "group_value", "horizon", "sample_count", "avg_return", "edge_vs_baseline", "expectancy"]
+    columns = [
+        "group_type",
+        "group_value",
+        "horizon",
+        "sample_count",
+        "avg_return",
+        "edge_vs_baseline",
+        "expectancy",
+    ]
     available = [column for column in columns if column in frame.columns]
-    return frame[available].where(frame[available].notna(), None).to_dict(orient="records")
+    return (
+        frame[available].where(frame[available].notna(), None).to_dict(orient="records")
+    )
 
 
 def _attach_stage1_lifecycle(scores: pd.DataFrame, state: pd.DataFrame) -> pd.DataFrame:
     """Expose the durable lifecycle context on the Investigator score artifact."""
-    if scores.empty or state.empty or "symbol_id" not in scores or "symbol_id" not in state:
+    if (
+        scores.empty
+        or state.empty
+        or "symbol_id" not in scores
+        or "symbol_id" not in state
+    ):
         return scores
     fields = [
-        "symbol_id", "stage1_lifecycle_state", "stage1_previous_lifecycle_state", "stage1_first_seen_date",
-        "stage1_state_entry_date", "stage1_last_transition_date", "stage1_days_in_lifecycle_state",
-        "stage1_days_since_first_seen", "stage1_score_delta_5d", "stage1_score_delta_20d",
-        "emerging_rank_improvement_5d", "emerging_rank_improvement_20d", "stage1_emerging_rank_best",
-        "golden_cross_status_previous", "stage1_evaluation_status", "stage1_lifecycle_reason_codes",
-        "stage1_lifecycle_model_version", "stage1_lifecycle_config_hash", "distance_to_pivot_pct",
+        "symbol_id",
+        "stage1_lifecycle_state",
+        "stage1_previous_lifecycle_state",
+        "stage1_first_seen_date",
+        "stage1_state_entry_date",
+        "stage1_last_transition_date",
+        "stage1_days_in_lifecycle_state",
+        "stage1_days_since_first_seen",
+        "stage1_score_delta_5d",
+        "stage1_score_delta_20d",
+        "emerging_rank_improvement_5d",
+        "emerging_rank_improvement_20d",
+        "stage1_emerging_rank_best",
+        "golden_cross_status_previous",
+        "stage1_evaluation_status",
+        "stage1_lifecycle_reason_codes",
+        "stage1_lifecycle_model_version",
+        "stage1_lifecycle_config_hash",
+        "distance_to_pivot_pct",
     ]
     available = [field for field in fields if field in state]
-    return scores.merge(state[available], on="symbol_id", how="left", suffixes=("", "_lifecycle"))
+    return scores.merge(
+        state[available], on="symbol_id", how="left", suffixes=("", "_lifecycle")
+    )
 
 
-def _merge_best_patterns(frame: pd.DataFrame, best_patterns: pd.DataFrame) -> pd.DataFrame:
-    if frame is None or frame.empty or best_patterns is None or best_patterns.empty or "symbol_id" not in frame.columns:
+def _merge_best_patterns(
+    frame: pd.DataFrame, best_patterns: pd.DataFrame
+) -> pd.DataFrame:
+    if (
+        frame is None
+        or frame.empty
+        or best_patterns is None
+        or best_patterns.empty
+        or "symbol_id" not in frame.columns
+    ):
         return frame
     desired = [
         "symbol_id",
@@ -815,7 +1157,9 @@ def _merge_best_patterns(frame: pd.DataFrame, best_patterns: pd.DataFrame) -> pd
     out = frame.copy()
     out.loc[:, "symbol_id"] = out["symbol_id"].astype(str).str.strip().str.upper()
     pattern_cols = [col for col in available if col != "symbol_id"]
-    merged = out.merge(best_patterns[available], on="symbol_id", how="left", suffixes=("", "_best"))
+    merged = out.merge(
+        best_patterns[available], on="symbol_id", how="left", suffixes=("", "_best")
+    )
     for column in pattern_cols:
         best_col = f"{column}_best"
         if best_col not in merged.columns:
@@ -824,7 +1168,9 @@ def _merge_best_patterns(frame: pd.DataFrame, best_patterns: pd.DataFrame) -> pd
             merged.loc[:, column] = merged[best_col]
         else:
             current = merged[column]
-            missing = current.isna() | current.astype(str).str.strip().str.upper().isin({"", "NONE", "NAN"})
+            missing = current.isna() | current.astype(str).str.strip().str.upper().isin(
+                {"", "NONE", "NAN"}
+            )
             merged.loc[missing, column] = merged.loc[missing, best_col]
         merged = merged.drop(columns=[best_col])
     return merged
@@ -927,25 +1273,43 @@ INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS = [
 ]
 
 for _component in (
-    "structural_repair", "accumulation", "rs_acceleration", "base_quality",
-    "sector_rotation", "pattern_readiness", "golden_cross_progression",
+    "structural_repair",
+    "accumulation",
+    "rs_acceleration",
+    "base_quality",
+    "sector_rotation",
+    "pattern_readiness",
+    "golden_cross_progression",
 ):
-    INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS.extend([
-        f"stage1_{_component}_raw", f"stage1_{_component}_score",
-        f"stage1_{_component}_max", f"stage1_{_component}_complete",
-    ])
+    INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS.extend(
+        [
+            f"stage1_{_component}_raw",
+            f"stage1_{_component}_score",
+            f"stage1_{_component}_max",
+            f"stage1_{_component}_complete",
+        ]
+    )
 for _component in (
-    "rs_acceleration", "structural_repair_velocity", "accumulation_improvement",
-    "sector_rotation", "base_improvement", "golden_cross_progression",
+    "rs_acceleration",
+    "structural_repair_velocity",
+    "accumulation_improvement",
+    "sector_rotation",
+    "base_improvement",
+    "golden_cross_progression",
     "pattern_progression",
 ):
-    INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS.extend([
-        f"stage1_emerging_{_component}_score", f"stage1_emerging_{_component}_max",
-        f"stage1_emerging_{_component}_complete",
-    ])
+    INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS.extend(
+        [
+            f"stage1_emerging_{_component}_score",
+            f"stage1_emerging_{_component}_max",
+            f"stage1_emerging_{_component}_complete",
+        ]
+    )
 
 
-def _normalise_investigator_early_accumulation(frame: pd.DataFrame | None) -> pd.DataFrame:
+def _normalise_investigator_early_accumulation(
+    frame: pd.DataFrame | None,
+) -> pd.DataFrame:
     if frame is None or frame.empty:
         return pd.DataFrame(columns=INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS)
     out = frame.copy()
@@ -957,15 +1321,33 @@ def _normalise_investigator_early_accumulation(frame: pd.DataFrame | None) -> pd
         "top_pattern_age_days": "pattern_age_days",
         "date": "trade_date",
     }
-    out = out.rename(columns={src: dst for src, dst in rename_map.items() if src in out.columns and dst not in out.columns})
+    out = out.rename(
+        columns={
+            src: dst
+            for src, dst in rename_map.items()
+            if src in out.columns and dst not in out.columns
+        }
+    )
     if "symbol_id" not in out.columns:
         out.loc[:, "symbol_id"] = out.get("symbol", pd.Series("", index=out.index))
-    out.loc[:, "symbol_id"] = out["symbol_id"].fillna("").astype(str).str.strip().str.upper()
+    out.loc[:, "symbol_id"] = (
+        out["symbol_id"].fillna("").astype(str).str.strip().str.upper()
+    )
     out.loc[:, "symbol"] = out["symbol_id"]
     if "breakout_qualified" not in out.columns:
-        status = out.get("graduation_status", pd.Series("", index=out.index)).fillna("").astype(str)
-        breakout_state = out.get("breakout_state", pd.Series("", index=out.index)).fillna("").astype(str)
-        out.loc[:, "breakout_qualified"] = status.eq("breakout_qualified") | breakout_state.str.lower().eq("qualified")
+        status = (
+            out.get("graduation_status", pd.Series("", index=out.index))
+            .fillna("")
+            .astype(str)
+        )
+        breakout_state = (
+            out.get("breakout_state", pd.Series("", index=out.index))
+            .fillna("")
+            .astype(str)
+        )
+        out.loc[:, "breakout_qualified"] = status.eq(
+            "breakout_qualified"
+        ) | breakout_state.str.lower().eq("qualified")
     for column in INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS:
         if column not in out.columns:
             out.loc[:, column] = pd.NA
@@ -1015,13 +1397,32 @@ def _normalise_investigator_early_accumulation(frame: pd.DataFrame | None) -> pd
         "sma50_sma200_gap_delta_60d",
     ):
         out.loc[:, column] = pd.to_numeric(out[column], errors="coerce")
-    out.loc[:, "breakout_qualified"] = out["breakout_qualified"].fillna(False).astype(bool)
-    for column in ("stage1_eligible", "promotion_eligibility", "stage2_review_candidate", "execution_eligible", "golden_cross_imminent"):
-        out.loc[:, column] = out[column].astype("string").str.lower().isin({"true", "1", "yes", "y"}).fillna(False)
+    out.loc[:, "breakout_qualified"] = (
+        out["breakout_qualified"].fillna(False).astype(bool)
+    )
+    for column in (
+        "stage1_eligible",
+        "promotion_eligibility",
+        "stage2_review_candidate",
+        "execution_eligible",
+        "golden_cross_imminent",
+    ):
+        out.loc[:, column] = (
+            out[column]
+            .astype("string")
+            .str.lower()
+            .isin({"true", "1", "yes", "y"})
+            .fillna(False)
+        )
     out = out.loc[:, INVESTIGATOR_EARLY_ACCUMULATION_COLUMNS].copy()
     if not out.empty:
         out = out.sort_values(
-            ["stage1_emerging_rank", "early_accumulation_rank", "stage1_emerging_score", "symbol_id"],
+            [
+                "stage1_emerging_rank",
+                "early_accumulation_rank",
+                "stage1_emerging_score",
+                "symbol_id",
+            ],
             ascending=[True, True, False, True],
             na_position="last",
             kind="stable",

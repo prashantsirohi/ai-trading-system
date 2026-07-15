@@ -1,8 +1,8 @@
 # Scan Router
 
-- **Purpose:** Define Phase 3B deterministic shadow scan allocation and position coverage.
+- **Purpose:** Define Phase 3B/3C deterministic shadow scan allocation, position coverage, and routing-governance validation.
 - **Audience:** Operators and engineers validating analysis coverage.
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-07-15
 - **Source of truth:** `domains/opportunities/routing.py` and `pipeline/stages/scan_router.py`.
 
 ---
@@ -11,9 +11,9 @@ Start with the [System Guide](../SYSTEM_GUIDE.md).
 
 ## Purpose
 
-The router consumes rank, universal stage, promotion, opportunity-registry lifecycle, and fill-derived position state. Precedence is active position, recent exit, triggered/pending follow-through, stage promotion, rank selection, then structural coverage. All reasons remain on the decision even though only the highest tier is emitted.
+The router consumes rank, universal stage, promotion, opportunity-registry lifecycle, and fill-derived position state. Phase 3C-2 uses `scan-routing-policy-v2`: each selection reason has a canonical minimum tier, the effective tier is the highest required tier, and the winning reason is deterministic by tier then tie-break order. All reasons remain on the decision even though only the effective tier is emitted.
 
-Active positions and recently exited positions receive `POSITION_MONITOR` without broker calls. Active positions, triggered candidates, and pending-follow-through candidates are uncapped. A missing-market-data position remains routed and creates a high-severity `routing_conflicts` row.
+Active positions and recently exited positions receive `POSITION_MONITOR` without broker calls. Active positions, triggered candidates, and pending-follow-through candidates are uncapped and cannot be manually downgraded below their required tier. A missing-market-data position remains routed and creates a high-severity `routing_conflicts` row.
 
 `compare` writes artifacts only. `shadow` also lets the opportunities stage consume routed evidence and recover position-only episodes. Neither mode changes execution, candidates, publish, Sheets, Telegram, or UI payloads.
 
@@ -27,7 +27,7 @@ Registered rank and weekly-stage artifacts, opportunity-registry current lifecyc
 
 ## Output artifacts
 
-Routing, discovery, deep-scan, position-monitor, conflict, coverage-summary, and old-versus-new comparison artifacts.
+Routing, discovery, deep-scan, position-monitor, conflict, coverage-summary, and old-versus-new comparison artifacts. Existing columns are preserved; Phase 3C-2 appends `effective_scan_tier`, `winning_reason`, all selection reasons/details, structural new-long block fields, active-position structural-risk fields, and routing hash/decision identifiers.
 
 ## Main modules
 
@@ -35,23 +35,23 @@ Routing, discovery, deep-scan, position-monitor, conflict, coverage-summary, and
 
 ## Process flow
 
-Resolve each selection source, apply caps only to rank/stage allocations, collapse to the highest tier while preserving reasons, reconcile active coverage, persist routing history, and register artifacts.
+Resolve each selection source, apply caps only to rank/stage allocations, validate the reason-to-tier policy, collapse to the highest tier while preserving reasons, reconcile active coverage, persist validated routing history, and register artifacts.
 
 ## DQ
 
-Every active fill-derived position must receive `POSITION_MONITOR`. Missing market data remains routed and emits a high-severity conflict row.
+Every active fill-derived position must receive `POSITION_MONITOR`. Unknown reasons/tiers, reason-tier mismatches, too-low effective tiers, invalid winning reasons, and unsafe manual downgrades emit routing conflicts and are excluded from trusted route artifacts. Missing market data remains routed and emits a high-severity conflict row.
 
 ## Failure modes
 
-An omitted active position fails this optional stage. Missing optional lifecycle or execution stores produce empty optional inputs rather than broker calls.
+An omitted active position fails this optional stage. Invalid row-level routing decisions degrade the optional stage and are excluded from trusted artifacts; systemic construction failures fail the stage. Missing optional lifecycle or execution stores produce empty optional inputs rather than broker calls.
 
 ## Retry behavior
 
-Artifacts are attempt-scoped and routing history is idempotent per run attempt, symbol, policy, and source hash.
+Artifacts are attempt-scoped and routing history is idempotent per routing decision ID. The existing routing-history table is unchanged; Phase 3C-2 stores v2 lineage in `decision_json`.
 
 ## Downstream consumers
 
-Routed Investigator sidecars and Phase 3B opportunity reconciliation only. Execution and publish remain unchanged.
+Routed Investigator sidecars and Phase 3B/3C opportunity reconciliation only. Both consumers validate routing artifacts before trusting them. Execution and publish remain unchanged.
 
 ## Commands
 

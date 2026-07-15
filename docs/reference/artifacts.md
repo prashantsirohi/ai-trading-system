@@ -248,6 +248,6 @@ coverage rows. Sector rows include constituent source hashes, membership IDs,
 and aggregate membership trust. These are additive columns; artifact names and
 downstream execution/publish payloads are unchanged.
 
-`scan_router` writes `scan_routing.csv`, `stage_discovery_candidates.csv`, `deep_scan_universe.csv`, `position_monitor_universe.csv`, `routing_conflicts.csv`, `scan_coverage_summary.json`, and `scan_routing_comparison.json`.
+`scan_router` writes `scan_routing.csv`, `stage_discovery_candidates.csv`, `deep_scan_universe.csv`, `position_monitor_universe.csv`, `routing_conflicts.csv`, `scan_coverage_summary.json`, and `scan_routing_comparison.json`. Phase 3C-2 preserves existing routing columns and appends policy-v2 lineage fields including effective tier, winning reason, all selection reasons, selection details, structural new-long block/risk fields, routing input hash, and routing decision ID. Invalid routing rows are reported in `routing_conflicts.csv` and excluded from trusted route artifacts before persistence.
 
-When routing is enabled, Investigator additionally writes `routed_investigator_scores.csv`, `routed_pattern_scan.csv`, and `position_risk_monitor.csv`. Existing Investigator artifacts and publish consumers are unchanged.
+When routing is enabled, Investigator additionally writes `routed_investigator_scores.csv`, `routed_pattern_scan.csv`, `position_risk_monitor.csv`, and `routed_routing_conflicts.csv`. Existing Investigator artifacts and publish consumers are unchanged.

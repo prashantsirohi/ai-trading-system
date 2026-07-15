@@ -39,7 +39,11 @@ governance](stages/weekly_stage.md) without changing execution, publishing, or t
 Phase 3B history payloads. Phase 3C-1A hardens that governance with explicit
 correction-authority precedence, supersession-cycle rejection, and quarantined
 legacy correction-impact link statuses; the operator store may still contain no
-real Phase 3B weekly-stage rows until Phase 3B has run.
+real Phase 3B weekly-stage rows until Phase 3B has run. Phase 3C-2 hardens scan
+routing with policy-v2 reason-to-tier precedence, row-level validation,
+structural new-long blocks separated from active-position structural risk, and
+fail-closed provisional early-entry sector checks; execution and publish remain
+unchanged.
 
 ## Safety and operating invariants
 
