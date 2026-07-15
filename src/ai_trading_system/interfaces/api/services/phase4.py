@@ -21,14 +21,14 @@ from ai_trading_system.platform.telemetry.performance import PERFORMANCE_POLICY_
 
 from ..config import ApiSettings, SourceProfile
 from ..artifacts import ARTIFACT_SPECS, CanonicalArtifactLocator, LocatedArtifact
-from ..limitations import PRODUCTION_LIMITATIONS, normalized_limitations
+from ..limitations import PRODUCTION_LIMITATIONS
 from ..repositories import ReadOnlyDataAccess, parse_json, utc
 from ..telemetry import ApiMetrics
 
 
 API_VERSION = "v1"
 SCHEMA_VERSION = "phase4a-api-schema-v1"
-LIMITATIONS = PRODUCTION_LIMITATIONS
+FALLBACK_LIMITATIONS = PRODUCTION_LIMITATIONS
 
 
 @dataclass(slots=True)
@@ -56,6 +56,11 @@ def _bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "pass", "ready"}
+
+
+def _unique_limitations(values: list[str] | tuple[str, ...]) -> list[str]:
+    """Preserve artifact-owned codes while deduplicating in stable order."""
+    return list(dict.fromkeys(str(value) for value in values if value))
 
 
 class SystemReadService(Protocol):
@@ -213,9 +218,16 @@ class Phase4ReadService:
         }
         readiness = self._readiness_payload()
         values = readiness.get("limitations") if readiness else None
-        if isinstance(values, list) and values:
+        if isinstance(values, list):
             return [dict(item) if isinstance(item, dict) else {"limitation_id": str(item), "description": descriptions.get(str(item), str(item)), "severity": "warning", "development_blocking": False, "production_blocking": True} for item in values]
-        return [{"limitation_id": item, "description": descriptions[item], "severity": "warning", "development_blocking": False, "production_blocking": True} for item in LIMITATIONS]
+        return [{"limitation_id": item, "description": descriptions[item], "severity": "warning", "development_blocking": False, "production_blocking": True} for item in FALLBACK_LIMITATIONS]
+
+    def limitation_ids(self) -> list[str]:
+        """Return the readiness artifact's limitation IDs, including an empty set."""
+        return _unique_limitations([
+            str(item.get("limitation_id")) for item in self.limitations()
+            if item.get("limitation_id")
+        ])
 
     def readiness(self) -> dict[str, Any]:
         payload = self._readiness_payload()
@@ -555,10 +567,11 @@ class Phase4ReadService:
     def partial_limitations(self, resource: str, rows: list[Any]) -> list[str]:
         family = {"positions": "positions", "governance": "governance"}.get(resource, resource)
         state = self.projection_state(family)
+        readiness_limitations = self.limitation_ids()
         if self.fixture:
-            return list(LIMITATIONS)
+            return readiness_limitations
         if rows:
-            return normalized_limitations([*LIMITATIONS, *state.limitations])
+            return _unique_limitations([*readiness_limitations, *state.limitations])
         table_requirements = {
             "stages": "weekly_stock_stage_history", "routing": "opportunity_scan_routing_history",
             "candidates": "candidate_episode", "positions": "position_recovery_proposal",
@@ -566,8 +579,8 @@ class Phase4ReadService:
         }
         required = table_requirements.get(resource)
         if required and required not in self.access.tables():
-            return [*LIMITATIONS, "SOURCE_NOT_MIGRATED"]
-        return normalized_limitations([*LIMITATIONS, *state.limitations, "SOURCE_EMPTY"])
+            return _unique_limitations([*readiness_limitations, "SOURCE_NOT_MIGRATED"])
+        return _unique_limitations([*readiness_limitations, *state.limitations, "SOURCE_EMPTY"])
 
     @staticmethod
     def semantic_hash(value: Any) -> str:

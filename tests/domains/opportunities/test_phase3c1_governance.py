@@ -266,6 +266,84 @@ def test_competing_terminal_corrections_use_authority_not_insertion_order(tmp_pa
     assert resolved.iloc[0]["effective_stage"] == WeinsteinStage.STAGE_3.value
 
 
+def test_correction_with_earlier_payload_as_of_still_supersedes_original(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    original = _stock_row(stage=WeinsteinStage.STAGE_1.value)
+    corrected = {
+        **_stock_row(stage=WeinsteinStage.STAGE_2.value, source_hash="stock-corrected"),
+        "as_of": "2026-07-16",
+    }
+    with registry._writer() as conn:  # noqa: SLF001
+        original_id = _insert_stock_history(conn, original, run_id="run-original", recorded_at=T1)
+        corrected_id = _insert_stock_history(conn, corrected, run_id="run-corrected", recorded_at=T2)
+        append_stage_governance(
+            conn, scope="STOCK", observation_id=original_id,
+            action=StageGovernanceAction.ORIGINAL,
+            membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED,
+            recorded_at=T1, run_id="run-original", stage_attempt=1,
+        )
+        append_stage_governance(
+            conn, scope="STOCK", observation_id=corrected_id,
+            action=StageGovernanceAction.CORRECTION,
+            supersedes_observation_id=original_id,
+            membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED,
+            recorded_at=T2, run_id="run-corrected", stage_attempt=1,
+            correction_reason="corrected effective timestamp",
+            correction_authority=CorrectionAuthority.DATA_REPAIR_PIPELINE,
+        )
+
+    resolved = read_stock_stage_as_of(
+        registry, as_of="2026-07-17", available_at=T2 + timedelta(seconds=1)
+    )
+    assert resolved.iloc[0]["effective_stage"] == WeinsteinStage.STAGE_2.value
+
+
+def test_multiple_governance_events_use_highest_authority_for_observation(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    original = _stock_row(stage=WeinsteinStage.STAGE_1.value)
+    reviewed = _stock_row(stage=WeinsteinStage.STAGE_2.value, source_hash="stock-reviewed")
+    repair = _stock_row(stage=WeinsteinStage.STAGE_3.value, source_hash="stock-repair")
+    with registry._writer() as conn:  # noqa: SLF001
+        original_id = _insert_stock_history(conn, original, run_id="run-original", recorded_at=T1)
+        reviewed_id = _insert_stock_history(conn, reviewed, run_id="run-reviewed", recorded_at=T2)
+        repair_id = _insert_stock_history(conn, repair, run_id="run-repair", recorded_at=T3)
+        append_stage_governance(
+            conn, scope="STOCK", observation_id=original_id,
+            action=StageGovernanceAction.ORIGINAL,
+            membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED,
+            recorded_at=T1, run_id="run-original", stage_attempt=1,
+        )
+        append_stage_governance(
+            conn, scope="STOCK", observation_id=reviewed_id,
+            action=StageGovernanceAction.CORRECTION,
+            supersedes_observation_id=original_id,
+            membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED,
+            recorded_at=T2, run_id="run-reviewed", stage_attempt=1,
+            correction_authority=CorrectionAuthority.REVIEWED_OPERATOR_CORRECTION,
+        )
+        append_stage_governance(
+            conn, scope="STOCK", observation_id=reviewed_id,
+            action=StageGovernanceAction.CORRECTION,
+            supersedes_observation_id=original_id,
+            membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED,
+            recorded_at=T2 + timedelta(seconds=1), run_id="run-migration", stage_attempt=1,
+            correction_authority=CorrectionAuthority.CLASSIFIER_VERSION_MIGRATION,
+        )
+        append_stage_governance(
+            conn, scope="STOCK", observation_id=repair_id,
+            action=StageGovernanceAction.CORRECTION,
+            supersedes_observation_id=original_id,
+            membership_trust=MembershipTrust.POINT_IN_TIME_VERIFIED,
+            recorded_at=T3, run_id="run-repair", stage_attempt=1,
+            correction_authority=CorrectionAuthority.DATA_REPAIR_PIPELINE,
+        )
+
+    resolved = read_stock_stage_as_of(
+        registry, as_of="2026-07-17", available_at=T3 + timedelta(seconds=1)
+    )
+    assert resolved.iloc[0]["effective_stage"] == WeinsteinStage.STAGE_2.value
+
+
 def test_equal_authority_competing_terminals_raise_conflict(tmp_path: Path) -> None:
     registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
     original = _stock_row(stage=WeinsteinStage.STAGE_1.value)
@@ -465,7 +543,7 @@ def test_correction_flags_candidate_snapshot_decision_and_attribution(
     assert statuses == [(CorrectionImpactLinkStatus.LINKED.value, True, False, 4)]
 
 
-def test_legacy_correction_impact_no_match_and_ambiguous_links_are_quarantined(tmp_path: Path) -> None:
+def test_legacy_correction_impact_no_match_is_quarantined_and_exact_matches_are_all_linked(tmp_path: Path) -> None:
     registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
     opportunity_store = DuckDBOpportunityRegistryStore(registry)
     lineage = SourceLineage("candidate-run", "opportunities", 1, "shadow", "/tmp/shadow.csv", "candidate-hash")
@@ -530,15 +608,18 @@ def test_legacy_correction_impact_no_match_and_ambiguous_links_are_quarantined(t
     persist_stage_history(registry2, first, pd.DataFrame(), run_id="run-1", attempt=1, recorded_at=T1)
     persist_stage_history(registry2, corrected, pd.DataFrame(), run_id="run-2", attempt=1, recorded_at=T2)
     with registry2._reader() as conn:  # noqa: SLF001
-        ambiguous = conn.execute(
+        linked = conn.execute(
             """SELECT impact_status, match_count, authoritative_calibration_eligible,
-                      review_required, match_evidence
+                      review_required, affected_record_id, match_evidence
                FROM stage_correction_impact
-               WHERE affected_record_type = 'candidate_snapshot'"""
-        ).fetchone()
-    assert ambiguous[0] == CorrectionImpactLinkStatus.UNRESOLVED_LEGACY_AMBIGUOUS.value
-    assert ambiguous[1:4] == (2, False, True)
-    assert "snapshot-0" in ambiguous[4] and "snapshot-1" in ambiguous[4]
+               WHERE affected_record_type = 'candidate_snapshot'
+               ORDER BY affected_record_id"""
+        ).fetchall()
+    assert [row[:5] for row in linked] == [
+        (CorrectionImpactLinkStatus.LINKED.value, 2, True, False, "snapshot-0"),
+        (CorrectionImpactLinkStatus.LINKED.value, 2, True, False, "snapshot-1"),
+    ]
+    assert all("snapshot-0" in row[5] and "snapshot-1" in row[5] for row in linked)
 
 
 def test_copied_store_legacy_annotation_is_idempotent_and_payload_immutable(tmp_path: Path) -> None:

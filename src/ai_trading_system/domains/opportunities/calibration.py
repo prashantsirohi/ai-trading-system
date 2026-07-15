@@ -395,6 +395,7 @@ def build_calibration_dataset(
     copied_realistic_performance_summary: Mapping[str, Any] | None = None,
     operator_migrations_applied: bool = False,
     real_phase3b_history_present: bool = False,
+    readiness_evidence: Mapping[str, Any] | None = None,
     expected_manifest: Mapping[str, Any] | None = None,
 ) -> CalibrationBuildResult:
     cfg = config or CalibrationConfig()
@@ -436,6 +437,10 @@ def build_calibration_dataset(
     sample_identity_hash = _digest([item.sample_id for item in eligibility_records])
     eligible_dataset_hash = _digest(list(eligible_rows))
     exclusion_dataset_hash = _digest([*excluded_rows, *quarantined_rows, *pending_rows])
+    readiness_evidence_payload = dict(readiness_evidence or {
+        "operator_migrations_applied": operator_migrations_applied,
+        "real_phase3b_history_present": real_phase3b_history_present,
+    })
     manifest_identity = {
         "as_of": as_of, "policy_version": cfg.policy_version,
         "dataset_name": dataset_name, "dataset_purpose": dataset_purpose,
@@ -448,6 +453,7 @@ def build_calibration_dataset(
         "eligibility_policy_hash": policy_hash,
         "outcome_policy_hash": outcome_policy_hash,
         "sample_identity_hash": sample_identity_hash,
+        "readiness_evidence": readiness_evidence_payload,
     }
     manifest_id = _digest(manifest_identity)
     eligibility_records = tuple(

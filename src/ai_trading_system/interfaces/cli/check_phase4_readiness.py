@@ -27,10 +27,12 @@ def run_readiness(
         json.loads(performance_summary.read_text(encoding="utf-8"))
         if performance_summary is not None else None
     )
+    evidence = dict(manifest.get("readiness_evidence") or {})
     checks, limitations, verdict, development, production = evaluate_phase4_readiness(
         quality=quality, manifest=manifest, config=CalibrationConfig(),
         copied_realistic_performance_summary=performance,
-        operator_migrations_applied=False, real_phase3b_history_present=False,
+        operator_migrations_applied=bool(evidence.get("operator_migrations_applied", False)),
+        real_phase3b_history_present=bool(evidence.get("real_phase3b_history_present", False)),
     )
     paths = write_readiness_artifacts(
         checks=checks, limitations=limitations, verdict=verdict,

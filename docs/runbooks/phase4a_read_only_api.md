@@ -49,8 +49,11 @@ requires explicit local-development mode.
 Valid `X-Request-ID` values are propagated; invalid values are replaced with a
 UUID. Structured logs contain request ID, route, status, duration, and
 authentication state—not credentials, SQL, source paths, or payloads. The
-in-memory limit defaults to 120 requests per minute per credential;
-distributed limiting remains a deployment concern.
+in-memory limit defaults to 120 requests per minute per credential; the same
+threshold is also enforced per direct client address before credential
+validation, so missing and invalid keys cannot bypass process-local throttling.
+Proxy-aware and distributed limiting remains a deployment concern; the API does
+not trust forwarding headers for client identity by default.
 
 Process-local telemetry records request count/duration/status class,
 source-read duration and rows, unavailable and partial responses,

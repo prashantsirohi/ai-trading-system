@@ -73,6 +73,16 @@ The command opens the source read-only. It rejects the configured operator
 store and symlinked source/output paths. Sparse or pre-Phase-3B copies produce
 honest exclusions and limitations; do not fabricate missing history.
 
+For copied-realistic builds, `OPERATOR_MIGRATIONS_034_036` passes only when the
+copied store contains the Phase 3C-1/1A/3 tables and hardening columns.
+`REAL_PHASE3B_HISTORY` passes only when weekly stock-stage rows have matching
+completed pipeline and weekly-stage-attempt lineage plus a non-empty source
+artifact hash. Candidate rows resolve point-in-time sector membership and
+decision-linked correction impacts from the copied governance tables; missing
+or conflicting evidence remains fail-closed. These observations are embedded
+in `readiness_evidence` in the calibration manifest so a later readiness-only
+check preserves the copied-store verdict without reopening the source.
+
 ## Readiness verdicts
 
 Re-evaluate an existing manifest with:
@@ -94,6 +104,11 @@ limitation IDs include `COPIED_REALISTIC_BASELINE_MISSING`,
 `OPERATOR_MIGRATIONS_NOT_APPLIED`, and `REAL_PHASE3B_HISTORY_EMPTY`. A fixture
 may support development-path verification while production readiness remains
 false.
+
+The Phase 4 read-only API treats `phase3c5_phase4_readiness.json` as the source
+for readiness limitations and production readiness, including the valid case
+of an empty limitations list. Static production limitations are used only when
+no readable readiness artifact is available.
 
 ## Operator review
 

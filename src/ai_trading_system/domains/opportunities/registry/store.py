@@ -673,7 +673,7 @@ class DuckDBOpportunityRegistryStore:
             [observation.candidate_id],
         ).fetchone()
         if latest is not None:
-            if observation.transitioned_at.replace(tzinfo=None) < latest[1]:
+            if _db_time(observation.transitioned_at) < latest[1]:
                 raise ValueError("transition chronology must be non-decreasing")
             if latest[0] != observation.from_state.value:
                 raise ValueError("transition from_state does not match latest persisted state")

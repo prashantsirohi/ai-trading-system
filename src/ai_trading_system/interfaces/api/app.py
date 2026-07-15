@@ -54,7 +54,7 @@ from .schemas import (
     SystemReadinessResponse,
     VersionResponse,
 )
-from .services import LIMITATIONS, Phase4ReadService
+from .services import Phase4ReadService
 from .telemetry import ApiMetrics
 
 
@@ -211,6 +211,7 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
     app.state.metrics = ApiMetrics()
     app.state.service = Phase4ReadService(settings, app.state.metrics)
     app.state.rate_windows = defaultdict(deque)
+    app.state.pre_auth_rate_windows = defaultdict(deque)
 
     @app.exception_handler(Phase4ApiError)
     async def phase4_error(request: Request, exc: Phase4ApiError) -> JSONResponse:
@@ -260,6 +261,15 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
             ))
         protected = path.startswith("/api/v1") and path not in PUBLIC_PATHS
         if protected and settings.auth_enabled and not settings.local_dev_mode:
+            client_address = request.client.host if request.client else "unknown"
+            pre_auth_window = app.state.pre_auth_rate_windows[client_address]
+            now = time.monotonic()
+            while pre_auth_window and pre_auth_window[0] <= now - 60:
+                pre_auth_window.popleft()
+            if len(pre_auth_window) >= settings.rate_limit_per_minute:
+                app.state.metrics.rate_limit_count += 1
+                return finish(JSONResponse(ApiError(code="RATE_LIMITED", message="Rate limit exceeded", request_id=request.state.request_id).model_dump(), status_code=429, headers={"X-Request-ID": request.state.request_id}))
+            pre_auth_window.append(now)
             if not settings.api_key:
                 app.state.metrics.authentication_failure_count += 1
                 return finish(JSONResponse(ApiError(code="AUTHENTICATION_REQUIRED", message="API authentication is not configured", request_id=request.state.request_id).model_dump(), status_code=503, headers={"X-Request-ID": request.state.request_id}))
@@ -273,7 +283,6 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
                 return finish(JSONResponse(ApiError(code="AUTHORIZATION_DENIED", message="Invalid API credential", request_id=request.state.request_id).model_dump(), status_code=403, headers={"X-Request-ID": request.state.request_id}))
             authenticated = True
             window = app.state.rate_windows[Phase4ReadService.semantic_hash(supplied)]
-            now = time.monotonic()
             while window and window[0] <= now - 60:
                 window.popleft()
             if len(window) >= settings.rate_limit_per_minute:
@@ -306,23 +315,25 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
         readable = service.source_readable()
         auth_ok = settings.auth_configured()
         ready = readable and auth_ok
-        data = {"api_ready": ready, "source_readable": readable, "primary_source_readable": readable, "optional_sources": {"phase3c_tables": "optional_or_unapplied"}, "phase4_development_ready": True, "phase4_production_ready": False, "limitations": list(LIMITATIONS)}
-        return _response(request, data, meta=_meta(request, partial=not ready, limitations=list(LIMITATIONS)), status_code=200 if ready else 503)
+        readiness = service.readiness()
+        limitations = service.limitation_ids()
+        data = {"api_ready": ready, "source_readable": readable, "primary_source_readable": readable, "optional_sources": {"phase3c_tables": "available" if "OPERATOR_MIGRATIONS_NOT_APPLIED" not in limitations else "optional_or_unapplied"}, "phase4_development_ready": readiness["phase4_development_ready"], "phase4_production_ready": readiness["phase4_production_ready"], "limitations": limitations}
+        return _response(request, data, meta=_meta(request, partial=not ready, limitations=limitations), status_code=200 if ready else 503)
 
     @app.get("/api/v1/system/version", response_model=ApiResponse[VersionResponse], tags=["system"])
     def system_version(request: Request):
         data = service.version()
-        return _response(request, data, meta=_meta(request, limitations=list(LIMITATIONS)), etag_seed=data)
+        return _response(request, data, meta=_meta(request, limitations=service.limitation_ids()), etag_seed=data)
 
     @app.get("/api/v1/system/readiness", response_model=ApiResponse[SystemReadinessResponse], tags=["system"])
     def system_readiness(request: Request):
         data = service.readiness()
-        return _response(request, data, meta=_meta(request, limitations=list(LIMITATIONS)), etag_seed=data)
+        return _response(request, data, meta=_meta(request, limitations=service.limitation_ids()), etag_seed=data)
 
     @app.get("/api/v1/system/limitations", response_model=ApiResponse[list[SystemLimitation]], tags=["system"])
     def system_limitations(request: Request):
         data = service.limitations()
-        return _response(request, data, meta=_meta(request, limitations=list(LIMITATIONS)), etag_seed=data)
+        return _response(request, data, meta=_meta(request, limitations=service.limitation_ids()), etag_seed=data)
 
     def stage_rows(request: Request, *, scope: str, as_of: str | None, symbol: str | None = None, sector: str | None = None) -> tuple[list[dict[str, Any]], datetime, list[str]]:
         cutoff = _parse_as_of(as_of)
@@ -400,7 +411,7 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
     @app.get("/api/v1/routing/{routing_decision_id}", response_model=ApiResponse[RoutingDecisionDetail], tags=["routing"])
     def routing_detail(routing_decision_id: str, request: Request):
         row = _find(service.routing(), "decision_id", routing_decision_id)
-        return _response(request, row, meta=_meta(request, limitations=list(LIMITATIONS)), etag_seed=row)
+        return _response(request, row, meta=_meta(request, limitations=service.limitation_ids()), etag_seed=row)
 
     @app.get("/api/v1/stocks/{symbol_id}/routing", response_model=ApiResponse[list[RoutingDecisionSummary]], tags=["routing"])
     def stock_routing(symbol_id: str, request: Request):
@@ -415,7 +426,7 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
     @app.get("/api/v1/candidates/{candidate_id}", response_model=ApiResponse[CandidateDetail], tags=["candidates"])
     def candidate_detail(candidate_id: str, request: Request):
         row = _find(service.candidates(), "candidate_id", candidate_id)
-        return _response(request, row, meta=_meta(request, limitations=list(LIMITATIONS)), etag_seed=row)
+        return _response(request, row, meta=_meta(request, limitations=service.limitation_ids()), etag_seed=row)
 
     def candidate_children(candidate_id: str, request: Request, resource: str, model: Any, limit: int, cursor: str | None):
         _find(service.candidates(), "candidate_id", candidate_id)
@@ -454,7 +465,7 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
     @app.get("/api/v1/positions/coverage/{position_cycle_id}", response_model=ApiResponse[PositionCoverageSummary], tags=["positions"])
     def position_detail(position_cycle_id: str, request: Request):
         row = _find(service.positions(), "position_cycle_id", position_cycle_id)
-        return _response(request, row, meta=_meta(request, limitations=list(LIMITATIONS)), etag_seed=row)
+        return _response(request, row, meta=_meta(request, limitations=service.limitation_ids()), etag_seed=row)
 
     def alert_list(request: Request, incidents: bool, severity: str | None, status: str | None):
         _allow(severity, {"info", "warning", "critical"}, "severity")
@@ -472,7 +483,7 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
     @app.get("/api/v1/alerts/{alert_id}", response_model=ApiResponse[AlertSummary], tags=["alerts"])
     def alert_detail(alert_id: str, request: Request):
         row = _find(service.alerts(False), "alert_id", alert_id)
-        return _response(request, row, meta=_meta(request, limitations=list(LIMITATIONS)), etag_seed=row)
+        return _response(request, row, meta=_meta(request, limitations=service.limitation_ids()), etag_seed=row)
 
     @app.get("/api/v1/alert-incidents", response_model=ApiResponse[list[AlertIncidentSummary]], tags=["alerts"])
     def incidents(request: Request, severity: str | None = None, status: str | None = None): return alert_list(request, True, severity, status)
@@ -480,7 +491,7 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
     @app.get("/api/v1/alert-incidents/{incident_id}", response_model=ApiResponse[AlertIncidentSummary], tags=["alerts"])
     def incident_detail(incident_id: str, request: Request):
         row = _find(service.alerts(True), "alert_id", incident_id)
-        return _response(request, row, meta=_meta(request, limitations=list(LIMITATIONS)), etag_seed=row)
+        return _response(request, row, meta=_meta(request, limitations=service.limitation_ids()), etag_seed=row)
 
     @app.get("/api/v1/governance/stage-corrections", response_model=ApiResponse[list[GovernanceCorrectionResponse]], tags=["governance"])
     def corrections(request: Request):
@@ -513,12 +524,12 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
     @app.get("/api/v1/calibration/summary", response_model=ApiResponse[CalibrationSummaryResponse], tags=["calibration/readiness"])
     def calibration_summary(request: Request):
         data = service.calibration("summary")
-        return _response(request, data, meta=_meta(request, partial=data["manifest_id"] is None, limitations=list(LIMITATIONS)), etag_seed=data)
+        return _response(request, data, meta=_meta(request, partial=data["manifest_id"] is None, limitations=service.limitation_ids()), etag_seed=data)
 
     @app.get("/api/v1/calibration/manifest", response_model=ApiResponse[CalibrationManifestResponse], tags=["calibration/readiness"])
     def calibration_manifest(request: Request):
         data = service.calibration("manifest")
-        return _response(request, data, meta=_meta(request, partial=data["manifest_id"] is None, limitations=list(LIMITATIONS)), etag_seed=data)
+        return _response(request, data, meta=_meta(request, partial=data["manifest_id"] is None, limitations=service.limitation_ids()), etag_seed=data)
 
     @app.get("/api/v1/calibration/coverage", response_model=ApiResponse[list[dict[str, Any]]], tags=["calibration/readiness"])
     def calibration_coverage(request: Request, dimension: str | None = None, bucket: str | None = None, status: str | None = None):
@@ -529,14 +540,14 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
         return _response(request, rows, meta=_meta(request, partial=not rows, limitations=service.partial_limitations("calibration", rows)))
 
     @app.get("/api/v1/calibration/exclusions", response_model=ApiResponse[list[dict[str, Any]]], tags=["calibration/readiness"])
-    def calibration_exclusions(request: Request, eligibility_status: str | None = None): return _response(request, service.calibration("exclusions"), meta=_meta(request, limitations=list(LIMITATIONS)))
+    def calibration_exclusions(request: Request, eligibility_status: str | None = None): return _response(request, service.calibration("exclusions"), meta=_meta(request, limitations=service.limitation_ids()))
 
     @app.get("/api/v1/readiness/checks", response_model=ApiResponse[list[ReadinessCheckResponse]], tags=["calibration/readiness"])
     def readiness_checks(request: Request, readiness_status: str | None = None):
         rows = service.calibration("checks")
         if readiness_status:
             rows = [row for row in rows if row["status"] == readiness_status]
-        return _response(request, rows, meta=_meta(request, limitations=list(LIMITATIONS)), etag_seed=rows)
+        return _response(request, rows, meta=_meta(request, limitations=service.limitation_ids()), etag_seed=rows)
 
     @app.get("/api/v1/performance/latest", response_model=ApiResponse[PerformanceSummaryResponse], tags=["performance"])
     def performance_latest(request: Request):
@@ -544,7 +555,7 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
         row = rows[-1] if rows else None
         if row is None:
             raise Phase4ApiError("SOURCE_UNAVAILABLE", "Performance evidence is unavailable", 503, {"limitation": "COPIED_REALISTIC_BASELINE_MISSING"})
-        return _response(request, row, meta=_meta(request, limitations=list(LIMITATIONS)), etag_seed=row)
+        return _response(request, row, meta=_meta(request, limitations=service.limitation_ids()), etag_seed=row)
 
     @app.get("/api/v1/performance/runs", response_model=ApiResponse[list[PerformanceSummaryResponse]], tags=["performance"])
     def performance_runs(request: Request, limit: int = Query(resolved_settings.default_page_size), cursor: str | None = None, sort: str = "as_of", order: str = "desc", cache_mode: str | None = None, replay_mode: str | None = None, performance_status: str | None = None, date_from: date | None = None, date_to: date | None = None):
@@ -557,17 +568,17 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
         if date_to:
             rows = [row for row in rows if str(row.get("as_of", ""))[:10] <= date_to.isoformat()]
         page, page_meta = _list_page(rows, limit=limit, cursor=cursor, sort=sort, order=order, allowed_sort={"as_of", "run_id", "performance_status"}, filters={}, cursor_filters={"cache_mode": cache_mode, "replay_mode": replay_mode, "performance_status": performance_status, "date_from": date_from, "date_to": date_to}, max_limit=settings.max_page_size)
-        return _response(request, page, meta=_meta(request, partial=not rows, limitations=[*LIMITATIONS, *(["SOURCE_UNAVAILABLE"] if not rows else [])], pagination=page_meta))
+        return _response(request, page, meta=_meta(request, partial=not rows, limitations=[*service.limitation_ids(), *(["SOURCE_UNAVAILABLE"] if not rows else [])], pagination=page_meta))
 
     @app.get("/api/v1/performance/runs/{run_id}", response_model=ApiResponse[PerformanceSummaryResponse], tags=["performance"])
     def performance_run(run_id: str, request: Request):
         row = _find(service.performance(), "run_id", run_id)
-        return _response(request, row, meta=_meta(request, limitations=list(LIMITATIONS)), etag_seed=row)
+        return _response(request, row, meta=_meta(request, limitations=service.limitation_ids()), etag_seed=row)
 
     @app.get("/api/v1/performance/baselines", response_model=ApiResponse[list[PerformanceSummaryResponse]], tags=["performance"])
     def performance_baselines(request: Request):
         rows = service.performance_baselines()
-        return _response(request, rows, meta=_meta(request, partial=not rows, limitations=[*LIMITATIONS, *([] if rows else ["COPIED_REALISTIC_BASELINE_MISSING"])]))
+        return _response(request, rows, meta=_meta(request, partial=not rows, limitations=[*service.limitation_ids(), *([] if rows else ["COPIED_REALISTIC_BASELINE_MISSING"])]))
 
     def phase4_openapi() -> dict[str, Any]:
         if app.openapi_schema:

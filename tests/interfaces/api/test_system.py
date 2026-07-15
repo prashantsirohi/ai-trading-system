@@ -1,3 +1,5 @@
+import json
+
 from .conftest import HEADERS
 
 
@@ -37,3 +39,32 @@ def test_empty_store_is_partial_not_fabricated(copied_client):
     assert response.json()["meta"]["partial"] is True
     assert "SOURCE_NOT_MIGRATED" in response.json()["meta"]["limitations"]
 
+
+def test_api_uses_artifact_limitations_without_static_blockers(operator_artifact_client):
+    response = operator_artifact_client.get("/api/v1/system/readiness", headers=HEADERS)
+    assert response.status_code == 200
+    assert [item["limitation_id"] for item in response.json()["data"]["limitations"]] == [
+        "SINGLE_YEAR_CONCENTRATION"
+    ]
+    assert response.json()["meta"]["limitations"] == ["SINGLE_YEAR_CONCENTRATION"]
+
+    health = operator_artifact_client.get("/api/v1/health/ready")
+    assert health.status_code == 200
+    assert health.json()["data"]["limitations"] == ["SINGLE_YEAR_CONCENTRATION"]
+
+
+def test_ready_artifact_can_expose_an_empty_limitation_set(operator_artifact_client):
+    root = operator_artifact_client.app.state.test_artifact_root
+    readiness_path = next(root.rglob("phase3c5_phase4_readiness.json"))
+    readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+    readiness.update({
+        "verdict": "READY",
+        "phase4_production_ready": True,
+        "limitations": [],
+    })
+    readiness_path.write_text(json.dumps(readiness), encoding="utf-8")
+
+    response = operator_artifact_client.get("/api/v1/system/readiness", headers=HEADERS)
+    assert response.json()["data"]["phase4_production_ready"] is True
+    assert response.json()["data"]["limitations"] == []
+    assert response.json()["meta"]["limitations"] == []

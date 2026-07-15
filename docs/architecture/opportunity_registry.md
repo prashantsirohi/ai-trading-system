@@ -55,6 +55,12 @@ Phase 3C-1A distinguishes `linked`, `unresolved_legacy_no_match`, and
 `unresolved_legacy_ambiguous` links. Unresolved legacy links are review-required
 and not eligible for authoritative calibration unless a later reviewed process
 resolves them.
+Exact `candidate_id` matches are not ambiguous merely because an episode has
+multiple snapshots, decisions, or attributions. Correction-impact match policy
+v2 appends one `linked` impact for every exact record match and records the
+total match count plus all matched record IDs as audit evidence. Ambiguity is
+reserved for identity resolution that cannot determine which candidate or
+record set is authoritative; zero exact matches remain fail-closed.
 
 ## Idempotency and transactions
 
@@ -85,6 +91,12 @@ not ordered by insertion time: the authority policy prefers reviewed operator
 corrections, then data-repair pipeline corrections, then classifier-version
 migrations, then original observations. Equal-authority terminal competition and
 supersession cycles are explicit governance conflicts.
+Supersession and authority are resolved across all observations in the selected
+source-week/status bucket before payload `as_of` can influence the result, so a
+correction with an earlier corrected effective timestamp still supersedes its
+original. When one observation has multiple governance events, its effective
+authority is the highest explicit policy precedence across those events; query
+scan or insertion order cannot downgrade it.
 
 ## Reconstruction
 

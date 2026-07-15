@@ -47,6 +47,9 @@ freshness, lineage, and limitations, and exposes no mutation controls.
 Phase 4A permits credential-header CORS preflight only for configured origins;
 the subsequent GET remains authenticated, and local development should prefer
 the dashboard's same-origin Vite proxy.
+Protected Phase 4A requests are process-limited by direct client address before
+credential validation and by credential after successful authentication;
+deployment remains responsible for proxy-aware distributed limiting.
 Phase 3C-1 adds append-only [sector-membership and stage-correction
 governance](stages/weekly_stage.md) without changing execution, publishing, or the
 Phase 3B history payloads. Phase 3C-1A hardens that governance with explicit
@@ -82,6 +85,12 @@ sample-quality failures. Eligible, excluded, quarantined, and pending samples
 remain separately auditable. It does not calibrate thresholds, alter scoring or
 routing, write operator databases, or implement Phase 4. See the
 [calibration and readiness runbook](runbooks/phase3c5_calibration_and_readiness.md).
+Copied-realistic builds derive migration status from the copied schema and real
+Phase 3B history from completed weekly-stage lineage. They also project
+point-in-time membership and correction governance into calibration rows. The
+resulting evidence is persisted in the immutable manifest, and Phase 4 API
+readiness, health, and response limitations consume the current readiness
+artifact rather than a permanently asserted production-blocker tuple.
 
 ## Safety and operating invariants
 

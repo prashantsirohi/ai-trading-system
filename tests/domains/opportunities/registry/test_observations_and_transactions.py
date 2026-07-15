@@ -123,6 +123,29 @@ def test_all_observation_families_and_current_state(
     }
 
 
+def test_transition_chronology_normalizes_aware_timestamp_to_utc(
+    opportunity_store, episode_request, snapshot_builder, lineage
+) -> None:
+    episode = opportunity_store.open_episode(episode_request)
+    snapshot = opportunity_store.append_snapshot(snapshot_builder(episode))
+    first_at = NOW + timedelta(hours=2)
+    opportunity_store.append_transition(TransitionObservation(
+        episode.candidate_id, episode.setup_id, CandidateState.UNSEEN, CandidateState.DISCOVERED,
+        TransitionReason.RANK_ADMISSION.value, first_at, snapshot.record_id,
+        "lifecycle-v1", {}, lineage,
+    ))
+
+    ist = timezone(timedelta(hours=5, minutes=30))
+    out_of_order_ist = datetime(2026, 7, 14, 17, 0, tzinfo=ist)  # 11:30 UTC
+    with pytest.raises(ValueError, match="chronology must be non-decreasing"):
+        opportunity_store.append_transition(TransitionObservation(
+            episode.candidate_id, episode.setup_id,
+            CandidateState.DISCOVERED, CandidateState.INVESTIGATING,
+            TransitionReason.EVIDENCE_IMPROVED.value, out_of_order_ist,
+            snapshot.record_id, "lifecycle-v1", {}, lineage,
+        ))
+
+
 def test_batch_conflict_rolls_back_new_rows(opportunity_store, episode_request, snapshot_builder) -> None:
     episode = opportunity_store.open_episode(episode_request)
     first = snapshot_builder(episode)

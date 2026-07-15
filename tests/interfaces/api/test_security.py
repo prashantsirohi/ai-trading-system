@@ -87,6 +87,24 @@ def test_rate_limit_is_per_credential():
     assert client.get("/api/v1/stocks", headers=HEADERS).status_code == 429
 
 
+def test_failed_credentials_are_rate_limited_before_authentication():
+    settings = ApiSettings(
+        source_profile=SourceProfile.SMALL_FIXTURE,
+        api_key=API_KEY,
+        rate_limit_per_minute=2,
+    )
+    client = TestClient(create_app(settings=settings))
+    assert client.get(
+        "/api/v1/stocks", headers={"Authorization": "Bearer wrong-1"}
+    ).status_code == 403
+    assert client.get(
+        "/api/v1/stocks", headers={"Authorization": "Bearer wrong-2"}
+    ).status_code == 403
+    assert client.get(
+        "/api/v1/stocks", headers={"Authorization": "Bearer wrong-3"}
+    ).status_code == 429
+
+
 def test_openapi_has_api_key_scheme_and_no_mutations(client):
     schema = client.app.openapi()
     assert {"BearerAuth", "ApiKeyAuth"} <= set(schema["components"]["securitySchemes"])

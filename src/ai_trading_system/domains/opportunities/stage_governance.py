@@ -17,7 +17,7 @@ STAGE_GOVERNANCE_POLICY_VERSION = "stage-governance-v1"
 SECTOR_MEMBERSHIP_POLICY_VERSION = "sector-membership-v1"
 CORRECTION_IMPACT_POLICY_VERSION = "stage-correction-impact-v1"
 STAGE_GOVERNANCE_AUTHORITY_POLICY_VERSION = "stage-governance-authority-v1"
-CORRECTION_IMPACT_MATCH_RULE_VERSION = "stage-correction-impact-match-v1"
+CORRECTION_IMPACT_MATCH_RULE_VERSION = "stage-correction-impact-match-v2"
 
 
 class MembershipTrust(str, Enum):
@@ -462,17 +462,11 @@ def record_correction_impacts(
             matches = [
                 str(row[0])
                 for row in conn.execute(
-                    f"SELECT {id_column} FROM {table} WHERE candidate_id = ?",  # noqa: S608
+                    f"SELECT {id_column} FROM {table} WHERE candidate_id = ? ORDER BY {id_column}",  # noqa: S608
                     [candidate_id],
                 ).fetchall()
             ]
-            if len(matches) == 1:
-                item = (
-                    table, matches[0], candidate_id, CorrectionImpactLinkStatus.LINKED,
-                    1, {"match_basis": "candidate_id", "candidate_id": candidate_id},
-                )
-                affected[(item[0], item[1], item[3])] = item
-            elif len(matches) == 0:
+            if not matches:
                 item = (
                     table, f"{candidate_id}:{table}:unresolved", candidate_id,
                     CorrectionImpactLinkStatus.UNRESOLVED_LEGACY_NO_MATCH, 0,
@@ -480,12 +474,16 @@ def record_correction_impacts(
                 )
                 affected[(item[0], item[1], item[3])] = item
             else:
-                item = (
-                    table, f"{candidate_id}:{table}:ambiguous", candidate_id,
-                    CorrectionImpactLinkStatus.UNRESOLVED_LEGACY_AMBIGUOUS, len(matches),
-                    {"match_basis": "candidate_id", "candidate_id": candidate_id, "matched_record_ids": matches},
-                )
-                affected[(item[0], item[1], item[3])] = item
+                evidence = {
+                    "match_basis": "candidate_id", "candidate_id": candidate_id,
+                    "matched_record_ids": matches,
+                }
+                for matched_record_id in matches:
+                    item = (
+                        table, matched_record_id, candidate_id,
+                        CorrectionImpactLinkStatus.LINKED, len(matches), evidence,
+                    )
+                    affected[(item[0], item[1], item[3])] = item
     for record_type, record_id, candidate_id, link_status, match_count, evidence in sorted(affected.values()):
         impact_id = _digest({
             "governance_event_id": governance.governance_event_id,
@@ -563,8 +561,6 @@ def resolve_stage_observation_payloads(
         week_items = [item for item in items if item["source_week_end"] == max_week]
         status_rank = max(_stage_status_rank(item["stage_status"]) for item in week_items)
         bucket = [item for item in week_items if _stage_status_rank(item["stage_status"]) == status_rank]
-        max_as_of = max(str(item["as_of"]) for item in bucket)
-        bucket = [item for item in bucket if str(item["as_of"]) == max_as_of]
         selected = _select_terminal_observation(
             conn,
             scope=scope_normalized,
@@ -804,20 +800,26 @@ def _select_terminal_observation(
         )
     placeholders = ",".join("?" for _ in ids)
     governance_rows = conn.execute(
-        f"""SELECT observation_id, supersedes_observation_id, correction_authority, recorded_at
+        f"""SELECT observation_id, supersedes_observation_id, correction_authority,
+                   recorded_at, governance_event_id
             FROM stage_observation_governance
             WHERE observation_scope = ?
               AND recorded_at <= ?
               AND (observation_id IN ({placeholders})
-                   OR supersedes_observation_id IN ({placeholders}))""",  # noqa: S608
+                   OR supersedes_observation_id IN ({placeholders}))
+            ORDER BY recorded_at, governance_event_id""",  # noqa: S608
         [scope, _db_time(requested_as_of), *sorted(ids), *sorted(ids)],
     ).fetchall()
     edges: dict[str, set[str]] = {observation_id: set() for observation_id in ids}
     authorities = {observation_id: CorrectionAuthority.ORIGINAL_OBSERVATION for observation_id in ids}
-    for observation_id, supersedes_id, authority, _recorded_at in governance_rows:
+    for observation_id, supersedes_id, authority, _recorded_at, _event_id in governance_rows:
         observation_id = str(observation_id)
         if observation_id in ids:
-            authorities[observation_id] = _coerce_authority(str(authority), StageGovernanceAction.CORRECTION)
+            candidate_authority = _coerce_authority(
+                str(authority), StageGovernanceAction.CORRECTION,
+            )
+            if AUTHORITY_PRECEDENCE[candidate_authority] > AUTHORITY_PRECEDENCE[authorities[observation_id]]:
+                authorities[observation_id] = candidate_authority
         if supersedes_id is not None and observation_id in ids and str(supersedes_id) in ids:
             edges.setdefault(observation_id, set()).add(str(supersedes_id))
     cycle = _detect_cycle_in_edges(edges)
