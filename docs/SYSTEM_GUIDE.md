@@ -53,6 +53,13 @@ setup/lifecycle timing compatibility. Position-only recovery defaults to
 `report_only`, records deterministic proposals, never fabricates pre-entry
 history, and does not affect execution or broker state.
 
+Phase 3C-4 adds advisory performance and operational instrumentation around the
+Phase 3B–3C shadow path. It records monotonic stage/operation timings, normalized
+process peak RSS, row/symbol throughput, database work, and artifact size/hash
+metadata under policy `phase3c4-performance-policy-v1`. Functional and
+performance status remain separate; threshold failures do not block the pipeline
+by default. See the [performance benchmark runbook](runbooks/phase3c4_performance_benchmark.md).
+
 ## Safety and operating invariants
 
 - Resolve live data through the existing path helpers and `$DATA_ROOT`; never hardcode a repo-local `data/...` path in application code.

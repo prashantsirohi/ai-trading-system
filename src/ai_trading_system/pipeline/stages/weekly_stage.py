@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -26,6 +27,7 @@ from ai_trading_system.domains.opportunities.stage_governance import (
     resolve_historical_sector_mapping,
 )
 from ai_trading_system.platform.db.paths import get_domain_paths
+from ai_trading_system.platform.telemetry.performance import DatabasePerformanceMetric
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 
 
@@ -38,6 +40,7 @@ class WeeklyStageCoverageStage:
             return StageResult(metadata={"status": "skipped", "mode": "off"})
         config = StageCoverageConfig.from_mapping(context.params)
         paths = get_domain_paths(context.project_root, context.params.get("data_domain", "operational"))
+        operation_started = time.perf_counter_ns()
         latest_mapping, mapping_warnings = load_sector_mapping(paths.master_db_path)
         mapping = latest_mapping
         recorded_at = datetime.now(timezone.utc)
@@ -52,9 +55,17 @@ class WeeklyStageCoverageStage:
             exchange=str(context.params.get("exchange", "NSE")),
             as_of=context.run_date,
         )
+        load_duration_ms = _record_duration(context, "weekly_stage.load_price_history", operation_started, rows_out=len(daily))
+        if context.performance is not None:
+            context.performance.record_database_metric(DatabasePerformanceMetric(
+                stage_name=self.name, operation_name="load_stage_inputs",
+                query_count=2, read_query_count=2, db_read_ms=load_duration_ms,
+                rows_read=len(daily) + len(mapping),
+            ))
         locked = config.weekly_lock_enabled and is_completed_trading_week(
             pd.Timestamp(context.run_date).date(), paths.master_db_path
         )
+        operation_started = time.perf_counter_ns()
         stock, exclusions = build_stage_coverage(
             daily,
             as_of=context.run_date,
@@ -63,8 +74,13 @@ class WeeklyStageCoverageStage:
             lock_current_week=locked,
             market_regime=str(context.params.get("execution_regime") or "unknown"),
         )
+        _record_duration(context, "weekly_stage.compute_stock_stages", operation_started, rows_in=len(daily), rows_out=len(stock), symbols_out=len(stock))
+        operation_started = time.perf_counter_ns()
         sector = build_sector_coverage(stock, config=config) if not stock.empty else pd.DataFrame()
+        _record_duration(context, "weekly_stage.aggregate_sector_stages", operation_started, rows_in=len(stock), rows_out=len(sector))
+        operation_started = time.perf_counter_ns()
         light, promotions = build_light_pattern_scan(stock, config=routing_config) if not stock.empty else (pd.DataFrame(), pd.DataFrame())
+        _record_duration(context, "weekly_stage.evaluate_light_pattern", operation_started, rows_in=len(stock), rows_out=len(light), symbols_out=len(light))
         history_stock = stock
         history_sector = sector
         if not locked and not daily.empty:
@@ -91,10 +107,21 @@ class WeeklyStageCoverageStage:
             history_stock = pd.concat([prior_stock, stock], ignore_index=True, sort=False)
             history_sector = pd.concat([prior_sector, sector], ignore_index=True, sort=False)
         if context.registry is not None:
+            operation_started = time.perf_counter_ns()
             persist_stage_history(
                 context.registry, history_stock, history_sector, run_id=context.run_id,
                 attempt=context.attempt_number, recorded_at=recorded_at,
             )
+            duration_ms = _record_duration(context, "weekly_stage.persist_stage_history", operation_started, rows_out=len(history_stock) + len(history_sector))
+            if context.performance is not None:
+                context.performance.record_database_metric(
+                    DatabasePerformanceMetric(
+                        stage_name=self.name, operation_name="persist_stage_history",
+                        query_count=2, write_query_count=2, transaction_count=1,
+                        commit_count=1, db_write_ms=duration_ms,
+                        rows_written=len(history_stock) + len(history_sector),
+                    )
+                )
 
         output = context.output_dir()
         frames = {
@@ -105,10 +132,15 @@ class WeeklyStageCoverageStage:
             "stage_promotion_candidates": ("stage_promotion_candidates.csv", promotions),
         }
         artifacts: list[StageArtifact] = []
+        artifact_started = time.perf_counter_ns()
         for artifact_type, (filename, frame) in frames.items():
+            write_started = time.perf_counter_ns()
             path = output / filename
             frame.to_csv(path, index=False)
-            artifacts.append(StageArtifact.from_file(artifact_type, path, row_count=len(frame), attempt_number=context.attempt_number))
+            artifact = StageArtifact.from_file(artifact_type, path, row_count=len(frame), attempt_number=context.attempt_number)
+            artifacts.append(artifact)
+            if context.performance is not None:
+                context.performance.record_artifact(artifact, column_count=len(frame.columns), write_duration_ms=(time.perf_counter_ns() - write_started) / 1_000_000.0)
         summary = {
             "mode": routing_config.mode.value,
             "eligible_full_universe": int(len(stock)),
@@ -126,4 +158,12 @@ class WeeklyStageCoverageStage:
         summary_path = output / "weekly_stage_summary.json"
         summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
         artifacts.append(StageArtifact.from_file("weekly_stage_summary", summary_path, attempt_number=context.attempt_number))
+        _record_duration(context, "weekly_stage.write_artifacts", artifact_started, rows_out=sum(len(frame) for _, frame in frames.values()))
         return StageResult(artifacts=artifacts, metadata=summary)
+
+
+def _record_duration(context: StageContext, operation: str, started_ns: int, **counts: int) -> float:
+    duration_ms = max((time.perf_counter_ns() - started_ns) / 1_000_000.0, 0.0)
+    if context.performance is not None:
+        context.performance.record_duration(stage_name="weekly_stage", operation_name=operation, duration_ms=duration_ms, **counts)
+    return duration_ms

@@ -60,6 +60,25 @@ Wrapper-specific on `ai-trading-daily`:
 - Injects `nse_primary=True`
 - Applies holiday + weekend checks unless `--force`
 
+## Phase 3C-4 performance policy
+
+`PerformanceConfig` is the typed source for `phase3c4-performance-policy-v1`.
+Stage params accept `performance_instrumentation_enabled`,
+`performance_threshold_evaluation_enabled`, `performance_fail_pipeline`, and
+`performance_policy_version`, plus the typed thresholds below:
+
+- upper bounds: weekly stage, sector aggregation, scan router, Investigator,
+  opportunities, total shadow pipeline, peak RSS, maximum artifact size, and
+  baseline regression;
+- lower bounds: minimum symbols per second.
+
+For upper bounds, values below warn pass, warn through below fail warn, and fail
+or above fails. For throughput, warn or above passes, above fail through below
+warn warns, and fail or below fails. Negative or reversed thresholds are
+rejected. Defaults are conservative and informational;
+`performance_fail_pipeline=false`. Cache labels are `COLD`, `WARM`, or `UNKNOWN`;
+replay labels are `FIRST_RUN`, `EXACT_REPLAY`, or `NON_IDENTICAL_REPLAY`.
+
 ## Preflight controls
 
 Orchestrator:

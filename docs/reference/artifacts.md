@@ -260,3 +260,22 @@ The coverage summary separates routed, complete-data, complete-evidence, fully
 monitored, and missing-coverage counts plus alert emit/dedupe/resolve counts.
 
 When routing is enabled, Investigator additionally writes `routed_investigator_scores.csv`, `routed_pattern_scan.csv`, `position_risk_monitor.csv`, and `routed_routing_conflicts.csv`. Existing Investigator artifacts and publish consumers are unchanged.
+
+## Phase 3C-4 performance artifacts
+
+Instrumented runs and benchmark roots contain exactly these canonical telemetry
+files:
+
+- `phase3c4_performance_metrics.csv`: operation timings, counts, throughput,
+  memory, cache/replay mode, and threshold status.
+- `phase3c4_performance_summary.json`: run/stage rollup with separate functional
+  and performance status.
+- `phase3c4_artifact_metrics.csv`: artifact rows/columns, bytes, write time, and
+  content hash.
+- `phase3c4_database_metrics.csv`: measured read/write time, query/transaction
+  counters, and row counts.
+- `phase3c4_replay_comparison.json`: semantic, artifact-hash, routing-decision,
+  and opportunity-identity equivalence.
+
+The files are audit evidence, not trading inputs or a replacement for canonical
+DuckDB stores. No Phase 3C-4 schema migration exists.

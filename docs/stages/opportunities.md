@@ -60,3 +60,12 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
 ```
 
 See [opportunity shadow orchestration](../architecture/opportunity_shadow_orchestration.md) for rules and artifact details.
+
+## Performance instrumentation
+
+Phase 3C-4 records the existing adapter/matching and registry-persistence
+durations, audit-artifact writes, and the stage total. It also records artifact
+row counts, sizes, and hashes. Performance status is advisory and separate from
+the stage's existing completed/degraded/failed functional status. Candidate
+admission, setup matching, lifecycle, recovery, execution, and publish contracts
+are unchanged.

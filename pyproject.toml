@@ -75,6 +75,7 @@ ai-trading-backfill-operational-valuation = "ai_trading_system.interfaces.cli.ba
 ai-trading-winner-validation-report = "ai_trading_system.research.backtesting.winner_validation:main"
 ai-trading-early-accumulation-validate = "ai_trading_system.research.backtesting.early_accumulation_validation:main"
 ai-trading-symbol-report = "ai_trading_system.research.symbol_report.cli:main"
+ai-trading-benchmark-phase3c4 = "ai_trading_system.interfaces.cli.benchmark_phase3c4:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

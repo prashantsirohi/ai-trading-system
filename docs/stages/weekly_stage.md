@@ -83,3 +83,12 @@ Use `--opportunity-scan-routing-mode compare` for artifact-only validation or `s
 
 Legacy Phase 3B annotation must run against a copied control plane. See
 [Phase 3B Shadow Verification](../runbooks/phase3b_shadow_verification.md).
+
+## Performance instrumentation
+
+Phase 3C-4 times price-history loading, stock-stage computation, sector
+aggregation, light-pattern evaluation, history persistence, artifact writes, and
+the stage total. It records row/symbol throughput, persistence counts/time, and
+artifact sizes/hashes. Sector aggregation has its own advisory threshold. These
+observations cannot alter classifications, exclusions, locks, or persisted stage
+identities.

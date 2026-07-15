@@ -150,6 +150,17 @@ At minimum, back up OHLCV, control-plane, execution, candidate-tracker, master-d
 
 Never run repair or migration commands against live stores without explicit task scope and a verified backup. Follow [backup and restore](../runbooks/backup_and_restore.md).
 
+## Phase 3C-4 performance artifacts
+
+Performance evidence is artifact-backed; Phase 3C-4 adds no database migration.
+Each instrumented run writes five registered files under
+`$DATA_ROOT/pipeline_runs/<run_id>/performance/attempt_1/`. Benchmark runs write
+the same files only beneath their explicit temporary `--output-root`. The
+benchmark opens a supplied copied control plane read-only, rejects the configured
+operator store, and rejects symlinked benchmark targets. Runtime metrics are
+observations, not canonical trading inputs, and are excluded from stage input
+hashes.
+
 The execution ledger also stores durable submission intents before adapter
 dispatch. A reserved intent without a linked order represents an unknown outcome
 that must be reconciled; retries do not create another order. Execution batches

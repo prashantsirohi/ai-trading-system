@@ -62,6 +62,7 @@ class ScanRouterStage:
         if config.mode is OpportunityScanRoutingMode.OFF:
             return StageResult(metadata={"status": "skipped", "mode": "off"})
         position_config = PositionMonitoringConfig.from_mapping(context.params)
+        load_started = time.perf_counter_ns()
         stock_artifact = context.require_artifact(
             "weekly_stage", "weekly_stock_stage_universe"
         )
@@ -160,6 +161,15 @@ class ScanRouterStage:
             | {key[1] for key in recent}
             | set(lifecycle)
         )
+        load_duration_ms = _record_duration(context, "scan_router.load_inputs", load_started, rows_out=len(all_symbols), symbols_out=len(all_symbols))
+        if context.performance is not None:
+            from ai_trading_system.platform.telemetry.performance import DatabasePerformanceMetric
+            context.performance.record_database_metric(DatabasePerformanceMetric(
+                stage_name=self.name, operation_name="load_router_inputs",
+                query_count=4, read_query_count=4, db_read_ms=load_duration_ms,
+                rows_read=len(stock) + len(sector) + len(ranked) + len(cycles),
+            ))
+        decision_started = time.perf_counter_ns()
         decisions = []
         for symbol in sorted(all_symbols):
             stage_row = stock_rows.get(symbol, {})
@@ -188,6 +198,7 @@ class ScanRouterStage:
                 policy_version=config.scan_policy_version,
             )
             decisions.append(decision)
+        _record_duration(context, "scan_router.resolve_decisions", decision_started, symbols_in=len(all_symbols), symbols_out=len(decisions), rows_out=len(decisions))
         missing_active = sorted(
             {key[1] for key in active}
             - {
@@ -210,6 +221,7 @@ class ScanRouterStage:
                 f"active positions missing scan routing: {missing_active}"
             )
 
+        validation_started = time.perf_counter_ns()
         rows = []
         conflict_rows: list[dict[str, Any]] = []
         for item in decisions:
@@ -260,8 +272,10 @@ class ScanRouterStage:
                 )
                 continue
             rows.append(row)
+        _record_duration(context, "scan_router.validate_decisions", validation_started, rows_in=len(decisions), rows_out=len(rows))
         routing = pd.DataFrame(rows)
         routing_conflicts = pd.DataFrame(conflict_rows)
+        coverage_started = time.perf_counter_ns()
         coverage = _position_coverage(
             context=context,
             active=active,
@@ -319,6 +333,7 @@ class ScanRouterStage:
             coverage=coverage,
             stock_artifact=stock_artifact,
         )
+        _record_duration(context, "scan_router.position_coverage_alert_reconciliation", coverage_started, rows_out=len(coverage))
         output = context.output_dir()
         outputs = {
             "scan_routing": routing,
@@ -358,17 +373,20 @@ class ScanRouterStage:
             "position_monitor_reconciliation": reconciliation_frame,
         }
         artifacts: list[StageArtifact] = []
+        artifact_started = time.perf_counter_ns()
         for artifact_type, frame in outputs.items():
+            write_started = time.perf_counter_ns()
             path = output / f"{artifact_type}.csv"
             frame.to_csv(path, index=False)
-            artifacts.append(
-                StageArtifact.from_file(
+            artifact = StageArtifact.from_file(
                     artifact_type,
                     path,
                     row_count=len(frame),
                     attempt_number=context.attempt_number,
                 )
-            )
+            artifacts.append(artifact)
+            if context.performance is not None:
+                context.performance.record_artifact(artifact, column_count=len(frame.columns), write_duration_ms=(time.perf_counter_ns() - write_started) / 1_000_000.0)
         old_symbols = set(
             ranked.get("symbol_id", pd.Series(dtype=str))
             .head(int(context.params.get("pattern_max_symbols", 150)))
@@ -432,13 +450,30 @@ class ScanRouterStage:
                 attempt_number=context.attempt_number,
             )
         )
+        _record_duration(context, "scan_router.write_artifacts", artifact_started, rows_out=sum(len(frame) for frame in outputs.values()))
         if context.registry is not None:
+            persistence_started = time.perf_counter_ns()
             _persist(
                 context,
                 rows,
                 f"{stock_artifact.content_hash}|{ranked_artifact.content_hash}",
             )
+            persistence_ms = _record_duration(context, "scan_router.persist_history", persistence_started, rows_out=len(rows))
+            if context.performance is not None:
+                from ai_trading_system.platform.telemetry.performance import DatabasePerformanceMetric
+                context.performance.record_database_metric(DatabasePerformanceMetric(
+                    stage_name=self.name, operation_name="persist_history",
+                    query_count=len(rows), write_query_count=len(rows), transaction_count=1,
+                    commit_count=1, db_write_ms=persistence_ms, rows_written=len(rows),
+                ))
         return StageResult(artifacts=artifacts, metadata=summary)
+
+
+def _record_duration(context: StageContext, operation: str, started_ns: int, **counts: int) -> float:
+    duration_ms = max((time.perf_counter_ns() - started_ns) / 1_000_000.0, 0.0)
+    if context.performance is not None:
+        context.performance.record_duration(stage_name="scan_router", operation_name=operation, duration_ms=duration_ms, **counts)
+    return duration_ms
 
 
 def _open_lifecycle(context: StageContext) -> dict[str, CandidateState]:

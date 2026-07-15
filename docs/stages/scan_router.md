@@ -56,3 +56,11 @@ Routed Investigator sidecars and Phase 3B/3C opportunity reconciliation only. Bo
 ## Commands
 
 Use `--opportunity-scan-routing-mode compare` or combine `shadow` with `--opportunity-registry-mode shadow`.
+
+## Performance instrumentation
+
+Phase 3C-4 times input loading, deterministic route resolution, route validation,
+active-position coverage/alert reconciliation, artifact writes, routing-history
+persistence, and the stage total. Routing input hashes, decision IDs, selected
+tiers, reasons, conflicts, and alert behavior remain functional outputs and are
+compared exactly by the replay benchmark; timing and memory fields are ignored.

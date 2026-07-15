@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import time as monotonic_time
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from ai_trading_system.domains.opportunities.orchestration.contracts import Oppo
 from ai_trading_system.domains.opportunities.orchestration.service import OpportunityArtifactSet, OpportunityShadowOrchestrator, OpportunityShadowSourceError
 from ai_trading_system.pipeline.contracts import PipelineStageError, StageArtifact, StageContext, StageResult
 from ai_trading_system.pipeline.alerts import AlertManager
+from ai_trading_system.platform.telemetry.performance import DatabasePerformanceMetric
 
 
 class OpportunityStageError(PipelineStageError):
@@ -52,8 +54,26 @@ class OpportunityStage:
             raise OpportunityStageError(str(exc)) from exc
         except Exception as exc:
             raise OpportunityStageError(f"opportunity shadow orchestration failed: {exc}") from exc
+        if context.performance is not None:
+            context.performance.record_duration(
+                stage_name=self.name, operation_name="opportunities.match_episodes",
+                duration_ms=float(result.summary.get("adapter_seconds") or 0.0) * 1000.0,
+                rows_out=int(result.summary.get("candidate_rows") or result.summary.get("rows_adapted") or 0),
+            )
+            persistence_ms = float(result.summary.get("persistence_seconds") or 0.0) * 1000.0
+            context.performance.record_duration(
+                stage_name=self.name, operation_name="opportunities.persist_registry",
+                duration_ms=persistence_ms, db_write_ms=persistence_ms,
+            )
+            context.performance.record_database_metric(DatabasePerformanceMetric(
+                stage_name=self.name, operation_name="persist_registry",
+                query_count=1, write_query_count=1, transaction_count=1,
+                commit_count=1, db_write_ms=persistence_ms,
+                rows_written=int(result.summary.get("rows_persisted") or 0),
+            ))
         output_dir = context.output_dir()
         artifacts: list[StageArtifact] = []
+        artifact_started = monotonic_time.perf_counter_ns()
         summary_path = context.write_json("opportunity_shadow_summary.json", dict(result.summary))
         artifacts.append(StageArtifact.from_file("opportunity_shadow_summary", summary_path, metadata={"status": result.status, "dry_run": result.dry_run}, attempt_number=context.attempt_number))
         filenames = {
@@ -76,6 +96,12 @@ class OpportunityStage:
             path = output_dir / filename
             _write_csv(path, rows)
             artifacts.append(StageArtifact.from_file(artifact_type, path, row_count=len(rows), attempt_number=context.attempt_number))
+        if context.performance is not None:
+            context.performance.record_duration(
+                stage_name=self.name, operation_name="opportunities.write_artifacts",
+                duration_ms=(monotonic_time.perf_counter_ns() - artifact_started) / 1_000_000.0,
+                rows_out=sum(artifact.row_count or 0 for artifact in artifacts),
+            )
         if context.registry is not None:
             manager = AlertManager(context.registry)
             for row in result.artifact_rows.get("position_episode_compatibility", ()):

@@ -31,6 +31,12 @@ from ai_trading_system.pipeline.contracts import (
     compute_stage_input_hash,
 )
 from ai_trading_system.platform.utils.env import load_project_env
+from ai_trading_system.platform.telemetry import (
+    CacheMode,
+    PerformanceCollector,
+    PerformanceConfig,
+    ReplayMode,
+)
 from ai_trading_system.platform.logging import logger as logging_module
 from ai_trading_system.platform.db.paths import (
     canonicalize_project_root,
@@ -76,6 +82,13 @@ PIPELINE_ORDER = ["ingest", *FEATURE_SUBSTAGES, "rank", "weekly_stage", "scan_ro
 # or by a detected input). They remain valid when named in an explicit stage list.
 OPTIONAL_STAGES = frozenset({"fundamentals", "weekly_stage", "scan_router", "opportunities"})
 DEFAULT_CLI_STAGES = "ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker"
+
+
+def _performance_enum(enum_type, value, default):
+    try:
+        return enum_type(str(value or default.value).upper())
+    except ValueError:
+        return default
 
 
 _BANNER_WIDTH = 78
@@ -770,6 +783,14 @@ class PipelineOrchestrator:
                 run_id = resumed_run_id
         run_id = run_id or self._build_run_id(run_date)
         domain_paths = ensure_domain_layout(project_root=self.project_root, data_domain=data_domain)
+        performance = PerformanceCollector(
+            run_id=run_id,
+            as_of=run_date,
+            config=PerformanceConfig.from_mapping(params),
+            cache_mode=_performance_enum(CacheMode, params.get("performance_cache_mode"), CacheMode.UNKNOWN),
+            replay_mode=_performance_enum(ReplayMode, params.get("performance_replay_mode"), ReplayMode.FIRST_RUN),
+        )
+        performance_started_ns = time.perf_counter_ns()
         new_run = not self.registry.run_exists(run_id)
 
         if new_run:
@@ -934,6 +955,7 @@ class PipelineOrchestrator:
                     task_reporter=(
                         self.progress_renderer.emit_task if self.progress_renderer is not None else None
                     ),
+                    performance=performance,
                 )
 
                 with log_context(run_id=run_id, stage_name=stage_name, attempt_number=attempt_number):
@@ -946,7 +968,14 @@ class PipelineOrchestrator:
                             interval_seconds=int(params.get("terminal_heartbeat_seconds", 30) or 30),
                         )
                         try:
-                            result: StageResult = stage.run(context)
+                            with performance.timer(
+                                stage_name=stage_name,
+                                operation_name=f"{stage_name}.total",
+                            ) as performance_span:
+                                result: StageResult = stage.run(context)
+                                performance_span.rows_out = sum(
+                                    artifact.row_count or 0 for artifact in result.artifacts
+                                )
                         finally:
                             if heartbeat is not None:
                                 stop_event, worker = heartbeat
@@ -956,6 +985,7 @@ class PipelineOrchestrator:
                         for artifact in result.artifacts:
                             self.registry.record_artifact(run_id, stage_name, attempt_number, artifact)
                             context.artifacts[stage_name][artifact.artifact_type] = artifact
+                            performance.record_artifact(artifact)
                             if stage_name == "features_snapshot" and artifact.artifact_type == "feature_snapshot":
                                 context.artifacts.setdefault("features", {})["feature_snapshot"] = artifact
 
@@ -973,6 +1003,7 @@ class PipelineOrchestrator:
                                 params=context.params,
                                 artifacts=context.artifacts,
                                 task_reporter=context.task_reporter,
+                                performance=performance,
                             )
                             self.dq_engine.evaluate(dq_context, result)
 
@@ -1038,6 +1069,8 @@ class PipelineOrchestrator:
                                 )
 
                         completed_metadata = dict(result.metadata or {})
+                        completed_metadata["functional_status"] = str(completed_metadata.get("status") or "completed")
+                        completed_metadata["performance_status"] = performance.stage_status(stage_name).value
                         completed_metadata["input_hash"] = input_hash
                         self.registry.finish_stage(
                             stage_run_id,
@@ -1135,6 +1168,29 @@ class PipelineOrchestrator:
                                 detail=str(exc),
                             )
                         raise
+
+            performance.record_duration(
+                stage_name="pipeline",
+                operation_name="pipeline.total",
+                duration_ms=(time.perf_counter_ns() - performance_started_ns) / 1_000_000.0,
+            )
+            performance_output = domain_paths.pipeline_runs_dir / run_id / "performance" / "attempt_1"
+            try:
+                performance_artifacts = performance.write_artifacts(performance_output)
+                for artifact in performance_artifacts:
+                    self.registry.record_artifact(run_id, "performance", 1, artifact)
+                self.registry.mark_attempt_artifacts_dq_passed(run_id, "performance", 1)
+            except Exception as exc:
+                logger.warning("performance artifact persistence failed without blocking run: %s", exc)
+
+            if performance.config.fail_pipeline and performance.summary()["performance_status"] == "FAIL":
+                final_status = "failed"
+                self.registry.update_run(
+                    run_id, status=final_status, current_stage="performance",
+                    error_class="PerformanceThresholdFailure",
+                    error_message="Phase 3C-4 performance threshold failed with explicit blocking enabled",
+                    finished=True,
+                )
 
             if final_status == "completed":
                 # If any DQ rule was relaxed this run, surface it in the run status

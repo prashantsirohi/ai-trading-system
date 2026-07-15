@@ -78,3 +78,15 @@ Months  a new admission identity opens episode 2
 ## Non-goals
 
 Phase 3A does not generate orders, eligibility, sizing, portfolio allocation, broker calls, API/UI surfaces, notifications, historical backfills, model updates, or synchronization with `candidate_tracker.duckdb`.
+
+## Phase 3C-4 observational instrumentation
+
+The orchestrator owns one run-scoped `PerformanceCollector`. It wraps stage
+execution and passes the same collector through `StageContext`; opportunity
+adapters and persistence retain their existing behavior and expose their existing
+measured durations to the collector. Metrics use monotonic nanosecond clocks and
+UTC wall-clock labels. `functional_status` is never derived from
+`performance_status`. Advisory `PASS`, `WARN`, `FAIL`, and `NOT_EVALUATED`
+results use `phase3c4-performance-policy-v1`; `performance_fail_pipeline=false`
+is the Phase 3C-4 default. Ranking, routing, Investigator, lifecycle, execution,
+and publish decisions do not consume these metrics.

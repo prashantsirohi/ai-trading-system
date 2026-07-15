@@ -120,6 +120,24 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.annotate_p
   --run-id phase3c1-copied-validation --apply --confirm-copied-store
 ```
 
+Phase 3C-4 deterministic performance benchmarks write only to the explicit
+temporary output root. Cold means fresh application objects/connections, not OS
+cache deletion. Warm reuses immutable fixture inputs in one process:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.benchmark_phase3c4 \
+  --profile small_fixture --cache-mode cold --repetitions 2 \
+  --as-of YYYY-MM-DD --output-root /tmp/phase3c4-small-cold
+
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.benchmark_phase3c4 \
+  --profile small_fixture --cache-mode warm --repetitions 3 \
+  --as-of YYYY-MM-DD --output-root /tmp/phase3c4-small-warm
+```
+
+`copied_realistic` additionally requires `--copied-control-plane` and opens it
+read-only. Threshold failures remain advisory unless `--fail-on-threshold` is
+explicitly supplied. See the [runbook](../runbooks/phase3c4_performance_benchmark.md).
+
 ## Publish and recovery
 
 ```bash
@@ -178,6 +196,7 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-bootstrap-data` | Runtime-data bootstrap |
 | `ai-trading-repair-ingest-schema` | Ingest schema repair |
 | `ai-trading-repair-control-plane-timestamps` | Control-plane timestamp repair |
+| `ai-trading-benchmark-phase3c4` | Isolated Phase 3C-4 performance/replay benchmark |
 | `ai-trading-annotate-phase3c1-governance` | Copied-store Phase 3B governance annotation |
 | `ai-trading-research-recipe` | Research recipe runner |
 | `ai-trading-optimize` | Optimization runner |

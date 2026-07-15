@@ -155,6 +155,7 @@ class StageContext:
     params: Dict[str, Any] = field(default_factory=dict)
     artifacts: Dict[str, Dict[str, StageArtifact]] = field(default_factory=dict)
     task_reporter: Any = None
+    performance: Any = None
 
     def output_dir(self) -> Path:
         from ai_trading_system.platform.db.paths import ensure_domain_layout
@@ -249,7 +250,7 @@ def compute_stage_input_hash(
     param_subset = {
         key: value
         for key, value in (params or {}).items()
-        if key not in _VOLATILE_INPUT_HASH_PARAMS
+        if key not in _VOLATILE_INPUT_HASH_PARAMS and not key.startswith("performance_")
     }
     payload = {
         "stage": stage_name,
