@@ -24,7 +24,8 @@ from ai_trading_system.pipeline.orchestrator import (
 )
 from ai_trading_system.pipeline.stages import FeaturesStage, IngestStage, PublishStage, RankStage
 from ai_trading_system.domains.ranking.service import build_integrated_stock_scan_view
-from ai_trading_system.pipeline.contracts import DataQualityCriticalError, PublishStageError, StageArtifact, StageContext
+from ai_trading_system.pipeline.contracts import DataQualityCriticalError, PublishStageError, StageArtifact, StageContext, StageResult
+from ai_trading_system.pipeline.stages.scan_router import ScanRouterStageError
 from ai_trading_system.platform.db.paths import ensure_domain_layout, get_domain_paths, research_static_end_date
 from ai_trading_system.ui.execution_api.services.readmodels.latest_operational_snapshot import (
     ExecutionContext,
@@ -37,6 +38,42 @@ def test_orchestrator_cli_default_stages_include_perf_tracker() -> None:
     args = orchestrator_module.build_parser().parse_args([])
 
     assert args.stages.split(",")[-1] == "perf_tracker"
+
+
+def test_scan_router_coverage_failure_is_nonblocking_for_execution_and_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path / "runtime"))
+    calls: list[str] = []
+
+    class _FailingRouter:
+        def run(self, _context):
+            calls.append("scan_router")
+            raise ScanRouterStageError("active position missing POSITION_MONITOR")
+
+    class _SuccessfulStage:
+        def __init__(self, name: str):
+            self.name = name
+
+        def run(self, _context):
+            calls.append(self.name)
+            return StageResult(metadata={"status": "completed"})
+
+    orchestrator = PipelineOrchestrator(
+        tmp_path,
+        stages={
+            "scan_router": _FailingRouter(),
+            "execute": _SuccessfulStage("execute"),
+            "publish": _SuccessfulStage("publish"),
+        },
+    )
+    result = orchestrator.run_pipeline(
+        stage_names=["scan_router", "execute", "publish"],
+        run_date="2026-07-15",
+        params={"preflight": False, "local_publish": True},
+    )
+    assert result["status"] == "completed_with_opportunity_errors"
+    assert calls == ["scan_router", "execute", "publish"]
 
 
 def _init_catalog(db_path: Path, rows: list[tuple]) -> None:

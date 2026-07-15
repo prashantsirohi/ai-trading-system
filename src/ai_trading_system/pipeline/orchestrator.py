@@ -44,6 +44,7 @@ from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
 from ai_trading_system.pipeline.stages import CandidateTrackerStage, CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, InvestigatorStage, NarrativeStage, OpportunityStage, PerfTrackerStage, PublishStage, RankStage, ScanRouterStage, WeeklyStageCoverageStage
 from ai_trading_system.pipeline.stages.opportunities import OpportunityStageError
+from ai_trading_system.pipeline.stages.scan_router import ScanRouterStageError
 
 load_project_env(__file__)
 
@@ -1076,7 +1077,7 @@ class PipelineOrchestrator:
                                 detail=str(exc),
                             )
                         break
-                    except OpportunityStageError as exc:
+                    except (OpportunityStageError, ScanRouterStageError) as exc:
                         opportunity_stage_failed = True
                         self.alert_manager.emit(
                             run_id=run_id,

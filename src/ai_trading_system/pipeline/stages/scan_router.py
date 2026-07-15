@@ -49,6 +49,10 @@ from ai_trading_system.pipeline.contracts import (
 from ai_trading_system.pipeline.alerts import AlertManager
 
 
+class ScanRouterStageError(PipelineStageError):
+    """Non-blocking Phase 3B/3C shadow routing failure."""
+
+
 class ScanRouterStage:
     name = "scan_router"
 
@@ -202,7 +206,7 @@ class ScanRouterStage:
                         stage_name=self.name,
                         message=f"active position lacks validated POSITION_MONITOR routing: {symbol}",
                     )
-            raise PipelineStageError(
+            raise ScanRouterStageError(
                 f"active positions missing scan routing: {missing_active}"
             )
 
@@ -459,7 +463,7 @@ def _persist(context: StageContext, rows: list[dict[str, Any]], source: str) -> 
         for row in rows:
             conflicts = validate_scan_routing_row(row)
             if conflicts:
-                raise PipelineStageError(
+                raise ScanRouterStageError(
                     f"invalid scan routing persistence row for {row.get('exchange')}:{row.get('symbol_id')}: "
                     + ", ".join(conflict.code.value for conflict in conflicts)
                 )
