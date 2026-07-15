@@ -39,3 +39,33 @@ def test_position_cycles_and_recent_exit_use_fill_ledger_only(tmp_path) -> None:
     conn.close()
     recent = store.list_recently_exited_positions(ohlcv_db_path=ohlcv, as_of="2026-07-14", cooling_sessions=10)
     assert [item.symbol_id for item in recent] == ["AAA"]
+
+
+def test_recent_exit_boundary_expires_by_trading_session_and_new_cycle_wins(tmp_path) -> None:
+    store = ExecutionStore(tmp_path, db_path=tmp_path / "execution.duckdb")
+    store.append_fills([
+        _fill("1", "BUY", 10, "2026-07-01T10:00:00"),
+        _fill("2", "SELL", 10, "2026-07-02T10:00:00"),
+    ])
+    ohlcv = tmp_path / "ohlcv.duckdb"
+    conn = duckdb.connect(str(ohlcv))
+    conn.execute("CREATE TABLE _catalog(timestamp TIMESTAMP)")
+    sessions = [f"2026-07-{day:02d}" for day in range(2, 14)]
+    conn.executemany("INSERT INTO _catalog VALUES (?)", [(session,) for session in sessions])
+    conn.close()
+    inside = store.list_recently_exited_positions(
+        ohlcv_db_path=ohlcv, as_of="2026-07-11", cooling_sessions=10
+    )
+    expired = store.list_recently_exited_positions(
+        ohlcv_db_path=ohlcv, as_of="2026-07-12", cooling_sessions=10
+    )
+    assert [item.symbol_id for item in inside] == ["AAA"]
+    assert expired == []
+
+    store.append_fills([_fill("3", "BUY", 5, "2026-07-13T10:00:00")])
+    cycle = store.list_position_cycles()[0]
+    assert cycle.active is True
+    assert cycle.position_cycle_id
+    assert store.list_recently_exited_positions(
+        ohlcv_db_path=ohlcv, as_of="2026-07-13", cooling_sessions=10
+    ) == []

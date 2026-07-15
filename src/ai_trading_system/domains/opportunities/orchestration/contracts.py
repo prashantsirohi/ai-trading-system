@@ -19,6 +19,9 @@ from ai_trading_system.domains.opportunities.contracts import (
     StageSnapshot,
     TransitionReason,
 )
+from ai_trading_system.domains.opportunities.position_monitoring import (
+    PositionRecoveryMode,
+)
 
 
 ADMISSION_RULE_VERSION = "admission-rules-v1"
@@ -185,6 +188,10 @@ class OpportunitySourceBundle:
     active_position: bool = False
     recently_exited: bool = False
     position_cycle_opened_at: str | None = None
+    position_cycle_id: str | None = None
+    routing_decision_id: str | None = None
+    market_data_complete: bool = True
+    missing_data_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,7 +258,13 @@ class OpportunityShadowConfig:
     early_trigger_stage_confidence_threshold: float = 75.0
     setup_progression_max_days: int = 30
     close_stage_4_without_position: bool = True
-    recover_position_only_episodes: bool = True
+    recover_position_only_episodes: bool = False
+    position_recovery_mode: PositionRecoveryMode = PositionRecoveryMode.REPORT_ONLY
+    position_episode_compatibility_policy_version: str = "position-episode-compatibility-v1"
+    position_recovery_policy_version: str = "position-recovery-policy-v1"
+    position_recovery_reviewed_by: str | None = None
+    position_recovery_reviewed_at: datetime | None = None
+    position_recovery_review_notes: str | None = None
     archive_failed_after_days: int = 0
     allowed_market_regimes: tuple[str, ...] = ("cautious_bull", "bull", "strong_bull")
     retention_policy: CandidateRetentionPolicy | None = None
@@ -259,10 +272,30 @@ class OpportunityShadowConfig:
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> "OpportunityShadowConfig":
         mode = OpportunityRegistryMode(str(values.get("opportunity_registry_mode", "off")).lower())
+        legacy_recovery = bool(values.get("recover_position_only_episodes", False))
+        recovery_mode = PositionRecoveryMode(
+            str(
+                values.get(
+                    "position_recovery_mode",
+                    "automatic" if legacy_recovery else "report_only",
+                )
+            ).lower()
+        )
         return cls(
             mode=mode,
             dry_run=bool(values.get("opportunity_registry_dry_run", False)),
-            recover_position_only_episodes=bool(values.get("recover_position_only_episodes", True)),
+            recover_position_only_episodes=legacy_recovery,
+            position_recovery_mode=recovery_mode,
+            position_recovery_reviewed_by=(
+                str(values.get("position_recovery_reviewed_by") or "") or None
+            ),
+            position_recovery_reviewed_at=(
+                datetime.fromisoformat(str(values["position_recovery_reviewed_at"]).replace("Z", "+00:00"))
+                if values.get("position_recovery_reviewed_at") else None
+            ),
+            position_recovery_review_notes=(
+                str(values.get("position_recovery_review_notes") or "") or None
+            ),
             rank_admission_percentile=float(values.get("opportunity_rank_admission_percentile", 90.0)),
             rank_velocity_floor=float(values.get("opportunity_rank_velocity_floor", -5.0)),
             rank_velocity_percentile_floor=float(values.get("opportunity_rank_velocity_percentile_floor", 75.0)),

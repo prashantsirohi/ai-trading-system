@@ -12,7 +12,7 @@
 | File | Owner stage / domain | Schema source | Notes |
 |---|---|---|---|
 | `data/ohlcv.duckdb` | Ingest stage (operational domain) | `domains/ingest/repository.py::initialize_ingest_duckdb` (+ `trust.py`, `delivery.py`, `masterdata.py`) | Catalog of OHLCV bars, snapshots, parquet pointers, masterdata, trust state. |
-| `data/control_plane.duckdb` | Pipeline orchestrator (writes governance) + several read paths | `src/ai_trading_system/pipeline/migrations/*.sql` (17 files, applied by `pipeline/registry.py` — see `registry.py:300`) | Run lifecycle, DQ, artifacts, model registry, monitoring, optimizer, universe, pattern cache. |
+| `data/control_plane.duckdb` | Pipeline orchestrator (writes governance) + several read paths | `src/ai_trading_system/pipeline/migrations/*.sql` (36 SQL files, applied by `pipeline/registry.py`) | Run lifecycle, DQ, artifacts, model registry, monitoring, optimizer, universe, pattern cache, opportunity history, alert incidents, and recovery proposals/actions. |
 | `data/execution.duckdb` | Execute stage (`domains/execution/service.py`) | `domains/execution/store.py::ExecutionStore._init_db` | Orders, fills, trade journal, stops, drawdown snapshots. **Created by `ExecutionStore`** — default path is `<project_root>/data/execution.duckdb` (`store.py:29`). |
 | `data/research.duckdb` | Perf tracker stage + research perf-tracker API endpoints | `research/perf_tracker/schema.py::RANK_COHORT_DDL` | `rank_cohort_performance`. Path resolved via `research_db_path()` -> `paths.root_dir / "research.duckdb"` (`schema.py:55-60`). |
 | `data/research_ohlcv.duckdb` | Research-domain OHLCV (selected when `DATA_DOMAIN=research`) | `domains/ingest/repository.py` (same DDL as operational) | Isolation per `platform/db/paths.py:111`: ohlcv file name is `research_ohlcv.duckdb` for the research domain. |
@@ -736,6 +736,17 @@ competition is a governance conflict. `stage_correction_impact` gains
 `linked`, `unresolved_legacy_no_match`, or
 `unresolved_legacy_ambiguous`; unresolved rows are quarantined from
 authoritative calibration by default.
+
+Migration `036_opportunity_phase3c3_position_monitoring.sql` adds:
+
+| Table | Purpose |
+|---|---|
+| `pipeline_alert_incident` | Deterministic OPEN/RESOLVED/RECURRED lifecycle and payload for deduplicated operational alerts. |
+| `position_recovery_proposal` | Idempotent position-cycle recovery proposal with compatibility result and explicit missing history. |
+| `position_recovery_action` | Reviewed or explicitly automatic recovery action, reviewer metadata, candidate link, and source cycle. |
+
+These tables are control-plane only. Migration 036 does not alter the execution
+ledger and was not applied to the operator store as part of Phase 3C-3 work.
 
 - Control-plane DDL is applied by `RegistryStore`; it reads packaged SQL files from `pipeline/migrations/` in lexicographic order.
 - DuckDB does not enforce foreign keys; relationships above are by convention and are not constrained at the database level.

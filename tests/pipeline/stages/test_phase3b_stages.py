@@ -79,8 +79,13 @@ def test_weekly_coverage_routes_active_position_and_persists_history(tmp_path, m
     )
     routed = ScanRouterStage().run(router_context)
     assert routed.metadata["active_positions_total"] == 1
-    assert routed.metadata["active_positions_fully_monitored"] == 1
+    assert routed.metadata["active_positions_with_position_monitor"] == 1
+    assert routed.metadata["active_positions_fully_monitored"] == 0
+    assert routed.metadata["active_positions_missing_coverage"] == 1
     assert routed.metadata["active_positions_missing_market_data"] == 1
     with registry._reader() as reader:  # noqa: SLF001
         assert reader.execute("SELECT COUNT(*) FROM weekly_stock_stage_history").fetchone()[0] >= 4
         assert reader.execute("SELECT COUNT(*) FROM opportunity_scan_routing_history").fetchone()[0] >= 1
+        assert reader.execute(
+            "SELECT COUNT(*) FROM pipeline_alert WHERE alert_type = 'active_position_missing_market_data'"
+        ).fetchone()[0] == 1

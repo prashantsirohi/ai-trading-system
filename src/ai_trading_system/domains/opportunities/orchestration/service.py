@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import time
 from dataclasses import replace
 from dataclasses import asdict, dataclass
@@ -27,14 +28,18 @@ from ai_trading_system.domains.opportunities.contracts import (
     ProgressSnapshot,
     ProgressStatus,
     WeinsteinStage,
-    OpportunitySnapshot,
-    EvidenceSnapshot,
-    EvidenceVerdict,
-    RiskLevel,
 )
 from ai_trading_system.domains.opportunities.routing import (
     parse_scan_reasons,
     validate_scan_routing_row,
+)
+from ai_trading_system.domains.opportunities.position_monitoring import (
+    PositionEpisodeCompatibility,
+    PositionRecoveryMode,
+    evaluate_position_episode_compatibility,
+    make_position_cycle_id,
+    make_recovery_proposal_id,
+    recovery_payload_hash,
 )
 from ai_trading_system.domains.opportunities.registry import (
     DuckDBOpportunityRegistryStore,
@@ -252,6 +257,10 @@ class OpportunityShadowOrchestrator:
                 "adapter_rejections",
                 "registry_conflicts",
                 "current_candidate_state",
+                "position_episode_compatibility",
+                "position_recovery_proposals",
+                "position_recovery_actions",
+                "position_monitor_reconciliation",
             )
         }
         for result in results:
@@ -285,6 +294,21 @@ class OpportunityShadowOrchestrator:
             bundles,
         )
         for bundle in bundles:
+            if bundle.active_position:
+                counters["active_positions_total"] += 1
+                counters["active_positions_with_position_monitor"] += int(
+                    bundle.scan_tier == "position_monitor" and bool(bundle.routing_decision_id)
+                )
+                counters["active_positions_with_complete_market_data"] += int(
+                    bundle.market_data_complete
+                )
+                counters["active_positions_with_complete_evidence"] += int(
+                    bool(
+                        bundle.market_data_complete
+                        and bundle.evidence
+                        and not bundle.evidence.missing_evidence
+                    )
+                )
             matching_for_symbol = [
                 episode
                 for episode in open_episodes
@@ -292,28 +316,93 @@ class OpportunityShadowOrchestrator:
                 and episode.symbol_id == bundle.symbol_id
             ]
             admission = evaluate_admission(bundle, config)
-            recovery = (
-                config.recover_position_only_episodes
-                and bundle.active_position
-                and not matching_for_symbol
-            )
-            if recovery:
-                bundle = _recovery_bundle(bundle)
-            if matching_for_symbol and not admission.admitted:
-                if len(matching_for_symbol) == 1:
-                    episode = matching_for_symbol[0]
-                    match_outcome = SetupMatchOutcome.EXACT
-                else:
-                    _conflict(
-                        rows,
-                        bundle,
-                        "multiple open episodes require an explicit setup-family match",
+            recovery = False
+            episode = None
+            compatibility = None
+            if bundle.active_position:
+                cycle_id = bundle.position_cycle_id or make_position_cycle_id(
+                    exchange=bundle.exchange,
+                    symbol_id=bundle.symbol_id,
+                    position_opened_at=bundle.position_cycle_opened_at or bundle.as_of,
+                )
+                all_symbol_episodes = self.registry.list_candidate_episodes(
+                    exchange=bundle.exchange, symbol_id=bundle.symbol_id
+                )
+                compatibility = evaluate_position_episode_compatibility(
+                    position_cycle_id=cycle_id,
+                    position_opened_at=_aware_datetime(bundle.position_cycle_opened_at, as_of),
+                    episodes=all_symbol_episodes,
+                    current_states=open_states,
+                )
+                rows["position_episode_compatibility"].append({
+                    "position_cycle_id": cycle_id,
+                    "exchange": bundle.exchange,
+                    "symbol_id": bundle.symbol_id,
+                    "compatibility_status": compatibility.status.value,
+                    "candidate_id": compatibility.candidate_id,
+                    "open_episode_ids": list(compatibility.open_episode_ids),
+                    "compatibility_reasons": list(compatibility.reasons),
+                    "policy_version": config.position_episode_compatibility_policy_version,
+                })
+                if compatibility.status is PositionEpisodeCompatibility.COMPATIBLE:
+                    episode = next(
+                        item for item in all_symbol_episodes
+                        if item.candidate_id == compatibility.candidate_id
                     )
-                    counters["registry_conflicts"] += 1
-                    continue
+                    match_outcome = SetupMatchOutcome.EXACT
+                    counters["compatible_episode_attachments"] += 1
+                    if bundle.market_data_complete and bundle.routing_decision_id:
+                        counters["active_positions_fully_monitored"] += 1
+                else:
+                    if compatibility.status is PositionEpisodeCompatibility.AMBIGUOUS_MULTIPLE_EPISODES:
+                        counters["ambiguous_episode_conflicts"] += 1
+                    elif compatibility.status not in {
+                        PositionEpisodeCompatibility.NO_OPEN_EPISODE,
+                        PositionEpisodeCompatibility.CLOSED_EPISODE,
+                    }:
+                        counters["incompatible_episode_conflicts"] += 1
+                    proposal = _recovery_proposal(
+                        bundle=bundle,
+                        cycle_id=cycle_id,
+                        compatibility=compatibility,
+                        config=config,
+                        run_id=run_id,
+                    )
+                    rows["position_recovery_proposals"].append(proposal)
+                    rows["position_monitor_reconciliation"].append({
+                        "position_cycle_id": cycle_id,
+                        "symbol_id": bundle.symbol_id,
+                        "exchange": bundle.exchange,
+                        "outcome": "POSITION_RECOVERY_REQUIRED",
+                        "compatibility_status": compatibility.status.value,
+                        "recovery_proposal_id": proposal["recovery_proposal_id"],
+                    })
+                    counters["recovery_proposals"] += 1
+                    if not config.dry_run:
+                        _persist_recovery_proposal(self.registry_store.registry, proposal)
+                    recovery = _recovery_allowed(config)
+                    if not recovery:
+                        _conflict(
+                            rows,
+                            bundle,
+                            "position episode compatibility failed; report-only recovery proposal created",
+                        )
+                        counters["registry_conflicts"] += 1
+                        continue
+                    bundle = _recovery_bundle(bundle)
+                    match_outcome = SetupMatchOutcome.NEW_EPISODE
+            elif matching_for_symbol and not admission.admitted:
+                counters["not_admitted"] += 1
+                rows["candidate_reconciliation"].append(
+                    _reconciliation_row(
+                        bundle,
+                        "not_admitted",
+                        "same-symbol open episode was not attached without setup-family admission",
+                    )
+                )
+                continue
             elif recovery:
                 match_outcome = SetupMatchOutcome.NEW_EPISODE
-                episode = None
             elif admission.admitted and admission.setup_family:
                 match = match_open_episode(
                     exchange=bundle.exchange,
@@ -352,9 +441,12 @@ class OpportunityShadowOrchestrator:
                 if recovery:
                     setup_family = "position_state_recovery"
                     opening_reason = "position_state_recovery"
-                    admission_identity = hashlib.sha256(
-                        f"{bundle.exchange}|{bundle.symbol_id}|{bundle.position_cycle_opened_at or bundle.as_of.isoformat()}|position_state_recovery".encode()
-                    ).hexdigest()
+                    cycle_id = bundle.position_cycle_id or make_position_cycle_id(
+                        exchange=bundle.exchange,
+                        symbol_id=bundle.symbol_id,
+                        position_opened_at=bundle.position_cycle_opened_at or bundle.as_of,
+                    )
+                    admission_identity = f"{cycle_id}|{config.position_recovery_policy_version}"
                     episode_started_at = _aware_datetime(
                         bundle.position_cycle_opened_at, as_of
                     )
@@ -436,7 +528,7 @@ class OpportunityShadowOrchestrator:
                 CandidateState(current.current_lifecycle_state)
                 if current and current.current_lifecycle_state
                 else (
-                    CandidateState.CONFIRMED if recovery else CandidateState.DISCOVERED
+                    CandidateState.INVESTIGATING if recovery else CandidateState.DISCOVERED
                 )
             )
             progress = _progress_from_current(bundle, current)
@@ -547,8 +639,56 @@ class OpportunityShadowOrchestrator:
                         "lifecycle_state": lifecycle_state.value,
                         "progress_status": progress.status.value,
                         "snapshot_complete": snapshot is not None,
+                        "evidence_complete": bool(
+                            bundle.evidence
+                            and not bundle.evidence.missing_evidence
+                            and bundle.market_data_complete
+                        ),
+                        "positive_action_suppressed": bool(
+                            bundle.active_position
+                            and (
+                                not bundle.market_data_complete
+                                or bundle.evidence is None
+                                or bool(bundle.evidence.missing_evidence)
+                            )
+                        ),
+                        "suppression_reasons": (
+                            list(bundle.missing_data_fields)
+                            + (["investigator_evidence_incomplete"] if bundle.evidence is None or bundle.evidence.missing_evidence else [])
+                        ),
                     }
                 )
+                if recovery:
+                    proposal_id = make_recovery_proposal_id(
+                        position_cycle_id=cycle_id,
+                        symbol_id=bundle.symbol_id,
+                        exchange=bundle.exchange,
+                        recovery_mode=config.position_recovery_mode,
+                        policy_version=config.position_recovery_policy_version,
+                    )
+                    action = {
+                        "recovery_action_id": f"action-{proposal_id}",
+                        "recovery_proposal_id": proposal_id,
+                        "position_cycle_id": cycle_id,
+                        "candidate_id": episode.candidate_id,
+                        "recovery_mode": config.position_recovery_mode.value,
+                        "reviewed_by": config.position_recovery_reviewed_by,
+                        "reviewed_at": config.position_recovery_reviewed_at,
+                        "review_notes": config.position_recovery_review_notes,
+                        "pre_entry_history_available": False,
+                        "recovered_from_position_state": True,
+                        "created_run_id": run_id,
+                    }
+                    rows["position_recovery_actions"].append(action)
+                    counters[
+                        "reviewed_recoveries"
+                        if config.position_recovery_mode is PositionRecoveryMode.REVIEWED
+                        else "automatic_recoveries"
+                    ] += 1
+                    if bundle.market_data_complete and bundle.routing_decision_id:
+                        counters["active_positions_fully_monitored"] += 1
+                    if not config.dry_run:
+                        _persist_recovery_action(self.registry_store.registry, action)
                 rows["candidate_reconciliation"].append(
                     _reconciliation_row(
                         bundle, match_outcome.value, episode.candidate_id
@@ -584,6 +724,10 @@ class OpportunityShadowOrchestrator:
                     item.sector_stage is None for item in bundles
                 ),
                 "missing_critical_sources": 0,
+                "active_positions_missing_coverage": (
+                    counters["active_positions_total"]
+                    - counters["active_positions_fully_monitored"]
+                ),
                 "state_distribution": {
                     state.value: sum(
                         row.get("lifecycle_state") == state.value
@@ -946,45 +1090,120 @@ def _attach_routing(
             in {"true", "1"},
             position_cycle_opened_at=str(row.get("position_cycle_opened_at") or "")
             or None,
+            position_cycle_id=str(row.get("position_cycle_id") or "") or None,
+            routing_decision_id=str(row.get("routing_decision_id") or "") or None,
+            market_data_complete=str(row.get("market_data_complete") or "").lower()
+            in {"true", "1"},
+            missing_data_fields=tuple(
+                str(item) for item in _list_value(row.get("missing_data_fields"))
+            ),
         )
     return tuple(by_key[key] for key in sorted(by_key)), tuple(rejections)
 
 
 def _recovery_bundle(bundle: OpportunitySourceBundle) -> OpportunitySourceBundle:
-    opportunity = bundle.opportunity or OpportunitySnapshot(
-        opportunity_score=0.0,
-        rank_position=1,
-        rank_percentile=0.0,
-        rank_velocity=None,
-        rank_velocity_state=ProgressStatus.UNKNOWN,
-        factor_scores={},
-        rank_model_version="position-state-recovery-v1",
-        ranked_at=bundle.as_of,
-    )
-    evidence = bundle.evidence or EvidenceSnapshot(
-        evidence_score=0.0,
-        investigator_verdict=EvidenceVerdict.UNKNOWN,
-        accumulation_score=None,
-        pattern_score=None,
-        breakout_quality=None,
-        volume_quality=None,
-        delivery_quality=None,
-        sector_alignment=None,
-        market_alignment=None,
-        extension_risk=RiskLevel.UNKNOWN,
-        failure_risk=RiskLevel.UNKNOWN,
-        positive_evidence=("active execution position",),
-        negative_evidence=(),
-        missing_evidence=("pre-entry opportunity history unavailable",),
-        evidence_model_version="position-state-recovery-v1",
-        evaluated_at=bundle.as_of,
-    )
     return replace(
         bundle,
-        opportunity=opportunity,
-        evidence=evidence,
-        lifecycle_hint=CandidateState.CONFIRMED,
+        lifecycle_hint=CandidateState.INVESTIGATING,
     )
+
+
+def _recovery_allowed(config: OpportunityShadowConfig) -> bool:
+    if config.position_recovery_mode is PositionRecoveryMode.AUTOMATIC:
+        return bool(config.recover_position_only_episodes)
+    if config.position_recovery_mode is PositionRecoveryMode.REVIEWED:
+        return bool(
+            config.position_recovery_reviewed_by
+            and config.position_recovery_reviewed_at
+            and config.position_recovery_review_notes
+        )
+    return False
+
+
+def _recovery_proposal(
+    *, bundle: OpportunitySourceBundle, cycle_id: str, compatibility: Any,
+    config: OpportunityShadowConfig, run_id: str,
+) -> dict[str, Any]:
+    proposal_id = make_recovery_proposal_id(
+        position_cycle_id=cycle_id,
+        symbol_id=bundle.symbol_id,
+        exchange=bundle.exchange,
+        recovery_mode=config.position_recovery_mode,
+        policy_version=config.position_recovery_policy_version,
+    )
+    payload = {
+        "recovery_proposal_id": proposal_id,
+        "position_cycle_id": cycle_id,
+        "symbol_id": bundle.symbol_id,
+        "exchange": bundle.exchange,
+        "position_opened_at": bundle.position_cycle_opened_at,
+        "compatibility_status": compatibility.status.value,
+        "open_episode_ids": list(compatibility.open_episode_ids),
+        "conflict_reasons": list(compatibility.reasons),
+        "proposed_setup_family": "position_state_recovery",
+        "proposed_initial_candidate_state": CandidateState.INVESTIGATING.value,
+        "pre_entry_history_available": False,
+        "missing_history_fields": [
+            "discovery_timestamp", "historical_rank", "historical_opportunity_score",
+            "historical_investigator_score", "trigger_transition",
+            "followthrough_status", "stage_at_entry",
+        ],
+        "recovery_mode": config.position_recovery_mode.value,
+        "proposal_status": "PROPOSED",
+        "policy_version": config.position_recovery_policy_version,
+        "source_lineage": [asdict(source) for source in bundle.source_lineage],
+        "created_run_id": run_id,
+    }
+    payload["payload_hash"] = recovery_payload_hash(payload)
+    return payload
+
+
+def _persist_recovery_proposal(registry: RegistryStore, proposal: dict[str, Any]) -> None:
+    with registry._writer() as conn:  # noqa: SLF001
+        existing = conn.execute(
+            "SELECT payload_hash FROM position_recovery_proposal WHERE recovery_proposal_id = ?",
+            [proposal["recovery_proposal_id"]],
+        ).fetchone()
+        if existing and existing[0] != proposal["payload_hash"]:
+            raise OpportunityRegistryConflictError(
+                record_type="position_recovery_proposal",
+                candidate_id=proposal["position_cycle_id"],
+                idempotency_key=proposal["recovery_proposal_id"],
+                existing_payload_hash=existing[0],
+                incoming_payload_hash=proposal["payload_hash"],
+            )
+        conn.execute(
+            """INSERT INTO position_recovery_proposal
+               (recovery_proposal_id, position_cycle_id, symbol_id, exchange,
+                recovery_mode, proposal_status, compatibility_status, payload_hash,
+                payload_json, created_run_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(recovery_proposal_id) DO NOTHING""",
+            [
+                proposal["recovery_proposal_id"], proposal["position_cycle_id"],
+                proposal["symbol_id"], proposal["exchange"], proposal["recovery_mode"],
+                proposal["proposal_status"], proposal["compatibility_status"],
+                proposal["payload_hash"], json.dumps(proposal, sort_keys=True, default=str),
+                proposal["created_run_id"],
+            ],
+        )
+
+
+def _persist_recovery_action(registry: RegistryStore, action: dict[str, Any]) -> None:
+    with registry._writer() as conn:  # noqa: SLF001
+        conn.execute(
+            """INSERT INTO position_recovery_action
+               (recovery_action_id, recovery_proposal_id, position_cycle_id, candidate_id,
+                recovery_mode, reviewed_by, reviewed_at, review_notes, payload_json, created_run_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(recovery_action_id) DO NOTHING""",
+            [
+                action["recovery_action_id"], action["recovery_proposal_id"],
+                action["position_cycle_id"], action["candidate_id"], action["recovery_mode"],
+                action["reviewed_by"], action["reviewed_at"], action["review_notes"],
+                json.dumps(action, sort_keys=True, default=str), action["created_run_id"],
+            ],
+        )
 
 
 def _aware_datetime(value: str | None, fallback: datetime) -> datetime:
@@ -1117,7 +1336,32 @@ def _initial_counts(*args: Any) -> dict[str, Any]:
         "registry_conflicts": 0,
         "rejected_writes": 0,
         "not_admitted": 0,
+        "compatible_episode_attachments": 0,
+        "incompatible_episode_conflicts": 0,
+        "ambiguous_episode_conflicts": 0,
+        "recovery_proposals": 0,
+        "reviewed_recoveries": 0,
+        "automatic_recoveries": 0,
+        "recovery_conflicts": 0,
+        "active_positions_total": 0,
+        "active_positions_with_position_monitor": 0,
+        "active_positions_with_complete_market_data": 0,
+        "active_positions_with_complete_evidence": 0,
+        "active_positions_fully_monitored": 0,
     }
+
+
+def _list_value(value: Any) -> list[Any]:
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    text = str(value or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text.replace("'", '"'))
+        return parsed if isinstance(parsed, list) else [parsed]
+    except json.JSONDecodeError:
+        return [item for item in text.split("|") if item]
 
 
 def _reconciliation_row(

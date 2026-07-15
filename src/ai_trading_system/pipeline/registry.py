@@ -1250,6 +1250,84 @@ class RegistryStore:
                 [f"alert-{uuid.uuid4().hex[:12]}", run_id, alert_type, severity, stage_name, message],
             )
 
+    def open_alert_incident(
+        self,
+        *,
+        run_id: str,
+        alert_type: str,
+        severity: str,
+        stage_name: str | None,
+        dedupe_key: str,
+        payload: Dict[str, Any],
+    ) -> str:
+        """Open/recur one deterministic incident, returning its lifecycle outcome."""
+        incident_id = "incident-" + __import__("hashlib").sha256(
+            dedupe_key.encode()
+        ).hexdigest()[:24]
+        payload_json = self._json(payload)
+        with self._writer() as conn:
+            existing = conn.execute(
+                "SELECT status FROM pipeline_alert_incident WHERE dedupe_key = ?",
+                [dedupe_key],
+            ).fetchone()
+            if existing and existing[0] != "RESOLVED":
+                conn.execute(
+                    """UPDATE pipeline_alert_incident
+                       SET last_run_id = ?, occurrence_count = occurrence_count + 1,
+                           payload_json = ?, last_seen_at = (current_timestamp AT TIME ZONE 'UTC')
+                       WHERE dedupe_key = ?""",
+                    [run_id, payload_json, dedupe_key],
+                )
+                return "DEDUPLICATED"
+            if existing:
+                conn.execute(
+                    """UPDATE pipeline_alert_incident
+                       SET status = 'RECURRED', last_run_id = ?, stage_name = ?,
+                           occurrence_count = occurrence_count + 1, payload_json = ?,
+                           opened_at = (current_timestamp AT TIME ZONE 'UTC'),
+                           last_seen_at = (current_timestamp AT TIME ZONE 'UTC'),
+                           resolved_at = NULL, resolution_json = NULL
+                       WHERE dedupe_key = ?""",
+                    [run_id, stage_name, payload_json, dedupe_key],
+                )
+                return "RECURRED"
+            conn.execute(
+                """INSERT INTO pipeline_alert_incident
+                   (incident_id, dedupe_key, alert_type, severity, status, first_run_id,
+                    last_run_id, stage_name, payload_json)
+                   VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)""",
+                [incident_id, dedupe_key, alert_type, severity, run_id, run_id, stage_name, payload_json],
+            )
+        return "EMITTED"
+
+    def resolve_alert_incidents(
+        self,
+        *,
+        alert_type: str,
+        position_cycle_id: str,
+        run_id: str,
+        resolution: Dict[str, Any],
+    ) -> int:
+        with self._writer() as conn:
+            rows = conn.execute(
+                """SELECT dedupe_key, payload_json FROM pipeline_alert_incident
+                   WHERE alert_type = ? AND status IN ('OPEN', 'RECURRED', 'ACKNOWLEDGED')""",
+                [alert_type],
+            ).fetchall()
+            keys = [
+                key for key, payload in rows
+                if json.loads(payload or "{}").get("position_cycle_id") == position_cycle_id
+            ]
+            for key in keys:
+                conn.execute(
+                    """UPDATE pipeline_alert_incident
+                       SET status = 'RESOLVED', last_run_id = ?,
+                           resolved_at = (current_timestamp AT TIME ZONE 'UTC'), resolution_json = ?
+                       WHERE dedupe_key = ?""",
+                    [run_id, self._json(resolution), key],
+                )
+        return len(keys)
+
     def get_alerts(self, run_id: str) -> List[Dict[str, Any]]:
         with self._reader() as conn:
             rows = conn.execute(

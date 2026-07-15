@@ -52,7 +52,7 @@ Every admission records a named reason, `setup-family-v1` family, rule version, 
 
 `lifecycle-policy-v1` is pure and persists at most one transition per candidate per shadow run. Monitoring states may collapse to the strongest fully satisfied pre-trigger state. Trigger and terminal semantics are not skipped. A direct `TRIGGERED → CONFIRMED` is allowed only when the first later observation already contains explicit confirmed follow-through; transition metadata records the collapsed pending observation.
 
-Normal trigger requires locked stock Stage 2. A provisional S1→S2 trigger requires confidence 75, locked sector Stage 2, evidence 80, low extension risk, and an allowed market regime. Stage 3 weakens active candidates; Stage 4 fails and closes position-free candidates. Phase 3A alone does not recover position-only episodes; Phase 3B shadow mode may recover them from fill-derived active-position state.
+Normal trigger requires locked stock Stage 2. A provisional S1→S2 trigger requires confidence 75, locked sector Stage 2, evidence 80, low extension risk, and an allowed market regime. Stage 3 weakens active candidates; Stage 4 fails and closes position-free candidates. Phase 3A alone does not recover position-only episodes. In Phase 3C-3 shadow mode, a live position attaches only when an open episode has compatible lifecycle and trigger timing; same symbol alone is insufficient, multiple episodes are ambiguous, and closed episodes are not reopened. Missing or incompatible matches create deterministic recovery proposals. Recovery defaults to `report_only`; reviewed or explicitly enabled automatic recovery uses an `INVESTIGATING` initial marker and never creates fabricated pre-entry rank, evidence, transition, follow-through, or stage history.
 
 Progress uses only comparable values. Two positives mean improving, two negatives or a hard structural event mean deteriorating, comparable non-material movement is stable, and absent comparisons remain unknown. Retention applies the Phase 1 age and stagnation limits independently. Rank decline alone cannot close a confirmed candidate.
 
@@ -64,7 +64,7 @@ A missing required `ranked_signals` artifact fails only the `opportunities` stag
 
 ## Artifacts and multi-day example
 
-Each attempt writes the summary plus admission, update, transition, closure, reconciliation, warning, rejection, conflict, and current-state CSVs under `$DATA_ROOT/pipeline_runs/<run_id>/opportunities/attempt_<n>/`. DuckDB remains authoritative.
+Each attempt writes the summary plus admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, position-episode compatibility, recovery proposal/action, and position-monitor reconciliation CSVs under `$DATA_ROOT/pipeline_runs/<run_id>/opportunities/attempt_<n>/`. DuckDB remains authoritative.
 
 ```text
 Day 1   strong Stage-1 accumulation opens episode 1

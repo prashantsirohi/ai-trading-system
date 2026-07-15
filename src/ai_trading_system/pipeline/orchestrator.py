@@ -1411,7 +1411,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--recent-exit-cooling-sessions", type=int, choices=range(10, 21), default=15)
     parser.add_argument("--minimum-sector-constituents", type=int, default=5)
     parser.add_argument("--minimum-sector-stage-coverage-ratio", type=float, default=0.70)
-    parser.add_argument("--recover-position-only-episodes", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--recover-position-only-episodes", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--position-recovery-mode",
+        choices=("report_only", "reviewed", "automatic"),
+        default="report_only",
+        help="Controlled position-only shadow recovery; report_only is the safe default.",
+    )
+    parser.add_argument("--active-position-market-data-max-staleness-sessions", type=int, default=0)
+    parser.add_argument("--active-position-alert-enabled", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--run-date",
         default=date.today().isoformat(),
@@ -1973,6 +1981,9 @@ def main() -> None:
         "minimum_sector_constituents": args.minimum_sector_constituents,
         "minimum_sector_stage_coverage_ratio": args.minimum_sector_stage_coverage_ratio,
         "recover_position_only_episodes": args.recover_position_only_episodes,
+        "position_recovery_mode": args.position_recovery_mode,
+        "active_position_market_data_max_staleness_sessions": args.active_position_market_data_max_staleness_sessions,
+        "active_position_alert_enabled": args.active_position_alert_enabled,
         "candidate_tracker_max_age_days": int(args.candidate_tracker_max_age_days),
         "candidate_tracker_review_window_days": int(args.candidate_tracker_review_window_days),
         "candidate_tracker_archive_failures": bool(args.candidate_tracker_archive_failures),

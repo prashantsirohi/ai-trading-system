@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from typing import Optional
 
 from ai_trading_system.platform.logging.logger import logger
@@ -47,6 +48,50 @@ class AlertManager:
             severity=severity,
             message=message,
             stage_name=stage_name,
+        )
+
+    def emit_incident(
+        self,
+        *,
+        run_id: str,
+        alert_type: str,
+        severity: str,
+        message: str,
+        dedupe_key: str,
+        payload: dict,
+        stage_name: str | None = None,
+    ) -> str:
+        outcome = self.registry.open_alert_incident(
+            run_id=run_id,
+            alert_type=alert_type,
+            severity=severity,
+            stage_name=stage_name,
+            dedupe_key=dedupe_key,
+            payload=payload,
+        )
+        if outcome != "DEDUPLICATED":
+            self.emit(
+                run_id=run_id,
+                alert_type=alert_type,
+                severity=severity,
+                message=f"{message} payload={json.dumps(payload, sort_keys=True, default=str)}",
+                stage_name=stage_name,
+            )
+        return outcome
+
+    def resolve_incidents(
+        self,
+        *,
+        run_id: str,
+        alert_type: str,
+        position_cycle_id: str,
+        resolution: dict,
+    ) -> int:
+        return self.registry.resolve_alert_incidents(
+            alert_type=alert_type,
+            position_cycle_id=position_cycle_id,
+            run_id=run_id,
+            resolution=resolution,
         )
 
     def _fan_out_alert(

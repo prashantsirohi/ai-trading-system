@@ -42,6 +42,10 @@ Primary selectors on `ai-trading-pipeline` (orchestrator):
 | `--rank-deep-scan-limit` | 250 | Rank-selected daily deep-scan allocation. |
 | `--stage-promoted-scan-limit` | 75 | Additional stage-promoted allocation; position/follow-through overrides are uncapped. |
 | `--recent-exit-cooling-sessions` | 15 | Trading-session cooling window; accepted range is 10–20. |
+| `--position-recovery-mode` | `report_only` | `reviewed` requires review metadata; `automatic` still requires the explicit legacy recovery enable flag. |
+| `--recover-position-only-episodes` | false | Backward-compatible explicit enable used only by automatic recovery; does not bypass compatibility. |
+| `--active-position-market-data-max-staleness-sessions` | 0 | Maximum stored trading sessions by which active-position market data may lag. |
+| `--active-position-alert-enabled` | true | Persist critical missing-data incidents while Phase 3B/3C routing runs. |
 | `--minimum-sector-constituents` | 5 | Minimum constituents for a known sector stage. |
 | `--minimum-sector-stage-coverage-ratio` | 0.70 | Minimum classified constituent coverage. |
 | `--run-id <id>` | new UUID | Reuse an existing run (mainly for stage retries) |

@@ -44,6 +44,14 @@ routing with policy-v2 reason-to-tier precedence, row-level validation,
 structural new-long blocks separated from active-position structural risk, and
 fail-closed provisional early-entry sector checks; execution and publish remain
 unchanged.
+Phase 3C-3 makes fill-derived active-position coverage explicit: a position is
+fully monitored only when it has one validated `POSITION_MONITOR` route, a
+valid cycle identity, and complete current market/structural data. Missing or
+stale data opens a deduplicated critical control-plane incident and suppresses
+positive shadow action evidence. Position-to-episode attachment now requires
+setup/lifecycle timing compatibility. Position-only recovery defaults to
+`report_only`, records deterministic proposals, never fabricates pre-entry
+history, and does not affect execution or broker state.
 
 ## Safety and operating invariants
 

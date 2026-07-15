@@ -97,6 +97,10 @@ Writes under `data/pipeline_runs/<run_id>/opportunities/attempt_<n>/`:
 - `adapter_rejections.csv`
 - `registry_conflicts.csv`
 - `current_candidate_state.csv`
+- `position_episode_compatibility.csv`
+- `position_recovery_proposals.csv`
+- `position_recovery_actions.csv`
+- `position_monitor_reconciliation.csv`
 
 Authority:
 
@@ -249,5 +253,10 @@ and aggregate membership trust. These are additive columns; artifact names and
 downstream execution/publish payloads are unchanged.
 
 `scan_router` writes `scan_routing.csv`, `stage_discovery_candidates.csv`, `deep_scan_universe.csv`, `position_monitor_universe.csv`, `routing_conflicts.csv`, `scan_coverage_summary.json`, and `scan_routing_comparison.json`. Phase 3C-2 preserves existing routing columns and appends policy-v2 lineage fields including effective tier, winning reason, all selection reasons, selection details, structural new-long block/risk fields, routing input hash, and routing decision ID. Invalid routing rows are reported in `routing_conflicts.csv` and excluded from trusted route artifacts before persistence.
+
+Phase 3C-3 additionally writes `active_position_coverage.csv`,
+`active_position_missing_data.csv`, and `position_monitor_reconciliation.csv`.
+The coverage summary separates routed, complete-data, complete-evidence, fully
+monitored, and missing-coverage counts plus alert emit/dedupe/resolve counts.
 
 When routing is enabled, Investigator additionally writes `routed_investigator_scores.csv`, `routed_pattern_scan.csv`, `position_risk_monitor.csv`, and `routed_routing_conflicts.csv`. Existing Investigator artifacts and publish consumers are unchanged.

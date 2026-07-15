@@ -99,9 +99,43 @@ def test_phase3b_recovers_position_only_episode_without_transition_history(tmp_p
             "SELECT lifecycle_state, active_position FROM candidate_snapshot"
         ).fetchone()
         transitions = conn.execute("SELECT COUNT(*) FROM candidate_transition").fetchone()[0]
+        proposal = conn.execute(
+            "SELECT recovery_mode, proposal_status FROM position_recovery_proposal"
+        ).fetchone()
+        action = conn.execute(
+            "SELECT recovery_mode, payload_json FROM position_recovery_action"
+        ).fetchone()
     assert episode == ("position_state_recovery", "position_state_recovery", "position_state_recovery")
-    assert snapshot == ("confirmed", True)
+    assert snapshot is None
     assert transitions == 0
+    assert proposal == ("automatic", "PROPOSED")
+    assert action[0] == "automatic"
+    assert '"pre_entry_history_available": false' in action[1]
+
+
+def test_phase3c3_report_only_creates_proposal_without_episode(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path / "runtime"))
+    context = _context(tmp_path, mode="shadow")
+    routing = tmp_path / "scan_routing.csv"
+    routing.write_text(
+        "symbol_id,exchange,scan_tier,scan_reasons,active_position,recently_exited,position_cycle_opened_at,market_data_complete\n"
+        "ABC,NSE,position_monitor,['active_position'],true,false,2026-07-01T10:00:00+00:00,true\n",
+        encoding="utf-8",
+    )
+    context.params.update({
+        "opportunity_registry_dry_run": False,
+        "opportunity_scan_routing_mode": "shadow",
+        "position_recovery_mode": "report_only",
+    })
+    context.artifacts["scan_router"] = {
+        "scan_routing": StageArtifact.from_file("scan_routing", routing, row_count=1)
+    }
+    result = OpportunityStage().run(context)
+    with context.registry._reader() as conn:  # noqa: SLF001
+        assert conn.execute("SELECT COUNT(*) FROM candidate_episode").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM position_recovery_proposal").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM position_recovery_action").fetchone()[0] == 0
+    assert result.metadata["recovery_proposals"] == 1
 
 
 def test_phase3b_sector_membership_comes_from_full_universe_stock_rows(tmp_path, monkeypatch):

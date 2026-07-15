@@ -37,7 +37,16 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
 
 Repeat for 5–10 stored sessions spanning a completed NSE week. For same-run replay, repeat the shadow command with its `--run-id` plus `--force-rerun --stages weekly_stage,scan_router,investigator,opportunities`.
 
-Review the weekly/routing summaries, comparison, conflicts, and opportunity reconciliation. Confirm active monitored equals active total, provisional and locked observations coexist, sector coverage guards fire, stage promotions outside the rank cap appear, and replay creates no semantic duplicates.
+Review the weekly/routing summaries, comparison, conflicts, active-position
+coverage/missing-data artifacts, compatibility, recovery proposals/actions, and
+opportunity reconciliation. A healthy run has fully monitored equal to active
+total; a merely routed position with incomplete data is unhealthy. Confirm
+critical missing-data incidents dedupe on replay, resolve after restored data,
+and recur after a later gap. Confirm incompatible/ambiguous episodes never
+receive position evidence and report-only recovery creates no episode. Also
+confirm provisional and locked observations coexist, sector coverage guards
+fire, stage promotions outside the rank cap appear, and replay creates no
+semantic duplicates.
 
 ## Phase 3C-1 copied-store migration and annotation
 
@@ -76,3 +85,9 @@ completed week, and the same final run. Confirm:
 
 Stop after copied-store validation. Applying migration 034 or annotations to an
 operator store requires a separate approval and a verified backup.
+
+Apply migration 036 only by initializing `RegistryStore` against a temporary or
+copied control plane. Do not apply migrations 034, 035, or 036 to the operator
+control plane during this verification. Phase 3C-3 performs no broker calls,
+order/stop writes, execution eligibility changes, ranking changes, or publish/UI
+payload changes.

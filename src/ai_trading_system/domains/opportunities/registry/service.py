@@ -87,6 +87,9 @@ class OpportunityRegistryService:
     def list_open_episodes(self):
         return self.store.list_open_episodes()
 
+    def list_candidate_episodes(self, *, exchange: str, symbol_id: str):
+        return self.store.list_episodes(exchange=exchange, symbol_id=symbol_id)
+
     def observation_hashes_for_run(self, run_id: str):
         return self.store.observation_hashes_for_run(run_id)
 

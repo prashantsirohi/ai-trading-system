@@ -2,7 +2,7 @@
 
 - **Purpose:** Operate the optional canonical opportunity-registry shadow stage.
 - **Audience:** Operators and engineers debugging opportunity reconciliation.
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-07-15
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
@@ -23,7 +23,7 @@ Required input is registered `rank/ranked_signals`. Optional inputs are Investig
 
 Writes are append-oriented canonical observations in `$DATA_ROOT/control_plane.duckdb` through `OpportunityRegistryService`. `--opportunity-registry-dry-run` disables those writes while retaining audit files. The stage never writes execution or candidate-tracker stores.
 
-The attempt directory contains `opportunity_shadow_summary.json` and the admission, update, transition, closure, reconciliation, warning, rejection, conflict, and current-state CSVs listed in the [artifact reference](../reference/artifacts.md).
+The attempt directory contains `opportunity_shadow_summary.json` and the admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, compatibility, recovery-proposal/action, and position-monitor reconciliation CSVs listed in the [artifact reference](../reference/artifacts.md).
 
 ## Main modules
 
@@ -34,7 +34,7 @@ The attempt directory contains `opportunity_shadow_summary.json` and the admissi
 
 ## Process flow
 
-The stage loads registered sources, adapts and reconciles by exchange/symbol, matches or admits episodes, evaluates one transition, persists canonical observations, evaluates retention/closure, and writes the reconciliation view.
+The stage loads registered sources, adapts and reconciles by exchange/symbol, checks active-position episode compatibility before any attachment, matches or admits episodes, evaluates one transition, persists canonical observations, evaluates retention/closure, and writes the reconciliation view.
 
 ## DQ
 
@@ -50,7 +50,7 @@ Exact same-run source replay is detected before writes and leaves current histor
 
 ## Downstream consumers
 
-Phase 3A and Phase 3B have no execution, publish, candidate-tracker, API, or UI consumer. Registry query callers and audit review are the only consumers. In Phase 3B shadow mode, routing lineage is added to reconciliation, routed Investigator sidecars may supply evidence, and position-only active episodes may be recovered without broker calls.
+Phase 3A through Phase 3C-3 have no execution, publish, candidate-tracker, API, or UI consumer. Registry query callers and audit review are the only consumers. In shadow mode, routing lineage is added to reconciliation and routed Investigator sidecars may supply evidence. Incomplete active-position evidence records `evidence_complete=false`, suppresses positive shadow actions, and keeps legacy execution unchanged. Recovery defaults to report-only proposals; reviewed recovery requires reviewer, timestamp, and notes, while automatic recovery remains disabled unless explicitly configured.
 
 ## Commands
 

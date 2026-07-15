@@ -28,6 +28,21 @@ class PositionCycle:
     cycle_opened_at: str | None
     last_exited_at: str | None
     active: bool
+    average_price: float | None = None
+
+    @property
+    def position_cycle_id(self) -> str | None:
+        if not self.cycle_opened_at:
+            return None
+        from ai_trading_system.domains.opportunities.position_monitoring import (
+            make_position_cycle_id,
+        )
+
+        return make_position_cycle_id(
+            exchange=self.exchange,
+            symbol_id=self.symbol_id,
+            position_opened_at=self.cycle_opened_at,
+        )
 
 
 def _load_json(value: str | None) -> dict:
@@ -525,17 +540,36 @@ class ExecutionStore:
             net = 0
             opened: str | None = None
             last_exit: str | None = None
+            average_price: float | None = None
+            position_cost = 0.0
             for row in rows:
                 before = net
                 quantity = int(row.get("quantity") or 0)
-                net += quantity if str(row.get("side") or "").upper() == "BUY" else -quantity
+                side = str(row.get("side") or "").upper()
+                price = float(row.get("price") or 0.0)
+                if side == "BUY":
+                    if before >= 0:
+                        position_cost += quantity * price
+                    net += quantity
+                else:
+                    if before > 0:
+                        position_cost -= min(quantity, before) * (position_cost / before)
+                    net -= quantity
                 filled_at = str(row.get("filled_at") or "") or None
                 if before == 0 and net != 0:
                     opened = filled_at
+                    position_cost = abs(net) * price
                 if before != 0 and net == 0:
                     last_exit = filled_at
                     opened = None
-            cycles.append(PositionCycle(symbol, exchange, net, opened, last_exit, net != 0))
+                    position_cost = 0.0
+            if net > 0:
+                average_price = position_cost / net
+            cycles.append(
+                PositionCycle(
+                    symbol, exchange, net, opened, last_exit, net != 0, average_price
+                )
+            )
         return cycles
 
     def list_recently_exited_positions(

@@ -13,7 +13,7 @@ Start with the [System Guide](../SYSTEM_GUIDE.md).
 
 The router consumes rank, universal stage, promotion, opportunity-registry lifecycle, and fill-derived position state. Phase 3C-2 uses `scan-routing-policy-v2`: each selection reason has a canonical minimum tier, the effective tier is the highest required tier, and the winning reason is deterministic by tier then tie-break order. All reasons remain on the decision even though only the effective tier is emitted.
 
-Active positions and recently exited positions receive `POSITION_MONITOR` without broker calls. Active positions, triggered candidates, and pending-follow-through candidates are uncapped and cannot be manually downgraded below their required tier. A missing-market-data position remains routed and creates a high-severity `routing_conflicts` row.
+Active positions and recently exited positions receive `POSITION_MONITOR` without broker calls. Active positions, triggered candidates, and pending-follow-through candidates are uncapped and cannot be manually downgraded below their required tier. An active position is fully monitored only when its route and cycle identity are valid and its latest close/session, weekly stock stage, structural price relation, relative-strength input, source week, and symbol mapping are complete. Freshness is measured in stored trading sessions, with zero stale sessions allowed by default. Missing data remains routed but is not fully monitored.
 
 `compare` writes artifacts only. `shadow` also lets the opportunities stage consume routed evidence and recover position-only episodes. Neither mode changes execution, candidates, publish, Sheets, Telegram, or UI payloads.
 
@@ -27,7 +27,7 @@ Registered rank and weekly-stage artifacts, opportunity-registry current lifecyc
 
 ## Output artifacts
 
-Routing, discovery, deep-scan, position-monitor, conflict, coverage-summary, and old-versus-new comparison artifacts. Existing columns are preserved; Phase 3C-2 appends `effective_scan_tier`, `winning_reason`, all selection reasons/details, structural new-long block fields, active-position structural-risk fields, and routing hash/decision identifiers.
+Routing, discovery, deep-scan, position-monitor, conflict, coverage-summary, old-versus-new comparison, `active_position_coverage.csv`, `active_position_missing_data.csv`, and `position_monitor_reconciliation.csv` artifacts. Existing columns are preserved; Phase 3C-2 appends `effective_scan_tier`, `winning_reason`, all selection reasons/details, structural new-long block fields, active-position structural-risk fields, and routing hash/decision identifiers.
 
 ## Main modules
 
@@ -39,7 +39,7 @@ Resolve each selection source, apply caps only to rank/stage allocations, valida
 
 ## DQ
 
-Every active fill-derived position must receive `POSITION_MONITOR`. Unknown reasons/tiers, reason-tier mismatches, too-low effective tiers, invalid winning reasons, and unsafe manual downgrades emit routing conflicts and are excluded from trusted route artifacts. Missing market data remains routed and emits a high-severity conflict row.
+Every active fill-derived position must receive `POSITION_MONITOR`. Unknown reasons/tiers, reason-tier mismatches, too-low effective tiers, invalid winning reasons, and unsafe manual downgrades emit routing conflicts and are excluded from trusted route artifacts. Missing market data remains routed, emits a `CRITICAL` `active_position_missing_market_data` alert, and opens a deterministic incident keyed by position cycle, missing-field signature, and expected market session. Identical open incidents dedupe, restored data resolves them, and recurrence after resolution emits again. Telegram fanout follows the existing alert threshold and is disabled by default.
 
 ## Failure modes
 

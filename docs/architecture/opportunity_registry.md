@@ -100,7 +100,7 @@ Closing is explicit. An identical repeated close is idempotent; a different repe
 
 Rollback means disabling future registry consumers while retaining the tables and history. There is no destructive down migration.
 
-The registry itself does not infer admissions or transitions. Phase 3A supplies optional shadow adapters and policies; Phase 3B supplies stage/routing lineage and conservative position-state recovery. Backfill, API/UI surfaces, ranking changes, execution eligibility, sizing, order generation, and broker access remain outside the registry contract.
+The registry itself does not infer admissions or transitions. Phase 3A supplies optional shadow adapters and policies; Phase 3B supplies stage/routing lineage. Phase 3C-3 adds deterministic position-recovery proposals and actions adjacent to episode history. Report-only is the default; reviewed recovery requires reviewer metadata, and automatic recovery additionally requires explicit configuration. Recovered episodes use the dedicated `position_state_recovery` family, retain their source position cycle, and do not synthesize discovery, rank, evidence, trigger, follow-through, or stage-at-entry history. Backfill, API/UI surfaces, ranking changes, execution eligibility, sizing, order generation, and broker access remain outside the registry contract.
 
 ## Example timeline
 

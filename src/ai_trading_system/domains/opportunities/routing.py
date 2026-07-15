@@ -264,7 +264,7 @@ class ScanRoutingConfig:
 @dataclass(frozen=True, slots=True)
 class PositionMonitoringConfig:
     recent_exit_cooling_sessions: int = 15
-    recover_position_only_episodes: bool = True
+    recover_position_only_episodes: bool = False
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> "PositionMonitoringConfig":
@@ -274,7 +274,7 @@ class PositionMonitoringConfig:
         return cls(
             recent_exit_cooling_sessions=sessions,
             recover_position_only_episodes=bool(
-                values.get("recover_position_only_episodes", True)
+                values.get("recover_position_only_episodes", False)
             ),
         )
 
