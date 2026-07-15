@@ -138,6 +138,25 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.benchmark_
 read-only. Threshold failures remain advisory unless `--fail-on-threshold` is
 explicitly supplied. See the [runbook](../runbooks/phase3c4_performance_benchmark.md).
 
+Phase 3C-5 builds immutable calibration and readiness evidence beneath an
+explicit temporary output root:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.build_phase3c5_calibration \
+  --profile small_fixture --as-of YYYY-MM-DD \
+  --output-root /tmp/phase3c5-small
+
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.check_phase4_readiness \
+  --calibration-manifest /tmp/phase3c5-small/phase3c5_calibration_manifest.json \
+  --output-root /tmp/phase3c5-readiness
+```
+
+For copied-realistic evidence, add `--profile copied_realistic
+--copied-control-plane /path/to/temporary/control_plane.duckdb`. Never supply
+the configured operator store. These commands do not apply migrations,
+calibrate thresholds, or implement Phase 4. See the
+[runbook](../runbooks/phase3c5_calibration_and_readiness.md).
+
 ## Publish and recovery
 
 ```bash
@@ -197,6 +216,8 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-repair-ingest-schema` | Ingest schema repair |
 | `ai-trading-repair-control-plane-timestamps` | Control-plane timestamp repair |
 | `ai-trading-benchmark-phase3c4` | Isolated Phase 3C-4 performance/replay benchmark |
+| `ai-trading-build-phase3c5-calibration` | Immutable calibration/readiness evidence builder |
+| `ai-trading-check-phase4-readiness` | Re-evaluate Phase 4 readiness from a calibration manifest |
 | `ai-trading-annotate-phase3c1-governance` | Copied-store Phase 3B governance annotation |
 | `ai-trading-research-recipe` | Research recipe runner |
 | `ai-trading-optimize` | Optimization runner |

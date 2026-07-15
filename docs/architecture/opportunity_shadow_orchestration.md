@@ -90,3 +90,19 @@ UTC wall-clock labels. `functional_status` is never derived from
 results use `phase3c4-performance-policy-v1`; `performance_fail_pipeline=false`
 is the Phase 3C-4 default. Ranking, routing, Investigator, lifecycle, execution,
 and publish decisions do not consume these metrics.
+
+## Phase 3C-5 calibration boundary
+
+Phase 3C-5 consumes reconstructed candidate-decision evidence only in an
+offline builder. A sample is authoritative only when every input, membership
+observation, stage decision, and correction used was available as of the
+decision timestamp; the decision has a stable episode identity; historical
+universe and listing evidence include later-delisted and failed candidates; and
+the forward outcome is complete and attributable. Ambiguous correction impact,
+stage conflicts or cycles, unresolved corporate actions, and duplicate sample
+identities are quarantined. Immature outcomes remain pending rather than being
+coerced to zero.
+
+Position-only recovery records are not entry-calibration history. The resulting
+readiness checks and manifests are advisory and do not feed ranking, routing,
+Investigator, lifecycle, execution, or publish.

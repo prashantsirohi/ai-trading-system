@@ -60,6 +60,16 @@ metadata under policy `phase3c4-performance-policy-v1`. Functional and
 performance status remain separate; threshold failures do not block the pipeline
 by default. See the [performance benchmark runbook](runbooks/phase3c4_performance_benchmark.md).
 
+Phase 3C-5 adds an offline, immutable calibration-eligibility and Phase 4
+readiness evidence layer under policy `phase3c5-calibration-policy-v1`. It
+fails closed on post-decision inputs, unresolved stage or correction
+governance, non-point-in-time membership, incomplete outcome windows,
+survivorship gaps, recovered-position-only history, identity defects, and
+sample-quality failures. Eligible, excluded, quarantined, and pending samples
+remain separately auditable. It does not calibrate thresholds, alter scoring or
+routing, write operator databases, or implement Phase 4. See the
+[calibration and readiness runbook](runbooks/phase3c5_calibration_and_readiness.md).
+
 ## Safety and operating invariants
 
 - Resolve live data through the existing path helpers and `$DATA_ROOT`; never hardcode a repo-local `data/...` path in application code.

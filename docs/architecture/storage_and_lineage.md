@@ -166,3 +166,18 @@ dispatch. A reserved intent without a linked order represents an unknown outcome
 that must be reconciled; retries do not create another order. Execution batches
 and submissions use store-adjacent lock files to serialize competing processes
 for this ledger without changing broker state.
+
+## Phase 3C-5 calibration evidence
+
+Phase 3C-5 adds no database migration and never writes operator stores.
+Calibration artifacts live only beneath the explicit `--output-root`. A
+`copied_realistic` build requires an explicitly supplied regular-file copy of
+`control_plane.duckdb`, opens it read-only, rejects the configured operator
+store, and rejects symlinked inputs or output roots.
+
+The manifest binds policy and builder versions, the as-of boundary, source
+database hashes, schema versions, sample IDs, configuration, and the eligible
+dataset hash. Exact replay must reproduce both manifest identity and eligible
+dataset content hash. A matching manifest identity with a different dataset
+hash is an integrity failure. Excluded, quarantined, and pending rows remain
+separate lineage evidence and are never silently promoted into calibration.

@@ -79,6 +79,23 @@ rejected. Defaults are conservative and informational;
 `performance_fail_pipeline=false`. Cache labels are `COLD`, `WARM`, or `UNKNOWN`;
 replay labels are `FIRST_RUN`, `EXACT_REPLAY`, or `NON_IDENTICAL_REPLAY`.
 
+## Phase 3C-5 calibration policy
+
+`CalibrationConfig` is the typed source for
+`phase3c5-calibration-policy-v1`. Its sample requirements distinguish a
+development-ready minimum from a limitation threshold and require outcome-class,
+market-regime, stage, scan-tier, and setup-family coverage. Critical failures
+include look-ahead inputs, duplicate identities, unresolved governance,
+survivorship-biased populations, missing required outcome classes, and manifest
+integrity mismatch.
+
+`--profile small_fixture` is deterministic test evidence only.
+`--profile copied_realistic` requires `--copied-control-plane`; the source is
+opened read-only and is never accepted when it resolves to the configured
+operator store. `--fail-on-not-ready` changes only the CLI exit code. It does
+not change the verdict or mutate any store. No environment variable enables
+Phase 4 or production calibration in Phase 3C-5.
+
 ## Preflight controls
 
 Orchestrator:

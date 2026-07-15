@@ -748,6 +748,14 @@ Migration `036_opportunity_phase3c3_position_monitoring.sql` adds:
 These tables are control-plane only. Migration 036 does not alter the execution
 ledger and was not applied to the operator store as part of Phase 3C-3 work.
 
+## Phase 3C-5 schema boundary
+
+Phase 3C-5 introduces no DuckDB migration or canonical table. It reads an
+explicit copied control-plane store only in read-only mode and emits immutable
+CSV, JSON, and Markdown evidence under a temporary output root. Migrations
+034–036 remain operator-controlled and are not applied by the builder or
+readiness checker.
+
 - Control-plane DDL is applied by `RegistryStore`; it reads packaged SQL files from `pipeline/migrations/` in lexicographic order.
 - DuckDB does not enforce foreign keys; relationships above are by convention and are not constrained at the database level.
 - Several control-plane tables are extended by later migrations (002 → `dq_rule`, `model_registry`; 012 → `data_repair_run` index; 017 → `strategy_iteration_result`). Treat the final shape as the merge of all referenced migrations.

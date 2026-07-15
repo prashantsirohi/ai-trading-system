@@ -279,3 +279,26 @@ files:
 
 The files are audit evidence, not trading inputs or a replacement for canonical
 DuckDB stores. No Phase 3C-4 schema migration exists.
+
+## Phase 3C-5 calibration and readiness artifacts
+
+Each calibration build writes exactly ten files beneath its explicit output
+root:
+
+- `phase3c5_calibration_manifest.json`
+- `phase3c5_calibration_eligible.csv`
+- `phase3c5_calibration_excluded.csv`
+- `phase3c5_calibration_quarantined.csv`
+- `phase3c5_calibration_quality_summary.json`
+- `phase3c5_sample_coverage.csv`
+- `phase3c5_exclusion_reasons.csv`
+- `phase3c5_readiness_checks.csv`
+- `phase3c5_phase4_readiness.json`
+- `phase3c5_phase4_readiness.md`
+
+The eligible CSV is the only authoritative calibration population. Excluded
+and pending rows are retained with explicit reason codes; quarantined rows
+identify evidence requiring review. The readiness JSON is the machine-readable
+source for `READY`, `READY_WITH_LIMITATIONS`, or `NOT_READY`; the Markdown file
+is an operator rendering of the same checks. These files are offline evidence,
+not runtime pipeline inputs.

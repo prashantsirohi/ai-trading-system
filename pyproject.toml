@@ -76,6 +76,8 @@ ai-trading-winner-validation-report = "ai_trading_system.research.backtesting.wi
 ai-trading-early-accumulation-validate = "ai_trading_system.research.backtesting.early_accumulation_validation:main"
 ai-trading-symbol-report = "ai_trading_system.research.symbol_report.cli:main"
 ai-trading-benchmark-phase3c4 = "ai_trading_system.interfaces.cli.benchmark_phase3c4:main"
+ai-trading-build-phase3c5-calibration = "ai_trading_system.interfaces.cli.build_phase3c5_calibration:main"
+ai-trading-check-phase4-readiness = "ai_trading_system.interfaces.cli.check_phase4_readiness:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
