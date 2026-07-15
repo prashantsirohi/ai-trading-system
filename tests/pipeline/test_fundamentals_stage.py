@@ -332,7 +332,7 @@ def test_fundamentals_stage_fails_when_rank_missing(tmp_path: Path) -> None:
 
 
 def test_orchestrator_auto_injects_fundamentals_when_snapshot_exists(tmp_path: Path) -> None:
-    orchestrator = PipelineOrchestrator(tmp_path)
+    orchestrator = PipelineOrchestrator(tmp_path, allow_control_plane_migrations=True)
     scores_path = tmp_path / "data" / "fundamentals" / "fundamental_scores_latest.csv"
 
     assert orchestrator._normalize_stage_names(None) == [

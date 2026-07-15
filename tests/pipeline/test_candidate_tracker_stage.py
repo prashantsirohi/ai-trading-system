@@ -69,7 +69,7 @@ def test_candidate_tracker_stage_writes_expected_artifacts(tmp_path: Path) -> No
 
 def test_default_stage_lists_include_candidate_tracker_and_keep_perf_tracker_final(tmp_path: Path) -> None:
     args = build_parser().parse_args([])
-    stages = PipelineOrchestrator(tmp_path)._normalize_stage_names(None)
+    stages = PipelineOrchestrator(tmp_path, allow_control_plane_migrations=True)._normalize_stage_names(None)
 
     assert "candidate_tracker" in args.stages.split(",")
     assert args.stages.split(",")[-1] == "perf_tracker"

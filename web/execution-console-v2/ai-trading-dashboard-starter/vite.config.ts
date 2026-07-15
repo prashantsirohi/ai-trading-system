@@ -6,7 +6,8 @@ import path from 'node:path';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const useMock = env.VITE_USE_MOCK_API === 'true' || env.VITE_USE_MOCK_API === '1';
-  const proxyTarget = env.VITE_EXECUTION_PROXY_TARGET || 'http://127.0.0.1:8090';
+  const executionProxyTarget = env.VITE_EXECUTION_PROXY_TARGET || 'http://127.0.0.1:8090';
+  const phase4ProxyTarget = env.VITE_PHASE4_PROXY_TARGET || 'http://127.0.0.1:8765';
   // GitHub Pages serves from a repo subpath; VITE_BASE_URL sets it at build time.
   const base = env.VITE_BASE_URL || '/';
 
@@ -25,8 +26,12 @@ export default defineConfig(({ mode }) => {
       proxy: useMock
         ? {}
         : {
+            '/api/v1': {
+              target: phase4ProxyTarget,
+              changeOrigin: true,
+            },
             '/api': {
-              target: proxyTarget,
+              target: executionProxyTarget,
               changeOrigin: true,
             },
           },

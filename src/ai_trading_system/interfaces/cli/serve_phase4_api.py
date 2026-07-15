@@ -42,6 +42,7 @@ def main() -> None:
         cache_ttl_seconds=settings.cache_ttl_seconds,
         include_openapi=settings.include_openapi,
         max_response_rows=settings.max_response_rows,
+        cors_allowed_origins=settings.cors_allowed_origins,
     )
     uvicorn.run(create_app(settings=settings), host=args.host, port=args.port, reload=args.reload)
 

@@ -13,6 +13,7 @@ from datetime import date, datetime, time as datetime_time, timezone
 from typing import Any, Callable
 
 from fastapi import FastAPI, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
@@ -281,6 +282,18 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
             window.append(now)
         response = await call_next(request)
         return finish(response)
+
+    # Keep CORS outside the authentication middleware so a browser can complete
+    # its credential-header preflight. The subsequent GET is still authenticated.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.cors_allowed_origins),
+        allow_credentials=False,
+        allow_methods=["GET", "HEAD", "OPTIONS"],
+        allow_headers=["Authorization", "X-API-Key", "X-Request-ID", "If-None-Match"],
+        expose_headers=["ETag", "X-Request-ID"],
+        max_age=600,
+    )
 
     service: Phase4ReadService = app.state.service
 

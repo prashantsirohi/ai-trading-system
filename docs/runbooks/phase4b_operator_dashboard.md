@@ -55,12 +55,21 @@ Terminal two:
 ```bash
 cd web/execution-console-v2/ai-trading-dashboard-starter
 npm install
-VITE_PHASE4_API_BASE_URL=http://127.0.0.1:8765 \
-  npm run dev -- --host 127.0.0.1
+npm run dev -- --host 127.0.0.1
 ```
 
 Open `http://127.0.0.1:5173/` and enter `local-test-key`. “Reload displayed
 data” re-fetches GET responses; it does not refresh a source or run a pipeline.
+The local dev server proxies same-origin `/api/v1` requests to Phase 4A. Do not
+point `VITE_PHASE4_API_BASE_URL` directly at a different origin unless that
+origin is listed in the API's comma-separated `PHASE4_API_CORS_ALLOWED_ORIGINS`.
+The default Phase 4 proxy target is `http://127.0.0.1:8765`; override it with
+`VITE_PHASE4_PROXY_TARGET` when the API uses another port. The older `/api/*`
+execution-console proxy remains independently configured.
+The API defaults only to the Vite development origins
+`http://127.0.0.1:5173` and `http://localhost:5173`; an empty environment value
+disables cross-origin browser access. CORS permits unauthenticated preflight,
+not unauthenticated data requests.
 
 ## Route and endpoint inventory
 
@@ -123,12 +132,15 @@ npm run lint
 npm test
 npm run build
 npm run test:e2e
+PLAYWRIGHT_REAL_API=true npm run test:e2e
 ```
 
 The OpenAPI exporter constructs only the deterministic fixture-mode app.
 `check:api` fails on backend/snapshot drift. Playwright asserts every observed
-`/api/v1` request uses GET. Vite emits hashed assets and no source maps by
-default.
+`/api/v1` request uses GET. The default Playwright run uses intercepted fixture
+responses for fast UI coverage; `PLAYWRIGHT_REAL_API=true` starts the Phase 4A
+small fixture API and verifies the same-origin Vite proxy path. Vite emits
+hashed assets and no source maps by default.
 
 ## Deployment and non-goals
 

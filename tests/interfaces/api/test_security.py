@@ -19,6 +19,42 @@ def test_valid_bearer_and_api_key_accepted(client):
     assert client.get("/api/v1/stocks", headers={"X-API-Key": API_KEY}).status_code == 200
 
 
+def test_cors_preflight_is_allowed_without_credential_but_get_stays_protected(client):
+    origin = "http://127.0.0.1:5173"
+    preflight = client.options(
+        "/api/v1/alerts",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == origin
+    assert "Authorization" in preflight.headers["access-control-allow-headers"]
+
+    unauthenticated = client.get("/api/v1/alerts", headers={"Origin": origin})
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.headers["access-control-allow-origin"] == origin
+
+    authenticated = client.get("/api/v1/alerts", headers={**HEADERS, "Origin": origin})
+    assert authenticated.status_code == 200
+    assert authenticated.headers["access-control-allow-origin"] == origin
+
+
+def test_cors_rejects_unconfigured_origins(client):
+    response = client.options(
+        "/api/v1/alerts",
+        headers={
+            "Origin": "https://untrusted.example",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
+
+
 def test_mutation_methods_are_rejected(client):
     for method in ("post", "put", "patch", "delete"):
         response = getattr(client, method)("/api/v1/candidates", headers=HEADERS)

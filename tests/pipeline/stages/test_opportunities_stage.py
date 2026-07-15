@@ -64,7 +64,7 @@ def test_pipeline_order_and_cli_defaults_are_feature_flagged(tmp_path):
     assert parser.parse_args([]).opportunity_scan_routing_mode == "off"
     assert "opportunities" not in DEFAULT_CLI_STAGES.split(",")
     assert PIPELINE_ORDER.index("opportunities") == PIPELINE_ORDER.index("investigator") + 1
-    orchestrator = PipelineOrchestrator(tmp_path)
+    orchestrator = PipelineOrchestrator(tmp_path, allow_control_plane_migrations=True)
     assert "opportunities" not in orchestrator._normalize_stage_names(None)
     enabled = orchestrator._normalize_stage_names(None, opportunity_registry_mode="shadow")
     assert enabled.index("opportunities") == enabled.index("investigator") + 1

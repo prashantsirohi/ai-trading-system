@@ -5,15 +5,28 @@ const limitations = [
   'OPERATOR_MIGRATIONS_NOT_APPLIED', 'EMPTY_REAL_PHASE3B_HISTORY',
 ];
 
+type ApiRequest = { method: string; url: string; authorization?: string; apiKey?: string };
+
 function meta(partial = false) {
   return { request_id: 'e2e-request', generated_at: '2026-07-15T10:00:00Z', partial, limitations: partial ? limitations : [], lineage: [], lineage_meta: { source_consistent: true }, freshness: { freshness_status: partial ? 'UNKNOWN' : 'FRESH', latest_market_session: '2026-07-14', expected_market_session: '2026-07-14', freshness_reasons: [] } };
 }
 
-async function fixtureApi(page: Page, methods: string[]) {
+function errorBody(status: number) {
+  const codes: Record<number, string> = { 401: 'UNAUTHORIZED', 403: 'FORBIDDEN', 404: 'NOT_FOUND', 409: 'CONFLICT', 429: 'RATE_LIMITED', 503: 'SOURCE_UNAVAILABLE' };
+  return { code: codes[status] ?? `HTTP_${status}`, message: 'safe fixture error', request_id: `e2e-${status}` };
+}
+
+async function fixtureApi(page: Page, requests: ApiRequest[], statusByPath: Record<string, number> = {}) {
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
-    methods.push(request.method());
+    const headers = request.headers();
+    requests.push({ method: request.method(), url: request.url(), authorization: headers.authorization, apiKey: headers['x-api-key'] });
     const path = new URL(request.url()).pathname;
+    const status = statusByPath[path];
+    if (status) {
+      await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(errorBody(status)) });
+      return;
+    }
     let data: unknown = [];
     if (path === '/api/v1/system/readiness') data = { readiness_status: 'READY_WITH_LIMITATIONS', phase4_development_ready: true, phase4_production_ready: false, limitations: limitations.map((limitation_id) => ({ limitation_id })) };
     else if (path === '/api/v1/system/limitations') data = limitations.map((limitation_id) => ({ limitation_id, description: limitation_id, production_blocking: true }));
@@ -33,8 +46,8 @@ async function fixtureApi(page: Page, methods: string[]) {
 }
 
 test('operator completes a read-only Phase 4B flow', async ({ page }) => {
-  const methods: string[] = [];
-  await fixtureApi(page, methods);
+  const requests: ApiRequest[] = [];
+  await fixtureApi(page, requests);
   await page.goto('/');
   await page.getByLabel('API credential').fill('fixture-key');
   await page.getByRole('button', { name: 'Open read-only dashboard' }).click();
@@ -51,12 +64,78 @@ test('operator completes a read-only Phase 4B flow', async ({ page }) => {
   await expect(page.getByText('LOOK_AHEAD')).toBeVisible();
   await page.getByRole('link', { name: 'Performance' }).click();
   await page.getByRole('tab', { name: 'baselines' }).click();
-  await expect(page.getByText('Copied-realistic performance baseline not established.')).toBeVisible();
+  await expect(page.locator('section.notice-warning strong').filter({ hasText: 'Copied-realistic performance baseline not established.' })).toBeVisible();
   await page.getByRole('link', { name: 'Market & Sectors' }).click();
   await page.getByLabel('Evidence as of').fill('2026-07-01');
   await expect(page).toHaveURL(/as_of=2026-07-01/);
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.getByLabel('API credential')).toBeVisible();
-  expect(methods.length).toBeGreaterThan(0);
-  expect(new Set(methods)).toEqual(new Set(['GET']));
+  expect(requests.length).toBeGreaterThan(0);
+  expect(new Set(requests.map((request) => request.method))).toEqual(new Set(['GET']));
+  expect(requests.every((request) => request.authorization === 'Bearer fixture-key')).toBe(true);
+  expect(requests.every((request) => !request.url.includes('fixture-key'))).toBe(true);
+  expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length }))).toEqual({ local: 0, session: 0 });
+});
+
+test('operator can use the API-key header without leaking it into URLs', async ({ page }) => {
+  const requests: ApiRequest[] = [];
+  await fixtureApi(page, requests);
+  await page.goto('/readiness');
+  await page.getByLabel('API credential').fill('api-key-secret');
+  await page.getByLabel('Authentication mode').selectOption('api-key');
+  await page.getByRole('button', { name: 'Open read-only dashboard' }).click();
+  await expect(page.getByRole('heading', { name: 'Development and production gates' })).toBeVisible();
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests.every((request) => request.apiKey === 'api-key-secret')).toBe(true);
+  expect(requests.every((request) => !request.url.includes('api-key-secret'))).toBe(true);
+});
+
+test.describe('error states', () => {
+  const expected: Record<number, string> = {
+    401: 'Authentication required',
+    403: 'Authorization denied',
+    404: 'Resource not found',
+    409: 'Governance conflict',
+    429: 'Rate limited',
+    503: 'Source unavailable',
+  };
+
+  for (const [status, label] of Object.entries(expected)) {
+    test(`renders distinct ${status} feedback`, async ({ page }) => {
+      const requests: ApiRequest[] = [];
+      await fixtureApi(page, requests, { '/api/v1/system/readiness': Number(status) });
+      await page.goto('/');
+      await page.getByLabel('API credential').fill('fixture-key');
+      await page.getByRole('button', { name: 'Open read-only dashboard' }).click();
+      await expect(page.getByRole('alert').filter({ hasText: label })).toBeVisible();
+      await expect(page.getByText(`Request: e2e-${status}`).first()).toBeVisible();
+      expect(new Set(requests.map((request) => request.method))).toEqual(new Set(['GET']));
+    });
+  }
+});
+
+test.describe('real Phase 4A fixture API', () => {
+  test.skip(process.env.PLAYWRIGHT_REAL_API !== 'true', 'Set PLAYWRIGHT_REAL_API=true to start the Phase 4A fixture API.');
+
+  test('loads through the same-origin Vite proxy and stays read-only', async ({ page }) => {
+    const expectedOrigin = new URL(process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? '4173'}`).origin;
+    const requests: ApiRequest[] = [];
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/api/v1/')) {
+        const headers = request.headers();
+        requests.push({ method: request.method(), url, authorization: headers.authorization, apiKey: headers['x-api-key'] });
+      }
+    });
+    await page.goto('/readiness');
+    await page.getByLabel('API credential').fill(process.env.PLAYWRIGHT_API_KEY ?? 'local-dev-key');
+    await page.getByRole('button', { name: 'Open read-only dashboard' }).click();
+    await expect(page.getByRole('heading', { name: 'Development and production gates' })).toBeVisible();
+    await expect(page.getByText('Development view only — production readiness is blocked.')).toBeVisible();
+    await page.getByRole('link', { name: 'Performance' }).click();
+    await expect(page.getByRole('heading', { name: 'Benchmarks, replay, and baselines' })).toBeVisible();
+    expect(requests.length).toBeGreaterThan(0);
+    expect(new Set(requests.map((request) => request.method))).toEqual(new Set(['GET']));
+    expect(requests.every((request) => new URL(request.url).origin === expectedOrigin)).toBe(true);
+  });
 });

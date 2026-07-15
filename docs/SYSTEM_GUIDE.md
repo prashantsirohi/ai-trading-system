@@ -44,6 +44,9 @@ Phase 4B adds the [read-only operator dashboard](runbooks/phase4b_operator_dashb
 in the existing React/Vite console. Its production bundle consumes only Phase
 4A `/api/v1` GET endpoints, keeps credentials in page memory, renders API-owned
 freshness, lineage, and limitations, and exposes no mutation controls.
+Phase 4A permits credential-header CORS preflight only for configured origins;
+the subsequent GET remains authenticated, and local development should prefer
+the dashboard's same-origin Vite proxy.
 Phase 3C-1 adds append-only [sector-membership and stage-correction
 governance](stages/weekly_stage.md) without changing execution, publishing, or the
 Phase 3B history payloads. Phase 3C-1A hardens that governance with explicit
@@ -224,6 +227,22 @@ Run a reduced real-data canary without network publishing:
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
   --canary --symbol-limit 25 --local-publish
 ```
+
+Pipeline startup is verify-only for the control-plane schema. It proceeds when
+the schema is current and otherwise fails without opening a migration writer.
+Apply migrations separately after taking and verifying an operator-store
+backup; the command also requires the live control plane to match its copied
+backup byte-for-byte:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.migrate_control_plane \
+  --backup-dir "$DATA_ROOT/backups/<timestamp>" \
+  --from-migration 033 --to-migration 036 --apply
+```
+
+`--apply-control-plane-migrations` is an explicit startup override for
+controlled bootstrap contexts. Routine operator runs should use the separate,
+backup-gated command above so migrations and pipeline execution remain distinct.
 
 Run Phase 3B comparison without changing registry, execution, or published payloads:
 

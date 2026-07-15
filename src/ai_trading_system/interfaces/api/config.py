@@ -21,6 +21,13 @@ def _bool(name: str, default: bool) -> bool:
     return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _origins(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return tuple(origin.strip().rstrip("/") for origin in value.split(",") if origin.strip())
+
+
 @dataclass(frozen=True, slots=True)
 class ApiSettings:
     source_profile: SourceProfile = SourceProfile.OPERATOR_READ_ONLY
@@ -38,6 +45,10 @@ class ApiSettings:
     cache_ttl_seconds: int = 30
     include_openapi: bool = True
     max_response_rows: int = 500
+    cors_allowed_origins: tuple[str, ...] = (
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    )
 
     @classmethod
     def from_env(cls) -> "ApiSettings":
@@ -57,6 +68,10 @@ class ApiSettings:
             cache_ttl_seconds=int(os.getenv("PHASE4_API_CACHE_TTL_SECONDS", "30")),
             include_openapi=_bool("PHASE4_API_INCLUDE_OPENAPI", True),
             max_response_rows=int(os.getenv("PHASE4_API_MAX_RESPONSE_ROWS", "500")),
+            cors_allowed_origins=_origins(
+                "PHASE4_API_CORS_ALLOWED_ORIGINS",
+                ("http://127.0.0.1:5173", "http://localhost:5173"),
+            ),
         )
 
     def control_plane_path(self) -> Path | None:

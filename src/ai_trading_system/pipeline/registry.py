@@ -373,6 +373,43 @@ _REGISTRY_INIT_LOCK = threading.Lock()
 _INITIALIZED_DB_PATHS: set[str] = set()
 
 
+CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
+    "pipeline_run": frozenset({"run_id", "status"}),
+    "dq_rule": frozenset({"rule_id", "enabled", "active"}),
+    "opportunity_registry_schema": frozenset({"schema_version"}),
+    "weekly_stock_stage_history": frozenset({"observation_id", "source_artifact_hash"}),
+    "weekly_sector_stage_history": frozenset({"observation_id", "source_artifact_hash"}),
+    "opportunity_scan_routing_history": frozenset({"decision_id", "policy_version"}),
+    "sector_membership_history": frozenset({"membership_observation_id", "membership_trust"}),
+    "stage_observation_governance": frozenset(
+        {
+            "governance_event_id",
+            "authority_reference",
+            "authority_recorded_at",
+            "governance_policy_version",
+        }
+    ),
+    "stage_observation_dependency": frozenset({"dependency_id", "sector_observation_id"}),
+    "stage_correction_impact": frozenset(
+        {
+            "impact_id",
+            "match_count",
+            "match_rule_version",
+            "match_evidence",
+            "authoritative_calibration_eligible",
+            "review_required",
+        }
+    ),
+    "pipeline_alert_incident": frozenset({"incident_id", "dedupe_key", "status"}),
+    "position_recovery_proposal": frozenset({"recovery_proposal_id", "proposal_status"}),
+    "position_recovery_action": frozenset({"recovery_action_id", "recovery_proposal_id"}),
+}
+
+
+class ControlPlaneMigrationRequiredError(RuntimeError):
+    """Raised when pipeline startup finds a control plane behind current code."""
+
+
 class RegistryStore:
     """Persists run metadata and governance records into DuckDB."""
 
@@ -382,13 +419,16 @@ class RegistryStore:
         db_path: Optional[Path | str] = None,
         *,
         initialize: bool = True,
+        allow_migrations: bool = True,
     ):
         self.project_root = canonicalize_project_root(project_root)
         # Keep governance/control-plane metadata in a dedicated database so
         # live OHLCV writers and long-running readers do not block alerting,
         # model governance, or pipeline run tracking.
         self.db_path = Path(db_path) if db_path else get_domain_paths(self.project_root).root_dir / "control_plane.duckdb"
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.allow_migrations = bool(allow_migrations)
+        if self.allow_migrations:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._write_lock = threading.RLock()
         if initialize:
             self._ensure_initialized()
@@ -432,6 +472,9 @@ class RegistryStore:
         )
 
     def _ensure_initialized(self) -> None:
+        if not self.allow_migrations:
+            self.verify_schema_current()
+            return
         db_key = str(self.db_path.resolve())
         with _REGISTRY_INIT_LOCK:
             if db_key in _INITIALIZED_DB_PATHS:
@@ -448,10 +491,66 @@ class RegistryStore:
                     time.sleep(0.05 * (attempt + 1))
 
     def _apply_migrations(self) -> None:
+        self.apply_migration_range()
+
+    def apply_migration_range(
+        self,
+        *,
+        first: str | None = None,
+        last: str | None = None,
+    ) -> list[str]:
+        """Apply an inclusive migration filename-prefix range explicitly."""
+        if not self.allow_migrations:
+            raise RuntimeError("RegistryStore was opened with allow_migrations=False")
+        selected = []
+        for migration_path in self._migration_files():
+            prefix = migration_path.name.split("_", 1)[0]
+            if first is not None and prefix < first:
+                continue
+            if last is not None and prefix > last:
+                continue
+            selected.append(migration_path)
+        if not selected:
+            raise ValueError(f"No migrations selected for range {first or '*'}..{last or '*'}")
         with self._writer() as conn:
-            for migration_path in self._migration_files():
+            for migration_path in selected:
                 conn.execute(migration_path.read_text(encoding="utf-8"))
-            self._ensure_dq_result_band_columns(conn)
+            if first is None and last is None:
+                self._ensure_dq_result_band_columns(conn)
+        return [migration_path.name for migration_path in selected]
+
+    def verify_schema_current(self) -> dict[str, list[str]]:
+        """Verify the current control-plane contract without opening a writer."""
+        if not self.db_path.is_file():
+            raise ControlPlaneMigrationRequiredError(
+                f"Control-plane database does not exist: {self.db_path}. "
+                "Create/migrate it explicitly before pipeline startup."
+            )
+        with self._reader() as conn:
+            rows = conn.execute(
+                """
+                SELECT table_name, column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'main'
+                """
+            ).fetchall()
+        available: dict[str, set[str]] = {}
+        for table_name, column_name in rows:
+            available.setdefault(str(table_name), set()).add(str(column_name))
+        missing = {
+            table_name: sorted(required_columns - available.get(table_name, set()))
+            for table_name, required_columns in CONTROL_PLANE_CURRENT_SCHEMA.items()
+            if required_columns - available.get(table_name, set())
+        }
+        if missing:
+            details = ", ".join(
+                f"{table}({','.join(columns)})" for table, columns in sorted(missing.items())
+            )
+            raise ControlPlaneMigrationRequiredError(
+                "Control-plane schema is not current; pipeline startup will not apply migrations. "
+                f"Missing tables/columns: {details}. Run the explicit control-plane migration command first."
+            )
+        return {table: sorted(columns) for table, columns in CONTROL_PLANE_CURRENT_SCHEMA.items()}
 
     @staticmethod
     def _ensure_dq_result_band_columns(conn: duckdb.DuckDBPyConnection) -> None:

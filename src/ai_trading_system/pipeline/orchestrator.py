@@ -545,9 +545,13 @@ class PipelineOrchestrator:
         alert_manager: Optional[AlertManager] = None,
         stages: Optional[Dict[str, object]] = None,
         progress_renderer: Optional[TerminalProgressRenderer] = None,
+        allow_control_plane_migrations: bool = False,
     ):
         self.project_root = canonicalize_project_root(project_root)
-        self.registry = registry or RegistryStore(self.project_root)
+        self.registry = registry or RegistryStore(
+            self.project_root,
+            allow_migrations=allow_control_plane_migrations,
+        )
         self.dq_engine = dq_engine or DataQualityEngine(self.registry)
         self.alert_manager = alert_manager or AlertManager(self.registry)
         self.preflight_checker = PreflightChecker(self.project_root)
@@ -1440,6 +1444,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Resilient trading pipeline orchestrator")
     parser.add_argument("--run-id", help="Reuse an existing run_id, typically for stage retries")
     parser.add_argument(
+        "--apply-control-plane-migrations",
+        action="store_true",
+        help="Explicitly allow startup migrations. Prefer the separately invoked migration command for operator stores.",
+    )
+    parser.add_argument(
         "--stages",
         default=DEFAULT_CLI_STAGES,
         help="Comma-separated stage list. Example: publish",
@@ -1986,9 +1995,19 @@ def main() -> None:
     configure_terminal_output(terminal_mode)
     progress_renderer = TerminalProgressRenderer(mode=terminal_mode)
     try:
-        orchestrator = PipelineOrchestrator(project_root, progress_renderer=progress_renderer)
+        orchestrator = PipelineOrchestrator(
+            project_root,
+            progress_renderer=progress_renderer,
+            allow_control_plane_migrations=bool(args.apply_control_plane_migrations),
+        )
     except TypeError:
-        orchestrator = PipelineOrchestrator(project_root)
+        if args.apply_control_plane_migrations:
+            orchestrator = PipelineOrchestrator(
+                project_root,
+                allow_control_plane_migrations=True,
+            )
+        else:
+            orchestrator = PipelineOrchestrator(project_root)
         if hasattr(orchestrator, "progress_renderer"):
             orchestrator.progress_renderer = progress_renderer
     run_date = args.run_date or date.today().isoformat()

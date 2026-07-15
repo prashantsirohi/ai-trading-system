@@ -61,6 +61,7 @@ def test_scan_router_coverage_failure_is_nonblocking_for_execution_and_publish(
 
     orchestrator = PipelineOrchestrator(
         tmp_path,
+        allow_control_plane_migrations=True,
         stages={
             "scan_router": _FailingRouter(),
             "execute": _SuccessfulStage("execute"),

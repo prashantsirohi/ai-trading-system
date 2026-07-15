@@ -150,6 +150,15 @@ At minimum, back up OHLCV, control-plane, execution, candidate-tracker, master-d
 
 Never run repair or migration commands against live stores without explicit task scope and a verified backup. Follow [backup and restore](../runbooks/backup_and_restore.md).
 
+`PipelineOrchestrator` does not implicitly migrate `control_plane.duckdb`.
+Its default `RegistryStore` opens in schema-verification mode and fails before a
+run is created when required tables or columns are absent. Operator migrations
+use `interfaces.cli.migrate_control_plane`, which runs outside pipeline
+execution, requires `--apply`, verifies the copied control-plane checksum from
+`SHA256SUMS.txt`, and confirms that the live pre-migration file still matches
+the backup. The pipeline CLI exposes `--apply-control-plane-migrations` only as
+an explicit bootstrap override; it is not the routine operator migration path.
+
 ## Phase 4A read-only access
 
 The Phase 4A API opens DuckDB with `read_only=True` and never constructs
