@@ -759,3 +759,9 @@ readiness checker.
 - Control-plane DDL is applied by `RegistryStore`; it reads packaged SQL files from `pipeline/migrations/` in lexicographic order.
 - DuckDB does not enforce foreign keys; relationships above are by convention and are not constrained at the database level.
 - Several control-plane tables are extended by later migrations (002 → `dq_rule`, `model_registry`; 012 → `data_repair_run` index; 017 → `strategy_iteration_result`). Treat the final shape as the merge of all referenced migrations.
+## Phase 4A-1 schema boundary
+
+Phase 4A-1 adds no database tables or migrations. The API opens the configured
+control plane with DuckDB `read_only=True`, uses governed Phase 3C tables when
+present, and falls back to immutable registered artifacts. API telemetry is
+process-local and is never persisted to an operator store.

@@ -26,6 +26,18 @@ calibration/readiness, and performance. OpenAPI is at `/openapi.json` and
 `/docs` unless disabled. Governed rows are authoritative, followed by immutable
 promoted evidence and then summaries; inconsistent versions are not mixed.
 
+Operator projections consume canonical position coverage/reconciliation,
+missing-data, episode compatibility, recovery proposal/action, calibration,
+readiness, performance, and routing-conflict families. A present primary
+artifact remains usable when supporting evidence is missing; the envelope is
+partial with a family-specific limitation. System readiness and limitations
+are projections of the same Phase 3C-5 readiness JSON.
+
+Governance conflicts aggregate stage resolver outcomes, membership interval
+and trust problems, unresolved correction impacts, routing conflicts, and
+source-version mismatches. A conflicted stock or sector detail returns
+`409 GOVERNANCE_CONFLICT`; collections remain usable.
+
 ## Authentication and tracing
 
 Live and ready health are public and disclose no rows. Other routes require
@@ -39,6 +51,14 @@ authentication state—not credentials, SQL, source paths, or payloads. The
 in-memory limit defaults to 120 requests per minute per credential;
 distributed limiting remains a deployment concern.
 
+Process-local telemetry records request count/duration/status class,
+source-read duration and rows, unavailable and partial responses,
+authentication/authorization failures, rate limiting, governance conflicts,
+and optional cache hits/misses. Metric labels are limited to route template,
+HTTP method, status class, source family, and cache result. Resource IDs,
+request IDs, keys, paths, SQL, and exception text are excluded. There is no
+public metrics route or database telemetry sink.
+
 ## Pagination, as-of, freshness, and ETags
 
 Collection cursors bind sort field, direction, stable identity, and filter
@@ -51,6 +71,14 @@ of day UTC. Naive, malformed, and future values return `INVALID_AS_OF`.
 Universal stages use canonical effective-time and recorded-availability
 resolution, preventing late corrections from leaking backward. Freshness uses
 semantic lineage rather than file modification time.
+
+Every envelope includes `freshness`, flat `lineage`, and `lineage_meta` with
+primary/supporting consistency; `source_freshness` remains for compatibility.
+Unknown lineage and semantic time are empty/null and use
+`LINEAGE_UNAVAILABLE` and `FRESHNESS_UNKNOWN`, never fabricated hashes or
+timestamps. The stable limitation registry covers source, position,
+calibration/readiness, performance, and governance gaps plus the four published
+production blockers.
 
 Versioned details use semantic ETags and return 304 for matching
 `If-None-Match`. Response-generation timestamps do not affect ETags.
@@ -90,3 +118,4 @@ The command rejects symlinks and the configured operator store.
 Phase 4A has no dashboard, charts, saved views, watchlists, preferences, action
 buttons, candidate edits, recovery approval, alert acknowledgement, refresh
 control, pipeline trigger, execution action, or broker import.
+Phase 4A-1 does not implement any Phase 4B behavior.

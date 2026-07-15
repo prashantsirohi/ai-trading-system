@@ -249,3 +249,15 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-symbol-report` | Symbol research report |
 
 For any mutating repair, migration, backfill, promotion, or live execution command, inspect `--help`, confirm the target data domain, and take the required backup first.
+
+For a read-only Phase 4A copied-store smoke with immutable evidence:
+
+```bash
+PHASE4_API_SOURCE_PROFILE=copied_store \
+PHASE4_API_COPIED_CONTROL_PLANE=/path/to/control_plane.copy.duckdb \
+PHASE4_API_ARTIFACT_ROOT=/path/to/immutable/evidence \
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.serve_phase4_api
+```
+
+The command opens DuckDB read-only and invokes no migration, pipeline, or
+broker operation.

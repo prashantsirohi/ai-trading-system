@@ -194,3 +194,17 @@ dataset hash. Exact replay must reproduce both manifest identity and eligible
 dataset content hash. A matching manifest identity with a different dataset
 hash is an integrity failure. Excluded, quarantined, and pending rows remain
 separate lineage evidence and are never silently promoted into calibration.
+## Phase 4A read-only projection boundary
+
+The Phase 4A API reads canonical governed DuckDB rows first, then promoted
+immutable artifacts registered to completed stage attempts, then canonical
+summary artifacts. Missing evidence produces a typed partial response; the API
+does not manufacture rows or repair sources. Artifact discovery is constrained
+to configured `DATA_ROOT`, copied-store roots, or the explicit
+`PHASE4_API_ARTIFACT_ROOT`; symlinks and paths outside those roots are rejected.
+
+Each governed response carries common source, run, content/schema/policy,
+semantic as-of, and availability lineage plus primary/supporting consistency.
+Freshness uses run, manifest, session, and availability timestamps. Filesystem
+modification time is not a freshness input. Different run IDs or semantic as-of
+values yield `SOURCE_VERSION_MISMATCH` and a partial response.

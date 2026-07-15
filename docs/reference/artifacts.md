@@ -310,3 +310,10 @@ when no governed row model exists, retaining content hashes as compact lineage.
 It never rewrites, refreshes, touches, downloads, or file-caches source
 evidence. Missing evidence is unavailable or partial and is never replaced
 with generated market data.
+
+Phase 4A-1 centralizes emitted Phase 3C filenames in one read-only registry. It
+covers position coverage and recovery, all ten calibration/readiness outputs,
+all five performance outputs, routing conflicts, and weekly-stage/governance
+conflict outputs. Registered promoted artifacts from completed attempts take
+precedence. Safe-root discovery is a deterministic semantic run/as-of fallback,
+never an mtime ordering. Required columns and registered hashes are verified.

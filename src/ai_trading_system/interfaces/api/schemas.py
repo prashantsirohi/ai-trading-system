@@ -19,17 +19,29 @@ class FreshnessStatus(str, Enum):
 class LineageRef(BaseModel):
     source_type: str
     source_id: str
+    run_id: str | None = None
     content_hash: str | None = None
+    schema_version: str | None = None
     available_at: datetime | None = None
     policy_version: str | None = None
+    source_as_of: datetime | None = None
+
+
+class LineageMeta(BaseModel):
+    primary: LineageRef | None = None
+    supporting: list[LineageRef] = Field(default_factory=list)
+    source_consistent: bool = True
+    source_version_mismatch: bool = False
 
 
 class SourceFreshness(BaseModel):
     source_as_of: datetime | None = None
     last_successful_run_at: datetime | None = None
     latest_market_session: date | None = None
+    expected_market_session: date | None = None
     staleness_sessions: int | None = None
     freshness_status: FreshnessStatus = FreshnessStatus.UNKNOWN
+    freshness_reasons: list[str] = Field(default_factory=list)
 
 
 class PaginationMeta(BaseModel):
@@ -46,6 +58,8 @@ class ResponseMeta(BaseModel):
     partial: bool = False
     limitations: list[str] = Field(default_factory=list)
     lineage: list[LineageRef] = Field(default_factory=list)
+    lineage_meta: LineageMeta = Field(default_factory=LineageMeta)
+    freshness: SourceFreshness = Field(default_factory=SourceFreshness)
     pagination: PaginationMeta | None = None
 
 
@@ -206,13 +220,25 @@ class PositionCoverageSummary(BaseModel):
     symbol_id: str
     exchange: str
     coverage_status: str
-    position_monitor_present: bool
-    market_data_complete: bool
-    evidence_complete: bool
+    position_monitor_present: bool = False
+    effective_scan_tier: str | None = None
+    routing_decision_id: str | None = None
+    market_data_available: bool | None = None
+    market_data_complete: bool = False
+    last_valid_market_timestamp: datetime | None = None
+    expected_market_session: date | None = None
+    evidence_complete: bool = False
+    investigator_evidence_complete: bool | None = None
     missing_fields: list[str] = Field(default_factory=list)
-    episode_compatibility: str
+    missing_data_fields: list[str] = Field(default_factory=list)
+    episode_compatibility: str = "unknown"
+    episode_match_status: str | None = None
+    opportunity_episode_id: str | None = None
     recovery_status: str | None = None
     positive_action_suppressed: bool
+    suppression_reasons: list[str] = Field(default_factory=list)
+    coverage_reasons: list[str] = Field(default_factory=list)
+    policy_version: str | None = None
 
 
 class AlertSummary(BaseModel):
@@ -262,6 +288,18 @@ class CalibrationSummaryResponse(BaseModel):
     quarantined_count: int = 0
     pending_count: int = 0
     top_exclusion_reasons: list[dict[str, Any]] = Field(default_factory=list)
+    total_samples: int = 0
+    class_counts: dict[str, int] = Field(default_factory=dict)
+    largest_class_share: float | None = None
+    date_range: dict[str, Any] = Field(default_factory=dict)
+    regime_coverage: dict[str, int] = Field(default_factory=dict)
+    stage_coverage: dict[str, Any] = Field(default_factory=dict)
+    scan_tier_coverage: dict[str, int] = Field(default_factory=dict)
+    setup_family_coverage: dict[str, int] = Field(default_factory=dict)
+    policy_version: str | None = None
+    formal_verdict: str | None = None
+    phase4_development_ready: bool | None = None
+    phase4_production_ready: bool | None = None
 
 
 class CalibrationManifestResponse(BaseModel):
@@ -269,6 +307,14 @@ class CalibrationManifestResponse(BaseModel):
     policy_version: str
     source_hashes: dict[str, str] = Field(default_factory=dict)
     replay_equivalent: bool | None = None
+    schema_versions: dict[str, str] = Field(default_factory=dict)
+    migration_lineage: list[Any] = Field(default_factory=list)
+    configuration_hash: str | None = None
+    policy_hashes: dict[str, str] = Field(default_factory=dict)
+    dataset_hashes: dict[str, str] = Field(default_factory=dict)
+    row_counts: dict[str, int] = Field(default_factory=dict)
+    date_bounds: dict[str, Any] = Field(default_factory=dict)
+    reproducibility_status: str | None = None
 
 
 class PerformanceSummaryResponse(BaseModel):
@@ -283,12 +329,27 @@ class PerformanceSummaryResponse(BaseModel):
     threshold_results: list[dict[str, Any]] = Field(default_factory=list)
     replay_equivalence: str | None = None
     cache_mode: str | None = None
+    as_of: datetime | None = None
+    policy_version: str | None = None
+    replay_mode: str | None = None
+    total_runtime_ms: float | None = None
+    symbols_processed: int | None = None
+    rows_processed: int | None = None
+    operation_metrics: list[dict[str, Any]] = Field(default_factory=list)
+    database_metrics: list[dict[str, Any]] = Field(default_factory=list)
+    replay_comparison: dict[str, Any] | None = None
 
 
 class ReadinessCheckResponse(BaseModel):
     check_id: str
     category: str
     status: str
-    required_for_ready: bool
+    required_for_ready: bool = False
     limitation: str | None = None
-
+    severity: str | None = None
+    observed_value: Any | None = None
+    expected_condition: str | None = None
+    development_blocking: bool = False
+    production_blocking: bool = False
+    remediation: str | None = None
+    policy_version: str | None = None

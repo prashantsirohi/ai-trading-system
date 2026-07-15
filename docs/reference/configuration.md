@@ -203,6 +203,7 @@ per credential.
 |---|---|---|
 | `PHASE4_API_SOURCE_PROFILE` | `operator_read_only` | `small_fixture`, `copied_store`, or `operator_read_only`. |
 | `PHASE4_API_COPIED_CONTROL_PLANE` | unset | Explicit copy; operator paths and symlinks are rejected. |
+| `PHASE4_API_ARTIFACT_ROOT` | unset | Fixed immutable evidence root; safe-root and symlink checks apply. |
 | `PHASE4_API_AUTH_ENABLED` | `true` | Require bearer or `X-API-Key` authentication outside public health. |
 | `PHASE4_API_LOCAL_DEV_MODE` | `false` | Explicit local-only authentication bypass. |
 | `PHASE4_API_KEY` | unset | Runtime secret; never logged. |
@@ -213,6 +214,8 @@ per credential.
 | `PHASE4_API_INCLUDE_OPENAPI` | `true` | Expose OpenAPI and interactive docs. |
 
 Requests cannot change source profile, database path, or runtime root.
+Artifact selection prefers completed promoted registry entries and otherwise
+uses semantic run/as-of identity. It never uses file mtime as freshness.
 
 ## See also
 

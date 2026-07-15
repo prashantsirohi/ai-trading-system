@@ -25,6 +25,7 @@ def _bool(name: str, default: bool) -> bool:
 class ApiSettings:
     source_profile: SourceProfile = SourceProfile.OPERATOR_READ_ONLY
     copied_control_plane: Path | None = None
+    artifact_root: Path | None = None
     auth_enabled: bool = True
     local_dev_mode: bool = False
     api_key: str | None = None
@@ -43,6 +44,7 @@ class ApiSettings:
         return cls(
             source_profile=SourceProfile(os.getenv("PHASE4_API_SOURCE_PROFILE", "operator_read_only").lower()),
             copied_control_plane=(Path(os.environ["PHASE4_API_COPIED_CONTROL_PLANE"]) if os.getenv("PHASE4_API_COPIED_CONTROL_PLANE") else None),
+            artifact_root=(Path(os.environ["PHASE4_API_ARTIFACT_ROOT"]) if os.getenv("PHASE4_API_ARTIFACT_ROOT") else None),
             auth_enabled=_bool("PHASE4_API_AUTH_ENABLED", True),
             local_dev_mode=_bool("PHASE4_API_LOCAL_DEV_MODE", False),
             api_key=os.getenv("PHASE4_API_KEY"),
@@ -81,3 +83,14 @@ class ApiSettings:
     def auth_configured(self) -> bool:
         return (not self.auth_enabled) or self.local_dev_mode or bool(self.api_key)
 
+    def artifact_roots(self) -> tuple[Path, ...]:
+        """Configured immutable evidence roots; never accepts request input."""
+        roots: list[Path] = []
+        if self.artifact_root is not None:
+            roots.append(self.artifact_root.expanduser())
+        if self.source_profile is SourceProfile.COPIED_STORE and self.copied_control_plane:
+            roots.append(self.copied_control_plane.expanduser().parent)
+        if self.source_profile is SourceProfile.OPERATOR_READ_ONLY:
+            operational = get_domain_paths(data_domain="operational")
+            roots.extend((operational.root_dir, operational.root_dir / "pipeline_runs"))
+        return tuple(dict.fromkeys(roots))

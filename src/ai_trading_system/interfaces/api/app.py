@@ -34,6 +34,8 @@ from .schemas import (
     DecisionContextResponse,
     GovernanceCorrectionResponse,
     HealthResponse,
+    LineageRef,
+    LineageMeta,
     MarketStageResponse,
     OutcomeAttributionResponse,
     PaginationMeta,
@@ -52,6 +54,7 @@ from .schemas import (
     VersionResponse,
 )
 from .services import LIMITATIONS, Phase4ReadService
+from .telemetry import ApiMetrics
 
 
 LOGGER = logging.getLogger("ai_trading_system.phase4_api")
@@ -63,6 +66,8 @@ ALLOWED_QUERY_PARAMS = {
     "scan_reason", "candidate_state", "setup_family", "coverage_status",
     "alert_status", "status", "severity", "eligibility_status", "readiness_status",
     "date_from", "date_to", "include",
+    "dimension", "bucket", "cache_mode", "replay_mode", "performance_status",
+    "review_required", "calibration_eligible", "entity_type",
 }
 
 
@@ -90,16 +95,24 @@ def _parse_as_of(value: str | None) -> datetime:
 
 
 def _meta(request: Request, *, as_of: datetime | None = None, partial: bool = False, limitations: list[str] | None = None, pagination: PaginationMeta | None = None) -> ResponseMeta:
+    service: Phase4ReadService = request.app.state.service
+    path = request.url.path
+    family = next((name for prefix, name in (("/api/v1/positions", "positions"), ("/api/v1/calibration", "calibration"), ("/api/v1/readiness", "calibration"), ("/api/v1/performance", "performance"), ("/api/v1/governance", "governance"), ("/api/v1/routing", "routing"), ("/api/v1/stocks", "stages"), ("/api/v1/sectors", "stages"), ("/api/v1/market/stage", "stages"), ("/api/v1/candidates", "candidates"), ("/api/v1/alerts", "alerts"), ("/api/v1/alert-incidents", "alerts"), ("/api/v1/system/readiness", "readiness"), ("/api/v1/system/limitations", "readiness")) if path.startswith(prefix)), "system")
+    state = service.projection_state(family)
+    lineage = [LineageRef.model_validate(item) for item in state.lineage]
+    combined = list(dict.fromkeys([*(limitations or []), *state.limitations]))
+    freshness = SourceFreshness.model_validate({**state.freshness, **({"source_as_of": as_of} if as_of and not state.freshness.get("source_as_of") else {})})
+    effective_partial = partial or bool(state.limitations) or state.source_version_mismatch
     return ResponseMeta(
         request_id=request.state.request_id,
         generated_at=datetime.now(timezone.utc),
         as_of=as_of,
-        source_freshness=SourceFreshness(
-            source_as_of=as_of,
-            freshness_status="FRESH" if as_of else "UNKNOWN",
-        ),
-        partial=partial,
-        limitations=limitations or [],
+        source_freshness=freshness,
+        freshness=freshness,
+        partial=effective_partial,
+        limitations=combined,
+        lineage=lineage,
+        lineage_meta=LineageMeta(primary=lineage[0] if lineage else None, supporting=lineage[1:] if lineage else [], source_consistent=not state.source_version_mismatch, source_version_mismatch=state.source_version_mismatch),
         pagination=pagination,
     )
 
@@ -107,6 +120,11 @@ def _meta(request: Request, *, as_of: datetime | None = None, partial: bool = Fa
 def _response(request: Request, data: Any, *, meta: ResponseMeta, etag_seed: Any | None = None, status_code: int = 200) -> Response:
     payload = ApiResponse(data=data, meta=meta).model_dump(mode="json")
     headers = {"X-Request-ID": request.state.request_id}
+    if meta.partial:
+        route = getattr(request.scope.get("route"), "path", "__unmatched__")
+        request.app.state.metrics.record_partial(route)
+    if data and request.url.path in {"/api/v1/governance/conflicts", "/api/v1/routing/conflicts"}:
+        request.app.state.metrics.governance_conflict_response_count += 1
     if etag_seed is not None:
         service: Phase4ReadService = request.app.state.service
         etag = f'"{service.semantic_hash(etag_seed)}"'
@@ -126,6 +144,7 @@ def _item_id(row: dict[str, Any]) -> str:
 def _list_page(
     rows: list[dict[str, Any]], *, limit: int, cursor: str | None, sort: str,
     order: str, allowed_sort: set[str], filters: dict[str, Any], max_limit: int,
+    cursor_filters: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], PaginationMeta]:
     if limit < 1 or limit > max_limit:
         raise Phase4ApiError("INVALID_ARGUMENT", f"limit must be between 1 and {max_limit}", 400)
@@ -137,16 +156,17 @@ def _list_page(
         if value is not None:
             rows = [row for row in rows if str(row.get(key, "")).lower() == str(value).lower()]
     rows.sort(key=lambda row: (str(row.get(sort, "")), _item_id(row)), reverse=order == "desc")
+    bound_filters = cursor_filters if cursor_filters is not None else filters
     start = 0
     if cursor:
-        last = decode_cursor(cursor, sort=sort, order=order, filters=filters)
+        last = decode_cursor(cursor, sort=sort, order=order, filters=bound_filters)
         matches = [index for index, row in enumerate(rows) if _item_id(row) == last]
         if not matches:
             raise Phase4ApiError("INVALID_ARGUMENT", "Cursor is no longer valid", 400)
         start = matches[0] + 1
     page = rows[start : start + limit]
     has_more = start + limit < len(rows)
-    next_cursor = encode_cursor(sort=sort, order=order, last_key=_item_id(page[-1]), filters=filters) if has_more and page else None
+    next_cursor = encode_cursor(sort=sort, order=order, last_key=_item_id(page[-1]), filters=bound_filters) if has_more and page else None
     return page, PaginationMeta(next_cursor=next_cursor, has_more=has_more, limit=limit)
 
 
@@ -171,6 +191,8 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
             auth_enabled=False,
             local_dev_mode=True,
         ) if testing else ApiSettings.from_env()
+    assert settings is not None
+    resolved_settings: ApiSettings = settings
     docs_url = "/docs" if settings.include_openapi else None
     openapi_url = "/openapi.json" if settings.include_openapi else None
     app = FastAPI(
@@ -185,9 +207,9 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
         openapi_url=openapi_url,
     )
     app.state.settings = settings
-    app.state.service = Phase4ReadService(settings)
+    app.state.metrics = ApiMetrics()
+    app.state.service = Phase4ReadService(settings, app.state.metrics)
     app.state.rate_windows = defaultdict(deque)
-    app.state.metrics = {"requests": 0, "partial_responses": 0, "source_unavailable": 0, "durations_ms": []}
 
     @app.exception_handler(Phase4ApiError)
     async def phase4_error(request: Request, exc: Phase4ApiError) -> JSONResponse:
@@ -214,42 +236,51 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
         request.state.request_id = _request_id(request)
         authenticated = False
         path = request.url.path
+        def finish(response: Response) -> Response:
+            duration_ms = round((time.monotonic() - started) * 1000, 3)
+            response.headers["X-Request-ID"] = request.state.request_id
+            route_object = request.scope.get("route")
+            route = getattr(route_object, "path", None)
+            if route is None:
+                route = next((str(getattr(item, "path")) for item in app.routes if getattr(item, "path_regex", None) and getattr(item, "path_regex").fullmatch(path)), "__unmatched__")
+            app.state.metrics.record_request(route, request.method, response.status_code, duration_ms)
+            LOGGER.info(json.dumps({"event": "phase4_api_request", "request_id": request.state.request_id, "request_started_at": datetime.now(timezone.utc).isoformat(), "duration_ms": duration_ms, "route": route, "status_code": response.status_code, "authenticated": authenticated}, sort_keys=True))
+            return response
         if path.startswith("/api/v1") and request.method not in {"GET", "HEAD", "OPTIONS"}:
-            return JSONResponse(
+            return finish(JSONResponse(
                 ApiError(code="METHOD_NOT_ALLOWED", message="Phase 4A is read-only", request_id=request.state.request_id).model_dump(),
                 status_code=405, headers={"Allow": "GET, HEAD, OPTIONS", "X-Request-ID": request.state.request_id},
-            )
+            ))
         unknown = set(request.query_params) - ALLOWED_QUERY_PARAMS
         if path.startswith("/api/v1") and unknown:
-            return JSONResponse(
+            return finish(JSONResponse(
                 ApiError(code="INVALID_ARGUMENT", message="Unknown query parameter", request_id=request.state.request_id, details={"unknown": sorted(unknown)}).model_dump(),
                 status_code=400, headers={"X-Request-ID": request.state.request_id},
-            )
+            ))
         protected = path.startswith("/api/v1") and path not in PUBLIC_PATHS
         if protected and settings.auth_enabled and not settings.local_dev_mode:
             if not settings.api_key:
-                return JSONResponse(ApiError(code="AUTHENTICATION_REQUIRED", message="API authentication is not configured", request_id=request.state.request_id).model_dump(), status_code=503, headers={"X-Request-ID": request.state.request_id})
+                app.state.metrics.authentication_failure_count += 1
+                return finish(JSONResponse(ApiError(code="AUTHENTICATION_REQUIRED", message="API authentication is not configured", request_id=request.state.request_id).model_dump(), status_code=503, headers={"X-Request-ID": request.state.request_id}))
             supplied = request.headers.get("Authorization", "")
             supplied = supplied[7:].strip() if supplied.startswith("Bearer ") else (request.headers.get("X-API-Key") or "").strip()
             if not supplied:
-                return JSONResponse(ApiError(code="AUTHENTICATION_REQUIRED", message="Authentication required", request_id=request.state.request_id).model_dump(), status_code=401, headers={"X-Request-ID": request.state.request_id})
+                app.state.metrics.authentication_failure_count += 1
+                return finish(JSONResponse(ApiError(code="AUTHENTICATION_REQUIRED", message="Authentication required", request_id=request.state.request_id).model_dump(), status_code=401, headers={"X-Request-ID": request.state.request_id}))
             if not hmac.compare_digest(supplied.encode(), settings.api_key.encode()):
-                return JSONResponse(ApiError(code="AUTHORIZATION_DENIED", message="Invalid API credential", request_id=request.state.request_id).model_dump(), status_code=403, headers={"X-Request-ID": request.state.request_id})
+                app.state.metrics.authorization_failure_count += 1
+                return finish(JSONResponse(ApiError(code="AUTHORIZATION_DENIED", message="Invalid API credential", request_id=request.state.request_id).model_dump(), status_code=403, headers={"X-Request-ID": request.state.request_id}))
             authenticated = True
             window = app.state.rate_windows[Phase4ReadService.semantic_hash(supplied)]
             now = time.monotonic()
             while window and window[0] <= now - 60:
                 window.popleft()
             if len(window) >= settings.rate_limit_per_minute:
-                return JSONResponse(ApiError(code="RATE_LIMITED", message="Rate limit exceeded", request_id=request.state.request_id).model_dump(), status_code=429, headers={"X-Request-ID": request.state.request_id})
+                app.state.metrics.rate_limit_count += 1
+                return finish(JSONResponse(ApiError(code="RATE_LIMITED", message="Rate limit exceeded", request_id=request.state.request_id).model_dump(), status_code=429, headers={"X-Request-ID": request.state.request_id}))
             window.append(now)
         response = await call_next(request)
-        duration_ms = round((time.monotonic() - started) * 1000, 3)
-        response.headers["X-Request-ID"] = request.state.request_id
-        app.state.metrics["requests"] += 1
-        app.state.metrics["durations_ms"].append(duration_ms)
-        LOGGER.info(json.dumps({"event": "phase4_api_request", "request_id": request.state.request_id, "request_started_at": datetime.now(timezone.utc).isoformat(), "duration_ms": duration_ms, "route": path, "status_code": response.status_code, "authenticated": authenticated}, sort_keys=True))
-        return response
+        return finish(response)
 
     service: Phase4ReadService = app.state.service
 
@@ -287,6 +318,12 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
             rows = [row for row in rows if str(row.get("symbol_id", "")).upper() == symbol.upper()]
         if sector:
             rows = [row for row in rows if str(row.get("sector_id", "")).upper() == sector.upper()]
+        entity = symbol or sector
+        if entity:
+            conflict = service.entity_conflict(scope, entity)
+            if conflict:
+                app.state.metrics.governance_conflict_response_count += 1
+                raise Phase4ApiError("GOVERNANCE_CONFLICT", "No authoritative stage can be selected", 409, conflict)
         limitations = service.partial_limitations("stages", rows)
         return rows, cutoff, limitations
 
@@ -337,7 +374,7 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
         return _response(request, page, meta=_meta(request, partial=not rows, limitations=limits, pagination=page_meta))
 
     @app.get("/api/v1/routing", response_model=ApiResponse[list[RoutingDecisionSummary]], tags=["routing"])
-    def routing(request: Request, limit: int = Query(settings.default_page_size), cursor: str | None = None, sort: str = "as_of", order: str = "desc", symbol: str | None = None, scan_tier: str | None = None, scan_reason: str | None = None):
+    def routing(request: Request, limit: int = Query(resolved_settings.default_page_size), cursor: str | None = None, sort: str = "as_of", order: str = "desc", symbol: str | None = None, scan_tier: str | None = None, scan_reason: str | None = None):
         _allow(scan_tier, {"stage_only", "light_pattern", "full_investigator", "position_monitor"}, "scan_tier")
         _allow(scan_reason, {"full_universe_structural", "stage_1_discovery", "stage_transition_discovery", "rank_selected", "stage_promoted", "active_position", "recent_exit", "triggered_candidate", "pending_followthrough", "manual_override"}, "scan_reason")
         return list_resource(request, service.routing(), resource="routing", limit=limit, cursor=cursor, sort=sort, order=order, allowed_sort={"as_of", "symbol_id", "decision_id"}, filters={"symbol_id": symbol, "effective_scan_tier": scan_tier, "winning_reason": scan_reason})
@@ -358,7 +395,7 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
         return _response(request, rows, meta=_meta(request, partial=not rows, limitations=service.partial_limitations("routing", rows)))
 
     @app.get("/api/v1/candidates", response_model=ApiResponse[list[CandidateSummary]], tags=["candidates"])
-    def candidates(request: Request, limit: int = Query(settings.default_page_size), cursor: str | None = None, sort: str = "opened_at", order: str = "desc", symbol: str | None = None, candidate_state: str | None = None, setup_family: str | None = None):
+    def candidates(request: Request, limit: int = Query(resolved_settings.default_page_size), cursor: str | None = None, sort: str = "opened_at", order: str = "desc", symbol: str | None = None, candidate_state: str | None = None, setup_family: str | None = None):
         _allow(candidate_state, {"unseen", "discovered", "investigating", "early_accumulation", "setup_forming", "ready", "triggered", "pending_followthrough", "confirmed", "advancing", "extended", "weakening", "failed", "exited", "archived", "open", "closed"}, "candidate_state")
         return list_resource(request, service.candidates(), resource="candidates", limit=limit, cursor=cursor, sort=sort, order=order, allowed_sort={"opened_at", "symbol_id", "candidate_id"}, filters={"symbol_id": symbol, "candidate_state": candidate_state, "setup_family": setup_family})
 
@@ -375,13 +412,13 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
         return _response(request, [model.model_validate(row).model_dump() for row in page], meta=_meta(request, partial=not rows, limitations=service.partial_limitations("candidates", rows), pagination=page_meta))
 
     @app.get("/api/v1/candidates/{candidate_id}/snapshots", response_model=ApiResponse[list[CandidateSnapshotResponse]], tags=["candidates"])
-    def candidate_snapshots(candidate_id: str, request: Request, limit: int = Query(settings.default_page_size), cursor: str | None = None): return candidate_children(candidate_id, request, "snapshots", CandidateSnapshotResponse, limit, cursor)
+    def candidate_snapshots(candidate_id: str, request: Request, limit: int = Query(resolved_settings.default_page_size), cursor: str | None = None): return candidate_children(candidate_id, request, "snapshots", CandidateSnapshotResponse, limit, cursor)
 
     @app.get("/api/v1/candidates/{candidate_id}/decisions", response_model=ApiResponse[list[DecisionContextResponse]], tags=["candidates"])
-    def candidate_decisions(candidate_id: str, request: Request, limit: int = Query(settings.default_page_size), cursor: str | None = None): return candidate_children(candidate_id, request, "decisions", DecisionContextResponse, limit, cursor)
+    def candidate_decisions(candidate_id: str, request: Request, limit: int = Query(resolved_settings.default_page_size), cursor: str | None = None): return candidate_children(candidate_id, request, "decisions", DecisionContextResponse, limit, cursor)
 
     @app.get("/api/v1/candidates/{candidate_id}/outcomes", response_model=ApiResponse[list[OutcomeAttributionResponse]], tags=["candidates"])
-    def candidate_outcomes(candidate_id: str, request: Request, limit: int = Query(settings.default_page_size), cursor: str | None = None): return candidate_children(candidate_id, request, "outcomes", OutcomeAttributionResponse, limit, cursor)
+    def candidate_outcomes(candidate_id: str, request: Request, limit: int = Query(resolved_settings.default_page_size), cursor: str | None = None): return candidate_children(candidate_id, request, "outcomes", OutcomeAttributionResponse, limit, cursor)
 
     @app.get("/api/v1/positions/coverage", response_model=ApiResponse[list[PositionCoverageSummary]], tags=["positions"])
     def position_coverage(request: Request, coverage_status: str | None = None):
@@ -391,9 +428,9 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
             rows = [row for row in rows if row["coverage_status"] == coverage_status]
         return _response(request, rows, meta=_meta(request, partial=not rows, limitations=service.partial_limitations("positions", rows)))
 
-    @app.get("/api/v1/positions/missing-data", response_model=ApiResponse[list[PositionCoverageSummary]], tags=["positions"])
+    @app.get("/api/v1/positions/missing-data", response_model=ApiResponse[list[dict[str, Any]]], tags=["positions"])
     def position_missing(request: Request):
-        rows = [row for row in service.positions() if row.get("missing_fields")]
+        rows = service.position_missing_data()
         return _response(request, rows, meta=_meta(request, limitations=service.partial_limitations("positions", rows)))
 
     @app.get("/api/v1/positions/recovery-proposals", response_model=ApiResponse[list[dict[str, Any]]], tags=["positions"])
@@ -438,8 +475,16 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
         return _response(request, rows, meta=_meta(request, partial=not rows, limitations=service.partial_limitations("governance", rows)))
 
     @app.get("/api/v1/governance/correction-impacts", response_model=ApiResponse[list[CorrectionImpactResponse]], tags=["governance"])
-    def impacts(request: Request):
+    def impacts(request: Request, status: str | None = None, review_required: bool | None = None, calibration_eligible: bool | None = None, entity_type: str | None = None):
         rows = service.governance("impacts")
+        if status:
+            rows = [row for row in rows if str(row.get("impact_link_status") or row.get("impact_status")).lower() == status.lower()]
+        if review_required is not None:
+            rows = [row for row in rows if bool(row.get("review_required")) is review_required]
+        if calibration_eligible is not None:
+            rows = [row for row in rows if bool(row.get("authoritative_calibration_eligible")) is calibration_eligible]
+        if entity_type:
+            rows = [row for row in rows if str(row.get("entity_type", "")).lower() == entity_type.lower()]
         return _response(request, rows, meta=_meta(request, partial=not rows, limitations=service.partial_limitations("governance", rows)))
 
     @app.get("/api/v1/governance/conflicts", response_model=ApiResponse[list[dict[str, Any]]], tags=["governance"])
@@ -463,7 +508,12 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
         return _response(request, data, meta=_meta(request, partial=data["manifest_id"] is None, limitations=list(LIMITATIONS)), etag_seed=data)
 
     @app.get("/api/v1/calibration/coverage", response_model=ApiResponse[list[dict[str, Any]]], tags=["calibration/readiness"])
-    def calibration_coverage(request: Request): return _response(request, service.calibration("coverage"), meta=_meta(request, limitations=list(LIMITATIONS)))
+    def calibration_coverage(request: Request, dimension: str | None = None, bucket: str | None = None, status: str | None = None):
+        rows = service.calibration("coverage")
+        for key, value in (("dimension", dimension), ("value", bucket), ("status", status)):
+            if value is not None:
+                rows = [row for row in rows if str(row.get(key, "")).lower() == value.lower()]
+        return _response(request, rows, meta=_meta(request, partial=not rows, limitations=service.partial_limitations("calibration", rows)))
 
     @app.get("/api/v1/calibration/exclusions", response_model=ApiResponse[list[dict[str, Any]]], tags=["calibration/readiness"])
     def calibration_exclusions(request: Request, eligibility_status: str | None = None): return _response(request, service.calibration("exclusions"), meta=_meta(request, limitations=list(LIMITATIONS)))
@@ -484,9 +534,17 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
         return _response(request, row, meta=_meta(request, limitations=list(LIMITATIONS)), etag_seed=row)
 
     @app.get("/api/v1/performance/runs", response_model=ApiResponse[list[PerformanceSummaryResponse]], tags=["performance"])
-    def performance_runs(request: Request):
+    def performance_runs(request: Request, limit: int = Query(resolved_settings.default_page_size), cursor: str | None = None, sort: str = "as_of", order: str = "desc", cache_mode: str | None = None, replay_mode: str | None = None, performance_status: str | None = None, date_from: date | None = None, date_to: date | None = None):
         rows = service.performance()
-        return _response(request, rows, meta=_meta(request, partial=not rows, limitations=[*LIMITATIONS, *( ["SOURCE_UNAVAILABLE"] if not rows else [])]))
+        for key, value in (("cache_mode", cache_mode), ("replay_mode", replay_mode), ("performance_status", performance_status)):
+            if value is not None:
+                rows = [row for row in rows if str(row.get(key, "")).lower() == value.lower()]
+        if date_from:
+            rows = [row for row in rows if str(row.get("as_of", ""))[:10] >= date_from.isoformat()]
+        if date_to:
+            rows = [row for row in rows if str(row.get("as_of", ""))[:10] <= date_to.isoformat()]
+        page, page_meta = _list_page(rows, limit=limit, cursor=cursor, sort=sort, order=order, allowed_sort={"as_of", "run_id", "performance_status"}, filters={}, cursor_filters={"cache_mode": cache_mode, "replay_mode": replay_mode, "performance_status": performance_status, "date_from": date_from, "date_to": date_to}, max_limit=settings.max_page_size)
+        return _response(request, page, meta=_meta(request, partial=not rows, limitations=[*LIMITATIONS, *(["SOURCE_UNAVAILABLE"] if not rows else [])], pagination=page_meta))
 
     @app.get("/api/v1/performance/runs/{run_id}", response_model=ApiResponse[PerformanceSummaryResponse], tags=["performance"])
     def performance_run(run_id: str, request: Request):
@@ -495,7 +553,8 @@ def create_app(*, testing: bool = False, settings: ApiSettings | None = None) ->
 
     @app.get("/api/v1/performance/baselines", response_model=ApiResponse[list[PerformanceSummaryResponse]], tags=["performance"])
     def performance_baselines(request: Request):
-        return _response(request, [], meta=_meta(request, partial=True, limitations=[*LIMITATIONS, "COPIED_REALISTIC_BASELINE_MISSING"]))
+        rows = service.performance_baselines()
+        return _response(request, rows, meta=_meta(request, partial=not rows, limitations=[*LIMITATIONS, *([] if rows else ["COPIED_REALISTIC_BASELINE_MISSING"])]))
 
     def phase4_openapi() -> dict[str, Any]:
         if app.openapi_schema:

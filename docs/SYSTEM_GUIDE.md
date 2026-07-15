@@ -36,7 +36,10 @@ Phase 3B adds optional full-universe [weekly structural coverage](stages/weekly_
 and [shadow scan routing](stages/scan_router.md). Phase 4A adds an isolated,
 strictly read-only `/api/v1` service over governed Phase 3 state; development is
 allowed while production deployment remains blocked by the published Phase
-3C-5 limitations. See the [Phase 4A runbook](runbooks/phase4a_read_only_api.md).
+3C-5 limitations. Phase 4A-1 completes operator projections from registered
+Phase 3C artifacts, conflict aggregation, semantic lineage/freshness, and
+low-cardinality API telemetry without adding routes or writes. See the
+[Phase 4A runbook](runbooks/phase4a_read_only_api.md).
 Phase 3C-1 adds append-only [sector-membership and stage-correction
 governance](stages/weekly_stage.md) without changing execution, publishing, or the
 Phase 3B history payloads. Phase 3C-1A hardens that governance with explicit
