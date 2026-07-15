@@ -189,6 +189,19 @@ npm run dev
 curl http://localhost:8090/api/execution/health
 ```
 
+The Phase 4A API is a separate read-only process and defaults to loopback:
+
+```bash
+export PHASE4_API_KEY='<runtime-secret>'
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.serve_phase4_api \
+  --fixture-profile operator_read_only --host 127.0.0.1 --port 8765
+```
+
+Use `small_fixture` for deterministic smoke tests. A copied store uses
+`--fixture-profile copied_store --copied-control-plane /path/to/copy`; the CLI
+rejects symlinks and the operator store. `--reload` is fixture-only. No option
+applies migrations.
+
 ## Research and optimization
 
 ```bash
@@ -218,6 +231,7 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-benchmark-phase3c4` | Isolated Phase 3C-4 performance/replay benchmark |
 | `ai-trading-build-phase3c5-calibration` | Immutable calibration/readiness evidence builder |
 | `ai-trading-check-phase4-readiness` | Re-evaluate Phase 4 readiness from a calibration manifest |
+| `ai-trading-phase4-api` | Strictly read-only Phase 4A API |
 | `ai-trading-annotate-phase3c1-governance` | Copied-store Phase 3B governance annotation |
 | `ai-trading-research-recipe` | Research recipe runner |
 | `ai-trading-optimize` | Optimization runner |

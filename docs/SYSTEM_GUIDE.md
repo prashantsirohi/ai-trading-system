@@ -33,8 +33,11 @@ Phase 3A [Shadow Lifecycle Orchestration](architecture/opportunity_shadow_orches
 writes that history when explicitly enabled; execution does not consume it. The
 existing candidate tracker remains the current pipeline's operational lifecycle store.
 Phase 3B adds optional full-universe [weekly structural coverage](stages/weekly_stage.md)
-and [shadow scan routing](stages/scan_router.md). Phase 4 read-only operator surfaces
-remain deferred. Phase 3C-1 adds append-only [sector-membership and stage-correction
+and [shadow scan routing](stages/scan_router.md). Phase 4A adds an isolated,
+strictly read-only `/api/v1` service over governed Phase 3 state; development is
+allowed while production deployment remains blocked by the published Phase
+3C-5 limitations. See the [Phase 4A runbook](runbooks/phase4a_read_only_api.md).
+Phase 3C-1 adds append-only [sector-membership and stage-correction
 governance](stages/weekly_stage.md) without changing execution, publishing, or the
 Phase 3B history payloads. Phase 3C-1A hardens that governance with explicit
 correction-authority precedence, supersession-cycle rejection, and quarantined
@@ -256,6 +259,17 @@ Start the API and React console in separate terminals:
 ```bash
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.ui.execution_api.app --port 8090
 ```
+
+Start the separate Phase 4A read-only API against deterministic fixtures:
+
+```bash
+PHASE4_API_AUTH_ENABLED=false PHASE4_API_LOCAL_DEV_MODE=true \
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.serve_phase4_api \
+  --fixture-profile small_fixture --host 127.0.0.1 --port 8765
+```
+
+It never applies migrations, triggers a pipeline, imports a broker adapter, or
+exposes business mutation methods. See the [runbook](runbooks/phase4a_read_only_api.md).
 
 ```bash
 cd web/execution-console-v2/ai-trading-dashboard-starter

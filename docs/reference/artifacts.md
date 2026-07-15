@@ -302,3 +302,11 @@ identify evidence requiring review. The readiness JSON is the machine-readable
 source for `READY`, `READY_WITH_LIMITATIONS`, or `NOT_READY`; the Markdown file
 is an operator rendering of the same checks. These files are offline evidence,
 not runtime pipeline inputs.
+
+## Phase 4A API artifact behavior
+
+Phase 4A creates no artifacts. It may read registered, promoted JSON evidence
+when no governed row model exists, retaining content hashes as compact lineage.
+It never rewrites, refreshes, touches, downloads, or file-caches source
+evidence. Missing evidence is unavailable or partial and is never replaced
+with generated market data.

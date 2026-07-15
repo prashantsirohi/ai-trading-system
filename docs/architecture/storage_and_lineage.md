@@ -150,6 +150,19 @@ At minimum, back up OHLCV, control-plane, execution, candidate-tracker, master-d
 
 Never run repair or migration commands against live stores without explicit task scope and a verified backup. Follow [backup and restore](../runbooks/backup_and_restore.md).
 
+## Phase 4A read-only access
+
+The Phase 4A API opens DuckDB with `read_only=True` and never constructs
+`RegistryStore`, `ExecutionStore`, or a schema initializer. Source precedence
+is governed rows, immutable promoted artifacts, then summaries. Missing tables
+are `SOURCE_NOT_MIGRATED`, empty tables are `SOURCE_EMPTY`, and missing optional
+evidence is explicit rather than fabricated. Freshness never uses file mtime.
+
+`small_fixture` is in memory. `copied_store` requires a regular-file copy and
+rejects symlinks and the configured operator store. `operator_read_only`
+resolves the operational root without creating it. No profile writes a cache
+or response snapshot beneath `DATA_ROOT`.
+
 ## Phase 3C-4 performance artifacts
 
 Performance evidence is artifact-backed; Phase 3C-4 adds no database migration.

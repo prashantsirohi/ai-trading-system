@@ -192,6 +192,28 @@ control plane, defaults to a read-only preview, and requires both `--apply` and
 `--confirm-copied-store` before appending annotations to the copy. It has no
 operator-store override.
 
+## Phase 4A API configuration
+
+Phase 4A uses environment-backed `ApiSettings`; secrets are never stored in a
+config file. Defaults bind to `127.0.0.1`, require authentication, disable
+caching, use 50 rows per page (500 maximum), and allow 120 requests per minute
+per credential.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PHASE4_API_SOURCE_PROFILE` | `operator_read_only` | `small_fixture`, `copied_store`, or `operator_read_only`. |
+| `PHASE4_API_COPIED_CONTROL_PLANE` | unset | Explicit copy; operator paths and symlinks are rejected. |
+| `PHASE4_API_AUTH_ENABLED` | `true` | Require bearer or `X-API-Key` authentication outside public health. |
+| `PHASE4_API_LOCAL_DEV_MODE` | `false` | Explicit local-only authentication bypass. |
+| `PHASE4_API_KEY` | unset | Runtime secret; never logged. |
+| `PHASE4_API_HOST` / `PHASE4_API_PORT` | `127.0.0.1` / `8765` | Bind address and port. |
+| `PHASE4_API_DEFAULT_PAGE_SIZE` / `PHASE4_API_MAX_PAGE_SIZE` | `50` / `500` | Cursor-page bounds. |
+| `PHASE4_API_RATE_LIMIT_PER_MINUTE` | `120` | Local in-memory per-key limit. |
+| `PHASE4_API_CACHE_ENABLED` | `false` | Reserved in-memory cache toggle; never a file cache. |
+| `PHASE4_API_INCLUDE_OPENAPI` | `true` | Expose OpenAPI and interactive docs. |
+
+Requests cannot change source profile, database path, or runtime root.
+
 ## See also
 
 - [`commands.md`](commands.md) — full command list

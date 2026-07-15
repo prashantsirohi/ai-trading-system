@@ -1,21 +1,10 @@
-"""Deprecated shim — import from ``ai_trading_system.ui.execution_api`` instead.
+"""Phase 4A read-only operator API.
 
-This path will be removed one release after 2026-04-25.
+This package is deliberately separate from the legacy execution-console API,
+which contains command endpoints.  Nothing in this package imports execution
+adapters or write-capable domain stores.
 """
 
-from __future__ import annotations
+from .app import create_app
 
-import sys as _sys
-import warnings as _warnings
-
-_warnings.warn(
-    "ai_trading_system.interfaces.api is deprecated; "
-    "import from ai_trading_system.ui.execution_api instead.",
-    DeprecationWarning,
-    stacklevel=2,
-)
-
-from ai_trading_system.ui import execution_api as _execution_api  # noqa: E402
-from ai_trading_system.ui.execution_api import *  # noqa: E402,F401,F403
-
-_sys.modules[__name__] = _execution_api
+__all__ = ["create_app"]

@@ -75,6 +75,16 @@ Later   Stage 2→3 records weakening; supplied exit closes episode 1
 Months  a new admission identity opens episode 2
 ```
 
+## Phase 4A read boundary
+
+Phase 4A reads this history through a separate application service and FastAPI
+package under `interfaces/api/`. Governed database rows take precedence over
+immutable manifests and summary artifacts. Universal stage responses use the
+existing effective-time plus recorded-availability resolver, so late
+corrections cannot repaint earlier responses. Missing migrations, empty
+history, and governance conflicts remain explicit; handlers do not run this
+orchestration or construct its write-capable store.
+
 ## Non-goals
 
 Phase 3A does not generate orders, eligibility, sizing, portfolio allocation, broker calls, API/UI surfaces, notifications, historical backfills, model updates, or synchronization with `candidate_tracker.duckdb`.
