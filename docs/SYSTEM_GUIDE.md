@@ -40,6 +40,10 @@ allowed while production deployment remains blocked by the published Phase
 Phase 3C artifacts, conflict aggregation, semantic lineage/freshness, and
 low-cardinality API telemetry without adding routes or writes. See the
 [Phase 4A runbook](runbooks/phase4a_read_only_api.md).
+Phase 4B adds the [read-only operator dashboard](runbooks/phase4b_operator_dashboard.md)
+in the existing React/Vite console. Its production bundle consumes only Phase
+4A `/api/v1` GET endpoints, keeps credentials in page memory, renders API-owned
+freshness, lineage, and limitations, and exposes no mutation controls.
 Phase 3C-1 adds append-only [sector-membership and stage-correction
 governance](stages/weekly_stage.md) without changing execution, publishing, or the
 Phase 3B history payloads. Phase 3C-1A hardens that governance with explicit
@@ -272,13 +276,17 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.serve_phas
 ```
 
 It never applies migrations, triggers a pipeline, imports a broker adapter, or
-exposes business mutation methods. See the [runbook](runbooks/phase4a_read_only_api.md).
+exposes business mutation methods. See the [API runbook](runbooks/phase4a_read_only_api.md).
 
 ```bash
 cd web/execution-console-v2/ai-trading-dashboard-starter
 npm install
-npm run dev
+VITE_PHASE4_API_BASE_URL=http://127.0.0.1:8765 npm run dev -- --host 127.0.0.1
 ```
+
+Enter the runtime Phase 4 API key in the session-only login view. See the
+[dashboard runbook](runbooks/phase4b_operator_dashboard.md) for routes,
+configuration, fixture smoke testing, and the public-bundle credential caveat.
 
 Run safe diagnostics:
 

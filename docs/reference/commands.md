@@ -182,7 +182,7 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.ui.execution_api.app --po
 ```bash
 cd web/execution-console-v2/ai-trading-dashboard-starter
 npm install
-npm run dev
+VITE_PHASE4_API_BASE_URL=http://127.0.0.1:8765 npm run dev -- --host 127.0.0.1
 ```
 
 ```bash
@@ -201,6 +201,30 @@ Use `small_fixture` for deterministic smoke tests. A copied store uses
 `--fixture-profile copied_store --copied-control-plane /path/to/copy`; the CLI
 rejects symlinks and the operator store. `--reload` is fixture-only. No option
 applies migrations.
+
+Build and verify the Phase 4B dashboard:
+
+```bash
+cd web/execution-console-v2/ai-trading-dashboard-starter
+npm run check:api
+npm run gen:api
+npm run typecheck
+npm run lint
+npm test
+npm run build
+npm run test:e2e
+```
+
+Regenerate the checked-in Phase 4A OpenAPI snapshot after an intentional API
+contract change:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python scripts/export_phase4_openapi.py
+```
+
+The exporter constructs only the deterministic fixture-mode app and accesses no
+operator store. The dashboard E2E flow asserts that all observed `/api/v1`
+business requests are GET.
 
 ## Research and optimization
 

@@ -11,7 +11,8 @@
 Phase 4A exposes canonical Phase 3 state under `/api/v1`. It has no POST, PUT,
 PATCH, or DELETE business operation and cannot run pipelines, migrations,
 calibration builds, recovery actions, alert acknowledgements, order simulation,
-or broker synchronization. It does not implement a UI.
+or broker synchronization. The API does not implement UI behavior; the separate
+[Phase 4B dashboard](phase4b_operator_dashboard.md) consumes this contract.
 
 Development readiness is true and production readiness is false. The API keeps
 `SINGLE_YEAR_CONCENTRATION`, `COPIED_REALISTIC_BASELINE_MISSING`,
@@ -115,7 +116,7 @@ The command rejects symlinks and the configured operator store.
 
 ## Non-goals
 
-Phase 4A has no dashboard, charts, saved views, watchlists, preferences, action
-buttons, candidate edits, recovery approval, alert acknowledgement, refresh
-control, pipeline trigger, execution action, or broker import.
-Phase 4A-1 does not implement any Phase 4B behavior.
+Phase 4A itself has no dashboard behavior, saved views, watchlists, action
+buttons, candidate edits, recovery approval, alert acknowledgement, pipeline
+trigger, execution action, or broker import. Phase 4A-1 does not implement
+client behavior; Phase 4B remains an API consumer and adds no API mutation.

@@ -6,12 +6,15 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --pretty false",
+    "lint": "tsc -b --pretty false",
     "test": "vitest run",
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
     "gen:api": "openapi-typescript ./openapi.snapshot.json -o ./src/types/api.gen.ts",
+    "check:api": "PYTHONPATH=../../../src ../../../.venv/bin/python ../../../scripts/export_phase4_openapi.py --check",
     "gen:api:live": "openapi-typescript http://127.0.0.1:8090/openapi.json -o ./src/types/api.gen.ts"
   },
   "dependencies": {
@@ -34,6 +37,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "axe-core": "4.11.0",
     "jsdom": "^29.1.1",
     "openapi-typescript": "^7.4.4",
     "postcss": "^8.4.49",

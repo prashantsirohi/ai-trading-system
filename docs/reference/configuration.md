@@ -217,6 +217,23 @@ Requests cannot change source profile, database path, or runtime root.
 Artifact selection prefers completed promoted registry entries and otherwise
 uses semantic run/as-of identity. It never uses file mtime as freshness.
 
+## Phase 4B dashboard configuration
+
+The React/Vite dashboard is a separate static build and uses only the Phase 4A
+HTTP contract.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VITE_PHASE4_API_BASE_URL` | same origin | Phase 4A origin; only HTTP(S) URLs are accepted. |
+| `VITE_PHASE4_API_AUTH_MODE` | `bearer` | `bearer` or `api-key`; credentials remain in headers. |
+| `VITE_PHASE4_API_KEY` | unset | Optional build-time development credential. Prefer session entry or a secure reverse proxy. |
+| `VITE_PHASE4_DEFAULT_POLL_SECONDS` | `60` | Conservative polling interval for live operator pages. |
+
+`VITE_*` values are public bundle configuration. Never use
+`VITE_PHASE4_API_KEY` for a production secret. Credentials entered in the UI
+remain in page memory and are never stored in browser storage or placed in
+URLs. Filters, tabs, cursors, and supported `as_of` values may be in URLs.
+
 ## See also
 
 - [`commands.md`](commands.md) — full command list
