@@ -74,6 +74,7 @@
 - [publish_retry](runbooks/publish_retry.md)
 - [backup_and_restore](runbooks/backup_and_restore.md)
 - [copied_data_canary](runbooks/copied_data_canary.md)
+- [phase3b_shadow_verification](runbooks/phase3b_shadow_verification.md)
 - [deployment_mac_mini](runbooks/deployment_mac_mini.md)
 - [optimization](runbooks/optimization.md)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,13 @@ from ai_trading_system.domains.opportunities.routing import (
     ScanRoutingConfig,
     StageCoverageConfig,
     StageDiscoveryReason,
+)
+from ai_trading_system.domains.opportunities.stage_governance import (
+    MembershipTrust,
+    StageGovernanceAction,
+    append_sector_dependencies,
+    append_stage_governance,
+    record_correction_impacts,
 )
 from ai_trading_system.domains.ranking.stage_classifier import classify_latest
 from ai_trading_system.domains.ranking.weekly import to_weekly
@@ -138,9 +145,13 @@ def build_stage_coverage(
         if len(frame) < 180 or len(weekly) < 30:
             exclusions.append(_exclusion(symbol, "insufficient_weekly_history"))
             continue
-        sector_id, sector_name = sector_mapping.get(symbol, ("", ""))
+        sector_id, sector_name, membership_trust, membership_observation_id = _membership_values(
+            sector_mapping.get(symbol, ("", ""))
+        )
         if not sector_name:
             exclusions.append(_exclusion(symbol, "missing_sector_mapping", scope="sector"))
+        elif membership_trust is MembershipTrust.LATEST_ONLY_BACKFILL:
+            exclusions.append(_exclusion(symbol, "latest_only_sector_mapping", scope="sector"))
         source_sessions = frame.assign(_week=pd.to_datetime(frame["timestamp"]).dt.to_period("W-FRI"))
         current_period = source_sessions["_week"].iloc[-1]
         current_sessions = source_sessions.loc[source_sessions["_week"].eq(current_period), "timestamp"]
@@ -176,6 +187,8 @@ def build_stage_coverage(
             "exchange": str(latest["exchange"]),
             "sector_id": sector_id or None,
             "sector_name": sector_name or None,
+            "sector_membership_trust": membership_trust.value,
+            "sector_membership_observation_id": membership_observation_id,
             "market_regime": market_regime,
             "as_of": as_of,
             "source_week_start": source_start,
@@ -222,6 +235,10 @@ def build_stage_coverage(
 def build_sector_coverage(stock: pd.DataFrame, *, config: StageCoverageConfig) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     mapped = stock.loc[stock.get("sector_id", pd.Series(index=stock.index, dtype=object)).notna()].copy()
+    if "sector_membership_trust" in mapped:
+        mapped = mapped.loc[
+            mapped["sector_membership_trust"].ne(MembershipTrust.LATEST_ONLY_BACKFILL.value)
+        ].copy()
     for sector_id, group in mapped.groupby("sector_id", sort=True):
         stages = group["effective_stage"].astype(str)
         eligible = len(group)
@@ -277,6 +294,24 @@ def build_sector_coverage(stock: pd.DataFrame, *, config: StageCoverageConfig) -
             "coverage_ratio": coverage,
             "classifier_version": config.stage_classifier_version,
             "aggregation_rule_version": config.sector_stage_rule_version,
+            "constituent_source_hashes": "|".join(sorted(
+                group.get(
+                    "source_artifact_hash",
+                    group.apply(lambda item: _hash(item.to_dict()), axis=1),
+                ).astype(str)
+            )),
+            "constituent_membership_observation_ids": "|".join(sorted(
+                value for value in group.get(
+                    "sector_membership_observation_id", pd.Series(index=group.index, dtype=object)
+                ).dropna().astype(str) if value
+            )),
+            "membership_trust": (
+                MembershipTrust.POINT_IN_TIME_VERIFIED.value
+                if group.get("sector_membership_trust", pd.Series(index=group.index, dtype=object)).eq(
+                    MembershipTrust.POINT_IN_TIME_VERIFIED.value
+                ).all()
+                else MembershipTrust.OBSERVED_AT_RUN.value
+            ),
         }
         row["source_artifact_hash"] = _hash(row)
         rows.append(row)
@@ -328,24 +363,97 @@ def build_light_pattern_scan(stock: pd.DataFrame, *, config: ScanRoutingConfig) 
     return pd.DataFrame(rows), pd.DataFrame(promoted)
 
 
-def persist_stage_history(registry: Any, stock: pd.DataFrame, sector: pd.DataFrame, *, run_id: str, attempt: int) -> None:
+def persist_stage_history(
+    registry: Any,
+    stock: pd.DataFrame,
+    sector: pd.DataFrame,
+    *,
+    run_id: str,
+    attempt: int,
+    recorded_at: datetime | None = None,
+    correction_authority: str = "pipeline_weekly_stage",
+) -> None:
+    available_at = recorded_at or datetime.now(timezone.utc)
     with registry._writer() as conn:  # noqa: SLF001
+        stock_identities: dict[tuple[str, str, str, str], tuple[str, str, str | None]] = {}
         for row in stock.to_dict(orient="records"):
             source_hash = str(row["source_artifact_hash"])
             observation_id = hashlib.sha256(f"stock|{row['exchange']}|{row['symbol_id']}|{row['source_week_end']}|{row['stage_status']}|{row['classifier_version']}|{source_hash}".encode()).hexdigest()
-            conn.execute(
-                """INSERT INTO weekly_stock_stage_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)
-                   ON CONFLICT(observation_id) DO NOTHING""",
-                [observation_id, row["exchange"], row["symbol_id"], row.get("sector_id"), row.get("sector_name"), row["as_of"], row["source_week_start"], row["source_week_end"], row["stage_status"], row["effective_stage"], row["classifier_version"], source_hash, json.dumps(row, default=str, sort_keys=True), run_id, attempt],
+            exists = conn.execute(
+                "SELECT 1 FROM weekly_stock_stage_history WHERE observation_id = ?", [observation_id]
+            ).fetchone()
+            prior = _prior_stage_observation(
+                conn, scope="STOCK", table="weekly_stock_stage_history",
+                entity_clause="exchange = ? AND symbol_id = ?",
+                entity_params=[row["exchange"], row["symbol_id"]],
+                source_week_end=row["source_week_end"], stage_status=row["stage_status"],
+                version_column="classifier_version", version=row["classifier_version"],
+                available_at=available_at,
             )
+            conn.execute(
+                """INSERT INTO weekly_stock_stage_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(observation_id) DO NOTHING""",
+                [observation_id, row["exchange"], row["symbol_id"], row.get("sector_id"), row.get("sector_name"), row["as_of"], row["source_week_start"], row["source_week_end"], row["stage_status"], row["effective_stage"], row["classifier_version"], source_hash, json.dumps(row, default=str, sort_keys=True), run_id, attempt, _db_time(available_at)],
+            )
+            if not exists:
+                trust = _membership_trust(row.get("sector_membership_trust"))
+                governance = append_stage_governance(
+                    conn, scope="STOCK", observation_id=observation_id,
+                    action=StageGovernanceAction.CORRECTION if prior else StageGovernanceAction.ORIGINAL,
+                    supersedes_observation_id=prior, membership_trust=trust,
+                    recorded_at=available_at, run_id=run_id, stage_attempt=attempt,
+                    correction_reason="normalized source data changed" if prior else None,
+                    correction_authority=correction_authority,
+                )
+                record_correction_impacts(
+                    conn, governance=governance, entity_id=str(row["symbol_id"]),
+                    source_week_end=row["source_week_end"],
+                )
+            stock_identities[(
+                str(row.get("sector_id") or ""), str(row["source_week_end"]),
+                str(row["stage_status"]), str(row["symbol_id"]),
+            )] = (observation_id, source_hash, _optional_string(row.get("sector_membership_observation_id")))
         for row in sector.to_dict(orient="records"):
             source_hash = str(row["source_artifact_hash"])
             observation_id = hashlib.sha256(f"sector|{row['sector_id']}|{row['source_week_end']}|{row['stage_status']}|{row['aggregation_rule_version']}|{source_hash}".encode()).hexdigest()
-            conn.execute(
-                """INSERT INTO weekly_sector_stage_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)
-                   ON CONFLICT(observation_id) DO NOTHING""",
-                [observation_id, row["sector_id"], row["sector_name"], row["as_of"], row["source_week_start"], row["source_week_end"], row["stage_status"], row["effective_stage"], row["aggregation_rule_version"], source_hash, json.dumps(row, default=str, sort_keys=True), run_id, attempt],
+            exists = conn.execute(
+                "SELECT 1 FROM weekly_sector_stage_history WHERE observation_id = ?", [observation_id]
+            ).fetchone()
+            prior = _prior_stage_observation(
+                conn, scope="SECTOR", table="weekly_sector_stage_history",
+                entity_clause="sector_id = ?", entity_params=[row["sector_id"]],
+                source_week_end=row["source_week_end"], stage_status=row["stage_status"],
+                version_column="aggregation_rule_version", version=row["aggregation_rule_version"],
+                available_at=available_at,
             )
+            conn.execute(
+                """INSERT INTO weekly_sector_stage_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(observation_id) DO NOTHING""",
+                [observation_id, row["sector_id"], row["sector_name"], row["as_of"], row["source_week_start"], row["source_week_end"], row["stage_status"], row["effective_stage"], row["aggregation_rule_version"], source_hash, json.dumps(row, default=str, sort_keys=True), run_id, attempt, _db_time(available_at)],
+            )
+            if not exists:
+                trust = _membership_trust(row.get("membership_trust"))
+                governance = append_stage_governance(
+                    conn, scope="SECTOR", observation_id=observation_id,
+                    action=StageGovernanceAction.CORRECTION if prior else StageGovernanceAction.ORIGINAL,
+                    supersedes_observation_id=prior, membership_trust=trust,
+                    recorded_at=available_at, run_id=run_id, stage_attempt=attempt,
+                    correction_reason="constituent stage or membership changed" if prior else None,
+                    correction_authority=correction_authority,
+                )
+                record_correction_impacts(
+                    conn, governance=governance, entity_id=str(row["sector_id"]),
+                    source_week_end=row["source_week_end"],
+                )
+                dependencies = [
+                    value for key, value in stock_identities.items()
+                    if key[0] == str(row["sector_id"])
+                    and key[1] == str(row["source_week_end"])
+                    and key[2] == str(row["stage_status"])
+                ]
+                append_sector_dependencies(
+                    conn, sector_observation_id=observation_id, stock_observations=dependencies
+                )
 
 
 def read_stock_stage_as_of(
@@ -354,8 +462,10 @@ def read_stock_stage_as_of(
     as_of: str,
     exchange: str = "NSE",
     symbols: list[str] | None = None,
+    available_at: datetime | str | None = None,
 ) -> pd.DataFrame:
-    """Reconstruct the latest universal stock-stage observation available as-of."""
+    """Resolve the canonical non-superseded stock stage known by available_at."""
+    availability = available_at or datetime.now(timezone.utc)
     clauses = ["exchange = ?", "as_of <= CAST(? AS TIMESTAMP)"]
     params: list[Any] = [exchange, as_of]
     if symbols:
@@ -363,13 +473,72 @@ def read_stock_stage_as_of(
         params.extend(str(symbol).upper() for symbol in symbols)
     with registry._reader() as conn:  # noqa: SLF001
         rows = conn.execute(
-            f"""SELECT observation_json FROM weekly_stock_stage_history
+            f"""SELECT observation_json FROM weekly_stock_stage_history history
                 WHERE {' AND '.join(clauses)}
+                  AND created_at <= CAST(? AS TIMESTAMP)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM stage_observation_governance correction
+                      WHERE correction.observation_scope = 'STOCK'
+                        AND correction.supersedes_observation_id = history.observation_id
+                        AND correction.recorded_at <= CAST(? AS TIMESTAMP)
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM stage_observation_governance quarantine
+                      WHERE quarantine.observation_scope = 'STOCK'
+                        AND quarantine.observation_id = history.observation_id
+                        AND NOT quarantine.authoritative
+                        AND quarantine.recorded_at <= CAST(? AS TIMESTAMP)
+                  )
                 QUALIFY ROW_NUMBER() OVER (
                     PARTITION BY exchange, symbol_id
-                    ORDER BY as_of DESC, source_week_end DESC, created_at DESC
+                    ORDER BY source_week_end DESC,
+                             CASE stage_status WHEN 'locked' THEN 2 ELSE 1 END DESC,
+                             as_of DESC, created_at DESC, observation_id DESC
                 ) = 1""",
-            params,
+            [*params, availability, availability, availability],
+        ).fetchall()
+    return pd.DataFrame([json.loads(row[0]) for row in rows])
+
+
+def read_sector_stage_as_of(
+    registry: Any,
+    *,
+    as_of: str,
+    sector_ids: list[str] | None = None,
+    available_at: datetime | str | None = None,
+) -> pd.DataFrame:
+    """Resolve canonical non-superseded sector stages known by available_at."""
+    availability = available_at or datetime.now(timezone.utc)
+    clauses = ["as_of <= CAST(? AS TIMESTAMP)"]
+    params: list[Any] = [as_of]
+    if sector_ids:
+        clauses.append(f"sector_id IN ({','.join('?' for _ in sector_ids)})")
+        params.extend(str(sector_id) for sector_id in sector_ids)
+    with registry._reader() as conn:  # noqa: SLF001
+        rows = conn.execute(
+            f"""SELECT observation_json FROM weekly_sector_stage_history history
+                WHERE {' AND '.join(clauses)}
+                  AND created_at <= CAST(? AS TIMESTAMP)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM stage_observation_governance correction
+                      WHERE correction.observation_scope = 'SECTOR'
+                        AND correction.supersedes_observation_id = history.observation_id
+                        AND correction.recorded_at <= CAST(? AS TIMESTAMP)
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM stage_observation_governance quarantine
+                      WHERE quarantine.observation_scope = 'SECTOR'
+                        AND quarantine.observation_id = history.observation_id
+                        AND NOT quarantine.authoritative
+                        AND quarantine.recorded_at <= CAST(? AS TIMESTAMP)
+                  )
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY sector_id
+                    ORDER BY source_week_end DESC,
+                             CASE stage_status WHEN 'locked' THEN 2 ELSE 1 END DESC,
+                             as_of DESC, created_at DESC, observation_id DESC
+                ) = 1""",
+            [*params, availability, availability, availability],
         ).fetchall()
     return pd.DataFrame([json.loads(row[0]) for row in rows])
 
@@ -443,3 +612,61 @@ def _confidence_band(score: float) -> str:
 
 def _transition(previous: WeinsteinStage, current: WeinsteinStage) -> str:
     return "none" if previous is current or previous is WeinsteinStage.UNKNOWN else f"{previous.value}_to_{current.value}"
+
+
+def _membership_values(value: Any) -> tuple[str, str, MembershipTrust, str | None]:
+    items = tuple(value or ())
+    sector_id = str(items[0]) if len(items) > 0 and items[0] else ""
+    sector_name = str(items[1]) if len(items) > 1 and items[1] else ""
+    trust = _membership_trust(items[2] if len(items) > 2 else None)
+    observation_id = _optional_string(items[3] if len(items) > 3 else None)
+    return sector_id, sector_name, trust, observation_id
+
+
+def _membership_trust(value: Any) -> MembershipTrust:
+    try:
+        return MembershipTrust(str(value))
+    except ValueError:
+        return MembershipTrust.OBSERVED_AT_RUN
+
+
+def _optional_string(value: Any) -> str | None:
+    if value is None or pd.isna(value) or not str(value).strip():
+        return None
+    return str(value)
+
+
+def _db_time(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _prior_stage_observation(
+    conn: Any,
+    *,
+    scope: str,
+    table: str,
+    entity_clause: str,
+    entity_params: list[Any],
+    source_week_end: Any,
+    stage_status: str,
+    version_column: str,
+    version: str,
+    available_at: datetime,
+) -> str | None:
+    row = conn.execute(
+        f"""SELECT observation_id FROM {table} history
+            WHERE {entity_clause} AND source_week_end = ? AND stage_status = ?
+              AND {version_column} = ? AND created_at <= ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM stage_observation_governance correction
+                  WHERE correction.observation_scope = ?
+                    AND correction.supersedes_observation_id = history.observation_id
+                    AND correction.recorded_at <= ?
+              )
+            ORDER BY created_at DESC, observation_id DESC LIMIT 1""",  # noqa: S608
+        [*entity_params, source_week_end, stage_status, version, _db_time(available_at),
+         scope, _db_time(available_at)],
+    ).fetchone()
+    return str(row[0]) if row else None

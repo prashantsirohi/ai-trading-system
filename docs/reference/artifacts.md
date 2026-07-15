@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-07-15
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -242,6 +242,11 @@ Convenience outputs:
 ## Phase 3B shadow artifacts
 
 `weekly_stage` writes `weekly_stock_stage_universe.csv`, `weekly_sector_stage_universe.csv`, `weekly_stage_exclusions.csv`, `weekly_stage_summary.json`, `light_pattern_scan.csv`, and `stage_promotion_candidates.csv`.
+
+Phase 3C-1 adds membership trust and membership-observation lineage to stock
+coverage rows. Sector rows include constituent source hashes, membership IDs,
+and aggregate membership trust. These are additive columns; artifact names and
+downstream execution/publish payloads are unchanged.
 
 `scan_router` writes `scan_routing.csv`, `stage_discovery_candidates.csv`, `deep_scan_universe.csv`, `position_monitor_universe.csv`, `routing_conflicts.csv`, `scan_coverage_summary.json`, and `scan_routing_comparison.json`.
 

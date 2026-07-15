@@ -2,7 +2,7 @@
 
 - **Purpose:** Define Phase 3B full-universe stock/sector structural coverage and light discovery.
 - **Audience:** Operators and engineers validating structural visibility.
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-07-15
 - **Source of truth:** `domains/opportunities/coverage.py` and `pipeline/stages/weekly_stage.py`.
 
 ---
@@ -15,7 +15,7 @@ Start with the [System Guide](../SYSTEM_GUIDE.md).
 
 The stage writes `weekly_stock_stage_universe`, `weekly_sector_stage_universe`, `weekly_stage_exclusions`, `light_pattern_scan`, `stage_promotion_candidates`, and `weekly_stage_summary`. Append-only stock and sector observations live in `control_plane.duckdb`; the legacy mutable `ohlcv.weekly_stage_snapshot` is unchanged.
 
-Missing sector mapping excludes a stock from sector breadth but not stock classification. Sector structure uses constituent breadth and coverage, never sector rank. Membership is latest-only before Phase 3B; each new observation preserves the mapping seen at classification time.
+Missing sector mapping excludes a stock from sector breadth but not stock classification. Sector structure uses constituent breadth and coverage, never sector rank. Historical membership cannot be reconstructed from latest-only master data. Phase 3C-1 records each new master-data mapping as `OBSERVED_AT_RUN` for that session and prefers an effective `POINT_IN_TIME_VERIFIED` interval when one exists. `LATEST_ONLY_BACKFILL` membership is quarantined from authoritative sector aggregation.
 
 ## Entrypoints
 
@@ -35,7 +35,24 @@ The registered universal stock, sector, exclusion, light-pattern, promotion, and
 
 ## Process flow
 
-Load uncapped eligible OHLCV, determine provisional/locked timing, classify stocks, aggregate sectors, run light discovery, append histories, then register attempt artifacts.
+Load uncapped eligible OHLCV, resolve or observe effective-date sector membership,
+determine provisional/locked timing, classify stocks, aggregate trusted
+constituents, run light discovery, append histories and governance dependencies,
+then register attempt artifacts.
+
+## Correction and as-of behavior
+
+`weekly_stock_stage_history` and `weekly_sector_stage_history` remain immutable.
+An exact replay writes nothing new. A changed normalized source hash appends a new
+observation and a `CORRECTION` event that names the superseded terminal
+observation. Sector hashes include constituent stock hashes and membership IDs,
+so a membership or constituent correction appends a recalculated sector row and
+its dependency set even when headline breadth values happen to be unchanged.
+
+`read_stock_stage_as_of` and `read_sector_stage_as_of` select terminal,
+non-superseded observations known by the requested availability time. A later
+correction cannot leak into an earlier reconstruction. Provisional and locked
+rows continue to coexist; locked wins only for the same source-week endpoint.
 
 ## DQ
 
@@ -47,7 +64,7 @@ Missing `_catalog` or persistence failures fail only this optional stage. No exe
 
 ## Retry behavior
 
-Artifacts are attempt-scoped. Universal history is idempotent by entity/week/status/version/source hash.
+Artifacts are attempt-scoped. Universal history and governance are idempotent by normalized identities.
 
 ## Downstream consumers
 
@@ -56,3 +73,6 @@ Artifacts are attempt-scoped. Universal history is idempotent by entity/week/sta
 ## Commands
 
 Use `--opportunity-scan-routing-mode compare` for artifact-only validation or `shadow` with registry shadow mode for reconciliation.
+
+Legacy Phase 3B annotation must run against a copied control plane. See
+[Phase 3B Shadow Verification](../runbooks/phase3b_shadow_verification.md).

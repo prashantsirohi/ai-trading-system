@@ -2,12 +2,18 @@
 
 - **Purpose:** Define the non-authoritative Phase 3A adapter, admission, lifecycle, retention, and registry-write workflow.
 - **Audience:** Engineers operating or changing canonical opportunity reconciliation.
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-07-15
 - **Source of truth:** `src/ai_trading_system/domains/opportunities/adapters/`, `src/ai_trading_system/domains/opportunities/orchestration/`, and `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
 
 Start with the [System Guide](../SYSTEM_GUIDE.md). Phase 1 — Canonical Opportunity Contracts owns the [domain contracts](opportunity_lifecycle_contracts.md), Phase 2 — Persistent Candidate Registry owns the [registry](opportunity_registry.md), and this document defines Phase 3A — Shadow Lifecycle Orchestration. Phase 3B — Universe Coverage and Scan Routing extends it without replacing it; Phase 4 — Read-Only Operator Surfaces remains deferred.
+
+Phase 3C-1 adds membership and correction governance around Phase 3B universal
+stage history. Corrections append `stage_correction_impact` review markers for
+potentially affected open episodes and immutable decision history. They do not
+rewrite this orchestration's snapshots or transitions and do not change
+execution behavior.
 
 ## Purpose and boundary
 

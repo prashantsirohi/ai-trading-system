@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -20,6 +21,10 @@ from ai_trading_system.domains.opportunities.routing import (
     ScanRoutingConfig,
     StageCoverageConfig,
 )
+from ai_trading_system.domains.opportunities.stage_governance import (
+    observe_sector_mapping,
+    resolve_historical_sector_mapping,
+)
 from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext, StageResult
 
@@ -33,7 +38,15 @@ class WeeklyStageCoverageStage:
             return StageResult(metadata={"status": "skipped", "mode": "off"})
         config = StageCoverageConfig.from_mapping(context.params)
         paths = get_domain_paths(context.project_root, context.params.get("data_domain", "operational"))
-        mapping, mapping_warnings = load_sector_mapping(paths.master_db_path)
+        latest_mapping, mapping_warnings = load_sector_mapping(paths.master_db_path)
+        mapping = latest_mapping
+        recorded_at = datetime.now(timezone.utc)
+        if context.registry is not None:
+            mapping = observe_sector_mapping(
+                context.registry, mapping, exchange=str(context.params.get("exchange", "NSE")),
+                as_of=context.run_date, run_id=context.run_id,
+                stage_attempt=context.attempt_number, recorded_at=recorded_at,
+            )
         daily = load_daily_universe(
             context.db_path,
             exchange=str(context.params.get("exchange", "NSE")),
@@ -57,10 +70,19 @@ class WeeklyStageCoverageStage:
         if not locked and not daily.empty:
             week_start = pd.Timestamp(context.run_date) - pd.Timedelta(days=pd.Timestamp(context.run_date).weekday())
             prior_daily = daily.loc[pd.to_datetime(daily["timestamp"]).lt(week_start)].copy()
+            prior_as_of = (week_start - pd.Timedelta(days=1)).date().isoformat()
+            prior_mapping = mapping
+            if context.registry is not None:
+                prior_mapping = resolve_historical_sector_mapping(
+                    context.registry, latest_mapping,
+                    exchange=str(context.params.get("exchange", "NSE")),
+                    effective_at=prior_as_of, available_at=recorded_at,
+                    run_id=context.run_id, stage_attempt=context.attempt_number,
+                )
             prior_stock, _ = build_stage_coverage(
                 prior_daily,
-                as_of=(week_start - pd.Timedelta(days=1)).date().isoformat(),
-                sector_mapping=mapping,
+                as_of=prior_as_of,
+                sector_mapping=prior_mapping,
                 config=config,
                 lock_current_week=True,
                 market_regime=str(context.params.get("execution_regime") or "unknown"),
@@ -70,7 +92,8 @@ class WeeklyStageCoverageStage:
             history_sector = pd.concat([prior_sector, sector], ignore_index=True, sort=False)
         if context.registry is not None:
             persist_stage_history(
-                context.registry, history_stock, history_sector, run_id=context.run_id, attempt=context.attempt_number
+                context.registry, history_stock, history_sector, run_id=context.run_id,
+                attempt=context.attempt_number, recorded_at=recorded_at,
             )
 
         output = context.output_dir()

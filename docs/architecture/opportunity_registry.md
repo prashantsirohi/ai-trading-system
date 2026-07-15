@@ -2,8 +2,8 @@
 
 - **Purpose:** Define the canonical candidate-episode history and reconstruction contract.
 - **Audience:** Engineers persisting or reading opportunity lifecycle history.
-- **Last verified:** 2026-07-14
-- **Source of truth:** `src/ai_trading_system/domains/opportunities/registry/` and `src/ai_trading_system/pipeline/migrations/032_opportunity_registry.sql`.
+- **Last verified:** 2026-07-15
+- **Source of truth:** `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/domains/opportunities/stage_governance.py`, and migrations `032_opportunity_registry.sql` plus `034_opportunity_phase3c1_governance.sql`.
 
 ---
 
@@ -46,6 +46,12 @@ The four domain axes remain separate:
 
 The full Phase 1 contract is retained as canonical JSON wherever a canonical object exists. Query columns are materialized in addition to, not instead of, that JSON.
 
+Phase 3C-1 universal stage governance remains adjacent to, rather than embedded
+in, candidate payloads. `stage_correction_impact` links a corrected universal
+observation to potentially affected open episodes, snapshots, decision contexts,
+and outcome attributions. These links are review markers only: registry rows are
+not updated, transitions are not fabricated, and attribution is not replaced.
+
 ## Idempotency and transactions
 
 Record IDs and idempotency keys use SHA-256 over normalized candidate, record type, observation time, run, stage attempt, artifact hash, and contract version. A second SHA-256 value covers the semantic payload.
@@ -66,6 +72,11 @@ Control-plane timestamps are UTC-naive at rest, consistent with existing tables.
 ## Stage history without repainting
 
 A Tuesday provisional `transition_1_to_2` observation and a Friday locked `stage_1_basing` observation are different rows. Friday does not update Tuesday. A Tuesday decision retains its serialized decision-time stage, while current state selects Friday and a Tuesday as-of query selects only Tuesday data.
+
+Universal Phase 3B stock/sector history follows the same non-repainting rule.
+Phase 3C-1 corrections append a new observation plus an explicit supersession
+event. Availability-aware readers continue to return the old observation for a
+cutoff before the correction was recorded.
 
 ## Reconstruction
 

@@ -2,8 +2,8 @@
 
 - **Purpose:** Canonical reference for every DuckDB table the system reads or writes — file location, owning stage, columns, indexes.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-05-16
-- **Source of truth:** `src/ai_trading_system/pipeline/migrations/*.sql` (17 files), `src/ai_trading_system/research/perf_tracker/schema.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/ingest/repository.py`.
+- **Last verified:** 2026-07-15
+- **Source of truth:** `src/ai_trading_system/pipeline/migrations/*.sql`, `src/ai_trading_system/research/perf_tracker/schema.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/ingest/repository.py`.
 
 ---
 
@@ -709,6 +709,21 @@ Migration `033_opportunity_phase3b.sql` adds three append-only control-plane tab
 | `weekly_sector_stage_history` | Full-constituent sector stage and coverage observations. |
 | `opportunity_scan_routing_history` | Idempotent per-run symbol routing decisions with source hashes. |
 
-- Control-plane DDL is applied by the registry initializer at `src/ai_trading_system/pipeline/registry.py:300` (`self.db_path = ... / "data" / "control_plane.duckdb"`); the executor reads the 17 SQL files from `pipeline/migrations/` in lexicographic order.
+Migration `034_opportunity_phase3c1_governance.sql` adds four append-only
+governance relations without altering migration 033 payloads:
+
+| Table | Purpose |
+|---|---|
+| `sector_membership_history` | Effective-date intervals, recorded availability, source hash, explicit trust, and optional superseded membership identity. |
+| `stage_observation_governance` | Original, correction, withdrawal, and legacy-annotation events for universal stock/sector observations. |
+| `stage_observation_dependency` | Immutable sector-stage dependencies on stock-stage and membership observations. |
+| `stage_correction_impact` | Review-required links from correction events to candidate episodes, snapshots, decision contexts, and outcome attributions. |
+
+`membership_trust` is one of `POINT_IN_TIME_VERIFIED`, `OBSERVED_AT_RUN`, or
+`LATEST_ONLY_BACKFILL`. `recorded_at` is the availability cutoff used by
+canonical as-of readers. DuckDB relationships remain convention-based rather
+than foreign-key-enforced.
+
+- Control-plane DDL is applied by `RegistryStore`; it reads packaged SQL files from `pipeline/migrations/` in lexicographic order.
 - DuckDB does not enforce foreign keys; relationships above are by convention and are not constrained at the database level.
 - Several control-plane tables are extended by later migrations (002 → `dq_rule`, `model_registry`; 012 → `data_repair_run` index; 017 → `strategy_iteration_result`). Treat the final shape as the merge of all referenced migrations.

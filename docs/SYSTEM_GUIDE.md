@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-07-15
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -34,7 +34,9 @@ writes that history when explicitly enabled; execution does not consume it. The
 existing candidate tracker remains the current pipeline's operational lifecycle store.
 Phase 3B adds optional full-universe [weekly structural coverage](stages/weekly_stage.md)
 and [shadow scan routing](stages/scan_router.md). Phase 4 read-only operator surfaces
-remain deferred.
+remain deferred. Phase 3C-1 adds append-only [sector-membership and stage-correction
+governance](stages/weekly_stage.md) without changing execution, publishing, or the
+Phase 3B history payloads.
 
 ## Safety and operating invariants
 
@@ -143,7 +145,7 @@ Canonical operational paths are resolved beneath `$DATA_ROOT`:
 | Store or tree | Responsibility |
 |---|---|
 | `$DATA_ROOT/ohlcv.duckdb` | Operational OHLCV, delivery, trust/provenance, quarantine, registries, and feature metadata. |
-| `$DATA_ROOT/control_plane.duckdb` | Pipeline runs, stage attempts, artifacts, DQ, alerts, models, operator state, durable decision history, and canonical opportunity-registry history written through its Phase 2 API. |
+| `$DATA_ROOT/control_plane.duckdb` | Pipeline runs, stage attempts, artifacts, DQ, alerts, models, operator state, durable decision history, canonical opportunity-registry history, and Phase 3B/3C structural governance history. |
 | `$DATA_ROOT/execution.duckdb` | Orders, fills, positions, and execution ledger state. |
 | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate episodes, snapshots, reviews, alerts, and current lifecycle state. |
 | `$DATA_ROOT/masterdata.db` | Shared instrument/master data. |
@@ -198,6 +200,17 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
 ```
 
 The command above uses the configured runtime stores. When validation must not mutate live stores, follow the [copied-data canary](runbooks/copied_data_canary.md) maintenance-window procedure instead.
+
+Preview or annotate legacy Phase 3B rows only in an explicitly copied control plane:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.annotate_phase3c1_governance \
+  --copied-control-plane /path/to/copied-control_plane.duckdb
+```
+
+The command refuses the configured operator control plane. Applying annotations
+also requires `--apply --confirm-copied-store`; follow the
+[Phase 3B/3C copied-store runbook](runbooks/phase3b_shadow_verification.md).
 
 Retry one stage for an existing run:
 

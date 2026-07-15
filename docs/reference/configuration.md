@@ -2,7 +2,7 @@
 
 - **Purpose:** Configuration sources, CLI flags, and mode selectors. For env vars see [`environment_variables.md`](environment_variables.md). For commands see [`commands.md`](commands.md).
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-07-15
 - **Source of truth:** `argparse` parsers in `pipeline/orchestrator.py` and `pipeline/daily_pipeline.py`; env loading in `platform/`; config files under `config/`.
 
 ---
@@ -143,6 +143,14 @@ ai-trading-pipeline --canary --stages ingest,features,rank,publish --local-publi
 # Local operator verification
 ai-trading-pipeline --skip-preflight --stages ingest,features,rank,publish --local-publish
 ```
+
+## Phase 3C-1 annotation safety
+
+`ai-trading-annotate-phase3c1-governance` is not a pipeline mode. It requires an
+explicit `--copied-control-plane` path, refuses the configured operational
+control plane, defaults to a read-only preview, and requires both `--apply` and
+`--confirm-copied-store` before appending annotations to the copy. It has no
+operator-store override.
 
 ## See also
 

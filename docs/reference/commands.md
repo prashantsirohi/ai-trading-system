@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-07-15
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -107,6 +107,19 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
   --opportunity-scan-routing-mode shadow --local-publish
 ```
 
+Phase 3C-1 legacy annotation is restricted to a copied control plane. Preview is
+read-only; apply initializes additive migrations on the copy and appends only
+governance overlays:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.annotate_phase3c1_governance \
+  --copied-control-plane /path/to/copied-control_plane.duckdb
+
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.annotate_phase3c1_governance \
+  --copied-control-plane /path/to/copied-control_plane.duckdb \
+  --run-id phase3c1-copied-validation --apply --confirm-copied-store
+```
+
 ## Publish and recovery
 
 ```bash
@@ -165,6 +178,7 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-bootstrap-data` | Runtime-data bootstrap |
 | `ai-trading-repair-ingest-schema` | Ingest schema repair |
 | `ai-trading-repair-control-plane-timestamps` | Control-plane timestamp repair |
+| `ai-trading-annotate-phase3c1-governance` | Copied-store Phase 3B governance annotation |
 | `ai-trading-research-recipe` | Research recipe runner |
 | `ai-trading-optimize` | Optimization runner |
 | `ai-trading-optimize-promote` | Optimization promotion workflow |
