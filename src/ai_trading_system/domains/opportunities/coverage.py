@@ -538,6 +538,40 @@ def read_sector_stage_as_of(
     return pd.DataFrame(rows)
 
 
+def read_locked_sector_stage_prior_completed_week(
+    registry: Any,
+    *,
+    as_of: str,
+    sector_ids: list[str] | None = None,
+    available_at: datetime | str | None = None,
+) -> pd.DataFrame:
+    """Resolve the latest governed locked sector row known at decision time.
+
+    Locked sector observations are produced only for completed trading weeks.
+    Filtering before governance resolution ensures a current provisional row
+    can never displace the most recent completed-week lock.
+    """
+    availability = available_at or datetime.now(timezone.utc)
+    clauses = ["as_of <= CAST(? AS TIMESTAMP)", "stage_status = ?"]
+    params: list[Any] = [as_of, "locked"]
+    if sector_ids:
+        normalized = sorted({str(sector_id).strip().lower() for sector_id in sector_ids})
+        clauses.append(f"LOWER(sector_id) IN ({','.join('?' for _ in normalized)})")
+        params.extend(normalized)
+    with registry._reader() as conn:  # noqa: SLF001
+        rows = resolve_stage_observation_payloads(
+            conn,
+            scope="SECTOR",
+            table="weekly_sector_stage_history",
+            as_of=as_of,
+            available_at=availability,
+            entity_columns=("sector_id",),
+            clauses=clauses,
+            params=params,
+        )
+    return pd.DataFrame(rows)
+
+
 def _base_features(weekly: pd.DataFrame) -> dict[str, Any]:
     window = weekly.tail(26)
     high = float(window["high"].max())

@@ -22,6 +22,7 @@ from ai_trading_system.domains.opportunities.registry.models import (
     TransitionObservation,
 )
 from ai_trading_system.domains.opportunities.contracts import TransitionReason
+from ai_trading_system.domains.opportunities.orchestration.contracts import SectorGateEvidence
 
 
 NOW = datetime(2026, 7, 14, 10, tzinfo=timezone.utc)
@@ -72,18 +73,42 @@ def test_transition_and_decision_rows_carry_policy_snapshot(
         action_policy_version="action-v1", execution_policy_version="execution-v1",
         portfolio_context_summary={"blocked": False},
     )
-    opportunity_store.append_decision_context(DecisionContextObservation(decision, context, stamped))
+    gate = SectorGateEvidence(
+        prior_locked_stage=WeinsteinStage.STAGE_2,
+        current_provisional_stage=WeinsteinStage.TRANSITION_1_TO_2,
+        current_stage_velocity=0.2,
+        taxonomy_cause="sector_not_stage_2",
+        calibration_cohort="stage_1_improving_blocked_v1",
+    )
+    observation = DecisionContextObservation(decision, context, stamped, gate)
+    first_decision = opportunity_store.append_decision_context(observation)
+    replay_decision = opportunity_store.append_decision_context(
+        replace(observation, lineage=replace(stamped, policy_snapshot_id="snap-2"))
+    )
+    assert first_decision.status is AppendStatus.CREATED
+    assert replay_decision.status is AppendStatus.DUPLICATE
 
     transition_rows = _rows(
         opportunity_store, "SELECT policy_snapshot_id FROM candidate_transition WHERE candidate_id = ?",
         [episode.candidate_id],
     )
     decision_rows = _rows(
-        opportunity_store, "SELECT policy_snapshot_id FROM candidate_decision_context WHERE candidate_id = ?",
+        opportunity_store,
+        """SELECT policy_snapshot_id, sector_locked_stage_prior_completed_week,
+                  sector_provisional_stage_current_week, sector_stage_velocity_current_week,
+                  sector_gate_taxonomy, sector_gate_cohort
+           FROM candidate_decision_context WHERE candidate_id = ?""",
         [episode.candidate_id],
     )
     assert [row[0] for row in transition_rows] == ["snap-1"]
-    assert [row[0] for row in decision_rows] == ["snap-1"]
+    assert decision_rows == [(
+        "snap-1",
+        WeinsteinStage.STAGE_2.value,
+        WeinsteinStage.TRANSITION_1_TO_2.value,
+        0.2,
+        "sector_not_stage_2",
+        "stage_1_improving_blocked_v1",
+    )]
 
 
 def test_replay_hash_ignores_policy_snapshot_id(opportunity_store, episode_request, snapshot_builder) -> None:

@@ -728,7 +728,10 @@ class DuckDBOpportunityRegistryStore:
                    "stage_classifier_version", "action_policy_version", "execution_policy_version", "portfolio_context_json",
                    "reasons_json", "blockers_json", "warnings_json", "next_required_event", "contract_version",
                    "decision_json", "run_id", "stage_name", "stage_attempt", "source_artifact_hash",
-                   "policy_snapshot_id", "semantic_payload_hash", "idempotency_key")
+                   "policy_snapshot_id", "sector_locked_stage_prior_completed_week",
+                   "sector_provisional_stage_current_week", "sector_stage_velocity_current_week",
+                   "sector_gate_taxonomy", "sector_gate_cohort", "semantic_payload_hash", "idempotency_key")
+        gate = observation.sector_gate
         values = [record_id, d.candidate_id, d.setup_id, _db_time(d.decided_at), d.action.value, d.eligibility.value,
                   d.confidence, d.size_multiplier, c.decision_stage.value, c.decision_stage_status.value,
                   _db_time(c.decision_stage_as_of), c.decision_locked_stage.value, c.decision_provisional_stage.value,
@@ -740,7 +743,13 @@ class DuckDBOpportunityRegistryStore:
                   canonical_json(d.blockers), canonical_json(d.warnings), d.next_required_event, c.contract_version,
                   canonical_json(payload), observation.lineage.run_id, observation.lineage.stage_name,
                   observation.lineage.stage_attempt, observation.lineage.source_artifact_hash,
-                  observation.lineage.policy_snapshot_id, semantic_hash, key]
+                  observation.lineage.policy_snapshot_id,
+                  gate.prior_locked_stage.value if gate else None,
+                  gate.current_provisional_stage.value if gate else None,
+                  gate.current_stage_velocity if gate else None,
+                  gate.taxonomy_cause if gate else None,
+                  gate.calibration_cohort if gate else None,
+                  semantic_hash, key]
         return self._insert_append(conn, table="candidate_decision_context", id_column="decision_context_id",
                                    record_id=record_id, candidate_id=d.candidate_id, idempotency_key=key,
                                    semantic_hash=semantic_hash, columns=columns, values=values)

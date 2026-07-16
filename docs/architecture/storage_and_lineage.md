@@ -169,6 +169,13 @@ summary artifacts, in admission identity, and in dedicated nullable columns on
 and idempotency identities, so legacy rows and pre-037 replay hashes are
 unchanged.
 
+Migration 038 extends `candidate_decision_context` with nullable completed-week
+sector-gate evidence and taxonomy columns. These columns are also outside the
+semantic payload and idempotency identity; the actual decision blockers remain
+inside the existing immutable decision payload. The governed locked-sector
+reader resolves by decision-time availability, so a later correction cannot
+rewrite or reinterpret an earlier gate record.
+
 ## Backup and mutation safety
 
 At minimum, back up OHLCV, control-plane, execution, candidate-tracker, master-data, fundamentals, and feature-store state before migrations or repairs. Treat `pipeline_runs/` as audit evidence even where upstream stores can reproduce some artifacts.

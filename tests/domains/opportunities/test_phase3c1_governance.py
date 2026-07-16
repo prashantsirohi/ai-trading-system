@@ -31,6 +31,7 @@ from ai_trading_system.domains.opportunities.contracts import (
 from ai_trading_system.domains.opportunities.coverage import (
     build_sector_coverage,
     persist_stage_history,
+    read_locked_sector_stage_prior_completed_week,
     read_sector_stage_as_of,
     read_stock_stage_as_of,
 )
@@ -230,6 +231,59 @@ def test_locked_correction_chain_and_late_availability_are_canonical(tmp_path: P
                WHERE observation_scope = 'STOCK' GROUP BY governance_action"""
         ).fetchall()
     assert dict(chain) == {"ORIGINAL": 1, "CORRECTION": 2}
+
+
+def test_locked_sector_reader_skips_current_provisional_week(tmp_path: Path) -> None:
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    config = StageCoverageConfig(minimum_sector_constituents=1)
+    prior_row = {
+        **_stock_row(stage=WeinsteinStage.STAGE_2.value, source_hash="prior-stock"),
+        "as_of": "2026-07-10",
+        "source_week_start": "2026-07-06",
+        "source_week_end": "2026-07-10",
+    }
+    prior_stock = pd.DataFrame([prior_row])
+    prior_sector = build_sector_coverage(prior_stock, config=config)
+    persist_stage_history(
+        registry,
+        prior_stock,
+        prior_sector,
+        run_id="prior-week",
+        attempt=1,
+        recorded_at=datetime(2026, 7, 10, 18, tzinfo=timezone.utc),
+    )
+    current_row = {
+        **_stock_row(
+            stage=WeinsteinStage.TRANSITION_1_TO_2.value,
+            source_hash="current-stock",
+            status="provisional",
+        ),
+        "as_of": "2026-07-14",
+        "source_week_start": "2026-07-13",
+        "source_week_end": "2026-07-17",
+    }
+    current_stock = pd.DataFrame([current_row])
+    current_sector = build_sector_coverage(current_stock, config=config)
+    assert current_sector.iloc[0]["stage_status"] == "provisional"
+    persist_stage_history(
+        registry,
+        current_stock,
+        current_sector,
+        run_id="current-week",
+        attempt=1,
+        recorded_at=datetime(2026, 7, 14, 10, tzinfo=timezone.utc),
+    )
+
+    resolved = read_locked_sector_stage_prior_completed_week(
+        registry,
+        as_of="2026-07-14",
+        sector_ids=["TECH"],
+        available_at=datetime(2026, 7, 14, 12, tzinfo=timezone.utc),
+    )
+    assert len(resolved) == 1
+    assert str(resolved.iloc[0]["source_week_end"])[:10] == "2026-07-10"
+    assert resolved.iloc[0]["stage_status"] == "locked"
+    assert resolved.iloc[0]["locked_stage"] == WeinsteinStage.STAGE_2.value
 
 
 def test_competing_terminal_corrections_use_authority_not_insertion_order(tmp_path: Path) -> None:

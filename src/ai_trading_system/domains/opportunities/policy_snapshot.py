@@ -23,6 +23,7 @@ from ai_trading_system.domains.opportunities.orchestration.contracts import (
     ADMISSION_RULE_VERSION,
     LIFECYCLE_RULE_VERSION,
     RETENTION_RULE_VERSION,
+    SECTOR_GATE_RULES,
     SETUP_FAMILY_RULE_VERSION,
     OpportunityShadowConfig,
 )
@@ -113,6 +114,7 @@ def policy_content(
             "early_trigger_stage_confidence_threshold": shadow.early_trigger_stage_confidence_threshold,
             "allowed_market_regimes": list(shadow.allowed_market_regimes),
             "close_stage_4_without_position": shadow.close_stage_4_without_position,
+            "sector_gate_rules": dict(SECTOR_GATE_RULES),
         },
         SETUP_FAMILY_RULE_VERSION: {
             "progression": list(SETUP_FAMILY_PROGRESSION),

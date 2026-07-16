@@ -17,7 +17,11 @@ from .compatibility import (
 from . import contracts as _contracts
 from .contracts import *  # noqa: F403
 from .policy import evaluate_early_entry_stage_guard, evaluate_normal_entry_stage_guard
-from .coverage import read_sector_stage_as_of, read_stock_stage_as_of
+from .coverage import (
+    read_locked_sector_stage_prior_completed_week,
+    read_sector_stage_as_of,
+    read_stock_stage_as_of,
+)
 from .routing import (
     OpportunityScanRoutingMode,
     PositionMonitoringConfig,
@@ -76,6 +80,7 @@ __all__ = [
     "evaluate_early_entry_stage_guard",
     "evaluate_normal_entry_stage_guard",
     "read_sector_stage_as_of",
+    "read_locked_sector_stage_prior_completed_week",
     "read_stock_stage_as_of",
     "from_dict",
     "to_dict",

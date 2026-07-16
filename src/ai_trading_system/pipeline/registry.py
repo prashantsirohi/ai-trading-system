@@ -406,7 +406,17 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
     "policy_version_registry": frozenset({"version_label", "policy_snapshot_id", "content_json"}),
     "candidate_episode": frozenset({"candidate_id", "policy_snapshot_id", "closed_policy_snapshot_id"}),
     "candidate_transition": frozenset({"transition_id", "policy_snapshot_id"}),
-    "candidate_decision_context": frozenset({"decision_context_id", "policy_snapshot_id"}),
+    "candidate_decision_context": frozenset(
+        {
+            "decision_context_id",
+            "policy_snapshot_id",
+            "sector_locked_stage_prior_completed_week",
+            "sector_provisional_stage_current_week",
+            "sector_stage_velocity_current_week",
+            "sector_gate_taxonomy",
+            "sector_gate_cohort",
+        }
+    ),
 }
 
 

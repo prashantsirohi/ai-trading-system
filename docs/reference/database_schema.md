@@ -752,7 +752,7 @@ Migration `037_policy_version_registry.sql` implements ADR-0006 Amendment A3:
 
 | Change | Purpose |
 |---|---|
-| `policy_version_registry` table | Binds each human-readable policy version label (`admission-rules-v1`, `lifecycle-policy-v1`, `scan-routing-policy-v2`, …) to exactly one canonical content hash plus the fingerprinted `content_json`. Phase 3 stages register-or-verify before any stage-owned write; a label reappearing with different content raises `POLICY_VERSION_CONTENT_MISMATCH` and fails only that optional shadow stage. |
+| `policy_version_registry` table | Binds each human-readable policy version label (`admission-rules-v1`, `lifecycle-policy-v1.1`, `scan-routing-policy-v2`, …) to exactly one canonical content hash plus the fingerprinted `content_json`. Phase 3 stages register-or-verify before any stage-owned write; a label reappearing with different content raises `POLICY_VERSION_CONTENT_MISMATCH` and fails only that optional shadow stage. |
 | `candidate_episode.policy_snapshot_id`, `candidate_episode.closed_policy_snapshot_id` | Nullable stamps of the composite policy snapshot at episode open and close. |
 | `candidate_transition.policy_snapshot_id` | Nullable stamp on each lifecycle transition. |
 | `candidate_decision_context.policy_snapshot_id` | Nullable stamp on each decision context. |
@@ -761,6 +761,14 @@ The stamped columns live outside semantic payload JSON and outside idempotency
 identities, so legacy rows remain valid and pre-037 replay hashes are
 unchanged. `pipeline_run.metadata_json` additionally records a
 `policy_snapshot` audit event with the composite ID and per-label hashes.
+
+Migration `038_sector_gate_evidence.sql` implements ADR-0006 Amendment A2 by
+adding five nullable columns to `candidate_decision_context`:
+`sector_locked_stage_prior_completed_week`,
+`sector_provisional_stage_current_week`,
+`sector_stage_velocity_current_week`, `sector_gate_taxonomy`, and
+`sector_gate_cohort`. They are direct, queryable stamps outside decision JSON,
+semantic hashes, and idempotency keys. Existing rows are not rewritten.
 
 ## Phase 3C-5 schema boundary
 

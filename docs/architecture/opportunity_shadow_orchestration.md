@@ -50,15 +50,26 @@ Every admission records a named reason, `setup-family-v1` family, rule version, 
 
 ## Lifecycle, progress, and retention
 
-`lifecycle-policy-v1` is pure and persists at most one transition per candidate per shadow run. Monitoring states may collapse to the strongest fully satisfied pre-trigger state. Trigger and terminal semantics are not skipped. A direct `TRIGGERED → CONFIRMED` is allowed only when the first later observation already contains explicit confirmed follow-through; transition metadata records the collapsed pending observation.
+`lifecycle-policy-v1.1` is pure and persists at most one transition per candidate per shadow run. The patch label records ADR-0006 A2's completed-week correction while reserving `lifecycle-policy-v2` for a future calibrated size-haircut policy. Monitoring states may collapse to the strongest fully satisfied pre-trigger state. Trigger and terminal semantics are not skipped. A direct `TRIGGERED → CONFIRMED` is allowed only when the first later observation already contains explicit confirmed follow-through; transition metadata records the collapsed pending observation.
 
-Normal trigger requires locked stock Stage 2. A provisional S1→S2 trigger requires confidence 75, locked sector Stage 2, evidence 80, low extension risk, and an allowed market regime. Stage 3 weakens active candidates; Stage 4 fails and closes position-free candidates. Phase 3A alone does not recover position-only episodes. In Phase 3C-3 shadow mode, a live position attaches only when an open episode has compatible lifecycle and trigger timing; same symbol alone is insufficient, multiple episodes are ambiguous, and closed episodes are not reopened. Missing or incompatible matches create deterministic recovery proposals. Recovery defaults to `report_only`; reviewed or explicitly enabled automatic recovery uses an `INVESTIGATING` initial marker and never creates fabricated pre-entry rank, evidence, transition, follow-through, or stage history.
+Normal trigger requires locked stock Stage 2 and does not consult the early gate. A provisional stock S1→S2 trigger reads the latest governed completed-week locked sector observation known at the decision timestamp; the current incomplete-week sector aggregation is monitoring evidence only. Prior locked Stage 2 passes. Missing mapping, latest-only membership, insufficient constituent coverage, no locked snapshot, and any non-Stage-2 prior lock fail closed under the ADR taxonomy. Prior locked Stage 1 with a current provisional transition or improving breadth is tagged `stage_1_improving_blocked_v1` for calibration but remains blocked. The gate also requires stock confidence 75, evidence 80, low extension risk, and an allowed market regime.
+
+The opportunities summary carries per-taxonomy and per-cohort counts. Candidate update and transition artifacts carry the prior locked stage/week/confidence, current provisional stage/velocity, membership and coverage status, taxonomy, and cohort. Migration 038 adds nullable direct stamps for the three ADR monitoring fields plus taxonomy and cohort when a `candidate_decision_context` is written; the shadow orchestrator does not synthesize decision contexts merely to populate them.
+
+Stage 3 weakens active candidates; Stage 4 fails and closes position-free candidates. Phase 3A alone does not recover position-only episodes. In Phase 3C-3 shadow mode, a live position attaches only when an open episode has compatible lifecycle and trigger timing; same symbol alone is insufficient, multiple episodes are ambiguous, and closed episodes are not reopened. Missing or incompatible matches create deterministic recovery proposals. Recovery defaults to `report_only`; reviewed or explicitly enabled automatic recovery uses an `INVESTIGATING` initial marker and never creates fabricated pre-entry rank, evidence, transition, follow-through, or stage history.
 
 Progress uses only comparable values. Two positives mean improving, two negatives or a hard structural event mean deteriorating, comparable non-material movement is stable, and absent comparisons remain unknown. Retention applies the Phase 1 age and stagnation limits independently. Rank decline alone cannot close a confirmed candidate.
 
 ## Idempotency, DQ, and failure behavior
 
 Lineage combines normalized source hashes and registered paths. An exact same-run replay is reported as a registry duplicate and writes no new history. Semantic-key conflicts remain explicit audit rows. Missing optional sources, unavailable sector stage, provisional-only stage, ambiguous lifecycle values, and incomplete evidence are warnings.
+
+Same-run replay equivalence is defined within one policy snapshot. Replaying a
+pre-A2 gate-affected decision under `lifecycle-policy-v1.1` can legitimately
+produce the same idempotency key with different decision blockers and therefore
+fails closed as an `OpportunityRegistryConflictError`. Gate-untouched records
+remain replay-compatible because migration-038 evidence columns are outside
+semantic payload hashes.
 
 A missing required `ranked_signals` artifact fails only the `opportunities` stage. The orchestrator continues later stages and finishes `completed_with_opportunity_errors`. Row-level warnings or conflicts mark opportunity task metadata degraded without changing the main pipeline result.
 

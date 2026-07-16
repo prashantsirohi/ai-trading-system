@@ -62,7 +62,7 @@ def test_explicit_range_migration_is_backup_gated_and_verified(
         db_path=db_path,
         backup_dir=backup_dir,
         first="033",
-        last="036",
+        last="038",
         apply=True,
     )
 
@@ -72,6 +72,8 @@ def test_explicit_range_migration_is_backup_gated_and_verified(
         "034_opportunity_phase3c1_governance.sql",
         "035_opportunity_phase3c1a_governance_hardening.sql",
         "036_opportunity_phase3c3_position_monitoring.sql",
+        "037_policy_version_registry.sql",
+        "038_sector_gate_evidence.sql",
     ]
     RegistryStore(tmp_path, db_path=db_path, allow_migrations=False).verify_schema_current()
 
@@ -99,7 +101,7 @@ def test_explicit_range_migration_rejects_stale_backup(
             db_path=db_path,
             backup_dir=backup_dir,
             first="033",
-            last="036",
+            last="038",
             apply=True,
         )
 
@@ -124,6 +126,6 @@ def test_explicit_range_migration_rejects_backup_symlink(
             db_path=db_path,
             backup_dir=backup_dir,
             first="033",
-            last="036",
+            last="038",
             apply=True,
         )

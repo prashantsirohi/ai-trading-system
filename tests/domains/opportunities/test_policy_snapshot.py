@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from ai_trading_system.domains.opportunities import coverage as coverage_module
+from ai_trading_system.domains.opportunities.orchestration import contracts as orchestration_contracts
+from ai_trading_system.domains.opportunities.orchestration.contracts import LIFECYCLE_RULE_VERSION
 from ai_trading_system.domains.opportunities.policy_snapshot import (
     PolicyVersionContentMismatchError,
     compute_policy_snapshot,
@@ -74,13 +76,32 @@ def test_mismatch_rolls_back_registrations_from_same_call(registry) -> None:
         conn.execute(
             """INSERT INTO policy_version_registry
                    (version_label, policy_snapshot_id, content_json, first_registered_at, first_run_id)
-               VALUES ('lifecycle-policy-v1', 'bogus-hash', '{}', current_timestamp, 'seed-run')""",
+               VALUES (?, 'bogus-hash', '{}', current_timestamp, 'seed-run')""",
+            [LIFECYCLE_RULE_VERSION],
         )
     with pytest.raises(PolicyVersionContentMismatchError):
         register_or_verify_policy_snapshots(registry, snapshot, run_id="run-1")
     with registry._reader() as conn:  # noqa: SLF001
         rows = conn.execute("SELECT version_label FROM policy_version_registry").fetchall()
-    assert [row[0] for row in rows] == ["lifecycle-policy-v1"]
+    assert [row[0] for row in rows] == [LIFECYCLE_RULE_VERSION]
+
+
+def test_a2_patch_label_registers_beside_legacy_lifecycle_v1(registry) -> None:
+    with registry._writer() as conn:  # noqa: SLF001
+        conn.execute(
+            """INSERT INTO policy_version_registry
+                   (version_label, policy_snapshot_id, content_json, first_registered_at, first_run_id)
+               VALUES ('lifecycle-policy-v1', 'legacy-hash', '{}', current_timestamp, 'legacy-run')"""
+        )
+    result = register_or_verify_policy_snapshots(
+        registry, compute_policy_snapshot({}), run_id="a2-run"
+    )
+    assert result["registered"] >= 1
+    with registry._reader() as conn:  # noqa: SLF001
+        labels = {row[0] for row in conn.execute(
+            "SELECT version_label FROM policy_version_registry"
+        ).fetchall()}
+    assert {"lifecycle-policy-v1", LIFECYCLE_RULE_VERSION}.issubset(labels)
 
 
 def test_code_constant_drift_is_caught_at_runtime(registry, monkeypatch) -> None:
@@ -92,3 +113,17 @@ def test_code_constant_drift_is_caught_at_runtime(registry, monkeypatch) -> None
     message = str(excinfo.value)
     assert "sector-stage-aggregation-v1" in message
     assert "stage_2_min_pct" in message
+
+
+def test_sector_gate_rule_drift_changes_lifecycle_fingerprint(registry, monkeypatch) -> None:
+    baseline = compute_policy_snapshot({})
+    register_or_verify_policy_snapshots(registry, baseline, run_id="run-1")
+    monkeypatch.setitem(
+        orchestration_contracts.SECTOR_GATE_RULES,
+        "calibration_improving_velocity_floor_exclusive",
+        0.1,
+    )
+    drifted = compute_policy_snapshot({})
+    assert drifted.label_hashes[LIFECYCLE_RULE_VERSION] != baseline.label_hashes[LIFECYCLE_RULE_VERSION]
+    with pytest.raises(PolicyVersionContentMismatchError, match=LIFECYCLE_RULE_VERSION):
+        register_or_verify_policy_snapshots(registry, drifted, run_id="run-2")

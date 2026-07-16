@@ -37,6 +37,11 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
 
 Repeat for 5–10 stored sessions spanning a completed NSE week. For same-run replay, repeat the shadow command with its `--run-id` plus `--force-rerun --stages weekly_stage,scan_router,investigator,opportunities`.
 
+Same-run replay comparison is valid only within one policy snapshot. A
+gate-affected pre-A2 decision replayed under `lifecycle-policy-v1.1` is expected
+to fail closed if its blockers change under the same idempotency key; use a new
+run for cross-policy comparison. Gate-untouched records remain duplicate-safe.
+
 Review the weekly/routing summaries, comparison, conflicts, active-position
 coverage/missing-data artifacts, compatibility, recovery proposals/actions, and
 opportunity reconciliation. A healthy run has fully monitored equal to active

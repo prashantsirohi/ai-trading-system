@@ -8,7 +8,7 @@ import json
 import time
 from dataclasses import replace
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -28,6 +28,9 @@ from ai_trading_system.domains.opportunities.contracts import (
     ProgressSnapshot,
     ProgressStatus,
     WeinsteinStage,
+)
+from ai_trading_system.domains.opportunities.coverage import (
+    read_locked_sector_stage_prior_completed_week,
 )
 from ai_trading_system.domains.opportunities.routing import (
     parse_scan_reasons,
@@ -72,6 +75,8 @@ from .contracts import (
     OpportunityShadowRunResult,
     OpportunitySourceBundle,
     RejectedSourceRow,
+    SECTOR_GATE_RULES,
+    SectorGateEvidence,
     SetupMatchOutcome,
     SourceDescriptor,
 )
@@ -244,6 +249,13 @@ class OpportunityShadowOrchestrator:
         bundles, routing_rejections = _attach_routing(
             _reconcile(results, raw_rank, raw_stock, as_of), raw_routing, as_of
         )
+        bundles = _attach_sector_gate_evidence(
+            self.registry_store.registry,
+            bundles,
+            raw_stock=raw_stock,
+            raw_sector=raw_sector,
+            as_of=as_of,
+        )
         adapter_seconds = time.perf_counter() - adapter_started
 
         rows: dict[str, list[dict[str, Any]]] = {
@@ -294,6 +306,7 @@ class OpportunityShadowOrchestrator:
             raw_lifecycle,
             bundles,
         )
+        sector_gate_taxonomy_counts: dict[str, int] = {}
         for bundle in bundles:
             if bundle.active_position:
                 counters["active_positions_total"] += 1
@@ -551,6 +564,16 @@ class OpportunityShadowOrchestrator:
                 active_position=active_position,
                 config=config,
             )
+            if (
+                _uses_sector_gate(bundle)
+                and bundle.sector_gate
+                and bundle.sector_gate.taxonomy_cause
+                and bundle.sector_gate.taxonomy_cause in transition.blockers
+            ):
+                cause = bundle.sector_gate.taxonomy_cause
+                sector_gate_taxonomy_counts[cause] = (
+                    sector_gate_taxonomy_counts.get(cause, 0) + 1
+                )
             lifecycle_state = (
                 transition.proposed_state if transition.allowed else previous_state
             )
@@ -572,6 +595,7 @@ class OpportunityShadowOrchestrator:
                             "to_state": lifecycle_state.value,
                             "reason": transition.transition_reason.value,
                             "rule_version": transition.rule_version,
+                            **_sector_gate_artifact_fields(bundle.sector_gate),
                         }
                     )
                 retention = evaluate_retention(
@@ -657,6 +681,8 @@ class OpportunityShadowOrchestrator:
                             list(bundle.missing_data_fields)
                             + (["investigator_evidence_incomplete"] if bundle.evidence is None or bundle.evidence.missing_evidence else [])
                         ),
+                        "transition_blockers": list(transition.blockers),
+                        **_sector_gate_artifact_fields(bundle.sector_gate),
                     }
                 )
                 if recovery:
@@ -725,6 +751,16 @@ class OpportunityShadowOrchestrator:
                     item.sector_stage is None for item in bundles
                 ),
                 "missing_critical_sources": 0,
+                "sector_gate_taxonomy_counts": dict(
+                    sorted(sector_gate_taxonomy_counts.items())
+                ),
+                "sector_gate_calibration_cohort_counts": _stage_distribution(
+                    item.sector_gate.calibration_cohort
+                    for item in bundles
+                    if _uses_sector_gate(item)
+                    and item.sector_gate is not None
+                    and item.sector_gate.calibration_cohort is not None
+                ),
                 "active_positions_missing_coverage": (
                     counters["active_positions_total"]
                     - counters["active_positions_fully_monitored"]
@@ -963,6 +999,206 @@ def _direction(
     if current == prior:
         return None
     return current < prior if lower_is_better else current > prior
+
+
+def _normalize_sector_id(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "_")
+
+
+def _coerce_stage(value: Any) -> WeinsteinStage:
+    try:
+        return WeinsteinStage(str(value or WeinsteinStage.UNKNOWN.value).lower())
+    except ValueError:
+        return WeinsteinStage.UNKNOWN
+
+
+def _coerce_date(value: Any) -> date | None:
+    if value in (None, ""):
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _attach_sector_gate_evidence(
+    registry: RegistryStore,
+    bundles: tuple[OpportunitySourceBundle, ...],
+    *,
+    raw_stock: list[dict[str, Any]],
+    raw_sector: list[dict[str, Any]],
+    as_of: datetime,
+) -> tuple[OpportunitySourceBundle, ...]:
+    """Attach governed prior-week evidence without using current-week stage to gate."""
+    stock_rows = {
+        (
+            str(row.get("exchange") or "NSE").upper(),
+            str(row.get("symbol_id") or row.get("symbol") or "").upper(),
+        ): row
+        for row in raw_stock
+    }
+    sector_rows: dict[str, dict[str, Any]] = {}
+    for row in raw_sector:
+        for value in (row.get("sector_id"), row.get("sector_name"), row.get("sector")):
+            normalized = _normalize_sector_id(value)
+            if normalized:
+                sector_rows[normalized] = row
+    sector_ids = sorted(
+        {
+            _normalize_sector_id(
+                bundle.sector_stage.sector_id
+                if bundle.sector_stage is not None
+                else bundle.sector_name
+            )
+            for bundle in bundles
+            if str(bundle.sector_name or "").strip().lower()
+            not in {"", "unknown", "nan", "none", "<na>"}
+        }
+    )
+    prior_records = (
+        read_locked_sector_stage_prior_completed_week(
+            registry,
+            as_of=as_of.isoformat(),
+            sector_ids=sector_ids,
+            available_at=as_of,
+        ).to_dict(orient="records")
+        if sector_ids
+        else []
+    )
+    prior_by_sector = {
+        _normalize_sector_id(row.get("sector_id")): row for row in prior_records
+    }
+    attached: list[OpportunitySourceBundle] = []
+    for bundle in bundles:
+        mapped = str(bundle.sector_name or "").strip().lower() not in {
+            "", "unknown", "nan", "none", "<na>"
+        }
+        sector_id = _normalize_sector_id(
+            bundle.sector_stage.sector_id
+            if bundle.sector_stage is not None
+            else bundle.sector_name
+        )
+        stock_row = stock_rows.get((bundle.exchange, bundle.symbol_id), {})
+        membership_trust = str(
+            stock_row.get("sector_membership_trust") or "UNKNOWN"
+        ).upper()
+        current_row = sector_rows.get(sector_id) or sector_rows.get(
+            _normalize_sector_id(bundle.sector_name)
+        )
+        prior = prior_by_sector.get(sector_id) or prior_by_sector.get(
+            _normalize_sector_id(bundle.sector_name)
+        )
+        prior_stage = _coerce_stage(
+            (prior or {}).get("locked_stage") or (prior or {}).get("effective_stage")
+        )
+        current_stage = (
+            bundle.sector_stage.stage_snapshot.provisional_stage
+            if bundle.sector_stage is not None
+            else WeinsteinStage.UNKNOWN
+        )
+        velocity_value = (current_row or {}).get("stage_breadth_velocity")
+        try:
+            velocity = float(velocity_value) if velocity_value not in (None, "") else None
+        except (TypeError, ValueError):
+            velocity = None
+        coverage_unknown = (
+            _coerce_stage((current_row or {}).get("effective_stage"))
+            is WeinsteinStage.UNKNOWN
+            if current_row is not None
+            else False
+        ) or (
+            prior is not None
+            and prior_stage is WeinsteinStage.UNKNOWN
+        )
+        coverage_status = "insufficient" if coverage_unknown else "sufficient"
+        taxonomy: str | None
+        if not mapped:
+            taxonomy = "missing_sector_mapping"
+        elif membership_trust not in SECTOR_GATE_RULES["trusted_membership_states"]:
+            taxonomy = "latest_only_untrusted_membership"
+        elif coverage_status == "insufficient":
+            taxonomy = "insufficient_constituent_coverage"
+        elif prior is None:
+            taxonomy = "sector_locked_snapshot_missing"
+        elif prior_stage.value not in SECTOR_GATE_RULES["passing_prior_locked_stages"]:
+            taxonomy = "sector_not_stage_2"
+        else:
+            taxonomy = None
+        improving = (
+            current_stage.value
+            in SECTOR_GATE_RULES["calibration_current_provisional_stages"]
+            or (
+                velocity is not None
+                and velocity
+                > SECTOR_GATE_RULES["calibration_improving_velocity_floor_exclusive"]
+            )
+        )
+        cohort = (
+            "stage_1_improving_blocked_v1"
+            if taxonomy == "sector_not_stage_2"
+            and prior_stage.value == SECTOR_GATE_RULES["calibration_prior_locked_stage"]
+            and improving
+            else None
+        )
+        attached.append(
+            replace(
+                bundle,
+                sector_gate=SectorGateEvidence(
+                    prior_locked_stage=prior_stage,
+                    prior_locked_week_end=_coerce_date(
+                        (prior or {}).get("source_week_end")
+                    ),
+                    prior_locked_confidence=(
+                        float((prior or {})["stage_confidence_score"])
+                        if (prior or {}).get("stage_confidence_score") not in (None, "")
+                        else None
+                    ),
+                    current_provisional_stage=current_stage,
+                    current_stage_velocity=velocity,
+                    membership_trust=membership_trust,
+                    coverage_status=coverage_status,
+                    taxonomy_cause=taxonomy,
+                    calibration_cohort=cohort,
+                ),
+            )
+        )
+    return tuple(attached)
+
+
+def _uses_sector_gate(bundle: OpportunitySourceBundle) -> bool:
+    return bool(
+        bundle.stock_stage
+        and bundle.stock_stage.stage_status.value == "provisional"
+        and bundle.stock_stage.provisional_stage is WeinsteinStage.TRANSITION_1_TO_2
+    )
+
+
+def _sector_gate_artifact_fields(
+    evidence: SectorGateEvidence | None,
+) -> dict[str, Any]:
+    return {
+        "sector_locked_stage_prior_completed_week": (
+            evidence.prior_locked_stage.value if evidence else None
+        ),
+        "sector_locked_week_end_prior_completed_week": (
+            evidence.prior_locked_week_end.isoformat()
+            if evidence and evidence.prior_locked_week_end
+            else None
+        ),
+        "sector_locked_confidence_prior_completed_week": (
+            evidence.prior_locked_confidence if evidence else None
+        ),
+        "sector_provisional_stage_current_week": (
+            evidence.current_provisional_stage.value if evidence else None
+        ),
+        "sector_stage_velocity_current_week": (
+            evidence.current_stage_velocity if evidence else None
+        ),
+        "sector_membership_trust": evidence.membership_trust if evidence else None,
+        "sector_coverage_status": evidence.coverage_status if evidence else None,
+        "sector_gate_taxonomy": evidence.taxonomy_cause if evidence else None,
+        "sector_gate_cohort": evidence.calibration_cohort if evidence else None,
+    }
 
 
 def _reconcile(

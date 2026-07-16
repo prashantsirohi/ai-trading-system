@@ -37,8 +37,8 @@ A lifecycle `TRIGGERED` transition requires a qualified, non-failed **breakout e
 
 ### Frozen semantics (binding wording)
 
-- **`MOMENTUM_LEADER` is a watch-source family, not an entry setup in `lifecycle-policy-v1`.** Rank admission creates monitoring eligibility only and can never directly create an `ENTER` or `ADD` action.
-- **`PULLBACK_REENTRY` is reserved in the contract but unsupported by `admission-rules-v1` and `lifecycle-policy-v1`.** Its presence in the `SetupFamily` enum ([contracts.py:58](../../src/ai_trading_system/domains/opportunities/orchestration/contracts.py)) must not be read as active functionality by agents, UI, or documentation.
+- **`MOMENTUM_LEADER` is a watch-source family, not an entry setup in `lifecycle-policy-v1.1`.** Rank admission creates monitoring eligibility only and can never directly create an `ENTER` or `ADD` action.
+- **`PULLBACK_REENTRY` is reserved in the contract but unsupported by `admission-rules-v1` and `lifecycle-policy-v1.1`.** Its presence in the `SetupFamily` enum ([contracts.py:58](../../src/ai_trading_system/domains/opportunities/orchestration/contracts.py)) must not be read as active functionality by agents, UI, or documentation.
 
 ### Pre-registered v2 metrics
 
@@ -221,6 +221,15 @@ A crash must never leave both episodes open, or the old episode closed without i
 
 ### A2 — Completed-week locked-sector semantics (implements D3)
 
+> **Implementation status (2026-07-16): implemented.** Governed locked-only
+> sector resolution, the binding blocker taxonomy, calibration-cohort tagging,
+> shadow artifact/summary fields, `lifecycle-policy-v1.1` fingerprinting, and
+> nullable decision-context evidence columns in migration 038 are implemented
+> with resolver, reachability, rule-matrix, persistence, and replay tests.
+> `lifecycle-policy-v2` remains reserved for the pre-registered future
+> calibrated size-haircut policy. Migration 038 was applied to the operator
+> store on 2026-07-16. Pending: the shadow campaign itself.
+
 - The early-trigger sector check consumes the **latest completed-week locked sector snapshot**; the current incomplete-week provisional aggregation is never an input to the gate.
 - Implement the v1 rule table and blocker taxonomy in D3 verbatim, including the `sector_locked_snapshot_missing` explicit state.
 - Persist the three monitoring fields (`sector_locked_stage_prior_completed_week`, `sector_provisional_stage_current_week`, `sector_stage_velocity_current_week`) on decision contexts and shadow artifacts so the pre-registered calibration cohort is measurable from day one.
@@ -233,8 +242,8 @@ A crash must never leave both episodes open, or the old episode closed without i
 > over single-sourced constants, stage-start register-or-verify in all three
 > Phase 3 stages, dedicated nullable stamp columns (episode open/close,
 > transition, decision context), run-metadata audit events, and the approved
-> stage-failure interpretation are in code with tests. Pending: operator
-> application of migration 037 to the operator store, and the deferred
+> stage-failure interpretation are in code with tests. Migration 037 was
+> applied to the operator store on 2026-07-16. Pending: the deferred
 > calibration-sample stamping that follows the Phase 3C-5 loader fix.
 
 Canonical fingerprint:

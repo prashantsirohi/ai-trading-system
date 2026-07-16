@@ -15,6 +15,7 @@ from ai_trading_system.domains.opportunities.contracts import (
 from .contracts import (
     OpportunityShadowConfig,
     OpportunitySourceBundle,
+    SECTOR_GATE_RULES,
     TransitionEvaluation,
 )
 
@@ -284,7 +285,7 @@ def _trigger_blockers(
 ) -> tuple[str, ...]:
     if not bundle.stock_stage or not bundle.evidence:
         return ("stock stage and evidence are required",)
-    stock, sector = bundle.stock_stage, bundle.sector_stage
+    stock = bundle.stock_stage
     if (
         stock.stage_status is StageStatus.LOCKED
         and stock.locked_stage is WeinsteinStage.STAGE_2
@@ -302,16 +303,15 @@ def _trigger_blockers(
         blockers.append("trigger requires locked Stage 2 or provisional Stage 1 to 2")
     if stock.confidence_score < cfg.early_trigger_stage_confidence_threshold:
         blockers.append("provisional stock-stage confidence too low")
-    if (
-        not sector
-        or sector.stage_snapshot.stage_status is StageStatus.UNKNOWN
-        or sector.stage_snapshot.effective_stage is WeinsteinStage.UNKNOWN
-    ):
-        blockers.append("sector_stage_unknown")
-    elif sector.stage_snapshot.stage_status is not StageStatus.LOCKED:
-        blockers.append("sector_stage_not_locked")
-    elif sector.stage_snapshot.locked_stage is not WeinsteinStage.STAGE_2:
-        blockers.append("sector_stage_not_stage_2")
+    gate = bundle.sector_gate
+    if gate is None:
+        blockers.append("sector_locked_snapshot_missing")
+    elif gate.taxonomy_cause:
+        blockers.append(gate.taxonomy_cause)
+    elif gate.prior_locked_stage.value not in SECTOR_GATE_RULES["passing_prior_locked_stages"]:
+        # Fail closed if a caller constructed incomplete evidence without using
+        # the bulk resolver/classifier.
+        blockers.append("sector_not_stage_2")
     if bundle.evidence.evidence_score < cfg.early_trigger_evidence_threshold:
         blockers.append("early-trigger evidence too weak")
     if bundle.evidence.extension_risk is not RiskLevel.LOW:

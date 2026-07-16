@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from ai_trading_system.domains.opportunities.contracts import (
     CandidateDecision,
@@ -20,6 +20,11 @@ from ai_trading_system.domains.opportunities.contracts import (
     SectorStageSnapshot,
     StageSnapshot,
 )
+
+if TYPE_CHECKING:
+    from ai_trading_system.domains.opportunities.orchestration.contracts import (
+        SectorGateEvidence,
+    )
 
 
 REGISTRY_SCHEMA_VERSION = "opportunity-registry-schema-v1"
@@ -208,6 +213,7 @@ class DecisionContextObservation:
     decision: CandidateDecision
     context: DecisionContextSnapshot
     lineage: SourceLineage
+    sector_gate: SectorGateEvidence | None = None
 
 
 @dataclass(frozen=True, slots=True)

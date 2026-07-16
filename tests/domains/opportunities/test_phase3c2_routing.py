@@ -371,11 +371,15 @@ def test_provisional_early_entry_sector_policy_fails_closed(
         _bundle(stage_factory, sector_factory, stock=stock), breakout_events=(trigger,)
     )
 
-    unknown = replace(base, sector_stage=None)
+    from ai_trading_system.domains.opportunities.orchestration.contracts import SectorGateEvidence
+
+    unknown = replace(base, sector_stage=None, sector_gate=SectorGateEvidence(
+        taxonomy_cause="sector_locked_snapshot_missing",
+    ))
     unknown_result = evaluate_transition(
         CandidateState.READY, unknown, config=OpportunityShadowConfig()
     )
-    assert "sector_stage_unknown" in unknown_result.blockers
+    assert "sector_locked_snapshot_missing" in unknown_result.blockers
     monitoring_route = decide_scan_route(
         symbol_id="AAA",
         stage_discovery=True,
@@ -392,9 +396,15 @@ def test_provisional_early_entry_sector_policy_fails_closed(
                 status=StageStatus.PROVISIONAL, provisional=WeinsteinStage.STAGE_2
             )
         ),
+        sector_gate=SectorGateEvidence(
+            prior_locked_stage=WeinsteinStage.STAGE_1,
+            current_provisional_stage=WeinsteinStage.TRANSITION_1_TO_2,
+            taxonomy_cause="sector_not_stage_2",
+            calibration_cohort="stage_1_improving_blocked_v1",
+        ),
     )
     assert (
-        "sector_stage_not_locked"
+        "sector_not_stage_2"
         in evaluate_transition(
             CandidateState.READY, provisional_sector, config=OpportunityShadowConfig()
         ).blockers
@@ -407,9 +417,13 @@ def test_provisional_early_entry_sector_policy_fails_closed(
                 status=StageStatus.LOCKED, locked=WeinsteinStage.STAGE_1
             )
         ),
+        sector_gate=SectorGateEvidence(
+            prior_locked_stage=WeinsteinStage.STAGE_1,
+            taxonomy_cause="sector_not_stage_2",
+        ),
     )
     assert (
-        "sector_stage_not_stage_2"
+        "sector_not_stage_2"
         in evaluate_transition(
             CandidateState.READY, locked_stage1_sector, config=OpportunityShadowConfig()
         ).blockers
@@ -421,6 +435,9 @@ def test_provisional_early_entry_sector_policy_fails_closed(
             stage=stage_factory(
                 status=StageStatus.LOCKED, locked=WeinsteinStage.STAGE_2
             )
+        ),
+        sector_gate=SectorGateEvidence(
+            prior_locked_stage=WeinsteinStage.STAGE_2,
         ),
     )
     assert evaluate_transition(

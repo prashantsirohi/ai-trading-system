@@ -61,6 +61,13 @@ produce a unique winner, the reader raises a governance conflict. Supersession
 cycles are rejected before insert and reported as malformed-governance conflicts
 if imported data already contains a cycle.
 
+`read_locked_sector_stage_prior_completed_week` applies the same availability,
+supersession, quarantine, and authority rules after restricting candidates to
+`stage_status = locked`. The opportunities early-entry gate uses this reader in
+one bulk call for all routed sectors. Consequently, an incomplete current-week
+provisional sector row can never displace the latest completed-week lock, and a
+later correction cannot repaint an earlier gate decision.
+
 ## DQ
 
 Invalid OHLCV, insufficient history, illiquidity, and missing sector mappings are explicit exclusions. Low sector constituent coverage returns `UNKNOWN`.

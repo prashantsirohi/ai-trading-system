@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Generic, Mapping, TypeVar
@@ -18,6 +18,7 @@ from ai_trading_system.domains.opportunities.contracts import (
     SectorStageSnapshot,
     StageSnapshot,
     TransitionReason,
+    WeinsteinStage,
 )
 from ai_trading_system.domains.opportunities.position_monitoring import (
     PositionRecoveryMode,
@@ -26,10 +27,24 @@ from ai_trading_system.domains.opportunities.position_monitoring import (
 
 ADMISSION_RULE_VERSION = "admission-rules-v1"
 SETUP_FAMILY_RULE_VERSION = "setup-family-v1"
-LIFECYCLE_RULE_VERSION = "lifecycle-policy-v1"
+LIFECYCLE_RULE_VERSION = "lifecycle-policy-v1.1"
 PROGRESS_RULE_VERSION = "opportunity-progress-v1"
 RETENTION_RULE_VERSION = "opportunity-retention-v1"
 LEGACY_STAGE_CONFIDENCE_VERSION = "weekly-stage-legacy-v1"
+
+
+# ADR-0006 A2. These values are consumed by the gate and by the A3 policy
+# fingerprint. ``lifecycle-policy-v2`` remains reserved for a future calibrated
+# size-haircut policy; v1.1 is the fail-closed completed-week correction to v1.
+SECTOR_GATE_RULES: dict[str, Any] = {
+    "passing_prior_locked_stages": (WeinsteinStage.STAGE_2.value,),
+    "trusted_membership_states": ("OBSERVED_AT_RUN", "POINT_IN_TIME_VERIFIED"),
+    "calibration_prior_locked_stage": WeinsteinStage.STAGE_1.value,
+    "calibration_current_provisional_stages": (
+        WeinsteinStage.TRANSITION_1_TO_2.value,
+    ),
+    "calibration_improving_velocity_floor_exclusive": 0.0,
+}
 
 
 class OpportunityRegistryMode(str, Enum):
@@ -192,6 +207,22 @@ class OpportunitySourceBundle:
     routing_decision_id: str | None = None
     market_data_complete: bool = True
     missing_data_fields: tuple[str, ...] = ()
+    sector_gate: "SectorGateEvidence | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class SectorGateEvidence:
+    """Point-in-time evidence for the provisional S1→S2 sector gate."""
+
+    prior_locked_stage: WeinsteinStage = WeinsteinStage.UNKNOWN
+    prior_locked_week_end: date | None = None
+    prior_locked_confidence: float | None = None
+    current_provisional_stage: WeinsteinStage = WeinsteinStage.UNKNOWN
+    current_stage_velocity: float | None = None
+    membership_trust: str = "UNKNOWN"
+    coverage_status: str = "unknown"
+    taxonomy_cause: str | None = None
+    calibration_cohort: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
