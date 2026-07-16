@@ -114,6 +114,8 @@ class CandidateEpisodeRecord:
     updated_at: datetime
     policy_snapshot_id: str | None = None
     closed_policy_snapshot_id: str | None = None
+    satisfied_admission_rules_json: str | None = None
+    rule_evaluations_json: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +129,8 @@ class OpenEpisodeRequest:
     opening_reason: str
     lineage: SourceLineage
     contract_version: str
+    satisfied_admission_rules_json: str | None = None
+    rule_evaluations_json: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

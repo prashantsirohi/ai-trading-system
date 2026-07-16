@@ -9,6 +9,7 @@ from ai_trading_system.domains.opportunities.orchestration import contracts as o
 from ai_trading_system.domains.opportunities.orchestration import retention as retention_module
 from ai_trading_system.domains.opportunities.orchestration import matching as matching_module
 from ai_trading_system.domains.opportunities.orchestration.contracts import (
+    ADMISSION_RULE_VERSION,
     LIFECYCLE_RULE_VERSION,
     RETENTION_RULE_VERSION,
     SETUP_FAMILY_RULE_VERSION,
@@ -37,13 +38,13 @@ def test_snapshot_is_deterministic() -> None:
 @pytest.mark.parametrize(
     ("param", "value", "label"),
     [
-        ("opportunity_rank_admission_percentile", 85.0, "admission-rules-v1"),
-        ("opportunity_rank_velocity_floor", -3.0, "admission-rules-v1"),
-        ("opportunity_rank_velocity_percentile_floor", 70.0, "admission-rules-v1"),
-        ("opportunity_investigator_admission_score", 65.0, "admission-rules-v1"),
-        ("opportunity_accumulation_admission_score", 70.0, "admission-rules-v1"),
-        ("opportunity_pattern_admission_score", 75.0, "admission-rules-v1"),
-        ("opportunity_breakout_admission_score", 75.0, "admission-rules-v1"),
+        ("opportunity_rank_admission_percentile", 85.0, ADMISSION_RULE_VERSION),
+        ("opportunity_rank_velocity_floor", -3.0, ADMISSION_RULE_VERSION),
+        ("opportunity_rank_velocity_percentile_floor", 70.0, ADMISSION_RULE_VERSION),
+        ("opportunity_investigator_admission_score", 65.0, ADMISSION_RULE_VERSION),
+        ("opportunity_accumulation_admission_score", 70.0, ADMISSION_RULE_VERSION),
+        ("opportunity_pattern_admission_score", 75.0, ADMISSION_RULE_VERSION),
+        ("opportunity_breakout_admission_score", 75.0, ADMISSION_RULE_VERSION),
         ("rank_deep_scan_limit", 100, "scan-routing-policy-v2"),
         ("stage_discovery_confidence_threshold", 60.0, "scan-routing-policy-v2"),
         ("minimum_sector_constituents", 8, "sector-stage-aggregation-v1"),
@@ -71,7 +72,7 @@ def test_register_then_verify_then_mismatch(registry) -> None:
         register_or_verify_policy_snapshots(registry, drifted, run_id="run-3")
     message = str(excinfo.value)
     assert "POLICY_VERSION_CONTENT_MISMATCH" in message
-    assert "admission-rules-v1" in message
+    assert ADMISSION_RULE_VERSION in message
     assert "rank_admission_percentile" in message
     assert "90.0" in message and "85.0" in message
 
@@ -196,4 +197,37 @@ def test_supersession_policy_drift_changes_setup_family_fingerprint(monkeypatch)
     drifted = compute_policy_snapshot({})
     assert drifted.label_hashes[SETUP_FAMILY_RULE_VERSION] != baseline.label_hashes[
         SETUP_FAMILY_RULE_VERSION
+    ]
+
+
+def test_a4_patch_label_registers_beside_legacy_admission_v1(registry) -> None:
+    with registry._writer() as conn:  # noqa: SLF001
+        conn.execute(
+            """INSERT INTO policy_version_registry
+                   (version_label, policy_snapshot_id, content_json, first_registered_at, first_run_id)
+               VALUES ('admission-rules-v1', 'legacy-hash', '{}', current_timestamp, 'legacy-run')"""
+        )
+    register_or_verify_policy_snapshots(
+        registry, compute_policy_snapshot({}), run_id="a4-run"
+    )
+    with registry._reader() as conn:  # noqa: SLF001
+        labels = {
+            row[0]
+            for row in conn.execute(
+                "SELECT version_label FROM policy_version_registry"
+            ).fetchall()
+        }
+    assert {"admission-rules-v1", ADMISSION_RULE_VERSION}.issubset(labels)
+
+
+def test_admission_precedence_drift_changes_runtime_fingerprint(monkeypatch) -> None:
+    baseline = compute_policy_snapshot({})
+    monkeypatch.setattr(
+        orchestration_contracts,
+        "ADMISSION_RULE_PRECEDENCE",
+        tuple(reversed(orchestration_contracts.ADMISSION_RULE_PRECEDENCE)),
+    )
+    drifted = compute_policy_snapshot({})
+    assert drifted.label_hashes[ADMISSION_RULE_VERSION] != baseline.label_hashes[
+        ADMISSION_RULE_VERSION
     ]

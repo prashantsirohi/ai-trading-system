@@ -98,7 +98,9 @@ def test_phase3b_recovers_position_only_episode_without_transition_history(tmp_p
     OpportunityStage().run(context)
     with context.registry._reader() as conn:  # noqa: SLF001
         episode = conn.execute(
-            "SELECT setup_family, episode_type, opening_reason FROM candidate_episode"
+            "SELECT setup_family, episode_type, opening_reason, "
+            "satisfied_admission_rules_json, rule_evaluations_json "
+            "FROM candidate_episode"
         ).fetchone()
         snapshot = conn.execute(
             "SELECT lifecycle_state, active_position FROM candidate_snapshot"
@@ -110,7 +112,13 @@ def test_phase3b_recovers_position_only_episode_without_transition_history(tmp_p
         action = conn.execute(
             "SELECT recovery_mode, payload_json FROM position_recovery_action"
         ).fetchone()
-    assert episode == ("position_state_recovery", "position_state_recovery", "position_state_recovery")
+    assert episode == (
+        "position_state_recovery",
+        "position_state_recovery",
+        "position_state_recovery",
+        None,
+        None,
+    )
     assert snapshot is None
     assert transitions == 0
     assert proposal == ("automatic", "PROPOSED")

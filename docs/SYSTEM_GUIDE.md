@@ -257,7 +257,7 @@ backup byte-for-byte:
 ```bash
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.migrate_control_plane \
   --backup-dir "$DATA_ROOT/backups/<timestamp>" \
-  --from-migration 033 --to-migration 040 --apply
+  --from-migration 033 --to-migration 041 --apply
 ```
 
 `--apply-control-plane-migrations` is an explicit startup override for

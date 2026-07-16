@@ -69,7 +69,11 @@ from ai_trading_system.domains.opportunities.registry import (
 from ai_trading_system.pipeline.contracts import StageArtifact
 from ai_trading_system.pipeline.registry import RegistryStore
 
-from .admission import evaluate_admission
+from .admission import (
+    evaluate_admission,
+    rule_evaluations_json,
+    satisfied_rules_json,
+)
 from .assembler import assemble_candidate_snapshot
 from .contracts import (
     AdapterWarning,
@@ -343,6 +347,8 @@ class OpportunityShadowOrchestrator:
                 and episode.symbol_id == bundle.symbol_id
             ]
             admission = evaluate_admission(bundle, config, policy_snapshot_id)
+            admission_evaluations_json = rule_evaluations_json(admission)
+            admission_satisfied_json = satisfied_rules_json(admission)
             recovery = False
             episode = None
             predecessor_episode = None
@@ -422,11 +428,14 @@ class OpportunityShadowOrchestrator:
             elif matching_for_symbol and not admission.admitted:
                 counters["not_admitted"] += 1
                 rows["candidate_reconciliation"].append(
-                    _reconciliation_row(
-                        bundle,
-                        "not_admitted",
-                        "same-symbol open episode was not attached without setup-family admission",
-                    )
+                    {
+                        **_reconciliation_row(
+                            bundle,
+                            "not_admitted",
+                            "same-symbol open episode was not attached without setup-family admission",
+                        ),
+                        "rule_evaluations": admission_evaluations_json,
+                    }
                 )
                 continue
             elif recovery:
@@ -460,9 +469,12 @@ class OpportunityShadowOrchestrator:
             else:
                 counters["not_admitted"] += 1
                 rows["candidate_reconciliation"].append(
-                    _reconciliation_row(
-                        bundle, "not_admitted", "; ".join(admission.blockers)
-                    )
+                    {
+                        **_reconciliation_row(
+                            bundle, "not_admitted", "; ".join(admission.blockers)
+                        ),
+                        "rule_evaluations": admission_evaluations_json,
+                    }
                 )
                 continue
 
@@ -481,6 +493,8 @@ class OpportunityShadowOrchestrator:
                     episode_started_at = _aware_datetime(
                         bundle.position_cycle_opened_at, as_of
                     )
+                    persisted_satisfied_json = None
+                    persisted_evaluations_json = None
                 else:
                     assert (
                         admission.admission_identity
@@ -491,6 +505,8 @@ class OpportunityShadowOrchestrator:
                     opening_reason = admission.reason.value
                     admission_identity = admission.admission_identity
                     episode_started_at = as_of
+                    persisted_satisfied_json = admission_satisfied_json
+                    persisted_evaluations_json = admission_evaluations_json
                 request = OpenEpisodeRequest(
                     symbol_id=bundle.symbol_id,
                     exchange=bundle.exchange,
@@ -503,6 +519,8 @@ class OpportunityShadowOrchestrator:
                     opening_reason=opening_reason,
                     lineage=lineage,
                     contract_version=OPPORTUNITY_CONTRACT_VERSION,
+                    satisfied_admission_rules_json=persisted_satisfied_json,
+                    rule_evaluations_json=persisted_evaluations_json,
                 )
                 setup_id = make_setup_id(
                     exchange=bundle.exchange,
@@ -560,6 +578,10 @@ class OpportunityShadowOrchestrator:
                         "symbol_id": bundle.symbol_id,
                         "reason": opening_reason,
                         "setup_family": setup_family,
+                        "primary_admission_reason": opening_reason,
+                        "primary_setup_family": setup_family,
+                        "satisfied_admission_rules": persisted_satisfied_json,
+                        "rule_evaluations": persisted_evaluations_json,
                         "rule_version": admission.rule_version,
                     }
                 )

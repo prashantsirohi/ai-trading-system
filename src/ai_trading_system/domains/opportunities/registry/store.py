@@ -152,6 +152,8 @@ class DuckDBOpportunityRegistryStore:
             created_at=_aware(row["created_at"]), updated_at=_aware(row["updated_at"]),
             policy_snapshot_id=row.get("policy_snapshot_id"),
             closed_policy_snapshot_id=row.get("closed_policy_snapshot_id"),
+            satisfied_admission_rules_json=row.get("satisfied_admission_rules_json"),
+            rule_evaluations_json=row.get("rule_evaluations_json"),
         )
 
     def _get_episode(self, conn: duckdb.DuckDBPyConnection, candidate_id: str) -> CandidateEpisodeRecord | None:
@@ -358,14 +360,16 @@ class DuckDBOpportunityRegistryStore:
                 candidate_id, setup_id, symbol_id, exchange, episode_number, episode_type,
                 setup_family, admission_identity, episode_started_at, episode_status,
                 opening_reason, created_run_id, created_stage, created_artifact_hash,
-                contract_version, schema_version, policy_snapshot_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?)
+                contract_version, schema_version, policy_snapshot_id,
+                satisfied_admission_rules_json, rule_evaluations_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [candidate_id, setup_id, symbol, exchange, episode_number, request.episode_type,
              family, request.admission_identity.strip(), _db_time(request.episode_started_at),
              request.opening_reason, request.lineage.run_id, request.lineage.stage_name,
              request.lineage.source_artifact_hash, request.contract_version, REGISTRY_SCHEMA_VERSION,
-             request.lineage.policy_snapshot_id],
+             request.lineage.policy_snapshot_id, request.satisfied_admission_rules_json,
+             request.rule_evaluations_json],
         )
         created = self._get_episode(conn, candidate_id)
         assert created is not None

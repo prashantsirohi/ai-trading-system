@@ -48,6 +48,22 @@ def opportunity(at: datetime, score: float) -> OpportunitySnapshot:
                                {"relative_strength": 90}, "rank-v1", at)
 
 
+def test_episode_persists_structured_admission_json(
+    opportunity_store, episode_request
+) -> None:
+    request = replace(
+        episode_request,
+        satisfied_admission_rules_json='["rank_threshold"]',
+        rule_evaluations_json='[{"passed":true,"rule":"rank_threshold"}]',
+    )
+    episode = opportunity_store.open_episode(request)
+    hydrated = opportunity_store.get_episode(episode.candidate_id)
+    assert hydrated.satisfied_admission_rules_json == '["rank_threshold"]'
+    assert hydrated.rule_evaluations_json == (
+        '[{"passed":true,"rule":"rank_threshold"}]'
+    )
+
+
 def evidence(at: datetime, score: float) -> EvidenceSnapshot:
     return EvidenceSnapshot(score, EvidenceVerdict.HIGH_CONVICTION, 80, 85, 90, 82, 76, 85, 80,
                             RiskLevel.LOW, RiskLevel.LOW, ("volume expansion",), (), (), "investigator-v1", at)

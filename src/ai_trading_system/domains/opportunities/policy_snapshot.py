@@ -19,6 +19,7 @@ from ai_trading_system.domains.opportunities.contracts import (
     STAGE_CONFIDENCE_FORMULA_VERSION,
 )
 from ai_trading_system.domains.opportunities.coverage import SECTOR_AGGREGATION_RULES
+from ai_trading_system.domains.opportunities.orchestration import contracts as admission_policy
 from ai_trading_system.domains.opportunities.orchestration.contracts import (
     ADMISSION_RULE_VERSION,
     LIFECYCLE_RULE_VERSION,
@@ -99,6 +100,9 @@ def policy_content(
     retention = shadow.retention_policy or default_candidate_retention_policy()
     return {
         ADMISSION_RULE_VERSION: {
+            "admission_rule_precedence": list(
+                admission_policy.ADMISSION_RULE_PRECEDENCE
+            ),
             "rank_admission_percentile": shadow.rank_admission_percentile,
             "rank_velocity_floor": shadow.rank_velocity_floor,
             "rank_velocity_percentile_floor": shadow.rank_velocity_percentile_floor,
@@ -107,6 +111,9 @@ def policy_content(
             "pattern_admission_score": shadow.pattern_admission_score,
             "breakout_admission_score": shadow.breakout_admission_score,
             "breakout_admission_tiers": list(shadow.breakout_admission_tiers),
+            "early_trigger_stage_confidence_threshold": (
+                shadow.early_trigger_stage_confidence_threshold
+            ),
         },
         LIFECYCLE_RULE_VERSION: {
             "setup_forming_evidence_threshold": shadow.setup_forming_evidence_threshold,

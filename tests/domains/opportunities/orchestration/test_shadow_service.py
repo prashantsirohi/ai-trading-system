@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import json
 
 import pandas as pd
 
@@ -73,8 +74,42 @@ def test_shadow_service_writes_and_replay_is_idempotent(tmp_path):
     second = service.run(run_id="run-1", stage_attempt=2, artifact_set=artifacts, as_of=NOW, mode=config.mode, config=config)
     assert first.summary["new_episodes_opened"] == 1
     assert first.summary["snapshots_created"] == 1
+    admission = first.artifact_rows["candidate_admissions"][0]
+    assert admission["primary_admission_reason"] == "qualified_breakout"
+    assert admission["primary_setup_family"] == "breakout"
+    assert "rank_threshold" in json.loads(admission["satisfied_admission_rules"])
+    assert len(json.loads(admission["rule_evaluations"])) == 7
+    episode = service.registry.list_open_episodes()[0]
+    assert episode.satisfied_admission_rules_json == admission[
+        "satisfied_admission_rules"
+    ]
+    assert episode.rule_evaluations_json == admission["rule_evaluations"]
     assert second.summary["registry_duplicates"] == 1
     assert len(service.registry.list_open_episodes()) == 1
+
+
+def test_not_admitted_reconciliation_surfaces_rule_evaluations(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+    artifacts = _momentum_artifacts(tmp_path)
+    config = OpportunityShadowConfig(
+        mode=OpportunityRegistryMode.SHADOW,
+        rank_admission_percentile=101,
+        rank_velocity_floor=-999,
+    )
+    result = service.run(
+        run_id="blocked-run",
+        stage_attempt=1,
+        artifact_set=artifacts,
+        as_of=NOW,
+        mode=config.mode,
+        config=config,
+    )
+    row = result.artifact_rows["candidate_reconciliation"][0]
+    assert row["outcome"] == "not_admitted"
+    evaluations = json.loads(row["rule_evaluations"])
+    assert len(evaluations) == 7
+    assert not any(item["passed"] for item in evaluations)
 
 
 def test_dry_run_writes_no_registry_records(tmp_path):

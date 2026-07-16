@@ -190,6 +190,11 @@ successor with deterministic identity, setup-family rule version, run, and
 source-artifact hash. Predecessor close, successor open, relation append, and
 successor observations share one registry transaction.
 
+Migration 041 adds nullable `candidate_episode` JSON columns for all satisfied
+admission rules and the seven structured rule evaluations. They do not alter
+episode identity or duplicate the canonical primary fields: `opening_reason`
+and `setup_family` remain the primary admission reason and family.
+
 ## Backup and mutation safety
 
 At minimum, back up OHLCV, control-plane, execution, candidate-tracker, master-data, fundamentals, and feature-store state before migrations or repairs. Treat `pipeline_runs/` as audit evidence even where upstream stores can reproduce some artifacts.

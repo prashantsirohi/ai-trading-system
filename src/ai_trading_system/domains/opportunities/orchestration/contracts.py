@@ -25,7 +25,20 @@ from ai_trading_system.domains.opportunities.position_monitoring import (
 )
 
 
-ADMISSION_RULE_VERSION = "admission-rules-v1"
+ADMISSION_RULE_VERSION = "admission-rules-v1.1"
+# Intentionally pinned: the label may point-bump without adding a second
+# avoidable candidate-ID discontinuity. Exact policy content remains identity
+# bound independently through policy_snapshot_id.
+ADMISSION_IDENTITY_RULE_VERSION = "admission-rules-v1"
+ADMISSION_RULE_PRECEDENCE: tuple[str, ...] = (
+    "qualified_breakout",
+    "stage_transition",
+    "early_accumulation",
+    "investigator_promotion",
+    "qualified_pattern",
+    "rank_velocity",
+    "rank_threshold",
+)
 SETUP_FAMILY_RULE_VERSION = "setup-family-v1.1"
 LIFECYCLE_RULE_VERSION = "lifecycle-policy-v1.1"
 PROGRESS_RULE_VERSION = "opportunity-progress-v1"
@@ -231,6 +244,22 @@ class SectorGateEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class AdmissionRuleEvaluation:
+    rule: AdmissionReason
+    setup_family: SetupFamily
+    passed: bool
+    observed_value: Mapping[str, Any]
+    threshold: Mapping[str, Any]
+    source_observation_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "observed_value", MappingProxyType(dict(self.observed_value))
+        )
+        object.__setattr__(self, "threshold", MappingProxyType(dict(self.threshold)))
+
+
+@dataclass(frozen=True, slots=True)
 class AdmissionEvaluation:
     admitted: bool
     reason: AdmissionReason | None
@@ -240,6 +269,8 @@ class AdmissionEvaluation:
     warnings: tuple[str, ...]
     admission_identity: str | None
     rule_version: str = ADMISSION_RULE_VERSION
+    satisfied_rules: tuple[AdmissionReason, ...] = ()
+    rule_evaluations: tuple[AdmissionRuleEvaluation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

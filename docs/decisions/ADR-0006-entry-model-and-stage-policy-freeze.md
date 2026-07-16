@@ -4,7 +4,7 @@
 - **Audience:** Operator (decision owner), developers, future agents.
 - **Last verified:** 2026-07-15
 - **Source of truth:** `src/ai_trading_system/domains/opportunities/orchestration/` (`admission.py`, `matching.py`, `transitions.py`, `retention.py`, `contracts.py`, `service.py`), `src/ai_trading_system/domains/opportunities/coverage.py`, `src/ai_trading_system/domains/opportunities/registry/models.py`, and the [opportunity lifecycle contracts](../architecture/opportunity_lifecycle_contracts.md).
-- **Status:** Proposed — operator decisions D1–D7 recorded 2026-07-15 and frozen as design intent. The ADR moves to **Accepted** only when amendments A1–A5 are implemented and verified in code. Until then, the current behavior documented below remains in force and is known-deficient.
+- **Status:** Accepted — operator decisions D1–D7 were frozen on 2026-07-15; amendments A1–A5 were implemented, verified, documented, and migrated through control-plane migration 041 on 2026-07-16. Deferred calibration-loader threading remains tracked under the Phase 3C-5 loader fix and does not change the accepted v1 policy semantics.
 
 ---
 
@@ -134,9 +134,9 @@ D4 is classified as **architecture plus enforcement**, not operator commitment.
 
 ## D5 — Admission precedence (FROZEN: Option A, via Amendment A4)
 
-### Current logic
+### Implemented logic
 
-`evaluate_admission` ([admission.py](../../src/ai_trading_system/domains/opportunities/orchestration/admission.py)) short-circuits a fixed elif chain — qualified breakout → high-confidence S1→S2 → early accumulation → Investigator promotion → qualified pattern → rank velocity → rank threshold — assigning exactly one reason/family. Stage 3/4 (including 2→3, 3→4) blocks all admission first.
+`evaluate_admission` ([admission.py](../../src/ai_trading_system/domains/opportunities/orchestration/admission.py)) evaluates all seven rules, records every result, and selects the primary reason/family using the fingerprinted `ADMISSION_RULE_PRECEDENCE`: qualified breakout → high-confidence S1→S2 → early accumulation → Investigator promotion → qualified pattern → rank velocity → rank threshold. Stage 3/4 (including 2→3, 3→4) blocks all admission first.
 
 ### Options considered
 
@@ -286,6 +286,18 @@ Create admission-rules-v2.
 Runtime threshold overrides remain possible mechanically but can no longer masquerade as the same policy version — any changed value produces a different snapshot ID and is rejected under the old label.
 
 ### A4 — Evaluate-all admission with structured persistence (implements D5)
+
+> **Implementation status (2026-07-16): implemented.** Migration 041 adds nullable structured admission JSON to
+> `candidate_episode`; `opening_reason` and `setup_family` remain the canonical
+> primary reason/family. `admission-rules-v1.1` fingerprints the runtime
+> precedence and early-trigger confidence threshold. The identity digest's
+> `ADMISSION_IDENTITY_RULE_VERSION` remains pinned to v1, while the A3 policy
+> snapshot still creates the acknowledged deploy boundary. `observed_value`
+> and `threshold` are named dictionaries; `source_observation_ids` currently
+> carry bundle-level row provenance because evidence items lack individual
+> IDs. Per-item provenance and calibration-loader threading remain deferred to
+> the pending Phase 3C-5 loader fix.
+> Migration 041 was applied to the operator store on 2026-07-16.
 
 Two-step admission:
 

@@ -787,6 +787,13 @@ idempotency key, semantic hash, and schema version. Unique indexes enforce
 idempotent replay and allow a predecessor to have at most one relation of a
 given type; a successor index supports reverse lookup.
 
+Migration `041_admission_rule_evaluations.sql` implements ADR-0006 Amendment
+A4 by adding nullable `candidate_episode.satisfied_admission_rules_json` and
+`candidate_episode.rule_evaluations_json`. The existing `opening_reason` and
+`setup_family` columns remain the single source for primary admission reason
+and family. Recovery and legacy episodes may leave both structured columns
+null; the columns are outside episode identity.
+
 ## Phase 3C-5 schema boundary
 
 Phase 3C-5 introduces no DuckDB migration or canonical table. It reads an
