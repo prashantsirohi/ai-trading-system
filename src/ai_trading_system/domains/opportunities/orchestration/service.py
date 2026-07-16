@@ -12,6 +12,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+import duckdb
+
 from ai_trading_system.domains.opportunities.adapters import (
     adapt_breakout_rows,
     adapt_investigator_rows,
@@ -47,6 +49,7 @@ from ai_trading_system.domains.opportunities.position_monitoring import (
 from ai_trading_system.domains.opportunities.registry import (
     DuckDBOpportunityRegistryStore,
     EpisodeClosure,
+    EpisodeSupersession,
     EpisodeStatus,
     EvidenceObservation,
     OpenEpisodeRequest,
@@ -70,18 +73,21 @@ from .admission import evaluate_admission
 from .assembler import assemble_candidate_snapshot
 from .contracts import (
     AdapterWarning,
+    ClosureReason,
+    EpisodeRelationType,
     OpportunityRegistryMode,
     OpportunityShadowConfig,
     OpportunityShadowRunResult,
     OpportunitySourceBundle,
     RejectedSourceRow,
     SECTOR_GATE_RULES,
+    SETUP_FAMILY_RULE_VERSION,
     SectorGateEvidence,
     SetupMatchOutcome,
     SourceDescriptor,
 )
 from .matching import match_open_episode
-from .retention import evaluate_retention
+from .retention import advance_session_counters, evaluate_retention
 from .transitions import evaluate_transition
 
 
@@ -119,6 +125,7 @@ class OpportunityShadowOrchestrator:
         config: OpportunityShadowConfig,
         ohlcv_db_path: Path | None = None,
         policy_snapshot_id: str | None = None,
+        observed_session_date: date | None = None,
     ) -> OpportunityShadowRunResult:
         if mode is OpportunityRegistryMode.OFF:
             return OpportunityShadowRunResult(
@@ -256,6 +263,11 @@ class OpportunityShadowOrchestrator:
             raw_sector=raw_sector,
             as_of=as_of,
         )
+        observed_session = observed_session_date or _resolve_observed_session(
+            ohlcv_db_path,
+            cutoff=as_of.date(),
+            exchanges={bundle.exchange for bundle in bundles},
+        )
         adapter_seconds = time.perf_counter() - adapter_started
 
         rows: dict[str, list[dict[str, Any]]] = {
@@ -265,6 +277,7 @@ class OpportunityShadowOrchestrator:
                 "candidate_updates",
                 "candidate_transitions",
                 "candidate_closures",
+                "candidate_supersessions",
                 "candidate_reconciliation",
                 "adapter_warnings",
                 "adapter_rejections",
@@ -332,6 +345,7 @@ class OpportunityShadowOrchestrator:
             admission = evaluate_admission(bundle, config, policy_snapshot_id)
             recovery = False
             episode = None
+            predecessor_episode = None
             compatibility = None
             if bundle.active_position:
                 cycle_id = bundle.position_cycle_id or make_position_cycle_id(
@@ -436,6 +450,9 @@ class OpportunityShadowOrchestrator:
                     ),
                     None,
                 )
+                if match.outcome is SetupMatchOutcome.SUPERSEDES:
+                    predecessor_episode = episode
+                    episode = None
                 if match.outcome is SetupMatchOutcome.CONFLICT:
                     _conflict(rows, bundle, "; ".join(match.warnings))
                     counters["registry_conflicts"] += 1
@@ -510,6 +527,31 @@ class OpportunityShadowOrchestrator:
                 episode_request = request
                 episode = _dry_episode(request, candidate_id, setup_id)
                 counters["new_episodes_opened"] += 1
+                if predecessor_episode is not None:
+                    supersession = EpisodeSupersession(
+                        predecessor_candidate_id=predecessor_episode.candidate_id,
+                        relation_type=(
+                            EpisodeRelationType.MOMENTUM_SUPERSEDED_BY_BREAKOUT.value
+                        ),
+                        related_at=as_of,
+                        closing_reason=ClosureReason.SUPERSEDED_BY_NEW_EPISODE.value,
+                        rule_version=SETUP_FAMILY_RULE_VERSION,
+                        lineage=lineage,
+                        contract_version=OPPORTUNITY_CONTRACT_VERSION,
+                    )
+                    counters["episodes_superseded"] += 1
+                    rows["candidate_supersessions"].append(
+                        {
+                            "predecessor_candidate_id": predecessor_episode.candidate_id,
+                            "successor_candidate_id": candidate_id,
+                            "exchange": bundle.exchange,
+                            "symbol_id": bundle.symbol_id,
+                            "relation_type": supersession.relation_type,
+                            "rule_version": supersession.rule_version,
+                        }
+                    )
+                else:
+                    supersession = None
                 rows["candidate_admissions"].append(
                     {
                         "candidate_id": candidate_id,
@@ -523,6 +565,7 @@ class OpportunityShadowOrchestrator:
                 )
             else:
                 counters["existing_episodes_matched"] += 1
+                supersession = None
 
             current = state_by_id.get(episode.candidate_id)
             if (
@@ -546,16 +589,6 @@ class OpportunityShadowOrchestrator:
                 )
             )
             progress = _progress_from_current(bundle, current)
-            days_without_progress = (
-                0
-                if progress.status is ProgressStatus.IMPROVING
-                else int(current.days_without_progress or 0) + 1 if current else 0
-            )
-            days_in_state = (
-                max((as_of - current.last_transition_at).days, 0)
-                if current and current.last_transition_at
-                else int(current.days_in_state or 0) if current else 0
-            )
             active_position = bundle.active_position
             transition = evaluate_transition(
                 previous_state,
@@ -577,12 +610,33 @@ class OpportunityShadowOrchestrator:
             lifecycle_state = (
                 transition.proposed_state if transition.allowed else previous_state
             )
+            counter_state = advance_session_counters(
+                previous_counted_session=(
+                    current.last_retention_counted_session if current else None
+                ),
+                previous_sessions_in_state=int(current.days_in_state or 0) if current else 0,
+                previous_sessions_without_progress=(
+                    int(current.days_without_progress or 0) if current else 0
+                ),
+                previous_last_progress_at=current.last_progress_at if current else None,
+                observed_session=observed_session,
+                observed_at=as_of,
+                progress_improving=progress.status is ProgressStatus.IMPROVING,
+                transition_occurred=transition.allowed,
+                legacy_last_snapshot_session=(
+                    current.last_snapshot_at.date()
+                    if current and current.last_snapshot_at
+                    else None
+                ),
+            )
+            days_in_state = counter_state.sessions_in_state
+            days_without_progress = counter_state.sessions_without_progress
             snapshot = assemble_candidate_snapshot(
                 candidate_id=episode.candidate_id,
                 setup_id=episode.setup_id,
                 bundle=bundle,
                 lifecycle_state=lifecycle_state,
-                days_in_state=0 if transition.allowed else days_in_state,
+                days_in_state=days_in_state,
                 days_without_progress=days_without_progress,
                 active_position=active_position,
             )
@@ -600,7 +654,7 @@ class OpportunityShadowOrchestrator:
                     )
                 retention = evaluate_retention(
                     state=lifecycle_state,
-                    days_in_state=0 if transition.allowed else days_in_state,
+                    days_in_state=days_in_state,
                     days_without_progress=days_without_progress,
                     progress_status=progress.status,
                     stock_stage=(
@@ -649,11 +703,14 @@ class OpportunityShadowOrchestrator:
                             bundle=bundle,
                             progress=progress,
                             days_without_progress=days_without_progress,
+                            last_progress_at=counter_state.last_progress_at,
+                            last_retention_counted_session=counter_state.counted_session,
                             snapshot=snapshot,
                             transition=(transition if transition.allowed else None),
                             previous_state=previous_state,
                             lineage=lineage,
                             closure=closure,
+                            supersession=supersession,
                         )
                     )
                     _count_append_results(counters, write_result.append_results)
@@ -812,11 +869,14 @@ def _write_bundle(
     bundle: OpportunitySourceBundle,
     progress: ProgressSnapshot,
     days_without_progress: int,
+    last_progress_at: datetime | None,
+    last_retention_counted_session: date,
     snapshot: Any,
     transition: Any,
     previous_state: CandidateState,
     lineage: SourceLineage,
     closure: EpisodeClosure | None,
+    supersession: EpisodeSupersession | None,
 ) -> OrchestrationBundle:
     stages: list[StageObservation] = []
     if bundle.stock_stage:
@@ -846,7 +906,13 @@ def _write_bundle(
             )
         )
     snapshot_observation = (
-        SnapshotObservation(snapshot, bundle.as_of, lineage)
+        SnapshotObservation(
+            snapshot,
+            bundle.as_of,
+            lineage,
+            last_progress_at=last_progress_at,
+            last_retention_counted_session=last_retention_counted_session,
+        )
         if snapshot is not None
         else None
     )
@@ -909,6 +975,7 @@ def _write_bundle(
         snapshot=snapshot_observation,
         transition=transition_observation,
         closure=closure,
+        supersession=supersession,
     )
 
 
@@ -1518,6 +1585,38 @@ def _combined_lineage(
     )
 
 
+def _resolve_observed_session(
+    db_path: Path | None, *, cutoff: date, exchanges: set[str]
+) -> date:
+    """Resolve the latest actual OHLCV session, never a weekend rerun date."""
+    if db_path is None:
+        return cutoff
+    normalized = sorted({item.upper() for item in exchanges if item})
+    if not normalized:
+        raise OpportunityShadowSourceError(
+            "cannot resolve observed trading session without an exchange"
+        )
+    placeholders = ", ".join("?" for _ in normalized)
+    try:
+        with duckdb.connect(str(db_path), read_only=True) as conn:
+            row = conn.execute(
+                f"SELECT MAX(CAST(timestamp AS DATE)) FROM _catalog "  # noqa: S608
+                f"WHERE UPPER(exchange) IN ({placeholders}) "
+                "AND CAST(timestamp AS DATE) <= ?",
+                [*normalized, cutoff],
+            ).fetchone()
+    except (duckdb.Error, OSError) as exc:
+        raise OpportunityShadowSourceError(
+            f"cannot resolve observed trading session from OHLCV store: {exc}"
+        ) from exc
+    session = row[0] if row else None
+    if session is None:
+        raise OpportunityShadowSourceError(
+            "OHLCV store has no observed trading session at or before the run date"
+        )
+    return session
+
+
 def _enrich_stock_stage(
     rows: list[dict[str, Any]], db_path: Path, as_of: datetime
 ) -> list[dict[str, Any]]:
@@ -1560,6 +1659,7 @@ def _initial_counts(*args: Any) -> dict[str, Any]:
         "source_bundles_assembled": len(bundles),
         "new_episodes_opened": 0,
         "existing_episodes_matched": 0,
+        "episodes_superseded": 0,
         "snapshots_created": 0,
         "duplicate_snapshots": 0,
         "transitions_created": 0,

@@ -10,6 +10,7 @@ from .models import REGISTRY_SCHEMA_VERSION
 TABLES = (
     "opportunity_registry_schema",
     "candidate_episode",
+    "candidate_episode_relation",
     "candidate_snapshot",
     "candidate_stage_observation",
     "candidate_evidence_observation",

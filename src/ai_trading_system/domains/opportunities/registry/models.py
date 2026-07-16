@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Mapping
@@ -38,6 +38,7 @@ __all__ = [
     "AttributionObservation", "AppendResult", "BatchAppendResult", "CandidateCurrentState",
     "TimelineEntry", "CandidateTimeline", "OpportunityRegistryConflictError",
     "EpisodeClosure", "OrchestrationBundle", "OrchestrationBundleResult",
+    "EpisodeSupersession", "EpisodeRelationRecord",
 ]
 
 
@@ -135,6 +136,8 @@ class SnapshotObservation:
     lineage: SourceLineage
     stock_stage_observation_id: str | None = None
     sector_stage_observation_id: str | None = None
+    last_progress_at: datetime | None = None
+    last_retention_counted_session: date | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +252,31 @@ class EpisodeClosure:
 
 
 @dataclass(frozen=True, slots=True)
+class EpisodeSupersession:
+    predecessor_candidate_id: str
+    relation_type: str
+    related_at: datetime
+    closing_reason: str
+    rule_version: str
+    lineage: SourceLineage
+    contract_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodeRelationRecord:
+    relation_id: str
+    predecessor_candidate_id: str
+    successor_candidate_id: str
+    relation_type: str
+    related_at: datetime
+    rule_version: str
+    run_id: str
+    source_artifact_hash: str
+    schema_version: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class OrchestrationBundle:
     candidate_id: str
     episode_request: OpenEpisodeRequest | None = None
@@ -259,6 +287,7 @@ class OrchestrationBundle:
     snapshot: SnapshotObservation | None = None
     transition: TransitionObservation | None = None
     closure: EpisodeClosure | None = None
+    supersession: EpisodeSupersession | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,6 +295,7 @@ class OrchestrationBundleResult:
     episode: CandidateEpisodeRecord
     append_results: tuple[AppendResult, ...]
     closed: bool
+    superseded_candidate_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,6 +328,8 @@ class CandidateCurrentState:
     current_eligibility: str | None = None
     last_snapshot_at: datetime | None = None
     last_transition_at: datetime | None = None
+    last_progress_at: datetime | None = None
+    last_retention_counted_session: date | None = None
     last_observed_run_id: str | None = None
 
 

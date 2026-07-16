@@ -2,7 +2,7 @@
 
 - **Purpose:** Define the non-authoritative Phase 3A adapter, admission, lifecycle, retention, and registry-write workflow.
 - **Audience:** Engineers operating or changing canonical opportunity reconciliation.
-- **Last verified:** 2026-07-15
+- **Last verified:** 2026-07-16
 - **Source of truth:** `src/ai_trading_system/domains/opportunities/adapters/`, `src/ai_trading_system/domains/opportunities/orchestration/`, and `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
@@ -46,7 +46,7 @@ Legacy Stage-1 lifecycle, follow-through, and tracker-health values use the Phas
 
 `admission-rules-v1` defaults are rank percentile 90, rank improvement of five positions with percentile 75, Investigator score 70, accumulation 75, ready pattern 80, qualified Tier A breakout 80, and S1→S2 confidence 75. Stage 3/4 blocks new long admission.
 
-Every admission records a named reason, `setup-family-v1` family, rule version, evidence, blockers, warnings, and stable admission identity. Exact open-family matching wins. The configured progression is `early_accumulation → base_building → stage_1_to_2_transition → breakout → post_breakout_followthrough`, with a 30-day continuity limit. Episode setup identity remains immutable. Ambiguous or incompatible open episodes produce a conflict; closed episodes are never reopened.
+Every admission records a named reason, `setup-family-v1.1` family, rule version, evidence, blockers, warnings, and stable admission identity. Exact open-family matching wins. The configured progression is `early_accumulation → base_building → stage_1_to_2_transition → breakout → post_breakout_followthrough`, with a 30-day continuity limit. Episode setup identity remains immutable. When no exact or progression-compatible episode exists, a qualified breakout supersedes exactly one open `momentum_leader`: one transaction opens the breakout episode, closes the predecessor, writes `MOMENTUM_SUPERSEDED_BY_BREAKOUT`, and appends the successor observations. Multiple momentum episodes or any mixed incompatible open set remains a conflict. Closed episodes are never reopened.
 
 ## Lifecycle, progress, and retention
 
@@ -58,7 +58,7 @@ The opportunities summary carries per-taxonomy and per-cohort counts. Candidate 
 
 Stage 3 weakens active candidates; Stage 4 fails and closes position-free candidates. Phase 3A alone does not recover position-only episodes. In Phase 3C-3 shadow mode, a live position attaches only when an open episode has compatible lifecycle and trigger timing; same symbol alone is insufficient, multiple episodes are ambiguous, and closed episodes are not reopened. Missing or incompatible matches create deterministic recovery proposals. Recovery defaults to `report_only`; reviewed or explicitly enabled automatic recovery uses an `INVESTIGATING` initial marker and never creates fabricated pre-entry rank, evidence, transition, follow-through, or stage history.
 
-Progress uses only comparable values. Two positives mean improving, two negatives or a hard structural event mean deteriorating, comparable non-material movement is stable, and absent comparisons remain unknown. Retention applies the Phase 1 age and stagnation limits independently. Rank decline alone cannot close a confirmed candidate.
+Progress uses only comparable values. Two positives mean improving, two negatives or a hard structural event mean deteriorating, comparable non-material movement is stable, and absent comparisons remain unknown. Retention applies the Phase 1 age and stagnation limits independently. Under `opportunity-retention-v1.1`, the compatibility fields `days_in_state` and `days_without_progress` count canonical observed OHLCV sessions, not runs or calendar days. The first persisted observation advances a session; later same-session observations cannot alter the counters, although an improvement updates `last_progress_at` and resets stagnation when the next session is counted. Lifecycle transitions reset both counters. Rank decline alone cannot close a confirmed candidate.
 
 ## Idempotency, DQ, and failure behavior
 
@@ -70,6 +70,11 @@ produce the same idempotency key with different decision blockers and therefore
 fails closed as an `OpportunityRegistryConflictError`. Gate-untouched records
 remain replay-compatible because migration-038 evidence columns are outside
 semantic payload hashes.
+
+Migration-039 counter-lineage columns are likewise outside snapshot semantic
+payloads and replay identities. A legacy row with no counted-session stamp
+bootstraps from its latest snapshot date, preventing the first post-migration
+same-date rerun from adding a session.
 
 A missing required `ranked_signals` artifact fails only the `opportunities` stage. The orchestrator continues later stages and finishes `completed_with_opportunity_errors`. Row-level warnings or conflicts mark opportunity task metadata degraded without changing the main pipeline result.
 

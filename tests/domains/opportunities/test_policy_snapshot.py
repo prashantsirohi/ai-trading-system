@@ -6,7 +6,13 @@ import pytest
 
 from ai_trading_system.domains.opportunities import coverage as coverage_module
 from ai_trading_system.domains.opportunities.orchestration import contracts as orchestration_contracts
-from ai_trading_system.domains.opportunities.orchestration.contracts import LIFECYCLE_RULE_VERSION
+from ai_trading_system.domains.opportunities.orchestration import retention as retention_module
+from ai_trading_system.domains.opportunities.orchestration import matching as matching_module
+from ai_trading_system.domains.opportunities.orchestration.contracts import (
+    LIFECYCLE_RULE_VERSION,
+    RETENTION_RULE_VERSION,
+    SETUP_FAMILY_RULE_VERSION,
+)
 from ai_trading_system.domains.opportunities.policy_snapshot import (
     PolicyVersionContentMismatchError,
     compute_policy_snapshot,
@@ -127,3 +133,67 @@ def test_sector_gate_rule_drift_changes_lifecycle_fingerprint(registry, monkeypa
     assert drifted.label_hashes[LIFECYCLE_RULE_VERSION] != baseline.label_hashes[LIFECYCLE_RULE_VERSION]
     with pytest.raises(PolicyVersionContentMismatchError, match=LIFECYCLE_RULE_VERSION):
         register_or_verify_policy_snapshots(registry, drifted, run_id="run-2")
+
+
+def test_a5_patch_label_registers_beside_legacy_retention_v1(registry) -> None:
+    with registry._writer() as conn:  # noqa: SLF001
+        conn.execute(
+            """INSERT INTO policy_version_registry
+                   (version_label, policy_snapshot_id, content_json, first_registered_at, first_run_id)
+               VALUES ('opportunity-retention-v1', 'legacy-hash', '{}', current_timestamp, 'legacy-run')"""
+        )
+    register_or_verify_policy_snapshots(
+        registry, compute_policy_snapshot({}), run_id="a5-run"
+    )
+    with registry._reader() as conn:  # noqa: SLF001
+        labels = {
+            row[0]
+            for row in conn.execute(
+                "SELECT version_label FROM policy_version_registry"
+            ).fetchall()
+        }
+    assert {"opportunity-retention-v1", RETENTION_RULE_VERSION}.issubset(labels)
+
+
+def test_retention_counting_unit_drift_changes_runtime_fingerprint(monkeypatch) -> None:
+    baseline = compute_policy_snapshot({})
+    monkeypatch.setattr(
+        retention_module, "RETENTION_COUNTING_UNIT", "orchestration_run"
+    )
+    drifted = compute_policy_snapshot({})
+    assert drifted.label_hashes[RETENTION_RULE_VERSION] != baseline.label_hashes[
+        RETENTION_RULE_VERSION
+    ]
+
+
+def test_a1_patch_label_registers_beside_legacy_setup_family_v1(registry) -> None:
+    with registry._writer() as conn:  # noqa: SLF001
+        conn.execute(
+            """INSERT INTO policy_version_registry
+                   (version_label, policy_snapshot_id, content_json, first_registered_at, first_run_id)
+               VALUES ('setup-family-v1', 'legacy-hash', '{}', current_timestamp, 'legacy-run')"""
+        )
+    register_or_verify_policy_snapshots(
+        registry, compute_policy_snapshot({}), run_id="a1-run"
+    )
+    with registry._reader() as conn:  # noqa: SLF001
+        labels = {
+            row[0]
+            for row in conn.execute(
+                "SELECT version_label FROM policy_version_registry"
+            ).fetchall()
+        }
+    assert {"setup-family-v1", SETUP_FAMILY_RULE_VERSION}.issubset(labels)
+
+
+def test_supersession_policy_drift_changes_setup_family_fingerprint(monkeypatch) -> None:
+    baseline = compute_policy_snapshot({})
+    monkeypatch.setitem(
+        matching_module.SETUP_FAMILY_SUPERSESSION,
+        "momentum_leader",
+        "base_building",
+    )
+    drifted = compute_policy_snapshot({})
+    assert drifted.label_hashes[SETUP_FAMILY_RULE_VERSION] != baseline.label_hashes[
+        SETUP_FAMILY_RULE_VERSION
+    ]

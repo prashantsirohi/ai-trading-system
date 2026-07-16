@@ -27,6 +27,7 @@ from .identity import (
     normalize_symbol,
     require_aware,
     stable_digest,
+    utc_iso,
 )
 from .models import (
     AppendResult,
@@ -38,6 +39,8 @@ from .models import (
     CandidateTimeline,
     DecisionContextObservation,
     EpisodeStatus,
+    EpisodeRelationRecord,
+    EpisodeSupersession,
     EvidenceObservation,
     OpenEpisodeRequest,
     OrchestrationBundle,
@@ -83,6 +86,10 @@ class OpportunityRegistryStore(Protocol):
     def list_open_episodes(self) -> tuple[CandidateEpisodeRecord, ...]: ...
     def append_orchestration_bundle(self, bundle: OrchestrationBundle) -> OrchestrationBundleResult: ...
     def observation_hashes_for_run(self, run_id: str) -> dict[str, tuple[str, ...]]: ...
+    def list_episode_relations(self, candidate_id: str) -> tuple[EpisodeRelationRecord, ...]: ...
+    def find_episode_relation(
+        self, *, predecessor_candidate_id: str, relation_type: str
+    ) -> EpisodeRelationRecord | None: ...
 
 
 def _db_time(value: datetime) -> datetime:
@@ -188,6 +195,50 @@ class DuckDBOpportunityRegistryStore:
             )
             names = [item[0] for item in cursor.description]
             return tuple(self._episode_from_row(dict(zip(names, row, strict=True))) for row in cursor.fetchall())
+
+    @staticmethod
+    def _relation_from_row(row: dict[str, Any]) -> EpisodeRelationRecord:
+        return EpisodeRelationRecord(
+            relation_id=row["relation_id"],
+            predecessor_candidate_id=row["predecessor_candidate_id"],
+            successor_candidate_id=row["successor_candidate_id"],
+            relation_type=row["relation_type"],
+            related_at=_aware(row["related_at"]),
+            rule_version=row["rule_version"],
+            run_id=row["run_id"],
+            source_artifact_hash=row["source_artifact_hash"],
+            schema_version=row["schema_version"],
+            created_at=_aware(row["created_at"]),
+        )
+
+    def list_episode_relations(
+        self, candidate_id: str
+    ) -> tuple[EpisodeRelationRecord, ...]:
+        _require_text(candidate_id, "candidate_id")
+        with self.registry._reader() as conn:  # noqa: SLF001
+            cursor = conn.execute(
+                "SELECT * FROM candidate_episode_relation "
+                "WHERE predecessor_candidate_id = ? OR successor_candidate_id = ? "
+                "ORDER BY related_at, relation_id",
+                [candidate_id, candidate_id],
+            )
+            names = [item[0] for item in cursor.description]
+            return tuple(
+                self._relation_from_row(dict(zip(names, row, strict=True)))
+                for row in cursor.fetchall()
+            )
+
+    def find_episode_relation(
+        self, *, predecessor_candidate_id: str, relation_type: str
+    ) -> EpisodeRelationRecord | None:
+        with self.registry._reader() as conn:  # noqa: SLF001
+            cursor = conn.execute(
+                "SELECT * FROM candidate_episode_relation "
+                "WHERE predecessor_candidate_id = ? AND relation_type = ?",
+                [predecessor_candidate_id, relation_type],
+            )
+            row = _row_dict(cursor, cursor.fetchone())
+            return self._relation_from_row(row) if row else None
 
     def latest_episode(self, *, exchange: str, symbol_id: str) -> CandidateEpisodeRecord | None:
         episodes = self.list_episodes(exchange=exchange, symbol_id=symbol_id)
@@ -397,6 +448,130 @@ class DuckDBOpportunityRegistryStore:
         return episode
 
     @staticmethod
+    def _count_open_family_episodes(
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        exchange: str,
+        symbol_id: str,
+        setup_family: str,
+    ) -> int:
+        return int(
+            conn.execute(
+                "SELECT COUNT(*) FROM candidate_episode "
+                "WHERE exchange = ? AND symbol_id = ? AND setup_family = ? "
+                "AND episode_status = 'OPEN'",
+                [
+                    normalize_exchange(exchange),
+                    normalize_symbol(symbol_id),
+                    normalize_setup_family(setup_family),
+                ],
+            ).fetchone()[0]
+        )
+
+    def _supersede_episode(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        supersession: EpisodeSupersession,
+        successor: CandidateEpisodeRecord,
+    ) -> AppendResult:
+        require_aware(supersession.related_at, "related_at")
+        predecessor = self._get_episode(
+            conn, supersession.predecessor_candidate_id
+        )
+        if predecessor is None:
+            raise KeyError(
+                f"unknown predecessor candidate_id: {supersession.predecessor_candidate_id}"
+            )
+        if predecessor.candidate_id == successor.candidate_id:
+            raise ValueError("episode cannot supersede itself")
+        if (predecessor.exchange, predecessor.symbol_id) != (
+            successor.exchange,
+            successor.symbol_id,
+        ):
+            raise ValueError("supersession episodes must have the same symbol identity")
+        expected_type = "MOMENTUM_SUPERSEDED_BY_BREAKOUT"
+        if (
+            predecessor.setup_family != "momentum_leader"
+            or successor.setup_family != "breakout"
+            or supersession.relation_type != expected_type
+        ):
+            raise ValueError(
+                "supersession requires momentum_leader to breakout relation"
+            )
+        if predecessor.episode_status is EpisodeStatus.OPEN:
+            count = self._count_open_family_episodes(
+                conn,
+                exchange=predecessor.exchange,
+                symbol_id=predecessor.symbol_id,
+                setup_family=predecessor.setup_family,
+            )
+            if count != 1:
+                raise ValueError(
+                    "supersession requires exactly one open momentum_leader episode"
+                )
+        self._close_episode(
+            conn,
+            predecessor.candidate_id,
+            status=EpisodeStatus.CLOSED,
+            closed_at=supersession.related_at,
+            closing_reason=supersession.closing_reason,
+            lineage=supersession.lineage,
+        )
+        payload = {
+            "predecessor_candidate_id": predecessor.candidate_id,
+            "successor_candidate_id": successor.candidate_id,
+            "relation_type": supersession.relation_type,
+            "related_at": utc_iso(supersession.related_at),
+            "rule_version": supersession.rule_version,
+        }
+        record_id, key, semantic_hash = self._identity(
+            candidate_id=successor.candidate_id,
+            record_type="episode_relation",
+            as_of=supersession.related_at,
+            lineage=supersession.lineage,
+            contract_version=supersession.contract_version,
+            payload=payload,
+        )
+        columns = (
+            "relation_id",
+            "predecessor_candidate_id",
+            "successor_candidate_id",
+            "relation_type",
+            "related_at",
+            "rule_version",
+            "run_id",
+            "source_artifact_hash",
+            "idempotency_key",
+            "semantic_payload_hash",
+            "schema_version",
+        )
+        values = [
+            record_id,
+            predecessor.candidate_id,
+            successor.candidate_id,
+            supersession.relation_type,
+            _db_time(supersession.related_at),
+            supersession.rule_version,
+            supersession.lineage.run_id,
+            supersession.lineage.source_artifact_hash,
+            key,
+            semantic_hash,
+            REGISTRY_SCHEMA_VERSION,
+        ]
+        return self._insert_append(
+            conn,
+            table="candidate_episode_relation",
+            id_column="relation_id",
+            record_id=record_id,
+            candidate_id=successor.candidate_id,
+            idempotency_key=key,
+            semantic_hash=semantic_hash,
+            columns=columns,
+            values=values,
+        )
+
+    @staticmethod
     def _validate_episode_identity(episode: CandidateEpisodeRecord, candidate_id: str, setup_id: str) -> None:
         if episode.candidate_id != candidate_id or episode.setup_id != setup_id:
             raise ValueError("record identity does not match candidate episode")
@@ -476,7 +651,8 @@ class DuckDBOpportunityRegistryStore:
             "rank_velocity", "evidence_score", "evidence_verdict", "days_in_state", "days_without_progress",
             "progress_status", "active_position", "latest_action", "eligibility", "stock_stage_observation_id",
             "sector_stage_observation_id", "contract_version", "serialization_version", "snapshot_json",
-            "semantic_payload_hash", "idempotency_key",
+            "semantic_payload_hash", "idempotency_key", "last_progress_at",
+            "last_retention_counted_session",
         )
         values = [
             record_id, snapshot.candidate_id, snapshot.setup_id, _db_time(snapshot.as_of),
@@ -489,6 +665,8 @@ class DuckDBOpportunityRegistryStore:
             snapshot.days_without_progress, None, snapshot.active_position, snapshot.latest_action.value,
             snapshot.eligibility.value, observation.stock_stage_observation_id, observation.sector_stage_observation_id,
             snapshot.contract_version, REGISTRY_SERIALIZATION_VERSION, canonical_json(snapshot), semantic_hash, key,
+            _db_time(observation.last_progress_at) if observation.last_progress_at else None,
+            observation.last_retention_counted_session,
         ]
         return self._insert_append(conn, table="candidate_snapshot", id_column="snapshot_id", record_id=record_id,
                                    candidate_id=snapshot.candidate_id, idempotency_key=key,
@@ -815,6 +993,16 @@ class DuckDBOpportunityRegistryStore:
             if episode.candidate_id != bundle.candidate_id:
                 raise ValueError("orchestration bundle candidate_id does not match episode identity")
             results: list[AppendResult] = []
+            superseded_candidate_id = None
+            if bundle.supersession is not None:
+                # The successor is opened first, but both operations share this
+                # transaction and therefore commit or roll back together.
+                results.append(
+                    self._supersede_episode(
+                        conn, supersession=bundle.supersession, successor=episode
+                    )
+                )
+                superseded_candidate_id = bundle.supersession.predecessor_candidate_id
             if bundle.opportunity is not None:
                 results.append(self._append_opportunity(conn, bundle.opportunity))
             if bundle.evidence is not None:
@@ -841,7 +1029,12 @@ class DuckDBOpportunityRegistryStore:
                 closed = True
             result_episode = self._get_episode(conn, bundle.candidate_id)
             assert result_episode is not None
-            return OrchestrationBundleResult(result_episode, tuple(results), closed)
+            return OrchestrationBundleResult(
+                result_episode,
+                tuple(results),
+                closed,
+                superseded_candidate_id,
+            )
 
     def append_snapshot_bundle(
         self, *, snapshot: SnapshotObservation, stock_stage: StageObservation, sector_stage: StageObservation
@@ -849,8 +1042,15 @@ class DuckDBOpportunityRegistryStore:
         with self._transaction() as conn:
             stock_result = self._append_stage(conn, stock_stage)
             sector_result = self._append_stage(conn, sector_stage)
-            linked = SnapshotObservation(snapshot.snapshot, snapshot.observed_at, snapshot.lineage,
-                                         stock_result.record_id, sector_result.record_id)
+            linked = SnapshotObservation(
+                snapshot.snapshot,
+                snapshot.observed_at,
+                snapshot.lineage,
+                stock_result.record_id,
+                sector_result.record_id,
+                snapshot.last_progress_at,
+                snapshot.last_retention_counted_session,
+            )
             snapshot_result = self._append_snapshot(conn, linked)
             return snapshot_result, stock_result, sector_result
 
@@ -870,7 +1070,13 @@ class DuckDBOpportunityRegistryStore:
         allowed = CandidateCurrentState.__dataclass_fields__
         values = {key: value for key, value in row.items() if key in allowed}
         values["episode_status"] = EpisodeStatus(values["episode_status"])
-        for key in ("episode_started_at", "episode_closed_at", "last_snapshot_at", "last_transition_at"):
+        for key in (
+            "episode_started_at",
+            "episode_closed_at",
+            "last_snapshot_at",
+            "last_transition_at",
+            "last_progress_at",
+        ):
             values[key] = _aware(values.get(key))
         return CandidateCurrentState(**values)
 
@@ -947,6 +1153,10 @@ class DuckDBOpportunityRegistryStore:
                 current_eligibility=pick(decision, "eligibility", snapshot, "eligibility"),
                 last_snapshot_at=_aware((snapshot or {}).get("as_of")),
                 last_transition_at=_aware((transition or {}).get("transitioned_at")),
+                last_progress_at=_aware((snapshot or {}).get("last_progress_at")),
+                last_retention_counted_session=(snapshot or {}).get(
+                    "last_retention_counted_session"
+                ),
                 last_observed_run_id=(last_sources[0].get("run_id") if last_sources else episode.created_run_id),
             )
 

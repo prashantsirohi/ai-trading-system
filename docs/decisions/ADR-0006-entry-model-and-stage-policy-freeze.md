@@ -163,12 +163,19 @@ Consistent with current code: Stage 3/2→3/3→4/4 block new long admission; no
 
 ## D7 — Retention (FROZEN: family-neutral current limits, via Amendment A5)
 
-### Current logic (defective — inconsistent time units)
+### Implemented logic
 
-Retention limits are state-specific, including 10 no-progress units for confirmed/advancing states. But the two age measures use different units ([service.py:535-543](../../src/ai_trading_system/domains/opportunities/orchestration/service.py)):
+Retention limits remain state-specific, including 10 no-progress sessions for
+confirmed/advancing states. Both compatibility fields now count observed
+trading sessions:
 
-- `days_without_progress` increments by one on **every non-improving orchestration observation** — two non-identical runs on the same trading date add two "days"; reruns and extra shadow sessions accelerate closure.
-- `days_in_state` is computed from **elapsed calendar days** since the last transition.
+- `days_without_progress` advances at most once for each canonical OHLCV
+  session and resets when progress was observed since the previously counted
+  session.
+- `days_in_state` advances on the same session boundary and resets on a
+  lifecycle transition.
+- Same-session reruns do not change either counter. A same-session improvement
+  updates `last_progress_at` and is honored when the next session is counted.
 
 ### Frozen decision
 
@@ -183,6 +190,14 @@ If D1 ever moves to pullback entries (v2), family-aware retention (structural-vi
 The amendments below are the acceptance criteria for this ADR: it moves from Proposed to Accepted when all five are implemented and verified. Each current behavior above remains in force — and known-deficient — until its amendment lands.
 
 ### A1 — First-class episode relation (implements D2)
+
+> **Implementation status (2026-07-16): implemented.**
+> `setup-family-v1.1` fingerprints the single-sourced
+> momentum-to-breakout supersession rule. Migration 040 adds the append-only
+> relation, and the registry atomically opens the successor, closes the
+> predecessor, writes the relation, and appends successor observations with
+> replay, concurrency, ambiguity, and rollback coverage. Migration 040 was
+> applied to the operator store on 2026-07-16.
 
 New registry relation, append-only, control-plane:
 
@@ -292,13 +307,26 @@ Prose strings ("qualified breakout", "top rank percentile") may remain for opera
 
 ### A5 — Trading-session retention counters (implements D7)
 
+> **Implementation status (2026-07-16): implemented.** The compatibility counter names are
+> retained with trading-session semantics under
+> `opportunity-retention-v1.1`; `opportunity-retention-v2` remains reserved for
+> family-aware retention. Session identity is resolved from canonical OHLCV
+> observations, transitions reset both counters, and legacy null rows bootstrap
+> from the latest snapshot session without a migration-day increment. Migration
+> 039 was applied to the operator store on 2026-07-16.
+
 One unit — **trading sessions** — for all retention ages. Increment only when:
 
 ```text
 current_as_of_trading_date > last_counted_progress_date
 ```
 
-Persist: `sessions_in_state`, `sessions_without_progress`, `last_progress_at`, `last_retention_counted_session`. If the existing field names are retained for compatibility, their semantics are explicitly redefined as trading sessions under a versioned retention policy bump (`opportunity-retention-v2` or a versioned semantics note within the A3 snapshot). Same-date reruns and multiple shadow sessions per date must not advance retention age.
+Persist the compatibility fields `days_in_state` and
+`days_without_progress` with session-count semantics, plus `last_progress_at`
+and `last_retention_counted_session`. The first successfully persisted
+observation for a session is authoritative for counter advancement; later
+same-session observations may record improvement but cannot advance or reset
+the counters until the next observed session.
 
 ---
 

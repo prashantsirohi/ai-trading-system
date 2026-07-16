@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical reference for every DuckDB table the system reads or writes — file location, owning stage, columns, indexes.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-07-15
+- **Last verified:** 2026-07-16
 - **Source of truth:** `src/ai_trading_system/pipeline/migrations/*.sql`, `src/ai_trading_system/research/perf_tracker/schema.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/ingest/repository.py`.
 
 ---
@@ -769,6 +769,23 @@ adding five nullable columns to `candidate_decision_context`:
 `sector_stage_velocity_current_week`, `sector_gate_taxonomy`, and
 `sector_gate_cohort`. They are direct, queryable stamps outside decision JSON,
 semantic hashes, and idempotency keys. Existing rows are not rewritten.
+
+Migration `039_trading_session_retention_counters.sql` implements ADR-0006
+Amendment A5. It adds nullable `candidate_snapshot.last_progress_at` and
+`candidate_snapshot.last_retention_counted_session`, then recreates
+`candidate_current_state` to project them. Both fields remain outside
+`snapshot_json`, semantic hashes, and idempotency keys. Existing
+`days_in_state` and `days_without_progress` columns are retained for schema
+compatibility and represent observed trading-session counts under
+`opportunity-retention-v1.1`.
+
+Migration `040_candidate_episode_relation.sql` implements ADR-0006 Amendment
+A1 by adding append-only `candidate_episode_relation`. Each row contains the
+deterministic relation ID, predecessor and successor candidate IDs, relation
+type, relation timestamp, setup-family rule version, run and artifact lineage,
+idempotency key, semantic hash, and schema version. Unique indexes enforce
+idempotent replay and allow a predecessor to have at most one relation of a
+given type; a successor index supports reverse lookup.
 
 ## Phase 3C-5 schema boundary
 

@@ -21,6 +21,11 @@ _PROGRESSION = (
 # Public alias for the setup-family-v1 policy fingerprint (ADR-0006 A3).
 SETUP_FAMILY_PROGRESSION = _PROGRESSION
 
+# Public constant for the setup-family-v1.1 policy fingerprint (ADR-0006 A1).
+SETUP_FAMILY_SUPERSESSION = {
+    SetupFamily.MOMENTUM_LEADER.value: SetupFamily.BREAKOUT.value
+}
+
 
 def match_open_episode(
     *, exchange: str, symbol_id: str, setup_family: SetupFamily, as_of: datetime,
@@ -46,6 +51,18 @@ def match_open_episode(
                 compatible.append(episode)
     if len(compatible) == 1:
         return EpisodeMatch(SetupMatchOutcome.PROGRESSION, compatible[0].candidate_id, compatible[0].setup_id, ("setup family progressed; immutable episode family retained",))
+    if (
+        setup_family is SetupFamily.BREAKOUT
+        and len(matching) == 1
+        and SETUP_FAMILY_SUPERSESSION.get(matching[0].setup_family)
+        == setup_family.value
+    ):
+        return EpisodeMatch(
+            SetupMatchOutcome.SUPERSEDES,
+            matching[0].candidate_id,
+            matching[0].setup_id,
+            ("open momentum_leader episode superseded by qualified breakout",),
+        )
     if len(compatible) > 1 or matching:
         return EpisodeMatch(SetupMatchOutcome.CONFLICT, None, None, ("open episode family is incompatible or ambiguous",))
     return EpisodeMatch(SetupMatchOutcome.NEW_EPISODE, None, None)

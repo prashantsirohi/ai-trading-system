@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
@@ -12,6 +13,10 @@ from ai_trading_system.pipeline.stages.opportunities import OpportunityStage, Op
 
 def _context(tmp_path: Path, *, mode: str, include_rank: bool = True) -> StageContext:
     registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    db_path = tmp_path / "ohlcv.duckdb"
+    with duckdb.connect(str(db_path)) as conn:
+        conn.execute("CREATE TABLE _catalog (exchange VARCHAR, timestamp TIMESTAMP)")
+        conn.execute("INSERT INTO _catalog VALUES ('NSE', '2026-07-14 15:30:00')")
     artifacts: dict[str, dict[str, StageArtifact]] = {}
     if include_rank:
         path = tmp_path / "ranked_signals.csv"
@@ -19,7 +24,7 @@ def _context(tmp_path: Path, *, mode: str, include_rank: bool = True) -> StageCo
         artifacts = {"rank": {"ranked_signals": StageArtifact.from_file("ranked_signals", path, row_count=1)}}
     return StageContext(
         project_root=tmp_path,
-        db_path=tmp_path / "ohlcv.duckdb",
+        db_path=db_path,
         run_id="run-opportunities",
         run_date="2026-07-14",
         stage_name="opportunities",

@@ -94,7 +94,15 @@ The current weekly classifier emits `0–1` confidence. Only `adapt_legacy_weekl
 
 Entry eligibility and candidate retention are separate policies. A Stage-1 accumulation episode can remain retained while being ineligible for a new long entry.
 
-The Phase-1 retention configuration supplies both `max_days_in_state` and `max_days_without_progress`. Confirmed and advancing states have no fixed state expiry but use a ten-day no-progress review. Pending follow-through is governed by its explicit follow-through window. Extended episodes are reviewed daily. Failed/exited episodes default to immediate archive eligibility. Phase 1 does not run a retention scheduler.
+The Phase-1 retention configuration supplies both `max_days_in_state` and
+`max_days_without_progress`; despite their compatibility names, both values
+count canonical observed trading sessions under `opportunity-retention-v1.1`.
+They advance at most once per session, reset on lifecycle transition, and a
+same-session improvement is carried into the next session's no-progress
+decision. Confirmed and advancing states have no fixed state expiry but use a
+ten-session no-progress review. Pending follow-through is governed by its
+explicit follow-through window. Failed/exited episodes default to immediate
+archive eligibility. Phase 1 does not run a retention scheduler.
 
 ### Structural guards
 

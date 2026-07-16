@@ -29,7 +29,9 @@ from ai_trading_system.domains.opportunities.orchestration.contracts import (
 )
 from ai_trading_system.domains.opportunities.orchestration.matching import (
     SETUP_FAMILY_PROGRESSION,
+    SETUP_FAMILY_SUPERSESSION,
 )
+from ai_trading_system.domains.opportunities.orchestration import retention as retention_policy
 from ai_trading_system.domains.opportunities.routing import (
     REASON_MINIMUM_TIER,
     SCAN_TIER_PRECEDENCE,
@@ -118,11 +120,14 @@ def policy_content(
         },
         SETUP_FAMILY_RULE_VERSION: {
             "progression": list(SETUP_FAMILY_PROGRESSION),
+            "supersession": dict(SETUP_FAMILY_SUPERSESSION),
             "setup_progression_max_days": shadow.setup_progression_max_days,
         },
         RETENTION_RULE_VERSION: {
             "rules": [to_dict(rule) for rule in retention.rules],
             "archive_failed_after_days": shadow.archive_failed_after_days,
+            "counting_unit": retention_policy.RETENTION_COUNTING_UNIT,
+            "counter_guard": retention_policy.RETENTION_COUNTER_GUARD,
         },
         routing.scan_policy_version: {
             "scan_tier_precedence": {tier.value: rank for tier, rank in SCAN_TIER_PRECEDENCE.items()},

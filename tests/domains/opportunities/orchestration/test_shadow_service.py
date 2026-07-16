@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -41,6 +41,29 @@ def _artifacts(tmp_path):
     )
 
 
+def _momentum_artifacts(tmp_path):
+    return OpportunityArtifactSet(
+        ranked_signals=_artifact(
+            tmp_path,
+            "momentum_ranked_signals",
+            "symbol_id,exchange,composite_score,sector_name\n"
+            "ABC,NSE,95,Capital Goods\n",
+        )
+    )
+
+
+def _breakout_artifacts(tmp_path):
+    return replace(
+        _momentum_artifacts(tmp_path),
+        breakout_scan=_artifact(
+            tmp_path,
+            "superseding_breakout_scan",
+            "symbol_id,exchange,breakout_state,candidate_tier,breakout_score,qualified\n"
+            "ABC,NSE,QUALIFIED,A,90,true\n",
+        ),
+    )
+
+
 def test_shadow_service_writes_and_replay_is_idempotent(tmp_path):
     registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
     service = OpportunityShadowOrchestrator(registry)
@@ -61,6 +84,78 @@ def test_dry_run_writes_no_registry_records(tmp_path):
     result = service.run(run_id="run-dry", stage_attempt=1, artifact_set=_artifacts(tmp_path), as_of=NOW, mode=config.mode, config=config)
     assert result.summary["no_database_writes_performed"] is True
     assert service.registry.list_open_episodes() == ()
+
+
+def test_momentum_breakout_supersession_is_atomic_and_replay_idempotent(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+    config = OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW)
+    service.run(
+        run_id="momentum-run",
+        stage_attempt=1,
+        artifact_set=_momentum_artifacts(tmp_path),
+        as_of=NOW,
+        mode=config.mode,
+        config=config,
+    )
+    momentum = service.registry.list_open_episodes()[0]
+    breakout_at = NOW + timedelta(days=1)
+    superseded = service.run(
+        run_id="breakout-run",
+        stage_attempt=1,
+        artifact_set=_breakout_artifacts(tmp_path),
+        as_of=breakout_at,
+        mode=config.mode,
+        config=config,
+    )
+    assert superseded.summary["registry_conflicts"] == 0
+    assert superseded.summary["episodes_superseded"] == 1
+    assert len(superseded.artifact_rows["candidate_supersessions"]) == 1
+    episodes = service.registry.list_candidate_episodes(exchange="NSE", symbol_id="ABC")
+    assert len(episodes) == 2
+    assert episodes[0].closing_reason == "superseded_by_new_episode"
+    assert episodes[1].setup_family == "breakout"
+    assert service.registry.list_episode_relations(momentum.candidate_id)[0].successor_candidate_id == episodes[1].candidate_id
+
+    replay = service.run(
+        run_id="breakout-run",
+        stage_attempt=1,
+        artifact_set=_breakout_artifacts(tmp_path),
+        as_of=breakout_at,
+        mode=config.mode,
+        config=config,
+    )
+    assert replay.summary["registry_duplicates"] == 1
+    assert len(service.registry.list_episode_relations(momentum.candidate_id)) == 1
+    assert len(service.registry.list_candidate_episodes(exchange="NSE", symbol_id="ABC")) == 2
+
+
+def test_dry_run_reports_supersession_without_mutation(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+    live = OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW)
+    service.run(
+        run_id="momentum-run",
+        stage_attempt=1,
+        artifact_set=_momentum_artifacts(tmp_path),
+        as_of=NOW,
+        mode=live.mode,
+        config=live,
+    )
+    momentum = service.registry.list_open_episodes()[0]
+    dry = replace(live, dry_run=True)
+    result = service.run(
+        run_id="breakout-dry-run",
+        stage_attempt=1,
+        artifact_set=_breakout_artifacts(tmp_path),
+        as_of=NOW + timedelta(days=1),
+        mode=dry.mode,
+        config=dry,
+    )
+    assert result.summary["episodes_superseded"] == 1
+    assert len(result.artifact_rows["candidate_supersessions"]) == 1
+    assert service.registry.get_candidate_episode(momentum.candidate_id).episode_status.value == "OPEN"
+    assert service.registry.list_episode_relations(momentum.candidate_id) == ()
 
 
 def test_sector_gate_taxonomy_is_emitted_in_summary_and_update_artifact(tmp_path):

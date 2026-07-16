@@ -114,6 +114,9 @@ class OpportunityRegistryService:
     def apply_orchestration_bundle(self, bundle: OrchestrationBundle):
         return self.store.append_orchestration_bundle(bundle)
 
+    def list_episode_relations(self, candidate_id: str):
+        return self.store.list_episode_relations(candidate_id)
+
     def append_snapshot_bundle(
         self, *, snapshot: SnapshotObservation, stock_stage: StageObservation, sector_stage: StageObservation
     ):

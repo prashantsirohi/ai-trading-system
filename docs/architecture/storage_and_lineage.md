@@ -176,6 +176,20 @@ inside the existing immutable decision payload. The governed locked-sector
 reader resolves by decision-time availability, so a later correction cannot
 rewrite or reinterpret an earlier gate record.
 
+Migration 039 extends `candidate_snapshot` with nullable `last_progress_at`
+and `last_retention_counted_session` columns and exposes both through
+`candidate_current_state`. They are operational counter lineage outside
+snapshot JSON, semantic hashes, and idempotency keys, preserving pre-039
+replay identity. The existing `days_in_state` and `days_without_progress`
+columns now mean observed trading-session counts under
+`opportunity-retention-v1.1`.
+
+Migration 040 adds append-only `candidate_episode_relation` lineage for
+ADR-0006 A1. The relation binds a momentum predecessor to its breakout
+successor with deterministic identity, setup-family rule version, run, and
+source-artifact hash. Predecessor close, successor open, relation append, and
+successor observations share one registry transaction.
+
 ## Backup and mutation safety
 
 At minimum, back up OHLCV, control-plane, execution, candidate-tracker, master-data, fundamentals, and feature-store state before migrations or repairs. Treat `pipeline_runs/` as audit evidence even where upstream stores can reproduce some artifacts.

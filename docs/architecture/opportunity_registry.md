@@ -33,9 +33,11 @@ erDiagram
     candidate_episode ||--o{ candidate_transition : transitions
     candidate_episode ||--o{ candidate_decision_context : decisions
     candidate_episode ||--o{ candidate_outcome_attribution : attribution
+    candidate_episode ||--o{ candidate_episode_relation : predecessor
+    candidate_episode ||--o{ candidate_episode_relation : successor
 ```
 
-`candidate_episode` is the only mutable summary. Closing may set its terminal status, timestamp, reason, and lineage. All observation, transition, decision, and attribution rows are immutable. The registry schema version is persisted as `opportunity-registry-schema-v1`.
+`candidate_episode` is the only mutable summary. Closing may set its terminal status, timestamp, reason, and lineage. All observation, transition, decision, attribution, and `candidate_episode_relation` rows are immutable. The relation is a first-class cross-episode record queryable from either predecessor or successor; A1 currently permits only `momentum_leader → breakout` supersession. The registry schema version is persisted as `opportunity-registry-schema-v1`.
 
 The four domain axes remain separate:
 
@@ -71,7 +73,7 @@ Record IDs and idempotency keys use SHA-256 over normalized candidate, record ty
 - Existing history is never overwritten.
 - Batch conflicts roll back every new row; exact duplicates may coexist with successful new rows.
 
-Multi-record operations use one explicit DuckDB transaction inside the shared `RegistryStore` writer lock. Episode-plus-initial-snapshot, snapshot-plus-stage, and snapshot-plus-transition operations commit or roll back together.
+Multi-record operations use one explicit DuckDB transaction inside the shared `RegistryStore` writer lock. Episode-plus-initial-snapshot, snapshot-plus-stage, snapshot-plus-transition, and predecessor-close plus successor-open/relation/observations operations commit or roll back together.
 
 ## Lineage and timestamps
 

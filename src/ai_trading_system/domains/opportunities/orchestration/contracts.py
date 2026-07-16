@@ -26,10 +26,10 @@ from ai_trading_system.domains.opportunities.position_monitoring import (
 
 
 ADMISSION_RULE_VERSION = "admission-rules-v1"
-SETUP_FAMILY_RULE_VERSION = "setup-family-v1"
+SETUP_FAMILY_RULE_VERSION = "setup-family-v1.1"
 LIFECYCLE_RULE_VERSION = "lifecycle-policy-v1.1"
 PROGRESS_RULE_VERSION = "opportunity-progress-v1"
-RETENTION_RULE_VERSION = "opportunity-retention-v1"
+RETENTION_RULE_VERSION = "opportunity-retention-v1.1"
 LEGACY_STAGE_CONFIDENCE_VERSION = "weekly-stage-legacy-v1"
 
 
@@ -87,6 +87,10 @@ class ClosureReason(str, Enum):
     SUPERSEDED_BY_NEW_EPISODE = "superseded_by_new_episode"
 
 
+class EpisodeRelationType(str, Enum):
+    MOMENTUM_SUPERSEDED_BY_BREAKOUT = "MOMENTUM_SUPERSEDED_BY_BREAKOUT"
+
+
 class ReconciliationSeverity(str, Enum):
     WARNING = "warning"
     ERROR = "error"
@@ -95,6 +99,7 @@ class ReconciliationSeverity(str, Enum):
 class SetupMatchOutcome(str, Enum):
     EXACT = "exact"
     PROGRESSION = "progression"
+    SUPERSEDES = "supersedes"
     NEW_EPISODE = "new_episode"
     CONFLICT = "conflict"
     NOT_ADMITTED = "not_admitted"

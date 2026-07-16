@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from pathlib import Path
 
+import duckdb
 import pytest
 
 from ai_trading_system.domains.opportunities.contracts import (
@@ -23,7 +25,13 @@ from ai_trading_system.domains.opportunities.orchestration.contracts import (
     SectorGateEvidence,
 )
 from ai_trading_system.domains.opportunities.orchestration.contracts import BreakoutEvidence
-from ai_trading_system.domains.opportunities.orchestration.retention import evaluate_retention
+from ai_trading_system.domains.opportunities.orchestration.retention import (
+    advance_session_counters,
+    evaluate_retention,
+)
+from ai_trading_system.domains.opportunities.orchestration.service import (
+    _resolve_observed_session,
+)
 from ai_trading_system.domains.opportunities.orchestration.transitions import evaluate_transition
 
 
@@ -145,3 +153,100 @@ def test_retention_uses_age_and_stagnation_independently():
     )
     assert retained.retain
     assert closed.close_episode
+
+
+def test_session_counters_advance_once_from_friday_to_monday():
+    friday = date(2026, 7, 10)
+    monday = date(2026, 7, 13)
+    first = advance_session_counters(
+        previous_counted_session=friday,
+        previous_sessions_in_state=2,
+        previous_sessions_without_progress=1,
+        previous_last_progress_at=None,
+        observed_session=monday,
+        observed_at=datetime(2026, 7, 13, tzinfo=timezone.utc),
+        progress_improving=False,
+        transition_occurred=False,
+    )
+    repeated = advance_session_counters(
+        previous_counted_session=monday,
+        previous_sessions_in_state=first.sessions_in_state,
+        previous_sessions_without_progress=first.sessions_without_progress,
+        previous_last_progress_at=first.last_progress_at,
+        observed_session=monday,
+        observed_at=datetime(2026, 7, 13, 12, tzinfo=timezone.utc),
+        progress_improving=False,
+        transition_occurred=False,
+    )
+    assert (first.sessions_in_state, first.sessions_without_progress) == (3, 2)
+    assert repeated == first
+
+
+def test_same_session_improvement_is_carried_into_next_session():
+    monday = date(2026, 7, 13)
+    improvement_at = datetime(2026, 7, 14, tzinfo=timezone.utc)
+    same_session = advance_session_counters(
+        previous_counted_session=monday,
+        previous_sessions_in_state=4,
+        previous_sessions_without_progress=3,
+        previous_last_progress_at=None,
+        observed_session=monday,
+        observed_at=improvement_at,
+        progress_improving=True,
+        transition_occurred=False,
+    )
+    next_session = advance_session_counters(
+        previous_counted_session=monday,
+        previous_sessions_in_state=same_session.sessions_in_state,
+        previous_sessions_without_progress=same_session.sessions_without_progress,
+        previous_last_progress_at=same_session.last_progress_at,
+        observed_session=date(2026, 7, 14),
+        observed_at=datetime(2026, 7, 14, 12, tzinfo=timezone.utc),
+        progress_improving=False,
+        transition_occurred=False,
+    )
+    assert (same_session.sessions_in_state, same_session.sessions_without_progress) == (4, 3)
+    assert (next_session.sessions_in_state, next_session.sessions_without_progress) == (5, 0)
+
+
+def test_transition_and_legacy_bootstrap_guards():
+    session = date(2026, 7, 14)
+    legacy = advance_session_counters(
+        previous_counted_session=None,
+        previous_sessions_in_state=7,
+        previous_sessions_without_progress=4,
+        previous_last_progress_at=None,
+        legacy_last_snapshot_session=session,
+        observed_session=session,
+        observed_at=NOW,
+        progress_improving=False,
+        transition_occurred=False,
+    )
+    transitioned = advance_session_counters(
+        previous_counted_session=session,
+        previous_sessions_in_state=7,
+        previous_sessions_without_progress=4,
+        previous_last_progress_at=None,
+        observed_session=session,
+        observed_at=NOW,
+        progress_improving=False,
+        transition_occurred=True,
+    )
+    assert (legacy.sessions_in_state, legacy.sessions_without_progress) == (7, 4)
+    assert (transitioned.sessions_in_state, transitioned.sessions_without_progress) == (0, 0)
+    assert transitioned.last_progress_at == NOW
+
+
+def test_observed_session_resolves_from_market_rows_not_weekend_run_date(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "ohlcv.duckdb"
+    with duckdb.connect(str(db_path)) as conn:
+        conn.execute("CREATE TABLE _catalog (exchange VARCHAR, timestamp TIMESTAMP)")
+        conn.execute(
+            "INSERT INTO _catalog VALUES (?, ?)",
+            ["NSE", datetime(2026, 7, 10, 15, 30)],
+        )
+    assert _resolve_observed_session(
+        db_path, cutoff=date(2026, 7, 12), exchanges={"NSE"}
+    ) == date(2026, 7, 10)

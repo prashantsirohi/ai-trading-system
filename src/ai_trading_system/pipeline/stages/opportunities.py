@@ -96,6 +96,7 @@ class OpportunityStage:
             "candidate_updates": "candidate_updates.csv",
             "candidate_transitions": "candidate_transitions.csv",
             "candidate_closures": "candidate_closures.csv",
+            "candidate_supersessions": "candidate_supersessions.csv",
             "candidate_reconciliation": "candidate_reconciliation.csv",
             "adapter_warnings": "adapter_warnings.csv",
             "adapter_rejections": "adapter_rejections.csv",

@@ -57,7 +57,11 @@ def test_all_observation_families_and_current_state(
     opportunity_store, episode_request, snapshot_builder, stage_factory, sector_factory, lineage
 ) -> None:
     episode = opportunity_store.open_episode(episode_request)
-    snapshot = snapshot_builder(episode)
+    snapshot = replace(
+        snapshot_builder(episode),
+        last_progress_at=NOW,
+        last_retention_counted_session=NOW.date(),
+    )
     stock = stage_factory()
     sector = sector_factory(stage=stock)
     stock_obs = StageObservation(episode.candidate_id, episode.setup_id, StageScope.STOCK,
@@ -68,6 +72,14 @@ def test_all_observation_families_and_current_state(
         snapshot=snapshot, stock_stage=stock_obs, sector_stage=sector_obs
     )
     assert snapshot_result.created and stock_result.created and sector_result.created
+    replay = opportunity_store.append_snapshot(
+        replace(
+            snapshot,
+            last_progress_at=NOW + timedelta(hours=1),
+            last_retention_counted_session=NOW.date() + timedelta(days=1),
+        )
+    )
+    assert replay.duplicate
 
     opportunity_store.append_opportunity_observation(
         OpportunityObservation(episode.candidate_id, episode.setup_id, NOW, NOW, opportunity(NOW, 93), lineage)
@@ -113,6 +125,8 @@ def test_all_observation_families_and_current_state(
     current = opportunity_store.current_state(episode.candidate_id)
     assert current.latest_opportunity_score == 93
     assert current.latest_evidence_score == 94
+    assert current.last_progress_at == NOW
+    assert current.last_retention_counted_session == NOW.date()
     assert current.current_stock_stage == WeinsteinStage.STAGE_2.value
     assert current.current_sector_stage == WeinsteinStage.STAGE_2.value
     assert current.current_progress_status == ProgressStatus.IMPROVING.value

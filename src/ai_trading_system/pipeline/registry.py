@@ -405,6 +405,21 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
     "position_recovery_action": frozenset({"recovery_action_id", "recovery_proposal_id"}),
     "policy_version_registry": frozenset({"version_label", "policy_snapshot_id", "content_json"}),
     "candidate_episode": frozenset({"candidate_id", "policy_snapshot_id", "closed_policy_snapshot_id"}),
+    "candidate_episode_relation": frozenset(
+        {
+            "relation_id",
+            "predecessor_candidate_id",
+            "successor_candidate_id",
+            "relation_type",
+        }
+    ),
+    "candidate_snapshot": frozenset(
+        {
+            "snapshot_id",
+            "last_progress_at",
+            "last_retention_counted_session",
+        }
+    ),
     "candidate_transition": frozenset({"transition_id", "policy_snapshot_id"}),
     "candidate_decision_context": frozenset(
         {

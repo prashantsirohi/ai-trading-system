@@ -18,3 +18,9 @@ def get_candidate_state_as_of(store: DuckDBOpportunityRegistryStore, candidate_i
 
 def get_candidate_timeline(store: DuckDBOpportunityRegistryStore, candidate_id: str):
     return store.timeline(candidate_id)
+
+
+def get_episode_relations(
+    store: DuckDBOpportunityRegistryStore, candidate_id: str
+):
+    return store.list_episode_relations(candidate_id)
