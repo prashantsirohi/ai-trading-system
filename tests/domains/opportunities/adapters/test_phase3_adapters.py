@@ -8,7 +8,7 @@ from ai_trading_system.domains.opportunities.adapters import (
     adapt_sector_stage_rows,
     adapt_stock_stage_rows,
 )
-from ai_trading_system.domains.opportunities.contracts import StageStatus, WeinsteinStage
+from ai_trading_system.domains.opportunities.contracts import StageConfidenceBand, StageStatus, WeinsteinStage
 from ai_trading_system.domains.opportunities.orchestration.contracts import SourceDescriptor
 
 
@@ -63,6 +63,18 @@ def test_stock_stage_separates_provisional_and_locked():
     assert locked.stage_locked_at is not None
 
 
+def test_unknown_stock_stage_discards_non_structural_legacy_confidence():
+    result = adapt_stock_stage_rows(
+        [{"symbol_id": "ABC", "weekly_stage_label": "UNDEFINED", "weekly_stage_confidence": "0.25"}],
+        source=SOURCE,
+        as_of=NOW,
+    )
+    stage = result.records[0].value
+    assert stage.stage_status is StageStatus.UNKNOWN
+    assert stage.confidence_score == 0
+    assert stage.confidence_band is StageConfidenceBand.UNKNOWN
+
+
 def test_sector_rotation_does_not_imply_structural_stage():
     result = adapt_sector_stage_rows(
         [{"Sector": "Capital Goods", "RS_rank_pct": "95", "Quadrant": "Leading"}],
@@ -79,7 +91,7 @@ def test_locked_unknown_stage_remains_canonical_unknown():
     result = adapt_sector_stage_rows(
         [{
             "sector_name": "Capital Goods", "effective_stage": "unknown",
-            "stage_status": "locked", "stage_confidence_score": 0,
+            "stage_status": "locked", "stage_confidence_score": 0.9,
             "source_week_end": "2026-07-10", "as_of": "2026-07-10T12:00:00+00:00",
         }],
         source=SOURCE,
@@ -88,3 +100,5 @@ def test_locked_unknown_stage_remains_canonical_unknown():
     stage = result.records[0].value.stage_snapshot
     assert stage.stage_status is StageStatus.UNKNOWN
     assert stage.effective_stage is WeinsteinStage.UNKNOWN
+    assert stage.confidence_score == 0
+    assert stage.confidence_band is StageConfidenceBand.UNKNOWN

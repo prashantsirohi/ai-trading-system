@@ -29,6 +29,8 @@ def adapt_sector_stage_rows(rows: Sequence[Mapping[str, Any]], *, source: Source
         confidence = as_float(first(row, "stage_confidence_score", "sector_stage_confidence", "stage_confidence")) or 0.0
         if confidence <= 1 and raw_stage is not None:
             confidence *= 100
+        if mapped is WeinsteinStage.UNKNOWN:
+            confidence = 0.0
         explicit = str(first(row, "sector_stage_status", "stage_status") or "").lower()
         week_end = as_date(first(row, "source_week_end", "week_end_date"), as_of.date())
         week_start = as_date(first(row, "source_week_start"), week_end - timedelta(days=week_end.weekday()))

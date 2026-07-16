@@ -39,6 +39,8 @@ def adapt_stock_stage_rows(
         except ValueError as exc:
             rejected.append(RejectedSourceRow(source.artifact_type, identity, str(exc), ("stage_confidence",)))
             continue
+        if mapped is WeinsteinStage.UNKNOWN:
+            confidence = 0.0
         warnings.extend(AdapterWarning(source.artifact_type, identity, "legacy_stock_stage", message) for message in adapter_warnings)
         week_end = as_date(first(row, "source_week_end", "week_end_date", "trade_date"), as_of.date())
         week_start = as_date(first(row, "source_week_start"), week_end - timedelta(days=week_end.weekday()))
