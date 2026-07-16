@@ -2816,6 +2816,46 @@ def test_latest_publishable_run_ignores_failed_rank_attempt(
     assert resolved == completed_run_id
 
 
+def test_scan_router_can_reuse_rank_artifact_from_latest_completed_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_root = tmp_path / "data"
+    monkeypatch.setenv("DATA_ROOT", str(data_root))
+    registry = RegistryStore(tmp_path, db_path=data_root / "control_plane.duckdb")
+    prior_run_id = "pipeline-2026-07-14-completed"
+    registry.create_run(prior_run_id, "daily", "2026-07-14")
+    stage_run_id = registry.start_stage(prior_run_id, "rank", 1)
+    ranked_path = data_root / "pipeline_runs" / prior_run_id / "rank" / "attempt_1" / "ranked_signals.csv"
+    ranked_path.parent.mkdir(parents=True)
+    ranked_path.write_text("symbol_id,composite_score\nABC,90\n", encoding="utf-8")
+    registry.record_artifact(
+        prior_run_id,
+        "rank",
+        1,
+        StageArtifact.from_file("ranked_signals", ranked_path, row_count=1),
+    )
+    registry.finish_stage(stage_run_id, "completed")
+    registry.update_run(prior_run_id, "completed", finished=True)
+    observed: list[str] = []
+
+    class _Router:
+        def run(self, context: StageContext) -> StageResult:
+            observed.append(context.require_artifact("rank", "ranked_signals").uri)
+            return StageResult(metadata={"status": "completed"})
+
+    orchestrator = PipelineOrchestrator(
+        tmp_path, registry=registry, stages={"scan_router": _Router()},
+    )
+    orchestrator.run_pipeline(
+        run_id="pipeline-2026-07-15-current",
+        stage_names=["scan_router"],
+        run_date="2026-07-15",
+        params={"preflight": False, "local_publish": True},
+    )
+
+    assert observed == [str(ranked_path)]
+
+
 def test_main_publish_only_without_run_id_exits_when_no_publishable_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     class FakeOrchestrator:
         def __init__(self, project_root: Path) -> None:

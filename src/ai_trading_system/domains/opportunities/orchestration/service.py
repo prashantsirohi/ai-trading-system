@@ -402,6 +402,8 @@ class OpportunityShadowOrchestrator:
                         config=config,
                         run_id=run_id,
                     )
+                    if not config.dry_run:
+                        _persist_recovery_proposal(self.registry_store.registry, proposal)
                     rows["position_recovery_proposals"].append(proposal)
                     rows["position_monitor_reconciliation"].append({
                         "position_cycle_id": cycle_id,
@@ -412,8 +414,6 @@ class OpportunityShadowOrchestrator:
                         "recovery_proposal_id": proposal["recovery_proposal_id"],
                     })
                     counters["recovery_proposals"] += 1
-                    if not config.dry_run:
-                        _persist_recovery_proposal(self.registry_store.registry, proposal)
                     recovery = _recovery_allowed(config)
                     if not recovery:
                         _conflict(
@@ -1487,16 +1487,60 @@ def _recovery_proposal(
 def _persist_recovery_proposal(registry: RegistryStore, proposal: dict[str, Any]) -> None:
     with registry._writer() as conn:  # noqa: SLF001
         existing = conn.execute(
-            "SELECT payload_hash FROM position_recovery_proposal WHERE recovery_proposal_id = ?",
+            """SELECT payload_hash, payload_json
+               FROM position_recovery_proposal
+               WHERE recovery_proposal_id = ?""",
             [proposal["recovery_proposal_id"]],
         ).fetchone()
-        if existing and existing[0] != proposal["payload_hash"]:
+        existing_semantic_hash = None
+        existing_payload = None
+        if existing:
+            try:
+                existing_payload = json.loads(existing[1])
+                existing_semantic_hash = recovery_payload_hash(existing_payload)
+            except (TypeError, ValueError):
+                existing_semantic_hash = None
+        incoming_semantic_hash = recovery_payload_hash(proposal)
+        if existing and (
+            existing[0] == proposal["payload_hash"]
+            or existing_semantic_hash == incoming_semantic_hash
+        ):
+            return
+        if (
+            existing_payload is not None
+            and _recovery_proposal_stable_hash(existing_payload)
+            == _recovery_proposal_stable_hash(proposal)
+        ):
+            proposal["recovery_proposal_id"] = _recovery_proposal_revision_id(
+                base_proposal_id=proposal["recovery_proposal_id"],
+                assessment_hash=incoming_semantic_hash,
+            )
+            proposal["payload_hash"] = recovery_payload_hash(proposal)
+            revised = conn.execute(
+                """SELECT payload_hash, payload_json
+                   FROM position_recovery_proposal
+                   WHERE recovery_proposal_id = ?""",
+                [proposal["recovery_proposal_id"]],
+            ).fetchone()
+            if revised:
+                revised_payload = json.loads(revised[1])
+                if recovery_payload_hash(revised_payload) == recovery_payload_hash(proposal):
+                    return
+                raise OpportunityRegistryConflictError(
+                    record_type="position_recovery_proposal",
+                    candidate_id=proposal["position_cycle_id"],
+                    idempotency_key=proposal["recovery_proposal_id"],
+                    existing_payload_hash=revised[0],
+                    incoming_payload_hash=proposal["payload_hash"],
+                )
+            existing = None
+        if existing:
             raise OpportunityRegistryConflictError(
                 record_type="position_recovery_proposal",
                 candidate_id=proposal["position_cycle_id"],
                 idempotency_key=proposal["recovery_proposal_id"],
                 existing_payload_hash=existing[0],
-                incoming_payload_hash=proposal["payload_hash"],
+                incoming_payload_hash=incoming_semantic_hash,
             )
         conn.execute(
             """INSERT INTO position_recovery_proposal
@@ -1513,6 +1557,30 @@ def _persist_recovery_proposal(registry: RegistryStore, proposal: dict[str, Any]
                 proposal["created_run_id"],
             ],
         )
+
+
+def _recovery_proposal_stable_hash(payload: dict[str, Any]) -> str:
+    evolving_compatibility_fields = {
+        "compatibility_status", "open_episode_ids", "conflict_reasons",
+    }
+    stable_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {
+            "payload_hash", "created_run_id", "source_lineage",
+            *evolving_compatibility_fields,
+        }
+    }
+    return hashlib.sha256(
+        json.dumps(stable_payload, sort_keys=True, default=str, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _recovery_proposal_revision_id(*, base_proposal_id: str, assessment_hash: str) -> str:
+    digest = hashlib.sha256(
+        f"{base_proposal_id}|{assessment_hash}".encode()
+    ).hexdigest()
+    return f"position-recovery-{digest[:24]}"
 
 
 def _persist_recovery_action(registry: RegistryStore, action: dict[str, Any]) -> None:

@@ -24,6 +24,7 @@ Active positions and recently exited positions receive `POSITION_MONITOR` withou
 ## Input data
 
 Registered rank and weekly-stage artifacts, opportunity-registry current lifecycle, and read-only execution fills/stops.
+If the current run skipped rank because its inputs were unchanged, the orchestrator supplies the latest promoted rank artifacts from a completed run; artifacts from failed rank attempts are excluded.
 
 ## Output artifacts
 

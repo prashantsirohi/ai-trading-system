@@ -898,7 +898,10 @@ class PipelineOrchestrator:
 
                 artifacts = self.registry.get_artifact_map(run_id)
                 self._alias_feature_snapshot_artifact(artifacts)
-                if stage_name in {"investigator", "opportunities", "events", "execute", "insight", "publish"}:
+                if stage_name in {
+                    "scan_router", "investigator", "opportunities", "events",
+                    "execute", "insight", "publish",
+                }:
                     self._attach_latest_rank_artifacts(artifacts, run_id=run_id)
                     self._alias_feature_snapshot_artifact(artifacts)
 
@@ -1293,7 +1296,7 @@ class PipelineOrchestrator:
             return False
 
     def _attach_latest_rank_artifacts(self, artifacts: Dict[str, Dict[str, StageArtifact]], *, run_id: str) -> None:
-        """Let event/insight/publish stages reuse the latest completed rank outputs.
+        """Let downstream stages reuse the latest completed rank outputs.
 
         This preserves the independent event-intelligence cadence: a new run can
         refresh events and reports even when ingest/features/rank were skipped

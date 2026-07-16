@@ -64,6 +64,8 @@ Progress uses only comparable values. Two positives mean improving, two negative
 
 Lineage combines normalized source hashes and registered paths. An exact same-run replay is reported as a registry duplicate and writes no new history. Semantic-key conflicts remain explicit audit rows. Missing optional sources, unavailable sector stage, provisional-only stage, ambiguous lifecycle values, and incomplete evidence are warnings.
 
+Position-recovery proposal hashes cover the recovery assessment but exclude `created_run_id`, `source_lineage`, and the hash field itself. Those fields remain stored audit provenance. This keeps an unchanged deterministic proposal replay-safe across observing runs. If only compatibility status, open-episode IDs, or conflict reasons change, the orchestrator appends a deterministic assessment revision under the same position cycle instead of rewriting the earlier proposal. Stable cycle, symbol, mode, policy, and recovery semantics remain conflict-protected, and an action always refers to the exact immutable assessment it reviewed. Rows written with the earlier full-payload hash are compared using the same canonical projection and require no data rewrite.
+
 Same-run replay equivalence is defined within one policy snapshot. Replaying a
 pre-A2 gate-affected decision under `lifecycle-policy-v1.1` can legitimately
 produce the same idempotency key with different decision blockers and therefore

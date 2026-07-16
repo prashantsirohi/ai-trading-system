@@ -53,6 +53,12 @@ confirm provisional and locked observations coexist, sector coverage guards
 fire, stage promotions outside the rank cap appear, and replay creates no
 semantic duplicates.
 
+Recovery proposals may be observed again under a later `run_id`; differing run
+lineage alone must deduplicate against the deterministic proposal. Before an
+action exists, changed compatibility evidence creates a deterministic immutable
+assessment revision under the same position cycle. Stable recovery semantics
+must still conflict, and an action remains bound to its exact assessment.
+
 ## Phase 3C-1 copied-store migration and annotation
 
 Do not point this workflow at the configured operator store. Back up the operator

@@ -185,6 +185,18 @@ def evaluate_position_episode_compatibility(
 
 
 def recovery_payload_hash(payload: Mapping[str, Any]) -> str:
+    """Hash the durable recovery decision, excluding per-run provenance.
+
+    Recovery proposal IDs are stable for a position cycle and policy.  The run
+    that observed the proposal and its source artifact lineage are audit
+    metadata, so including them would turn a semantically identical replay into
+    an idempotency conflict.
+    """
+    semantic_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"payload_hash", "created_run_id", "source_lineage"}
+    }
     return hashlib.sha256(
-        json.dumps(dict(payload), sort_keys=True, default=str, separators=(",", ":")).encode()
+        json.dumps(semantic_payload, sort_keys=True, default=str, separators=(",", ":")).encode()
     ).hexdigest()
