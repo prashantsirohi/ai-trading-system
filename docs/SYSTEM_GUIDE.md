@@ -110,6 +110,10 @@ coverage alongside readiness, health, and response limitations.
   batch with at least 10 symbols showing simultaneous raw-close gaps of 30% or
   more is rejected before delete, upsert, or insert. The corresponding ingest
   DQ result records the affected dates and a JSON symbol sample.
+- Daily raw-catalog refresh completes before split/bonus normalization. Refreshed
+  symbols with active split/bonus history have adjusted OHLC reapplied even when
+  no action definition changed, so incremental tail rewrites cannot silently
+  reset valid adjustment factors without forcing a full-catalog rewrite.
 - Historical ranking is point-in-time: market, return, volume, delivery, sector,
   stage, benchmark, and persisted feature inputs cannot read observations after
   the requested run date. One immutable `RankInputSnapshot` owns that cutoff and

@@ -418,6 +418,81 @@ def test_incremental_skips_recompute_when_no_action_state_changed(tmp_path: Path
     ]
 
 
+def test_incremental_recomputes_ingest_refreshed_symbol_when_actions_are_unchanged(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    masterdb = tmp_path / "masterdata.db"
+    _seed_catalog(db_path)
+    _seed_masterdb(masterdb)
+    raw = {
+        "symbol": "AAA", "isin": "INE000A01011",
+        "exDate": "02-Jan-2026", "subject": "Bonus 1:1",
+    }
+    run_corporate_action_normalization(
+        ohlcv_db_path=db_path, masterdb_path=masterdb,
+        today=pd.Timestamp("2026-01-10").date(), fetcher=lambda **_: [raw],
+    )
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """UPDATE _catalog
+               SET adjusted_close = close, adjustment_factor = 1.0,
+                   adjustment_source = NULL
+               WHERE symbol_id = 'AAA'"""
+        )
+    finally:
+        conn.close()
+
+    result = run_corporate_action_normalization(
+        ohlcv_db_path=db_path, masterdb_path=masterdb,
+        today=pd.Timestamp("2026-01-10").date(), fetcher=lambda **_: [raw],
+        recompute_symbols=["AAA"],
+    )
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        factor, source = conn.execute(
+            """SELECT adjustment_factor, adjustment_source FROM _catalog
+               WHERE symbol_id = 'AAA' AND CAST(timestamp AS DATE) = DATE '2026-01-01'"""
+        ).fetchone()
+    finally:
+        conn.close()
+    assert result["skipped"] is False
+    assert result["recompute_scope"] == "symbols"
+    assert result["affected_symbols"] == ["AAA"]
+    assert result["ingest_refreshed_symbols_count"] == 1
+    assert result["ingest_recompute_symbols_count"] == 1
+    assert factor == 0.5
+    assert source == "nse_corporate_actions"
+
+
+def test_incremental_skips_refreshed_symbol_without_active_action(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    masterdb = tmp_path / "masterdata.db"
+    _seed_catalog(db_path)
+    _seed_masterdb(masterdb)
+    raw = {
+        "symbol": "AAA", "isin": "INE000A01011",
+        "exDate": "02-Jan-2026", "subject": "Bonus 1:1",
+    }
+    run_corporate_action_normalization(
+        ohlcv_db_path=db_path, masterdb_path=masterdb,
+        today=pd.Timestamp("2026-01-10").date(), fetcher=lambda **_: [raw],
+    )
+
+    result = run_corporate_action_normalization(
+        ohlcv_db_path=db_path, masterdb_path=masterdb,
+        today=pd.Timestamp("2026-01-10").date(), fetcher=lambda **_: [raw],
+        recompute_symbols=["NIFTY50"],
+    )
+
+    assert result["skipped"] is True
+    assert result["recompute_scope"] == "skipped"
+    assert result["ingest_refreshed_symbols_count"] == 1
+    assert result["ingest_recompute_symbols_count"] == 0
+
+
 def test_incremental_changed_payload_recomputes_only_affected_symbol(tmp_path: Path) -> None:
     db_path = tmp_path / "ohlcv.duckdb"
     masterdb = tmp_path / "masterdata.db"

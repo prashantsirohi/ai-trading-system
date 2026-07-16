@@ -99,6 +99,53 @@ def test_ingest_service_passes_context_run_date_to_daily_update_runner(
     assert payload["nse_allow_yfinance_fallback_reason"] == "catalog_stale"
 
 
+def test_ingest_reapplies_corporate_actions_after_catalog_refresh(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """CREATE TABLE _catalog (
+                   symbol_id VARCHAR, exchange VARCHAR, timestamp TIMESTAMP
+               )"""
+        )
+        conn.execute(
+            """INSERT INTO _catalog VALUES
+               ('AAA', 'NSE', TIMESTAMP '2026-04-08 00:00:00')"""
+        )
+    finally:
+        conn.close()
+    calls: list[tuple[str, object]] = []
+    service = IngestOrchestrationService(
+        operation=lambda _context: (
+            calls.append(("catalog_refresh", None))
+            or {"target_end_date": "2026-04-08", "updated_symbols": ["AAA"]}
+        )
+    )
+
+    def fake_normalize(_context, *, recompute_symbols=None):
+        calls.append(("corporate_actions", recompute_symbols))
+        return {"status": "success", "rows_adjusted": 1, "affected_symbols": ["AAA"]}
+
+    monkeypatch.setattr(service, "run_corporate_action_normalization", fake_normalize)
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=db_path,
+        run_id="run-order",
+        run_date="2026-04-08",
+        stage_name="ingest",
+        attempt_number=1,
+        params={"include_delivery": False},
+    )
+
+    payload = service.run_default(context)
+
+    assert calls == [("catalog_refresh", None), ("corporate_actions", ["AAA"])]
+    assert payload["downstream_changed_symbols"] == ["AAA"]
+
+
 def test_ingest_service_respects_explicitly_disabled_yfinance_fallback(
     tmp_path: Path,
     monkeypatch,

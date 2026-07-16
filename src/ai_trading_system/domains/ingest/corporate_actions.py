@@ -429,6 +429,7 @@ def run_corporate_action_normalization(
     max_age_days: int = 30,
     overlap_days: int = 45,
     normalizer_version: int = 1,
+    recompute_symbols: list[str] | None = None,
     today: date | None = None,
     fetcher: Callable[..., list[dict[str, Any]]] | None = None,
     show_progress: bool = False,
@@ -460,6 +461,10 @@ def run_corporate_action_normalization(
         "overlap_days": int(overlap_days),
         "normalizer_version": int(normalizer_version),
         "error_message": None,
+        "ingest_refreshed_symbols_count": len(
+            {str(symbol).strip() for symbol in recompute_symbols or [] if str(symbol).strip()}
+        ),
+        "ingest_recompute_symbols_count": 0,
     }
 
     try:
@@ -513,7 +518,15 @@ def run_corporate_action_normalization(
             result["affected_symbols_count"] = len(result["affected_symbols"])
             _report(progress, "step_done", step="Saving corporate actions", **reconcile_result)
 
-            skip_recompute = should_skip_adjustment_recompute(
+            ingest_refreshed_symbols = sorted(
+                {str(symbol).strip() for symbol in recompute_symbols or [] if str(symbol).strip()}
+            )
+            ingest_recompute_symbols = _symbols_with_active_actions(
+                conn,
+                ingest_refreshed_symbols,
+            )
+            result["ingest_recompute_symbols_count"] = len(ingest_recompute_symbols)
+            skip_recompute = not ingest_recompute_symbols and should_skip_adjustment_recompute(
                 force=force,
                 reconcile_result=reconcile_result,
                 previous_action_set_hash=previous_hash,
@@ -534,15 +547,19 @@ def run_corporate_action_normalization(
                 _report(progress, "message", message="Skipped adjusted-price rewrite: no action state change")
             else:
                 full_recompute = execution_mode == "full" or previous_version != int(normalizer_version)
+                scoped_symbols = sorted(
+                    set(reconcile_result["affected_symbols"]) | set(ingest_recompute_symbols)
+                )
                 result.update(
                     recompute_adjusted_prices(
                         ohlcv_db_path,
-                        symbols=None if full_recompute else reconcile_result["affected_symbols"],
+                        symbols=None if full_recompute else scoped_symbols,
                         force=full_recompute,
                         progress=progress,
                         _conn=conn,
                     )
                 )
+                result["affected_symbols_count"] = len(result.get("affected_symbols") or [])
             normalized_at = _utc_now()
             update_corporate_action_sync_state(
                 ohlcv_db_path,
@@ -576,6 +593,39 @@ def run_corporate_action_normalization(
         return result
     finally:
         progress.close()
+
+
+def _symbols_with_active_actions(
+    conn: duckdb.DuckDBPyConnection,
+    symbols: list[str],
+) -> list[str]:
+    """Return refreshed catalog symbols whose adjusted history can differ from raw."""
+    scoped_symbols = sorted({str(symbol).strip() for symbol in symbols if str(symbol).strip()})
+    if not scoped_symbols:
+        return []
+    rows = conn.execute(
+        """
+        SELECT DISTINCT c.symbol_id
+        FROM _catalog c
+        WHERE c.symbol_id IN (SELECT UNNEST(?))
+          AND EXISTS (
+              SELECT 1
+              FROM _corporate_actions a
+              WHERE COALESCE(a.status, 'active') = 'active'
+                AND a.price_factor > 0
+                AND (
+                     UPPER(a.symbol) = UPPER(c.symbol_id)
+                  OR (
+                       COALESCE(TRIM(a.isin), '') <> ''
+                   AND UPPER(a.isin) = UPPER(COALESCE(c.isin, ''))
+                  )
+                )
+          )
+        ORDER BY c.symbol_id
+        """,
+        [scoped_symbols],
+    ).fetchall()
+    return [str(row[0]) for row in rows]
 
 
 def _last_successful_execution_at(db_path: str | Path, *, execution_mode: str) -> datetime | None:

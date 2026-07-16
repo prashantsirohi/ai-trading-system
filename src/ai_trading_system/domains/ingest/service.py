@@ -38,7 +38,6 @@ class IngestOrchestrationService:
 
     def run_default(self, context: StageContext) -> Dict:
         fallback_enabled, fallback_reason = self.resolve_yfinance_fallback_policy(context)
-        corporate_actions_result = self.run_corporate_action_normalization(context)
         if self.operation is not None:
             result = self.operation(context)
         else:
@@ -59,6 +58,16 @@ class IngestOrchestrationService:
                 stale_missing_symbol_grace_days=int(context.params.get("stale_missing_symbol_grace_days", 3)),
                 nse_allow_yfinance_fallback=fallback_enabled,
             )
+
+        updated_symbols = (
+            result.get("updated_symbols", [])
+            if isinstance(result, dict) and isinstance(result.get("updated_symbols"), list)
+            else []
+        )
+        corporate_actions_result = self.run_corporate_action_normalization(
+            context,
+            recompute_symbols=updated_symbols,
+        )
 
         catalog_rows, symbol_count, latest_ts = fetch_catalog_summary(context.db_path)
 
@@ -104,7 +113,12 @@ class IngestOrchestrationService:
         payload["stale_quarantine_sweep"] = self.run_stale_quarantine_sweep(context)
         return payload
 
-    def run_corporate_action_normalization(self, context: StageContext) -> Dict:
+    def run_corporate_action_normalization(
+        self,
+        context: StageContext,
+        *,
+        recompute_symbols: list[str] | None = None,
+    ) -> Dict:
         """Run split/bonus normalization as a warning-only ingest pre-step."""
         try:
             from ai_trading_system.domains.ingest.corporate_actions import run_corporate_action_normalization
@@ -214,6 +228,7 @@ class IngestOrchestrationService:
                 max_age_days=int(context.params.get("corporate_actions_full_max_age_days", 30) or 30),
                 overlap_days=int(context.params.get("corporate_actions_overlap_days", 45) or 45),
                 normalizer_version=int(context.params.get("corporate_actions_normalizer_version", 1) or 1),
+                recompute_symbols=recompute_symbols,
                 progress_callback=_corporate_action_progress,
             )
         except Exception as exc:
