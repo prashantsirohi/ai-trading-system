@@ -21,6 +21,12 @@ def test_operator_position_calibration_and_performance_projections(operator_arti
     calibration = operator_artifact_client.get("/api/v1/calibration/summary", headers=HEADERS).json()["data"]
     assert calibration["total_samples"] == 12
     assert calibration["formal_verdict"] == "READY_WITH_LIMITATIONS"
+    assert calibration["policy_snapshot_coverage"] == {"snapshot-op": 8}
+    assert calibration["admission_reason_coverage"] == {"qualified_breakout": 8}
+    manifest = operator_artifact_client.get(
+        "/api/v1/calibration/manifest", headers=HEADERS,
+    ).json()["data"]
+    assert manifest["policy_snapshot_ids"] == ["snapshot-op"]
     performance = operator_artifact_client.get("/api/v1/performance/latest", headers=HEADERS).json()["data"]
     assert performance["operation_metrics"][0]["stage_name"] == "scan_router"
     assert operator_artifact_client.get("/api/v1/performance/baselines", headers=HEADERS).json()["data"][0]["run_id"] == "operator-run-1"

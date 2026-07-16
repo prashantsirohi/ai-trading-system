@@ -841,6 +841,13 @@
             "title": "Policy Hashes",
             "type": "object"
           },
+          "policy_snapshot_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Policy Snapshot Ids",
+            "type": "array"
+          },
           "policy_version": {
             "title": "Policy Version",
             "type": "string"
@@ -897,6 +904,13 @@
       },
       "CalibrationSummaryResponse": {
         "properties": {
+          "admission_reason_coverage": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Admission Reason Coverage",
+            "type": "object"
+          },
           "class_counts": {
             "additionalProperties": {
               "type": "integer"
@@ -978,6 +992,13 @@
               }
             ],
             "title": "Phase4 Production Ready"
+          },
+          "policy_snapshot_coverage": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Policy Snapshot Coverage",
+            "type": "object"
           },
           "policy_version": {
             "anyOf": [

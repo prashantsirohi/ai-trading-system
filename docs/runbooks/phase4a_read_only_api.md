@@ -2,7 +2,7 @@
 
 - **Purpose:** Operate and verify Phase 4A without mutating operator state.
 - **Audience:** Operators, API clients, and Phase 4B developers.
-- **Last verified:** 2026-07-15
+- **Last verified:** 2026-07-16
 - **Source of truth:** `src/ai_trading_system/interfaces/api/` and `interfaces/cli/serve_phase4_api.py`.
 - **API schema:** `phase4a-api-schema-v1`
 
@@ -33,6 +33,11 @@ readiness, performance, and routing-conflict families. A present primary
 artifact remains usable when supporting evidence is missing; the envelope is
 partial with a family-specific limitation. System readiness and limitations
 are projections of the same Phase 3C-5 readiness JSON.
+
+Calibration summary responses include decision-time policy-snapshot coverage
+and primary-admission-reason coverage. Calibration manifest responses include
+the distinct `policy_snapshot_ids` recorded by the Phase 3C-5 builder. These
+are read-only projections of immutable calibration artifacts.
 
 Governance conflicts aggregate stage resolver outcomes, membership interval
 and trust problems, unresolved correction impacts, routing conflicts, and

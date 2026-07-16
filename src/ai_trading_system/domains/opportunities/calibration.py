@@ -17,7 +17,7 @@ from ai_trading_system.pipeline.contracts import compute_file_hash
 
 CALIBRATION_POLICY_VERSION = "phase3c5-calibration-policy-v1"
 READINESS_POLICY_VERSION = "phase3c5-readiness-policy-v1"
-CALIBRATION_BUILDER_VERSION = "phase3c5-calibration-builder-v1"
+CALIBRATION_BUILDER_VERSION = "phase3c5-calibration-builder-v1.1"
 OUTCOME_POLICY_VERSION = "phase3c5-session-outcomes-v1"
 
 
@@ -391,7 +391,9 @@ def build_calibration_dataset(
     source_database_hashes: Mapping[str, str] | None = None,
     source_artifact_hashes: Mapping[str, str] | None = None,
     source_schema_versions: Mapping[str, str] | None = None,
-    migration_versions: tuple[str, ...] = ("033", "034", "035", "036"),
+    migration_versions: tuple[str, ...] = (
+        "033", "034", "035", "036", "037", "038", "039", "040", "041",
+    ),
     copied_realistic_performance_summary: Mapping[str, Any] | None = None,
     operator_migrations_applied: bool = False,
     real_phase3b_history_present: bool = False,
@@ -476,6 +478,7 @@ def build_calibration_dataset(
         "membership_trust_distribution": quality["membership_trust_distribution"],
         "stage_status_distribution": quality["stage_status_distribution"],
         "correction_status_distribution": quality["correction_status_distribution"],
+        "policy_snapshot_ids": quality["policy_snapshot_ids"],
         "reproducibility_status": "REPRODUCIBLE",
         "quality_summary": quality,
     }
@@ -651,7 +654,7 @@ def evaluate_phase4_readiness(
     migration_status = ReadinessStatus.PASS if operator_migrations_applied else (
         ReadinessStatus.FAIL if cfg.phase4_require_operator_migrations else ReadinessStatus.WARN
     )
-    add("OPERATOR_MIGRATIONS_034_036", "schema", migration_status,
+    add("OPERATOR_MIGRATIONS_034_041", "schema", migration_status,
         operator_migrations_applied, "operator migrations 034-036 backed up and copied-store verified",
         severity="high", limitation_id="OPERATOR_MIGRATIONS_NOT_APPLIED",
         description="operator migrations 034-036 remain unapplied",
@@ -774,6 +777,9 @@ def _quality_summary(
     dimensions = (
         "market_regime", "breadth_velocity_bucket", "stock_stage", "sector_stage",
         "scan_tier", "setup_family", "candidate_state", "outcome_horizon",
+        "policy_snapshot_id", "admission_policy_snapshot_id",
+        "primary_admission_reason", "primary_setup_family",
+        "sector_gate_taxonomy", "sector_gate_cohort",
     )
     coverage_counts = {
         dimension: dict(sorted(Counter(
@@ -825,6 +831,10 @@ def _quality_summary(
         "membership_trust_distribution": dict(sorted(Counter(str(row.get("membership_trust")) for row in source_rows).items())),
         "stage_status_distribution": dict(sorted(Counter(str(row.get("stage_status")) for row in source_rows).items())),
         "correction_status_distribution": dict(sorted(Counter(str(row.get("correction_impact_status") or "linked") for row in source_rows).items())),
+        "policy_snapshot_ids": sorted({
+            str(row["policy_snapshot_id"])
+            for row in source_rows if row.get("policy_snapshot_id")
+        }),
     }
 
 
@@ -836,6 +846,13 @@ def _output_row(row: Mapping[str, Any], eligibility: CalibrationEligibility) -> 
         "breadth_velocity_bucket", "stock_stage", "sector_stage", "stage_status",
         "scan_tier", "setup_family", "candidate_state", "membership_trust",
         "listing_status_as_of_decision", "delisting_status", "universe_source",
+        "policy_snapshot_id", "admission_policy_snapshot_id",
+        "primary_admission_reason", "primary_setup_family",
+        "satisfied_admission_rules", "rule_evaluations",
+        "sector_locked_stage_prior_completed_week",
+        "sector_provisional_stage_current_week",
+        "sector_stage_velocity_current_week", "sector_gate_taxonomy",
+        "sector_gate_cohort",
     )
     result = {key: row.get(key) for key in allowed}
     result.update({

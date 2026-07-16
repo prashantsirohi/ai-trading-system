@@ -87,10 +87,11 @@ routing, write operator databases, or implement Phase 4. See the
 [calibration and readiness runbook](runbooks/phase3c5_calibration_and_readiness.md).
 Copied-realistic builds derive migration status from the copied schema and real
 Phase 3B history from completed weekly-stage lineage. They also project
-point-in-time membership and correction governance into calibration rows. The
-resulting evidence is persisted in the immutable manifest, and Phase 4 API
-readiness, health, and response limitations consume the current readiness
-artifact rather than a permanently asserted production-blocker tuple.
+point-in-time membership, correction governance, decision/admission policy
+snapshot IDs, completed-week sector-gate cohorts, and structured evaluate-all
+admission records into calibration rows. The immutable manifest records policy
+snapshot coverage, and the Phase 4 API exposes snapshot and primary-admission
+coverage alongside readiness, health, and response limitations.
 
 ## Safety and operating invariants
 
@@ -128,6 +129,10 @@ artifact rather than a permanently asserted production-blocker tuple.
   structure is monitoring evidence only; missing/untrusted membership,
   insufficient coverage, missing locks, and non-Stage-2 prior locks remain
   separately measurable fail-closed cohorts under `lifecycle-policy-v1.1`.
+  Current mapping reads `masterdata.symbols` first and fills only missing or
+  placeholder NSE mappings from `stock_details`; conflicting or ambiguous
+  sources remain visible and fail closed rather than silently overwriting the
+  primary master.
 - Paper execution is the safe default. Do not enable live broker placement without explicit operator authorization, and do not describe the live path as production-certified.
 - New buys are checked against projected cumulative portfolio heat before
   submission. Risk reserved by earlier accepted buys in the same execution

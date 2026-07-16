@@ -2,7 +2,7 @@
 
 - **Purpose:** Build immutable calibration eligibility and Phase 4 readiness evidence safely.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-07-15
+- **Last verified:** 2026-07-16
 - **Source of truth:** `domains/opportunities/calibration.py` and `interfaces/cli/build_phase3c5_calibration.py`.
 - **Policy:** `phase3c5-calibration-policy-v1`
 
@@ -73,8 +73,10 @@ The command opens the source read-only. It rejects the configured operator
 store and symlinked source/output paths. Sparse or pre-Phase-3B copies produce
 honest exclusions and limitations; do not fabricate missing history.
 
-For copied-realistic builds, `OPERATOR_MIGRATIONS_034_036` passes only when the
-copied store contains the Phase 3C-1/1A/3 tables and hardening columns.
+For copied-realistic builds, `OPERATOR_MIGRATIONS_034_041` passes only when the
+copied store contains the Phase 3C-1/1A/3 tables and required additive schema
+through migration 041. Pre-037/041 copies remain readable but report an honest
+migration limitation and emit null policy/admission provenance.
 `REAL_PHASE3B_HISTORY` passes only when weekly stock-stage rows have matching
 completed pipeline and weekly-stage-attempt lineage plus a non-empty source
 artifact hash. Candidate rows resolve point-in-time sector membership and
@@ -82,6 +84,16 @@ decision-linked correction impacts from the copied governance tables; missing
 or conflicting evidence remains fail-closed. These observations are embedded
 in `readiness_evidence` in the calibration manifest so a later readiness-only
 check preserves the copied-store verdict without reopening the source.
+
+Builder `phase3c5-calibration-builder-v1.1` also projects the decision-time
+`policy_snapshot_id`, episode-open `admission_policy_snapshot_id`, primary
+admission reason/family, canonical `satisfied_admission_rules` and
+`rule_evaluations` JSON, and completed-week sector-gate evidence/cohorts. The
+manifest records distinct decision-time policy snapshots. Phase 4 summary
+responses expose policy-snapshot and primary-admission coverage; the manifest
+response exposes the snapshot ID list. Rule evaluation provenance retains A4's
+bundle-level `source_observation_ids` until evidence contracts gain per-item
+observation IDs.
 
 ## Readiness verdicts
 

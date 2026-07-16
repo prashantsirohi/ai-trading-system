@@ -28,6 +28,22 @@ def test_valid_point_in_time_sample_is_eligible() -> None:
     assert result.eligible is True
 
 
+def test_output_preserves_policy_and_structured_admission_provenance() -> None:
+    row = _row()
+    result = build_calibration_dataset(
+        [row], dataset_name="provenance", dataset_purpose="entry", as_of="2026-07-15",
+    )
+    output = result.eligible_rows[0]
+    assert output["policy_snapshot_id"] == "policy-snapshot-0"
+    assert output["admission_policy_snapshot_id"] == "policy-snapshot-0"
+    assert output["primary_admission_reason"] == "qualified_breakout"
+    assert output["satisfied_admission_rules"] == '["qualified_breakout"]'
+    assert result.manifest["policy_snapshot_ids"] == ["policy-snapshot-0"]
+    assert result.quality_summary["coverage_counts"]["primary_admission_reason"] == {
+        "qualified_breakout": 1
+    }
+
+
 def test_input_available_after_decision_is_excluded() -> None:
     row = _row()
     row["input_available_at"] = "2026-01-01T00:00:00+00:00"

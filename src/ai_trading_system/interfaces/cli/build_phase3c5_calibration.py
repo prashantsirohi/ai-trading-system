@@ -20,7 +20,10 @@ from ai_trading_system.interfaces.cli.benchmark_phase3c4 import validate_benchma
 
 PROFILES = ("small_fixture", "winner_only", "critical_leakage", "copied_realistic")
 
-_MIGRATION_034_036_TABLES = frozenset({
+_REQUIRED_CALIBRATION_TABLES = frozenset({
+    "candidate_episode",
+    "candidate_decision_context",
+    "candidate_snapshot",
     "sector_membership_history",
     "stage_observation_governance",
     "stage_observation_dependency",
@@ -28,14 +31,28 @@ _MIGRATION_034_036_TABLES = frozenset({
     "pipeline_alert_incident",
     "position_recovery_proposal",
     "position_recovery_action",
+    "candidate_episode_relation",
 })
-_MIGRATION_035_COLUMNS = {
+_REQUIRED_CALIBRATION_COLUMNS = {
     "stage_observation_governance": frozenset({
         "authority_reference", "authority_recorded_at", "governance_policy_version",
     }),
     "stage_correction_impact": frozenset({
         "match_count", "match_rule_version", "match_evidence",
         "authoritative_calibration_eligible", "review_required",
+    }),
+    "candidate_episode": frozenset({
+        "policy_snapshot_id", "satisfied_admission_rules_json",
+        "rule_evaluations_json",
+    }),
+    "candidate_decision_context": frozenset({
+        "policy_snapshot_id", "sector_locked_stage_prior_completed_week",
+        "sector_provisional_stage_current_week",
+        "sector_stage_velocity_current_week", "sector_gate_taxonomy",
+        "sector_gate_cohort",
+    }),
+    "candidate_snapshot": frozenset({
+        "last_progress_at", "last_retention_counted_session",
     }),
 }
 
@@ -76,6 +93,20 @@ def fixture_rows(profile: str = "small_fixture", *, count: int = 72) -> list[dic
             "breadth_velocity_bucket": ("accelerating", "stable", "decelerating")[index % 3],
             "scan_tier": tiers[index % len(tiers)], "setup_family": families[index % len(families)],
             "candidate_state": ("ready", "triggered", "confirmed")[index % 3],
+            "policy_snapshot_id": f"policy-snapshot-{index % 2}",
+            "admission_policy_snapshot_id": f"policy-snapshot-{index % 2}",
+            "primary_admission_reason": "qualified_breakout",
+            "primary_setup_family": families[index % len(families)],
+            "satisfied_admission_rules": json.dumps(
+                ["qualified_breakout"], separators=(",", ":"), sort_keys=True,
+            ),
+            "rule_evaluations": json.dumps([{
+                "observed_value": {"score": 90.0}, "passed": True,
+                "rule": "qualified_breakout",
+                "setup_family": "breakout",
+                "source_observation_ids": [f"fixture-row-{index:04d}"],
+                "threshold": {"score_min": 80.0},
+            }], separators=(",", ":"), sort_keys=True),
             "lookback_sessions": 252, "required_lookback_sessions": 200,
         })
     if profile == "critical_leakage" and rows:
@@ -96,14 +127,47 @@ def load_copied_rows(path: Path, *, as_of: str) -> list[dict[str, Any]]:
         tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
         if not {"candidate_decision_context", "candidate_episode"}.issubset(tables):
             return rows
+        decision_columns = _table_columns(conn, "candidate_decision_context")
+        episode_columns = _table_columns(conn, "candidate_episode")
+        decision_policy = (
+            "d.policy_snapshot_id" if "policy_snapshot_id" in decision_columns else "NULL"
+        )
+        episode_policy = (
+            "e.policy_snapshot_id" if "policy_snapshot_id" in episode_columns else "NULL"
+        )
+        satisfied_rules = (
+            "e.satisfied_admission_rules_json"
+            if "satisfied_admission_rules_json" in episode_columns else "NULL"
+        )
+        rule_evaluations = (
+            "e.rule_evaluations_json" if "rule_evaluations_json" in episode_columns else "NULL"
+        )
+        opening_reason = (
+            "e.opening_reason" if "opening_reason" in episode_columns else "NULL"
+        )
+        sector_gate_fields = [
+            (
+                f"d.{name}" if name in decision_columns else "NULL"
+            )
+            for name in (
+                "sector_locked_stage_prior_completed_week",
+                "sector_provisional_stage_current_week",
+                "sector_stage_velocity_current_week",
+                "sector_gate_taxonomy",
+                "sector_gate_cohort",
+            )
+        ]
         decisions = conn.execute(
-            """SELECT d.decision_context_id, d.candidate_id, e.symbol_id, e.exchange,
+            f"""SELECT d.decision_context_id, d.candidate_id, e.symbol_id, e.exchange,
                       d.decided_at, d.decision_stage_status, d.decision_stage,
-                      d.decision_sector_stage, d.market_regime, e.setup_family
+                      d.decision_sector_stage, d.market_regime, e.setup_family,
+                      {opening_reason}, {decision_policy}, {episode_policy},
+                      {satisfied_rules}, {rule_evaluations},
+                      {", ".join(sector_gate_fields)}
                FROM candidate_decision_context d
                JOIN candidate_episode e ON e.candidate_id = d.candidate_id
                WHERE d.decided_at <= CAST(? AS TIMESTAMP)
-               ORDER BY d.decided_at, d.decision_context_id""",
+               ORDER BY d.decided_at, d.decision_context_id""",  # noqa: S608
             [as_of],
         ).fetchall()
         for item in decisions:
@@ -141,6 +205,17 @@ def load_copied_rows(path: Path, *, as_of: str) -> list[dict[str, Any]]:
                 "stage_governance_cycle": correction["stage_governance_cycle"],
                 "stock_stage": str(item[6]), "sector_stage": str(item[7]),
                 "market_regime": str(item[8]), "setup_family": str(item[9]),
+                "primary_admission_reason": _optional_text(item[10]),
+                "primary_setup_family": str(item[9]),
+                "policy_snapshot_id": _optional_text(item[11]),
+                "admission_policy_snapshot_id": _optional_text(item[12]),
+                "satisfied_admission_rules": _canonical_json_text(item[13]),
+                "rule_evaluations": _canonical_json_text(item[14]),
+                "sector_locked_stage_prior_completed_week": _optional_text(item[15]),
+                "sector_provisional_stage_current_week": _optional_text(item[16]),
+                "sector_stage_velocity_current_week": item[17],
+                "sector_gate_taxonomy": _optional_text(item[18]),
+                "sector_gate_cohort": _optional_text(item[19]),
                 "membership_trust": membership["membership_trust"],
                 "membership_recorded_at": membership["membership_recorded_at"],
                 "membership_overlap": membership["membership_overlap"],
@@ -164,10 +239,10 @@ def copied_store_readiness_evidence(path: Path) -> dict[str, Any]:
     """Derive migration and real-history readiness from an immutable copy."""
     with duckdb.connect(str(path), read_only=True) as conn:
         tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
-        missing_tables = sorted(_MIGRATION_034_036_TABLES - tables)
+        missing_tables = sorted(_REQUIRED_CALIBRATION_TABLES - tables)
         missing_columns = sorted(
             f"{table}.{column}"
-            for table, required in _MIGRATION_035_COLUMNS.items()
+            for table, required in _REQUIRED_CALIBRATION_COLUMNS.items()
             if table in tables
             for column in required - {
                 str(row[0]) for row in conn.execute(f"DESCRIBE {table}").fetchall()  # noqa: S608
@@ -341,6 +416,21 @@ def _stage_lookback_sessions(
 def _table_columns(conn: duckdb.DuckDBPyConnection, table: str) -> set[str]:
     """Inspect a trusted internal table name without mutating the copied store."""
     return {str(row[0]) for row in conn.execute(f"DESCRIBE {table}").fetchall()}  # noqa: S608
+
+
+def _optional_text(value: Any) -> str | None:
+    return str(value) if value is not None and str(value).strip() else None
+
+
+def _canonical_json_text(value: Any) -> str | None:
+    """Preserve nullable legacy provenance and canonicalize valid JSON payloads."""
+    if value is None or not str(value).strip():
+        return None
+    try:
+        payload = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return str(value)
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
 def run_build(

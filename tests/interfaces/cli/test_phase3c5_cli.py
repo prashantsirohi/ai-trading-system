@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,6 +30,18 @@ def test_small_fixture_cli_writes_machine_readable_artifacts(tmp_path: Path) -> 
         "phase3c5_exclusion_reasons.csv", "phase3c5_readiness_checks.csv",
         "phase3c5_phase4_readiness.json", "phase3c5_phase4_readiness.md",
     }
+    with (output / "phase3c5_calibration_eligible.csv").open(
+        encoding="utf-8", newline="",
+    ) as handle:
+        row = next(
+            item for item in csv.DictReader(handle)
+            if item["candidate_id"] == "candidate-0000"
+        )
+    assert row["policy_snapshot_id"] == "policy-snapshot-0"
+    assert json.loads(row["satisfied_admission_rules"]) == ["qualified_breakout"]
+    assert json.loads(row["rule_evaluations"])[0]["source_observation_ids"] == [
+        "fixture-row-0000"
+    ]
 
 
 def test_exact_fixture_replay_has_same_manifest_and_dataset_hash(tmp_path: Path) -> None:
@@ -105,16 +118,29 @@ def test_copied_profile_derives_governance_and_readiness_evidence(tmp_path: Path
     with duckdb.connect(str(copied)) as conn:
         conn.execute(
             """CREATE TABLE candidate_episode (
-                candidate_id VARCHAR, symbol_id VARCHAR, exchange VARCHAR, setup_family VARCHAR
+                candidate_id VARCHAR, symbol_id VARCHAR, exchange VARCHAR, setup_family VARCHAR,
+                opening_reason VARCHAR, policy_snapshot_id VARCHAR,
+                satisfied_admission_rules_json VARCHAR, rule_evaluations_json VARCHAR
             )"""
         )
         conn.execute(
             """CREATE TABLE candidate_decision_context (
                 decision_context_id VARCHAR, candidate_id VARCHAR, decided_at TIMESTAMP,
                 decision_stage_status VARCHAR, decision_stage VARCHAR,
-                decision_sector_stage VARCHAR, market_regime VARCHAR
+                decision_sector_stage VARCHAR, market_regime VARCHAR,
+                policy_snapshot_id VARCHAR,
+                sector_locked_stage_prior_completed_week VARCHAR,
+                sector_provisional_stage_current_week VARCHAR,
+                sector_stage_velocity_current_week DOUBLE,
+                sector_gate_taxonomy VARCHAR, sector_gate_cohort VARCHAR
             )"""
         )
+        conn.execute(
+            """CREATE TABLE candidate_snapshot (
+                last_progress_at TIMESTAMP, last_retention_counted_session DATE
+            )"""
+        )
+        conn.execute("CREATE TABLE candidate_episode_relation (relation_id VARCHAR)")
         conn.execute(
             """CREATE TABLE pipeline_run (
                 run_id VARCHAR PRIMARY KEY, status VARCHAR
@@ -132,10 +158,18 @@ def test_copied_profile_derives_governance_and_readiness_evidence(tmp_path: Path
             "036_opportunity_phase3c3_position_monitoring.sql",
         ):
             conn.execute((migration_root / migration).read_text(encoding="utf-8"))
-        conn.execute("INSERT INTO candidate_episode VALUES ('c1', 'ABC', 'NSE', 'breakout')")
+        conn.execute(
+            """INSERT INTO candidate_episode VALUES (
+                'c1', 'ABC', 'NSE', 'breakout', 'qualified_breakout', 'snapshot-admission',
+                '["qualified_breakout","rank_threshold"]',
+                '[{"rule":"qualified_breakout","passed":true,"source_observation_ids":["obs-breakout"]}]'
+            )"""
+        )
         conn.execute(
             """INSERT INTO candidate_decision_context VALUES (
-                'd1', 'c1', '2026-01-02 10:00:00', 'LOCKED', 'stage_2', 'stage_2', 'bull'
+                'd1', 'c1', '2026-01-02 10:00:00', 'LOCKED', 'stage_2', 'stage_2', 'bull',
+                'snapshot-decision', 'stage_1', 'transition_1_to_2', 0.25,
+                'sector_stage_1_improving', 'stage_1_improving_blocked_v1'
             )"""
         )
         conn.execute("INSERT INTO pipeline_run VALUES ('run-real', 'completed')")
@@ -170,6 +204,16 @@ def test_copied_profile_derives_governance_and_readiness_evidence(tmp_path: Path
     assert rows[0]["authoritative_calibration_eligible"] is True
     assert rows[0]["correction_impact_status"] == "resolved"
     assert rows[0]["lookback_sessions"] == 5
+    assert rows[0]["policy_snapshot_id"] == "snapshot-decision"
+    assert rows[0]["admission_policy_snapshot_id"] == "snapshot-admission"
+    assert rows[0]["primary_admission_reason"] == "qualified_breakout"
+    assert json.loads(rows[0]["satisfied_admission_rules"]) == [
+        "qualified_breakout", "rank_threshold"
+    ]
+    assert json.loads(rows[0]["rule_evaluations"])[0]["source_observation_ids"] == [
+        "obs-breakout"
+    ]
+    assert rows[0]["sector_gate_cohort"] == "stage_1_improving_blocked_v1"
 
     output = tmp_path / "out"
     result = run_build(
@@ -179,6 +223,8 @@ def test_copied_profile_derives_governance_and_readiness_evidence(tmp_path: Path
     manifest = json.loads((output / "phase3c5_calibration_manifest.json").read_text())
     assert manifest["readiness_evidence"]["operator_migrations_applied"] is True
     assert manifest["readiness_evidence"]["real_phase3b_history_present"] is True
+    assert manifest["policy_snapshot_ids"] == ["snapshot-decision"]
+    assert manifest["query_or_builder_version"] == "phase3c5-calibration-builder-v1.1"
     assert "OPERATOR_MIGRATIONS_NOT_APPLIED" not in result["limitations"]
     assert "EMPTY_REAL_PHASE3B_HISTORY" not in result["limitations"]
 

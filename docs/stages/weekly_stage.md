@@ -2,7 +2,7 @@
 
 - **Purpose:** Define Phase 3B full-universe stock/sector structural coverage and light discovery.
 - **Audience:** Operators and engineers validating structural visibility.
-- **Last verified:** 2026-07-15
+- **Last verified:** 2026-07-16
 - **Source of truth:** `domains/opportunities/coverage.py` and `pipeline/stages/weekly_stage.py`.
 
 ---
@@ -15,7 +15,17 @@ Start with the [System Guide](../SYSTEM_GUIDE.md).
 
 The stage writes `weekly_stock_stage_universe`, `weekly_sector_stage_universe`, `weekly_stage_exclusions`, `light_pattern_scan`, `stage_promotion_candidates`, and `weekly_stage_summary`. Append-only stock and sector observations live in `control_plane.duckdb`; the legacy mutable `ohlcv.weekly_stage_snapshot` is unchanged.
 
-Missing sector mapping excludes a stock from sector breadth but not stock classification. Sector structure uses constituent breadth and coverage, never sector rank. Historical membership cannot be reconstructed from latest-only master data. Phase 3C-1 records each new master-data mapping as `OBSERVED_AT_RUN` for that session and prefers an effective `POINT_IN_TIME_VERIFIED` interval when one exists. `LATEST_ONLY_BACKFILL` membership is quarantined from authoritative sector aggregation.
+Missing sector mapping excludes a stock from sector breadth but not stock
+classification. Current mapping uses `masterdata.symbols` as primary and the
+NSE `stock_details` industry group only for symbols absent from the primary or
+carrying a placeholder sector. Primary/fallback conflicts are reported without
+overwriting `symbols`; duplicate fallback conflicts are omitted as ambiguous.
+Sector structure uses constituent breadth and coverage, never sector rank.
+Historical membership cannot be reconstructed from latest-only master data.
+Phase 3C-1 records each new master-data mapping as `OBSERVED_AT_RUN` for that
+session and prefers an effective `POINT_IN_TIME_VERIFIED` interval when one
+exists. `LATEST_ONLY_BACKFILL` membership is quarantined from authoritative
+sector aggregation.
 
 ## Entrypoints
 
@@ -71,6 +81,9 @@ later correction cannot repaint an earlier gate decision.
 ## DQ
 
 Invalid OHLCV, insufficient history, illiquidity, and missing sector mappings are explicit exclusions. Low sector constituent coverage returns `UNKNOWN`.
+`weekly_stage_summary` reports `sector_mapping_symbols`,
+`sector_mapping_missing`, `sector_mapping_coverage_ratio`, and source warnings
+so mapping regressions are directly observable.
 
 ## Failure modes
 

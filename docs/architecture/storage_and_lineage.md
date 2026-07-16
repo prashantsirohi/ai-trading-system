@@ -169,6 +169,15 @@ summary artifacts, in admission identity, and in dedicated nullable columns on
 and idempotency identities, so legacy rows and pre-037 replay hashes are
 unchanged.
 
+Phase 3C-5 copied-realistic builds project the decision-context snapshot as
+`policy_snapshot_id` and the episode-open snapshot as
+`admission_policy_snapshot_id` into every calibration artifact row. They also
+carry the episode's canonical structured admission JSON and A2 sector-gate
+cohort fields. The immutable manifest lists distinct decision-time snapshot
+IDs, while Phase 4 read models expose snapshot and primary-admission coverage.
+Copies predating migrations 037/041 remain readable with null provenance and a
+fail-closed migration-readiness limitation.
+
 Migration 038 extends `candidate_decision_context` with nullable completed-week
 sector-gate evidence and taxonomy columns. These columns are also outside the
 semantic payload and idempotency identity; the actual decision blockers remain

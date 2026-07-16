@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
@@ -7,6 +8,7 @@ import pandas as pd
 from ai_trading_system.domains.opportunities.coverage import (
     build_sector_coverage,
     build_stage_coverage,
+    load_sector_mapping,
     persist_stage_history,
     read_stock_stage_as_of,
 )
@@ -27,6 +29,54 @@ def _daily(symbol: str, start: float) -> pd.DataFrame:
         "close": close,
         "volume": 1_000_000,
     })
+
+
+def test_sector_mapping_uses_stock_details_only_for_primary_gaps(tmp_path: Path) -> None:
+    path = tmp_path / "masterdata.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE symbols(symbol_id TEXT, sector TEXT, industry TEXT)")
+        conn.executemany(
+            "INSERT INTO symbols VALUES (?, ?, ?)",
+            [("PRIMARY", "Banks", "Private Bank"), ("UNKNOWN", "Unknown", "Unknown")],
+        )
+        conn.execute(
+            'CREATE TABLE stock_details(Symbol TEXT, "Industry Group" TEXT, Sector TEXT, exchange TEXT)'
+        )
+        conn.executemany(
+            "INSERT INTO stock_details VALUES (?, ?, ?, ?)",
+            [
+                ("PRIMARY", "Finance", "Financial Services", "NSE"),
+                ("UNKNOWN", "Consumer Durables", "Consumer", "NSE"),
+                ("FALLBACK", "Construction", "Infrastructure", "NSE"),
+                ("BSEONLY", "Metals", "Commodities", "BSE"),
+            ],
+        )
+
+    mapping, warnings = load_sector_mapping(path)
+
+    assert mapping["PRIMARY"] == ("banks", "Banks")
+    assert mapping["UNKNOWN"] == ("consumer_durables", "Consumer Durables")
+    assert mapping["FALLBACK"] == ("construction", "Construction")
+    assert "BSEONLY" not in mapping
+    assert "sector_mapping_stock_details_fallback:2" in warnings
+    assert "sector_mapping_source_conflicts:1" in warnings
+
+
+def test_sector_mapping_quarantines_ambiguous_fallback_rows(tmp_path: Path) -> None:
+    path = tmp_path / "masterdata.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            'CREATE TABLE stock_details(Symbol TEXT, "Industry Group" TEXT, exchange TEXT)'
+        )
+        conn.executemany(
+            "INSERT INTO stock_details VALUES (?, ?, 'NSE')",
+            [("AMBIG", "Banks"), ("AMBIG", "Finance")],
+        )
+
+    mapping, warnings = load_sector_mapping(path)
+
+    assert "AMBIG" not in mapping
+    assert "sector_mapping_source_ambiguous:1" in warnings
 
 
 def test_full_universe_not_reduced_by_rank_and_history_is_idempotent(tmp_path: Path) -> None:

@@ -296,6 +296,8 @@ class CalibrationSummaryResponse(BaseModel):
     stage_coverage: dict[str, Any] = Field(default_factory=dict)
     scan_tier_coverage: dict[str, int] = Field(default_factory=dict)
     setup_family_coverage: dict[str, int] = Field(default_factory=dict)
+    policy_snapshot_coverage: dict[str, int] = Field(default_factory=dict)
+    admission_reason_coverage: dict[str, int] = Field(default_factory=dict)
     policy_version: str | None = None
     formal_verdict: str | None = None
     phase4_development_ready: bool | None = None
@@ -315,6 +317,7 @@ class CalibrationManifestResponse(BaseModel):
     row_counts: dict[str, int] = Field(default_factory=dict)
     date_bounds: dict[str, Any] = Field(default_factory=dict)
     reproducibility_status: str | None = None
+    policy_snapshot_ids: list[str] = Field(default_factory=list)
 
 
 class PerformanceSummaryResponse(BaseModel):

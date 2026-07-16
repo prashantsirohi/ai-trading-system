@@ -165,6 +165,17 @@ class WeeklyStageCoverageStage:
             "light_pattern_scanned": int(len(light)),
             "stage_promoted_candidates": int(len(promotions)),
             "weekly_lock": bool(locked),
+            "sector_mapping_symbols": int(len(mapping)),
+            "sector_mapping_missing": int(
+                exclusions.get("reason", pd.Series(dtype=str)).eq(
+                    "missing_sector_mapping"
+                ).sum()
+            ),
+            "sector_mapping_coverage_ratio": round(
+                float(stock.get("sector_name", pd.Series(dtype=str)).notna().sum())
+                / len(stock),
+                6,
+            ) if len(stock) else 0.0,
             "mapping_warnings": mapping_warnings,
             **policy_snapshot.metadata(),
         }

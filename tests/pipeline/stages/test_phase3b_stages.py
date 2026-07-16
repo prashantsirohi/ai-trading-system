@@ -48,6 +48,8 @@ def test_weekly_coverage_routes_active_position_and_persists_history(tmp_path, m
     weekly_context = StageContext(project_root, ohlcv, "phase3b-test", run_date, "weekly_stage", 1, registry=registry, params=params)
     weekly = WeeklyStageCoverageStage().run(weekly_context)
     assert weekly.metadata["eligible_full_universe"] >= 4
+    assert weekly.metadata["sector_mapping_missing"] == 0
+    assert weekly.metadata["sector_mapping_coverage_ratio"] == 1.0
 
     rank_path = tmp_path / "ranked_signals.csv"
     pd.DataFrame({"symbol_id": ["AAA", "BBB"], "rank_position": [1, 2]}).to_csv(rank_path, index=False)

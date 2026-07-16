@@ -2,9 +2,9 @@
 
 - **Purpose:** Freeze the v1 opportunity design against its trading objective — Weinstein stage analysis plus pattern evidence to find strong candidates among (a) high-RS / momentum leaders and (b) stocks emerging from Stage 1 / base consolidation — and bind the five implementation amendments (A1–A5) that operator review required.
 - **Audience:** Operator (decision owner), developers, future agents.
-- **Last verified:** 2026-07-15
+- **Last verified:** 2026-07-16
 - **Source of truth:** `src/ai_trading_system/domains/opportunities/orchestration/` (`admission.py`, `matching.py`, `transitions.py`, `retention.py`, `contracts.py`, `service.py`), `src/ai_trading_system/domains/opportunities/coverage.py`, `src/ai_trading_system/domains/opportunities/registry/models.py`, and the [opportunity lifecycle contracts](../architecture/opportunity_lifecycle_contracts.md).
-- **Status:** Accepted — operator decisions D1–D7 were frozen on 2026-07-15; amendments A1–A5 were implemented, verified, documented, and migrated through control-plane migration 041 on 2026-07-16. Deferred calibration-loader threading remains tracked under the Phase 3C-5 loader fix and does not change the accepted v1 policy semantics.
+- **Status:** Accepted — operator decisions D1–D7 were frozen on 2026-07-15; amendments A1–A5 were implemented, verified, documented, and migrated through control-plane migration 041 on 2026-07-16. The Phase 3C-5 loader follow-up now threads A2/A3/A4 provenance into calibration artifacts and Phase 4 read models; the shadow campaign remains operationally pending.
 
 ---
 
@@ -111,7 +111,13 @@ Blocked early entries must be distinguishable by cause; these cohorts have diffe
 
 First question the shadow campaign must answer: *how many provisional S1→S2 candidates with strong stock-level evidence were blocked solely by the sector gate (by taxonomy cohort), and what were their forward outcomes?* If the blocked Stage-2-pending cohort outperforms, Option B's haircuts get calibrated and adopted as `lifecycle-policy-v2`.
 
-The sector-mapping coverage gap (77 unmatched symbols in the first real session) is design-critical: under the hard gate, unmapped sectors suppress the early path silently. Fixing mapping coverage precedes any conclusion from the calibration question.
+The first real session exposed 77 unmatched symbols, a design-critical gap
+because the hard gate would suppress their early path. The 2026-07-16 mapping
+fix preserves `masterdata.symbols` as primary, fills only missing/placeholder
+NSE mappings from masterdata `stock_details`, and surfaces conflicts and
+ambiguities. A read-only real-data canary mapped all 1,207 stage-eligible
+symbols (`sector_mapping_coverage_ratio = 1.0`, zero missing mappings). Mapping
+coverage must remain at this level before drawing calibration conclusions.
 
 ---
 
@@ -243,7 +249,9 @@ A crash must never leave both episodes open, or the old episode closed without i
 > with resolver, reachability, rule-matrix, persistence, and replay tests.
 > `lifecycle-policy-v2` remains reserved for the pre-registered future
 > calibrated size-haircut policy. Migration 038 was applied to the operator
-> store on 2026-07-16. Pending: the shadow campaign itself.
+> store on 2026-07-16. The sector-mapping source gap was closed with a
+> conflict-aware `stock_details` fallback and explicit coverage metrics.
+> Pending: the shadow campaign itself.
 
 - The early-trigger sector check consumes the **latest completed-week locked sector snapshot**; the current incomplete-week provisional aggregation is never an input to the gate.
 - Implement the v1 rule table and blocker taxonomy in D3 verbatim, including the `sector_locked_snapshot_missing` explicit state.
@@ -258,8 +266,10 @@ A crash must never leave both episodes open, or the old episode closed without i
 > Phase 3 stages, dedicated nullable stamp columns (episode open/close,
 > transition, decision context), run-metadata audit events, and the approved
 > stage-failure interpretation are in code with tests. Migration 037 was
-> applied to the operator store on 2026-07-16. Pending: the deferred
-> calibration-sample stamping that follows the Phase 3C-5 loader fix.
+> applied to the operator store on 2026-07-16. Phase 3C-5 now stamps
+> decision-time and admission-time policy snapshot IDs into calibration rows
+> and exposes snapshot coverage through the immutable manifest and Phase 4
+> read models.
 
 Canonical fingerprint:
 
@@ -295,8 +305,10 @@ Runtime threshold overrides remain possible mechanically but can no longer masqu
 > snapshot still creates the acknowledged deploy boundary. `observed_value`
 > and `threshold` are named dictionaries; `source_observation_ids` currently
 > carry bundle-level row provenance because evidence items lack individual
-> IDs. Per-item provenance and calibration-loader threading remain deferred to
-> the pending Phase 3C-5 loader fix.
+> IDs. Phase 3C-5 now carries the structured fields into calibration artifacts
+> and Phase 4 coverage projections. Per-item provenance remains a future
+> evidence-contract enhancement; current bundle-level IDs are preserved
+> without inventing finer lineage.
 > Migration 041 was applied to the operator store on 2026-07-16.
 
 Two-step admission:
@@ -345,6 +357,6 @@ the counters until the next observed session.
 ## Consequences
 
 - v1 is frozen as: **breakout-only, long-only, family-pure, strict on provisional entries, reproducible, calibration-ready.** Momentum admission is watchlist-semantics; pullback entries and sector-gate haircuts are deferred behind pre-registered measurements, not discarded.
-- Implementation scope created by this ADR: A1 (registry relation + orchestration transaction), A2 (sector-gate temporal semantics + taxonomy), A3 (policy fingerprint + enforcement), A4 (admission refactor + persistence), A5 (session counters). A2 and A3 gate the usefulness of the shadow campaign and should land first; the early-entry path is currently unreachable (A2) and history produced without content-bound policy versions is not safely comparable (A3).
-- The sector-mapping coverage gap (77 unmatched symbols) is elevated to design-critical: under the frozen hard gate it silently disables the early-entry path.
+- Implementation scope created by this ADR: A1 (registry relation + orchestration transaction), A2 (sector-gate temporal semantics + taxonomy), A3 (policy fingerprint + enforcement), A4 (admission refactor + persistence), A5 (session counters). All five amendments and their calibration-loader follow-up are implemented; the shadow campaign is the remaining operational step.
+- Sector-mapping coverage remains design-critical under the frozen hard gate. The initial 77-symbol gap is resolved, directly metered, and verified at 100% across the current stage-eligible real-data universe.
 - Documentation propagation on acceptance: the contracts doc gains the `MOMENTUM_LEADER` watch-source and `PULLBACK_REENTRY` reserved-family declarations, the `LONG_ONLY` scope declaration, and the completed-week sector-gate semantics; the shadow-orchestration doc gains the A1 supersession flow.

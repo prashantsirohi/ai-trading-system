@@ -83,25 +83,123 @@ def load_daily_universe(
 
 
 def load_sector_mapping(master_db_path: Path) -> tuple[dict[str, tuple[str, str]], list[str]]:
-    """Return latest-only observed sector mapping and its limitations."""
+    """Return latest-only observed sector mapping and its limitations.
+
+    ``symbols`` is the primary current master. ``stock_details`` is a governed
+    NSE metadata source with broader historical/security coverage and supplies
+    only missing or placeholder primary mappings. Conflicts never overwrite the
+    primary source and remain visible in stage warnings.
+    """
     if not master_db_path.exists():
         return {}, ["masterdata_missing"]
     conn = sqlite3.connect(str(master_db_path))
     try:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(symbols)").fetchall()}
-        if not columns:
-            return {}, ["symbols_table_missing"]
-        sector_expr = "COALESCE(sector, industry, '')" if "industry" in columns else "COALESCE(sector, '')"
-        rows = conn.execute(
-            f"SELECT UPPER(symbol_id), {sector_expr} FROM symbols WHERE symbol_id IS NOT NULL"
-        ).fetchall()
-        mapping = {
-            str(symbol).strip().upper(): (str(sector).strip().lower().replace(" ", "_"), str(sector).strip())
-            for symbol, sector in rows if str(sector or "").strip()
+        tables = {
+            str(row[0]).lower()
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
         }
-        return mapping, ["sector_membership_latest_only"]
+        warnings = ["sector_membership_latest_only"]
+        primary: dict[str, tuple[str, str]] = {}
+        primary_conflicts: set[str] = set()
+        if "symbols" in tables:
+            primary, primary_conflicts = _load_sector_source(
+                conn,
+                table="symbols",
+                symbol_candidates=("symbol_id", "symbol"),
+                sector_candidates=("sector", "industry"),
+            )
+        else:
+            warnings.append("symbols_table_missing")
+
+        fallback: dict[str, tuple[str, str]] = {}
+        fallback_conflicts: set[str] = set()
+        if "stock_details" in tables:
+            fallback, fallback_conflicts = _load_sector_source(
+                conn,
+                table="stock_details",
+                symbol_candidates=("Symbol", "symbol", "symbol_id"),
+                sector_candidates=("Industry Group", "industry_group", "Sector", "Industry"),
+                exchange="NSE",
+            )
+        else:
+            warnings.append("stock_details_table_missing")
+
+        source_conflicts = {
+            symbol
+            for symbol in primary.keys() & fallback.keys()
+            if primary[symbol] != fallback[symbol]
+        }
+        fallback_only = fallback.keys() - primary.keys()
+        mapping = {**fallback, **primary}
+        if fallback_only:
+            warnings.append(f"sector_mapping_stock_details_fallback:{len(fallback_only)}")
+        ambiguous = primary_conflicts | fallback_conflicts
+        for symbol in ambiguous:
+            mapping.pop(symbol, None)
+        if ambiguous:
+            warnings.append(f"sector_mapping_source_ambiguous:{len(ambiguous)}")
+        if source_conflicts:
+            warnings.append(f"sector_mapping_source_conflicts:{len(source_conflicts)}")
+        return mapping, warnings
     finally:
         conn.close()
+
+
+def _load_sector_source(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    symbol_candidates: tuple[str, ...],
+    sector_candidates: tuple[str, ...],
+    exchange: str | None = None,
+) -> tuple[dict[str, tuple[str, str]], set[str]]:
+    """Load one trusted internal SQLite table without hiding duplicate conflicts."""
+    columns = {
+        str(row[1]).lower(): str(row[1])
+        for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()  # noqa: S608
+    }
+    symbol_column = next(
+        (columns[item.lower()] for item in symbol_candidates if item.lower() in columns),
+        None,
+    )
+    sector_columns = [
+        columns[item.lower()] for item in sector_candidates if item.lower() in columns
+    ]
+    if symbol_column is None or not sector_columns:
+        return {}, set()
+    exchange_column = columns.get("exchange")
+    selected = [symbol_column, *sector_columns]
+    query = "SELECT " + ", ".join(f'"{column}"' for column in selected)
+    query += f' FROM "{table}"'
+    params: list[str] = []
+    if exchange is not None and exchange_column is not None:
+        query += f' WHERE UPPER(TRIM("{exchange_column}")) = ?'
+        params.append(exchange.upper())
+    rows = conn.execute(query, params).fetchall()
+    mapping: dict[str, tuple[str, str]] = {}
+    conflicts: set[str] = set()
+    for row in rows:
+        symbol = str(row[0] or "").strip().upper()
+        sector = next((_sector_pair(value) for value in row[1:] if _usable_sector(value)), None)
+        if not symbol or sector is None:
+            continue
+        if symbol in mapping and mapping[symbol] != sector:
+            conflicts.add(symbol)
+            continue
+        mapping[symbol] = sector
+    return mapping, conflicts
+
+
+def _usable_sector(value: Any) -> bool:
+    text = str(value or "").strip()
+    return bool(text) and text.lower() not in {"unknown", "other", "unclassified", "n/a", "na"}
+
+
+def _sector_pair(value: Any) -> tuple[str, str]:
+    name = " ".join(str(value).split())
+    return name.lower().replace(" ", "_"), name
 
 
 def is_completed_trading_week(run_date: date, master_db_path: Path) -> bool:
