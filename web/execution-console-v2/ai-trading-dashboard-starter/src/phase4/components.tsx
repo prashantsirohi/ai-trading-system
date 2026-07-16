@@ -93,12 +93,59 @@ export function PaginationControls({ meta, onNext, onPrevious, canPrevious }: { 
   return <nav className="pagination" aria-label="Pagination"><button type="button" disabled={!canPrevious} onClick={onPrevious}>Previous page</button><span>Limit {meta.pagination.limit}</span><button type="button" disabled={!meta.pagination.has_more} onClick={onNext}>Next page</button></nav>;
 }
 
+export interface FilterOption { value: string; label: string }
+export interface FilterSpec {
+  key: string;
+  label: string;
+  kind?: 'select' | 'text' | 'date';
+  options?: readonly FilterOption[];
+  placeholder?: string;
+  uppercase?: boolean;
+}
+
+export function FilterBar({ filters, title = 'Filter evidence' }: { filters: readonly FilterSpec[]; title?: string }) {
+  const [params, setParams] = useSearchParams();
+  const idPrefix = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const activeCount = filters.filter((filter) => Boolean(params.get(filter.key))).length;
+  const update = (filter: FilterSpec, raw: string) => {
+    const next = new URLSearchParams(params);
+    const value = filter.uppercase ? raw.toUpperCase() : raw;
+    value ? next.set(filter.key, value) : next.delete(filter.key);
+    next.delete('cursor');
+    setParams(next);
+  };
+  const clear = () => {
+    const next = new URLSearchParams(params);
+    filters.forEach((filter) => next.delete(filter.key));
+    next.delete('cursor');
+    setParams(next);
+  };
+  return <section className="filter-panel" aria-label={title}>
+    <div className="filter-panel-heading"><div><strong>{title}</strong><span>{activeCount ? `${activeCount} active` : 'Showing all available records'}</span></div><button type="button" disabled={!activeCount} onClick={clear}>Clear filters</button></div>
+    <div className="filter-grid">{filters.map((filter) => {
+      const id = `filter-${idPrefix}-${filter.key}`;
+      const value = params.get(filter.key) ?? '';
+      return <label key={filter.key} htmlFor={id}><span>{filter.label}</span>{filter.kind === 'select' ? <select id={id} value={value} onChange={(event) => update(filter, event.target.value)}><option value="">All</option>{filter.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <input id={id} type={filter.kind === 'date' ? 'date' : 'search'} value={value} placeholder={filter.placeholder} onChange={(event) => update(filter, event.target.value)} />}</label>;
+    })}</div>
+  </section>;
+}
+
 export interface Column { key: string; label: string; render?: (value: unknown, row: JsonRecord) => ReactNode }
-export function DataTable({ rows, columns, rowKey, caption, onRow }: { rows: JsonRecord[]; columns: Column[]; rowKey: (row: JsonRecord, index: number) => string; caption: string; onRow?: (row: JsonRecord) => void }) {
+export function DataTable({ rows, columns, rowKey, caption, onRow, clientPageSize = 0 }: { rows: JsonRecord[]; columns: Column[]; rowKey: (row: JsonRecord, index: number) => string; caption: string; onRow?: (row: JsonRecord) => void; clientPageSize?: number }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(0);
   const visible = useMemo(() => columns.filter((column) => !hidden.has(column.key)), [columns, hidden]);
+  const filtered = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => columns.some((column) => text(row[column.key], '').toLowerCase().includes(needle)));
+  }, [columns, rows, search]);
+  const pageCount = clientPageSize > 0 ? Math.max(1, Math.ceil(filtered.length / clientPageSize)) : 1;
+  const safePage = Math.min(page, pageCount - 1);
+  const displayed = clientPageSize > 0 ? filtered.slice(safePage * clientPageSize, (safePage + 1) * clientPageSize) : filtered;
   if (!rows.length) return <EmptyState />;
-  return <><details className="column-picker"><summary>Column visibility</summary><div>{columns.map((column) => <label key={column.key}><input type="checkbox" checked={!hidden.has(column.key)} onChange={() => setHidden((current) => { const next = new Set(current); next.has(column.key) ? next.delete(column.key) : next.add(column.key); return next; })} />{column.label}</label>)}</div></details><div className="table-wrap" tabIndex={0}><table><caption className="sr-only">{caption}</caption><thead><tr>{visible.map((column) => <th key={column.key} scope="col">{column.label}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={rowKey(row, index)} tabIndex={onRow ? 0 : undefined} className={onRow ? 'clickable' : ''} onClick={() => onRow?.(row)} onKeyDown={(event) => { if (onRow && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onRow(row); } }}>{visible.map((column) => <td key={column.key}>{column.render ? column.render(row[column.key], row) : text(row[column.key])}</td>)}</tr>)}</tbody></table></div></>;
+  return <><div className="table-tools"><label htmlFor={`table-search-${caption.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`}>Search displayed rows<input id={`table-search-${caption.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`} type="search" value={search} placeholder="Symbol, status, ID…" onChange={(event) => { setSearch(event.target.value); setPage(0); }} /></label><span>{filtered.length === rows.length ? `${rows.length} records` : `${filtered.length} of ${rows.length} records`}</span></div><details className="column-picker"><summary>Column visibility</summary><div>{columns.map((column) => <label key={column.key}><input type="checkbox" checked={!hidden.has(column.key)} onChange={() => setHidden((current) => { const next = new Set(current); next.has(column.key) ? next.delete(column.key) : next.add(column.key); return next; })} />{column.label}</label>)}</div></details>{displayed.length ? <div className="table-wrap" tabIndex={0}><table><caption className="sr-only">{caption}</caption><thead><tr>{visible.map((column) => <th key={column.key} scope="col">{column.label}</th>)}</tr></thead><tbody>{displayed.map((row, index) => <tr key={rowKey(row, safePage * clientPageSize + index)} tabIndex={onRow ? 0 : undefined} className={onRow ? 'clickable' : ''} onClick={() => onRow?.(row)} onKeyDown={(event) => { if (onRow && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onRow(row); } }}>{visible.map((column) => <td key={column.key}>{column.render ? column.render(row[column.key], row) : text(row[column.key])}</td>)}</tr>)}</tbody></table></div> : <EmptyState title="No matching records" detail="Adjust or clear the table search to restore available rows." />}{clientPageSize > 0 && pageCount > 1 ? <nav className="pagination" aria-label={`${caption} pages`}><button type="button" disabled={safePage === 0} onClick={() => setPage(Math.max(0, safePage - 1))}>Previous</button><span>Page {safePage + 1} of {pageCount}</span><button type="button" disabled={safePage + 1 >= pageCount} onClick={() => setPage(Math.min(pageCount - 1, safePage + 1))}>Next</button></nav> : null}</>;
 }
 
 const navItems = [

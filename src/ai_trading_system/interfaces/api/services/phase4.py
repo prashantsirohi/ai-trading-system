@@ -63,6 +63,29 @@ def _unique_limitations(values: list[str] | tuple[str, ...]) -> list[str]:
     return list(dict.fromkeys(str(value) for value in values if value))
 
 
+def _stage_projection(scope: str, source: dict[str, Any]) -> dict[str, Any]:
+    """Map governed canonical stage payloads onto the stable Phase 4 API schema."""
+    row = dict(source)
+    entity_id = row.get("symbol_id") if scope == "stock" else row.get("sector_id")
+    if not row.get("observation_id"):
+        identity = {
+            "scope": scope,
+            "exchange": row.get("exchange"),
+            "entity_id": entity_id,
+            "as_of": row.get("as_of"),
+            "source_week_end": row.get("source_week_end"),
+            "source_artifact_hash": row.get("source_artifact_hash"),
+        }
+        row["observation_id"] = "stage-" + hashlib.sha256(
+            json.dumps(identity, sort_keys=True, default=str, separators=(",", ":")).encode()
+        ).hexdigest()[:24]
+    if row.get("stage_confidence") is None:
+        row["stage_confidence"] = row.get("stage_confidence_score")
+    if row.get("membership_trust") is None:
+        row["membership_trust"] = row.get("sector_membership_trust")
+    return row
+
+
 class SystemReadService(Protocol):
     def readiness(self) -> dict[str, Any]: ...
     def limitations(self) -> list[dict[str, Any]]: ...
@@ -260,6 +283,7 @@ class Phase4ReadService:
             self._dynamic_conflicts = [item for item in self._dynamic_conflicts if item["conflict_id"] != view["conflict_id"]]
             self._dynamic_conflicts.append(view)
             rows = []
+        rows = [_stage_projection(scope, row) for row in rows]
         for conflict in self.access.stage_conflicts:
             view = self._stage_conflict(conflict)
             self._dynamic_conflicts = [item for item in self._dynamic_conflicts if item["conflict_id"] != view["conflict_id"]]

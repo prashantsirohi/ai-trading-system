@@ -110,6 +110,19 @@ class ReadOnlyDataAccess:
         adapter = _CanonicalReaderAdapter(self)
         result: list[dict[str, Any]] = []
         self.stage_conflicts = []
+        try:
+            frame = read_stock_stage_as_of(
+                adapter, as_of=as_of.isoformat(), available_at=as_of,
+                exchange="NSE", symbols=entities,
+            ) if scope == "stock" else read_sector_stage_as_of(
+                adapter, as_of=as_of.isoformat(), available_at=as_of,
+                sector_ids=entities,
+            )
+            return frame.to_dict(orient="records")
+        except StageGovernanceConflictError:
+            # A batch conflict does not identify every unaffected entity. Fall
+            # back to isolated reads only for the exceptional conflict path.
+            pass
         for entity in entities:
             try:
                 frame = read_stock_stage_as_of(

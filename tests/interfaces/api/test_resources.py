@@ -1,3 +1,5 @@
+from ai_trading_system.interfaces.api.services.phase4 import _stage_projection
+
 from .conftest import HEADERS
 
 
@@ -7,6 +9,19 @@ def test_stock_list_and_detail(client):
     detail = client.get("/api/v1/stocks/AAA", headers=HEADERS)
     assert detail.status_code == 200
     assert detail.json()["data"]["governance_status"] == "AUTHORITATIVE"
+
+
+def test_canonical_stage_payload_is_projected_to_api_contract():
+    projected = _stage_projection("stock", {
+        "exchange": "NSE", "symbol_id": "ABC", "as_of": "2026-07-15",
+        "source_week_end": "2026-07-14", "source_artifact_hash": "abc123",
+        "effective_stage": "stage_2_advancing", "stage_status": "provisional",
+        "stage_confidence_score": 80.0, "sector_membership_trust": "OBSERVED_AT_RUN",
+    })
+    assert projected["observation_id"].startswith("stage-")
+    assert projected["stage_confidence"] == 80.0
+    assert projected["membership_trust"] == "OBSERVED_AT_RUN"
+    assert _stage_projection("stock", projected)["observation_id"] == projected["observation_id"]
 
 
 def test_missing_detail_is_typed_404(client):
@@ -63,4 +78,3 @@ def test_every_required_endpoint_exists(client):
     assert len(paths) == 41
     assert "/api/v1/governance/membership-history" in paths
     assert "/api/v1/readiness/checks" in paths
-
