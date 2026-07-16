@@ -403,6 +403,10 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
     "pipeline_alert_incident": frozenset({"incident_id", "dedupe_key", "status"}),
     "position_recovery_proposal": frozenset({"recovery_proposal_id", "proposal_status"}),
     "position_recovery_action": frozenset({"recovery_action_id", "recovery_proposal_id"}),
+    "policy_version_registry": frozenset({"version_label", "policy_snapshot_id", "content_json"}),
+    "candidate_episode": frozenset({"candidate_id", "policy_snapshot_id", "closed_policy_snapshot_id"}),
+    "candidate_transition": frozenset({"transition_id", "policy_snapshot_id"}),
+    "candidate_decision_context": frozenset({"decision_context_id", "policy_snapshot_id"}),
 }
 
 

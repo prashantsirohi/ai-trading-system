@@ -21,6 +21,12 @@ from ai_trading_system.domains.opportunities.contracts import (
 from ai_trading_system.domains.opportunities.registry.service import (
     OpportunityRegistryService,
 )
+from ai_trading_system.domains.opportunities.policy_snapshot import (
+    PolicyVersionContentMismatchError,
+    append_policy_snapshot_event,
+    compute_policy_snapshot,
+    register_or_verify_policy_snapshots,
+)
 from ai_trading_system.domains.opportunities.registry.store import (
     DuckDBOpportunityRegistryStore,
 )
@@ -61,6 +67,13 @@ class ScanRouterStage:
         config = ScanRoutingConfig.from_mapping(context.params)
         if config.mode is OpportunityScanRoutingMode.OFF:
             return StageResult(metadata={"status": "skipped", "mode": "off"})
+        policy_snapshot = compute_policy_snapshot(context.params)
+        if context.registry is not None:
+            try:
+                register_or_verify_policy_snapshots(context.registry, policy_snapshot, run_id=context.run_id)
+            except PolicyVersionContentMismatchError as exc:
+                raise ScanRouterStageError(str(exc)) from exc
+            append_policy_snapshot_event(context.registry, policy_snapshot, run_id=context.run_id, stage_name=self.name)
         position_config = PositionMonitoringConfig.from_mapping(context.params)
         load_started = time.perf_counter_ns()
         stock_artifact = context.require_artifact(
@@ -442,6 +455,7 @@ class ScanRouterStage:
             coverage=coverage,
             alert_counts=alert_counts,
         )
+        summary.update(policy_snapshot.metadata())
         summary_path = context.write_json("scan_coverage_summary.json", summary)
         artifacts.append(
             StageArtifact.from_file(

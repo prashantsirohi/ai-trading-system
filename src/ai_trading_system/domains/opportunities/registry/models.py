@@ -68,6 +68,9 @@ class SourceLineage:
     source_artifact_type: str
     source_artifact_path: str
     source_artifact_hash: str
+    # ADR-0006 A3: composite policy snapshot for column-only stamping.
+    # Excluded from record identity and semantic payload hashes.
+    policy_snapshot_id: str | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -103,6 +106,8 @@ class CandidateEpisodeRecord:
     schema_version: str
     created_at: datetime
     updated_at: datetime
+    policy_snapshot_id: str | None = None
+    closed_policy_snapshot_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

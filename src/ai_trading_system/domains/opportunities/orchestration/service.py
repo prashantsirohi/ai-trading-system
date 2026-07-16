@@ -113,6 +113,7 @@ class OpportunityShadowOrchestrator:
         mode: OpportunityRegistryMode,
         config: OpportunityShadowConfig,
         ohlcv_db_path: Path | None = None,
+        policy_snapshot_id: str | None = None,
     ) -> OpportunityShadowRunResult:
         if mode is OpportunityRegistryMode.OFF:
             return OpportunityShadowRunResult(
@@ -315,7 +316,7 @@ class OpportunityShadowOrchestrator:
                 if episode.exchange == bundle.exchange
                 and episode.symbol_id == bundle.symbol_id
             ]
-            admission = evaluate_admission(bundle, config)
+            admission = evaluate_admission(bundle, config, policy_snapshot_id)
             recovery = False
             episode = None
             compatibility = None
@@ -435,7 +436,7 @@ class OpportunityShadowOrchestrator:
                 )
                 continue
 
-            lineage = _combined_lineage(bundle, run_id, stage_attempt)
+            lineage = _combined_lineage(bundle, run_id, stage_attempt, policy_snapshot_id)
             episode_request = None
             if episode is None:
                 if recovery:
@@ -1261,7 +1262,8 @@ def _descriptor_optional(
 
 
 def _combined_lineage(
-    bundle: OpportunitySourceBundle, run_id: str, attempt: int
+    bundle: OpportunitySourceBundle, run_id: str, attempt: int,
+    policy_snapshot_id: str | None = None,
 ) -> SourceLineage:
     hashes = sorted(source.artifact_hash for source in bundle.source_lineage)
     digest = hashlib.sha256("|".join(hashes).encode()).hexdigest()
@@ -1276,6 +1278,7 @@ def _combined_lineage(
         "reconciled_bundle",
         "|".join(paths) or "reconciled:unknown",
         digest or hashlib.sha256(b"unknown").hexdigest(),
+        policy_snapshot_id=policy_snapshot_id,
     )
 
 

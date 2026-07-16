@@ -143,6 +143,8 @@ class DuckDBOpportunityRegistryStore:
             closed_run_id=row["closed_run_id"], closed_stage=row["closed_stage"],
             contract_version=row["contract_version"], schema_version=row["schema_version"],
             created_at=_aware(row["created_at"]), updated_at=_aware(row["updated_at"]),
+            policy_snapshot_id=row.get("policy_snapshot_id"),
+            closed_policy_snapshot_id=row.get("closed_policy_snapshot_id"),
         )
 
     def _get_episode(self, conn: duckdb.DuckDBPyConnection, candidate_id: str) -> CandidateEpisodeRecord | None:
@@ -305,13 +307,14 @@ class DuckDBOpportunityRegistryStore:
                 candidate_id, setup_id, symbol_id, exchange, episode_number, episode_type,
                 setup_family, admission_identity, episode_started_at, episode_status,
                 opening_reason, created_run_id, created_stage, created_artifact_hash,
-                contract_version, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?)
+                contract_version, schema_version, policy_snapshot_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?)
             """,
             [candidate_id, setup_id, symbol, exchange, episode_number, request.episode_type,
              family, request.admission_identity.strip(), _db_time(request.episode_started_at),
              request.opening_reason, request.lineage.run_id, request.lineage.stage_name,
-             request.lineage.source_artifact_hash, request.contract_version, REGISTRY_SCHEMA_VERSION],
+             request.lineage.source_artifact_hash, request.contract_version, REGISTRY_SCHEMA_VERSION,
+             request.lineage.policy_snapshot_id],
         )
         created = self._get_episode(conn, candidate_id)
         assert created is not None
@@ -372,10 +375,12 @@ class DuckDBOpportunityRegistryStore:
         conn.execute(
             """
             UPDATE candidate_episode SET episode_closed_at = ?, episode_status = ?, closing_reason = ?,
-                closed_run_id = ?, closed_stage = ?, updated_at = (current_timestamp AT TIME ZONE 'UTC')
+                closed_run_id = ?, closed_stage = ?, closed_policy_snapshot_id = ?,
+                updated_at = (current_timestamp AT TIME ZONE 'UTC')
             WHERE candidate_id = ?
             """,
-            [_db_time(closed_at), status.value, closing_reason, lineage.run_id, lineage.stage_name, candidate_id],
+            [_db_time(closed_at), status.value, closing_reason, lineage.run_id, lineage.stage_name,
+             lineage.policy_snapshot_id, candidate_id],
         )
         result = self._get_episode(conn, candidate_id)
         assert result is not None
@@ -687,12 +692,14 @@ class DuckDBOpportunityRegistryStore:
         )
         columns = ("transition_id", "candidate_id", "setup_id", "from_state", "to_state", "transition_reason",
                    "transitioned_at", "triggering_snapshot_id", "rule_version", "metadata_json", "run_id", "stage_name",
-                   "stage_attempt", "source_artifact_hash", "semantic_payload_hash", "idempotency_key")
+                   "stage_attempt", "source_artifact_hash", "policy_snapshot_id", "semantic_payload_hash",
+                   "idempotency_key")
         values = [record_id, observation.candidate_id, observation.setup_id, observation.from_state.value,
                   observation.to_state.value, reason, _db_time(observation.transitioned_at),
                   observation.triggering_snapshot_id, observation.rule_version, canonical_json(observation.metadata),
                   observation.lineage.run_id, observation.lineage.stage_name, observation.lineage.stage_attempt,
-                  observation.lineage.source_artifact_hash, semantic_hash, key]
+                  observation.lineage.source_artifact_hash, observation.lineage.policy_snapshot_id,
+                  semantic_hash, key]
         return self._insert_append(conn, table="candidate_transition", id_column="transition_id", record_id=record_id,
                                    candidate_id=observation.candidate_id, idempotency_key=key,
                                    semantic_hash=semantic_hash, columns=columns, values=values)
@@ -721,7 +728,7 @@ class DuckDBOpportunityRegistryStore:
                    "stage_classifier_version", "action_policy_version", "execution_policy_version", "portfolio_context_json",
                    "reasons_json", "blockers_json", "warnings_json", "next_required_event", "contract_version",
                    "decision_json", "run_id", "stage_name", "stage_attempt", "source_artifact_hash",
-                   "semantic_payload_hash", "idempotency_key")
+                   "policy_snapshot_id", "semantic_payload_hash", "idempotency_key")
         values = [record_id, d.candidate_id, d.setup_id, _db_time(d.decided_at), d.action.value, d.eligibility.value,
                   d.confidence, d.size_multiplier, c.decision_stage.value, c.decision_stage_status.value,
                   _db_time(c.decision_stage_as_of), c.decision_locked_stage.value, c.decision_provisional_stage.value,
@@ -732,7 +739,8 @@ class DuckDBOpportunityRegistryStore:
                   c.execution_policy_version, canonical_json(c.portfolio_context_summary), canonical_json(d.reasons),
                   canonical_json(d.blockers), canonical_json(d.warnings), d.next_required_event, c.contract_version,
                   canonical_json(payload), observation.lineage.run_id, observation.lineage.stage_name,
-                  observation.lineage.stage_attempt, observation.lineage.source_artifact_hash, semantic_hash, key]
+                  observation.lineage.stage_attempt, observation.lineage.source_artifact_hash,
+                  observation.lineage.policy_snapshot_id, semantic_hash, key]
         return self._insert_append(conn, table="candidate_decision_context", id_column="decision_context_id",
                                    record_id=record_id, candidate_id=d.candidate_id, idempotency_key=key,
                                    semantic_hash=semantic_hash, columns=columns, values=values)

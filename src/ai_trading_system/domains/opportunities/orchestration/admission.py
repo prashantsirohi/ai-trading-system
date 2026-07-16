@@ -8,7 +8,11 @@ from ai_trading_system.domains.opportunities.registry.identity import stable_dig
 from .contracts import AdmissionEvaluation, AdmissionReason, OpportunityShadowConfig, OpportunitySourceBundle, SetupFamily
 
 
-def evaluate_admission(bundle: OpportunitySourceBundle, config: OpportunityShadowConfig) -> AdmissionEvaluation:
+def evaluate_admission(
+    bundle: OpportunitySourceBundle,
+    config: OpportunityShadowConfig,
+    policy_snapshot_id: str | None = None,
+) -> AdmissionEvaluation:
     blockers: list[str] = []
     supporting: list[str] = []
     warnings: list[str] = []
@@ -64,5 +68,9 @@ def evaluate_admission(bundle: OpportunitySourceBundle, config: OpportunityShado
         "source_rows": sorted(bundle.source_row_identities),
         "artifact_hashes": sorted(source.artifact_hash for source in bundle.source_lineage),
         "rule_version": "admission-rules-v1",
+        # ADR-0006 A3: bind admission identity to the exact policy content used.
+        # Pre-A3 open episodes still match by setup family, so identity drift
+        # cannot open duplicate episodes.
+        "policy_snapshot_id": policy_snapshot_id,
     })
     return AdmissionEvaluation(True, reason, family, tuple(supporting), (), tuple(warnings), identity)

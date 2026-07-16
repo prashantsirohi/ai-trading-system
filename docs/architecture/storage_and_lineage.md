@@ -144,6 +144,31 @@ states are review-required and excluded from authoritative calibration by
 default. A copied operator store with no `weekly_stage` history is classified as
 `EMPTY_PRE_PHASE3B`, not as a governance defect.
 
+## Policy snapshot enforcement (ADR-0006 A3)
+
+Every semantic Phase 3 policy value — runtime-suppliable thresholds and
+single-sourced code constants alike — is fingerprinted per version label at
+stage start by `domains/opportunities/policy_snapshot.py`. Migration 037's
+`policy_version_registry` binds each label to exactly one canonical content
+hash. The `weekly_stage`, `scan_router`, and `opportunities` stages
+register-or-verify all labels in one transaction **before any stage-owned
+write**.
+
+A known label with different content raises
+`POLICY_VERSION_CONTENT_MISMATCH`, naming the changed fields and requiring a
+successor version label. Per the operator-approved interpretation of ADR-0006
+"startup fails": the mismatch fails **only the affected optional Phase 3
+shadow stage**, fail-closed and before it writes; the overall pipeline
+continues because Phase 3 never feeds execution or publish.
+
+The composite `policy_snapshot_id` is persisted in `pipeline_run`
+metadata (`policy_snapshot` audit event with per-label hashes), in shadow
+summary artifacts, in admission identity, and in dedicated nullable columns on
+`candidate_episode` (open and close), `candidate_transition`, and
+`candidate_decision_context`. The columns sit outside semantic payload JSON
+and idempotency identities, so legacy rows and pre-037 replay hashes are
+unchanged.
+
 ## Backup and mutation safety
 
 At minimum, back up OHLCV, control-plane, execution, candidate-tracker, master-data, fundamentals, and feature-store state before migrations or repairs. Treat `pipeline_runs/` as audit evidence even where upstream stores can reproduce some artifacts.

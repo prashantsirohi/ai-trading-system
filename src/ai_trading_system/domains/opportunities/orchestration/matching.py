@@ -18,6 +18,9 @@ _PROGRESSION = (
     SetupFamily.POST_BREAKOUT_FOLLOWTHROUGH.value,
 )
 
+# Public alias for the setup-family-v1 policy fingerprint (ADR-0006 A3).
+SETUP_FAMILY_PROGRESSION = _PROGRESSION
+
 
 def match_open_episode(
     *, exchange: str, symbol_id: str, setup_family: SetupFamily, as_of: datetime,

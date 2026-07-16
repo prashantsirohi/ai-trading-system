@@ -117,6 +117,12 @@ artifact rather than a permanently asserted production-blocker tuple.
   attempt completed. Failed-attempt files remain immutable forensic evidence but
   cannot feed retries, execution, or publishing. Registered artifacts advance
   through `written` → `dq_passed` → `promoted` lifecycle states.
+- Phase 3 policy content is version-bound: each policy label is registered with
+  a canonical content hash in `policy_version_registry` (migration 037), and a
+  label reappearing with different thresholds or constants fails that optional
+  shadow stage with `POLICY_VERSION_CONTENT_MISMATCH` before any stage-owned
+  write. Changing a policy value requires a successor version label. See
+  [ADR-0006](decisions/ADR-0006-entry-model-and-stage-policy-freeze.md).
 - Paper execution is the safe default. Do not enable live broker placement without explicit operator authorization, and do not describe the live path as production-certified.
 - New buys are checked against projected cumulative portfolio heat before
   submission. Risk reserved by earlier accepted buys in the same execution
@@ -246,7 +252,7 @@ backup byte-for-byte:
 ```bash
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.migrate_control_plane \
   --backup-dir "$DATA_ROOT/backups/<timestamp>" \
-  --from-migration 033 --to-migration 036 --apply
+  --from-migration 033 --to-migration 037 --apply
 ```
 
 `--apply-control-plane-migrations` is an explicit startup override for

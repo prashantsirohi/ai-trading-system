@@ -12,7 +12,7 @@
 | File | Owner stage / domain | Schema source | Notes |
 |---|---|---|---|
 | `data/ohlcv.duckdb` | Ingest stage (operational domain) | `domains/ingest/repository.py::initialize_ingest_duckdb` (+ `trust.py`, `delivery.py`, `masterdata.py`) | Catalog of OHLCV bars, snapshots, parquet pointers, masterdata, trust state. |
-| `data/control_plane.duckdb` | Pipeline orchestrator (writes governance) + several read paths | `src/ai_trading_system/pipeline/migrations/*.sql` (36 SQL files, applied by `pipeline/registry.py`) | Run lifecycle, DQ, artifacts, model registry, monitoring, optimizer, universe, pattern cache, opportunity history, alert incidents, and recovery proposals/actions. |
+| `data/control_plane.duckdb` | Pipeline orchestrator (writes governance) + several read paths | `src/ai_trading_system/pipeline/migrations/*.sql` (37 SQL files, applied by `pipeline/registry.py`) | Run lifecycle, DQ, artifacts, model registry, monitoring, optimizer, universe, pattern cache, opportunity history, alert incidents, recovery proposals/actions, and the policy version registry. |
 | `data/execution.duckdb` | Execute stage (`domains/execution/service.py`) | `domains/execution/store.py::ExecutionStore._init_db` | Orders, fills, trade journal, stops, drawdown snapshots. **Created by `ExecutionStore`** — default path is `<project_root>/data/execution.duckdb` (`store.py:29`). |
 | `data/research.duckdb` | Perf tracker stage + research perf-tracker API endpoints | `research/perf_tracker/schema.py::RANK_COHORT_DDL` | `rank_cohort_performance`. Path resolved via `research_db_path()` -> `paths.root_dir / "research.duckdb"` (`schema.py:55-60`). |
 | `data/research_ohlcv.duckdb` | Research-domain OHLCV (selected when `DATA_DOMAIN=research`) | `domains/ingest/repository.py` (same DDL as operational) | Isolation per `platform/db/paths.py:111`: ohlcv file name is `research_ohlcv.duckdb` for the research domain. |
@@ -747,6 +747,20 @@ Migration `036_opportunity_phase3c3_position_monitoring.sql` adds:
 
 These tables are control-plane only. Migration 036 does not alter the execution
 ledger and was not applied to the operator store as part of Phase 3C-3 work.
+
+Migration `037_policy_version_registry.sql` implements ADR-0006 Amendment A3:
+
+| Change | Purpose |
+|---|---|
+| `policy_version_registry` table | Binds each human-readable policy version label (`admission-rules-v1`, `lifecycle-policy-v1`, `scan-routing-policy-v2`, …) to exactly one canonical content hash plus the fingerprinted `content_json`. Phase 3 stages register-or-verify before any stage-owned write; a label reappearing with different content raises `POLICY_VERSION_CONTENT_MISMATCH` and fails only that optional shadow stage. |
+| `candidate_episode.policy_snapshot_id`, `candidate_episode.closed_policy_snapshot_id` | Nullable stamps of the composite policy snapshot at episode open and close. |
+| `candidate_transition.policy_snapshot_id` | Nullable stamp on each lifecycle transition. |
+| `candidate_decision_context.policy_snapshot_id` | Nullable stamp on each decision context. |
+
+The stamped columns live outside semantic payload JSON and outside idempotency
+identities, so legacy rows remain valid and pre-037 replay hashes are
+unchanged. `pipeline_run.metadata_json` additionally records a
+`policy_snapshot` audit event with the composite ID and per-label hashes.
 
 ## Phase 3C-5 schema boundary
 

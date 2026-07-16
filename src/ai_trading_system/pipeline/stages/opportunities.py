@@ -9,6 +9,12 @@ from pathlib import Path
 
 from ai_trading_system.domains.opportunities.orchestration.contracts import OpportunityRegistryMode, OpportunityShadowConfig
 from ai_trading_system.domains.opportunities.orchestration.service import OpportunityArtifactSet, OpportunityShadowOrchestrator, OpportunityShadowSourceError
+from ai_trading_system.domains.opportunities.policy_snapshot import (
+    PolicyVersionContentMismatchError,
+    append_policy_snapshot_event,
+    compute_policy_snapshot,
+    register_or_verify_policy_snapshots,
+)
 from ai_trading_system.pipeline.contracts import PipelineStageError, StageArtifact, StageContext, StageResult
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.platform.telemetry.performance import DatabasePerformanceMetric
@@ -25,6 +31,13 @@ class OpportunityStage:
         config = OpportunityShadowConfig.from_mapping(context.params)
         if config.mode is OpportunityRegistryMode.OFF:
             return StageResult(metadata={"status": "skipped", "mode": "off"})
+        policy_snapshot = compute_policy_snapshot(context.params)
+        if context.registry is not None:
+            try:
+                register_or_verify_policy_snapshots(context.registry, policy_snapshot, run_id=context.run_id)
+            except PolicyVersionContentMismatchError as exc:
+                raise OpportunityStageError(str(exc)) from exc
+            append_policy_snapshot_event(context.registry, policy_snapshot, run_id=context.run_id, stage_name=self.name)
         ranked = context.artifact_for("rank", "ranked_signals")
         if ranked is None:
             raise OpportunityStageError("shadow opportunities requires the registered rank/ranked_signals artifact")
@@ -49,6 +62,7 @@ class OpportunityStage:
                 mode=config.mode,
                 config=config,
                 ohlcv_db_path=context.db_path,
+                policy_snapshot_id=policy_snapshot.policy_snapshot_id,
             )
         except OpportunityShadowSourceError as exc:
             raise OpportunityStageError(str(exc)) from exc
@@ -74,7 +88,8 @@ class OpportunityStage:
         output_dir = context.output_dir()
         artifacts: list[StageArtifact] = []
         artifact_started = monotonic_time.perf_counter_ns()
-        summary_path = context.write_json("opportunity_shadow_summary.json", dict(result.summary))
+        summary_payload = {**dict(result.summary), **policy_snapshot.metadata()}
+        summary_path = context.write_json("opportunity_shadow_summary.json", summary_payload)
         artifacts.append(StageArtifact.from_file("opportunity_shadow_summary", summary_path, metadata={"status": result.status, "dry_run": result.dry_run}, attempt_number=context.attempt_number))
         filenames = {
             "candidate_admissions": "candidate_admissions.csv",

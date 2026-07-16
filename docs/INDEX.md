@@ -96,6 +96,7 @@
 - [ADR-0003 trust-first ingest](decisions/ADR-0003-trust-first-ingest.md)
 - [ADR-0004 artifact-driven publish](decisions/ADR-0004-artifact-driven-publish.md)
 - [ADR-0005 React operator workspace](decisions/ADR-0005-react-operator-workspace.md)
+- [ADR-0006 entry model and stage policy freeze](decisions/ADR-0006-entry-model-and-stage-policy-freeze.md)
 
 ## Audit
 - [documentation_inventory](_audit/documentation_inventory.md)

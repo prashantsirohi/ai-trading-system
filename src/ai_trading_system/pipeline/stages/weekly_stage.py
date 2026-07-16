@@ -17,6 +17,11 @@ from ai_trading_system.domains.opportunities.coverage import (
     load_sector_mapping,
     persist_stage_history,
 )
+from ai_trading_system.domains.opportunities.policy_snapshot import (
+    append_policy_snapshot_event,
+    compute_policy_snapshot,
+    register_or_verify_policy_snapshots,
+)
 from ai_trading_system.domains.opportunities.routing import (
     OpportunityScanRoutingMode,
     ScanRoutingConfig,
@@ -39,6 +44,13 @@ class WeeklyStageCoverageStage:
         if routing_config.mode is OpportunityScanRoutingMode.OFF:
             return StageResult(metadata={"status": "skipped", "mode": "off"})
         config = StageCoverageConfig.from_mapping(context.params)
+        # ADR-0006 A3: verify policy content before any stage-owned write
+        # (observe_sector_mapping below is the first registry write). A
+        # mismatch fails only this optional shadow stage.
+        policy_snapshot = compute_policy_snapshot(context.params)
+        if context.registry is not None:
+            register_or_verify_policy_snapshots(context.registry, policy_snapshot, run_id=context.run_id)
+            append_policy_snapshot_event(context.registry, policy_snapshot, run_id=context.run_id, stage_name=self.name)
         paths = get_domain_paths(context.project_root, context.params.get("data_domain", "operational"))
         operation_started = time.perf_counter_ns()
         latest_mapping, mapping_warnings = load_sector_mapping(paths.master_db_path)
@@ -154,6 +166,7 @@ class WeeklyStageCoverageStage:
             "stage_promoted_candidates": int(len(promotions)),
             "weekly_lock": bool(locked),
             "mapping_warnings": mapping_warnings,
+            **policy_snapshot.metadata(),
         }
         summary_path = output / "weekly_stage_summary.json"
         summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")

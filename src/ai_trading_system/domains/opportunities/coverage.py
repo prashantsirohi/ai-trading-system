@@ -39,6 +39,20 @@ LEGACY_STAGE_MAP = {
     "UNDEFINED": WeinsteinStage.UNKNOWN,
 }
 
+# Single source of truth for sector-stage-aggregation-v1 semantics. The
+# aggregation below and the policy fingerprint (ADR-0006 A3) both read these
+# exact values; editing one without bumping the version label raises
+# POLICY_VERSION_CONTENT_MISMATCH at the next Phase 3 stage start.
+SECTOR_AGGREGATION_RULES: dict[str, float] = {
+    "stage_4_min_pct": 40.0,
+    "stage_3_min_pct": 35.0,
+    "stage_2_min_pct": 50.0,
+    "stage_2_min_above_rising_ratio": 0.60,
+    "transition_1_to_2_min_pct": 20.0,
+    "confidence_coverage_weight": 70.0,
+    "confidence_velocity_weight": 300.0,
+}
+
 
 def load_daily_universe(
     ohlcv_db_path: Path,
@@ -252,22 +266,23 @@ def build_sector_coverage(stock: pd.DataFrame, *, config: StageCoverageConfig) -
             & pd.to_numeric(group["weekly_ma_30_slope"], errors="coerce").gt(0)
         )
         velocity = float(pd.to_numeric(group["weekly_ma_30_slope_acceleration"], errors="coerce").median() or 0.0)
+        rules = SECTOR_AGGREGATION_RULES
         if eligible < config.minimum_sector_constituents or coverage < config.minimum_sector_stage_coverage_ratio:
             effective = WeinsteinStage.UNKNOWN
-        elif pct(WeinsteinStage.STAGE_4.value) >= 40:
+        elif pct(WeinsteinStage.STAGE_4.value) >= rules["stage_4_min_pct"]:
             effective = WeinsteinStage.STAGE_4
-        elif pct(WeinsteinStage.STAGE_3.value) + pct(WeinsteinStage.TRANSITION_2_TO_3.value) >= 35 and velocity < 0:
+        elif pct(WeinsteinStage.STAGE_3.value) + pct(WeinsteinStage.TRANSITION_2_TO_3.value) >= rules["stage_3_min_pct"] and velocity < 0:
             effective = WeinsteinStage.STAGE_3
-        elif pct(WeinsteinStage.STAGE_2.value) >= 50 and float(above_rising.mean()) >= 0.60:
+        elif pct(WeinsteinStage.STAGE_2.value) >= rules["stage_2_min_pct"] and float(above_rising.mean()) >= rules["stage_2_min_above_rising_ratio"]:
             effective = WeinsteinStage.STAGE_2
-        elif pct(WeinsteinStage.TRANSITION_1_TO_2.value) >= 20 and velocity > 0:
+        elif pct(WeinsteinStage.TRANSITION_1_TO_2.value) >= rules["transition_1_to_2_min_pct"] and velocity > 0:
             effective = WeinsteinStage.TRANSITION_1_TO_2
         else:
             effective = WeinsteinStage.STAGE_1
         confidence = (
             0.0
             if effective is WeinsteinStage.UNKNOWN
-            else round(min(100.0, coverage * 70.0 + abs(velocity) * 300.0), 2)
+            else round(min(100.0, coverage * rules["confidence_coverage_weight"] + abs(velocity) * rules["confidence_velocity_weight"]), 2)
         )
         row = {
             "sector_id": sector_id,

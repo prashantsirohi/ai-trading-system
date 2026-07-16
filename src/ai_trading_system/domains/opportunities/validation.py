@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from types import MappingProxyType
+from typing import Literal, Mapping
 
 from .contracts import (
     CandidateAction,
@@ -21,30 +22,49 @@ from .contracts import (
 
 StageUseCase = Literal["monitoring", "normal_entry", "early_entry"]
 
+# Single source of truth for stage-confidence-v1 semantics. The policy
+# fingerprint (ADR-0006 A3) hashes these exact objects at runtime, so editing
+# a value without bumping the version label raises
+# POLICY_VERSION_CONTENT_MISMATCH instead of silently drifting.
+STAGE_CONFIDENCE_WEIGHTS: Mapping[str, float] = MappingProxyType({
+    "ma_slope_quality": 0.25,
+    "price_position_quality": 0.20,
+    "relative_strength_quality": 0.20,
+    "base_breakout_quality": 0.15,
+    "volume_confirmation": 0.10,
+    "transition_persistence": 0.10,
+})
+STAGE_CONFIDENCE_BAND_BOUNDS: Mapping[str, float] = MappingProxyType({
+    "low_below": 50.0,
+    "medium_below": 65.0,
+    "high_below": 80.0,
+})
+
 
 def confidence_band_for_score(score: float) -> StageConfidenceBand:
     """Return the canonical confidence band for a 0-100 score."""
     value = float(score)
     if not 0.0 <= value <= 100.0:
         raise ValueError("confidence score must be between 0 and 100")
-    if value < 50.0:
+    if value < STAGE_CONFIDENCE_BAND_BOUNDS["low_below"]:
         return StageConfidenceBand.LOW
-    if value < 65.0:
+    if value < STAGE_CONFIDENCE_BAND_BOUNDS["medium_below"]:
         return StageConfidenceBand.MEDIUM
-    if value < 80.0:
+    if value < STAGE_CONFIDENCE_BAND_BOUNDS["high_below"]:
         return StageConfidenceBand.HIGH
     return StageConfidenceBand.VERY_HIGH
 
 
 def calculate_stage_confidence(components: StageConfidenceComponents) -> StageConfidenceResult:
     """Calculate the versioned stage confidence score without loading data."""
+    weights = STAGE_CONFIDENCE_WEIGHTS
     score = (
-        0.25 * components.ma_slope_quality
-        + 0.20 * components.price_position_quality
-        + 0.20 * components.relative_strength_quality
-        + 0.15 * components.base_breakout_quality
-        + 0.10 * components.volume_confirmation
-        + 0.10 * components.transition_persistence
+        weights["ma_slope_quality"] * components.ma_slope_quality
+        + weights["price_position_quality"] * components.price_position_quality
+        + weights["relative_strength_quality"] * components.relative_strength_quality
+        + weights["base_breakout_quality"] * components.base_breakout_quality
+        + weights["volume_confirmation"] * components.volume_confirmation
+        + weights["transition_persistence"] * components.transition_persistence
         - components.failed_breakout_penalty
     )
     clamped = min(100.0, max(0.0, score))
