@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-07-16
+- **Last verified:** 2026-07-17
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -92,6 +92,17 @@ snapshot IDs, completed-week sector-gate cohorts, and structured evaluate-all
 admission records into calibration rows. The immutable manifest records policy
 snapshot coverage, and the Phase 4 API exposes snapshot and primary-admission
 coverage alongside readiness, health, and response limitations.
+
+ADR-0007 R0 is a separate research-only calibration harness for the proposed
+four-lane pattern evidence classifier. `ai-trading-pattern-r0-calibrate` reads
+`_catalog` and `weekly_stage_snapshot` point-in-time through read-only DuckDB
+connections, dispatches the exact lane/history-band detector allowlist before
+detector execution, and writes only to an explicit immutable research output
+directory. It never writes `pattern_scan.csv`, pattern cache, pipeline
+artifacts, operator databases, router evidence, lifecycle state, candidates,
+opportunities, or execution state. Policy and dataset hashes make an exact
+replay verifiable; wall-clock telemetry is observational and excluded from
+equality hashes. See the [rank contract](stages/rank.md#offline-r0-pattern-lane-calibration).
 
 ## Safety and operating invariants
 
@@ -258,6 +269,21 @@ Run a reduced real-data canary without network publishing:
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
   --canary --symbol-limit 25 --local-publish
 ```
+
+Run a read-only ADR-0007 R0 replay into a new research bundle:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.research.pattern_lane_calibration.cli \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD --cadence weekly \
+  --output-dir /path/to/new/pattern-r0-bundle
+```
+
+This command does not authorize R1, alter rank output, or admit lane evidence
+to an operational consumer. `--verify-against <manifest>` recomputes the same
+dates and compares policy, source, dataset, and row-count hashes. Long runs
+report live throughput and ETA and resume compatible completed-date checkpoints
+from `<output-dir>.checkpoints`.
 
 Pipeline startup is verify-only for the control-plane schema. It proceeds when
 the schema is current and otherwise fails without opening a migration writer.

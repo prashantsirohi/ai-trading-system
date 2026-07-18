@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-07-15
+- **Last verified:** 2026-07-17
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -302,6 +302,42 @@ identify evidence requiring review. The readiness JSON is the machine-readable
 source for `READY`, `READY_WITH_LIMITATIONS`, or `NOT_READY`; the Markdown file
 is an operator rendering of the same checks. These files are offline evidence,
 not runtime pipeline inputs.
+
+## ADR-0007 R0 pattern calibration artifacts
+
+Each run writes a new explicit output directory and refuses to overwrite a
+non-empty bundle. The research-only files are:
+
+- `r0_pattern_structure_context.csv` — one point-in-time lane decision row per
+  symbol, exchange, and as-of date, including reason codes and policy lineage.
+- `r0_pattern_detector_invocations.csv` — exact pre-dispatch family invocation
+  counts by symbol, lane, history band, and date.
+- `r0_pattern_lane_signals.csv` — emitted fresh or replay-carried signal rows;
+  it is not `pattern_scan.csv` and has no operational consumer.
+- `r0_pattern_outcomes.csv` — 5/10/20-session forward outcomes, MFE/MAE,
+  confirmation/failure flags, and benchmark-relative returns.
+- `r0_pattern_matched_controls.csv` — deterministic same-date/lane/history-band
+  nearest-liquidity controls.
+- `r0_pattern_metrics.csv` — lane/family/history/state/origin/regime/liquidity
+  cohort metrics with 95% Wilson intervals and minimum-sample status.
+- `r0_pattern_winner_recall.csv` — recall-only analysis before
+  `first_guard_pass`; it is explicitly excluded from precision claims.
+- `r0_pattern_policies.json`, `r0_pattern_summary.json`, and
+  `r0_pattern_manifest.json` — frozen policy content, reconciliation counts,
+  source hashes, byte hashes, row counts, and policy versions.
+- `r0_pattern_runtime.json` — observational wall-clock diagnostics excluded
+  from reproducibility equality because elapsed time is machine-dependent.
+
+The writer rejects destinations beneath `pipeline_runs` or `stage_store`. It
+does not register these files in the control plane and does not write an
+operational DuckDB table, pattern cache, or consumer artifact.
+
+Long replays also create a sibling `<output-dir>.checkpoints/<as-of-date>/`
+tree by default. Each completed date contains `context.parquet`,
+`signals.parquet`, `invocations.parquet`, and an atomically published
+`complete.json` signature. These are resumable research work files, not final
+calibration evidence and not production artifacts. A checkpoint is reused only
+when its combined policy and source signature matches the current run.
 
 ## Phase 4A API artifact behavior
 

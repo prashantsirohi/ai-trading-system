@@ -2,7 +2,7 @@
 
 - **Purpose:** Configuration sources, CLI flags, and mode selectors. For env vars see [`environment_variables.md`](environment_variables.md). For commands see [`commands.md`](commands.md).
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-07-15
+- **Last verified:** 2026-07-17
 - **Source of truth:** `argparse` parsers in `pipeline/orchestrator.py` and `pipeline/daily_pipeline.py`; env loading in `platform/`; config files under `config/`.
 
 ---
@@ -152,6 +152,28 @@ Operational default: incremental tail recompute. Research default: full rebuild.
 - `ml_mode` stage param — `shadow_ml` is the supported overlay mode today
 
 See [`docs/reference/ranking_factors.md`](ranking_factors.md) and [`docs/reference/breakout_and_patterns.md`](breakout_and_patterns.md).
+
+### ADR-0007 R0 research controls
+
+`ai-trading-pattern-r0-calibrate` has its own research parser and does not add
+or change orchestrator rank parameters. It accepts either repeated
+`--as-of-date` values or `--from-date/--to-date` with `--cadence daily|weekly`.
+`--output-dir` is required for a build; `--verify-against` replaces it for an
+exact manifest replay. Optional inputs are `--symbols-file`,
+`--winner-windows`, and the dated `--exclusions-csv`.
+
+Execution controls are `--workers` (default `min(4, CPU count)`),
+`--progress-every` (default 25 completed symbols), `--checkpoint-dir`,
+`--no-resume`, and `--quiet`. Checkpoints are accepted only when their policy
+and all source hashes match the current replay; incompatible checkpoints are
+ignored and recomputed.
+
+The classifier, early-IPO liquidity, standard liquidity, mature Stage-2
+validity, weekly freshness, Stage-1 structure, detector-family, reconstruction,
+matched-control, and outcome constants are frozen dataclasses in
+`research/pattern_lane_calibration/policy.py`. They are serialized into every
+bundle and bound by one canonical SHA-256 policy hash. They are deliberately
+not environment variables or mutable rank-stage flags.
 
 ## Execution safety controls
 

@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-07-15
+- **Last verified:** 2026-07-17
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -238,6 +238,49 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.research.optimization.cli
 
 Research commands must preserve `DATA_DOMAIN=research` isolation where required by their contracts.
 
+### ADR-0007 R0 pattern calibration
+
+Run the four-lane classifier and exact history-band detector policies against
+read-only operational history, writing a new immutable research bundle:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.research.pattern_lane_calibration.cli \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD --cadence weekly \
+  --winner-windows reports/winner_analysis/funnel_autopsy/winner_funnel_autopsy.csv \
+  --output-dir /path/to/new/pattern-r0-bundle
+```
+
+Use repeated `--as-of-date YYYY-MM-DD` arguments for a pre-registered date set,
+`--symbols-file` for a bounded real-data canary, and `--exclusions-csv` for
+dated DQ or corporate-action exclusions. The exclusion CSV requires
+`symbol_id,effective_from`; optional `effective_to` bounds the exclusion.
+Undated exclusion lists are rejected because they are not point-in-time safe.
+
+Verify an exact replay without writing another retained bundle:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.research.pattern_lane_calibration.cli \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD --cadence weekly \
+  --winner-windows reports/winner_analysis/funnel_autopsy/winner_funnel_autopsy.csv \
+  --verify-against /path/to/pattern-r0-bundle/r0_pattern_manifest.json
+```
+
+The command opens DuckDB read-only and never writes a pipeline attempt,
+operator database, pattern cache, rank artifact, or consumer state. The known
+winner file feeds only `r0_pattern_winner_recall.csv`; it is not included in
+precision metrics.
+
+Progress is written to stderr with date position, symbol position, processing
+rate, per-date ETA, overall ETA, signal counts, and checkpoint commits. The
+default is up to four parallel symbol workers; override with `--workers N` and
+set reporting frequency with `--progress-every N`. Completed dates are written
+atomically to `<output-dir>.checkpoints` and automatically resumed on an exact
+policy/source signature match. Use `--checkpoint-dir` to relocate them or
+`--no-resume` to recompute all dates. `Ctrl-C` preserves completed-date
+checkpoints and exits with status 130.
+
 ## Installed console scripts
 
 After `pip install -e .`, these aliases are defined by `pyproject.toml`:
@@ -255,6 +298,7 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-benchmark-phase3c4` | Isolated Phase 3C-4 performance/replay benchmark |
 | `ai-trading-build-phase3c5-calibration` | Immutable calibration/readiness evidence builder |
 | `ai-trading-check-phase4-readiness` | Re-evaluate Phase 4 readiness from a calibration manifest |
+| `ai-trading-pattern-r0-calibrate` | Read-only four-lane pattern R0 calibration and replay verifier |
 | `ai-trading-phase4-api` | Strictly read-only Phase 4A API |
 | `ai-trading-annotate-phase3c1-governance` | Copied-store Phase 3B governance annotation |
 | `ai-trading-research-recipe` | Research recipe runner |

@@ -2,7 +2,7 @@
 
 - **Purpose:** Complete map of all documentation under `docs/`.
 - **Audience:** Anyone navigating the docs.
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-07-17
 - **Source of truth:** This file is the source of truth for the doc inventory; `SYSTEM_GUIDE.md` is the source of truth for system orientation.
 
 > Each document records its own verification date. See [`development/legacy_cleanup_plan.md`](development/legacy_cleanup_plan.md) for the cleanup history.
@@ -97,6 +97,7 @@
 - [ADR-0004 artifact-driven publish](decisions/ADR-0004-artifact-driven-publish.md)
 - [ADR-0005 React operator workspace](decisions/ADR-0005-react-operator-workspace.md)
 - [ADR-0006 entry model and stage policy freeze](decisions/ADR-0006-entry-model-and-stage-policy-freeze.md)
+- [ADR-0007 multi-lane pattern evidence scan (proposed)](decisions/ADR-0007-two-lane-pattern-scan.md)
 
 ## Audit
 - [documentation_inventory](_audit/documentation_inventory.md)

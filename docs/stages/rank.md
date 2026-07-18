@@ -2,7 +2,7 @@
 
 - **Purpose:** Build the canonical ranked-signal artifact set (composite ranking, breakout scan, pattern scan, sector dashboard, dashboard payload) consumed by every downstream stage.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-07-17
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/rank.py`
   - `src/ai_trading_system/domains/ranking/service.py` (`RankOrchestrationService`)
@@ -135,6 +135,32 @@ AUD-001 changes historical rank inputs but not feature formulas. A full feature
 rebuild is not required. Historical rank and research artifacts created with the
 old latest-row behavior must be recomputed under `point_in_time_v2`; retain the
 old immutable attempts as superseded evidence rather than overwriting them.
+
+## Offline R0 pattern-lane calibration
+
+`research/pattern_lane_calibration/` implements the ADR-0007 R0 harness outside
+the rank stage. It reconstructs daily OHLCV, structural fields,
+cross-sectional relative strength, weekly-stage freshness, and liquidity
+eligibility for every historical as-of date. Market and weekly-stage rows after
+that boundary cannot enter classification; only outcome calculation may read
+later market rows.
+
+The frozen `pattern-lane-r0-policy-v1` assigns one of
+`stage2_continuation`, `stage1_base`, `young_listing_base`,
+`ipo_early_base`, or `no_lane`. Its complete family matrix covers all emitted
+families for five lane/history-band combinations. Allowed families are selected
+before detector calls; `head_shoulders` is suppression-only where its 120-bar
+history requirement is met. The 35–49-bar lane uses
+`ipo-early-liquidity-policy-v1`, not rank's 50-bar `feature_ready` gate.
+
+The harness produces only explicitly rooted `r0_*` research evidence. It does
+not invoke `RankOrchestrationService`, register a `StageArtifact`, write pattern
+cache, replace `pattern_scan.csv`, or call a rank consumer. No feature rebuild
+or operational rank rebuild is required. See
+[`commands`](../reference/commands.md#adr-0007-r0-pattern-calibration) and
+[`artifacts`](../reference/artifacts.md#adr-0007-r0-pattern-calibration-artifacts).
+The CLI reports live date/symbol throughput and ETA, uses parallel symbol
+workers, and commits a resumable checkpoint after every completed date.
 
 ## Downstream consumers
 
