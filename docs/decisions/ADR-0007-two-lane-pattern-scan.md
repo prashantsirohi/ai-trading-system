@@ -8,8 +8,11 @@
   `domains/ranking/patterns/`, `domains/ranking/service.py`,
   `pipeline/stages/weekly_stage.py`, and `pipeline/stages/scan_router.py`.
 - **R0 implementation:** `research/pattern_lane_calibration/`.
-- **Status:** **Proposed.** The R0 harness exists, but R0 execution and each
-  later rollout stage still require separate operator authorization.
+- **Status:** **Proposed; R0 pilot executed 2026-07-18.** The R0 harness
+  passed (reproducible, immutable, no production impact). Calibration evidence
+  is partial/inconclusive: the operator authorized a narrowly scoped R1a
+  shadow integration and R0.1 measurement repair, and declined to authorize
+  R2 routing and R3 admission. See "R0 pilot outcome" under D7.
 
 ---
 
@@ -163,8 +166,11 @@ store read-only and writes a new explicit immutable directory containing:
 - structural context and lane reasons;
 - exact detector invocation counts and untruncated signals;
 - 5/10/20-session returns, benchmark-relative returns against the
-  equal-weight `UNIV_TOP1000_MCAP` universe index, MFE, MAE,
-  confirmation, failure, invalidation, and sessions-to-breakout;
+  equal-weight liquid-1000 universe index (labelled `UNIV_TOP1000_EW`;
+  stored as `universe_index_daily` universe `UNIV_TOP1000_MCAP` with
+  `index_type = equal_weight` — the stored id names the top-1000-by-market-cap
+  membership, not the weighting), MFE, MAE, confirmation, failure,
+  invalidation, and sessions-to-breakout;
 - deterministic same-date/lane/history-band nearest-liquidity controls;
 - lane/family/history/state/origin/regime/liquidity metrics with 95% Wilson
   intervals and a 30-observation minimum-sample flag;
@@ -183,7 +189,7 @@ The manifest binds `pattern-r0-reconstruction-policy-v1`,
 rerun compares policy, source, dataset, and row-count hashes.
 `pattern-r0-outcome-policy-v1` used the `NIFTY50` benchmark symbol, which is
 absent from the OHLCV store; v2 supersedes it with the broad equal-weight
-`UNIV_TOP1000_MCAP` index loaded from `universe_index_daily`.
+liquid-1000 index (`UNIV_TOP1000_EW`) loaded from `universe_index_daily`.
 
 ## D6 — Production boundary
 
@@ -206,6 +212,78 @@ admission.
 Operator approval is required before running the pre-registered replay. The
 run must preserve policy/source hashes and report incomplete outcome windows
 separately.
+
+#### R0 pilot outcome (2026-07-18)
+
+Pilot replay: 81 weekly as-of dates 2025-01-03 through 2026-07-16, output at
+`pattern_lane_r0/2026-07-17-pilot` (immutable, `REPRODUCIBLE`), post-hoc
+analysis at `pattern_lane_r0/2026-07-17-pilot-analysis`. Operator decisions:
+
+| Stage | Decision | Reason |
+|---|---|---|
+| R0 harness | Pass | Reproducible, immutable, no production impact |
+| R0 calibration evidence | Partial/inconclusive | Dead Stage-1 lane; incomplete measurement channels |
+| R1 shadow plumbing | Conditionally authorized (R1a scope) | Read-only, ~5–6 min per date, changes no decisions |
+| R2 router integration | Not authorized | No demonstrated timeliness or reliable promotion threshold |
+| R3 candidate/opportunity admission | Not authorized | Most lanes underperform the broad benchmark |
+
+Key evidence: `stage1_base` produced 11 assignments because weekly-stage
+history does not exist before April 2026 (`weekly_stage_snapshot` holds four
+week-ends, 2026-04-10 through 2026-05-01; the governed
+`weekly_stock_stage_history` begins full-universe writes 2026-07-10), so the
+lane was starved of input, not weakly tuned. Benchmark-relative 20-session
+medians (equal-weight liquid-1000): `stage2_continuation` −0.5%,
+`young_listing_base` −2.1%, `ipo_early_base` −3.7%; `flat_base` is the only
+sizeable family above baseline (+0.5%, 52.9% beat rate, n=2,149). Winner
+recall (post-hoc): 29/31 winners signalled, but only 9/30 before
+`first_guard_pass`. R0.1 measurement repair (control outcomes, episode
+deduplication, regime join, stricter confirmation, independent invalidation,
+official winner-recall rerun) plus a Stage-1-only replay after weekly-stage
+backfill are required before R2 gates can be evaluated.
+
+The weekly-stage history gap was closed 2026-07-18 by a point-in-time
+backfill (`stage_backfill.py`, policy `weekly-stage-v2`, 92,143 append-only
+observations over 84 completed weeks 2024-12-05 through 2026-07-10, frozen
+OHLCV snapshot bound in `weekly-stage-backfill-2026-07-18/backfill_manifest.json`,
+zero conflicts against live governed rows). Weekly-stage coverage is
+evaluated against the population eligible under the governed weekly-stage
+classifier: symbols admitted by the R0 liquidity gate but excluded by the
+weekly-stage classifier remain visible as cross-policy exclusions
+(`cross_policy_exclusions.csv`, reason-coded, zero unexplained) and are not
+counted as missing stage observations. Calibration replays read the
+backfill through `weekly_stage_source_mode = frozen_backfill`; live
+consumers use `governed_current` precedence.
+
+R0.1 executed 2026-07-18 via `research/pattern_lane_calibration/r0_analysis.py`
+(bundle `pattern_lane_r0/2026-07-17-pilot-analysis-v2`, manifest bound to the
+pilot manifest hash). Episode-level signal-minus-control shows a small
+positive selection edge (median +0.24%, 50.9% beat rate, n=10,083 at 20
+sessions) that does not yet clear the R2 benchmark-relative gate; `flat_base`
+and `vcp` are the only families positive after deduplication and control
+comparison, while raw `high_tight_flag`/`three_weeks_tight` positives were
+pseudo-replication artifacts. See the bundle `REPORT.md`.
+
+#### Stage-1-only replay (2026-07-18, post-backfill)
+
+Bundle `pattern_lane_r0/2026-07-18-stage1-replay(-analysis)`, `frozen_backfill`
+source mode, lane `stage1_base`, `weekly-stage-v2`. The backfill lifted fresh
+weekly-stage coverage of stage-1 candidates from 5.2% to **94.9%** and
+stage1_base assignments from 11 to **80** (58 symbols, 48 complete 20-session
+outcomes). Stage-1 signals are positive and control-beating: episode-level
+benchmark-relative median **+2.6%** (57.5% beat), signal-minus-control median
+**+7.6%** (64% beat control, n=28) — the strongest control-relative edge of any
+lane, though small-sample. Offline gate comparison (stock-level forward
+benchmark-relative, entry=as_of): 8-of-8 is benchmark-neutral (−0.2%, 49.3%)
+while every relaxation is monotonically worse (7-of-8 −1.1%, 6-of-8 −1.1%,
+hard+scored −1.1%/−1.3%, all-admissible −1.7%); the incremental stocks each
+relaxation adds underperform. **Decision: keep the 8-of-8
+`pattern-stage1-structure-policy-v1` baseline unchanged** — its low yield is
+precision, not over-restriction. 0/31 funnel-autopsy winners received a
+stage1_base signal (those winners were already advancing when captured); the
+lane contributes high-precision, low-recall basing evidence. Carry stage1_base
+forward as observational alongside `flat_base` and `vcp`; sample size and thin
+flow (~4–5 assignments/month) keep it short of an R2 admission mandate. See the
+bundle `REPORT.md`.
 
 ### R1
 

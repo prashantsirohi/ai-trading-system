@@ -15,10 +15,12 @@ import duckdb
 import pandas as pd
 from dotenv import load_dotenv
 
+from ai_trading_system.domains.features.benchmark_index import load_benchmark_as_market_rows
 from ai_trading_system.platform.db.paths import ensure_domain_layout, require_data_root_available
 
 from .harness import run_calibration, write_calibration_result
 from .policy import default_r0_policy
+from .stage_source import load_weekly_stage_observations
 
 
 def _table_exists(conn: duckdb.DuckDBPyConnection, table_name: str) -> bool:
@@ -70,50 +72,33 @@ def _load_benchmark_index(
     benchmark_symbol: str,
     benchmark_source: str,
 ) -> pd.DataFrame:
-    source_table, _, index_type = benchmark_source.partition(":")
-    conn = duckdb.connect(str(db_path), read_only=True)
-    try:
-        if not _table_exists(conn, source_table):
-            raise RuntimeError(f"benchmark source table {source_table} is missing from {db_path}")
-        frame = conn.execute(
-            f"""
-            SELECT CAST(? AS VARCHAR) AS symbol_id,
-                   CAST(? AS VARCHAR) AS exchange,
-                   CAST(date AS TIMESTAMP) AS timestamp,
-                   level AS open, level AS high, level AS low, level AS close,
-                   CAST(0 AS BIGINT) AS volume
-            FROM {source_table}
-            WHERE universe_id = ?
-              AND index_type = ?
-              AND date <= CAST(? AS DATE)
-            ORDER BY date
-            """,
-            [benchmark_symbol, exchange, benchmark_symbol, index_type, through_date],
-        ).fetchdf()
-    finally:
-        conn.close()
-    if frame.empty:
-        raise RuntimeError(
-            f"benchmark {benchmark_symbol} ({benchmark_source}) returned no rows from {db_path}"
-        )
-    return frame
+    return load_benchmark_as_market_rows(
+        db_path,
+        exchange=exchange,
+        through_date=through_date,
+        symbol=benchmark_symbol,
+        source=benchmark_source,
+    )
 
 
-def _load_weekly_stage(db_path: Path, *, through_date: str) -> pd.DataFrame:
-    conn = duckdb.connect(str(db_path), read_only=True)
-    try:
-        if not _table_exists(conn, "weekly_stage_snapshot"):
-            return pd.DataFrame()
-        return conn.execute(
-            """
-            SELECT * FROM weekly_stage_snapshot
-            WHERE week_end_date <= CAST(? AS DATE)
-            ORDER BY symbol, week_end_date
-            """,
-            [through_date],
-        ).fetchdf()
-    finally:
-        conn.close()
+def _load_weekly_stage(
+    db_path: Path,
+    *,
+    through_date: str,
+    control_plane_db: Path | None = None,
+    mode: str = "governed_current",
+    stage_policy_version: str | None = None,
+) -> pd.DataFrame:
+    control_plane = control_plane_db or db_path.parent / "control_plane.duckdb"
+    if not control_plane.exists():
+        raise RuntimeError(f"control plane store missing: {control_plane}")
+    return load_weekly_stage_observations(
+        control_plane_db=control_plane,
+        ohlcv_db=db_path,
+        through_date=through_date,
+        mode=mode,
+        require_stage_policy_version=stage_policy_version,
+    )
 
 
 def _resolve_dates(args: argparse.Namespace, db_path: Path) -> list[str]:
@@ -250,6 +235,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbols-file", help="Optional newline-delimited symbol restriction for canaries.")
     parser.add_argument("--exclusions-csv", help="Dated DQ/corporate-action exclusions with symbol_id and effective_from.")
     parser.add_argument("--winner-windows", help="Optional CSV used only for recall-before-first-guard analysis.")
+    parser.add_argument(
+        "--lane", action="append", dest="lanes",
+        help="Restrict detector execution to this lane (repeatable). Context and lane assignment still cover the full universe.",
+    )
+    parser.add_argument(
+        "--weekly-stage-source-mode", choices=("governed_current", "frozen_backfill"),
+        default="governed_current",
+        help="governed_current: live>backfill>snapshot precedence. frozen_backfill: backfill rows only (calibration).",
+    )
+    parser.add_argument(
+        "--stage-policy-version",
+        help="Require this stage policy version; mismatches fail in frozen_backfill mode.",
+    )
+    parser.add_argument("--control-plane-db", help="Override the control plane DuckDB path.")
     parser.add_argument("--workers", type=int, default=min(4, os.cpu_count() or 1), help="Parallel symbol workers; default: min(4, CPU count).")
     parser.add_argument("--progress-every", type=int, default=25, help="Emit symbol progress after this many completions.")
     parser.add_argument("--checkpoint-dir", help="Completed-date checkpoint directory; defaults beside output.")
@@ -288,7 +287,13 @@ def main(argv: list[str] | None = None) -> int:
         benchmark_source=policy.outcomes.benchmark_source,
     )
     market = pd.concat([market, benchmark], ignore_index=True)
-    weekly = _load_weekly_stage(db_path, through_date=max(dates))
+    weekly = _load_weekly_stage(
+        db_path,
+        through_date=max(dates),
+        control_plane_db=Path(args.control_plane_db).resolve() if args.control_plane_db else None,
+        mode=args.weekly_stage_source_mode,
+        stage_policy_version=args.stage_policy_version,
+    )
     progress({"event": "input_load_complete", "market_rows": len(market), "weekly_rows": len(weekly)})
     checkpoint_dir = args.checkpoint_dir
     if checkpoint_dir is None and args.output_dir:
@@ -296,7 +301,11 @@ def main(argv: list[str] | None = None) -> int:
     if checkpoint_dir is None and args.verify_against:
         manifest_parent = Path(args.verify_against).resolve().parent
         checkpoint_dir = str(manifest_parent.with_name(f"{manifest_parent.name}.verify-checkpoints"))
-    progress({"event": "run_configuration", "workers": args.workers, "checkpoint_dir": checkpoint_dir, "resume": not args.no_resume})
+    progress({
+        "event": "run_configuration", "workers": args.workers, "checkpoint_dir": checkpoint_dir,
+        "resume": not args.no_resume, "weekly_stage_source_mode": args.weekly_stage_source_mode,
+        "stage_policy_version": args.stage_policy_version, "lanes": args.lanes,
+    })
     try:
         result = run_calibration(
             market,
@@ -310,6 +319,7 @@ def main(argv: list[str] | None = None) -> int:
             progress_every=args.progress_every,
             checkpoint_dir=checkpoint_dir,
             resume=not args.no_resume,
+            lane_filter=tuple(args.lanes) if args.lanes else None,
         )
     except KeyboardInterrupt:
         progress({"event": "interrupted", "checkpoint_dir": checkpoint_dir})

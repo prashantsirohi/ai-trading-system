@@ -47,8 +47,9 @@ CONTEXT_COLUMNS: tuple[str, ...] = (
     "liquidity_gate_passed", "liquidity_policy_version", "sma_50",
     "sma_150", "sma_200", "sma_200_slope", "distance_from_52w_high",
     "stage2_score", "stage2_label", "stage2_input_valid", "weekly_stage",
-    "weekly_stage_as_of", "weekly_stage_age_trading_days",
-    "weekly_stage_is_fresh", "structure_observation_id",
+    "weekly_stage_transition", "weekly_stage_as_of",
+    "weekly_stage_age_trading_days", "weekly_stage_is_fresh",
+    "structure_observation_id",
 )
 
 
@@ -315,6 +316,7 @@ def build_point_in_time_context(
         weekly_age = _trading_day_age(sessions, weekly_date, as_of)
         weekly_fresh = weekly_age is not None and weekly_age <= active.weekly_freshness.max_age_trading_days
         weekly_label = str(weekly_row.get("stage_label", weekly_row.get("weekly_stage", "")) or "").upper()
+        weekly_transition = str(weekly_row.get("stage_transition", "") or "NONE").upper()
         stage2_valid = bool(
             bar_count >= active.stage2.min_complete_long_history_bars
             and bool(latest.get("is_stage2_structural", False))
@@ -348,6 +350,7 @@ def build_point_in_time_context(
             "stage2_label": str(latest.get("stage2_label", "non_stage2")),
             "stage2_input_valid": stage2_valid,
             "weekly_stage": weekly_label or None,
+            "weekly_stage_transition": weekly_transition,
             "weekly_stage_as_of": pd.Timestamp(weekly_date).date().isoformat() if weekly_date is not None and not pd.isna(weekly_date) else None,
             "weekly_stage_age_trading_days": weekly_age,
             "weekly_stage_is_fresh": bool(weekly_fresh),
@@ -409,11 +412,19 @@ def classify_lanes(context: pd.DataFrame, *, policy: R0Policy | None = None) -> 
                 reasons.extend(("MATURE_STAGE2_INPUTS_VALID", "STAGE2_SCORE_THRESHOLD_PASS"))
             elif (
                 bool(row.get("weekly_stage_is_fresh", False))
-                and str(row.get("weekly_stage") or "").upper() in active.weekly_freshness.allowed_stage1_labels
+                and (
+                    str(row.get("weekly_stage") or "").upper() in active.weekly_freshness.allowed_stage1_labels
+                    or str(row.get("weekly_stage_transition") or "").upper() in active.weekly_freshness.allowed_stage1_transitions
+                )
                 and bool(row.get("stage1_structure_checks_passed", False))
             ):
                 lane = "stage1_base"
-                reasons.extend(("FRESH_WEEKLY_STAGE1", "STAGE1_STRUCTURE_PASS"))
+                reasons.append(
+                    "FRESH_WEEKLY_STAGE1"
+                    if str(row.get("weekly_stage") or "").upper() in active.weekly_freshness.allowed_stage1_labels
+                    else "FRESH_WEEKLY_STAGE1_TRANSITION"
+                )
+                reasons.append("STAGE1_STRUCTURE_PASS")
             else:
                 reasons.append("MATURE_STRUCTURE_NOT_ELIGIBLE")
         elif bars >= 180:
@@ -505,6 +516,24 @@ def _scan_one_lane_symbol(
             if signal is not None:
                 record = signal.to_record()
                 record["pattern_score"] = 0.0
+                record.update({
+                    "exchange": exchange,
+                    "as_of_date": as_of_date,
+                    "scan_lane_at_detection": lane,
+                    "scan_lane_as_of": lane,
+                    "evidence_origin": "fresh" if str(signal.signal_date) == as_of_date else "carry_forward",
+                    "lane_assignment_reason_codes": context["lane_assignment_reason_codes"],
+                    "lane_policy_version": policy.version,
+                    "liquidity_policy_version": context["liquidity_policy_version"],
+                    "pattern_family_policy_version": policy.families.version,
+                    "stage2_score_at_detection": float(context.get("stage2_score", 0.0) or 0.0),
+                    "stage2_score_as_of": float(context.get("stage2_score", 0.0) or 0.0),
+                    "structure_observation_id": context["structure_observation_id"],
+                    "history_band": context["history_band"],
+                    "liquidity_percentile": float(context.get("liquidity_percentile", 0.0) or 0.0),
+                    "liquidity_cohort": int(min(10, max(1, np.ceil(float(context.get("liquidity_percentile", 0.0) or 0.0) * 10.0)))),
+                    "market_regime": str(context.get("market_regime", "unknown") or "unknown"),
+                })
                 signal_rows.append(record)
             return signal_rows, invocation_rows
 
@@ -562,6 +591,7 @@ def scan_lane_patterns(
     workers: int = 1,
     progress_callback: ProgressCallback | None = None,
     progress_every: int = 25,
+    lane_filter: tuple[str, ...] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Invoke only policy-enabled detector families for each assigned lane."""
 
@@ -572,9 +602,13 @@ def scan_lane_patterns(
     scoped = market.loc[market["timestamp"].dt.normalize() <= as_of].copy()
     signal_rows: list[dict[str, Any]] = []
     invocation_rows: list[dict[str, Any]] = []
-    eligible = classified_context.loc[
-        classified_context["scan_lane_as_of"].astype(str) != "no_lane"
-    ].sort_values(["exchange", "symbol_id"], kind="stable")
+    lane_series = classified_context["scan_lane_as_of"].astype(str)
+    eligible_mask = lane_series != "no_lane"
+    if lane_filter is not None:
+        eligible_mask &= lane_series.isin([str(lane) for lane in lane_filter])
+    eligible = classified_context.loc[eligible_mask].sort_values(
+        ["exchange", "symbol_id"], kind="stable"
+    )
     market_groups = {
         (str(symbol), str(exchange)): frame.tail(active.reconstruction.history_lookback_bars).copy()
         for (symbol, exchange), frame in scoped.groupby(["symbol_id", "exchange"], sort=False)
@@ -940,6 +974,7 @@ def run_calibration(
     progress_every: int = 25,
     checkpoint_dir: str | Path | None = None,
     resume: bool = True,
+    lane_filter: tuple[str, ...] | None = None,
 ) -> CalibrationResult:
     """Run deterministic multi-date R0 replay without any operational writes."""
 
@@ -956,6 +991,8 @@ def run_calibration(
         "winner_windows": _frame_hash(winner_windows if winner_windows is not None else pd.DataFrame()),
         "exclusions": _frame_hash(exclusion_frame if exclusion_frame is not None else pd.DataFrame()),
     }
+    if lane_filter is not None:
+        source_hashes["lane_filter"] = ",".join(sorted(str(lane) for lane in lane_filter))
     signature = _checkpoint_signature(active, source_hashes)
     checkpoint_root = Path(checkpoint_dir).resolve() if checkpoint_dir else None
     if progress_callback:
@@ -1000,6 +1037,7 @@ def run_calibration(
                 market, classified, as_of_date=as_of, policy=active,
                 scan_config=scan_config, workers=workers,
                 progress_callback=progress_callback, progress_every=progress_every,
+                lane_filter=lane_filter,
             )
             if checkpoint_root is not None:
                 _write_date_checkpoint(

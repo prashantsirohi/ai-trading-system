@@ -96,6 +96,35 @@ def test_lane_classifier_applies_age_precedence_and_requires_valid_mature_stage2
     assert classified.loc["MATURE_S2", "scan_lane_as_of"] == "stage2_continuation"
 
 
+def test_stage1_gate_separates_current_stage_from_transition() -> None:
+    base = {
+        "exchange": "NSE", "as_of_date": "2026-01-01", "bar_count": 220,
+        "early_ipo_liquidity_gate_passed": False, "standard_liquidity_gate_passed": True,
+        "stage2_input_valid": False, "stage2_score": 0.0,
+        "weekly_stage_is_fresh": True, "stage1_structure_checks_passed": True,
+        "liquidity_policy_version": "standard",
+    }
+    context = pd.DataFrame([
+        # current S1 -> admissible via label
+        {**base, "symbol_id": "FRESH_S1", "weekly_stage": "S1",
+         "weekly_stage_transition": "NONE", "structure_observation_id": "a"},
+        # current S2 that just arrived from S1 -> admissible via transition only
+        {**base, "symbol_id": "FRESH_S1_TO_S2", "weekly_stage": "S2",
+         "weekly_stage_transition": "S1_TO_S2", "structure_observation_id": "b"},
+        # plain current S2 with no transition -> NOT stage1-admissible
+        {**base, "symbol_id": "PLAIN_S2", "weekly_stage": "S2",
+         "weekly_stage_transition": "NONE", "structure_observation_id": "c"},
+    ])
+
+    classified = classify_lanes(context).set_index("symbol_id")
+
+    assert classified.loc["FRESH_S1", "scan_lane_as_of"] == "stage1_base"
+    assert "FRESH_WEEKLY_STAGE1" in classified.loc["FRESH_S1", "lane_assignment_reason_codes"]
+    assert classified.loc["FRESH_S1_TO_S2", "scan_lane_as_of"] == "stage1_base"
+    assert "FRESH_WEEKLY_STAGE1_TRANSITION" in classified.loc["FRESH_S1_TO_S2", "lane_assignment_reason_codes"]
+    assert classified.loc["PLAIN_S2", "scan_lane_as_of"] == "no_lane"
+
+
 def test_point_in_time_context_is_unchanged_by_future_market_and_stage_rows() -> None:
     market = _market("AAA", 240)
     as_of = market["timestamp"].iloc[219].date().isoformat()
@@ -216,7 +245,7 @@ def test_metrics_and_winner_recall_keep_precision_and_recall_populations_separat
 
 def test_parallel_run_reports_progress_and_resumes_completed_date(tmp_path: Path) -> None:
     market = pd.concat(
-        [_market("IPO1", 40), _market("IPO2", 40, base=120.0), _market("UNIV_TOP1000_MCAP", 40, base=20_000.0)],
+        [_market("IPO1", 40), _market("IPO2", 40, base=120.0), _market("UNIV_TOP1000_EW", 40, base=20_000.0)],
         ignore_index=True,
     )
     as_of = market["timestamp"].max().date().isoformat()

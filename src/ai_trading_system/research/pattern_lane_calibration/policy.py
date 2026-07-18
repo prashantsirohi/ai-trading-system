@@ -89,14 +89,15 @@ class Stage2Policy:
 
 @dataclass(frozen=True)
 class WeeklyStageFreshnessPolicy:
-    version: str = "weekly-stage-freshness-policy-v1"
+    version: str = "weekly-stage-freshness-policy-v2"
     max_age_trading_days: int = 10
-    allowed_stage1_labels: tuple[str, ...] = (
-        "S1",
-        "STAGE_1",
-        "TRANSITION_1_TO_2",
-        "S1_TO_S2",
-    )
+    # Current stage and transition are separate facts: a fresh observation is
+    # Stage-1 admissible when its current stage is S1, OR when the
+    # observation itself records a permitted fresh transition (e.g. a current
+    # S2 that just arrived from S1). v1 conflated the two by matching
+    # transition strings inside the label vocabulary.
+    allowed_stage1_labels: tuple[str, ...] = ("S1",)
+    allowed_stage1_transitions: tuple[str, ...] = ("S1_TO_S2",)
 
 
 @dataclass(frozen=True)
@@ -172,8 +173,8 @@ class FamilyPolicy:
 class OutcomePolicy:
     version: str = "pattern-r0-outcome-policy-v2"
     horizons: tuple[int, ...] = (5, 10, 20)
-    benchmark_symbol: str = "UNIV_TOP1000_MCAP"
-    benchmark_source: str = "universe_index_daily:equal_weight"
+    benchmark_symbol: str = "UNIV_TOP1000_EW"
+    benchmark_source: str = "universe_index_daily:UNIV_TOP1000_MCAP:equal_weight"
     breakout_buffer_pct: float = 0.0
     failed_breakout_close_below_invalidation: bool = True
     matched_control_method: str = "same_date_lane_history_band_liquidity_decile_nearest_symbol"
