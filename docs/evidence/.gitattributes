@@ -1,0 +1,3 @@
+# Evidence bundles are byte-exact audit records: never normalize line endings,
+# so committed files keep the exact bytes recorded in bundle.sha256.
+* -text

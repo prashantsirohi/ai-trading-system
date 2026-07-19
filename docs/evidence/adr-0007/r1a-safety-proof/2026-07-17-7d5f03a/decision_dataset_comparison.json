@@ -1,0 +1,96 @@
+{
+  "control_run_present": true,
+  "decision_content_identical": true,
+  "flag_caused_legacy_diffs": [],
+  "policy_version": "shadow-parity-policy-v1",
+  "strict_artifacts": [
+    {
+      "raw_match": true,
+      "rel_path": "candidate_tracker/attempt_1/candidate_tracker_alerts.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "candidate_tracker/attempt_1/candidate_tracker_current.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "candidates/attempt_1/final_candidates.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "execute/attempt_1/positions.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "execute/attempt_1/trade_actions.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": false,
+      "rel_path": "investigator/attempt_1/stage1_current_state.csv",
+      "verdict": "CONTENT_EQUIVALENT"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "investigator/attempt_1/stage1_invalidations.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "investigator/attempt_1/stage1_regressions.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "investigator/attempt_1/stage1_stale_candidates.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "investigator/attempt_1/stage1_transitions.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": false,
+      "rel_path": "investigator/attempt_1/stage1_watchlist.csv",
+      "verdict": "CONTENT_EQUIVALENT"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "opportunities/attempt_1/candidate_admissions.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "opportunities/attempt_1/candidate_closures.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "opportunities/attempt_1/candidate_transitions.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "opportunities/attempt_1/current_candidate_state.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "rank/attempt_1/pattern_scan.csv",
+      "verdict": "IDENTICAL"
+    },
+    {
+      "raw_match": true,
+      "rel_path": "scan_router/attempt_1/stage_discovery_candidates.csv",
+      "verdict": "IDENTICAL"
+    }
+  ],
+  "strict_artifacts_byte_identical": false,
+  "strict_headline_byte_identical": true,
+  "verdict": "PASS"
+}

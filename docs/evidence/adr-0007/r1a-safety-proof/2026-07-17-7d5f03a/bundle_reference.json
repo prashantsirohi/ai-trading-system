@@ -1,0 +1,11 @@
+{
+  "as_of_date": "2026-07-17",
+  "asset_name": "r1a-safety-proof-2026-07-17-7d5f03a.tar.zst",
+  "bundle_sha256": "d2f70c7b6f3b301465b4e4a64ecf0c62d1480ae4f69b92f4560d9b9ebd7099ed",
+  "code_commit": "7d5f03a67c834bd6d46342934e4436f2f1615622",
+  "evidence_tag": "r1a-safety-proof-2026-07-17-7d5f03a",
+  "local_archive_path": "/Volumes/MacData/Trading/audit/r1a-proof-2026-07-17-7d5f03a/r1a-safety-proof-2026-07-17-7d5f03a.tar.gz",
+  "local_archive_sha256": "90a7d6ba3fd460f74a1d7acc9bc5a2448e86826ea1eebac4249b37ffb470bc64",
+  "remote_asset_uploaded": false,
+  "staging_path": "/Volumes/MacData/Trading/audit/r1a-proof-2026-07-17-7d5f03a/evidence"
+}

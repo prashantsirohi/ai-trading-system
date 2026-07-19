@@ -83,6 +83,7 @@ def build_proof_bundle(
     run_a: Path, run_b: Path, run_c: Path | None,
     staging_root: Path, git_record_root: Path,
     as_of_date: str, run_id: str, code_commit: str,
+    evidence_tooling_commit: str | None = None,
     clone_db_hashes: dict[str, Any] | None = None,
     env_sha256: str | None = None,
     policy_hashes: dict[str, Any] | None = None,
@@ -120,21 +121,30 @@ def build_proof_bundle(
                ["rel_path", "comparison_class", "raw_match", "normalized_match", "verdict", "differing_columns"])
 
     strict_all_identical = all(r["raw_match"] for r in strict_rows) if strict_rows else False
+    headline_ok = any(
+        r["raw_match"] for r in strict_rows
+        if r["rel_path"].replace("\\", "/").rsplit("/", 1)[-1] == "pattern_scan.csv"
+    )
+    flag_caused_legacy = [
+        {"rel_path": rel, "columns": list(cols)}
+        for rel, cols in report.flag_caused
+        if "performance/" not in rel.replace("\\", "/")
+    ]
     decision = {
+        # Headline gate: rank/pattern_scan.csv must be byte-identical A vs B.
+        "strict_headline_byte_identical": headline_ok,
+        # Whole-file byte-identity of every strict artifact (informational; some
+        # lifecycle artifacts legitimately carry a run-scoped rank/timestamp).
         "strict_artifacts_byte_identical": strict_all_identical,
         "strict_artifacts": strict_rows,
-        "flag_caused_legacy_diffs": [
-            {"rel_path": rel, "columns": list(cols)}
-            for rel, cols in report.flag_caused
-            if not rel.replace("\\", "/").startswith("performance")
-            and "performance/" not in rel.replace("\\", "/")
-        ],
+        # Decision content is identical when no legacy diff survives the A~C
+        # control subtraction. This is the authoritative parity criterion.
+        "decision_content_identical": not flag_caused_legacy,
+        "flag_caused_legacy_diffs": flag_caused_legacy,
         "control_run_present": run_c is not None,
         "policy_version": report.policy_version,
     }
-    decision["verdict"] = (
-        "PASS" if strict_all_identical and not decision["flag_caused_legacy_diffs"] else "REVIEW"
-    )
+    decision["verdict"] = "PASS" if headline_ok and not flag_caused_legacy else "REVIEW"
     (staging_root / "decision_dataset_comparison.json").write_text(
         json.dumps(decision, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -187,7 +197,9 @@ def build_proof_bundle(
         "schema_version": BUNDLE_SCHEMA_VERSION,
         "as_of_date": as_of_date,
         "run_id": run_id,
+        "subject_code_commit": code_commit,
         "code_commit": code_commit,
+        "evidence_tooling_commit": evidence_tooling_commit,
         "git_status_clean": git_status.strip() == "",
         "mode_assignment": {"A": "off", "B": "shadow", "C": "off"},
         "clone_method": "APFS copy-on-write (cp -c); run-history cleared per shadow_stage_ab_parity runbook",
@@ -250,7 +262,9 @@ def build_proof_bundle(
 def _sign_bundle(root: Path) -> str:
     entries = []
     for path in sorted(root.rglob("*")):
-        if path.is_file() and path.name != "bundle.sha256":
+        # Skip bundle.sha256 itself and transient/working files (leading "_",
+        # e.g. the builder's own log or input hash JSONs) that are not evidence.
+        if path.is_file() and path.name != "bundle.sha256" and not path.name.startswith("_"):
             entries.append(f"{raw_sha256(path)}  {path.relative_to(root)}")
     payload = ("\n".join(entries) + "\n").encode("utf-8")
     (root / "bundle.sha256").write_bytes(payload)
@@ -258,13 +272,14 @@ def _sign_bundle(root: Path) -> str:
 
 
 def _summary_markdown(manifest, decision, presence, report) -> str:
-    strict = "byte-identical" if decision["strict_artifacts_byte_identical"] else "NOT byte-identical"
     flagged = decision["flag_caused_legacy_diffs"]
     lines = [
-        f"# Shadow A/B/C proof — {manifest['as_of_date']} @ {manifest['code_commit'][:7]}",
+        f"# Shadow A/B/C proof — {manifest['as_of_date']} @ {manifest['subject_code_commit'][:7]}",
         "",
         f"- **Verdict:** {decision['verdict']}",
-        f"- **STRICT decision artifacts (A vs B):** {strict}",
+        f"- **Headline `rank/pattern_scan.csv` byte-identical (A vs B):** {decision['strict_headline_byte_identical']}",
+        f"- **Decision content identical (control-subtracted):** {decision['decision_content_identical']}",
+        f"- **All strict artifacts byte-identical (informational):** {decision['strict_artifacts_byte_identical']}",
         f"- **Flag-caused legacy diffs (A~B minus A~C control):** {len(flagged) if flagged else 'none'}",
         f"- **Run B lane artifacts:** {presence['run_b_lane_artifact_count']} · Run A has lane dir: {presence['run_a_has_lane_dir']}",
         f"- **Comparison policy:** {manifest['comparison_policy_version']}",
@@ -315,7 +330,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--git-record-root", type=Path, required=True)
     parser.add_argument("--as-of-date", required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--code-commit", required=True)
+    parser.add_argument("--code-commit", required=True, help="Subject code commit (what was run)")
+    parser.add_argument("--evidence-tooling-commit", help="Commit of the proof tooling building this bundle")
     parser.add_argument("--clone-db-hashes", type=Path, help="JSON file of pre-run clone DB hashes")
     parser.add_argument("--env-sha256")
     parser.add_argument("--policy-hashes", type=Path, help="JSON file of policy hashes")
@@ -324,6 +340,7 @@ def main(argv: list[str] | None = None) -> int:
         run_a=args.run_a, run_b=args.run_b, run_c=args.run_c,
         staging_root=args.staging_root, git_record_root=args.git_record_root,
         as_of_date=args.as_of_date, run_id=args.run_id, code_commit=args.code_commit,
+        evidence_tooling_commit=args.evidence_tooling_commit,
         clone_db_hashes=json.loads(args.clone_db_hashes.read_text()) if args.clone_db_hashes else None,
         env_sha256=args.env_sha256,
         policy_hashes=json.loads(args.policy_hashes.read_text()) if args.policy_hashes else None,

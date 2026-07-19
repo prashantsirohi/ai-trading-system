@@ -201,20 +201,19 @@ def normalized_sha256(path: str | Path, policy: ArtifactPolicy | None = None) ->
     return canonical_sha256(_read_csv(path), policy)
 
 
-def _value_differing_columns(a: pd.DataFrame, b: pd.DataFrame) -> list[str]:
-    """Columns whose value multiset differs (ignores pure row-order)."""
-    if list(a.columns) != list(b.columns):
+def _canonical_differing_columns(ca: pd.DataFrame, cb: pd.DataFrame) -> list[str]:
+    """Columns that differ positionally between two already-canonicalized frames.
+
+    Both frames are sorted by all (non-run-scoped) columns, so tied-only row
+    reorderings vanish and this surfaces genuine content diffs — including ones
+    embedded in JSON-blob columns (e.g. ``selection_details`` carrying a
+    run-scoped ``rank_position``), which a column-value multiset check misses.
+    """
+    if list(ca.columns) != list(cb.columns):
         return ["__COLUMN_SET__"]
-    if len(a) != len(b):
-        return [f"__ROW_COUNT__({len(a)}v{len(b)})"]
-    diffs: list[str] = []
-    for col in a.columns:
-        ca, cb = a[col], b[col]
-        if ca.equals(cb):
-            continue
-        if sorted(ca.tolist()) != sorted(cb.tolist()):
-            diffs.append(col)
-    return diffs
+    if len(ca) != len(cb):
+        return [f"__ROW_COUNT__({len(ca)}v{len(cb)})"]
+    return [c for c in ca.columns if not ca[c].reset_index(drop=True).equals(cb[c].reset_index(drop=True))]
 
 
 def compare_artifact(
@@ -229,12 +228,6 @@ def compare_artifact(
             policy.rel_path, policy.artifact_class, raw, raw, (), note="non-tabular",
         )
     da, db = _read_csv(path_a), _read_csv(path_b)
-    raw_diff_cols = _value_differing_columns(da, db)
-    # Content-differing columns: value diffs that survive canonicalization.
-    content_cols = tuple(
-        c for c in raw_diff_cols
-        if c.startswith("__") or c not in policy.run_scoped_columns
-    )
     if policy.artifact_class is FieldClass.TELEMETRY:
         # Additive rows allowed; only a column-set change is a real diff.
         schema_ok = list(da.columns) == list(db.columns) or da.empty or db.empty
@@ -242,9 +235,9 @@ def compare_artifact(
             policy.rel_path, policy.artifact_class, raw, schema_ok,
             () if schema_ok else ("__COLUMN_SET__",), note="telemetry-additive",
         )
-    normalized = canonical_sha256(da, policy) == canonical_sha256(db, policy)
-    # If canonical hashes match, no content column truly differs.
-    differing = () if normalized else content_cols
+    ca, cb = canonicalize(da, policy), canonicalize(db, policy)
+    differing = _canonical_differing_columns(ca, cb)
+    normalized = not differing
     return ArtifactComparison(
         policy.rel_path, policy.artifact_class, raw, normalized, tuple(differing),
     )

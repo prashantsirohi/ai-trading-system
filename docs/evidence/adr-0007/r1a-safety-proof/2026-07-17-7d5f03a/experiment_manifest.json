@@ -1,0 +1,45 @@
+{
+  "as_of_date": "2026-07-17",
+  "clone_db_hashes": {
+    "candidate_tracker.duckdb": "99dd4a7fddf6ac1c22d65515e6427b4e31feec5d1e5b2d1bb36d68849137dc52",
+    "control_plane.duckdb": "4de5d466274bcaac0c00227495d835f384b4fd3ed530bc84ff5683577fed4cb3",
+    "execution.duckdb": "d05c112a4b780ac5627dc77ff1ec3f58fd0bdcae11113a6a5884f5b03038f2bd",
+    "fundamentals.duckdb": "50df3d146eac3391fd920de09abb0089e2cc923e37cb6cc67886f669355f6b85",
+    "market_intel.duckdb": "8211256c80e0ff0d27c907a1a2ab8a1480f8015a728e532ea53ef432a987f4c1",
+    "masterdata.db": "8aff15dee6861195d7dd20bc39b664b86fb18e305aaee1ffe0d38f3b42f315da",
+    "ohlcv.duckdb": "69123615322d2646d3487b39cecd3b1ad675cc3b9e44293e1cce843cb435a4e3",
+    "registry.duckdb": "0dbc2c9e3be28c0770c3ab64461659bbfd177e17f22cfcf96925f216f2d6487d",
+    "research.duckdb": "fd10d4b639deb2e5e7b96e250b9d1dbbcbff004e5887bbca8cfa8c5f30ffbebb"
+  },
+  "clone_method": "APFS copy-on-write (cp -c); run-history cleared per shadow_stage_ab_parity runbook",
+  "code_commit": "7d5f03a67c834bd6d46342934e4436f2f1615622",
+  "comparison_policy_version": "shadow-parity-policy-v1",
+  "decision_verdict": "PASS",
+  "env_sha256": "b09296639d910103faa981277c13c377a2ba958fa1ac2ef86310567562fff0b9",
+  "evidence_tooling_commit": "f6644d6b3d96cb1dc8a6fb746412db52c15ff753",
+  "git_status_clean": true,
+  "mode_assignment": {
+    "A": "off",
+    "B": "shadow",
+    "C": "off"
+  },
+  "operational_side_effects": false,
+  "policy_hashes": {
+    "r0_policy_content_hash": "bb45dfa5a465d8f26d74801c924a98cf90eff64f4b13ffee26008ed2f8ff076c",
+    "r0_policy_version": "pattern-lane-r0-policy-v1",
+    "sub_policy_versions": {
+      "early_ipo_liquidity": "ipo-early-liquidity-policy-v1",
+      "families": "pattern-family-policy-v1",
+      "outcomes": "pattern-r0-outcome-policy-v2",
+      "reconstruction": "pattern-r0-reconstruction-policy-v1",
+      "stage1_structure": "pattern-stage1-structure-policy-v1",
+      "stage2": "pattern-stage2-validity-policy-v1",
+      "standard_liquidity": "pattern-standard-liquidity-policy-v1",
+      "weekly_freshness": "weekly-stage-freshness-policy-v2"
+    },
+    "weekly_stage_policy_version": "weekly-stage-v2"
+  },
+  "run_id": "ABRUN",
+  "schema_version": "shadow-ab-proof-bundle-v1",
+  "subject_code_commit": "7d5f03a67c834bd6d46342934e4436f2f1615622"
+}

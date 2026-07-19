@@ -1,0 +1,14 @@
+{
+  "run_a_has_lane_dir": false,
+  "run_b_lane_artifact_count": 7,
+  "run_b_lane_artifacts": [
+    "pattern_lane_manifest.json",
+    "pattern_lane_parity_report.json",
+    "pattern_lane_runtime.json",
+    "pattern_lane_scan.csv",
+    "pattern_lane_shadow_report.html",
+    "pattern_lane_source_diagnostics.csv",
+    "pattern_lane_summary.json"
+  ],
+  "run_b_lane_dir": "/Volumes/MacData/Trading/audit/r1a-proof-2026-07-17-7d5f03a/run-B-data/pipeline_runs/ABRUN/pattern_lane_scan/attempt_1"
+}
