@@ -48,9 +48,10 @@ from ai_trading_system.platform.db.paths import (
 from ai_trading_system.domains.fundamentals.screener_store import default_screener_db_path
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
-from ai_trading_system.pipeline.stages import CandidateTrackerStage, CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, InvestigatorStage, NarrativeStage, OpportunityStage, PerfTrackerStage, PublishStage, RankStage, ScanRouterStage, WeeklyStageCoverageStage
+from ai_trading_system.pipeline.stages import CandidateTrackerStage, CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalsStage, IngestStage, InsightStage, InvestigatorStage, NarrativeStage, OpportunityStage, PatternLaneScanStage, PerfTrackerStage, PublishStage, RankStage, ScanRouterStage, WeeklyStageCoverageStage
 from ai_trading_system.pipeline.stages.opportunities import OpportunityStageError
 from ai_trading_system.pipeline.stages.scan_router import ScanRouterStageError
+from ai_trading_system.pipeline.stages.pattern_lane_scan import PatternLaneScanStageError
 
 load_project_env(__file__)
 
@@ -77,10 +78,10 @@ FEATURE_SUBSTAGE_LABELS = {
     "features_phase1": "phase1 derived features",
     "features_snapshot": "feature snapshot and DQ",
 }
-PIPELINE_ORDER = ["ingest", *FEATURE_SUBSTAGES, "rank", "weekly_stage", "scan_router", "investigator", "opportunities", "fundamentals", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
+PIPELINE_ORDER = ["ingest", *FEATURE_SUBSTAGES, "rank", "weekly_stage", "pattern_lane_scan", "scan_router", "investigator", "opportunities", "fundamentals", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
 # Stages dropped from the default order unless explicitly enabled (e.g. by a flag
 # or by a detected input). They remain valid when named in an explicit stage list.
-OPTIONAL_STAGES = frozenset({"fundamentals", "weekly_stage", "scan_router", "opportunities"})
+OPTIONAL_STAGES = frozenset({"fundamentals", "weekly_stage", "pattern_lane_scan", "scan_router", "opportunities"})
 DEFAULT_CLI_STAGES = "ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker"
 
 
@@ -567,6 +568,7 @@ class PipelineOrchestrator:
             "features_snapshot": FeaturesStage(),
             "rank": RankStage(),
             "weekly_stage": WeeklyStageCoverageStage(),
+            "pattern_lane_scan": PatternLaneScanStage(),
             "scan_router": ScanRouterStage(),
             "investigator": InvestigatorStage(),
             "opportunities": OpportunityStage(),
@@ -600,6 +602,7 @@ class PipelineOrchestrator:
             "features_snapshot": "features 7/7: snapshot and feature DQ",
             "rank": "scoring symbols and building ranked outputs",
             "weekly_stage": "classifying full-universe weekly structure",
+            "pattern_lane_scan": "running shadow-only lane-aware pattern scan (non-actionable)",
             "scan_router": "routing rank, stage and position monitoring coverage",
             "investigator": "investigating daily gainers and ageing active watchlist",
             "opportunities": "reconciling canonical candidate episodes in shadow mode",
@@ -767,6 +770,7 @@ class PipelineOrchestrator:
             enable_candidate_tracker=bool(params.get("enable_candidate_tracker", True)),
             opportunity_registry_mode=str(params.get("opportunity_registry_mode", "off")),
             opportunity_scan_routing_mode=str(params.get("opportunity_scan_routing_mode", "off")),
+            pattern_lane_scan_mode=str(params.get("pattern_lane_scan_mode", "off")),
         )
         data_domain = params.get("data_domain", "operational")
         run_date = run_date or date.today().isoformat()
@@ -899,8 +903,8 @@ class PipelineOrchestrator:
                 artifacts = self.registry.get_artifact_map(run_id)
                 self._alias_feature_snapshot_artifact(artifacts)
                 if stage_name in {
-                    "scan_router", "investigator", "opportunities", "events",
-                    "execute", "insight", "publish",
+                    "scan_router", "pattern_lane_scan", "investigator", "opportunities",
+                    "events", "execute", "insight", "publish",
                 }:
                     self._attach_latest_rank_artifacts(artifacts, run_id=run_id)
                     self._alias_feature_snapshot_artifact(artifacts)
@@ -1117,7 +1121,7 @@ class PipelineOrchestrator:
                                 detail=str(exc),
                             )
                         break
-                    except (OpportunityStageError, ScanRouterStageError) as exc:
+                    except (OpportunityStageError, ScanRouterStageError, PatternLaneScanStageError) as exc:
                         opportunity_stage_failed = True
                         self.alert_manager.emit(
                             run_id=run_id,
@@ -1239,6 +1243,7 @@ class PipelineOrchestrator:
         enable_candidate_tracker: bool = True,
         opportunity_registry_mode: str = "off",
         opportunity_scan_routing_mode: str = "off",
+        pattern_lane_scan_mode: str = "off",
     ) -> List[str]:
         def _expand_features(stages: Iterable[str]) -> list[str]:
             expanded: list[str] = []
@@ -1260,6 +1265,9 @@ class PipelineOrchestrator:
                 or (stage == "fundamentals" and fundamentals_enabled)
                 or (stage == "opportunities" and str(opportunity_registry_mode).lower() == "shadow")
                 or (stage in {"weekly_stage", "scan_router"} and str(opportunity_scan_routing_mode).lower() in {"compare", "shadow"})
+                # R1a shadow mode needs the current week's governed weekly-stage
+                # rows, so enabling it also schedules weekly_stage.
+                or (stage in {"weekly_stage", "pattern_lane_scan"} and str(pattern_lane_scan_mode).lower() == "shadow")
                 if stage != "candidate_tracker" or bool(enable_candidate_tracker)
             ]
         requested = _expand_features(stage_names)
@@ -1472,6 +1480,18 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("off", "compare", "shadow"),
         default="off",
         help="Enable Phase 3B universe coverage and non-authoritative scan routing.",
+    )
+    parser.add_argument(
+        "--pattern-lane-scan-mode",
+        choices=("off", "shadow"),
+        default="off",
+        help="Enable the R1a shadow-only, non-actionable lane-aware pattern scan (also schedules weekly_stage).",
+    )
+    parser.add_argument(
+        "--pattern-lane-scan-workers",
+        type=int,
+        default=1,
+        help="Process-pool workers for the R1a shadow lane scan (default 1, matches --pattern-workers convention).",
     )
     parser.add_argument("--rank-deep-scan-limit", type=int, default=250)
     parser.add_argument("--stage-promoted-scan-limit", type=int, default=75)
@@ -2023,6 +2043,13 @@ def main() -> None:
         if args.opportunity_scan_routing_mode in {"compare", "shadow"} and args.stages == DEFAULT_CLI_STAGES:
             rank_index = stage_names.index("rank")
             stage_names[rank_index + 1:rank_index + 1] = ["weekly_stage", "scan_router"]
+        if args.pattern_lane_scan_mode == "shadow" and args.stages == DEFAULT_CLI_STAGES:
+            if "weekly_stage" not in stage_names:
+                rank_index = stage_names.index("rank")
+                stage_names.insert(rank_index + 1, "weekly_stage")
+            weekly_index = stage_names.index("weekly_stage")
+            if "pattern_lane_scan" not in stage_names:
+                stage_names.insert(weekly_index + 1, "pattern_lane_scan")
         if args.opportunity_registry_mode == "shadow" and args.stages == DEFAULT_CLI_STAGES:
             investigator_index = stage_names.index("investigator")
             stage_names.insert(investigator_index + 1, "opportunities")
@@ -2052,6 +2079,8 @@ def main() -> None:
         "opportunity_registry_mode": args.opportunity_registry_mode,
         "opportunity_registry_dry_run": bool(args.opportunity_registry_dry_run),
         "opportunity_scan_routing_mode": args.opportunity_scan_routing_mode,
+        "pattern_lane_scan_mode": args.pattern_lane_scan_mode,
+        "pattern_lane_scan_workers": args.pattern_lane_scan_workers,
         "rank_deep_scan_limit": args.rank_deep_scan_limit,
         "stage_promoted_scan_limit": args.stage_promoted_scan_limit,
         "stage_discovery_confidence_threshold": args.stage_discovery_confidence_threshold,

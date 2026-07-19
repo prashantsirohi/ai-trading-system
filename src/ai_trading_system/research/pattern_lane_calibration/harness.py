@@ -49,6 +49,11 @@ CONTEXT_COLUMNS: tuple[str, ...] = (
     "stage2_score", "stage2_label", "stage2_input_valid", "weekly_stage",
     "weekly_stage_transition", "weekly_stage_as_of",
     "weekly_stage_age_trading_days", "weekly_stage_is_fresh",
+    # Weekly-stage source provenance threaded from the governed source
+    # contract (additive; None when the weekly-stage frame carries no
+    # provenance, e.g. synthetic calibration inputs).
+    "weekly_stage_source", "weekly_stage_observation_id",
+    "weekly_stage_policy_version", "weekly_stage_source_fallback_used",
     "structure_observation_id",
 )
 
@@ -354,10 +359,22 @@ def build_point_in_time_context(
             "weekly_stage_as_of": pd.Timestamp(weekly_date).date().isoformat() if weekly_date is not None and not pd.isna(weekly_date) else None,
             "weekly_stage_age_trading_days": weekly_age,
             "weekly_stage_is_fresh": bool(weekly_fresh),
+            "weekly_stage_source": (str(weekly_row["stage_source"]) if weekly_row.get("stage_source") is not None else None),
+            "weekly_stage_observation_id": (str(weekly_row["stage_observation_id"]) if weekly_row.get("stage_observation_id") is not None else None),
+            "weekly_stage_policy_version": (str(weekly_row["stage_policy_version"]) if weekly_row.get("stage_policy_version") is not None else None),
+            "weekly_stage_source_fallback_used": (bool(weekly_row["stage_source_fallback_used"]) if weekly_row.get("stage_source_fallback_used") is not None else None),
             **stage1,
             "market_regime": str(latest.get("market_regime", "unknown") or "unknown"),
         }
-        identity_fields = {key: base_record.get(key) for key in CONTEXT_COLUMNS if key != "structure_observation_id"}
+        # Weekly-stage source provenance is descriptive metadata, not part of
+        # the structural identity, so it is excluded from the observation hash
+        # to keep existing structure_observation_id values stable.
+        _identity_excluded = {
+            "structure_observation_id", "weekly_stage_source",
+            "weekly_stage_observation_id", "weekly_stage_policy_version",
+            "weekly_stage_source_fallback_used",
+        }
+        identity_fields = {key: base_record.get(key) for key in CONTEXT_COLUMNS if key not in _identity_excluded}
         base_record["structure_observation_id"] = _sha256_bytes(_json(identity_fields).encode("utf-8"))
         rows.append(base_record)
     return pd.DataFrame(rows).sort_values(["exchange", "symbol_id"], kind="stable").reset_index(drop=True)
