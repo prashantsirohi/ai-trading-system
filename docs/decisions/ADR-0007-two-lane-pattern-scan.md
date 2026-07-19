@@ -3,11 +3,17 @@
 - **Purpose:** Define a governed four-lane pattern evidence scan and its
   research-first calibration path without changing current rank consumers.
 - **Audience:** Operator, developers, reviewers, future agents.
-- **Last verified:** 2026-07-17
+- **Last verified:** 2026-07-19
 - **Source of truth:** Current behavior is owned by
   `domains/ranking/patterns/`, `domains/ranking/service.py`,
   `pipeline/stages/weekly_stage.py`, and `pipeline/stages/scan_router.py`.
 - **R0 implementation:** `research/pattern_lane_calibration/`.
+- **R1a implementation:** `pipeline/stages/pattern_lane_scan.py`,
+  `research/pattern_lane_calibration/shadow.py`.
+- **R1a evidence:** A/B/C safety proof at
+  `docs/evidence/adr-0007/r1a-safety-proof/2026-07-17-7d5f03a/`; daily gate
+  `pipeline/session_gate.py`; parity policy `platform/parity/comparison_policy.py`.
+  See "R1a shadow" under D7.
 - **Status:** **Proposed; R0 pilot executed 2026-07-18.** The R0 harness
   passed (reproducible, immutable, no production impact). Calibration evidence
   is partial/inconclusive: the operator authorized a narrowly scoped R1a
@@ -290,6 +296,78 @@ bundle `REPORT.md`.
 R1 may add an independent shadow scan only after the ADR and lane artifact
 contract are approved. Legacy execution remains unchanged. Decision consumers,
 including the existing Stage-1 lifecycle builder, must remain row-equivalent.
+
+#### R1a shadow — safety proof
+
+The row-equivalence claim above is proven, not asserted. Enabling
+`--pattern-lane-scan-mode shadow` was validated with an A/B/C controlled
+comparison (A=off, B=shadow, C=off control) on isolated APFS copy-on-write
+clones for run date 2026-07-17 at commit `7d5f03a`: every legacy decision
+artifact was byte-identical A vs B (`rank/pattern_scan.csv` exact SHA-256,
+`final_candidates`, `positions`, `trade_actions`, candidate/stage-1 lifecycle,
+scan-router tier/reason decisions, opportunity admissions/transitions). The only
+flag-caused output is the new stage's own additive `performance/*` telemetry.
+Every residual difference was reproduced in the same-mode A~C control (generated
+ids, timestamps, float-summation jitter, run-scoped hashes, rank tie jitter) —
+ordinary nondeterminism, catalogued in the parity policy.
+
+The durable, independently-reviewable evidence is the committed audit record at
+`docs/evidence/adr-0007/r1a-safety-proof/2026-07-17-7d5f03a/` (bound to the full
+signed bundle by `bundle.sha256` and the GitHub Release asset in
+`bundle_reference.json`). The procedure is
+[shadow_stage_ab_parity](../runbooks/shadow_stage_ab_parity.md); the field
+classification is `platform/parity/comparison_policy.py`
+(`shadow-parity-policy-v1`). Day 1 counts; the full three-run test does not
+repeat daily.
+
+#### Daily operation from Day 2
+
+Run the normal production pipeline with the three shadow flags — no A/B/C:
+
+```
+ai-trading-pipeline --run-date <session> \
+  --opportunity-registry-mode shadow \
+  --opportunity-scan-routing-mode shadow \
+  --pattern-lane-scan-mode shadow --local-publish
+```
+
+A session counts toward the 20-session clock when all eight hold (evaluated by
+`ai-trading-shadow-session-gate --run-id <id>`, module
+`pipeline/session_gate.py`, `r1a-session-gate-v1`): the lane stage completed; all
+seven lane artifacts are registered; runtime passes (p95 ≤ 10 min, none > 15
+min); policy diagnostics pass; source diagnostics pass; no stale evidence is
+admitted as fresh; no malformed signal rows; the registry and routing shadows
+complete (a non-blocking `opportunities` degradation is tolerated); and no
+operational consumer changed (`operational_side_effects == false`).
+
+During the shadow period, run the offline cross-shadow reconciliation
+(`ai-trading-cross-shadow`, read-only, `research/pattern_lane_calibration/
+cross_shadow.py`) to compare lane evidence against the opportunity-registry
+shadow without writing pattern evidence into the registry: pattern-before /
+same-day / pattern-after / pattern-only / registry-only / suppression-conflict /
+possible-duplicate. This measures whether the lane scan adds genuine early
+discovery or merely confirms rank/Investigator finds.
+
+#### R1a review points
+
+**After five successful sessions**, review operational health: runtime median
+and p95; snapshot-fallback rate (the Day-1 value of ~22.5% is not a blocker —
+no stale evidence was admitted — but each fallback's reason must stay visible);
+governed-stage freshness; lane and family signal volume; fresh vs carry-forward
+ratio; registry conflicts and duplicate episodes; and pattern-to-registry
+lead/lag examples from the cross-shadow report.
+
+**After twenty successful sessions**, make three *separate* decisions: (1)
+whether the opportunity registry may become the authoritative lifecycle store;
+(2) whether selected pattern evidence may enter the registry as
+**non-actionable observational** events; (3) whether pattern reasons may move
+into scan-router **compare** mode. Do not move directly from R1a to active
+Investigator routing.
+
+Course: Day-1 safety proof (complete) → Days 2–5 operational monitoring → Days
+1–20 independent dual shadows → cross-shadow reconciliation during the period →
+Day-20 registry and pattern reviews → next possible mode: observational bridge /
+router compare.
 
 ### R2
 

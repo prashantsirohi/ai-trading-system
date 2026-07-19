@@ -313,6 +313,61 @@ def build_parity_report(lane_signals: pd.DataFrame, legacy_pattern_scan_artifact
     }
 
 
+VALID_EVIDENCE_CLASSES: frozenset[str] = frozenset(
+    [EVIDENCE_CLASS["default"]]
+    + list(EVIDENCE_CLASS["suppression"].values())
+    + list(EVIDENCE_CLASS["family"].values())
+    + list(EVIDENCE_CLASS["lane"].values())
+)
+VALID_EVIDENCE_ORIGINS: frozenset[str] = frozenset({"fresh", "carry_forward"})
+_SIGNAL_REQUIRED_COLUMNS: tuple[str, ...] = (
+    "symbol_id", "exchange", "as_of_date", "pattern_family",
+    "scan_lane_as_of", "evidence_origin", "r1a_evidence_class",
+)
+
+
+def validate_signal_rows(frame: pd.DataFrame) -> tuple[bool, list[str], int]:
+    """Validate the evidence-attached signal frame; return (ok, issues, count).
+
+    A malformed row is one missing a required key, carrying an out-of-domain
+    ``evidence_origin`` / ``r1a_evidence_class``, or a ``head_shoulders``
+    suppression row not classified ``suppression_only`` (regression guard for
+    the suppression-provenance bug fixed earlier). Non-blocking: surfaced as a
+    count, never raised here.
+    """
+    issues: list[str] = []
+    if frame is None or frame.empty:
+        return True, issues, 0
+    missing_cols = [c for c in _SIGNAL_REQUIRED_COLUMNS if c not in frame.columns]
+    if missing_cols:
+        return False, [f"missing_columns:{missing_cols}"], int(len(frame))
+
+    def _blank(series: pd.Series) -> pd.Series:
+        return series.isna() | series.astype(str).str.strip().isin({"", "nan", "None"})
+
+    malformed = pd.Series(False, index=frame.index)
+    for key in ("symbol_id", "pattern_family", "scan_lane_as_of", "as_of_date"):
+        blank = _blank(frame[key])
+        if blank.any():
+            issues.append(f"blank_{key}:{int(blank.sum())}")
+        malformed |= blank
+    bad_origin = ~frame["evidence_origin"].astype(str).isin(VALID_EVIDENCE_ORIGINS)
+    if bad_origin.any():
+        issues.append(f"invalid_evidence_origin:{int(bad_origin.sum())}")
+    malformed |= bad_origin
+    bad_class = ~frame["r1a_evidence_class"].astype(str).isin(VALID_EVIDENCE_CLASSES)
+    if bad_class.any():
+        issues.append(f"invalid_r1a_evidence_class:{int(bad_class.sum())}")
+    malformed |= bad_class
+    hs = frame["pattern_family"].astype(str) == "head_shoulders"
+    bad_suppression = hs & (frame["r1a_evidence_class"].astype(str) != "suppression_only")
+    if bad_suppression.any():
+        issues.append(f"suppression_misclassified:{int(bad_suppression.sum())}")
+    malformed |= bad_suppression
+    count = int(malformed.sum())
+    return count == 0, issues, count
+
+
 def build_shadow_summary(
     classified: pd.DataFrame,
     signals: pd.DataFrame,
@@ -332,6 +387,7 @@ def build_shadow_summary(
     signal_family = signals.get("pattern_family", pd.Series(dtype=str)) if signals is not None else pd.Series(dtype=str)
     origin = signals.get("evidence_origin", pd.Series(dtype=str)) if signals is not None else pd.Series(dtype=str)
     evidence = signals.get("r1a_evidence_class", pd.Series(dtype=str)) if signals is not None else pd.Series(dtype=str)
+    signals_ok, signal_issues, malformed_signal_rows = validate_signal_rows(signals)
     return {
         "status": status,
         "symbols_scanned": symbols_scanned,
@@ -343,6 +399,9 @@ def build_shadow_summary(
         "evidence_class_counts": {str(k): int(v) for k, v in evidence.value_counts().to_dict().items()},
         "fresh_signals": int((origin.astype(str) == "fresh").sum()),
         "carry_forward_signals": int((origin.astype(str) == "carry_forward").sum()),
+        "malformed_signal_rows": int(malformed_signal_rows),
+        "signal_rows_valid": bool(signals_ok),
+        "signal_validation_issues": signal_issues,
         "fallback_rate": diagnostics.get("fallback_rate", 0.0),
         "stale_admitted_as_fresh_count": diagnostics.get("stale_admitted_as_fresh_count", 0),
         "policy_mismatch_count": diagnostics.get("policy_mismatch_count", 0),

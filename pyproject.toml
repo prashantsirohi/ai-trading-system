@@ -80,6 +80,9 @@ ai-trading-benchmark-phase3c4 = "ai_trading_system.interfaces.cli.benchmark_phas
 ai-trading-build-phase3c5-calibration = "ai_trading_system.interfaces.cli.build_phase3c5_calibration:main"
 ai-trading-check-phase4-readiness = "ai_trading_system.interfaces.cli.check_phase4_readiness:main"
 ai-trading-pattern-r0-calibrate = "ai_trading_system.research.pattern_lane_calibration.cli:main"
+ai-trading-shadow-session-gate = "ai_trading_system.interfaces.cli.check_shadow_session_gate:main"
+ai-trading-shadow-ab-proof = "ai_trading_system.interfaces.cli.build_shadow_ab_proof:main"
+ai-trading-cross-shadow = "ai_trading_system.interfaces.cli.build_cross_shadow_reconciliation:main"
 ai-trading-phase4-api = "ai_trading_system.interfaces.cli.serve_phase4_api:main"
 
 [tool.setuptools.packages.find]

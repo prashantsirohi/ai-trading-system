@@ -75,6 +75,8 @@
 - [backup_and_restore](runbooks/backup_and_restore.md)
 - [copied_data_canary](runbooks/copied_data_canary.md)
 - [phase3b_shadow_verification](runbooks/phase3b_shadow_verification.md)
+- [shadow_stage_ab_parity](runbooks/shadow_stage_ab_parity.md)
+- [shadow_daily_session](runbooks/shadow_daily_session.md)
 - [deployment_mac_mini](runbooks/deployment_mac_mini.md)
 - [optimization](runbooks/optimization.md)
 
@@ -98,6 +100,9 @@
 - [ADR-0005 React operator workspace](decisions/ADR-0005-react-operator-workspace.md)
 - [ADR-0006 entry model and stage policy freeze](decisions/ADR-0006-entry-model-and-stage-policy-freeze.md)
 - [ADR-0007 multi-lane pattern evidence scan (proposed)](decisions/ADR-0007-two-lane-pattern-scan.md)
+
+## Evidence
+- [R1a shadow A/B safety proof (2026-07-17 @ 7d5f03a)](evidence/adr-0007/r1a-safety-proof/2026-07-17-7d5f03a/README.md)
 
 ## Audit
 - [documentation_inventory](_audit/documentation_inventory.md)

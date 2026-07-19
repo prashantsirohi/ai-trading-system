@@ -53,6 +53,8 @@ class PerformanceConfig:
     sector_aggregation_fail_seconds: float = 90.0
     scan_router_warn_seconds: float = 30.0
     scan_router_fail_seconds: float = 90.0
+    pattern_lane_scan_warn_seconds: float = 600.0
+    pattern_lane_scan_fail_seconds: float = 900.0
     investigator_warn_seconds: float = 180.0
     investigator_fail_seconds: float = 600.0
     opportunities_warn_seconds: float = 60.0
@@ -73,6 +75,7 @@ class PerformanceConfig:
             ("weekly_stage", self.weekly_stage_warn_seconds, self.weekly_stage_fail_seconds),
             ("sector_aggregation", self.sector_aggregation_warn_seconds, self.sector_aggregation_fail_seconds),
             ("scan_router", self.scan_router_warn_seconds, self.scan_router_fail_seconds),
+            ("pattern_lane_scan", self.pattern_lane_scan_warn_seconds, self.pattern_lane_scan_fail_seconds),
             ("investigator", self.investigator_warn_seconds, self.investigator_fail_seconds),
             ("opportunities", self.opportunities_warn_seconds, self.opportunities_fail_seconds),
             ("total_shadow_pipeline", self.total_shadow_pipeline_warn_seconds, self.total_shadow_pipeline_fail_seconds),
@@ -109,6 +112,7 @@ class PerformanceConfig:
         mapping = {
             "weekly_stage": ("weekly_stage_runtime", self.weekly_stage_warn_seconds, self.weekly_stage_fail_seconds),
             "scan_router": ("scan_router_runtime", self.scan_router_warn_seconds, self.scan_router_fail_seconds),
+            "pattern_lane_scan": ("pattern_lane_scan_runtime", self.pattern_lane_scan_warn_seconds, self.pattern_lane_scan_fail_seconds),
             "investigator": ("investigator_runtime", self.investigator_warn_seconds, self.investigator_fail_seconds),
             "opportunities": ("opportunities_runtime", self.opportunities_warn_seconds, self.opportunities_fail_seconds),
             "pipeline": ("total_shadow_pipeline_runtime", self.total_shadow_pipeline_warn_seconds, self.total_shadow_pipeline_fail_seconds),
