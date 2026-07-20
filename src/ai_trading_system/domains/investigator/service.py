@@ -751,9 +751,9 @@ class InvestigatorService:
                 if frame.empty:
                     continue
                 frame = frame.copy()
-                frame.loc[:, "run_id"] = context.run_id
+                frame["run_id"] = context.run_id
                 frame.loc[:, "attempt_number"] = context.attempt_number
-                frame.loc[:, "artifact_uri"] = artifact.uri
+                frame["artifact_uri"] = artifact.uri
                 conn.execute(
                     "CREATE TEMP TABLE investigator_stage_frame AS SELECT * FROM frame"
                 )

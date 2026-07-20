@@ -234,7 +234,7 @@ def _compute_rotation_rrg_history(rotation_indices: pd.DataFrame, benchmark: pd.
     data.loc[:, "alpha_60d"] = data["return_60d"] - grouped["benchmark_index"].pct_change(60)
     data.loc[:, "quadrant"] = data.apply(lambda row: classify_quadrant(row["rs_ratio"], row["rs_momentum"]), axis=1)
     data.loc[:, "outperformance_bucket"] = data["alpha_20d"].map(bucket_outperformance)
-    data.loc[:, "date"] = pd.to_datetime(data["date"], errors="coerce").dt.date.astype(str)
+    data["date"] = pd.to_datetime(data["date"], errors="coerce").dt.date.astype(str)
     if "industry" not in data.columns:
         data.loc[:, "industry"] = data["rotation_group_name"].where(data["rotation_group_type"].eq("industry"), data["rotation_group_name"])
     if "sector" not in data.columns:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 
@@ -16,7 +17,7 @@ def score_price_structure(frame: pd.DataFrame) -> pd.DataFrame:
     low = pd.to_numeric(out.get("low"), errors="coerce")
     open_ = pd.to_numeric(out.get("open"), errors="coerce")
     close = pd.to_numeric(out.get("close"), errors="coerce")
-    range_ = (high - low).replace(0, pd.NA)
+    range_ = (high - low).replace(0, np.nan)
     body_pct = (close - open_).abs() / range_ * 100.0
     close_position = (close - low) / range_ * 100.0
     upper_wick_pct = (high - close) / range_ * 100.0

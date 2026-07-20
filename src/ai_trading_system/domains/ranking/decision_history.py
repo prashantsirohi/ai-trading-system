@@ -190,8 +190,8 @@ class DecisionHistoryRepository:
         for frame in (lifecycle, events):
             if not frame.empty:
                 frame.loc[:, "exchange"] = frame["exchange"].fillna("NSE")
-                frame.loc[:, "pipeline_run_id"] = context.run_id
-                frame.loc[:, "run_id"] = context.run_id
+                frame["pipeline_run_id"] = context.run_id
+                frame["run_id"] = context.run_id
                 frame.loc[:, "source_attempt"] = context.attempt_number
                 frame.loc[:, "attempt_number"] = context.attempt_number
         if not lifecycle.empty:

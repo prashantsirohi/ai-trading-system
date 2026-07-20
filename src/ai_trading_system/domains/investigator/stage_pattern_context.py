@@ -412,7 +412,7 @@ def _merge_prefer_right(left: pd.DataFrame, right: pd.DataFrame, *, on: str) -> 
     for column in overlap:
         ctx = f"{column}_ctx"
         if ctx in merged.columns:
-            values = merged[ctx].combine_first(merged[column])
+            values = merged[ctx].where(merged[ctx].notna(), merged[column])
             merged = merged.drop(columns=[column, ctx])
             merged.loc[:, column] = values
     return merged
