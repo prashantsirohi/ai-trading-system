@@ -13,7 +13,9 @@
 #
 # Env overrides:
 #   RUN_DATE               session date (default: today, YYYY-MM-DD)
-#   RUN_ID                 pinned run id (default: shadow-<RUN_DATE>-<HHMMSS>)
+#   RUN_ID                 pinned run id. If unset, a plain re-run auto-resumes
+#                          the latest failed/interrupted run for RUN_DATE (skips
+#                          completed stages); otherwise mints shadow-<DATE>-<HHMMSS>.
 #   PATTERN_LANE_WORKERS   process-pool workers for the lane scan (default: 4)
 
 set -uo pipefail
@@ -28,7 +30,38 @@ if [[ ! -x "$PY" ]]; then
 fi
 
 RUN_DATE="${RUN_DATE:-$(date +%F)}"
-RUN_ID="${RUN_ID:-shadow-$RUN_DATE-$(date +%H%M%S)}"     # 2. unique per invocation
+
+# 2. Resolve the run id. Priority:
+#      a) explicit RUN_ID env  -> pin that run (honours the operator).
+#      b) latest resumable run -> a plain re-run continues the failed/interrupted
+#         run for RUN_DATE (orchestrator then skips already-completed stages)
+#         instead of restarting from ingest. Uses the SAME "resumable" definition
+#         as the orchestrator's own auto-resume (registry.find_latest_resumable_run).
+#      c) otherwise            -> mint a fresh timestamped id.
+if [[ -n "${RUN_ID:-}" ]]; then
+  RESUME_NOTE="pinned"
+else
+  RESUME_ID="$("$PY" - "$REPO" "$RUN_DATE" <<'PY' 2>/dev/null || true
+import sys
+from ai_trading_system.analytics.registry import RegistryStore
+
+repo, run_date = sys.argv[1], sys.argv[2]
+try:
+    rid = RegistryStore(repo).find_latest_resumable_run(run_date=run_date)
+except Exception:
+    rid = None
+print(rid or "")
+PY
+)"
+  if [[ -n "$RESUME_ID" ]]; then
+    RUN_ID="$RESUME_ID"
+    RESUME_NOTE="auto-resume"
+  else
+    RUN_ID="shadow-$RUN_DATE-$(date +%H%M%S)"
+    RESUME_NOTE="new"
+  fi
+fi
+
 WORKERS="${PATTERN_LANE_WORKERS:-4}"
 OUT="reports/research/shadow_sessions/$RUN_DATE"
 
@@ -40,7 +73,7 @@ if ! mkdir "$LOCK" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
-echo "[daily-shadow] run_id=$RUN_ID  run_date=$RUN_DATE  workers=$WORKERS"
+echo "[daily-shadow] run_id=$RUN_ID  run_date=$RUN_DATE  workers=$WORKERS  ($RESUME_NOTE)"
 
 # 4. Full production pipeline + three shadow flags. Default --stages, so the
 #    orchestrator auto-injects weekly_stage, pattern_lane_scan, scan_router and
