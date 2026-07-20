@@ -178,3 +178,22 @@ def test_s1_classification_ambiguity_matrix_cases() -> None:
     for label, row, expected in cases:
         classified = _classify_s1_state(pd.Series(row))
         assert classified["s1_promotion_state"] == expected, label
+
+
+def test_s1_classification_tolerates_pd_na_strings() -> None:
+    # pd.NA in string-typed columns must not raise "boolean value of NA is ambiguous".
+    row = pd.Series(
+        {
+            "pattern_score": 52,
+            "delivery_pct": 58,
+            "trigger_reason": pd.NA,
+            "pattern_state": pd.NA,
+            "pattern_lifecycle_state": pd.NA,
+            "drop_reason": pd.NA,
+            "investigator_verdict": pd.NA,
+        }
+    )
+
+    classified = _classify_s1_state(row)
+
+    assert classified["s1_promotion_state"] == "S1_ACCUMULATION"

@@ -110,7 +110,7 @@ def _active_symbols(values: Iterable[object]) -> list[str]:
     symbols: list[str] = []
     seen: set[str] = set()
     for value in values:
-        symbol = str(value or "").strip().upper()
+        symbol = _text(value).strip().upper()
         if not symbol or symbol in seen:
             continue
         seen.add(symbol)
@@ -151,8 +151,8 @@ def _investigator_context(active_watchlist: pd.DataFrame | None) -> pd.DataFrame
 
 
 def _classify_s1_state(row: pd.Series) -> dict[str, str]:
-    lifecycle = str(row.get("pattern_lifecycle_state") or "").strip().lower()
-    pattern_state = str(row.get("pattern_state") or "").strip().lower()
+    lifecycle = _text(row.get("pattern_lifecycle_state")).strip().lower()
+    pattern_state = _text(row.get("pattern_state")).strip().lower()
     pattern_score = _num(row.get("pattern_score"))
     setup_quality = _num(row.get("setup_quality"))
     stage2_score = _num(row.get("stage2_score"))
@@ -180,7 +180,7 @@ def _volume_confirmed(row: pd.Series) -> bool:
 
 
 def _accumulation_improving(row: pd.Series) -> bool:
-    trigger_reason = str(row.get("trigger_reason") or "").upper()
+    trigger_reason = _text(row.get("trigger_reason")).upper()
     trigger_accumulation = trigger_reason in {"WEEKLY_GAINER", "STEALTH_ACCUMULATION"}
     return (
         _truthy(row.get("volume_escalation"))
@@ -196,7 +196,7 @@ def _accumulation_improving(row: pd.Series) -> bool:
 
 def _trap_evidence(row: pd.Series) -> bool:
     text = " ".join(
-        str(row.get(col) or "").upper()
+        _text(row.get(col)).upper()
         for col in ("drop_reason", "investigator_verdict", "pattern_lifecycle_state")
     )
     low_delivery_failure = (
@@ -210,6 +210,12 @@ def _trap_evidence(row: pd.Series) -> bool:
         or "TRAP" in text
         or "INVALIDATED" in text
     )
+
+
+def _text(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return str(value)
 
 
 def _truthy(value: object) -> bool:
