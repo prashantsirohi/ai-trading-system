@@ -47,6 +47,7 @@ from .models import (
     OrchestrationBundleResult,
     OpportunityObservation,
     OpportunityRegistryConflictError,
+    PerformanceEventObservation,
     ProgressObservation,
     REGISTRY_SCHEMA_VERSION,
     REGISTRY_SERIALIZATION_VERSION,
@@ -68,25 +69,49 @@ class OpportunityRegistryStore(Protocol):
     def open_episode(self, request: OpenEpisodeRequest) -> CandidateEpisodeRecord: ...
     def get_episode(self, candidate_id: str) -> CandidateEpisodeRecord | None: ...
     def append_snapshot(self, observation: SnapshotObservation) -> AppendResult: ...
-    def append_stage_observation(self, observation: StageObservation) -> AppendResult: ...
-    def append_evidence_observation(self, observation: EvidenceObservation) -> AppendResult: ...
-    def append_opportunity_observation(self, observation: OpportunityObservation) -> AppendResult: ...
+    def append_stage_observation(
+        self, observation: StageObservation
+    ) -> AppendResult: ...
+    def append_evidence_observation(
+        self, observation: EvidenceObservation
+    ) -> AppendResult: ...
+    def append_opportunity_observation(
+        self, observation: OpportunityObservation
+    ) -> AppendResult: ...
     def append_progress(self, observation: ProgressObservation) -> AppendResult: ...
     def append_transition(self, observation: TransitionObservation) -> AppendResult: ...
-    def append_decision_context(self, observation: DecisionContextObservation) -> AppendResult: ...
-    def append_attribution(self, observation: AttributionObservation) -> AppendResult: ...
+    def append_decision_context(
+        self, observation: DecisionContextObservation
+    ) -> AppendResult: ...
+    def append_attribution(
+        self, observation: AttributionObservation
+    ) -> AppendResult: ...
+    def append_performance_event(
+        self, observation: PerformanceEventObservation
+    ) -> AppendResult: ...
     def close_episode(
-        self, candidate_id: str, *, status: EpisodeStatus, closed_at: datetime,
-        closing_reason: str, lineage: SourceLineage,
+        self,
+        candidate_id: str,
+        *,
+        status: EpisodeStatus,
+        closed_at: datetime,
+        closing_reason: str,
+        lineage: SourceLineage,
     ) -> CandidateEpisodeRecord: ...
     def current_state(self, candidate_id: str) -> CandidateCurrentState | None: ...
-    def state_as_of(self, candidate_id: str, as_of: datetime) -> CandidateCurrentState | None: ...
+    def state_as_of(
+        self, candidate_id: str, as_of: datetime
+    ) -> CandidateCurrentState | None: ...
     def timeline(self, candidate_id: str) -> CandidateTimeline: ...
     def list_open_candidates(self) -> tuple[CandidateCurrentState, ...]: ...
     def list_open_episodes(self) -> tuple[CandidateEpisodeRecord, ...]: ...
-    def append_orchestration_bundle(self, bundle: OrchestrationBundle) -> OrchestrationBundleResult: ...
+    def append_orchestration_bundle(
+        self, bundle: OrchestrationBundle
+    ) -> OrchestrationBundleResult: ...
     def observation_hashes_for_run(self, run_id: str) -> dict[str, tuple[str, ...]]: ...
-    def list_episode_relations(self, candidate_id: str) -> tuple[EpisodeRelationRecord, ...]: ...
+    def list_episode_relations(
+        self, candidate_id: str
+    ) -> tuple[EpisodeRelationRecord, ...]: ...
     def find_episode_relation(
         self, *, predecessor_candidate_id: str, relation_type: str
     ) -> EpisodeRelationRecord | None: ...
@@ -100,14 +125,20 @@ def _db_time(value: datetime) -> datetime:
 def _aware(value: datetime | None) -> datetime | None:
     if value is None:
         return None
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return (
+        value.replace(tzinfo=timezone.utc)
+        if value.tzinfo is None
+        else value.astimezone(timezone.utc)
+    )
 
 
 def _enum(value: Any) -> Any:
     return value.value if isinstance(value, Enum) else value
 
 
-def _row_dict(cursor: duckdb.DuckDBPyConnection, row: tuple[Any, ...] | None) -> dict[str, Any] | None:
+def _row_dict(
+    cursor: duckdb.DuckDBPyConnection, row: tuple[Any, ...] | None
+) -> dict[str, Any] | None:
     if row is None:
         return None
     return {item[0]: value for item, value in zip(cursor.description, row, strict=True)}
@@ -140,24 +171,40 @@ class DuckDBOpportunityRegistryStore:
     @staticmethod
     def _episode_from_row(row: dict[str, Any]) -> CandidateEpisodeRecord:
         return CandidateEpisodeRecord(
-            candidate_id=row["candidate_id"], setup_id=row["setup_id"], symbol_id=row["symbol_id"],
-            exchange=row["exchange"], episode_number=row["episode_number"], episode_type=row["episode_type"],
-            setup_family=row["setup_family"], admission_identity=row["admission_identity"],
-            episode_started_at=_aware(row["episode_started_at"]), episode_closed_at=_aware(row["episode_closed_at"]),
-            episode_status=EpisodeStatus(row["episode_status"]), opening_reason=row["opening_reason"],
-            closing_reason=row["closing_reason"], created_run_id=row["created_run_id"],
-            created_stage=row["created_stage"], created_artifact_hash=row["created_artifact_hash"],
-            closed_run_id=row["closed_run_id"], closed_stage=row["closed_stage"],
-            contract_version=row["contract_version"], schema_version=row["schema_version"],
-            created_at=_aware(row["created_at"]), updated_at=_aware(row["updated_at"]),
+            candidate_id=row["candidate_id"],
+            setup_id=row["setup_id"],
+            symbol_id=row["symbol_id"],
+            exchange=row["exchange"],
+            episode_number=row["episode_number"],
+            episode_type=row["episode_type"],
+            setup_family=row["setup_family"],
+            admission_identity=row["admission_identity"],
+            episode_started_at=_aware(row["episode_started_at"]),
+            episode_closed_at=_aware(row["episode_closed_at"]),
+            episode_status=EpisodeStatus(row["episode_status"]),
+            opening_reason=row["opening_reason"],
+            closing_reason=row["closing_reason"],
+            created_run_id=row["created_run_id"],
+            created_stage=row["created_stage"],
+            created_artifact_hash=row["created_artifact_hash"],
+            closed_run_id=row["closed_run_id"],
+            closed_stage=row["closed_stage"],
+            contract_version=row["contract_version"],
+            schema_version=row["schema_version"],
+            created_at=_aware(row["created_at"]),
+            updated_at=_aware(row["updated_at"]),
             policy_snapshot_id=row.get("policy_snapshot_id"),
             closed_policy_snapshot_id=row.get("closed_policy_snapshot_id"),
             satisfied_admission_rules_json=row.get("satisfied_admission_rules_json"),
             rule_evaluations_json=row.get("rule_evaluations_json"),
         )
 
-    def _get_episode(self, conn: duckdb.DuckDBPyConnection, candidate_id: str) -> CandidateEpisodeRecord | None:
-        cursor = conn.execute("SELECT * FROM candidate_episode WHERE candidate_id = ?", [candidate_id])
+    def _get_episode(
+        self, conn: duckdb.DuckDBPyConnection, candidate_id: str
+    ) -> CandidateEpisodeRecord | None:
+        cursor = conn.execute(
+            "SELECT * FROM candidate_episode WHERE candidate_id = ?", [candidate_id]
+        )
         row = _row_dict(cursor, cursor.fetchone())
         return self._episode_from_row(row) if row else None
 
@@ -167,7 +214,9 @@ class DuckDBOpportunityRegistryStore:
 
     def get_episode_by_setup(self, setup_id: str) -> CandidateEpisodeRecord | None:
         with self.registry._reader() as conn:  # noqa: SLF001
-            cursor = conn.execute("SELECT * FROM candidate_episode WHERE setup_id = ?", [setup_id])
+            cursor = conn.execute(
+                "SELECT * FROM candidate_episode WHERE setup_id = ?", [setup_id]
+            )
             row = _row_dict(cursor, cursor.fetchone())
             return self._episode_from_row(row) if row else None
 
@@ -188,7 +237,9 @@ class DuckDBOpportunityRegistryStore:
             row = _row_dict(cursor, cursor.fetchone())
             return self._episode_from_row(row) if row else None
 
-    def list_episodes(self, *, exchange: str, symbol_id: str) -> tuple[CandidateEpisodeRecord, ...]:
+    def list_episodes(
+        self, *, exchange: str, symbol_id: str
+    ) -> tuple[CandidateEpisodeRecord, ...]:
         with self.registry._reader() as conn:  # noqa: SLF001
             cursor = conn.execute(
                 "SELECT * FROM candidate_episode WHERE exchange = ? AND symbol_id = ? "
@@ -196,7 +247,10 @@ class DuckDBOpportunityRegistryStore:
                 [normalize_exchange(exchange), normalize_symbol(symbol_id)],
             )
             names = [item[0] for item in cursor.description]
-            return tuple(self._episode_from_row(dict(zip(names, row, strict=True))) for row in cursor.fetchall())
+            return tuple(
+                self._episode_from_row(dict(zip(names, row, strict=True)))
+                for row in cursor.fetchall()
+            )
 
     @staticmethod
     def _relation_from_row(row: dict[str, Any]) -> EpisodeRelationRecord:
@@ -242,7 +296,9 @@ class DuckDBOpportunityRegistryStore:
             row = _row_dict(cursor, cursor.fetchone())
             return self._relation_from_row(row) if row else None
 
-    def latest_episode(self, *, exchange: str, symbol_id: str) -> CandidateEpisodeRecord | None:
+    def latest_episode(
+        self, *, exchange: str, symbol_id: str
+    ) -> CandidateEpisodeRecord | None:
         episodes = self.list_episodes(exchange=exchange, symbol_id=symbol_id)
         return episodes[-1] if episodes else None
 
@@ -253,7 +309,10 @@ class DuckDBOpportunityRegistryStore:
                 "ORDER BY exchange, symbol_id, episode_started_at, candidate_id"
             )
             names = [item[0] for item in cursor.description]
-            return tuple(self._current_from_row(dict(zip(names, row, strict=True))) for row in cursor.fetchall())
+            return tuple(
+                self._current_from_row(dict(zip(names, row, strict=True)))
+                for row in cursor.fetchall()
+            )
 
     def list_open_episodes(self) -> tuple[CandidateEpisodeRecord, ...]:
         with self.registry._reader() as conn:  # noqa: SLF001
@@ -262,15 +321,23 @@ class DuckDBOpportunityRegistryStore:
                 "ORDER BY exchange, symbol_id, episode_started_at, candidate_id"
             )
             names = [item[0] for item in cursor.description]
-            return tuple(self._episode_from_row(dict(zip(names, row, strict=True))) for row in cursor.fetchall())
+            return tuple(
+                self._episode_from_row(dict(zip(names, row, strict=True)))
+                for row in cursor.fetchall()
+            )
 
     def observation_hashes_for_run(self, run_id: str) -> dict[str, tuple[str, ...]]:
         """Return persisted semantic source hashes for exact-run replay checks."""
         _require_text(run_id, "run_id")
         tables = (
-            "candidate_snapshot", "candidate_stage_observation", "candidate_evidence_observation",
-            "candidate_opportunity_observation", "candidate_transition", "candidate_progress_observation",
-            "candidate_decision_context", "candidate_outcome_attribution",
+            "candidate_snapshot",
+            "candidate_stage_observation",
+            "candidate_evidence_observation",
+            "candidate_opportunity_observation",
+            "candidate_transition",
+            "candidate_progress_observation",
+            "candidate_decision_context",
+            "candidate_outcome_attribution",
         )
         query = " UNION ALL ".join(
             f"SELECT candidate_id, source_artifact_hash FROM {table} WHERE run_id = ?"  # noqa: S608
@@ -281,7 +348,10 @@ class DuckDBOpportunityRegistryStore:
         grouped: dict[str, set[str]] = {}
         for candidate_id, source_hash in rows:
             grouped.setdefault(str(candidate_id), set()).add(str(source_hash))
-        return {candidate_id: tuple(sorted(values)) for candidate_id, values in grouped.items()}
+        return {
+            candidate_id: tuple(sorted(values))
+            for candidate_id, values in grouped.items()
+        }
 
     def query_current_states(
         self,
@@ -299,31 +369,64 @@ class DuckDBOpportunityRegistryStore:
         if as_of is not None:
             require_aware(as_of, "as_of")
             with self.registry._reader() as conn:  # noqa: SLF001
-                ids = [row[0] for row in conn.execute(
-                    "SELECT candidate_id FROM candidate_episode WHERE episode_started_at <= ? "
-                    "ORDER BY exchange, symbol_id, episode_number",
-                    [_db_time(as_of)],
-                ).fetchall()]
-            states = tuple(state for candidate_id in ids if (state := self.state_as_of(candidate_id, as_of)))
+                ids = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT candidate_id FROM candidate_episode WHERE episode_started_at <= ? "
+                        "ORDER BY exchange, symbol_id, episode_number",
+                        [_db_time(as_of)],
+                    ).fetchall()
+                ]
+            states = tuple(
+                state
+                for candidate_id in ids
+                if (state := self.state_as_of(candidate_id, as_of))
+            )
         else:
             with self.registry._reader() as conn:  # noqa: SLF001
-                cursor = conn.execute("SELECT * FROM candidate_current_state ORDER BY exchange, symbol_id, candidate_id")
+                cursor = conn.execute(
+                    "SELECT * FROM candidate_current_state ORDER BY exchange, symbol_id, candidate_id"
+                )
                 names = [item[0] for item in cursor.description]
-                states = tuple(self._current_from_row(dict(zip(names, row, strict=True))) for row in cursor.fetchall())
+                states = tuple(
+                    self._current_from_row(dict(zip(names, row, strict=True)))
+                    for row in cursor.fetchall()
+                )
         return tuple(
-            state for state in states
+            state
+            for state in states
             if (episode_status is None or state.episode_status is episode_status)
-            and (lifecycle_state is None or state.current_lifecycle_state == _enum(lifecycle_state))
+            and (
+                lifecycle_state is None
+                or state.current_lifecycle_state == _enum(lifecycle_state)
+            )
             and (stock_stage is None or state.current_stock_stage == _enum(stock_stage))
-            and (sector_stage is None or state.current_sector_stage == _enum(sector_stage))
-            and (progress_status is None or state.current_progress_status == _enum(progress_status))
-            and (followthrough_status is None or state.current_followthrough_status == _enum(followthrough_status))
-            and (minimum_opportunity_score is None or (
-                state.latest_opportunity_score is not None and state.latest_opportunity_score >= minimum_opportunity_score
-            ))
-            and (minimum_evidence_score is None or (
-                state.latest_evidence_score is not None and state.latest_evidence_score >= minimum_evidence_score
-            ))
+            and (
+                sector_stage is None
+                or state.current_sector_stage == _enum(sector_stage)
+            )
+            and (
+                progress_status is None
+                or state.current_progress_status == _enum(progress_status)
+            )
+            and (
+                followthrough_status is None
+                or state.current_followthrough_status == _enum(followthrough_status)
+            )
+            and (
+                minimum_opportunity_score is None
+                or (
+                    state.latest_opportunity_score is not None
+                    and state.latest_opportunity_score >= minimum_opportunity_score
+                )
+            )
+            and (
+                minimum_evidence_score is None
+                or (
+                    state.latest_evidence_score is not None
+                    and state.latest_evidence_score >= minimum_evidence_score
+                )
+            )
         )
 
     def open_episode(self, request: OpenEpisodeRequest) -> CandidateEpisodeRecord:
@@ -337,11 +440,19 @@ class DuckDBOpportunityRegistryStore:
         exchange = normalize_exchange(request.exchange)
         symbol = normalize_symbol(request.symbol_id)
         family = normalize_setup_family(request.setup_family)
-        for name in ("admission_identity", "episode_type", "opening_reason", "contract_version"):
+        for name in (
+            "admission_identity",
+            "episode_type",
+            "opening_reason",
+            "contract_version",
+        ):
             _require_text(getattr(request, name), name)
         setup_id = make_setup_id(
-            exchange=exchange, symbol_id=symbol, setup_family=family,
-            admission_identity=request.admission_identity, episode_started_at=request.episode_started_at,
+            exchange=exchange,
+            symbol_id=symbol,
+            setup_family=family,
+            admission_identity=request.admission_identity,
+            episode_started_at=request.episode_started_at,
         )
         candidate_id = make_candidate_id(setup_id)
         existing = self._get_episode(conn, candidate_id)
@@ -364,12 +475,26 @@ class DuckDBOpportunityRegistryStore:
                 satisfied_admission_rules_json, rule_evaluations_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            [candidate_id, setup_id, symbol, exchange, episode_number, request.episode_type,
-             family, request.admission_identity.strip(), _db_time(request.episode_started_at),
-             request.opening_reason, request.lineage.run_id, request.lineage.stage_name,
-             request.lineage.source_artifact_hash, request.contract_version, REGISTRY_SCHEMA_VERSION,
-             request.lineage.policy_snapshot_id, request.satisfied_admission_rules_json,
-             request.rule_evaluations_json],
+            [
+                candidate_id,
+                setup_id,
+                symbol,
+                exchange,
+                episode_number,
+                request.episode_type,
+                family,
+                request.admission_identity.strip(),
+                _db_time(request.episode_started_at),
+                request.opening_reason,
+                request.lineage.run_id,
+                request.lineage.stage_name,
+                request.lineage.source_artifact_hash,
+                request.contract_version,
+                REGISTRY_SCHEMA_VERSION,
+                request.lineage.policy_snapshot_id,
+                request.satisfied_admission_rules_json,
+                request.rule_evaluations_json,
+            ],
         )
         created = self._get_episode(conn, candidate_id)
         assert created is not None
@@ -382,7 +507,9 @@ class DuckDBOpportunityRegistryStore:
         with self._transaction() as conn:
             episode = self._open_episode(conn, request)
             self._validate_episode_identity(
-                episode, observation.snapshot.candidate_id, observation.snapshot.setup_id
+                episode,
+                observation.snapshot.candidate_id,
+                observation.snapshot.setup_id,
             )
             return episode, self._append_snapshot(conn, observation)
 
@@ -400,29 +527,52 @@ class DuckDBOpportunityRegistryStore:
             raise ValueError("close status must be terminal")
         _require_text(closing_reason, "closing_reason")
         with self._transaction() as conn:
-            return self._close_episode(conn, candidate_id, status=status, closed_at=closed_at,
-                                       closing_reason=closing_reason, lineage=lineage)
+            return self._close_episode(
+                conn,
+                candidate_id,
+                status=status,
+                closed_at=closed_at,
+                closing_reason=closing_reason,
+                lineage=lineage,
+            )
 
     def _close_episode(
-        self, conn: duckdb.DuckDBPyConnection, candidate_id: str, *, status: EpisodeStatus,
-        closed_at: datetime, closing_reason: str, lineage: SourceLineage,
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        candidate_id: str,
+        *,
+        status: EpisodeStatus,
+        closed_at: datetime,
+        closing_reason: str,
+        lineage: SourceLineage,
     ) -> CandidateEpisodeRecord:
         require_aware(closed_at, "closed_at")
         if status is EpisodeStatus.OPEN:
             raise ValueError("close status must be terminal")
         _require_text(closing_reason, "closing_reason")
         episode = self._require_open_or_closed(conn, candidate_id, allow_closed=True)
-        requested = (status, _db_time(closed_at), closing_reason, lineage.run_id, lineage.stage_name)
+        requested = (
+            status,
+            _db_time(closed_at),
+            closing_reason,
+            lineage.run_id,
+            lineage.stage_name,
+        )
         if episode.episode_status is not EpisodeStatus.OPEN:
             existing = (
-                episode.episode_status, _db_time(episode.episode_closed_at), episode.closing_reason,
-                episode.closed_run_id, episode.closed_stage,
+                episode.episode_status,
+                _db_time(episode.episode_closed_at),
+                episode.closing_reason,
+                episode.closed_run_id,
+                episode.closed_stage,
             )
             if existing == requested:
                 return episode
             raise OpportunityRegistryConflictError(
-                record_type="candidate_episode_close", candidate_id=candidate_id,
-                idempotency_key=stable_digest(requested), existing_payload_hash=stable_digest(existing),
+                record_type="candidate_episode_close",
+                candidate_id=candidate_id,
+                idempotency_key=stable_digest(requested),
+                existing_payload_hash=stable_digest(existing),
                 incoming_payload_hash=stable_digest(requested),
             )
         if closed_at < episode.episode_started_at:
@@ -434,15 +584,26 @@ class DuckDBOpportunityRegistryStore:
                 updated_at = (current_timestamp AT TIME ZONE 'UTC')
             WHERE candidate_id = ?
             """,
-            [_db_time(closed_at), status.value, closing_reason, lineage.run_id, lineage.stage_name,
-             lineage.policy_snapshot_id, candidate_id],
+            [
+                _db_time(closed_at),
+                status.value,
+                closing_reason,
+                lineage.run_id,
+                lineage.stage_name,
+                lineage.policy_snapshot_id,
+                candidate_id,
+            ],
         )
         result = self._get_episode(conn, candidate_id)
         assert result is not None
         return result
 
     def _require_open_or_closed(
-        self, conn: duckdb.DuckDBPyConnection, candidate_id: str, *, allow_closed: bool = False
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        candidate_id: str,
+        *,
+        allow_closed: bool = False,
     ) -> CandidateEpisodeRecord:
         episode = self._get_episode(conn, candidate_id)
         if episode is None:
@@ -480,9 +641,7 @@ class DuckDBOpportunityRegistryStore:
         successor: CandidateEpisodeRecord,
     ) -> AppendResult:
         require_aware(supersession.related_at, "related_at")
-        predecessor = self._get_episode(
-            conn, supersession.predecessor_candidate_id
-        )
+        predecessor = self._get_episode(conn, supersession.predecessor_candidate_id)
         if predecessor is None:
             raise KeyError(
                 f"unknown predecessor candidate_id: {supersession.predecessor_candidate_id}"
@@ -576,7 +735,9 @@ class DuckDBOpportunityRegistryStore:
         )
 
     @staticmethod
-    def _validate_episode_identity(episode: CandidateEpisodeRecord, candidate_id: str, setup_id: str) -> None:
+    def _validate_episode_identity(
+        episode: CandidateEpisodeRecord, candidate_id: str, setup_id: str
+    ) -> None:
         if episode.candidate_id != candidate_id or episode.setup_id != setup_id:
             raise ValueError("record identity does not match candidate episode")
 
@@ -599,36 +760,58 @@ class DuckDBOpportunityRegistryStore:
         ).fetchone()
         if existing is not None:
             if existing[1] == semantic_hash:
-                return AppendResult(existing[0], AppendStatus.DUPLICATE, idempotency_key, True, False)
+                return AppendResult(
+                    existing[0], AppendStatus.DUPLICATE, idempotency_key, True, False
+                )
             raise OpportunityRegistryConflictError(
-                record_type=table, candidate_id=candidate_id, idempotency_key=idempotency_key,
-                existing_payload_hash=existing[1], incoming_payload_hash=semantic_hash,
+                record_type=table,
+                candidate_id=candidate_id,
+                idempotency_key=idempotency_key,
+                existing_payload_hash=existing[1],
+                incoming_payload_hash=semantic_hash,
             )
         placeholders = ", ".join("?" for _ in columns)
         conn.execute(
             f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})",  # noqa: S608
             values,
         )
-        return AppendResult(record_id, AppendStatus.CREATED, idempotency_key, False, True)
+        return AppendResult(
+            record_id, AppendStatus.CREATED, idempotency_key, False, True
+        )
 
     def _identity(
-        self, *, candidate_id: str, record_type: str, as_of: datetime, lineage: SourceLineage,
-        contract_version: str, payload: Any
+        self,
+        *,
+        candidate_id: str,
+        record_type: str,
+        as_of: datetime,
+        lineage: SourceLineage,
+        contract_version: str,
+        payload: Any,
     ) -> tuple[str, str, str]:
         return make_record_identity(
-            candidate_id=candidate_id, record_type=record_type, as_of=as_of, run_id=lineage.run_id,
-            stage_attempt=lineage.stage_attempt, source_artifact_hash=lineage.source_artifact_hash,
-            contract_version=contract_version, semantic_payload=payload,
+            candidate_id=candidate_id,
+            record_type=record_type,
+            as_of=as_of,
+            run_id=lineage.run_id,
+            stage_attempt=lineage.stage_attempt,
+            source_artifact_hash=lineage.source_artifact_hash,
+            contract_version=contract_version,
+            semantic_payload=payload,
         )
 
     def append_snapshot(self, observation: SnapshotObservation) -> AppendResult:
         with self._transaction() as conn:
             return self._append_snapshot(conn, observation)
 
-    def _append_snapshot(self, conn: duckdb.DuckDBPyConnection, observation: SnapshotObservation) -> AppendResult:
+    def _append_snapshot(
+        self, conn: duckdb.DuckDBPyConnection, observation: SnapshotObservation
+    ) -> AppendResult:
         snapshot = observation.snapshot
         episode = self._require_open_or_closed(conn, snapshot.candidate_id)
-        self._validate_episode_identity(episode, snapshot.candidate_id, snapshot.setup_id)
+        self._validate_episode_identity(
+            episode, snapshot.candidate_id, snapshot.setup_id
+        )
         require_aware(observation.observed_at, "observed_at")
         if snapshot.as_of < episode.episode_started_at:
             raise ValueError("snapshot cannot precede episode start")
@@ -642,47 +825,154 @@ class DuckDBOpportunityRegistryStore:
                     [observation_id],
                 ).fetchone()
                 if row is None or row != (snapshot.candidate_id, scope):
-                    raise ValueError(f"linked {scope.lower()} stage observation does not belong to candidate")
+                    raise ValueError(
+                        f"linked {scope.lower()} stage observation does not belong to candidate"
+                    )
         payload = to_dict(snapshot)
         record_id, key, semantic_hash = self._identity(
-            candidate_id=snapshot.candidate_id, record_type="snapshot", as_of=snapshot.as_of,
-            lineage=observation.lineage, contract_version=snapshot.contract_version, payload=payload,
+            candidate_id=snapshot.candidate_id,
+            record_type="snapshot",
+            as_of=snapshot.as_of,
+            lineage=observation.lineage,
+            contract_version=snapshot.contract_version,
+            payload=payload,
         )
         columns = (
-            "snapshot_id", "candidate_id", "setup_id", "as_of", "observed_at", "run_id", "stage_name",
-            "stage_attempt", "source_artifact_type", "source_artifact_path", "source_artifact_hash",
-            "lifecycle_state", "followthrough_status", "opportunity_score", "rank_position", "rank_percentile",
-            "rank_velocity", "evidence_score", "evidence_verdict", "days_in_state", "days_without_progress",
-            "progress_status", "active_position", "latest_action", "eligibility", "stock_stage_observation_id",
-            "sector_stage_observation_id", "contract_version", "serialization_version", "snapshot_json",
-            "semantic_payload_hash", "idempotency_key", "last_progress_at",
+            "snapshot_id",
+            "candidate_id",
+            "setup_id",
+            "as_of",
+            "observed_at",
+            "run_id",
+            "stage_name",
+            "stage_attempt",
+            "source_artifact_type",
+            "source_artifact_path",
+            "source_artifact_hash",
+            "lifecycle_state",
+            "followthrough_status",
+            "opportunity_score",
+            "rank_position",
+            "rank_percentile",
+            "rank_velocity",
+            "evidence_score",
+            "evidence_verdict",
+            "days_in_state",
+            "days_without_progress",
+            "progress_status",
+            "active_position",
+            "latest_action",
+            "eligibility",
+            "stock_stage_observation_id",
+            "sector_stage_observation_id",
+            "contract_version",
+            "serialization_version",
+            "snapshot_json",
+            "semantic_payload_hash",
+            "idempotency_key",
+            "last_progress_at",
             "last_retention_counted_session",
+            "stage_label",
+            "stage_confidence",
+            "pattern_family",
+            "pattern_state",
+            "setup_quality_bucket",
+            "breakout_type",
+            "candidate_tier",
+            "qualified_breakout",
+            "confirmed_regime",
+            "raw_regime",
+            "regime_confidence",
+            "breadth_velocity_bucket",
+            "breadth_velocity_quantile",
+            "regime_score_chg_5d",
+            "sector_relative_strength_bucket",
+            "investigator_context_as_of",
+            "investigator_attribution_mode",
+            "investigator_missing_fields_json",
+            "investigator_context_json",
         )
+        context = snapshot.investigator_context
         values = [
-            record_id, snapshot.candidate_id, snapshot.setup_id, _db_time(snapshot.as_of),
-            _db_time(observation.observed_at), observation.lineage.run_id, observation.lineage.stage_name,
-            observation.lineage.stage_attempt, observation.lineage.source_artifact_type,
-            observation.lineage.source_artifact_path, observation.lineage.source_artifact_hash,
-            snapshot.lifecycle_state.value, snapshot.followthrough_status.value, snapshot.opportunity.opportunity_score,
-            snapshot.opportunity.rank_position, snapshot.opportunity.rank_percentile, snapshot.opportunity.rank_velocity,
-            snapshot.evidence.evidence_score, snapshot.evidence.investigator_verdict.value, snapshot.days_in_state,
-            snapshot.days_without_progress, None, snapshot.active_position, snapshot.latest_action.value,
-            snapshot.eligibility.value, observation.stock_stage_observation_id, observation.sector_stage_observation_id,
-            snapshot.contract_version, REGISTRY_SERIALIZATION_VERSION, canonical_json(snapshot), semantic_hash, key,
-            _db_time(observation.last_progress_at) if observation.last_progress_at else None,
+            record_id,
+            snapshot.candidate_id,
+            snapshot.setup_id,
+            _db_time(snapshot.as_of),
+            _db_time(observation.observed_at),
+            observation.lineage.run_id,
+            observation.lineage.stage_name,
+            observation.lineage.stage_attempt,
+            observation.lineage.source_artifact_type,
+            observation.lineage.source_artifact_path,
+            observation.lineage.source_artifact_hash,
+            snapshot.lifecycle_state.value,
+            snapshot.followthrough_status.value,
+            snapshot.opportunity.opportunity_score,
+            snapshot.opportunity.rank_position,
+            snapshot.opportunity.rank_percentile,
+            snapshot.opportunity.rank_velocity,
+            snapshot.evidence.evidence_score,
+            snapshot.evidence.investigator_verdict.value,
+            snapshot.days_in_state,
+            snapshot.days_without_progress,
+            None,
+            snapshot.active_position,
+            snapshot.latest_action.value,
+            snapshot.eligibility.value,
+            observation.stock_stage_observation_id,
+            observation.sector_stage_observation_id,
+            snapshot.contract_version,
+            REGISTRY_SERIALIZATION_VERSION,
+            canonical_json(snapshot),
+            semantic_hash,
+            key,
+            _db_time(observation.last_progress_at)
+            if observation.last_progress_at
+            else None,
             observation.last_retention_counted_session,
+            context.stage_label,
+            context.stage_confidence,
+            context.pattern_family,
+            context.pattern_state,
+            context.setup_quality_bucket,
+            context.breakout_type,
+            context.candidate_tier,
+            context.qualified_breakout,
+            context.confirmed_regime,
+            context.raw_regime,
+            context.regime_confidence,
+            context.breadth_velocity_bucket,
+            context.breadth_velocity_quantile,
+            context.regime_score_chg_5d,
+            context.sector_relative_strength_bucket,
+            _db_time(context.context_as_of) if context.context_as_of else None,
+            context.attribution_mode,
+            canonical_json(context.missing_fields),
+            canonical_json(context),
         ]
-        return self._insert_append(conn, table="candidate_snapshot", id_column="snapshot_id", record_id=record_id,
-                                   candidate_id=snapshot.candidate_id, idempotency_key=key,
-                                   semantic_hash=semantic_hash, columns=columns, values=values)
+        return self._insert_append(
+            conn,
+            table="candidate_snapshot",
+            id_column="snapshot_id",
+            record_id=record_id,
+            candidate_id=snapshot.candidate_id,
+            idempotency_key=key,
+            semantic_hash=semantic_hash,
+            columns=columns,
+            values=values,
+        )
 
     def append_stage_observation(self, observation: StageObservation) -> AppendResult:
         with self._transaction() as conn:
             return self._append_stage(conn, observation)
 
-    def _append_stage(self, conn: duckdb.DuckDBPyConnection, observation: StageObservation) -> AppendResult:
+    def _append_stage(
+        self, conn: duckdb.DuckDBPyConnection, observation: StageObservation
+    ) -> AppendResult:
         episode = self._require_open_or_closed(conn, observation.candidate_id)
-        self._validate_episode_identity(episode, observation.candidate_id, observation.setup_id)
+        self._validate_episode_identity(
+            episode, observation.candidate_id, observation.setup_id
+        )
         require_aware(observation.observed_at, "observed_at")
         if observation.scope is StageScope.SECTOR:
             if not hasattr(observation.snapshot, "stage_snapshot"):
@@ -697,82 +987,210 @@ class DuckDBOpportunityRegistryStore:
         payload = to_dict(observation.snapshot)
         record_id, key, semantic_hash = self._identity(
             candidate_id=observation.candidate_id,
-            record_type=f"stage_{observation.scope.value.lower()}", as_of=stage.stage_as_of,
-            lineage=observation.lineage, contract_version=stage.contract_version, payload={"scope": observation.scope.value, "snapshot": payload},
+            record_type=f"stage_{observation.scope.value.lower()}",
+            as_of=stage.stage_as_of,
+            lineage=observation.lineage,
+            contract_version=stage.contract_version,
+            payload={"scope": observation.scope.value, "snapshot": payload},
         )
         columns = (
-            "stage_observation_id", "candidate_id", "setup_id", "scope", "entity_id", "entity_name", "as_of",
-            "observed_at", "provisional_stage", "locked_stage", "effective_stage", "stage_status", "confidence_score",
-            "confidence_band", "confidence_components_json", "stage_locked_at", "source_week_start", "source_week_end",
-            "previous_locked_stage", "weeks_in_locked_stage", "provisional_persistence_days", "transition_reason",
-            "classifier_version", "confidence_formula_version", "contract_version", "run_id", "stage_name",
-            "stage_attempt", "source_artifact_type", "source_artifact_path", "source_artifact_hash", "observation_json",
-            "semantic_payload_hash", "idempotency_key",
+            "stage_observation_id",
+            "candidate_id",
+            "setup_id",
+            "scope",
+            "entity_id",
+            "entity_name",
+            "as_of",
+            "observed_at",
+            "provisional_stage",
+            "locked_stage",
+            "effective_stage",
+            "stage_status",
+            "confidence_score",
+            "confidence_band",
+            "confidence_components_json",
+            "stage_locked_at",
+            "source_week_start",
+            "source_week_end",
+            "previous_locked_stage",
+            "weeks_in_locked_stage",
+            "provisional_persistence_days",
+            "transition_reason",
+            "classifier_version",
+            "confidence_formula_version",
+            "contract_version",
+            "run_id",
+            "stage_name",
+            "stage_attempt",
+            "source_artifact_type",
+            "source_artifact_path",
+            "source_artifact_hash",
+            "observation_json",
+            "semantic_payload_hash",
+            "idempotency_key",
         )
         values = [
-            record_id, observation.candidate_id, observation.setup_id, observation.scope.value, observation.entity_id,
-            observation.entity_name, _db_time(stage.stage_as_of), _db_time(observation.observed_at),
-            stage.provisional_stage.value, stage.locked_stage.value, stage.effective_stage.value, stage.stage_status.value,
-            stage.confidence_score, stage.confidence_band.value, canonical_json(stage.confidence_components),
-            _db_time(stage.stage_locked_at) if stage.stage_locked_at else None, stage.source_week_start, stage.source_week_end,
-            stage.previous_locked_stage.value if stage.previous_locked_stage else None, stage.weeks_in_locked_stage,
-            stage.provisional_persistence_days, stage.transition_reason.value, stage.classifier_version,
-            stage.confidence_formula_version, stage.contract_version, observation.lineage.run_id,
-            observation.lineage.stage_name, observation.lineage.stage_attempt, observation.lineage.source_artifact_type,
-            observation.lineage.source_artifact_path, observation.lineage.source_artifact_hash,
-            canonical_json(observation.snapshot), semantic_hash, key,
+            record_id,
+            observation.candidate_id,
+            observation.setup_id,
+            observation.scope.value,
+            observation.entity_id,
+            observation.entity_name,
+            _db_time(stage.stage_as_of),
+            _db_time(observation.observed_at),
+            stage.provisional_stage.value,
+            stage.locked_stage.value,
+            stage.effective_stage.value,
+            stage.stage_status.value,
+            stage.confidence_score,
+            stage.confidence_band.value,
+            canonical_json(stage.confidence_components),
+            _db_time(stage.stage_locked_at) if stage.stage_locked_at else None,
+            stage.source_week_start,
+            stage.source_week_end,
+            stage.previous_locked_stage.value if stage.previous_locked_stage else None,
+            stage.weeks_in_locked_stage,
+            stage.provisional_persistence_days,
+            stage.transition_reason.value,
+            stage.classifier_version,
+            stage.confidence_formula_version,
+            stage.contract_version,
+            observation.lineage.run_id,
+            observation.lineage.stage_name,
+            observation.lineage.stage_attempt,
+            observation.lineage.source_artifact_type,
+            observation.lineage.source_artifact_path,
+            observation.lineage.source_artifact_hash,
+            canonical_json(observation.snapshot),
+            semantic_hash,
+            key,
         ]
-        return self._insert_append(conn, table="candidate_stage_observation", id_column="stage_observation_id",
-                                   record_id=record_id, candidate_id=observation.candidate_id, idempotency_key=key,
-                                   semantic_hash=semantic_hash, columns=columns, values=values)
+        return self._insert_append(
+            conn,
+            table="candidate_stage_observation",
+            id_column="stage_observation_id",
+            record_id=record_id,
+            candidate_id=observation.candidate_id,
+            idempotency_key=key,
+            semantic_hash=semantic_hash,
+            columns=columns,
+            values=values,
+        )
 
-    def append_evidence_observation(self, observation: EvidenceObservation) -> AppendResult:
+    def append_evidence_observation(
+        self, observation: EvidenceObservation
+    ) -> AppendResult:
         with self._transaction() as conn:
             return self._append_evidence(conn, observation)
 
-    def _append_evidence(self, conn: duckdb.DuckDBPyConnection, observation: EvidenceObservation) -> AppendResult:
+    def _append_evidence(
+        self, conn: duckdb.DuckDBPyConnection, observation: EvidenceObservation
+    ) -> AppendResult:
         episode = self._require_open_or_closed(conn, observation.candidate_id)
-        self._validate_episode_identity(episode, observation.candidate_id, observation.setup_id)
+        self._validate_episode_identity(
+            episode, observation.candidate_id, observation.setup_id
+        )
         require_aware(observation.as_of, "as_of")
         require_aware(observation.observed_at, "observed_at")
         for name in ("evidence_type", "source_module", "source_component"):
             _require_text(getattr(observation, name), name)
         if observation.as_of < episode.episode_started_at:
             raise ValueError("evidence observation cannot precede episode start")
-        payload = {"snapshot": to_dict(observation.snapshot), "details": observation.details,
-                   "evidence_type": observation.evidence_type, "source_module": observation.source_module,
-                   "source_component": observation.source_component}
+        payload = {
+            "snapshot": to_dict(observation.snapshot),
+            "details": observation.details,
+            "evidence_type": observation.evidence_type,
+            "source_module": observation.source_module,
+            "source_component": observation.source_component,
+        }
         record_id, key, semantic_hash = self._identity(
-            candidate_id=observation.candidate_id, record_type="evidence", as_of=observation.as_of,
-            lineage=observation.lineage, contract_version=observation.snapshot.contract_version, payload=payload,
+            candidate_id=observation.candidate_id,
+            record_type="evidence",
+            as_of=observation.as_of,
+            lineage=observation.lineage,
+            contract_version=observation.snapshot.contract_version,
+            payload=payload,
         )
         s = observation.snapshot
         columns = (
-            "evidence_observation_id", "candidate_id", "setup_id", "as_of", "observed_at", "evidence_type",
-            "source_module", "source_component", "score", "verdict", "positive_evidence_json", "negative_evidence_json",
-            "missing_evidence_json", "details_json", "evidence_model_version", "contract_version", "run_id", "stage_name",
-            "stage_attempt", "source_artifact_type", "source_artifact_path", "source_artifact_hash", "observation_json",
-            "semantic_payload_hash", "idempotency_key",
+            "evidence_observation_id",
+            "candidate_id",
+            "setup_id",
+            "as_of",
+            "observed_at",
+            "evidence_type",
+            "source_module",
+            "source_component",
+            "score",
+            "verdict",
+            "positive_evidence_json",
+            "negative_evidence_json",
+            "missing_evidence_json",
+            "details_json",
+            "evidence_model_version",
+            "contract_version",
+            "run_id",
+            "stage_name",
+            "stage_attempt",
+            "source_artifact_type",
+            "source_artifact_path",
+            "source_artifact_hash",
+            "observation_json",
+            "semantic_payload_hash",
+            "idempotency_key",
         )
-        values = [record_id, observation.candidate_id, observation.setup_id, _db_time(observation.as_of),
-                  _db_time(observation.observed_at), observation.evidence_type, observation.source_module,
-                  observation.source_component, s.evidence_score, s.investigator_verdict.value,
-                  canonical_json(s.positive_evidence), canonical_json(s.negative_evidence), canonical_json(s.missing_evidence),
-                  canonical_json(observation.details), s.evidence_model_version, s.contract_version, observation.lineage.run_id,
-                  observation.lineage.stage_name, observation.lineage.stage_attempt, observation.lineage.source_artifact_type,
-                  observation.lineage.source_artifact_path, observation.lineage.source_artifact_hash,
-                  canonical_json(s), semantic_hash, key]
-        return self._insert_append(conn, table="candidate_evidence_observation", id_column="evidence_observation_id",
-                                   record_id=record_id, candidate_id=observation.candidate_id, idempotency_key=key,
-                                   semantic_hash=semantic_hash, columns=columns, values=values)
+        values = [
+            record_id,
+            observation.candidate_id,
+            observation.setup_id,
+            _db_time(observation.as_of),
+            _db_time(observation.observed_at),
+            observation.evidence_type,
+            observation.source_module,
+            observation.source_component,
+            s.evidence_score,
+            s.investigator_verdict.value,
+            canonical_json(s.positive_evidence),
+            canonical_json(s.negative_evidence),
+            canonical_json(s.missing_evidence),
+            canonical_json(observation.details),
+            s.evidence_model_version,
+            s.contract_version,
+            observation.lineage.run_id,
+            observation.lineage.stage_name,
+            observation.lineage.stage_attempt,
+            observation.lineage.source_artifact_type,
+            observation.lineage.source_artifact_path,
+            observation.lineage.source_artifact_hash,
+            canonical_json(s),
+            semantic_hash,
+            key,
+        ]
+        return self._insert_append(
+            conn,
+            table="candidate_evidence_observation",
+            id_column="evidence_observation_id",
+            record_id=record_id,
+            candidate_id=observation.candidate_id,
+            idempotency_key=key,
+            semantic_hash=semantic_hash,
+            columns=columns,
+            values=values,
+        )
 
-    def append_opportunity_observation(self, observation: OpportunityObservation) -> AppendResult:
+    def append_opportunity_observation(
+        self, observation: OpportunityObservation
+    ) -> AppendResult:
         with self._transaction() as conn:
             return self._append_opportunity(conn, observation)
 
-    def _append_opportunity(self, conn: duckdb.DuckDBPyConnection, observation: OpportunityObservation) -> AppendResult:
+    def _append_opportunity(
+        self, conn: duckdb.DuckDBPyConnection, observation: OpportunityObservation
+    ) -> AppendResult:
         episode = self._require_open_or_closed(conn, observation.candidate_id)
-        self._validate_episode_identity(episode, observation.candidate_id, observation.setup_id)
+        self._validate_episode_identity(
+            episode, observation.candidate_id, observation.setup_id
+        )
         require_aware(observation.as_of, "as_of")
         require_aware(observation.observed_at, "observed_at")
         if observation.as_of < episode.episode_started_at:
@@ -780,68 +1198,179 @@ class DuckDBOpportunityRegistryStore:
         s = observation.snapshot
         payload = to_dict(s)
         record_id, key, semantic_hash = self._identity(
-            candidate_id=observation.candidate_id, record_type="opportunity", as_of=observation.as_of,
-            lineage=observation.lineage, contract_version=s.contract_version, payload=payload,
+            candidate_id=observation.candidate_id,
+            record_type="opportunity",
+            as_of=observation.as_of,
+            lineage=observation.lineage,
+            contract_version=s.contract_version,
+            payload=payload,
         )
-        columns = ("opportunity_observation_id", "candidate_id", "setup_id", "as_of", "observed_at",
-                   "opportunity_score", "rank_position", "rank_percentile", "rank_velocity", "rank_velocity_state",
-                   "factor_scores_json", "rank_model_version", "contract_version", "run_id", "stage_name", "stage_attempt",
-                   "source_artifact_type", "source_artifact_path", "source_artifact_hash", "observation_json",
-                   "semantic_payload_hash", "idempotency_key")
-        values = [record_id, observation.candidate_id, observation.setup_id, _db_time(observation.as_of),
-                  _db_time(observation.observed_at), s.opportunity_score, s.rank_position, s.rank_percentile,
-                  s.rank_velocity, s.rank_velocity_state.value, canonical_json(s.factor_scores), s.rank_model_version,
-                  s.contract_version, observation.lineage.run_id, observation.lineage.stage_name,
-                  observation.lineage.stage_attempt, observation.lineage.source_artifact_type,
-                  observation.lineage.source_artifact_path, observation.lineage.source_artifact_hash,
-                  canonical_json(s), semantic_hash, key]
-        return self._insert_append(conn, table="candidate_opportunity_observation", id_column="opportunity_observation_id",
-                                   record_id=record_id, candidate_id=observation.candidate_id, idempotency_key=key,
-                                   semantic_hash=semantic_hash, columns=columns, values=values)
+        columns = (
+            "opportunity_observation_id",
+            "candidate_id",
+            "setup_id",
+            "as_of",
+            "observed_at",
+            "opportunity_score",
+            "rank_position",
+            "rank_percentile",
+            "rank_velocity",
+            "rank_velocity_state",
+            "factor_scores_json",
+            "rank_model_version",
+            "contract_version",
+            "run_id",
+            "stage_name",
+            "stage_attempt",
+            "source_artifact_type",
+            "source_artifact_path",
+            "source_artifact_hash",
+            "observation_json",
+            "semantic_payload_hash",
+            "idempotency_key",
+        )
+        values = [
+            record_id,
+            observation.candidate_id,
+            observation.setup_id,
+            _db_time(observation.as_of),
+            _db_time(observation.observed_at),
+            s.opportunity_score,
+            s.rank_position,
+            s.rank_percentile,
+            s.rank_velocity,
+            s.rank_velocity_state.value,
+            canonical_json(s.factor_scores),
+            s.rank_model_version,
+            s.contract_version,
+            observation.lineage.run_id,
+            observation.lineage.stage_name,
+            observation.lineage.stage_attempt,
+            observation.lineage.source_artifact_type,
+            observation.lineage.source_artifact_path,
+            observation.lineage.source_artifact_hash,
+            canonical_json(s),
+            semantic_hash,
+            key,
+        ]
+        return self._insert_append(
+            conn,
+            table="candidate_opportunity_observation",
+            id_column="opportunity_observation_id",
+            record_id=record_id,
+            candidate_id=observation.candidate_id,
+            idempotency_key=key,
+            semantic_hash=semantic_hash,
+            columns=columns,
+            values=values,
+        )
 
     def append_progress(self, observation: ProgressObservation) -> AppendResult:
         with self._transaction() as conn:
             return self._append_progress(conn, observation)
 
-    def _append_progress(self, conn: duckdb.DuckDBPyConnection, observation: ProgressObservation) -> AppendResult:
+    def _append_progress(
+        self, conn: duckdb.DuckDBPyConnection, observation: ProgressObservation
+    ) -> AppendResult:
         episode = self._require_open_or_closed(conn, observation.candidate_id)
-        self._validate_episode_identity(episode, observation.candidate_id, observation.setup_id)
+        self._validate_episode_identity(
+            episode, observation.candidate_id, observation.setup_id
+        )
         require_aware(observation.as_of, "as_of")
         if observation.days_without_progress < 0:
             raise ValueError("days_without_progress must be non-negative")
         if observation.as_of < episode.episode_started_at:
             raise ValueError("progress observation cannot precede episode start")
         s = observation.snapshot
-        payload = {"snapshot": to_dict(s), "days_without_progress": observation.days_without_progress,
-                   "rule_version": observation.rule_version, "details": observation.details}
+        payload = {
+            "snapshot": to_dict(s),
+            "days_without_progress": observation.days_without_progress,
+            "rule_version": observation.rule_version,
+            "details": observation.details,
+        }
         record_id, key, semantic_hash = self._identity(
-            candidate_id=observation.candidate_id, record_type="progress", as_of=observation.as_of,
-            lineage=observation.lineage, contract_version=OPPORTUNITY_CONTRACT_VERSION, payload=payload,
+            candidate_id=observation.candidate_id,
+            record_type="progress",
+            as_of=observation.as_of,
+            lineage=observation.lineage,
+            contract_version=OPPORTUNITY_CONTRACT_VERSION,
+            payload=payload,
         )
-        columns = ("progress_observation_id", "candidate_id", "setup_id", "as_of", "observed_at", "progress_status",
-                   "rank_velocity_improved", "evidence_score_improved", "base_contraction_improved", "volume_dry_up_improved",
-                   "weekly_ma_slope_improved", "distance_to_pivot_narrowed", "relative_strength_improved",
-                   "sector_alignment_improved", "days_without_progress", "details_json", "rule_version", "run_id",
-                   "stage_name", "stage_attempt", "source_artifact_hash", "observation_json", "semantic_payload_hash",
-                   "idempotency_key")
-        values = [record_id, observation.candidate_id, observation.setup_id, _db_time(observation.as_of),
-                  _db_time(s.observed_at), s.status.value, s.rank_velocity_improved, s.evidence_score_improved,
-                  s.base_contraction_improved, s.volume_dry_up_improved, s.weekly_ma_slope_improved,
-                  s.distance_to_pivot_narrowed, s.relative_strength_improved, s.sector_alignment_improved,
-                  observation.days_without_progress, canonical_json(observation.details), observation.rule_version,
-                  observation.lineage.run_id, observation.lineage.stage_name, observation.lineage.stage_attempt,
-                  observation.lineage.source_artifact_hash, canonical_json(s), semantic_hash, key]
-        return self._insert_append(conn, table="candidate_progress_observation", id_column="progress_observation_id",
-                                   record_id=record_id, candidate_id=observation.candidate_id, idempotency_key=key,
-                                   semantic_hash=semantic_hash, columns=columns, values=values)
+        columns = (
+            "progress_observation_id",
+            "candidate_id",
+            "setup_id",
+            "as_of",
+            "observed_at",
+            "progress_status",
+            "rank_velocity_improved",
+            "evidence_score_improved",
+            "base_contraction_improved",
+            "volume_dry_up_improved",
+            "weekly_ma_slope_improved",
+            "distance_to_pivot_narrowed",
+            "relative_strength_improved",
+            "sector_alignment_improved",
+            "days_without_progress",
+            "details_json",
+            "rule_version",
+            "run_id",
+            "stage_name",
+            "stage_attempt",
+            "source_artifact_hash",
+            "observation_json",
+            "semantic_payload_hash",
+            "idempotency_key",
+        )
+        values = [
+            record_id,
+            observation.candidate_id,
+            observation.setup_id,
+            _db_time(observation.as_of),
+            _db_time(s.observed_at),
+            s.status.value,
+            s.rank_velocity_improved,
+            s.evidence_score_improved,
+            s.base_contraction_improved,
+            s.volume_dry_up_improved,
+            s.weekly_ma_slope_improved,
+            s.distance_to_pivot_narrowed,
+            s.relative_strength_improved,
+            s.sector_alignment_improved,
+            observation.days_without_progress,
+            canonical_json(observation.details),
+            observation.rule_version,
+            observation.lineage.run_id,
+            observation.lineage.stage_name,
+            observation.lineage.stage_attempt,
+            observation.lineage.source_artifact_hash,
+            canonical_json(s),
+            semantic_hash,
+            key,
+        ]
+        return self._insert_append(
+            conn,
+            table="candidate_progress_observation",
+            id_column="progress_observation_id",
+            record_id=record_id,
+            candidate_id=observation.candidate_id,
+            idempotency_key=key,
+            semantic_hash=semantic_hash,
+            columns=columns,
+            values=values,
+        )
 
     def append_transition(self, observation: TransitionObservation) -> AppendResult:
         with self._transaction() as conn:
             return self._append_transition(conn, observation)
 
-    def _append_transition(self, conn: duckdb.DuckDBPyConnection, observation: TransitionObservation) -> AppendResult:
+    def _append_transition(
+        self, conn: duckdb.DuckDBPyConnection, observation: TransitionObservation
+    ) -> AppendResult:
         episode = self._require_open_or_closed(conn, observation.candidate_id)
-        self._validate_episode_identity(episode, observation.candidate_id, observation.setup_id)
+        self._validate_episode_identity(
+            episode, observation.candidate_id, observation.setup_id
+        )
         require_aware(observation.transitioned_at, "transitioned_at")
         if observation.from_state is observation.to_state:
             raise ValueError("transition from_state and to_state must differ")
@@ -863,34 +1392,85 @@ class DuckDBOpportunityRegistryStore:
             if _db_time(observation.transitioned_at) < latest[1]:
                 raise ValueError("transition chronology must be non-decreasing")
             if latest[0] != observation.from_state.value:
-                raise ValueError("transition from_state does not match latest persisted state")
-        payload = {"from_state": observation.from_state.value, "to_state": observation.to_state.value,
-                   "transition_reason": reason, "transitioned_at": observation.transitioned_at,
-                   "triggering_snapshot_id": observation.triggering_snapshot_id,
-                   "rule_version": observation.rule_version, "metadata": observation.metadata}
+                raise ValueError(
+                    "transition from_state does not match latest persisted state"
+                )
+        payload = {
+            "from_state": observation.from_state.value,
+            "to_state": observation.to_state.value,
+            "transition_reason": reason,
+            "transitioned_at": observation.transitioned_at,
+            "triggering_snapshot_id": observation.triggering_snapshot_id,
+            "rule_version": observation.rule_version,
+            "metadata": observation.metadata,
+        }
         record_id, key, semantic_hash = self._identity(
-            candidate_id=observation.candidate_id, record_type="transition", as_of=observation.transitioned_at,
-            lineage=observation.lineage, contract_version=OPPORTUNITY_CONTRACT_VERSION, payload=payload,
+            candidate_id=observation.candidate_id,
+            record_type="transition",
+            as_of=observation.transitioned_at,
+            lineage=observation.lineage,
+            contract_version=OPPORTUNITY_CONTRACT_VERSION,
+            payload=payload,
         )
-        columns = ("transition_id", "candidate_id", "setup_id", "from_state", "to_state", "transition_reason",
-                   "transitioned_at", "triggering_snapshot_id", "rule_version", "metadata_json", "run_id", "stage_name",
-                   "stage_attempt", "source_artifact_hash", "policy_snapshot_id", "semantic_payload_hash",
-                   "idempotency_key")
-        values = [record_id, observation.candidate_id, observation.setup_id, observation.from_state.value,
-                  observation.to_state.value, reason, _db_time(observation.transitioned_at),
-                  observation.triggering_snapshot_id, observation.rule_version, canonical_json(observation.metadata),
-                  observation.lineage.run_id, observation.lineage.stage_name, observation.lineage.stage_attempt,
-                  observation.lineage.source_artifact_hash, observation.lineage.policy_snapshot_id,
-                  semantic_hash, key]
-        return self._insert_append(conn, table="candidate_transition", id_column="transition_id", record_id=record_id,
-                                   candidate_id=observation.candidate_id, idempotency_key=key,
-                                   semantic_hash=semantic_hash, columns=columns, values=values)
+        columns = (
+            "transition_id",
+            "candidate_id",
+            "setup_id",
+            "from_state",
+            "to_state",
+            "transition_reason",
+            "transitioned_at",
+            "triggering_snapshot_id",
+            "rule_version",
+            "metadata_json",
+            "run_id",
+            "stage_name",
+            "stage_attempt",
+            "source_artifact_hash",
+            "policy_snapshot_id",
+            "semantic_payload_hash",
+            "idempotency_key",
+        )
+        values = [
+            record_id,
+            observation.candidate_id,
+            observation.setup_id,
+            observation.from_state.value,
+            observation.to_state.value,
+            reason,
+            _db_time(observation.transitioned_at),
+            observation.triggering_snapshot_id,
+            observation.rule_version,
+            canonical_json(observation.metadata),
+            observation.lineage.run_id,
+            observation.lineage.stage_name,
+            observation.lineage.stage_attempt,
+            observation.lineage.source_artifact_hash,
+            observation.lineage.policy_snapshot_id,
+            semantic_hash,
+            key,
+        ]
+        return self._insert_append(
+            conn,
+            table="candidate_transition",
+            id_column="transition_id",
+            record_id=record_id,
+            candidate_id=observation.candidate_id,
+            idempotency_key=key,
+            semantic_hash=semantic_hash,
+            columns=columns,
+            values=values,
+        )
 
-    def append_decision_context(self, observation: DecisionContextObservation) -> AppendResult:
+    def append_decision_context(
+        self, observation: DecisionContextObservation
+    ) -> AppendResult:
         with self._transaction() as conn:
             return self._append_decision(conn, observation)
 
-    def _append_decision(self, conn: duckdb.DuckDBPyConnection, observation: DecisionContextObservation) -> AppendResult:
+    def _append_decision(
+        self, conn: duckdb.DuckDBPyConnection, observation: DecisionContextObservation
+    ) -> AppendResult:
         d, c = observation.decision, observation.context
         episode = self._require_open_or_closed(conn, d.candidate_id)
         self._validate_episode_identity(episode, d.candidate_id, d.setup_id)
@@ -898,49 +1478,251 @@ class DuckDBOpportunityRegistryStore:
             raise ValueError("decision cannot precede episode start")
         payload = {"decision": to_dict(d), "context": to_dict(c)}
         record_id, key, semantic_hash = self._identity(
-            candidate_id=d.candidate_id, record_type="decision", as_of=d.decided_at, lineage=observation.lineage,
-            contract_version=c.contract_version, payload=payload,
+            candidate_id=d.candidate_id,
+            record_type="decision",
+            as_of=d.decided_at,
+            lineage=observation.lineage,
+            contract_version=c.contract_version,
+            payload=payload,
         )
-        columns = ("decision_context_id", "candidate_id", "setup_id", "decided_at", "action", "eligibility",
-                   "decision_confidence", "size_multiplier", "decision_stage", "decision_stage_status",
-                   "decision_stage_as_of", "decision_locked_stage", "decision_provisional_stage",
-                   "decision_stage_confidence", "decision_sector_stage", "decision_sector_stage_status",
-                   "decision_sector_stage_confidence", "opportunity_score", "evidence_score", "lifecycle_state",
-                   "followthrough_status", "market_regime", "sector_regime", "rank_model_version", "evidence_model_version",
-                   "stage_classifier_version", "action_policy_version", "execution_policy_version", "portfolio_context_json",
-                   "reasons_json", "blockers_json", "warnings_json", "next_required_event", "contract_version",
-                   "decision_json", "run_id", "stage_name", "stage_attempt", "source_artifact_hash",
-                   "policy_snapshot_id", "sector_locked_stage_prior_completed_week",
-                   "sector_provisional_stage_current_week", "sector_stage_velocity_current_week",
-                   "sector_gate_taxonomy", "sector_gate_cohort", "semantic_payload_hash", "idempotency_key")
+        columns = (
+            "decision_context_id",
+            "candidate_id",
+            "setup_id",
+            "decided_at",
+            "action",
+            "eligibility",
+            "decision_confidence",
+            "size_multiplier",
+            "decision_stage",
+            "decision_stage_status",
+            "decision_stage_as_of",
+            "decision_locked_stage",
+            "decision_provisional_stage",
+            "decision_stage_confidence",
+            "decision_sector_stage",
+            "decision_sector_stage_status",
+            "decision_sector_stage_confidence",
+            "opportunity_score",
+            "evidence_score",
+            "lifecycle_state",
+            "followthrough_status",
+            "market_regime",
+            "sector_regime",
+            "rank_model_version",
+            "evidence_model_version",
+            "stage_classifier_version",
+            "action_policy_version",
+            "execution_policy_version",
+            "portfolio_context_json",
+            "reasons_json",
+            "blockers_json",
+            "warnings_json",
+            "next_required_event",
+            "contract_version",
+            "decision_json",
+            "run_id",
+            "stage_name",
+            "stage_attempt",
+            "source_artifact_hash",
+            "policy_snapshot_id",
+            "sector_locked_stage_prior_completed_week",
+            "sector_provisional_stage_current_week",
+            "sector_stage_velocity_current_week",
+            "sector_gate_taxonomy",
+            "sector_gate_cohort",
+            "semantic_payload_hash",
+            "idempotency_key",
+        )
         gate = observation.sector_gate
-        values = [record_id, d.candidate_id, d.setup_id, _db_time(d.decided_at), d.action.value, d.eligibility.value,
-                  d.confidence, d.size_multiplier, c.decision_stage.value, c.decision_stage_status.value,
-                  _db_time(c.decision_stage_as_of), c.decision_locked_stage.value, c.decision_provisional_stage.value,
-                  c.decision_stage_confidence, c.decision_sector_stage.value, c.decision_sector_stage_status.value,
-                  c.decision_sector_stage_confidence, c.opportunity_score, c.evidence_score, c.lifecycle_state.value,
-                  c.followthrough_status.value, c.market_regime, c.sector_regime, c.rank_model_version,
-                  c.evidence_model_version, c.stage_classifier_version, c.action_policy_version,
-                  c.execution_policy_version, canonical_json(c.portfolio_context_summary), canonical_json(d.reasons),
-                  canonical_json(d.blockers), canonical_json(d.warnings), d.next_required_event, c.contract_version,
-                  canonical_json(payload), observation.lineage.run_id, observation.lineage.stage_name,
-                  observation.lineage.stage_attempt, observation.lineage.source_artifact_hash,
-                  observation.lineage.policy_snapshot_id,
-                  gate.prior_locked_stage.value if gate else None,
-                  gate.current_provisional_stage.value if gate else None,
-                  gate.current_stage_velocity if gate else None,
-                  gate.taxonomy_cause if gate else None,
-                  gate.calibration_cohort if gate else None,
-                  semantic_hash, key]
-        return self._insert_append(conn, table="candidate_decision_context", id_column="decision_context_id",
-                                   record_id=record_id, candidate_id=d.candidate_id, idempotency_key=key,
-                                   semantic_hash=semantic_hash, columns=columns, values=values)
+        values = [
+            record_id,
+            d.candidate_id,
+            d.setup_id,
+            _db_time(d.decided_at),
+            d.action.value,
+            d.eligibility.value,
+            d.confidence,
+            d.size_multiplier,
+            c.decision_stage.value,
+            c.decision_stage_status.value,
+            _db_time(c.decision_stage_as_of),
+            c.decision_locked_stage.value,
+            c.decision_provisional_stage.value,
+            c.decision_stage_confidence,
+            c.decision_sector_stage.value,
+            c.decision_sector_stage_status.value,
+            c.decision_sector_stage_confidence,
+            c.opportunity_score,
+            c.evidence_score,
+            c.lifecycle_state.value,
+            c.followthrough_status.value,
+            c.market_regime,
+            c.sector_regime,
+            c.rank_model_version,
+            c.evidence_model_version,
+            c.stage_classifier_version,
+            c.action_policy_version,
+            c.execution_policy_version,
+            canonical_json(c.portfolio_context_summary),
+            canonical_json(d.reasons),
+            canonical_json(d.blockers),
+            canonical_json(d.warnings),
+            d.next_required_event,
+            c.contract_version,
+            canonical_json(payload),
+            observation.lineage.run_id,
+            observation.lineage.stage_name,
+            observation.lineage.stage_attempt,
+            observation.lineage.source_artifact_hash,
+            observation.lineage.policy_snapshot_id,
+            gate.prior_locked_stage.value if gate else None,
+            gate.current_provisional_stage.value if gate else None,
+            gate.current_stage_velocity if gate else None,
+            gate.taxonomy_cause if gate else None,
+            gate.calibration_cohort if gate else None,
+            semantic_hash,
+            key,
+        ]
+        return self._insert_append(
+            conn,
+            table="candidate_decision_context",
+            id_column="decision_context_id",
+            record_id=record_id,
+            candidate_id=d.candidate_id,
+            idempotency_key=key,
+            semantic_hash=semantic_hash,
+            columns=columns,
+            values=values,
+        )
 
     def append_attribution(self, observation: AttributionObservation) -> AppendResult:
         with self._transaction() as conn:
             return self._append_attribution(conn, observation)
 
-    def _append_attribution(self, conn: duckdb.DuckDBPyConnection, observation: AttributionObservation) -> AppendResult:
+    def append_performance_event(
+        self, observation: PerformanceEventObservation
+    ) -> AppendResult:
+        with self._transaction() as conn:
+            return self._append_performance_event(conn, observation)
+
+    def _append_performance_event(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        observation: PerformanceEventObservation,
+    ) -> AppendResult:
+        episode = self._require_open_or_closed(
+            conn, observation.candidate_id, allow_closed=True
+        )
+        self._validate_episode_identity(
+            episode, observation.candidate_id, observation.setup_id
+        )
+        require_aware(observation.event_at, "event_at")
+        context = observation.investigator_context
+        primary_eligible = bool(
+            context.attribution_mode
+            in {"OBSERVED_AT_DECISION", "RECONSTRUCTED_SAME_RUN"}
+            and (
+                context.context_as_of is None
+                or context.context_as_of <= observation.event_at
+            )
+        )
+        payload = {
+            "candidate_id": observation.candidate_id,
+            "setup_id": observation.setup_id,
+            "event_type": observation.event_type,
+            "event_at": observation.event_at,
+            "session_date": observation.session_date,
+            "anchor_price": observation.anchor_price,
+            "anchor_price_basis": observation.anchor_price_basis,
+            "source_snapshot_id": observation.source_snapshot_id,
+            "source_transition_id": observation.source_transition_id,
+            "lifecycle_evaluable": observation.lifecycle_evaluable,
+            "investigator_context": to_dict(context),
+        }
+        record_id, key, semantic_hash = self._identity(
+            candidate_id=observation.candidate_id,
+            record_type=f"performance_{observation.event_type.lower()}",
+            as_of=observation.event_at,
+            lineage=observation.lineage,
+            contract_version=OPPORTUNITY_CONTRACT_VERSION,
+            payload=payload,
+        )
+        overlap_group_id = stable_digest(
+            {
+                "exchange": normalize_exchange(observation.exchange),
+                "symbol_id": normalize_symbol(observation.symbol_id),
+            }
+        )
+        columns = (
+            "event_id",
+            "candidate_id",
+            "setup_id",
+            "symbol_id",
+            "exchange",
+            "sector_name",
+            "overlap_group_id",
+            "event_type",
+            "event_at",
+            "session_date",
+            "anchor_price",
+            "anchor_price_basis",
+            "source_snapshot_id",
+            "source_transition_id",
+            "attribution_mode",
+            "primary_eligible",
+            "lifecycle_evaluable",
+            "context_as_of",
+            "context_json",
+            "source_run_id",
+            "source_artifact_hash",
+            "data_quality_status",
+            "data_quality_reason",
+            "semantic_payload_hash",
+            "idempotency_key",
+        )
+        values = [
+            record_id,
+            observation.candidate_id,
+            observation.setup_id,
+            normalize_symbol(observation.symbol_id),
+            normalize_exchange(observation.exchange),
+            observation.sector_name,
+            overlap_group_id,
+            observation.event_type,
+            _db_time(observation.event_at),
+            observation.session_date,
+            observation.anchor_price,
+            observation.anchor_price_basis,
+            observation.source_snapshot_id,
+            observation.source_transition_id,
+            context.attribution_mode,
+            primary_eligible,
+            observation.lifecycle_evaluable,
+            _db_time(context.context_as_of) if context.context_as_of else None,
+            canonical_json(context),
+            observation.lineage.run_id,
+            observation.lineage.source_artifact_hash,
+            observation.data_quality_status,
+            observation.data_quality_reason,
+            semantic_hash,
+            key,
+        ]
+        return self._insert_append(
+            conn,
+            table="investigator_performance_event",
+            id_column="event_id",
+            record_id=record_id,
+            candidate_id=observation.candidate_id,
+            idempotency_key=key,
+            semantic_hash=semantic_hash,
+            columns=columns,
+            values=values,
+        )
+
+    def _append_attribution(
+        self, conn: duckdb.DuckDBPyConnection, observation: AttributionObservation
+    ) -> AppendResult:
         a = observation.attribution
         episode = self._require_open_or_closed(conn, a.candidate_id, allow_closed=True)
         self._validate_episode_identity(episode, a.candidate_id, a.setup_id)
@@ -948,43 +1730,100 @@ class DuckDBOpportunityRegistryStore:
             raise ValueError("attribution cannot precede episode start")
         payload = to_dict(a)
         record_id, key, semantic_hash = self._identity(
-            candidate_id=a.candidate_id, record_type="attribution", as_of=a.resolved_at,
-            lineage=observation.lineage, contract_version=OPPORTUNITY_CONTRACT_VERSION, payload=payload,
+            candidate_id=a.candidate_id,
+            record_type="attribution",
+            as_of=a.resolved_at,
+            lineage=observation.lineage,
+            contract_version=OPPORTUNITY_CONTRACT_VERSION,
+            payload=payload,
         )
-        columns = ("attribution_id", "candidate_id", "setup_id", "attribution_category", "attribution_subcategory",
-                   "attribution_confidence", "attribution_rule_version", "supporting_evidence_json",
-                   "counterfactual_notes", "resolved_at", "contract_version", "attribution_json", "run_id", "stage_name",
-                   "stage_attempt", "source_artifact_hash", "semantic_payload_hash", "idempotency_key")
-        values = [record_id, a.candidate_id, a.setup_id, a.attribution_category.value, a.attribution_subcategory,
-                  a.attribution_confidence, a.attribution_rule_version, canonical_json(a.supporting_evidence),
-                  a.counterfactual_notes, _db_time(a.resolved_at), OPPORTUNITY_CONTRACT_VERSION, canonical_json(a),
-                  observation.lineage.run_id, observation.lineage.stage_name, observation.lineage.stage_attempt,
-                  observation.lineage.source_artifact_hash, semantic_hash, key]
-        return self._insert_append(conn, table="candidate_outcome_attribution", id_column="attribution_id",
-                                   record_id=record_id, candidate_id=a.candidate_id, idempotency_key=key,
-                                   semantic_hash=semantic_hash, columns=columns, values=values)
+        columns = (
+            "attribution_id",
+            "candidate_id",
+            "setup_id",
+            "attribution_category",
+            "attribution_subcategory",
+            "attribution_confidence",
+            "attribution_rule_version",
+            "supporting_evidence_json",
+            "counterfactual_notes",
+            "resolved_at",
+            "contract_version",
+            "attribution_json",
+            "run_id",
+            "stage_name",
+            "stage_attempt",
+            "source_artifact_hash",
+            "semantic_payload_hash",
+            "idempotency_key",
+        )
+        values = [
+            record_id,
+            a.candidate_id,
+            a.setup_id,
+            a.attribution_category.value,
+            a.attribution_subcategory,
+            a.attribution_confidence,
+            a.attribution_rule_version,
+            canonical_json(a.supporting_evidence),
+            a.counterfactual_notes,
+            _db_time(a.resolved_at),
+            OPPORTUNITY_CONTRACT_VERSION,
+            canonical_json(a),
+            observation.lineage.run_id,
+            observation.lineage.stage_name,
+            observation.lineage.stage_attempt,
+            observation.lineage.source_artifact_hash,
+            semantic_hash,
+            key,
+        ]
+        return self._insert_append(
+            conn,
+            table="candidate_outcome_attribution",
+            id_column="attribution_id",
+            record_id=record_id,
+            candidate_id=a.candidate_id,
+            idempotency_key=key,
+            semantic_hash=semantic_hash,
+            columns=columns,
+            values=values,
+        )
 
     def _batch(self, observations: Iterable[T], appender: Any) -> BatchAppendResult:
         with self._transaction() as conn:
             results = tuple(appender(conn, item) for item in observations)
-        return BatchAppendResult(results, sum(r.created for r in results), sum(r.duplicate for r in results))
+        return BatchAppendResult(
+            results, sum(r.created for r in results), sum(r.duplicate for r in results)
+        )
 
-    def append_snapshots_batch(self, observations: Iterable[SnapshotObservation]) -> BatchAppendResult:
+    def append_snapshots_batch(
+        self, observations: Iterable[SnapshotObservation]
+    ) -> BatchAppendResult:
         return self._batch(observations, self._append_snapshot)
 
-    def append_stage_observations_batch(self, observations: Iterable[StageObservation]) -> BatchAppendResult:
+    def append_stage_observations_batch(
+        self, observations: Iterable[StageObservation]
+    ) -> BatchAppendResult:
         return self._batch(observations, self._append_stage)
 
-    def append_evidence_observations_batch(self, observations: Iterable[EvidenceObservation]) -> BatchAppendResult:
+    def append_evidence_observations_batch(
+        self, observations: Iterable[EvidenceObservation]
+    ) -> BatchAppendResult:
         return self._batch(observations, self._append_evidence)
 
-    def append_opportunity_observations_batch(self, observations: Iterable[OpportunityObservation]) -> BatchAppendResult:
+    def append_opportunity_observations_batch(
+        self, observations: Iterable[OpportunityObservation]
+    ) -> BatchAppendResult:
         return self._batch(observations, self._append_opportunity)
 
-    def append_progress_observations_batch(self, observations: Iterable[ProgressObservation]) -> BatchAppendResult:
+    def append_progress_observations_batch(
+        self, observations: Iterable[ProgressObservation]
+    ) -> BatchAppendResult:
         return self._batch(observations, self._append_progress)
 
-    def append_orchestration_bundle(self, bundle: OrchestrationBundle) -> OrchestrationBundleResult:
+    def append_orchestration_bundle(
+        self, bundle: OrchestrationBundle
+    ) -> OrchestrationBundleResult:
         """Atomically apply one Phase 3 candidate write intent."""
         from dataclasses import replace
 
@@ -995,7 +1834,9 @@ class DuckDBOpportunityRegistryStore:
                 else self._require_open_or_closed(conn, bundle.candidate_id)
             )
             if episode.candidate_id != bundle.candidate_id:
-                raise ValueError("orchestration bundle candidate_id does not match episode identity")
+                raise ValueError(
+                    "orchestration bundle candidate_id does not match episode identity"
+                )
             results: list[AppendResult] = []
             superseded_candidate_id = None
             if bundle.supersession is not None:
@@ -1017,17 +1858,42 @@ class DuckDBOpportunityRegistryStore:
             if bundle.snapshot is not None:
                 snapshot_result = self._append_snapshot(conn, bundle.snapshot)
                 results.append(snapshot_result)
+                transition_result = None
                 if bundle.transition is not None:
-                    results.append(self._append_transition(
-                        conn, replace(bundle.transition, triggering_snapshot_id=snapshot_result.record_id)
-                    ))
+                    transition_result = self._append_transition(
+                        conn,
+                        replace(
+                            bundle.transition,
+                            triggering_snapshot_id=snapshot_result.record_id,
+                        ),
+                    )
+                    results.append(transition_result)
+                for event in bundle.performance_events:
+                    linked_event = replace(
+                        event,
+                        source_snapshot_id=snapshot_result.record_id,
+                        source_transition_id=(
+                            transition_result.record_id
+                            if transition_result is not None
+                            and event.event_type == "ENTRY_CONFIRMED"
+                            else event.source_transition_id
+                        ),
+                    )
+                    results.append(self._append_performance_event(conn, linked_event))
             elif bundle.transition is not None:
-                raise ValueError("orchestration transition requires a triggering snapshot")
+                raise ValueError(
+                    "orchestration transition requires a triggering snapshot"
+                )
+            elif bundle.performance_events:
+                raise ValueError("performance events require a triggering snapshot")
             closed = False
             if bundle.closure is not None:
                 self._close_episode(
-                    conn, bundle.candidate_id, status=bundle.closure.status,
-                    closed_at=bundle.closure.closed_at, closing_reason=bundle.closure.closing_reason,
+                    conn,
+                    bundle.candidate_id,
+                    status=bundle.closure.status,
+                    closed_at=bundle.closure.closed_at,
+                    closing_reason=bundle.closure.closing_reason,
                     lineage=bundle.closure.lineage,
                 )
                 closed = True
@@ -1041,7 +1907,11 @@ class DuckDBOpportunityRegistryStore:
             )
 
     def append_snapshot_bundle(
-        self, *, snapshot: SnapshotObservation, stock_stage: StageObservation, sector_stage: StageObservation
+        self,
+        *,
+        snapshot: SnapshotObservation,
+        stock_stage: StageObservation,
+        sector_stage: StageObservation,
     ) -> tuple[AppendResult, AppendResult, AppendResult]:
         with self._transaction() as conn:
             stock_result = self._append_stage(conn, stock_stage)
@@ -1066,7 +1936,9 @@ class DuckDBOpportunityRegistryStore:
 
         with self._transaction() as conn:
             snapshot_result = self._append_snapshot(conn, snapshot)
-            linked = replace(transition, triggering_snapshot_id=snapshot_result.record_id)
+            linked = replace(
+                transition, triggering_snapshot_id=snapshot_result.record_id
+            )
             return snapshot_result, self._append_transition(conn, linked)
 
     @staticmethod
@@ -1086,64 +1958,178 @@ class DuckDBOpportunityRegistryStore:
 
     def current_state(self, candidate_id: str) -> CandidateCurrentState | None:
         with self.registry._reader() as conn:  # noqa: SLF001
-            cursor = conn.execute("SELECT * FROM candidate_current_state WHERE candidate_id = ?", [candidate_id])
+            cursor = conn.execute(
+                "SELECT * FROM candidate_current_state WHERE candidate_id = ?",
+                [candidate_id],
+            )
             row = _row_dict(cursor, cursor.fetchone())
             return self._current_from_row(row) if row else None
 
     @staticmethod
     def _latest_before(
-        conn: duckdb.DuckDBPyConnection, table: str, candidate_id: str, cutoff: datetime,
-        time_column: str, id_column: str, *, extra: str = "", extra_params: list[Any] | None = None,
+        conn: duckdb.DuckDBPyConnection,
+        table: str,
+        candidate_id: str,
+        cutoff: datetime,
+        time_column: str,
+        id_column: str,
+        *,
+        extra: str = "",
+        extra_params: list[Any] | None = None,
     ) -> dict[str, Any] | None:
         params: list[Any] = [candidate_id, _db_time(cutoff), *(extra_params or [])]
         cursor = conn.execute(
             f"SELECT * FROM {table} WHERE candidate_id = ? AND {time_column} <= ? {extra} "  # noqa: S608
-            f"ORDER BY {time_column} DESC, " + ("observed_at DESC, " if time_column == "as_of" else "") +
-            f"created_at DESC, {id_column} DESC LIMIT 1",
+            f"ORDER BY {time_column} DESC, "
+            + ("observed_at DESC, " if time_column == "as_of" else "")
+            + f"created_at DESC, {id_column} DESC LIMIT 1",
             params,
         )
         return _row_dict(cursor, cursor.fetchone())
 
-    def state_as_of(self, candidate_id: str, as_of: datetime) -> CandidateCurrentState | None:
+    def state_as_of(
+        self, candidate_id: str, as_of: datetime
+    ) -> CandidateCurrentState | None:
         require_aware(as_of, "as_of")
         with self.registry._reader() as conn:  # noqa: SLF001
             episode = self._get_episode(conn, candidate_id)
             if episode is None or episode.episode_started_at > as_of:
                 return None
-            snapshot = self._latest_before(conn, "candidate_snapshot", candidate_id, as_of, "as_of", "snapshot_id")
-            opportunity = self._latest_before(conn, "candidate_opportunity_observation", candidate_id, as_of, "as_of", "opportunity_observation_id")
-            evidence = self._latest_before(conn, "candidate_evidence_observation", candidate_id, as_of, "as_of", "evidence_observation_id")
-            stock = self._latest_before(conn, "candidate_stage_observation", candidate_id, as_of, "as_of", "stage_observation_id", extra="AND scope = ?", extra_params=["STOCK"])
-            sector = self._latest_before(conn, "candidate_stage_observation", candidate_id, as_of, "as_of", "stage_observation_id", extra="AND scope = ?", extra_params=["SECTOR"])
-            progress = self._latest_before(conn, "candidate_progress_observation", candidate_id, as_of, "as_of", "progress_observation_id")
-            decision = self._latest_before(conn, "candidate_decision_context", candidate_id, as_of, "decided_at", "decision_context_id")
-            transition = self._latest_before(conn, "candidate_transition", candidate_id, as_of, "transitioned_at", "transition_id")
+            snapshot = self._latest_before(
+                conn, "candidate_snapshot", candidate_id, as_of, "as_of", "snapshot_id"
+            )
+            opportunity = self._latest_before(
+                conn,
+                "candidate_opportunity_observation",
+                candidate_id,
+                as_of,
+                "as_of",
+                "opportunity_observation_id",
+            )
+            evidence = self._latest_before(
+                conn,
+                "candidate_evidence_observation",
+                candidate_id,
+                as_of,
+                "as_of",
+                "evidence_observation_id",
+            )
+            stock = self._latest_before(
+                conn,
+                "candidate_stage_observation",
+                candidate_id,
+                as_of,
+                "as_of",
+                "stage_observation_id",
+                extra="AND scope = ?",
+                extra_params=["STOCK"],
+            )
+            sector = self._latest_before(
+                conn,
+                "candidate_stage_observation",
+                candidate_id,
+                as_of,
+                "as_of",
+                "stage_observation_id",
+                extra="AND scope = ?",
+                extra_params=["SECTOR"],
+            )
+            progress = self._latest_before(
+                conn,
+                "candidate_progress_observation",
+                candidate_id,
+                as_of,
+                "as_of",
+                "progress_observation_id",
+            )
+            decision = self._latest_before(
+                conn,
+                "candidate_decision_context",
+                candidate_id,
+                as_of,
+                "decided_at",
+                "decision_context_id",
+            )
+            transition = self._latest_before(
+                conn,
+                "candidate_transition",
+                candidate_id,
+                as_of,
+                "transitioned_at",
+                "transition_id",
+            )
             status = episode.episode_status
             closed_at = episode.episode_closed_at
             if closed_at is None or closed_at > as_of:
                 status = EpisodeStatus.OPEN
                 closed_at = None
-            def pick(primary: dict[str, Any] | None, pkey: str, fallback: dict[str, Any] | None, fkey: str) -> Any:
-                return (primary or {}).get(pkey) if (primary or {}).get(pkey) is not None else (fallback or {}).get(fkey)
-            last_sources = [item for item in (decision, progress, sector, stock, evidence, opportunity, snapshot) if item]
+
+            def pick(
+                primary: dict[str, Any] | None,
+                pkey: str,
+                fallback: dict[str, Any] | None,
+                fkey: str,
+            ) -> Any:
+                return (
+                    (primary or {}).get(pkey)
+                    if (primary or {}).get(pkey) is not None
+                    else (fallback or {}).get(fkey)
+                )
+
+            last_sources = [
+                item
+                for item in (
+                    decision,
+                    progress,
+                    sector,
+                    stock,
+                    evidence,
+                    opportunity,
+                    snapshot,
+                )
+                if item
+            ]
             last_sources.sort(
-                key=lambda item: item.get("decided_at") or item.get("as_of") or datetime.min,
+                key=lambda item: (
+                    item.get("decided_at") or item.get("as_of") or datetime.min
+                ),
                 reverse=True,
             )
             lifecycle = (snapshot or {}).get("lifecycle_state")
-            if transition and (snapshot is None or transition["transitioned_at"] > snapshot["as_of"]):
+            if transition and (
+                snapshot is None or transition["transitioned_at"] > snapshot["as_of"]
+            ):
                 lifecycle = transition["to_state"]
             return CandidateCurrentState(
-                candidate_id=episode.candidate_id, setup_id=episode.setup_id, symbol_id=episode.symbol_id,
-                exchange=episode.exchange, episode_status=status, episode_started_at=episode.episode_started_at,
-                episode_closed_at=closed_at, current_lifecycle_state=lifecycle,
-                current_followthrough_status=(snapshot or {}).get("followthrough_status"),
-                latest_opportunity_score=pick(opportunity, "opportunity_score", snapshot, "opportunity_score"),
-                latest_rank_position=pick(opportunity, "rank_position", snapshot, "rank_position"),
-                latest_rank_percentile=pick(opportunity, "rank_percentile", snapshot, "rank_percentile"),
-                latest_rank_velocity=pick(opportunity, "rank_velocity", snapshot, "rank_velocity"),
-                latest_evidence_score=pick(evidence, "score", snapshot, "evidence_score"),
-                latest_evidence_verdict=pick(evidence, "verdict", snapshot, "evidence_verdict"),
+                candidate_id=episode.candidate_id,
+                setup_id=episode.setup_id,
+                symbol_id=episode.symbol_id,
+                exchange=episode.exchange,
+                episode_status=status,
+                episode_started_at=episode.episode_started_at,
+                episode_closed_at=closed_at,
+                current_lifecycle_state=lifecycle,
+                current_followthrough_status=(snapshot or {}).get(
+                    "followthrough_status"
+                ),
+                latest_opportunity_score=pick(
+                    opportunity, "opportunity_score", snapshot, "opportunity_score"
+                ),
+                latest_rank_position=pick(
+                    opportunity, "rank_position", snapshot, "rank_position"
+                ),
+                latest_rank_percentile=pick(
+                    opportunity, "rank_percentile", snapshot, "rank_percentile"
+                ),
+                latest_rank_velocity=pick(
+                    opportunity, "rank_velocity", snapshot, "rank_velocity"
+                ),
+                latest_evidence_score=pick(
+                    evidence, "score", snapshot, "evidence_score"
+                ),
+                latest_evidence_verdict=pick(
+                    evidence, "verdict", snapshot, "evidence_verdict"
+                ),
                 current_stock_stage=(stock or {}).get("effective_stage"),
                 current_stock_stage_status=(stock or {}).get("stage_status"),
                 current_stock_stage_confidence=(stock or {}).get("confidence_score"),
@@ -1152,16 +2138,24 @@ class DuckDBOpportunityRegistryStore:
                 current_sector_stage_confidence=(sector or {}).get("confidence_score"),
                 current_progress_status=(progress or {}).get("progress_status"),
                 days_in_state=(snapshot or {}).get("days_in_state"),
-                days_without_progress=pick(progress, "days_without_progress", snapshot, "days_without_progress"),
+                days_without_progress=pick(
+                    progress, "days_without_progress", snapshot, "days_without_progress"
+                ),
                 latest_action=pick(decision, "action", snapshot, "latest_action"),
-                current_eligibility=pick(decision, "eligibility", snapshot, "eligibility"),
+                current_eligibility=pick(
+                    decision, "eligibility", snapshot, "eligibility"
+                ),
                 last_snapshot_at=_aware((snapshot or {}).get("as_of")),
                 last_transition_at=_aware((transition or {}).get("transitioned_at")),
                 last_progress_at=_aware((snapshot or {}).get("last_progress_at")),
                 last_retention_counted_session=(snapshot or {}).get(
                     "last_retention_counted_session"
                 ),
-                last_observed_run_id=(last_sources[0].get("run_id") if last_sources else episode.created_run_id),
+                last_observed_run_id=(
+                    last_sources[0].get("run_id")
+                    if last_sources
+                    else episode.created_run_id
+                ),
             )
 
     def timeline(self, candidate_id: str) -> CandidateTimeline:
@@ -1169,27 +2163,103 @@ class DuckDBOpportunityRegistryStore:
             episode = self._get_episode(conn, candidate_id)
             if episode is None:
                 raise KeyError(f"unknown candidate_id: {candidate_id}")
-            entries = [TimelineEntry("episode_open", episode.candidate_id, episode.episode_started_at,
-                                     episode.created_at, {"status": "OPEN", "opening_reason": episode.opening_reason})]
+            entries = [
+                TimelineEntry(
+                    "episode_open",
+                    episode.candidate_id,
+                    episode.episode_started_at,
+                    episode.created_at,
+                    {"status": "OPEN", "opening_reason": episode.opening_reason},
+                )
+            ]
             specs = (
-                ("snapshot", "candidate_snapshot", "snapshot_id", "as_of", "snapshot_json"),
-                ("opportunity", "candidate_opportunity_observation", "opportunity_observation_id", "as_of", "observation_json"),
-                ("evidence", "candidate_evidence_observation", "evidence_observation_id", "as_of", "observation_json"),
-                ("stage", "candidate_stage_observation", "stage_observation_id", "as_of", "observation_json"),
-                ("progress", "candidate_progress_observation", "progress_observation_id", "as_of", "observation_json"),
-                ("transition", "candidate_transition", "transition_id", "transitioned_at", "metadata_json"),
-                ("decision", "candidate_decision_context", "decision_context_id", "decided_at", "decision_json"),
-                ("attribution", "candidate_outcome_attribution", "attribution_id", "resolved_at", "attribution_json"),
+                (
+                    "snapshot",
+                    "candidate_snapshot",
+                    "snapshot_id",
+                    "as_of",
+                    "snapshot_json",
+                ),
+                (
+                    "opportunity",
+                    "candidate_opportunity_observation",
+                    "opportunity_observation_id",
+                    "as_of",
+                    "observation_json",
+                ),
+                (
+                    "evidence",
+                    "candidate_evidence_observation",
+                    "evidence_observation_id",
+                    "as_of",
+                    "observation_json",
+                ),
+                (
+                    "stage",
+                    "candidate_stage_observation",
+                    "stage_observation_id",
+                    "as_of",
+                    "observation_json",
+                ),
+                (
+                    "progress",
+                    "candidate_progress_observation",
+                    "progress_observation_id",
+                    "as_of",
+                    "observation_json",
+                ),
+                (
+                    "transition",
+                    "candidate_transition",
+                    "transition_id",
+                    "transitioned_at",
+                    "metadata_json",
+                ),
+                (
+                    "decision",
+                    "candidate_decision_context",
+                    "decision_context_id",
+                    "decided_at",
+                    "decision_json",
+                ),
+                (
+                    "attribution",
+                    "candidate_outcome_attribution",
+                    "attribution_id",
+                    "resolved_at",
+                    "attribution_json",
+                ),
             )
             for kind, table, id_col, time_col, payload_col in specs:
                 rows = conn.execute(
                     f"SELECT {id_col}, {time_col}, created_at, {payload_col} FROM {table} WHERE candidate_id = ?",  # noqa: S608
                     [candidate_id],
                 ).fetchall()
-                entries.extend(TimelineEntry(kind, row[0], _aware(row[1]), _aware(row[2]), json.loads(row[3])) for row in rows)
+                entries.extend(
+                    TimelineEntry(
+                        kind, row[0], _aware(row[1]), _aware(row[2]), json.loads(row[3])
+                    )
+                    for row in rows
+                )
             if episode.episode_closed_at is not None:
-                entries.append(TimelineEntry("episode_close", episode.candidate_id, episode.episode_closed_at,
-                                             episode.updated_at, {"status": episode.episode_status.value,
-                                                                  "closing_reason": episode.closing_reason}))
-            entries.sort(key=lambda item: (item.event_at, item.created_at, item.record_type, item.record_id))
+                entries.append(
+                    TimelineEntry(
+                        "episode_close",
+                        episode.candidate_id,
+                        episode.episode_closed_at,
+                        episode.updated_at,
+                        {
+                            "status": episode.episode_status.value,
+                            "closing_reason": episode.closing_reason,
+                        },
+                    )
+                )
+            entries.sort(
+                key=lambda item: (
+                    item.event_at,
+                    item.created_at,
+                    item.record_type,
+                    item.record_id,
+                )
+            )
             return CandidateTimeline(episode, tuple(entries))

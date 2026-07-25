@@ -11,6 +11,7 @@ from ai_trading_system.domains.investigator.cohort_performance import (
     build_performance_summary,
     build_threshold_recommendations,
     mature_investigator_cohorts,
+    upsert_investigator_cohorts,
 )
 
 
@@ -62,7 +63,9 @@ def _create_cohort_table(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-def _seed_prices(path: Path, symbol: str = "AAA", closes: list[float] | None = None) -> None:
+def _seed_prices(
+    path: Path, symbol: str = "AAA", closes: list[float] | None = None
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     closes = closes or [100 + i for i in range(25)]
     conn = duckdb.connect(str(path))
@@ -119,10 +122,17 @@ def test_mature_investigator_cohorts_calculates_forward_returns(tmp_path: Path) 
     assert row[5] == "MATURED"
 
     assert mature_investigator_cohorts(conn, ohlcv_db_path=ohlcv) == 0
-    assert conn.execute("SELECT COUNT(*) FROM investigator_cohort_performance").fetchone()[0] == 1
+    assert (
+        conn.execute("SELECT COUNT(*) FROM investigator_cohort_performance").fetchone()[
+            0
+        ]
+        == 1
+    )
 
 
-def test_mature_investigator_cohorts_handles_partial_and_missing_prices(tmp_path: Path) -> None:
+def test_mature_investigator_cohorts_handles_partial_and_missing_prices(
+    tmp_path: Path,
+) -> None:
     partial_ohlcv = tmp_path / "partial.duckdb"
     _seed_prices(partial_ohlcv, closes=[100, 101, 102, 103, 104, 105])
     conn = duckdb.connect(":memory:")
@@ -235,7 +245,9 @@ def test_performance_summary_groups_metrics_and_empty_table() -> None:
         ]
     )
     conn.register("rows", rows)
-    conn.execute("INSERT INTO investigator_cohort_performance BY NAME SELECT * FROM rows")
+    conn.execute(
+        "INSERT INTO investigator_cohort_performance BY NAME SELECT * FROM rows"
+    )
     conn.unregister("rows")
 
     frame, summary = build_performance_summary(conn)
@@ -254,9 +266,53 @@ def test_performance_summary_groups_metrics_and_empty_table() -> None:
 
 
 def test_threshold_recommendations_are_diagnostic_only() -> None:
-    insufficient = build_threshold_recommendations(pd.DataFrame(), {"matured_by_horizon": {"5d": 99}})
+    insufficient = build_threshold_recommendations(
+        pd.DataFrame(), {"matured_by_horizon": {"5d": 99}}
+    )
     assert insufficient["insufficient_sample"] is True
     assert insufficient["recommendation"] == "Do not tune thresholds yet."
+
+
+def test_cohort_replay_does_not_rewrite_point_in_time_context() -> None:
+    conn = duckdb.connect(":memory:")
+    _create_cohort_table(conn)
+    gate = pd.DataFrame(
+        [
+            {
+                "trade_date": "2026-05-01",
+                "symbol_id": "AAA",
+                "verdict": "HIGH_CONVICTION",
+                "final_score": 80,
+            }
+        ]
+    )
+    original = pd.DataFrame(
+        [
+            {
+                "trade_date": "2026-05-01",
+                "symbol_id": "AAA",
+                "stage_label": "STAGE_2_EARLY",
+                "pattern_family": "VCP",
+                "close": 100,
+            }
+        ]
+    )
+    later = original.assign(
+        stage_label="STAGE_2_CONFIRMED",
+        pattern_family="CUP_HANDLE",
+        close=110,
+    )
+
+    upsert_investigator_cohorts(conn, gate, original)
+    upsert_investigator_cohorts(conn, gate, later)
+
+    row = conn.execute(
+        """
+        SELECT stage_label, pattern_family, close
+        FROM investigator_cohort_performance
+        """
+    ).fetchone()
+    assert row == ("STAGE_2_EARLY", "VCP", 100.0)
 
     frame = pd.DataFrame(
         [
@@ -278,7 +334,9 @@ def test_threshold_recommendations_are_diagnostic_only() -> None:
             },
         ]
     )
-    sufficient = build_threshold_recommendations(frame, {"matured_by_horizon": {"5d": 100}})
+    sufficient = build_threshold_recommendations(
+        frame, {"matured_by_horizon": {"5d": 100}}
+    )
     assert sufficient["insufficient_sample"] is False
     assert sufficient["recommendations"]
 
@@ -344,7 +402,9 @@ def test_performance_summary_stage_pattern_groups_confidence_and_edge() -> None:
         ]
     )
     conn.register("rows", rows)
-    conn.execute("INSERT INTO investigator_cohort_performance BY NAME SELECT * FROM rows")
+    conn.execute(
+        "INSERT INTO investigator_cohort_performance BY NAME SELECT * FROM rows"
+    )
     conn.unregister("rows")
 
     frame, _summary = build_performance_summary(conn)
@@ -355,7 +415,12 @@ def test_performance_summary_stage_pattern_groups_confidence_and_edge() -> None:
         & frame["horizon"].eq("5d")
     ].iloc[0]
 
-    assert {"stage_label", "pattern_family", "stage_x_pattern", "pattern_x_trigger_reason"}.issubset(group_types)
+    assert {
+        "stage_label",
+        "pattern_family",
+        "stage_x_pattern",
+        "pattern_x_trigger_reason",
+    }.issubset(group_types)
     assert cross["sample_count"] == 2
     assert cross["sample_confidence"] == "LOW"
     assert bool(cross["min_sample_pass"]) is False

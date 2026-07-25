@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ COHORT_COLUMNS = [
     "move_tag",
     "sector",
     "stage_label",
+    "stage_confidence",
     "pattern_family",
     "pattern_state",
     "setup_quality_bucket",
@@ -37,6 +39,16 @@ COHORT_COLUMNS = [
     "proximity_to_highs",
     "delivery_pct",
     "sector_strength",
+    "confirmed_regime",
+    "raw_regime",
+    "regime_confidence",
+    "breadth_velocity_bucket",
+    "breadth_velocity_quantile",
+    "regime_score_chg_5d",
+    "sector_relative_strength_bucket",
+    "context_as_of",
+    "attribution_mode",
+    "missing_fields_json",
     "close",
     "fwd_3d_return",
     "fwd_5d_return",
@@ -92,19 +104,33 @@ def build_cohort_rows(
         return pd.DataFrame(columns=COHORT_COLUMNS)
 
     source = final_gate.copy().assign(
-        trade_date=pd.to_datetime(final_gate["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d").astype("object")
+        trade_date=pd.to_datetime(final_gate["trade_date"], errors="coerce")
+        .dt.strftime("%Y-%m-%d")
+        .astype("object")
     )
-    source.loc[:, "symbol_id"] = source["symbol_id"].fillna("").astype(str).str.strip().str.upper()
-    source = source.loc[source["trade_date"].notna() & source["symbol_id"].ne("")].copy()
+    source.loc[:, "symbol_id"] = (
+        source["symbol_id"].fillna("").astype(str).str.strip().str.upper()
+    )
+    source = source.loc[
+        source["trade_date"].notna() & source["symbol_id"].ne("")
+    ].copy()
     if source.empty:
         return pd.DataFrame(columns=COHORT_COLUMNS)
 
-    scores = investigator_scores.copy() if isinstance(investigator_scores, pd.DataFrame) else pd.DataFrame()
+    scores = (
+        investigator_scores.copy()
+        if isinstance(investigator_scores, pd.DataFrame)
+        else pd.DataFrame()
+    )
     if not scores.empty and "symbol_id" in scores.columns:
-        scores.loc[:, "symbol_id"] = scores["symbol_id"].fillna("").astype(str).str.strip().str.upper()
+        scores.loc[:, "symbol_id"] = (
+            scores["symbol_id"].fillna("").astype(str).str.strip().str.upper()
+        )
         if "trade_date" in scores.columns:
             scores = scores.assign(
-                trade_date=pd.to_datetime(scores["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d").astype("object")
+                trade_date=pd.to_datetime(scores["trade_date"], errors="coerce")
+                .dt.strftime("%Y-%m-%d")
+                .astype("object")
             )
         score_columns = [
             col
@@ -115,6 +141,7 @@ def build_cohort_rows(
                 "move_tag",
                 "sector",
                 "stage_label",
+                "stage_confidence",
                 "pattern_family",
                 "pattern_state",
                 "setup_quality_bucket",
@@ -131,18 +158,37 @@ def build_cohort_rows(
                 "proximity_to_highs",
                 "delivery_pct",
                 "sector_strength",
+                "confirmed_regime",
+                "raw_regime",
+                "regime_confidence",
+                "breadth_velocity_bucket",
+                "breadth_velocity_quantile",
+                "regime_score_chg_5d",
+                "sector_relative_strength_bucket",
+                "context_as_of",
+                "attribution_mode",
+                "missing_fields_json",
                 "close",
             )
             if col in scores.columns
         ]
         scores = scores[score_columns].drop_duplicates(
-            ["symbol_id", "trade_date"] if "trade_date" in score_columns else ["symbol_id"],
+            ["symbol_id", "trade_date"]
+            if "trade_date" in score_columns
+            else ["symbol_id"],
             keep="first",
         )
         if "trade_date" in score_columns:
-            source = source.merge(scores, on=["symbol_id", "trade_date"], how="left", suffixes=("", "_score"))
+            source = source.merge(
+                scores,
+                on=["symbol_id", "trade_date"],
+                how="left",
+                suffixes=("", "_score"),
+            )
         else:
-            source = source.merge(scores, on="symbol_id", how="left", suffixes=("", "_score"))
+            source = source.merge(
+                scores, on="symbol_id", how="left", suffixes=("", "_score")
+            )
 
     out = pd.DataFrame(index=source.index)
     out.loc[:, "trade_date"] = source["trade_date"]
@@ -159,14 +205,30 @@ def build_cohort_rows(
         "setup_quality_bucket",
         "breakout_type",
         "candidate_tier",
+        "confirmed_regime",
+        "raw_regime",
+        "breadth_velocity_bucket",
+        "breadth_velocity_quantile",
+        "sector_relative_strength_bucket",
+        "attribution_mode",
+        "missing_fields_json",
     ):
         out.loc[:, column] = _first_available(source, column)
-    out.loc[:, "qualified_breakout"] = _nullable_bool(_first_available(source, "qualified_breakout"))
-    out.loc[:, "final_score"] = pd.to_numeric(_first_available(source, "final_score"), errors="coerce")
-    out.loc[:, "hard_trap_flag"] = _nullable_bool(_first_available(source, "hard_trap_flag"))
-    out.loc[:, "credible_trigger"] = _nullable_bool(_first_available(source, "credible_trigger"))
+    out.loc[:, "qualified_breakout"] = _nullable_bool(
+        _first_available(source, "qualified_breakout")
+    )
+    out.loc[:, "final_score"] = pd.to_numeric(
+        _first_available(source, "final_score"), errors="coerce"
+    )
+    out.loc[:, "hard_trap_flag"] = _nullable_bool(
+        _first_available(source, "hard_trap_flag")
+    )
+    out.loc[:, "credible_trigger"] = _nullable_bool(
+        _first_available(source, "credible_trigger")
+    )
     for column in (
         "stage_score",
+        "stage_confidence",
         "pattern_score",
         "breakout_score",
         "composite_score",
@@ -176,9 +238,48 @@ def build_cohort_rows(
         "proximity_to_highs",
         "delivery_pct",
         "sector_strength",
+        "regime_confidence",
+        "regime_score_chg_5d",
     ):
-        out.loc[:, column] = pd.to_numeric(_first_available(source, column), errors="coerce")
-    out.loc[:, "close"] = pd.to_numeric(_first_available(source, "close"), errors="coerce")
+        out.loc[:, column] = pd.to_numeric(
+            _first_available(source, column), errors="coerce"
+        )
+    out.loc[:, "close"] = pd.to_numeric(
+        _first_available(source, "close"), errors="coerce"
+    )
+    out.loc[:, "context_as_of"] = pd.to_datetime(
+        _first_available(source, "context_as_of", default=source["trade_date"]),
+        errors="coerce",
+    )
+    out.loc[:, "attribution_mode"] = out["attribution_mode"].fillna(
+        "OBSERVED_AT_DECISION"
+    )
+    required_context = (
+        "stage_label",
+        "stage_confidence",
+        "pattern_family",
+        "pattern_state",
+        "setup_quality_bucket",
+        "breakout_type",
+        "candidate_tier",
+        "qualified_breakout",
+        "confirmed_regime",
+        "breadth_velocity_bucket",
+        "sector_relative_strength_bucket",
+    )
+    out.loc[:, "missing_fields_json"] = [
+        json.dumps(
+            [
+                column
+                for column in required_context
+                if pd.isna(row.get(column))
+                or str(row.get(column) or "").upper()
+                in {"", "UNKNOWN", "NONE", "NAN", "<NA>"}
+            ],
+            separators=(",", ":"),
+        )
+        for _, row in out.iterrows()
+    ]
     for column in (
         "fwd_3d_return",
         "fwd_5d_return",
@@ -191,7 +292,11 @@ def build_cohort_rows(
     ):
         out.loc[:, column] = pd.NA
     out.loc[:, "data_quality_status"] = "PENDING"
-    return out[COHORT_COLUMNS].drop_duplicates(["trade_date", "symbol_id", "exchange"], keep="first").reset_index(drop=True)
+    return (
+        out[COHORT_COLUMNS]
+        .drop_duplicates(["trade_date", "symbol_id", "exchange"], keep="first")
+        .reset_index(drop=True)
+    )
 
 
 def upsert_investigator_cohorts(
@@ -205,78 +310,34 @@ def upsert_investigator_cohorts(
     rows = build_cohort_rows(final_gate, investigator_scores, exchange=exchange)
     if rows.empty:
         return 0
+    table_columns = {
+        row[1]
+        for row in conn.execute(
+            "PRAGMA table_info('investigator_cohort_performance')"
+        ).fetchall()
+    }
+    rows = rows[[column for column in rows.columns if column in table_columns]]
 
     conn.register("incoming_investigator_cohorts", rows)
     try:
         conn.execute(
             """
-            CREATE TEMP TABLE incoming_investigator_cohorts_enriched AS
-            SELECT
-                incoming.trade_date,
-                incoming.symbol_id,
-                incoming.exchange,
-                incoming.trigger_reason,
-                incoming.verdict,
-                incoming.final_score,
-                incoming.hard_trap_flag,
-                incoming.credible_trigger,
-                incoming.move_tag,
-                incoming.sector,
-                incoming.stage_label,
-                incoming.pattern_family,
-                incoming.pattern_state,
-                incoming.setup_quality_bucket,
-                incoming.breakout_type,
-                incoming.candidate_tier,
-                incoming.qualified_breakout,
-                incoming.stage_score,
-                incoming.pattern_score,
-                incoming.breakout_score,
-                incoming.composite_score,
-                incoming.relative_strength,
-                incoming.volume_intensity,
-                incoming.trend_persistence,
-                incoming.proximity_to_highs,
-                incoming.delivery_pct,
-                incoming.sector_strength,
-                incoming.close,
-                COALESCE(existing.fwd_3d_return, incoming.fwd_3d_return) AS fwd_3d_return,
-                COALESCE(existing.fwd_5d_return, incoming.fwd_5d_return) AS fwd_5d_return,
-                COALESCE(existing.fwd_10d_return, incoming.fwd_10d_return) AS fwd_10d_return,
-                COALESCE(existing.fwd_20d_return, incoming.fwd_20d_return) AS fwd_20d_return,
-                COALESCE(existing.fwd_3d_matured_at, incoming.fwd_3d_matured_at) AS fwd_3d_matured_at,
-                COALESCE(existing.fwd_5d_matured_at, incoming.fwd_5d_matured_at) AS fwd_5d_matured_at,
-                COALESCE(existing.fwd_10d_matured_at, incoming.fwd_10d_matured_at) AS fwd_10d_matured_at,
-                COALESCE(existing.fwd_20d_matured_at, incoming.fwd_20d_matured_at) AS fwd_20d_matured_at,
-                COALESCE(existing.data_quality_status, incoming.data_quality_status) AS data_quality_status,
-                COALESCE(existing.inserted_at, CURRENT_TIMESTAMP) AS inserted_at
-            FROM incoming_investigator_cohorts AS incoming
-            LEFT JOIN investigator_cohort_performance AS existing
-              ON existing.trade_date = incoming.trade_date
-             AND existing.symbol_id = incoming.symbol_id
-             AND existing.exchange = incoming.exchange
-            """
-        )
-        conn.execute(
-            """
-            DELETE FROM investigator_cohort_performance AS existing
-            USING incoming_investigator_cohorts AS incoming
-            WHERE existing.trade_date = incoming.trade_date
-              AND existing.symbol_id = incoming.symbol_id
-              AND existing.exchange = incoming.exchange
-            """
-        )
-        conn.execute(
-            """
             INSERT INTO investigator_cohort_performance BY NAME
             SELECT
-                incoming_investigator_cohorts_enriched.*,
+                incoming.*,
+                CURRENT_TIMESTAMP AS inserted_at,
                 CURRENT_TIMESTAMP AS updated_at
-            FROM incoming_investigator_cohorts_enriched
+            FROM incoming_investigator_cohorts AS incoming
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM investigator_cohort_performance AS existing
+                WHERE existing.trade_date = incoming.trade_date
+                  AND existing.symbol_id = incoming.symbol_id
+                  AND existing.exchange = incoming.exchange
+            )
             """
         )
     finally:
-        conn.execute("DROP TABLE IF EXISTS incoming_investigator_cohorts_enriched")
         conn.unregister("incoming_investigator_cohorts")
     return int(len(rows))
 
@@ -301,46 +362,18 @@ def mature_investigator_cohorts(
         conn.execute(
             """
             CREATE TEMP TABLE investigator_cohort_matured_rows AS
-            SELECT
-                cohorts.trade_date,
-                cohorts.symbol_id,
-                cohorts.exchange,
-                cohorts.trigger_reason,
-                cohorts.verdict,
-                cohorts.final_score,
-                cohorts.hard_trap_flag,
-                cohorts.credible_trigger,
-                cohorts.move_tag,
-                cohorts.sector,
-                cohorts.stage_label,
-                cohorts.pattern_family,
-                cohorts.pattern_state,
-                cohorts.setup_quality_bucket,
-                cohorts.breakout_type,
-                cohorts.candidate_tier,
-                cohorts.qualified_breakout,
-                cohorts.stage_score,
-                cohorts.pattern_score,
-                cohorts.breakout_score,
-                cohorts.composite_score,
-                cohorts.relative_strength,
-                cohorts.volume_intensity,
-                cohorts.trend_persistence,
-                cohorts.proximity_to_highs,
-                cohorts.delivery_pct,
-                cohorts.sector_strength,
-                cohorts.close,
-                updates.fwd_3d_return,
-                updates.fwd_5d_return,
-                updates.fwd_10d_return,
-                updates.fwd_20d_return,
-                updates.fwd_3d_matured_at,
-                updates.fwd_5d_matured_at,
-                updates.fwd_10d_matured_at,
-                updates.fwd_20d_matured_at,
-                updates.data_quality_status,
-                cohorts.inserted_at,
+            SELECT cohorts.* REPLACE (
+                updates.fwd_3d_return AS fwd_3d_return,
+                updates.fwd_5d_return AS fwd_5d_return,
+                updates.fwd_10d_return AS fwd_10d_return,
+                updates.fwd_20d_return AS fwd_20d_return,
+                updates.fwd_3d_matured_at AS fwd_3d_matured_at,
+                updates.fwd_5d_matured_at AS fwd_5d_matured_at,
+                updates.fwd_10d_matured_at AS fwd_10d_matured_at,
+                updates.fwd_20d_matured_at AS fwd_20d_matured_at,
+                updates.data_quality_status AS data_quality_status,
                 CURRENT_TIMESTAMP AS updated_at
+            )
             FROM investigator_cohort_performance AS cohorts
             JOIN investigator_cohort_updates AS updates
               ON cohorts.trade_date = updates.trade_date
@@ -378,7 +411,9 @@ def build_performance_summary(
     if cohorts.empty:
         return pd.DataFrame(columns=_performance_columns()), summary
     working = cohorts.copy()
-    working.loc[:, "final_score_bucket"] = _score_bucket(working.get("final_score", pd.Series(dtype=float)))
+    working.loc[:, "final_score_bucket"] = _score_bucket(
+        working.get("final_score", pd.Series(dtype=float))
+    )
     baselines = {
         horizon: _baseline_avg_return(working, f"fwd_{horizon}d_return")
         for horizon in HORIZONS
@@ -388,9 +423,13 @@ def build_performance_summary(
         if group_column not in working.columns:
             continue
         labels = working[group_column].fillna("UNKNOWN").astype(str)
-        for label, group in working.assign(_group_label=labels).groupby("_group_label", dropna=False):
+        for label, group in working.assign(_group_label=labels).groupby(
+            "_group_label", dropna=False
+        ):
             for horizon in HORIZONS:
-                metrics = _return_metrics(group, f"fwd_{horizon}d_return", baseline_avg=baselines[horizon])
+                metrics = _return_metrics(
+                    group, f"fwd_{horizon}d_return", baseline_avg=baselines[horizon]
+                )
                 if metrics["sample_count"] <= 0:
                     continue
                 rows.append(
@@ -408,7 +447,9 @@ def build_performance_summary(
         cross.loc[:, "_group_label"] = _cross_label(cross, columns)
         for label, group in cross.groupby("_group_label", dropna=False):
             for horizon in HORIZONS:
-                metrics = _return_metrics(group, f"fwd_{horizon}d_return", baseline_avg=baselines[horizon])
+                metrics = _return_metrics(
+                    group, f"fwd_{horizon}d_return", baseline_avg=baselines[horizon]
+                )
                 if metrics["sample_count"] <= 0:
                     continue
                 rows.append(
@@ -429,7 +470,9 @@ def build_performance_summary(
         ).reset_index(drop=True)
     summary.update(_best_worst_payload(frame))
     summary["score_bucket_performance"] = _records(
-        frame.loc[frame.get("group_type", pd.Series(dtype=str)).eq("final_score_bucket")]
+        frame.loc[
+            frame.get("group_type", pd.Series(dtype=str)).eq("final_score_bucket")
+        ]
         if not frame.empty
         else pd.DataFrame()
     )
@@ -451,15 +494,27 @@ def build_threshold_recommendations(
         "recommendation": "Do not tune thresholds yet.",
         "recommendations": [],
     }
-    if base["insufficient_sample"] or performance_summary is None or performance_summary.empty:
+    if (
+        base["insufficient_sample"]
+        or performance_summary is None
+        or performance_summary.empty
+    ):
         return base
-    five_day = performance_summary.loc[performance_summary["horizon"].astype(str).eq("5d")].copy()
-    eligible = five_day.loc[pd.to_numeric(five_day["sample_count"], errors="coerce").fillna(0).ge(30)]
+    five_day = performance_summary.loc[
+        performance_summary["horizon"].astype(str).eq("5d")
+    ].copy()
+    eligible = five_day.loc[
+        pd.to_numeric(five_day["sample_count"], errors="coerce").fillna(0).ge(30)
+    ]
     if eligible.empty:
         return {**base, "insufficient_sample": True}
     recommendations: list[dict[str, Any]] = []
-    weak = eligible.sort_values(["avg_return", "win_rate"], ascending=[True, True]).head(3)
-    strong = eligible.sort_values(["avg_return", "win_rate"], ascending=[False, False]).head(3)
+    weak = eligible.sort_values(
+        ["avg_return", "win_rate"], ascending=[True, True]
+    ).head(3)
+    strong = eligible.sort_values(
+        ["avg_return", "win_rate"], ascending=[False, False]
+    ).head(3)
     for row in weak.to_dict(orient="records"):
         recommendations.append(
             {
@@ -486,12 +541,16 @@ def build_threshold_recommendations(
     }
 
 
-def _first_available(frame: pd.DataFrame, column: str) -> Any:
+def _first_available(
+    frame: pd.DataFrame, column: str, default: Any | None = None
+) -> Any:
     if column in frame.columns:
         return frame[column]
     score_column = f"{column}_score"
     if score_column in frame.columns:
         return frame[score_column]
+    if default is not None:
+        return default
     return pd.Series(pd.NA, index=frame.index)
 
 
@@ -500,7 +559,9 @@ def _nullable_bool(series: Any) -> pd.Series:
     if values.empty:
         return values
     lowered = values.fillna("").astype(str).str.strip().str.lower()
-    mapped = lowered.map({"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False})
+    mapped = lowered.map(
+        {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
+    )
     return mapped.where(lowered.ne(""), pd.NA)
 
 
@@ -529,15 +590,27 @@ def _read_cohorts(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _load_catalog_prices(ohlcv_db_path: str | Path, cohorts: pd.DataFrame) -> pd.DataFrame:
+def _load_catalog_prices(
+    ohlcv_db_path: str | Path, cohorts: pd.DataFrame
+) -> pd.DataFrame:
     path = Path(ohlcv_db_path)
     if cohorts.empty or not path.exists():
-        return pd.DataFrame(columns=["symbol_id", "exchange", "trade_date", "close", "idx"])
-    symbols = sorted(cohorts["symbol_id"].dropna().astype(str).str.upper().unique().tolist())
+        return pd.DataFrame(
+            columns=["symbol_id", "exchange", "trade_date", "close", "idx"]
+        )
+    symbols = sorted(
+        cohorts["symbol_id"].dropna().astype(str).str.upper().unique().tolist()
+    )
     if not symbols:
-        return pd.DataFrame(columns=["symbol_id", "exchange", "trade_date", "close", "idx"])
-    trade_dates = pd.to_datetime(cohorts.get("trade_date", pd.Series(dtype="object")), errors="coerce").dropna()
-    min_trade_date = trade_dates.min().strftime("%Y-%m-%d") if not trade_dates.empty else None
+        return pd.DataFrame(
+            columns=["symbol_id", "exchange", "trade_date", "close", "idx"]
+        )
+    trade_dates = pd.to_datetime(
+        cohorts.get("trade_date", pd.Series(dtype="object")), errors="coerce"
+    ).dropna()
+    min_trade_date = (
+        trade_dates.min().strftime("%Y-%m-%d") if not trade_dates.empty else None
+    )
     conn: duckdb.DuckDBPyConnection | None = None
     try:
         conn = duckdb.connect(str(path), read_only=True)
@@ -575,14 +648,18 @@ def _load_catalog_prices(ohlcv_db_path: str | Path, cohorts: pd.DataFrame) -> pd
             params,
         ).fetchdf()
     except Exception:
-        return pd.DataFrame(columns=["symbol_id", "exchange", "trade_date", "close", "idx"])
+        return pd.DataFrame(
+            columns=["symbol_id", "exchange", "trade_date", "close", "idx"]
+        )
     finally:
         if conn is not None:
             conn.close()
     if prices.empty:
         return prices
     prices = prices.assign(
-        trade_date=pd.to_datetime(prices["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d"),
+        trade_date=pd.to_datetime(prices["trade_date"], errors="coerce").dt.strftime(
+            "%Y-%m-%d"
+        ),
         close=pd.to_numeric(prices["close"], errors="coerce"),
         idx=pd.to_numeric(prices["idx"], errors="coerce"),
     )
@@ -591,12 +668,18 @@ def _load_catalog_prices(ohlcv_db_path: str | Path, cohorts: pd.DataFrame) -> pd
     return prices
 
 
-def _mature_rows(cohorts: pd.DataFrame, prices: pd.DataFrame, *, horizons: tuple[int, ...]) -> pd.DataFrame:
+def _mature_rows(
+    cohorts: pd.DataFrame, prices: pd.DataFrame, *, horizons: tuple[int, ...]
+) -> pd.DataFrame:
     updates: list[dict[str, Any]] = []
-    grouped = {
-        key: group.sort_values("trade_date").reset_index(drop=True)
-        for key, group in prices.groupby(["symbol_id", "exchange"])
-    } if not prices.empty else {}
+    grouped = (
+        {
+            key: group.sort_values("trade_date").reset_index(drop=True)
+            for key, group in prices.groupby(["symbol_id", "exchange"])
+        }
+        if not prices.empty
+        else {}
+    )
     for record in cohorts.to_dict(orient="records"):
         symbol = str(record.get("symbol_id") or "").strip().upper()
         exchange = str(record.get("exchange") or "NSE").strip().upper() or "NSE"
@@ -611,7 +694,9 @@ def _mature_rows(cohorts: pd.DataFrame, prices: pd.DataFrame, *, horizons: tuple
         entry_close = _as_float(record.get("close"))
         entry_idx = None
         if not price_frame.empty and trade_date:
-            matches = price_frame.index[price_frame["trade_date"].eq(trade_date)].tolist()
+            matches = price_frame.index[
+                price_frame["trade_date"].eq(trade_date)
+            ].tolist()
             if matches:
                 entry_idx = int(matches[0])
                 entry_close = _as_float(price_frame.iloc[entry_idx].get("close"))
@@ -626,7 +711,11 @@ def _mature_rows(cohorts: pd.DataFrame, prices: pd.DataFrame, *, horizons: tuple
                     future = price_frame.iloc[target_idx]
                     future_close = _as_float(future.get("close"))
                     if future_close is not None:
-                        value = (future_close - float(entry_close)) / float(entry_close) * 100.0
+                        value = (
+                            (future_close - float(entry_close))
+                            / float(entry_close)
+                            * 100.0
+                        )
                         matured_at = _date_text(future.get("trade_date"))
             if value is not None:
                 matured_count += 1
@@ -654,13 +743,25 @@ def _summary_payload(cohorts: pd.DataFrame) -> dict[str, Any]:
             "matured_by_horizon": {f"{horizon}d": 0 for horizon in HORIZONS},
         }
     matured_by_horizon = {
-        f"{horizon}d": int(pd.to_numeric(cohorts.get(f"fwd_{horizon}d_return"), errors="coerce").notna().sum())
+        f"{horizon}d": int(
+            pd.to_numeric(cohorts.get(f"fwd_{horizon}d_return"), errors="coerce")
+            .notna()
+            .sum()
+        )
         for horizon in HORIZONS
     }
-    status = cohorts.get("data_quality_status", pd.Series("", index=cohorts.index)).fillna("").astype(str)
+    status = (
+        cohorts.get("data_quality_status", pd.Series("", index=cohorts.index))
+        .fillna("")
+        .astype(str)
+    )
     return {
         "total_cohorts": int(len(cohorts)),
-        "pending_cohorts": int(status.isin(["", "PENDING", "PARTIAL_MATURED", "INSUFFICIENT_PRICE_DATA"]).sum()),
+        "pending_cohorts": int(
+            status.isin(
+                ["", "PENDING", "PARTIAL_MATURED", "INSUFFICIENT_PRICE_DATA"]
+            ).sum()
+        ),
         "matured_cohorts": int(status.eq("MATURED").sum()),
         "matured_by_horizon": matured_by_horizon,
     }
@@ -670,28 +771,43 @@ def _best_worst_payload(frame: pd.DataFrame) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if frame.empty:
         return payload
-    for group_type, key_prefix in (("trigger_reason", "trigger_reason"), ("move_tag", "move_tag")):
+    for group_type, key_prefix in (
+        ("trigger_reason", "trigger_reason"),
+        ("move_tag", "move_tag"),
+    ):
         for horizon in ("5d", "10d"):
-            subset = frame.loc[(frame["group_type"].eq(group_type)) & (frame["horizon"].eq(horizon))].copy()
+            subset = frame.loc[
+                (frame["group_type"].eq(group_type)) & (frame["horizon"].eq(horizon))
+            ].copy()
             if subset.empty:
                 payload[f"best_{key_prefix}_{horizon}"] = None
                 payload[f"worst_{key_prefix}_{horizon}"] = None
                 continue
-            ordered = subset.sort_values(["avg_return", "sample_count"], ascending=[False, False], kind="stable")
-            payload[f"best_{key_prefix}_{horizon}"] = ordered.head(1).to_dict(orient="records")[0]
-            payload[f"worst_{key_prefix}_{horizon}"] = ordered.tail(1).to_dict(orient="records")[0]
+            ordered = subset.sort_values(
+                ["avg_return", "sample_count"], ascending=[False, False], kind="stable"
+            )
+            payload[f"best_{key_prefix}_{horizon}"] = ordered.head(1).to_dict(
+                orient="records"
+            )[0]
+            payload[f"worst_{key_prefix}_{horizon}"] = ordered.tail(1).to_dict(
+                orient="records"
+            )[0]
     return payload
 
 
 def _baseline_avg_return(frame: pd.DataFrame, column: str) -> float | None:
-    values = pd.to_numeric(frame.get(column, pd.Series(dtype=float)), errors="coerce").dropna()
+    values = pd.to_numeric(
+        frame.get(column, pd.Series(dtype=float)), errors="coerce"
+    ).dropna()
     return round(float(values.mean()), 4) if len(values) else None
 
 
 def _cross_label(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
     labels = []
     for column in columns:
-        labels.append(frame[column].fillna("UNKNOWN").astype(str).replace("", "UNKNOWN"))
+        labels.append(
+            frame[column].fillna("UNKNOWN").astype(str).replace("", "UNKNOWN")
+        )
     out = labels[0]
     for label in labels[1:]:
         out = out + " | " + label
@@ -708,7 +824,11 @@ def _mark_best_horizons(frame: pd.DataFrame) -> pd.DataFrame:
         return out
     idx = (
         out.loc[eligible]
-        .sort_values(["group_type", "group_value", "avg_return", "sample_count"], ascending=[True, True, False, False], kind="stable")
+        .sort_values(
+            ["group_type", "group_value", "avg_return", "sample_count"],
+            ascending=[True, True, False, False],
+            kind="stable",
+        )
         .drop_duplicates(["group_type", "group_value"], keep="first")
         .index
     )
@@ -716,8 +836,12 @@ def _mark_best_horizons(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _return_metrics(frame: pd.DataFrame, column: str, *, baseline_avg: float | None = None) -> dict[str, Any]:
-    values = pd.to_numeric(frame.get(column, pd.Series(dtype=float)), errors="coerce").dropna()
+def _return_metrics(
+    frame: pd.DataFrame, column: str, *, baseline_avg: float | None = None
+) -> dict[str, Any]:
+    values = pd.to_numeric(
+        frame.get(column, pd.Series(dtype=float)), errors="coerce"
+    ).dropna()
     positives = values.loc[values.gt(0)]
     negatives = values.loc[values.lt(0)]
     count = int(len(values))
@@ -731,22 +855,40 @@ def _return_metrics(frame: pd.DataFrame, column: str, *, baseline_avg: float | N
         else pd.NA
     )
     expectancy = (
-        round((win_rate_decimal * float(avg_winner)) + ((1.0 - win_rate_decimal) * float(avg_loser)), 4)
+        round(
+            (win_rate_decimal * float(avg_winner))
+            + ((1.0 - win_rate_decimal) * float(avg_loser)),
+            4,
+        )
         if win_rate_decimal is not None and pd.notna(avg_winner) and pd.notna(avg_loser)
         else pd.NA
     )
     return {
         "sample_count": count,
-        "sample_confidence": "HIGH" if count >= 50 else "MEDIUM" if count >= 20 else "LOW",
+        "sample_confidence": "HIGH"
+        if count >= 50
+        else "MEDIUM"
+        if count >= 20
+        else "LOW",
         "min_sample_pass": count >= 20,
         "win_rate": round(float(values.gt(0).mean() * 100.0), 2) if count else pd.NA,
         "avg_return": avg_return,
         "median_return": round(float(values.median()), 4) if count else pd.NA,
-        "hit_rate_above_2pct": round(float(values.gt(2.0).mean() * 100.0), 2) if count else pd.NA,
-        "hit_rate_above_5pct": round(float(values.gt(5.0).mean() * 100.0), 2) if count else pd.NA,
-        "avg_loss_when_negative": round(float(negatives.mean()), 4) if len(negatives) else pd.NA,
-        "avg_gain_when_positive": round(float(positives.mean()), 4) if len(positives) else pd.NA,
-        "edge_vs_baseline": round(float(avg_return) - float(baseline_avg), 4) if pd.notna(avg_return) and baseline_avg is not None else pd.NA,
+        "hit_rate_above_2pct": round(float(values.gt(2.0).mean() * 100.0), 2)
+        if count
+        else pd.NA,
+        "hit_rate_above_5pct": round(float(values.gt(5.0).mean() * 100.0), 2)
+        if count
+        else pd.NA,
+        "avg_loss_when_negative": round(float(negatives.mean()), 4)
+        if len(negatives)
+        else pd.NA,
+        "avg_gain_when_positive": round(float(positives.mean()), 4)
+        if len(positives)
+        else pd.NA,
+        "edge_vs_baseline": round(float(avg_return) - float(baseline_avg), 4)
+        if pd.notna(avg_return) and baseline_avg is not None
+        else pd.NA,
         "avg_winner_return": avg_winner,
         "avg_loser_return": avg_loser,
         "payoff_ratio": payoff_ratio,

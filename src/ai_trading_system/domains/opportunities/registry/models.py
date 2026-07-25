@@ -14,6 +14,7 @@ from ai_trading_system.domains.opportunities.contracts import (
     CandidateState,
     DecisionContextSnapshot,
     EvidenceSnapshot,
+    InvestigatorContext,
     OpportunitySnapshot,
     OutcomeAttributionRecord,
     ProgressSnapshot,
@@ -31,14 +32,34 @@ REGISTRY_SCHEMA_VERSION = "opportunity-registry-schema-v1"
 REGISTRY_SERIALIZATION_VERSION = "opportunity-serialization-v1"
 
 __all__ = [
-    "REGISTRY_SCHEMA_VERSION", "REGISTRY_SERIALIZATION_VERSION", "EpisodeStatus", "AppendStatus",
-    "StageScope", "SourceLineage", "CandidateEpisodeRecord", "OpenEpisodeRequest",
-    "SnapshotObservation", "StageObservation", "EvidenceObservation", "OpportunityObservation",
-    "ProgressObservation", "TransitionObservation", "DecisionContextObservation",
-    "AttributionObservation", "AppendResult", "BatchAppendResult", "CandidateCurrentState",
-    "TimelineEntry", "CandidateTimeline", "OpportunityRegistryConflictError",
-    "EpisodeClosure", "OrchestrationBundle", "OrchestrationBundleResult",
-    "EpisodeSupersession", "EpisodeRelationRecord",
+    "REGISTRY_SCHEMA_VERSION",
+    "REGISTRY_SERIALIZATION_VERSION",
+    "EpisodeStatus",
+    "AppendStatus",
+    "StageScope",
+    "SourceLineage",
+    "CandidateEpisodeRecord",
+    "OpenEpisodeRequest",
+    "SnapshotObservation",
+    "StageObservation",
+    "EvidenceObservation",
+    "OpportunityObservation",
+    "ProgressObservation",
+    "TransitionObservation",
+    "DecisionContextObservation",
+    "AttributionObservation",
+    "AppendResult",
+    "BatchAppendResult",
+    "CandidateCurrentState",
+    "TimelineEntry",
+    "CandidateTimeline",
+    "OpportunityRegistryConflictError",
+    "EpisodeClosure",
+    "OrchestrationBundle",
+    "OrchestrationBundleResult",
+    "EpisodeSupersession",
+    "EpisodeRelationRecord",
+    "PerformanceEventObservation",
 ]
 
 
@@ -80,7 +101,11 @@ class SourceLineage:
 
     def __post_init__(self) -> None:
         for name in (
-            "run_id", "stage_name", "source_artifact_type", "source_artifact_path", "source_artifact_hash"
+            "run_id",
+            "stage_name",
+            "source_artifact_type",
+            "source_artifact_path",
+            "source_artifact_hash",
         ):
             if not str(getattr(self, name) or "").strip():
                 raise ValueError(f"{name} must be non-empty")
@@ -230,6 +255,27 @@ class AttributionObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class PerformanceEventObservation:
+    candidate_id: str
+    setup_id: str
+    symbol_id: str
+    exchange: str
+    sector_name: str | None
+    event_type: str
+    event_at: datetime
+    session_date: date
+    anchor_price: float | None
+    anchor_price_basis: str
+    investigator_context: InvestigatorContext
+    lineage: SourceLineage
+    source_snapshot_id: str = "pending"
+    source_transition_id: str | None = None
+    lifecycle_evaluable: bool = True
+    data_quality_status: str = "PENDING"
+    data_quality_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AppendResult:
     record_id: str
     status: AppendStatus
@@ -292,6 +338,7 @@ class OrchestrationBundle:
     transition: TransitionObservation | None = None
     closure: EpisodeClosure | None = None
     supersession: EpisodeSupersession | None = None
+    performance_events: tuple[PerformanceEventObservation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

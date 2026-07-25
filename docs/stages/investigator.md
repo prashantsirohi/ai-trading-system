@@ -136,9 +136,32 @@ The stage persists selected artifact rows to the control-plane registry database
 | `final_3q_gate` | `investigator_final_gate` |
 | `archived_investigator` | `investigator_archive` |
 | clean final-gate cohorts | `investigator_cohort_performance` |
+| canonical discovery/entry events | `investigator_performance_event` |
+| per-event horizon outcomes | `investigator_performance_horizon` |
 
 Rows are scoped by `run_id` and `attempt_number`. On rerun of the same attempt, existing rows for that scope are deleted and reinserted.
-`investigator_cohort_performance` is keyed by `trade_date`, `symbol_id`, and `exchange`; upserts are idempotent and preserve already matured forward returns.
+`investigator_cohort_performance` is keyed by `trade_date`, `symbol_id`, and
+`exchange`; it is now a compatibility projection. Initial context is insert-only
+and maturation may update only outcome columns. The canonical opportunity
+registry retains separate setup episodes and their immutable decision context.
+
+Every canonical candidate snapshot serializes an `investigator_context`, even
+when values are unavailable. It contains point-in-time stage, pattern, setup
+quality, breakout, tier, regime, breadth velocity, and sector-relative-strength
+fields; unavailable classifications are explicit `UNKNOWN`/null values. It also
+records context time, source run and artifact hashes, classifier versions,
+missing fields, all contributing pattern/breakout observations, and one of:
+
+- `OBSERVED_AT_DECISION`
+- `RECONSTRUCTED_SAME_RUN`
+- `RETROSPECTIVE_ENRICHED`
+
+Only the first two modes enter primary performance metrics, and their source
+observation time must not exceed the decision timestamp. Pattern and breakout
+selection is deterministic: valid/qualified observations precede score,
+quality/tier, and stable source identity. Sector relative strength is `HIGH` at
+or above percentile 75, `MID` from 25 through below 75, `LOW` below 25, and
+`UNKNOWN` when unavailable.
 
 ## Process flow
 
@@ -176,9 +199,12 @@ flowchart TD
 10. Pattern-scan active investigator symbols without Stage 2 prescreening and without writing the pattern cache.
 11. Merge each symbol's best pattern row back into active and score artifacts.
 12. Build trap log and final manual gate, including `invalidation_source`, stock-specific `exit_plan`, and operator exit-monitoring fields.
-13. Seed and mature `investigator_cohort_performance` from trusted `_catalog` prices.
-14. Build performance-summary and threshold-recommendation artifacts.
-15. Write artifacts and persist configured tables.
+13. Seed and mature the compatibility `investigator_cohort_performance` view.
+14. In the opportunity stage, append canonical discovery/confirmed-entry events
+    and mature their lifecycle and trading outcomes from trusted stock/index data.
+15. Build separate discovery/entry scorecards, transition, coverage, DQ, and
+    symbol-overlap sensitivity artifacts.
+16. Write artifacts and persist configured tables.
 
 ## Intake Logic
 
@@ -367,6 +393,26 @@ The stage does not auto-delete final-gate rows solely because `exit_triggered` i
 ## Cohort Performance
 
 Clean final-gate rows are seeded into `investigator_cohort_performance`. A maturation pass reads trusted OHLCV from `$DATA_ROOT/ohlcv.duckdb::_catalog` and computes 3D, 5D, 10D, and 20D forward returns in percentage points using trading-session offsets. It also fills `fwd_*_matured_at` dates and sets `data_quality_status` to `PENDING`, `PARTIAL_MATURED`, `MATURED`, or `INSUFFICIENT_PRICE_DATA`.
+
+The canonical evaluator separates two immutable event grains:
+
+- `CANDIDATE_DISCOVERED`, once per setup episode at discovery-session close.
+- `ENTRY_CONFIRMED`, once at the first canonical transition to `CONFIRMED`, at
+  that session's close. An imported status string alone cannot create it.
+
+At session 3, discovery episodes become `CONFIRMED`, `STILL_DEVELOPING`, or
+`FAILED` only when a valid canonical `PENDING_3D` sequence and enough history
+exist. At session 10 after entry confirmation,
+they become `SUSTAINED_10D` or `FAILED_AFTER_CONFIRMATION`; immature observations
+or runs lacking that sequence remain pending/insufficient. Horizons 3/5/10/20
+include close and next-open returns, MFE, MAE,
+first +2%/+5% touch, pre-touch drawdown, and NIFTY 50/sector-index relative
+returns. Missing trusted benchmark or mapped sector history stays null with a DQ
+reason. Primary aggregation is episode-based; a sensitivity view keeps only the
+earliest event per symbol within overlapping 20-session windows.
+
+Do not recommend score changes until at least 100 matured observations overall
+and 30 in each compared subgroup are available.
 
 `investigator_performance_summary.csv` groups matured rows by trigger reason, verdict, move tag, sector, score bucket (`55-64`, `65-74`, `75-84`, `85+`), credible trigger, hard-trap flag, stage label, pattern family/state, setup-quality bucket, breakout type, candidate tier, and qualified-breakout flag. It also emits cross groups such as stage × pattern, stage × breakout tier, pattern × trigger reason, and stage/pattern × verdict or move tag.
 

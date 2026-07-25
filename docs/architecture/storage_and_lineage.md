@@ -20,7 +20,7 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 | Store | Canonical path | Primary owner | Purpose |
 |---|---|---|---|
 | OHLCV | `$DATA_ROOT/ohlcv.duckdb` | Ingest, trust, features | Price/volume, delivery, provenance, quarantine, source freshness, and feature metadata. |
-| Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, lifecycle-aware alert incidents, models, operator state, decision history, canonical opportunity-registry history, Phase 3B universal stage/routing history, Phase 3C-1 governance, and Phase 3C-3 recovery proposals/actions. |
+| Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, lifecycle-aware alert incidents, models, operator state, decision history, canonical opportunity-registry history, immutable Investigator performance events and derived horizons, Phase 3B universal stage/routing history, Phase 3C-1 governance, and Phase 3C-3 recovery proposals/actions. |
 | Execution ledger | `$DATA_ROOT/execution.duckdb` | `ExecutionStore` | Orders, fills, positions, stops, and broker/paper execution state supported by the active code. |
 | Candidate tracker | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate tracker domain | Candidate episodes, transitions, snapshots, fundamental reviews, alerts, and current lifecycle state. |
 | Master data | `$DATA_ROOT/masterdata.db` | Ingest/master-data services | Shared instrument and symbol identity data. |
@@ -177,6 +177,20 @@ cohort fields. The immutable manifest lists distinct decision-time snapshot
 IDs, while Phase 4 read models expose snapshot and primary-admission coverage.
 Copies predating migrations 037/041 remain readable with null provenance and a
 fail-closed migration-readiness limitation.
+
+Migration `042_investigator_performance_evaluation.sql` materializes complete
+point-in-time Investigator attribution on append-only candidate snapshots and
+adds immutable discovery/entry events plus mutable per-horizon outcomes.
+Decision context is never updated during maturation. The legacy
+`investigator_cohort_performance` table is a lossy symbol/date compatibility
+projection: canonical discovery rows may be inserted when absent, while only
+forward-return outcome columns may subsequently change.
+
+Historical attribution reconstruction must use registered artifacts from the
+same run whose artifact timestamp is no later than the decision timestamp.
+Later evidence can be retained only as `RETROSPECTIVE_ENRICHED` and is excluded
+from primary metrics. The reconstruction CLI refuses the configured live control
+plane and symlinks and writes only to an explicit regular-file copy.
 
 Migration 038 extends `candidate_decision_context` with nullable completed-week
 sector-gate evidence and taxonomy columns. These columns are also outside the

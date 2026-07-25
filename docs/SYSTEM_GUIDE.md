@@ -232,7 +232,7 @@ Canonical operational paths are resolved beneath `$DATA_ROOT`:
 | Store or tree | Responsibility |
 |---|---|
 | `$DATA_ROOT/ohlcv.duckdb` | Operational OHLCV, delivery, trust/provenance, quarantine, registries, and feature metadata. |
-| `$DATA_ROOT/control_plane.duckdb` | Pipeline runs, stage attempts, artifacts, DQ, alerts, models, operator state, durable decision history, canonical opportunity-registry history, and Phase 3B/3C structural governance history. |
+| `$DATA_ROOT/control_plane.duckdb` | Pipeline runs, stage attempts, artifacts, DQ, alerts, models, operator state, durable decision history, canonical opportunity-registry history, immutable Investigator discovery/entry events and outcomes, and Phase 3B/3C structural governance history. |
 | `$DATA_ROOT/execution.duckdb` | Orders, fills, positions, and execution ledger state. |
 | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate episodes, snapshots, reviews, alerts, and current lifecycle state. |
 | `$DATA_ROOT/masterdata.db` | Shared instrument/master data. |
@@ -294,7 +294,7 @@ backup byte-for-byte:
 ```bash
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.migrate_control_plane \
   --backup-dir "$DATA_ROOT/backups/<timestamp>" \
-  --from-migration 033 --to-migration 041 --apply
+  --from-migration 033 --to-migration 042 --apply
 ```
 
 `--apply-control-plane-migrations` is an explicit startup override for
@@ -318,6 +318,18 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
 ```
 
 The command above uses the configured runtime stores. When validation must not mutate live stores, follow the [copied-data canary](runbooks/copied_data_canary.md) maintenance-window procedure instead.
+
+Reconstruct Investigator performance for historical shadow runs only on a
+regular-file copy of the control plane. The command rejects the configured live
+store, applies migration 042 to the copy, and accepts attribution only from
+same-run artifacts created no later than each decision timestamp:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.interfaces.cli.reconstruct_investigator_performance \
+  --copied-control-plane /path/to/copied/control_plane.duckdb \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD --apply
+```
 
 Preview or annotate legacy Phase 3B rows only in an explicitly copied control plane:
 

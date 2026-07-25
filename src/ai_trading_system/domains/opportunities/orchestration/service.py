@@ -46,6 +46,9 @@ from ai_trading_system.domains.opportunities.position_monitoring import (
     make_recovery_proposal_id,
     recovery_payload_hash,
 )
+from ai_trading_system.domains.opportunities.performance_evaluation import (
+    mature_performance_events,
+)
 from ai_trading_system.domains.opportunities.registry import (
     DuckDBOpportunityRegistryStore,
     EpisodeClosure,
@@ -57,6 +60,7 @@ from ai_trading_system.domains.opportunities.registry import (
     OrchestrationBundle,
     OpportunityRegistryConflictError,
     OpportunityRegistryService,
+    PerformanceEventObservation,
     ProgressObservation,
     SnapshotObservation,
     SourceLineage,
@@ -109,6 +113,7 @@ class OpportunityArtifactSet:
     sector_dashboard: StageArtifact | None = None
     lifecycle_state: StageArtifact | None = None
     scan_routing: StageArtifact | None = None
+    market_context: StageArtifact | None = None
 
 
 class OpportunityShadowOrchestrator:
@@ -157,6 +162,7 @@ class OpportunityShadowOrchestrator:
         raw_sector = _read_csv(artifacts.sector_dashboard)
         raw_lifecycle = _read_csv(artifacts.lifecycle_state)
         raw_routing = _read_csv(artifacts.scan_routing)
+        raw_market_context = _read_json(artifacts.market_context)
         if raw_stock and ohlcv_db_path is not None:
             raw_stock = _enrich_stock_stage(raw_stock, ohlcv_db_path, as_of)
 
@@ -260,6 +266,17 @@ class OpportunityShadowOrchestrator:
         bundles, routing_rejections = _attach_routing(
             _reconcile(results, raw_rank, raw_stock, as_of), raw_routing, as_of
         )
+        bundles = _attach_market_context(
+            bundles,
+            raw_market_context,
+            descriptor=_descriptor_optional(
+                artifacts.market_context,
+                "rank",
+                "dashboard_payload",
+                run_id,
+                stage_attempt,
+            ),
+        )
         bundles = _attach_sector_gate_evidence(
             self.registry_store.registry,
             bundles,
@@ -271,6 +288,9 @@ class OpportunityShadowOrchestrator:
             ohlcv_db_path,
             cutoff=as_of.date(),
             exchanges={bundle.exchange for bundle in bundles},
+        )
+        bundles = _attach_session_prices(
+            bundles, ohlcv_db_path=ohlcv_db_path, session_date=observed_session
         )
         adapter_seconds = time.perf_counter() - adapter_started
 
@@ -291,6 +311,14 @@ class OpportunityShadowOrchestrator:
                 "position_recovery_proposals",
                 "position_recovery_actions",
                 "position_monitor_reconciliation",
+                "investigator_performance_events",
+                "investigator_performance_horizons",
+                "investigator_discovery_scorecard",
+                "investigator_entry_scorecard",
+                "investigator_transition_matrix",
+                "investigator_attribution_coverage",
+                "investigator_missing_data_reasons",
+                "investigator_symbol_sensitivity",
             )
         }
         for result in results:
@@ -328,7 +356,8 @@ class OpportunityShadowOrchestrator:
             if bundle.active_position:
                 counters["active_positions_total"] += 1
                 counters["active_positions_with_position_monitor"] += int(
-                    bundle.scan_tier == "position_monitor" and bool(bundle.routing_decision_id)
+                    bundle.scan_tier == "position_monitor"
+                    and bool(bundle.routing_decision_id)
                 )
                 counters["active_positions_with_complete_market_data"] += int(
                     bundle.market_data_complete
@@ -364,23 +393,28 @@ class OpportunityShadowOrchestrator:
                 )
                 compatibility = evaluate_position_episode_compatibility(
                     position_cycle_id=cycle_id,
-                    position_opened_at=_aware_datetime(bundle.position_cycle_opened_at, as_of),
+                    position_opened_at=_aware_datetime(
+                        bundle.position_cycle_opened_at, as_of
+                    ),
                     episodes=all_symbol_episodes,
                     current_states=open_states,
                 )
-                rows["position_episode_compatibility"].append({
-                    "position_cycle_id": cycle_id,
-                    "exchange": bundle.exchange,
-                    "symbol_id": bundle.symbol_id,
-                    "compatibility_status": compatibility.status.value,
-                    "candidate_id": compatibility.candidate_id,
-                    "open_episode_ids": list(compatibility.open_episode_ids),
-                    "compatibility_reasons": list(compatibility.reasons),
-                    "policy_version": config.position_episode_compatibility_policy_version,
-                })
+                rows["position_episode_compatibility"].append(
+                    {
+                        "position_cycle_id": cycle_id,
+                        "exchange": bundle.exchange,
+                        "symbol_id": bundle.symbol_id,
+                        "compatibility_status": compatibility.status.value,
+                        "candidate_id": compatibility.candidate_id,
+                        "open_episode_ids": list(compatibility.open_episode_ids),
+                        "compatibility_reasons": list(compatibility.reasons),
+                        "policy_version": config.position_episode_compatibility_policy_version,
+                    }
+                )
                 if compatibility.status is PositionEpisodeCompatibility.COMPATIBLE:
                     episode = next(
-                        item for item in all_symbol_episodes
+                        item
+                        for item in all_symbol_episodes
                         if item.candidate_id == compatibility.candidate_id
                     )
                     match_outcome = SetupMatchOutcome.EXACT
@@ -388,7 +422,10 @@ class OpportunityShadowOrchestrator:
                     if bundle.market_data_complete and bundle.routing_decision_id:
                         counters["active_positions_fully_monitored"] += 1
                 else:
-                    if compatibility.status is PositionEpisodeCompatibility.AMBIGUOUS_MULTIPLE_EPISODES:
+                    if (
+                        compatibility.status
+                        is PositionEpisodeCompatibility.AMBIGUOUS_MULTIPLE_EPISODES
+                    ):
                         counters["ambiguous_episode_conflicts"] += 1
                     elif compatibility.status not in {
                         PositionEpisodeCompatibility.NO_OPEN_EPISODE,
@@ -403,16 +440,20 @@ class OpportunityShadowOrchestrator:
                         run_id=run_id,
                     )
                     if not config.dry_run:
-                        _persist_recovery_proposal(self.registry_store.registry, proposal)
+                        _persist_recovery_proposal(
+                            self.registry_store.registry, proposal
+                        )
                     rows["position_recovery_proposals"].append(proposal)
-                    rows["position_monitor_reconciliation"].append({
-                        "position_cycle_id": cycle_id,
-                        "symbol_id": bundle.symbol_id,
-                        "exchange": bundle.exchange,
-                        "outcome": "POSITION_RECOVERY_REQUIRED",
-                        "compatibility_status": compatibility.status.value,
-                        "recovery_proposal_id": proposal["recovery_proposal_id"],
-                    })
+                    rows["position_monitor_reconciliation"].append(
+                        {
+                            "position_cycle_id": cycle_id,
+                            "symbol_id": bundle.symbol_id,
+                            "exchange": bundle.exchange,
+                            "outcome": "POSITION_RECOVERY_REQUIRED",
+                            "compatibility_status": compatibility.status.value,
+                            "recovery_proposal_id": proposal["recovery_proposal_id"],
+                        }
+                    )
                     counters["recovery_proposals"] += 1
                     recovery = _recovery_allowed(config)
                     if not recovery:
@@ -478,7 +519,9 @@ class OpportunityShadowOrchestrator:
                 )
                 continue
 
-            lineage = _combined_lineage(bundle, run_id, stage_attempt, policy_snapshot_id)
+            lineage = _combined_lineage(
+                bundle, run_id, stage_attempt, policy_snapshot_id
+            )
             episode_request = None
             if episode is None:
                 if recovery:
@@ -487,9 +530,12 @@ class OpportunityShadowOrchestrator:
                     cycle_id = bundle.position_cycle_id or make_position_cycle_id(
                         exchange=bundle.exchange,
                         symbol_id=bundle.symbol_id,
-                        position_opened_at=bundle.position_cycle_opened_at or bundle.as_of,
+                        position_opened_at=bundle.position_cycle_opened_at
+                        or bundle.as_of,
                     )
-                    admission_identity = f"{cycle_id}|{config.position_recovery_policy_version}"
+                    admission_identity = (
+                        f"{cycle_id}|{config.position_recovery_policy_version}"
+                    )
                     episode_started_at = _aware_datetime(
                         bundle.position_cycle_opened_at, as_of
                     )
@@ -607,7 +653,9 @@ class OpportunityShadowOrchestrator:
                 CandidateState(current.current_lifecycle_state)
                 if current and current.current_lifecycle_state
                 else (
-                    CandidateState.INVESTIGATING if recovery else CandidateState.DISCOVERED
+                    CandidateState.INVESTIGATING
+                    if recovery
+                    else CandidateState.DISCOVERED
                 )
             )
             progress = _progress_from_current(bundle, current)
@@ -632,11 +680,27 @@ class OpportunityShadowOrchestrator:
             lifecycle_state = (
                 transition.proposed_state if transition.allowed else previous_state
             )
+            if (
+                bundle.followthrough_status is FollowthroughStatus.CONFIRMED
+                and lifecycle_state is not CandidateState.CONFIRMED
+            ):
+                rows["adapter_warnings"].append(
+                    asdict(
+                        AdapterWarning(
+                            "lifecycle_state",
+                            f"{bundle.exchange}:{bundle.symbol_id}",
+                            "confirmed_followthrough_without_confirmed_transition",
+                            "confirmed follow-through was not treated as an entry event because the canonical lifecycle did not transition to CONFIRMED",
+                        )
+                    )
+                )
             counter_state = advance_session_counters(
                 previous_counted_session=(
                     current.last_retention_counted_session if current else None
                 ),
-                previous_sessions_in_state=int(current.days_in_state or 0) if current else 0,
+                previous_sessions_in_state=int(current.days_in_state or 0)
+                if current
+                else 0,
                 previous_sessions_without_progress=(
                     int(current.days_without_progress or 0) if current else 0
                 ),
@@ -758,7 +822,12 @@ class OpportunityShadowOrchestrator:
                         ),
                         "suppression_reasons": (
                             list(bundle.missing_data_fields)
-                            + (["investigator_evidence_incomplete"] if bundle.evidence is None or bundle.evidence.missing_evidence else [])
+                            + (
+                                ["investigator_evidence_incomplete"]
+                                if bundle.evidence is None
+                                or bundle.evidence.missing_evidence
+                                else []
+                            )
                         ),
                         "transition_blockers": list(transition.blockers),
                         **_sector_gate_artifact_fields(bundle.sector_gate),
@@ -788,7 +857,8 @@ class OpportunityShadowOrchestrator:
                     rows["position_recovery_actions"].append(action)
                     counters[
                         "reviewed_recoveries"
-                        if config.position_recovery_mode is PositionRecoveryMode.REVIEWED
+                        if config.position_recovery_mode
+                        is PositionRecoveryMode.REVIEWED
                         else "automatic_recoveries"
                     ] += 1
                     if bundle.market_data_complete and bundle.routing_decision_id:
@@ -807,6 +877,13 @@ class OpportunityShadowOrchestrator:
                 counters["rejected_writes"] += 1
                 _conflict(rows, bundle, f"rejected write: {exc}")
 
+        if not config.dry_run and ohlcv_db_path is not None:
+            performance_outputs = mature_performance_events(
+                self.registry_store.registry,
+                ohlcv_db_path=ohlcv_db_path,
+            )
+            for name, output_rows in performance_outputs.items():
+                rows[name].extend(output_rows)
         if not config.dry_run:
             for state in self.registry.query_current_states():
                 rows["current_candidate_state"].append(asdict(state))
@@ -872,6 +949,17 @@ class OpportunityShadowOrchestrator:
                             else ()
                         ),
                     )
+                ),
+                "discovery_event_count": sum(
+                    row.get("event_type") == "CANDIDATE_DISCOVERED"
+                    for row in rows["investigator_performance_events"]
+                ),
+                "entry_confirmed_event_count": sum(
+                    row.get("event_type") == "ENTRY_CONFIRMED"
+                    for row in rows["investigator_performance_events"]
+                ),
+                "transition_evidence_sufficient": bool(
+                    rows["investigator_transition_matrix"]
                 ),
             }
         )
@@ -952,6 +1040,61 @@ def _write_bundle(
             transition.metadata,
             lineage,
         )
+    performance_events: list[PerformanceEventObservation] = []
+    if snapshot is not None:
+        context = snapshot.investigator_context
+        if context.context_as_of is not None and context.context_as_of > bundle.as_of:
+            raise ValueError(
+                "investigator context cannot be later than the decision timestamp"
+            )
+        event_dq = (
+            "PENDING" if bundle.market_close is not None else "INSUFFICIENT_PRICE_DATA"
+        )
+        event_reason = (
+            None
+            if bundle.market_close is not None
+            else "decision_session_close_missing"
+        )
+        common = {
+            "candidate_id": candidate_id,
+            "setup_id": setup_id,
+            "symbol_id": bundle.symbol_id,
+            "exchange": bundle.exchange,
+            "sector_name": bundle.sector_name,
+            "event_at": bundle.as_of,
+            "session_date": last_retention_counted_session,
+            "anchor_price": bundle.market_close,
+            "anchor_price_basis": "DECISION_SESSION_CLOSE",
+            "investigator_context": context,
+            "lineage": lineage,
+            "data_quality_status": event_dq,
+            "data_quality_reason": event_reason,
+        }
+        if (
+            episode_request is not None
+            and episode_request.episode_type != "position_state_recovery"
+        ):
+            performance_events.append(
+                PerformanceEventObservation(
+                    event_type="CANDIDATE_DISCOVERED",
+                    lifecycle_evaluable=(
+                        snapshot.lifecycle_state is CandidateState.PENDING_FOLLOWTHROUGH
+                    ),
+                    **common,
+                )
+            )
+        if (
+            transition is not None
+            and transition.allowed
+            and transition.proposed_state is CandidateState.CONFIRMED
+        ):
+            performance_events.append(
+                PerformanceEventObservation(
+                    event_type="ENTRY_CONFIRMED",
+                    lifecycle_evaluable=True,
+                    **common,
+                )
+            )
     return OrchestrationBundle(
         candidate_id=candidate_id,
         episode_request=episode_request,
@@ -998,6 +1141,7 @@ def _write_bundle(
         transition=transition_observation,
         closure=closure,
         supersession=supersession,
+        performance_events=tuple(performance_events),
     )
 
 
@@ -1010,6 +1154,7 @@ def _count_append_results(counters: dict[str, Any], results: Iterable[Any]) -> N
         "stage_stock_": "stock_stage_observations_created",
         "stage_sector_": "sector_stage_observations_created",
         "progress_": "progress_observations_created",
+        "performance_": "performance_events_created",
     }
     for result in results:
         if result.duplicate:
@@ -1160,7 +1305,11 @@ def _attach_sector_gate_evidence(
     attached: list[OpportunitySourceBundle] = []
     for bundle in bundles:
         mapped = str(bundle.sector_name or "").strip().lower() not in {
-            "", "unknown", "nan", "none", "<na>"
+            "",
+            "unknown",
+            "nan",
+            "none",
+            "<na>",
         }
         sector_id = _normalize_sector_id(
             bundle.sector_stage.sector_id
@@ -1187,7 +1336,9 @@ def _attach_sector_gate_evidence(
         )
         velocity_value = (current_row or {}).get("stage_breadth_velocity")
         try:
-            velocity = float(velocity_value) if velocity_value not in (None, "") else None
+            velocity = (
+                float(velocity_value) if velocity_value not in (None, "") else None
+            )
         except (TypeError, ValueError):
             velocity = None
         coverage_unknown = (
@@ -1195,10 +1346,7 @@ def _attach_sector_gate_evidence(
             is WeinsteinStage.UNKNOWN
             if current_row is not None
             else False
-        ) or (
-            prior is not None
-            and prior_stage is WeinsteinStage.UNKNOWN
-        )
+        ) or (prior is not None and prior_stage is WeinsteinStage.UNKNOWN)
         coverage_status = "insufficient" if coverage_unknown else "sufficient"
         taxonomy: str | None
         if not mapped:
@@ -1213,14 +1361,12 @@ def _attach_sector_gate_evidence(
             taxonomy = "sector_not_stage_2"
         else:
             taxonomy = None
-        improving = (
-            current_stage.value
-            in SECTOR_GATE_RULES["calibration_current_provisional_stages"]
-            or (
-                velocity is not None
-                and velocity
-                > SECTOR_GATE_RULES["calibration_improving_velocity_floor_exclusive"]
-            )
+        improving = current_stage.value in SECTOR_GATE_RULES[
+            "calibration_current_provisional_stages"
+        ] or (
+            velocity is not None
+            and velocity
+            > SECTOR_GATE_RULES["calibration_improving_velocity_floor_exclusive"]
         )
         cohort = (
             "stage_1_improving_blocked_v1"
@@ -1331,6 +1477,7 @@ def _reconcile(
                 item["opportunity"] = value
             elif name == "EvidenceSnapshot":
                 item["evidence"] = value
+                item["investigator_context"] = value.investigator_context
             elif name == "StageSnapshot":
                 item["stock_stage"] = value
             elif name == "BreakoutEvidence":
@@ -1354,6 +1501,7 @@ def _reconcile(
                 as_of=as_of,
                 opportunity=item.get("opportunity"),
                 evidence=item.get("evidence"),
+                investigator_context=item.get("investigator_context"),
                 stock_stage=item.get("stock_stage"),
                 sector_stage=sector,
                 lifecycle_hint=item.get("lifecycle_hint"),
@@ -1447,8 +1595,12 @@ def _recovery_allowed(config: OpportunityShadowConfig) -> bool:
 
 
 def _recovery_proposal(
-    *, bundle: OpportunitySourceBundle, cycle_id: str, compatibility: Any,
-    config: OpportunityShadowConfig, run_id: str,
+    *,
+    bundle: OpportunitySourceBundle,
+    cycle_id: str,
+    compatibility: Any,
+    config: OpportunityShadowConfig,
+    run_id: str,
 ) -> dict[str, Any]:
     proposal_id = make_recovery_proposal_id(
         position_cycle_id=cycle_id,
@@ -1470,9 +1622,13 @@ def _recovery_proposal(
         "proposed_initial_candidate_state": CandidateState.INVESTIGATING.value,
         "pre_entry_history_available": False,
         "missing_history_fields": [
-            "discovery_timestamp", "historical_rank", "historical_opportunity_score",
-            "historical_investigator_score", "trigger_transition",
-            "followthrough_status", "stage_at_entry",
+            "discovery_timestamp",
+            "historical_rank",
+            "historical_opportunity_score",
+            "historical_investigator_score",
+            "trigger_transition",
+            "followthrough_status",
+            "stage_at_entry",
         ],
         "recovery_mode": config.position_recovery_mode.value,
         "proposal_status": "PROPOSED",
@@ -1484,7 +1640,9 @@ def _recovery_proposal(
     return payload
 
 
-def _persist_recovery_proposal(registry: RegistryStore, proposal: dict[str, Any]) -> None:
+def _persist_recovery_proposal(
+    registry: RegistryStore, proposal: dict[str, Any]
+) -> None:
     with registry._writer() as conn:  # noqa: SLF001
         existing = conn.execute(
             """SELECT payload_hash, payload_json
@@ -1506,11 +1664,9 @@ def _persist_recovery_proposal(registry: RegistryStore, proposal: dict[str, Any]
             or existing_semantic_hash == incoming_semantic_hash
         ):
             return
-        if (
-            existing_payload is not None
-            and _recovery_proposal_stable_hash(existing_payload)
-            == _recovery_proposal_stable_hash(proposal)
-        ):
+        if existing_payload is not None and _recovery_proposal_stable_hash(
+            existing_payload
+        ) == _recovery_proposal_stable_hash(proposal):
             proposal["recovery_proposal_id"] = _recovery_proposal_revision_id(
                 base_proposal_id=proposal["recovery_proposal_id"],
                 assessment_hash=incoming_semantic_hash,
@@ -1524,7 +1680,9 @@ def _persist_recovery_proposal(registry: RegistryStore, proposal: dict[str, Any]
             ).fetchone()
             if revised:
                 revised_payload = json.loads(revised[1])
-                if recovery_payload_hash(revised_payload) == recovery_payload_hash(proposal):
+                if recovery_payload_hash(revised_payload) == recovery_payload_hash(
+                    proposal
+                ):
                     return
                 raise OpportunityRegistryConflictError(
                     record_type="position_recovery_proposal",
@@ -1550,10 +1708,15 @@ def _persist_recovery_proposal(registry: RegistryStore, proposal: dict[str, Any]
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(recovery_proposal_id) DO NOTHING""",
             [
-                proposal["recovery_proposal_id"], proposal["position_cycle_id"],
-                proposal["symbol_id"], proposal["exchange"], proposal["recovery_mode"],
-                proposal["proposal_status"], proposal["compatibility_status"],
-                proposal["payload_hash"], json.dumps(proposal, sort_keys=True, default=str),
+                proposal["recovery_proposal_id"],
+                proposal["position_cycle_id"],
+                proposal["symbol_id"],
+                proposal["exchange"],
+                proposal["recovery_mode"],
+                proposal["proposal_status"],
+                proposal["compatibility_status"],
+                proposal["payload_hash"],
+                json.dumps(proposal, sort_keys=True, default=str),
                 proposal["created_run_id"],
             ],
         )
@@ -1561,22 +1724,31 @@ def _persist_recovery_proposal(registry: RegistryStore, proposal: dict[str, Any]
 
 def _recovery_proposal_stable_hash(payload: dict[str, Any]) -> str:
     evolving_compatibility_fields = {
-        "compatibility_status", "open_episode_ids", "conflict_reasons",
+        "compatibility_status",
+        "open_episode_ids",
+        "conflict_reasons",
     }
     stable_payload = {
         key: value
         for key, value in payload.items()
-        if key not in {
-            "payload_hash", "created_run_id", "source_lineage",
+        if key
+        not in {
+            "payload_hash",
+            "created_run_id",
+            "source_lineage",
             *evolving_compatibility_fields,
         }
     }
     return hashlib.sha256(
-        json.dumps(stable_payload, sort_keys=True, default=str, separators=(",", ":")).encode()
+        json.dumps(
+            stable_payload, sort_keys=True, default=str, separators=(",", ":")
+        ).encode()
     ).hexdigest()
 
 
-def _recovery_proposal_revision_id(*, base_proposal_id: str, assessment_hash: str) -> str:
+def _recovery_proposal_revision_id(
+    *, base_proposal_id: str, assessment_hash: str
+) -> str:
     digest = hashlib.sha256(
         f"{base_proposal_id}|{assessment_hash}".encode()
     ).hexdigest()
@@ -1592,10 +1764,16 @@ def _persist_recovery_action(registry: RegistryStore, action: dict[str, Any]) ->
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(recovery_action_id) DO NOTHING""",
             [
-                action["recovery_action_id"], action["recovery_proposal_id"],
-                action["position_cycle_id"], action["candidate_id"], action["recovery_mode"],
-                action["reviewed_by"], action["reviewed_at"], action["review_notes"],
-                json.dumps(action, sort_keys=True, default=str), action["created_run_id"],
+                action["recovery_action_id"],
+                action["recovery_proposal_id"],
+                action["position_cycle_id"],
+                action["candidate_id"],
+                action["recovery_mode"],
+                action["reviewed_by"],
+                action["reviewed_at"],
+                action["review_notes"],
+                json.dumps(action, sort_keys=True, default=str),
+                action["created_run_id"],
             ],
         )
 
@@ -1614,6 +1792,19 @@ def _aware_datetime(value: str | None, fallback: datetime) -> datetime:
         return fallback
 
 
+def _read_json(artifact: StageArtifact | None) -> dict[str, Any]:
+    if artifact is None:
+        return {}
+    path = Path(artifact.uri)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _read_csv(artifact: StageArtifact | None) -> list[dict[str, Any]]:
     if artifact is None:
         return []
@@ -1622,6 +1813,52 @@ def _read_csv(artifact: StageArtifact | None) -> list[dict[str, Any]]:
         return []
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
+
+
+def _attach_market_context(
+    bundles: tuple[OpportunitySourceBundle, ...],
+    payload: dict[str, Any],
+    *,
+    descriptor: SourceDescriptor | None,
+) -> tuple[OpportunitySourceBundle, ...]:
+    market = payload.get("market_regime") if isinstance(payload, dict) else {}
+    market = market if isinstance(market, dict) else {}
+    confirmed = str(market.get("regime") or market.get("confirmed_regime") or "unknown")
+    raw = str(market.get("raw_regime") or confirmed or "unknown")
+    confidence = _optional_float(
+        market.get("regime_confidence_capped", market.get("regime_confidence"))
+    )
+    velocity_bucket = str(market.get("breadth_velocity_bucket") or "unknown")
+    velocity_quantile = str(market.get("breadth_velocity_quantile") or "unknown")
+    score_change = _optional_float(market.get("regime_score_chg_5d"))
+    attached: list[OpportunitySourceBundle] = []
+    for bundle in bundles:
+        sources = bundle.source_lineage
+        if descriptor is not None and all(
+            item.artifact_hash != descriptor.artifact_hash for item in sources
+        ):
+            sources = (*sources, descriptor)
+        attached.append(
+            replace(
+                bundle,
+                market_regime=confirmed,
+                raw_market_regime=raw,
+                regime_confidence=confidence,
+                breadth_velocity_bucket=velocity_bucket,
+                breadth_velocity_quantile=velocity_quantile,
+                regime_score_chg_5d=score_change,
+                source_lineage=sources,
+            )
+        )
+    return tuple(attached)
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if parsed != parsed else parsed
 
 
 def _descriptor(
@@ -1655,7 +1892,9 @@ def _descriptor_optional(
 
 
 def _combined_lineage(
-    bundle: OpportunitySourceBundle, run_id: str, attempt: int,
+    bundle: OpportunitySourceBundle,
+    run_id: str,
+    attempt: int,
     policy_snapshot_id: str | None = None,
 ) -> SourceLineage:
     hashes = sorted(source.artifact_hash for source in bundle.source_lineage)
@@ -1705,6 +1944,55 @@ def _resolve_observed_session(
             "OHLCV store has no observed trading session at or before the run date"
         )
     return session
+
+
+def _attach_session_prices(
+    bundles: tuple[OpportunitySourceBundle, ...],
+    *,
+    ohlcv_db_path: Path | None,
+    session_date: date,
+) -> tuple[OpportunitySourceBundle, ...]:
+    if ohlcv_db_path is None or not bundles:
+        return bundles
+    keys = sorted({(item.exchange, item.symbol_id) for item in bundles})
+    symbols = sorted({symbol for _, symbol in keys})
+    exchanges = sorted({exchange for exchange, _ in keys})
+    symbol_placeholders = ", ".join("?" for _ in symbols)
+    exchange_placeholders = ", ".join("?" for _ in exchanges)
+    try:
+        with duckdb.connect(str(ohlcv_db_path), read_only=True) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT UPPER(exchange), UPPER(symbol_id), open, close
+                FROM _catalog
+                WHERE UPPER(symbol_id) IN ({symbol_placeholders})
+                  AND UPPER(exchange) IN ({exchange_placeholders})
+                  AND CAST(timestamp AS DATE) = ?
+                  AND COALESCE(is_benchmark, FALSE) = FALSE
+                """,
+                [*symbols, *exchanges, session_date],
+            ).fetchall()
+    except (duckdb.Error, OSError):
+        return bundles
+    prices = {
+        (str(exchange), str(symbol)): (
+            _optional_float(open_price),
+            _optional_float(close_price),
+        )
+        for exchange, symbol, open_price, close_price in rows
+    }
+    return tuple(
+        replace(
+            bundle,
+            market_open=prices.get((bundle.exchange, bundle.symbol_id), (None, None))[
+                0
+            ],
+            market_close=prices.get((bundle.exchange, bundle.symbol_id), (None, None))[
+                1
+            ],
+        )
+        for bundle in bundles
+    )
 
 
 def _enrich_stock_stage(
@@ -1758,6 +2046,7 @@ def _initial_counts(*args: Any) -> dict[str, Any]:
         "stock_stage_observations_created": 0,
         "sector_stage_observations_created": 0,
         "progress_observations_created": 0,
+        "performance_events_created": 0,
         "episodes_retained": 0,
         "episodes_closed": 0,
         "episodes_archived": 0,

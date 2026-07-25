@@ -96,6 +96,21 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
   --opportunity-registry-mode shadow --opportunity-registry-dry-run
 ```
 
+Reconstruct same-run Investigator attribution and performance on a copied
+control plane only:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.interfaces.cli.reconstruct_investigator_performance \
+  --copied-control-plane /path/to/copied/control_plane.duckdb \
+  --ohlcv-db /path/to/ohlcv.duckdb \
+  --from-date 2026-07-20 --to-date 2026-07-24 --apply
+```
+
+The command rejects the configured operator store and symlinks, applies
+additive migrations only to the copy, rejects later-than-decision artifacts,
+and labels accepted historical context `RECONSTRUCTED_SAME_RUN`.
+
 Phase 3B comparison and full shadow:
 
 ```bash

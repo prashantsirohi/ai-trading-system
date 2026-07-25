@@ -19,6 +19,8 @@ TABLES = (
     "candidate_progress_observation",
     "candidate_decision_context",
     "candidate_outcome_attribution",
+    "investigator_performance_event",
+    "investigator_performance_horizon",
 )
 VIEWS = ("candidate_current_state",)
 
@@ -32,7 +34,9 @@ def verify_schema(conn: Any) -> None:
     }
     missing = (set(TABLES) | set(VIEWS)) - relations
     if missing:
-        raise RuntimeError(f"opportunity registry schema is incomplete: {sorted(missing)}")
+        raise RuntimeError(
+            f"opportunity registry schema is incomplete: {sorted(missing)}"
+        )
     row = conn.execute(
         "SELECT schema_version FROM opportunity_registry_schema WHERE schema_name = ?",
         ["opportunity_registry"],

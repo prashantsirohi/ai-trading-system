@@ -43,6 +43,7 @@ __all__ = [
     "SectorStageSnapshot",
     "OpportunitySnapshot",
     "EvidenceSnapshot",
+    "InvestigatorContext",
     "CandidateSnapshot",
     "CandidateTransition",
     "CandidateDecision",
@@ -217,7 +218,9 @@ def _require_text(value: object, field_name: str) -> None:
         raise ValueError(f"{field_name} must be non-empty")
 
 
-def _require_range(value: float, field_name: str, low: float = 0.0, high: float = 100.0) -> None:
+def _require_range(
+    value: float, field_name: str, low: float = 0.0, high: float = 100.0
+) -> None:
     if not low <= float(value) <= high:
         raise ValueError(f"{field_name} must be between {low:g} and {high:g}")
 
@@ -227,7 +230,9 @@ def _require_aware(value: datetime | None, field_name: str) -> None:
         raise ValueError(f"{field_name} must be timezone-aware")
 
 
-def _monitoring_stage(provisional: WeinsteinStage, locked: WeinsteinStage) -> WeinsteinStage:
+def _monitoring_stage(
+    provisional: WeinsteinStage, locked: WeinsteinStage
+) -> WeinsteinStage:
     return provisional if provisional is not WeinsteinStage.UNKNOWN else locked
 
 
@@ -243,7 +248,9 @@ def _confidence_band(score: float) -> StageConfidenceBand:
 
 def _freeze_value(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return MappingProxyType({str(key): _freeze_value(item) for key, item in value.items()})
+        return MappingProxyType(
+            {str(key): _freeze_value(item) for key, item in value.items()}
+        )
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_value(item) for item in value)
     return value
@@ -338,13 +345,17 @@ class StageSnapshot:
             and self.confidence_score == 0.0
             and self.confidence_band is StageConfidenceBand.UNKNOWN
         )
-        if not unknown_confidence and self.confidence_band is not _confidence_band(self.confidence_score):
+        if not unknown_confidence and self.confidence_band is not _confidence_band(
+            self.confidence_score
+        ):
             raise ValueError("confidence_band must match confidence_score")
         if (
             self.confidence_formula_version == STAGE_CONFIDENCE_FORMULA_VERSION
             and self.confidence_components is None
         ):
-            raise ValueError("canonical stage confidence requires confidence_components")
+            raise ValueError(
+                "canonical stage confidence requires confidence_components"
+            )
         _require_aware(self.stage_as_of, "stage_as_of")
         _require_aware(self.stage_locked_at, "stage_locked_at")
         if self.stage_status is StageStatus.LOCKED and self.stage_locked_at is None:
@@ -357,7 +368,9 @@ class StageSnapshot:
             raise ValueError("provisional_persistence_days must be non-negative")
         expected = _monitoring_stage(self.provisional_stage, self.locked_stage)
         if self.effective_stage is not expected:
-            raise ValueError("effective_stage must match the canonical monitoring-stage selection")
+            raise ValueError(
+                "effective_stage must match the canonical monitoring-stage selection"
+            )
         _require_text(self.classifier_version, "classifier_version")
         _require_text(self.confidence_formula_version, "confidence_formula_version")
         _require_text(self.contract_version, "contract_version")
@@ -375,7 +388,9 @@ class SectorStageSnapshot:
     def __post_init__(self) -> None:
         _require_text(self.sector_id, "sector_id")
         _require_text(self.sector_name, "sector_name")
-        _require_text(self.sector_relative_strength_state, "sector_relative_strength_state")
+        _require_text(
+            self.sector_relative_strength_state, "sector_relative_strength_state"
+        )
         _require_text(self.sector_rotation_state, "sector_rotation_state")
 
 
@@ -423,6 +438,7 @@ class EvidenceSnapshot:
     evidence_model_version: str
     evaluated_at: datetime
     contract_version: str = OPPORTUNITY_CONTRACT_VERSION
+    investigator_context: "InvestigatorContext | None" = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -440,6 +456,63 @@ class EvidenceSnapshot:
                 _require_range(value, field_name)
         _require_text(self.evidence_model_version, "evidence_model_version")
         _require_aware(self.evaluated_at, "evaluated_at")
+
+
+@dataclass(frozen=True, slots=True)
+class InvestigatorContext:
+    """Point-in-time Investigator attribution carried by every candidate snapshot."""
+
+    stage_label: str = "UNKNOWN"
+    stage_confidence: float | None = None
+    pattern_family: str = "UNKNOWN"
+    pattern_state: str = "UNKNOWN"
+    setup_quality_bucket: str = "UNKNOWN"
+    breakout_type: str = "UNKNOWN"
+    candidate_tier: str = "UNKNOWN"
+    qualified_breakout: bool | None = None
+    confirmed_regime: str = "UNKNOWN"
+    raw_regime: str = "UNKNOWN"
+    regime_confidence: float | None = None
+    breadth_velocity_bucket: str = "UNKNOWN"
+    breadth_velocity_quantile: str = "UNKNOWN"
+    regime_score_chg_5d: float | None = None
+    sector_relative_strength_bucket: str = "UNKNOWN"
+    context_as_of: datetime | None = None
+    source_run_id: str = "UNKNOWN"
+    source_artifact_hashes: tuple[str, ...] = ()
+    classifier_versions: tuple[str, ...] = ()
+    missing_fields: tuple[str, ...] = ()
+    attribution_mode: str = "OBSERVED_AT_DECISION"
+    pattern_events: tuple[Mapping[str, Any], ...] = ()
+    breakout_events: tuple[Mapping[str, Any], ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.context_as_of is not None:
+            _require_aware(self.context_as_of, "context_as_of")
+        if self.stage_confidence is not None:
+            _require_range(self.stage_confidence, "stage_confidence")
+        if (
+            self.regime_confidence is not None
+            and not 0 <= float(self.regime_confidence) <= 1
+        ):
+            raise ValueError("regime_confidence must be between 0 and 1")
+        allowed_modes = {
+            "OBSERVED_AT_DECISION",
+            "RECONSTRUCTED_SAME_RUN",
+            "RETROSPECTIVE_ENRICHED",
+        }
+        if self.attribution_mode not in allowed_modes:
+            raise ValueError(f"unsupported attribution_mode: {self.attribution_mode}")
+        object.__setattr__(
+            self,
+            "pattern_events",
+            tuple(_freeze_value(item) for item in self.pattern_events),
+        )
+        object.__setattr__(
+            self,
+            "breakout_events",
+            tuple(_freeze_value(item) for item in self.breakout_events),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -462,6 +535,9 @@ class CandidateSnapshot:
     active_position: bool
     latest_action: CandidateAction
     eligibility: ActionEligibility
+    investigator_context: InvestigatorContext = field(
+        default_factory=InvestigatorContext
+    )
     contract_version: str = OPPORTUNITY_CONTRACT_VERSION
 
     def __post_init__(self) -> None:
@@ -479,12 +555,18 @@ class CandidateSnapshot:
         }
         if self.lifecycle_state is CandidateState.PENDING_FOLLOWTHROUGH:
             if self.followthrough_status not in pending:
-                raise ValueError("pending_followthrough state requires a pending follow-through status")
+                raise ValueError(
+                    "pending_followthrough state requires a pending follow-through status"
+                )
         elif self.lifecycle_state is CandidateState.CONFIRMED:
             if self.followthrough_status is not FollowthroughStatus.CONFIRMED:
-                raise ValueError("confirmed state requires confirmed follow-through status")
+                raise ValueError(
+                    "confirmed state requires confirmed follow-through status"
+                )
         elif self.followthrough_status in pending:
-            raise ValueError("pending follow-through status requires pending_followthrough lifecycle state")
+            raise ValueError(
+                "pending follow-through status requires pending_followthrough lifecycle state"
+            )
         _require_text(self.market_regime, "market_regime")
         _require_text(self.sector_regime, "sector_regime")
 
@@ -581,7 +663,11 @@ class DecisionContextSnapshot:
             "execution_policy_version",
         ):
             _require_text(getattr(self, field_name), field_name)
-        object.__setattr__(self, "portfolio_context_summary", _freeze_value(self.portfolio_context_summary))
+        object.__setattr__(
+            self,
+            "portfolio_context_summary",
+            _freeze_value(self.portfolio_context_summary),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -602,8 +688,13 @@ class OutcomeAttributionRecord:
         _require_range(self.attribution_confidence, "attribution_confidence")
         _require_text(self.attribution_rule_version, "attribution_rule_version")
         _require_aware(self.resolved_at, "resolved_at")
-        if self.attribution_category is OutcomeAttribution.STAGE_CLASSIFICATION_ERROR and not self.supporting_evidence:
-            raise ValueError("stage_classification_error requires explicit supporting evidence")
+        if (
+            self.attribution_category is OutcomeAttribution.STAGE_CLASSIFICATION_ERROR
+            and not self.supporting_evidence
+        ):
+            raise ValueError(
+                "stage_classification_error requires explicit supporting evidence"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -639,9 +730,12 @@ class CandidateRetentionRule:
             if value is not None and value < 0:
                 raise ValueError(f"{field_name} must be non-negative or None")
         if self.controlled_by_followthrough_window and (
-            self.max_days_in_state is not None or self.max_days_without_progress is not None
+            self.max_days_in_state is not None
+            or self.max_days_without_progress is not None
         ):
-            raise ValueError("follow-through-controlled rules cannot define fixed day limits")
+            raise ValueError(
+                "follow-through-controlled rules cannot define fixed day limits"
+            )
 
 
 @dataclass(frozen=True, slots=True)

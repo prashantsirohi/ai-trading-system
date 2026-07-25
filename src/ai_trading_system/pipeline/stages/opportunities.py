@@ -7,15 +7,27 @@ import time as monotonic_time
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 
-from ai_trading_system.domains.opportunities.orchestration.contracts import OpportunityRegistryMode, OpportunityShadowConfig
-from ai_trading_system.domains.opportunities.orchestration.service import OpportunityArtifactSet, OpportunityShadowOrchestrator, OpportunityShadowSourceError
+from ai_trading_system.domains.opportunities.orchestration.contracts import (
+    OpportunityRegistryMode,
+    OpportunityShadowConfig,
+)
+from ai_trading_system.domains.opportunities.orchestration.service import (
+    OpportunityArtifactSet,
+    OpportunityShadowOrchestrator,
+    OpportunityShadowSourceError,
+)
 from ai_trading_system.domains.opportunities.policy_snapshot import (
     PolicyVersionContentMismatchError,
     append_policy_snapshot_event,
     compute_policy_snapshot,
     register_or_verify_policy_snapshots,
 )
-from ai_trading_system.pipeline.contracts import PipelineStageError, StageArtifact, StageContext, StageResult
+from ai_trading_system.pipeline.contracts import (
+    PipelineStageError,
+    StageArtifact,
+    StageContext,
+    StageResult,
+)
 from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.platform.telemetry.performance import DatabasePerformanceMetric
 
@@ -34,25 +46,65 @@ class OpportunityStage:
         policy_snapshot = compute_policy_snapshot(context.params)
         if context.registry is not None:
             try:
-                register_or_verify_policy_snapshots(context.registry, policy_snapshot, run_id=context.run_id)
+                register_or_verify_policy_snapshots(
+                    context.registry, policy_snapshot, run_id=context.run_id
+                )
             except PolicyVersionContentMismatchError as exc:
                 raise OpportunityStageError(str(exc)) from exc
-            append_policy_snapshot_event(context.registry, policy_snapshot, run_id=context.run_id, stage_name=self.name)
+            append_policy_snapshot_event(
+                context.registry,
+                policy_snapshot,
+                run_id=context.run_id,
+                stage_name=self.name,
+            )
         ranked = context.artifact_for("rank", "ranked_signals")
         if ranked is None:
-            raise OpportunityStageError("shadow opportunities requires the registered rank/ranked_signals artifact")
-        phase3b_shadow = str(context.params.get("opportunity_scan_routing_mode", "off")).lower() == "shadow"
+            raise OpportunityStageError(
+                "shadow opportunities requires the registered rank/ranked_signals artifact"
+            )
+        phase3b_shadow = (
+            str(context.params.get("opportunity_scan_routing_mode", "off")).lower()
+            == "shadow"
+        )
         artifact_set = OpportunityArtifactSet(
             ranked_signals=ranked,
-            investigator_scores=(context.artifact_for("investigator", "routed_investigator_scores") if phase3b_shadow else None) or context.artifact_for("investigator", "investigator_scores"),
+            investigator_scores=(
+                context.artifact_for("investigator", "routed_investigator_scores")
+                if phase3b_shadow
+                else None
+            )
+            or context.artifact_for("investigator", "investigator_scores"),
             breakout_scan=context.artifact_for("rank", "breakout_scan"),
-            pattern_scan=(context.artifact_for("investigator", "routed_pattern_scan") if phase3b_shadow else None) or context.artifact_for("rank", "pattern_scan"),
-            stock_scan=(context.artifact_for("weekly_stage", "weekly_stock_stage_universe") if phase3b_shadow else None) or context.artifact_for("rank", "stock_scan"),
-            sector_dashboard=(context.artifact_for("weekly_stage", "weekly_sector_stage_universe") if phase3b_shadow else None) or context.artifact_for("rank", "sector_dashboard"),
-            lifecycle_state=(context.artifact_for("investigator", "stage1_current_state") or context.artifact_for("investigator", "stage1_state")),
-            scan_routing=context.artifact_for("scan_router", "scan_routing") if phase3b_shadow else None,
+            pattern_scan=(
+                context.artifact_for("investigator", "routed_pattern_scan")
+                if phase3b_shadow
+                else None
+            )
+            or context.artifact_for("rank", "pattern_scan"),
+            stock_scan=(
+                context.artifact_for("weekly_stage", "weekly_stock_stage_universe")
+                if phase3b_shadow
+                else None
+            )
+            or context.artifact_for("rank", "stock_scan"),
+            sector_dashboard=(
+                context.artifact_for("weekly_stage", "weekly_sector_stage_universe")
+                if phase3b_shadow
+                else None
+            )
+            or context.artifact_for("rank", "sector_dashboard"),
+            lifecycle_state=(
+                context.artifact_for("investigator", "stage1_current_state")
+                or context.artifact_for("investigator", "stage1_state")
+            ),
+            scan_routing=context.artifact_for("scan_router", "scan_routing")
+            if phase3b_shadow
+            else None,
+            market_context=context.artifact_for("rank", "dashboard_payload"),
         )
-        as_of = datetime.combine(date.fromisoformat(context.run_date), time.min, tzinfo=timezone.utc)
+        as_of = datetime.combine(
+            date.fromisoformat(context.run_date), time.min, tzinfo=timezone.utc
+        )
         try:
             result = OpportunityShadowOrchestrator(context.registry).run(
                 run_id=context.run_id,
@@ -67,30 +119,57 @@ class OpportunityStage:
         except OpportunityShadowSourceError as exc:
             raise OpportunityStageError(str(exc)) from exc
         except Exception as exc:
-            raise OpportunityStageError(f"opportunity shadow orchestration failed: {exc}") from exc
+            raise OpportunityStageError(
+                f"opportunity shadow orchestration failed: {exc}"
+            ) from exc
         if context.performance is not None:
             context.performance.record_duration(
-                stage_name=self.name, operation_name="opportunities.match_episodes",
-                duration_ms=float(result.summary.get("adapter_seconds") or 0.0) * 1000.0,
-                rows_out=int(result.summary.get("candidate_rows") or result.summary.get("rows_adapted") or 0),
+                stage_name=self.name,
+                operation_name="opportunities.match_episodes",
+                duration_ms=float(result.summary.get("adapter_seconds") or 0.0)
+                * 1000.0,
+                rows_out=int(
+                    result.summary.get("candidate_rows")
+                    or result.summary.get("rows_adapted")
+                    or 0
+                ),
             )
-            persistence_ms = float(result.summary.get("persistence_seconds") or 0.0) * 1000.0
+            persistence_ms = (
+                float(result.summary.get("persistence_seconds") or 0.0) * 1000.0
+            )
             context.performance.record_duration(
-                stage_name=self.name, operation_name="opportunities.persist_registry",
-                duration_ms=persistence_ms, db_write_ms=persistence_ms,
+                stage_name=self.name,
+                operation_name="opportunities.persist_registry",
+                duration_ms=persistence_ms,
+                db_write_ms=persistence_ms,
             )
-            context.performance.record_database_metric(DatabasePerformanceMetric(
-                stage_name=self.name, operation_name="persist_registry",
-                query_count=1, write_query_count=1, transaction_count=1,
-                commit_count=1, db_write_ms=persistence_ms,
-                rows_written=int(result.summary.get("rows_persisted") or 0),
-            ))
+            context.performance.record_database_metric(
+                DatabasePerformanceMetric(
+                    stage_name=self.name,
+                    operation_name="persist_registry",
+                    query_count=1,
+                    write_query_count=1,
+                    transaction_count=1,
+                    commit_count=1,
+                    db_write_ms=persistence_ms,
+                    rows_written=int(result.summary.get("rows_persisted") or 0),
+                )
+            )
         output_dir = context.output_dir()
         artifacts: list[StageArtifact] = []
         artifact_started = monotonic_time.perf_counter_ns()
         summary_payload = {**dict(result.summary), **policy_snapshot.metadata()}
-        summary_path = context.write_json("opportunity_shadow_summary.json", summary_payload)
-        artifacts.append(StageArtifact.from_file("opportunity_shadow_summary", summary_path, metadata={"status": result.status, "dry_run": result.dry_run}, attempt_number=context.attempt_number))
+        summary_path = context.write_json(
+            "opportunity_shadow_summary.json", summary_payload
+        )
+        artifacts.append(
+            StageArtifact.from_file(
+                "opportunity_shadow_summary",
+                summary_path,
+                metadata={"status": result.status, "dry_run": result.dry_run},
+                attempt_number=context.attempt_number,
+            )
+        )
         filenames = {
             "candidate_admissions": "candidate_admissions.csv",
             "candidate_updates": "candidate_updates.csv",
@@ -106,16 +185,33 @@ class OpportunityStage:
             "position_recovery_proposals": "position_recovery_proposals.csv",
             "position_recovery_actions": "position_recovery_actions.csv",
             "position_monitor_reconciliation": "position_monitor_reconciliation.csv",
+            "investigator_performance_events": "investigator_performance_events.csv",
+            "investigator_performance_horizons": "investigator_performance_horizons.csv",
+            "investigator_discovery_scorecard": "investigator_discovery_scorecard.csv",
+            "investigator_entry_scorecard": "investigator_entry_scorecard.csv",
+            "investigator_transition_matrix": "investigator_transition_matrix.csv",
+            "investigator_attribution_coverage": "investigator_attribution_coverage.csv",
+            "investigator_missing_data_reasons": "investigator_missing_data_reasons.csv",
+            "investigator_symbol_sensitivity": "investigator_symbol_sensitivity.csv",
         }
         for artifact_type, filename in filenames.items():
             rows = [dict(row) for row in result.artifact_rows.get(artifact_type, ())]
             path = output_dir / filename
             _write_csv(path, rows)
-            artifacts.append(StageArtifact.from_file(artifact_type, path, row_count=len(rows), attempt_number=context.attempt_number))
+            artifacts.append(
+                StageArtifact.from_file(
+                    artifact_type,
+                    path,
+                    row_count=len(rows),
+                    attempt_number=context.attempt_number,
+                )
+            )
         if context.performance is not None:
             context.performance.record_duration(
-                stage_name=self.name, operation_name="opportunities.write_artifacts",
-                duration_ms=(monotonic_time.perf_counter_ns() - artifact_started) / 1_000_000.0,
+                stage_name=self.name,
+                operation_name="opportunities.write_artifacts",
+                duration_ms=(monotonic_time.perf_counter_ns() - artifact_started)
+                / 1_000_000.0,
                 rows_out=sum(artifact.row_count or 0 for artifact in artifacts),
             )
         if context.registry is not None:
@@ -134,7 +230,11 @@ class OpportunityStage:
                     dedupe_key=f"position_episode_reconciliation_conflict|{cycle_id}|{status}",
                     payload=dict(row),
                 )
-        context.report_task(task_name="opportunity_shadow", status="degraded" if result.status == "degraded" else "completed", metadata=dict(result.summary))
+        context.report_task(
+            task_name="opportunity_shadow",
+            status="degraded" if result.status == "degraded" else "completed",
+            metadata=dict(result.summary),
+        )
         return StageResult(artifacts=artifacts, metadata=dict(result.summary))
 
 

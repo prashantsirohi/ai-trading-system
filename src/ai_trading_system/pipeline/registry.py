@@ -378,9 +378,13 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
     "dq_rule": frozenset({"rule_id", "enabled", "active"}),
     "opportunity_registry_schema": frozenset({"schema_version"}),
     "weekly_stock_stage_history": frozenset({"observation_id", "source_artifact_hash"}),
-    "weekly_sector_stage_history": frozenset({"observation_id", "source_artifact_hash"}),
+    "weekly_sector_stage_history": frozenset(
+        {"observation_id", "source_artifact_hash"}
+    ),
     "opportunity_scan_routing_history": frozenset({"decision_id", "policy_version"}),
-    "sector_membership_history": frozenset({"membership_observation_id", "membership_trust"}),
+    "sector_membership_history": frozenset(
+        {"membership_observation_id", "membership_trust"}
+    ),
     "stage_observation_governance": frozenset(
         {
             "governance_event_id",
@@ -389,7 +393,9 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
             "governance_policy_version",
         }
     ),
-    "stage_observation_dependency": frozenset({"dependency_id", "sector_observation_id"}),
+    "stage_observation_dependency": frozenset(
+        {"dependency_id", "sector_observation_id"}
+    ),
     "stage_correction_impact": frozenset(
         {
             "impact_id",
@@ -401,9 +407,15 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
         }
     ),
     "pipeline_alert_incident": frozenset({"incident_id", "dedupe_key", "status"}),
-    "position_recovery_proposal": frozenset({"recovery_proposal_id", "proposal_status"}),
-    "position_recovery_action": frozenset({"recovery_action_id", "recovery_proposal_id"}),
-    "policy_version_registry": frozenset({"version_label", "policy_snapshot_id", "content_json"}),
+    "position_recovery_proposal": frozenset(
+        {"recovery_proposal_id", "proposal_status"}
+    ),
+    "position_recovery_action": frozenset(
+        {"recovery_action_id", "recovery_proposal_id"}
+    ),
+    "policy_version_registry": frozenset(
+        {"version_label", "policy_snapshot_id", "content_json"}
+    ),
     "candidate_episode": frozenset(
         {
             "candidate_id",
@@ -426,7 +438,21 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
             "snapshot_id",
             "last_progress_at",
             "last_retention_counted_session",
+            "investigator_context_json",
+            "investigator_attribution_mode",
         }
+    ),
+    "investigator_performance_event": frozenset(
+        {
+            "event_id",
+            "candidate_id",
+            "event_type",
+            "context_json",
+            "lifecycle_evaluable",
+        }
+    ),
+    "investigator_performance_horizon": frozenset(
+        {"event_id", "horizon_sessions", "data_quality_status"}
     ),
     "candidate_transition": frozenset({"transition_id", "policy_snapshot_id"}),
     "candidate_decision_context": frozenset(
@@ -462,7 +488,11 @@ class RegistryStore:
         # Keep governance/control-plane metadata in a dedicated database so
         # live OHLCV writers and long-running readers do not block alerting,
         # model governance, or pipeline run tracking.
-        self.db_path = Path(db_path) if db_path else get_domain_paths(self.project_root).root_dir / "control_plane.duckdb"
+        self.db_path = (
+            Path(db_path)
+            if db_path
+            else get_domain_paths(self.project_root).root_dir / "control_plane.duckdb"
+        )
         self.allow_migrations = bool(allow_migrations)
         if self.allow_migrations:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -499,12 +529,18 @@ class RegistryStore:
 
     def _migration_files(self) -> list[Any]:
         candidate_root = self.project_root / "sql" / "migrations"
-        migration_paths = sorted(candidate_root.glob("*.sql")) if candidate_root.exists() else []
+        migration_paths = (
+            sorted(candidate_root.glob("*.sql")) if candidate_root.exists() else []
+        )
         if migration_paths:
             return list(migration_paths)
         package_root = resources.files("ai_trading_system.pipeline.migrations")
         return sorted(
-            (migration for migration in package_root.iterdir() if migration.name.endswith(".sql")),
+            (
+                migration
+                for migration in package_root.iterdir()
+                if migration.name.endswith(".sql")
+            ),
             key=lambda migration: migration.name,
         )
 
@@ -548,7 +584,9 @@ class RegistryStore:
                 continue
             selected.append(migration_path)
         if not selected:
-            raise ValueError(f"No migrations selected for range {first or '*'}..{last or '*'}")
+            raise ValueError(
+                f"No migrations selected for range {first or '*'}..{last or '*'}"
+            )
         with self._writer() as conn:
             for migration_path in selected:
                 conn.execute(migration_path.read_text(encoding="utf-8"))
@@ -581,13 +619,17 @@ class RegistryStore:
         }
         if missing:
             details = ", ".join(
-                f"{table}({','.join(columns)})" for table, columns in sorted(missing.items())
+                f"{table}({','.join(columns)})"
+                for table, columns in sorted(missing.items())
             )
             raise ControlPlaneMigrationRequiredError(
                 "Control-plane schema is not current; pipeline startup will not apply migrations. "
                 f"Missing tables/columns: {details}. Run the explicit control-plane migration command first."
             )
-        return {table: sorted(columns) for table, columns in CONTROL_PLANE_CURRENT_SCHEMA.items()}
+        return {
+            table: sorted(columns)
+            for table, columns in CONTROL_PLANE_CURRENT_SCHEMA.items()
+        }
 
     @staticmethod
     def _ensure_dq_result_band_columns(conn: duckdb.DuckDBPyConnection) -> None:
@@ -599,7 +641,8 @@ class RegistryStore:
         keeps this safe to re-run.
         """
         existing = {
-            row[0] for row in conn.execute(
+            row[0]
+            for row in conn.execute(
                 "SELECT column_name FROM information_schema.columns WHERE table_name = 'dq_result'"
             ).fetchall()
         }
@@ -659,7 +702,14 @@ class RegistryStore:
                 (run_id, pipeline_name, run_date, trigger, status, started_at, metadata_json)
                 VALUES (?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?)
                 """,
-                [run_id, pipeline_name, run_date, trigger, status, self._json(metadata)],
+                [
+                    run_id,
+                    pipeline_name,
+                    run_date,
+                    trigger,
+                    status,
+                    self._json(metadata),
+                ],
             )
 
     def register_dataset(
@@ -876,14 +926,18 @@ class RegistryStore:
                 params,
             )
 
-    def append_run_metadata_event(self, run_id: str, event: Dict[str, Any]) -> Dict[str, Any]:
+    def append_run_metadata_event(
+        self, run_id: str, event: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Append an immutable audit event to pipeline_run metadata_json."""
         run_record = self.get_run(run_id)
         metadata = run_record.get("metadata", {}) if run_record else {}
         history = list(metadata.get("events", []))
         history.append(event)
         metadata["events"] = history
-        self.update_run(run_id, status=run_record.get("status", "running"), metadata=metadata)
+        self.update_run(
+            run_id, status=run_record.get("status", "running"), metadata=metadata
+        )
         return metadata
 
     def next_stage_attempt(self, run_id: str, stage_name: str) -> int:
@@ -951,7 +1005,13 @@ class RegistryStore:
                         error_class = ?, error_message = ?, metadata_json = ?
                     WHERE stage_run_id = ?
                     """,
-                    [status, error_class, error_message, self._json(metadata), stage_run_id],
+                    [
+                        status,
+                        error_class,
+                        error_message,
+                        self._json(metadata),
+                        stage_run_id,
+                    ],
                 )
             else:
                 conn.execute(
@@ -962,7 +1022,14 @@ class RegistryStore:
                         checkpoint_json = ?
                     WHERE stage_run_id = ?
                     """,
-                    [status, error_class, error_message, self._json(metadata), checkpoint_json, stage_run_id],
+                    [
+                        status,
+                        error_class,
+                        error_message,
+                        self._json(metadata),
+                        checkpoint_json,
+                        stage_run_id,
+                    ],
                 )
             if status == "completed":
                 conn.execute(
@@ -987,7 +1054,9 @@ class RegistryStore:
                     [stage_run_id],
                 )
 
-    def heartbeat_stage(self, stage_run_id: str, checkpoint: Optional[Dict[str, Any]] = None) -> None:
+    def heartbeat_stage(
+        self, stage_run_id: str, checkpoint: Optional[Dict[str, Any]] = None
+    ) -> None:
         with self._writer() as conn:
             if checkpoint is None:
                 conn.execute(
@@ -1122,8 +1191,18 @@ class RegistryStore:
 
         artifacts: Dict[str, Dict[str, StageArtifact]] = {}
         for row in rows:
-            stage_name, artifact_type, uri, row_count, content_hash, metadata_json, attempt_number = row
-            resolved_uri = str(resolve_artifact_path(uri, project_root=self.project_root))
+            (
+                stage_name,
+                artifact_type,
+                uri,
+                row_count,
+                content_hash,
+                metadata_json,
+                attempt_number,
+            ) = row
+            resolved_uri = str(
+                resolve_artifact_path(uri, project_root=self.project_root)
+            )
             artifacts.setdefault(stage_name, {})[artifact_type] = StageArtifact(
                 artifact_type=artifact_type,
                 uri=resolved_uri,
@@ -1187,7 +1266,7 @@ class RegistryStore:
                 "description": row[5],
                 "owner": row[6],
             }
-                for row in rows
+            for row in rows
         ]
 
     def get_latest_artifact(
@@ -1265,8 +1344,19 @@ class RegistryStore:
                  message, sample_uri, band, relaxed_from, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'))
                 """,
-                [result_id, run_id, stage_name, rule_id, severity, status, failed_count,
-                 message, sample_uri, band, relaxed_from],
+                [
+                    result_id,
+                    run_id,
+                    stage_name,
+                    rule_id,
+                    severity,
+                    status,
+                    failed_count,
+                    message,
+                    sample_uri,
+                    band,
+                    relaxed_from,
+                ],
             )
 
     def get_successful_delivery(self, dedupe_key: str) -> Optional[Dict[str, Any]]:
@@ -1383,7 +1473,14 @@ class RegistryStore:
                 (alert_id, run_id, alert_type, severity, stage_name, message, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, (current_timestamp AT TIME ZONE 'UTC'))
                 """,
-                [f"alert-{uuid.uuid4().hex[:12]}", run_id, alert_type, severity, stage_name, message],
+                [
+                    f"alert-{uuid.uuid4().hex[:12]}",
+                    run_id,
+                    alert_type,
+                    severity,
+                    stage_name,
+                    message,
+                ],
             )
 
     def open_alert_incident(
@@ -1397,9 +1494,10 @@ class RegistryStore:
         payload: Dict[str, Any],
     ) -> str:
         """Open/recur one deterministic incident, returning its lifecycle outcome."""
-        incident_id = "incident-" + __import__("hashlib").sha256(
-            dedupe_key.encode()
-        ).hexdigest()[:24]
+        incident_id = (
+            "incident-"
+            + __import__("hashlib").sha256(dedupe_key.encode()).hexdigest()[:24]
+        )
         payload_json = self._json(payload)
         with self._writer() as conn:
             existing = conn.execute(
@@ -1432,7 +1530,16 @@ class RegistryStore:
                    (incident_id, dedupe_key, alert_type, severity, status, first_run_id,
                     last_run_id, stage_name, payload_json)
                    VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)""",
-                [incident_id, dedupe_key, alert_type, severity, run_id, run_id, stage_name, payload_json],
+                [
+                    incident_id,
+                    dedupe_key,
+                    alert_type,
+                    severity,
+                    run_id,
+                    run_id,
+                    stage_name,
+                    payload_json,
+                ],
             )
         return "EMITTED"
 
@@ -1451,8 +1558,10 @@ class RegistryStore:
                 [alert_type],
             ).fetchall()
             keys = [
-                key for key, payload in rows
-                if json.loads(payload or "{}").get("position_cycle_id") == position_cycle_id
+                key
+                for key, payload in rows
+                if json.loads(payload or "{}").get("position_cycle_id")
+                == position_cycle_id
             ]
             for key in keys:
                 conn.execute(
@@ -1534,7 +1643,14 @@ class RegistryStore:
                     (eval_id, model_id, evaluated_at, metric_name, metric_value, dataset_ref, notes)
                     VALUES (?, ?, (current_timestamp AT TIME ZONE 'UTC'), ?, ?, ?, ?)
                     """,
-                    [eval_id, model_id, metric_name, float(metric_value), dataset_ref, notes],
+                    [
+                        eval_id,
+                        model_id,
+                        metric_name,
+                        float(metric_value),
+                        dataset_ref,
+                        notes,
+                    ],
                 )
                 eval_ids.append(eval_id)
         return eval_ids
@@ -1605,7 +1721,9 @@ class RegistryStore:
     ) -> str:
         active = self.get_active_deployment(environment)
         if active is None or not active.get("rollback_model_id"):
-            raise ValueError(f"No rollback target available for environment {environment}")
+            raise ValueError(
+                f"No rollback target available for environment {environment}"
+            )
         return self.deploy_model(
             model_id=active["rollback_model_id"],
             environment=environment,
@@ -1811,7 +1929,9 @@ class RegistryStore:
             return None
         return self._loads(row[0]) or None
 
-    def get_stage_runs(self, run_id: str, *, started_after: str | None = None) -> List[Dict[str, Any]]:
+    def get_stage_runs(
+        self, run_id: str, *, started_after: str | None = None
+    ) -> List[Dict[str, Any]]:
         with self._reader() as conn:
             where_sql = "WHERE run_id = ?"
             params: list[Any] = [run_id]
@@ -2007,7 +2127,9 @@ class RegistryStore:
             next_finished_at = finished_at if finished_at is not None else existing[5]
             next_result_json = self._json(result) if result is not None else existing[6]
             next_error = error if error is not None else existing[7]
-            next_metadata_json = self._json(metadata) if metadata is not None else existing[8]
+            next_metadata_json = (
+                self._json(metadata) if metadata is not None else existing[8]
+            )
             conn.execute("DELETE FROM operator_task WHERE task_id = ?", [task_id])
             conn.commit()
             conn.execute(
@@ -2148,7 +2270,9 @@ class RegistryStore:
             )
             inserted = 0
             for row in rows:
-                prediction_id = row.get("prediction_id") or f"pred-{uuid.uuid4().hex[:12]}"
+                prediction_id = (
+                    row.get("prediction_id") or f"pred-{uuid.uuid4().hex[:12]}"
+                )
                 conn.execute(
                     """
                     INSERT INTO model_shadow_prediction (
@@ -2226,7 +2350,9 @@ class RegistryStore:
 
             inserted = 0
             for row in rows:
-                prediction_log_id = row.get("prediction_log_id") or f"plog-{uuid.uuid4().hex[:12]}"
+                prediction_log_id = (
+                    row.get("prediction_log_id") or f"plog-{uuid.uuid4().hex[:12]}"
+                )
                 conn.execute(
                     """
                     INSERT INTO prediction_log (
@@ -2266,9 +2392,15 @@ class RegistryStore:
         artifact_uri: Optional[str],
     ) -> List[Dict[str, Any]]:
         """Replace final watchlist rows for a run and attach history metrics."""
-        symbols = [str(row.get("symbol_id") or "").upper() for row in rows if row.get("symbol_id")]
+        symbols = [
+            str(row.get("symbol_id") or "").upper()
+            for row in rows
+            if row.get("symbol_id")
+        ]
         symbols = sorted(set(symbols))
-        prior_by_symbol: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in symbols}
+        prior_by_symbol: dict[str, list[dict[str, Any]]] = {
+            symbol: [] for symbol in symbols
+        }
 
         with self._writer() as conn:
             if symbols:
@@ -2314,7 +2446,9 @@ class RegistryStore:
                     if previous_rank is None or current_rank is None
                     else int(previous_rank) - int(current_rank)
                 )
-                days_on_watchlist = len({item["watchlist_date"] for item in prior_history}) + 1
+                days_on_watchlist = (
+                    len({item["watchlist_date"] for item in prior_history}) + 1
+                )
                 is_new_entry = previous_rank is None
                 payload.update(
                     {
@@ -2463,7 +2597,9 @@ class RegistryStore:
         with self._writer() as conn:
             inserted = 0
             for row in rows:
-                drift_metric_id = row.get("drift_metric_id") or f"drift-{uuid.uuid4().hex[:12]}"
+                drift_metric_id = (
+                    row.get("drift_metric_id") or f"drift-{uuid.uuid4().hex[:12]}"
+                )
                 conn.execute(
                     """
                     INSERT INTO drift_metric (
@@ -2480,7 +2616,9 @@ class RegistryStore:
                         row.get("horizon"),
                         row["metric_name"],
                         float(row["metric_value"]),
-                        float(row["threshold_value"]) if row.get("threshold_value") is not None else None,
+                        float(row["threshold_value"])
+                        if row.get("threshold_value") is not None
+                        else None,
                         row["status"],
                         self._json(row.get("metadata")),
                     ],
@@ -2538,11 +2676,15 @@ class RegistryStore:
             for row in rows
         ]
 
-    def record_promotion_gate_results(self, model_id: str, rows: List[Dict[str, Any]]) -> int:
+    def record_promotion_gate_results(
+        self, model_id: str, rows: List[Dict[str, Any]]
+    ) -> int:
         with self._writer() as conn:
             inserted = 0
             for row in rows:
-                gate_result_id = row.get("gate_result_id") or f"gate-{uuid.uuid4().hex[:12]}"
+                gate_result_id = (
+                    row.get("gate_result_id") or f"gate-{uuid.uuid4().hex[:12]}"
+                )
                 conn.execute(
                     """
                     INSERT INTO promotion_gate_result (
@@ -2556,8 +2698,12 @@ class RegistryStore:
                         model_id,
                         row["gate_name"],
                         row["status"],
-                        float(row["metric_value"]) if row.get("metric_value") is not None else None,
-                        float(row["threshold_value"]) if row.get("threshold_value") is not None else None,
+                        float(row["metric_value"])
+                        if row.get("metric_value") is not None
+                        else None,
+                        float(row["threshold_value"])
+                        if row.get("threshold_value") is not None
+                        else None,
                         self._json(row.get("metadata")),
                     ],
                 )
@@ -2688,7 +2834,7 @@ class RegistryStore:
                 f"""
                 SELECT COALESCE(probability, score)
                 FROM prediction_log
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                   AND COALESCE(probability, score) IS NOT NULL
                 ORDER BY prediction_date, rank
                 """,
@@ -2916,7 +3062,9 @@ class RegistryStore:
                 ],
             )
 
-    def get_latest_data_repair_run(self, exchange: str = "NSE") -> Optional[Dict[str, Any]]:
+    def get_latest_data_repair_run(
+        self, exchange: str = "NSE"
+    ) -> Optional[Dict[str, Any]]:
         with self._reader() as conn:
             row = conn.execute(
                 """

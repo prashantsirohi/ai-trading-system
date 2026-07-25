@@ -13,6 +13,7 @@ from ai_trading_system.domains.opportunities.contracts import (
     CandidateState,
     EvidenceSnapshot,
     FollowthroughStatus,
+    InvestigatorContext,
     OpportunitySnapshot,
     ProgressSnapshot,
     SectorStageSnapshot,
@@ -53,9 +54,7 @@ SECTOR_GATE_RULES: dict[str, Any] = {
     "passing_prior_locked_stages": (WeinsteinStage.STAGE_2.value,),
     "trusted_membership_states": ("OBSERVED_AT_RUN", "POINT_IN_TIME_VERIFIED"),
     "calibration_prior_locked_stage": WeinsteinStage.STAGE_1.value,
-    "calibration_current_provisional_stages": (
-        WeinsteinStage.TRANSITION_1_TO_2.value,
-    ),
+    "calibration_current_provisional_stages": (WeinsteinStage.TRANSITION_1_TO_2.value,),
     "calibration_improving_velocity_floor_exclusive": 0.0,
 }
 
@@ -226,6 +225,14 @@ class OpportunitySourceBundle:
     market_data_complete: bool = True
     missing_data_fields: tuple[str, ...] = ()
     sector_gate: "SectorGateEvidence | None" = None
+    investigator_context: InvestigatorContext | None = None
+    raw_market_regime: str = "unknown"
+    regime_confidence: float | None = None
+    breadth_velocity_bucket: str = "unknown"
+    breadth_velocity_quantile: str = "unknown"
+    regime_score_chg_5d: float | None = None
+    market_open: float | None = None
+    market_close: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,7 +334,9 @@ class OpportunityShadowConfig:
     close_stage_4_without_position: bool = True
     recover_position_only_episodes: bool = False
     position_recovery_mode: PositionRecoveryMode = PositionRecoveryMode.REPORT_ONLY
-    position_episode_compatibility_policy_version: str = "position-episode-compatibility-v1"
+    position_episode_compatibility_policy_version: str = (
+        "position-episode-compatibility-v1"
+    )
     position_recovery_policy_version: str = "position-recovery-policy-v1"
     position_recovery_reviewed_by: str | None = None
     position_recovery_reviewed_at: datetime | None = None
@@ -338,7 +347,9 @@ class OpportunityShadowConfig:
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> "OpportunityShadowConfig":
-        mode = OpportunityRegistryMode(str(values.get("opportunity_registry_mode", "off")).lower())
+        mode = OpportunityRegistryMode(
+            str(values.get("opportunity_registry_mode", "off")).lower()
+        )
         legacy_recovery = bool(values.get("recover_position_only_episodes", False))
         recovery_mode = PositionRecoveryMode(
             str(
@@ -357,19 +368,36 @@ class OpportunityShadowConfig:
                 str(values.get("position_recovery_reviewed_by") or "") or None
             ),
             position_recovery_reviewed_at=(
-                datetime.fromisoformat(str(values["position_recovery_reviewed_at"]).replace("Z", "+00:00"))
-                if values.get("position_recovery_reviewed_at") else None
+                datetime.fromisoformat(
+                    str(values["position_recovery_reviewed_at"]).replace("Z", "+00:00")
+                )
+                if values.get("position_recovery_reviewed_at")
+                else None
             ),
             position_recovery_review_notes=(
                 str(values.get("position_recovery_review_notes") or "") or None
             ),
-            rank_admission_percentile=float(values.get("opportunity_rank_admission_percentile", 90.0)),
-            rank_velocity_floor=float(values.get("opportunity_rank_velocity_floor", -5.0)),
-            rank_velocity_percentile_floor=float(values.get("opportunity_rank_velocity_percentile_floor", 75.0)),
-            investigator_admission_score=float(values.get("opportunity_investigator_admission_score", 70.0)),
-            accumulation_admission_score=float(values.get("opportunity_accumulation_admission_score", 75.0)),
-            pattern_admission_score=float(values.get("opportunity_pattern_admission_score", 80.0)),
-            breakout_admission_score=float(values.get("opportunity_breakout_admission_score", 80.0)),
+            rank_admission_percentile=float(
+                values.get("opportunity_rank_admission_percentile", 90.0)
+            ),
+            rank_velocity_floor=float(
+                values.get("opportunity_rank_velocity_floor", -5.0)
+            ),
+            rank_velocity_percentile_floor=float(
+                values.get("opportunity_rank_velocity_percentile_floor", 75.0)
+            ),
+            investigator_admission_score=float(
+                values.get("opportunity_investigator_admission_score", 70.0)
+            ),
+            accumulation_admission_score=float(
+                values.get("opportunity_accumulation_admission_score", 75.0)
+            ),
+            pattern_admission_score=float(
+                values.get("opportunity_pattern_admission_score", 80.0)
+            ),
+            breakout_admission_score=float(
+                values.get("opportunity_breakout_admission_score", 80.0)
+            ),
         )
 
 
@@ -385,5 +413,7 @@ class OpportunityShadowRunResult:
         object.__setattr__(
             self,
             "artifact_rows",
-            MappingProxyType({key: tuple(value) for key, value in self.artifact_rows.items()}),
+            MappingProxyType(
+                {key: tuple(value) for key, value in self.artifact_rows.items()}
+            ),
         )

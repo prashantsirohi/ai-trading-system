@@ -2,8 +2,8 @@
 
 - **Purpose:** Define the canonical candidate-episode history and reconstruction contract.
 - **Audience:** Engineers persisting or reading opportunity lifecycle history.
-- **Last verified:** 2026-07-15
-- **Source of truth:** `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/domains/opportunities/stage_governance.py`, and migrations `032_opportunity_registry.sql` plus `034_opportunity_phase3c1_governance.sql`.
+- **Last verified:** 2026-07-25
+- **Source of truth:** `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/domains/opportunities/performance_evaluation.py`, `src/ai_trading_system/domains/opportunities/stage_governance.py`, and migrations `032_opportunity_registry.sql`, `034_opportunity_phase3c1_governance.sql`, and `042_investigator_performance_evaluation.sql`.
 
 ---
 
@@ -33,11 +33,21 @@ erDiagram
     candidate_episode ||--o{ candidate_transition : transitions
     candidate_episode ||--o{ candidate_decision_context : decisions
     candidate_episode ||--o{ candidate_outcome_attribution : attribution
+    candidate_episode ||--o{ investigator_performance_event : performance
+    investigator_performance_event ||--o{ investigator_performance_horizon : matures
     candidate_episode ||--o{ candidate_episode_relation : predecessor
     candidate_episode ||--o{ candidate_episode_relation : successor
 ```
 
-`candidate_episode` is the only mutable summary. Closing may set its terminal status, timestamp, reason, and lineage. All observation, transition, decision, attribution, and `candidate_episode_relation` rows are immutable. The relation is a first-class cross-episode record queryable from either predecessor or successor; A1 currently permits only `momentum_leader → breakout` supersession. The registry schema version is persisted as `opportunity-registry-schema-v1`.
+`candidate_episode` is the only mutable episode summary. Closing may set its
+terminal status, timestamp, reason, and lineage. All observation, transition,
+decision, attribution, performance-event, and `candidate_episode_relation` rows
+are immutable. Per-event horizon rows are the derived mutable outcome surface:
+replays may mature them but cannot change the event anchor or decision context.
+The relation is a first-class cross-episode record queryable from either
+predecessor or successor; A1 currently permits only
+`momentum_leader → breakout` supersession. The registry schema version is
+persisted as `opportunity-registry-schema-v1`.
 
 The four domain axes remain separate:
 
@@ -47,6 +57,14 @@ The four domain axes remain separate:
 - Stock and sector structural stages are separate scoped observations.
 
 The full Phase 1 contract is retained as canonical JSON wherever a canonical object exists. Query columns are materialized in addition to, not instead of, that JSON.
+
+Candidate snapshots materialize their complete `investigator_context` as
+queryable columns plus canonical JSON. Context includes explicit unknowns,
+decision-time provenance and missingness, and all contributing observations.
+Migration 042 also adds immutable `CANDIDATE_DISCOVERED` and `ENTRY_CONFIRMED`
+events with deterministic IDs. Discovery is episode-grained; confirmation
+requires an actual canonical state transition. Parallel setup families retain
+separate episode/event rows and share a symbol overlap-group identifier.
 
 Phase 3C-1 universal stage governance remains adjacent to, rather than embedded
 in, candidate payloads. `stage_correction_impact` links a corrected universal
