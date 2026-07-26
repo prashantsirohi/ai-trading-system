@@ -393,6 +393,7 @@ def build_calibration_dataset(
     source_schema_versions: Mapping[str, str] | None = None,
     migration_versions: tuple[str, ...] = (
         "033", "034", "035", "036", "037", "038", "039", "040", "041",
+        "042", "043",
     ),
     copied_realistic_performance_summary: Mapping[str, Any] | None = None,
     operator_migrations_applied: bool = False,
@@ -491,6 +492,9 @@ def build_calibration_dataset(
         copied_realistic_performance_summary=copied_realistic_performance_summary,
         operator_migrations_applied=operator_migrations_applied,
         real_phase3b_history_present=real_phase3b_history_present,
+        investigator_readiness_checks=readiness_evidence_payload.get(
+            "investigator_attribution_checks", ()
+        ),
     )
     return CalibrationBuildResult(
         manifest=manifest, quality_summary=quality, eligibility=eligibility_records,
@@ -508,6 +512,7 @@ def evaluate_phase4_readiness(
     copied_realistic_performance_summary: Mapping[str, Any] | None = None,
     operator_migrations_applied: bool = False,
     real_phase3b_history_present: bool = False,
+    investigator_readiness_checks: Iterable[Mapping[str, Any]] = (),
 ) -> tuple[tuple[ReadinessCheck, ...], tuple[ReadinessLimitation, ...], ReadinessVerdict, bool, bool]:
     cfg = config or CalibrationConfig()
     checks: list[ReadinessCheck] = []
@@ -640,6 +645,27 @@ def evaluate_phase4_readiness(
     add("PHASE3C4_PERFORMANCE_HARNESS", "performance", ReadinessStatus.PASS,
         "PHASE_3C4_VERIFIED", "instrumentation and exact fixture replay verified")
 
+    for item in investigator_readiness_checks:
+        raw_status = str(item.get("status") or "NOT_EVALUATED").upper()
+        status = (
+            ReadinessStatus(raw_status)
+            if raw_status in {member.value for member in ReadinessStatus}
+            else ReadinessStatus.NOT_EVALUATED
+        )
+        metric = str(item.get("metric_name") or "unknown").upper()
+        add(
+            f"INVESTIGATOR_{metric}",
+            "investigator_attribution",
+            status,
+            item.get("coverage_pct"),
+            f">={item.get('target_pct')}%",
+            severity="critical",
+            limitation_id=f"INVESTIGATOR_{metric}_BELOW_TARGET",
+            description=f"Investigator {metric.lower()} coverage is below its frozen target",
+            remediation="repair point-in-time evidence and rerun the shadow window",
+            development_blocking=status is ReadinessStatus.FAIL,
+        )
+
     baseline_valid = bool(copied_realistic_performance_summary) and copied_realistic_performance_summary.get("replay_equivalence", {}).get("equivalent") is True
     baseline_status = ReadinessStatus.PASS if baseline_valid else (
         ReadinessStatus.FAIL if cfg.phase4_require_copied_realistic_performance_baseline else ReadinessStatus.WARN
@@ -654,10 +680,10 @@ def evaluate_phase4_readiness(
     migration_status = ReadinessStatus.PASS if operator_migrations_applied else (
         ReadinessStatus.FAIL if cfg.phase4_require_operator_migrations else ReadinessStatus.WARN
     )
-    add("OPERATOR_MIGRATIONS_034_041", "schema", migration_status,
-        operator_migrations_applied, "operator migrations 034-036 backed up and copied-store verified",
+    add("OPERATOR_MIGRATIONS_034_043", "schema", migration_status,
+        operator_migrations_applied, "operator migrations 034-043 backed up and copied-store verified",
         severity="high", limitation_id="OPERATOR_MIGRATIONS_NOT_APPLIED",
-        description="operator migrations 034-036 remain unapplied",
+        description="operator migrations 034-043 remain unapplied",
         remediation="perform separately approved backup and copied-store migration verification",
         development_blocking=migration_status is ReadinessStatus.FAIL)
 

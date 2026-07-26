@@ -189,10 +189,18 @@ class OpportunityStage:
             "investigator_performance_horizons": "investigator_performance_horizons.csv",
             "investigator_discovery_scorecard": "investigator_discovery_scorecard.csv",
             "investigator_entry_scorecard": "investigator_entry_scorecard.csv",
+            "investigator_executable_scorecard": "investigator_executable_scorecard.csv",
             "investigator_transition_matrix": "investigator_transition_matrix.csv",
+            "investigator_evaluation_transitions": "investigator_evaluation_transitions.csv",
             "investigator_attribution_coverage": "investigator_attribution_coverage.csv",
+            "investigator_coverage_receipt": "investigator_coverage_receipt.csv",
+            "investigator_readiness_inputs": "investigator_readiness_inputs.csv",
             "investigator_missing_data_reasons": "investigator_missing_data_reasons.csv",
             "investigator_symbol_sensitivity": "investigator_symbol_sensitivity.csv",
+            "investigator_primary_cohorts": "investigator_primary_cohorts.csv",
+            "investigator_diagnostic_cohorts": "investigator_diagnostic_cohorts.csv",
+            "investigator_research_cohorts": "investigator_research_cohorts.csv",
+            "investigator_calendar_windows": "investigator_calendar_windows.csv",
         }
         for artifact_type, filename in filenames.items():
             rows = [dict(row) for row in result.artifact_rows.get(artifact_type, ())]

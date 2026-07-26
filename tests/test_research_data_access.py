@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ai_trading_system.ui.execution_api.services.research_data_access import load_drilldown_history_for_symbols, load_sector_history_for_sectors
+from ai_trading_system.ui.execution_api.services.research_data_access import (
+    load_drilldown_history_for_symbols,
+    load_rank_history_for_symbols,
+    load_sector_history_for_sectors,
+)
 
 
 def test_load_sector_history_for_sectors_reads_recent_sector_dashboards(tmp_path: Path) -> None:
@@ -55,3 +59,19 @@ def test_load_drilldown_history_for_symbols_aggregates_symbol_basket(tmp_path: P
     assert history["symbol_count"].tolist() == [3, 3]
     assert history["top_score"].tolist() == [70.0, 75.0]
     assert history["best_rank"].tolist() == [1.0, 1.0]
+
+
+def test_rank_history_binds_requested_symbols(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "data" / "pipeline_runs"
+    attempt = runs_dir / "pipeline-2026-04-01-aaaa1111" / "rank" / "attempt_1"
+    attempt.mkdir(parents=True)
+    (attempt / "ranked_signals.csv").write_text(
+        "symbol_id,composite_score\nSAFE,70\nOTHER,40\n",
+        encoding="utf-8",
+    )
+
+    history = load_rank_history_for_symbols(
+        str(runs_dir), ["SAFE') OR 1=1 --"], max_runs=10
+    )
+
+    assert history.empty

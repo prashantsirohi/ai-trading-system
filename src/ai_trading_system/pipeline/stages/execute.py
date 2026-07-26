@@ -108,6 +108,18 @@ class ExecuteStage:
             "strategy_mode",
             "reason",
         ],
+        "execution_decisions": [
+            "decision_id",
+            "submission_scope",
+            "symbol_id",
+            "exchange",
+            "planned_action",
+            "execution_status",
+            "reason_code",
+            "correlation_id",
+            "order_id",
+            "decided_at",
+        ],
         "executed_fills": [
             "fill_id",
             "order_id",
@@ -334,7 +346,13 @@ class ExecuteStage:
             )
 
         actions_df = pd.DataFrame(result["actions"])
-        cycle_orders = [item["result"].get("order", {}) for item in result["executions"] if item.get("result")]
+        cycle_orders = [
+            order
+            for item in result["executions"]
+            if item.get("result")
+            for order in [item["result"].get("order")]
+            if isinstance(order, dict) and order.get("order_id")
+        ]
         cycle_fills = [
             fill
             for item in result["executions"]
@@ -342,6 +360,7 @@ class ExecuteStage:
         ]
         orders_df = pd.DataFrame(cycle_orders)
         fills_df = pd.DataFrame(cycle_fills)
+        decisions_df = pd.DataFrame(result.get("decisions", []))
         positions_df = pd.DataFrame(result["positions_after"])
 
         # Phase 8: Breadth-impulse 2-D risk matrix DRY-RUN. Active only when
@@ -407,6 +426,7 @@ class ExecuteStage:
         artifact_frames: Dict[str, pd.DataFrame] = {
             "trade_actions": actions_df,
             "executed_orders": orders_df,
+            "execution_decisions": decisions_df,
             "executed_fills": fills_df,
             "positions": positions_df,
         }
@@ -427,6 +447,7 @@ class ExecuteStage:
             "stage2_gate": candidates.stage2_gate,
             "actions_count": int(len(actions_df)),
             "order_count": int(len(cycle_orders)),
+            "decision_count": int(len(decisions_df)),
             "fill_count": int(len(cycle_fills)),
             "open_position_count": int(len(positions_df)),
             "detected_regime": current_regime,
@@ -448,6 +469,32 @@ class ExecuteStage:
             "breadth_impulse_dry_run": breadth_impulse_dry_run,
             "market_direction": market_direction,
         }
+        decision_status_counts = (
+            decisions_df["execution_status"].value_counts().to_dict()
+            if "execution_status" in decisions_df.columns
+            else {}
+        )
+        ordered_decisions = (
+            int(decisions_df["order_id"].notna().sum())
+            if "order_id" in decisions_df.columns
+            else 0
+        )
+        reconciliation = {
+            "actions_equal_decisions": len(actions_df) == len(decisions_df),
+            "orders_equal_ordered_decisions": len(cycle_orders) == ordered_decisions,
+            "blank_order_rows": int(
+                orders_df.get("order_id", pd.Series(dtype=object)).isna().sum()
+            )
+            if not orders_df.empty
+            else 0,
+        }
+        reconciliation["reconciled"] = (
+            bool(reconciliation["actions_equal_decisions"])
+            and bool(reconciliation["orders_equal_ordered_decisions"])
+            and int(reconciliation["blank_order_rows"]) == 0
+        )
+        metadata["decision_status_counts"] = decision_status_counts
+        metadata["execution_reconciliation"] = reconciliation
 
         total_position_value = sum(
             pos.get("quantity", 0) * pos.get("avg_entry_price", 0)

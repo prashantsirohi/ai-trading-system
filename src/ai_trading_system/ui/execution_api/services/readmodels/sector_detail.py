@@ -298,7 +298,7 @@ def _load_latest_technicals(ohlcv_db: str, symbols: list[str]) -> pd.DataFrame:
     try:
         conn = duckdb.connect(ohlcv_db, read_only=True)
         try:
-            sym_list = ", ".join(f"'{s}'" for s in symbols)
+            placeholders = ", ".join("?" for _ in symbols)
             # One scan, window functions for both the latest snapshot and
             # the trailing aggregates. rn=1 row carries the per-symbol totals.
             df = conn.execute(f"""
@@ -313,7 +313,7 @@ def _load_latest_technicals(ohlcv_db: str, symbols: list[str]) -> pd.DataFrame:
                             PARTITION BY symbol_id ORDER BY timestamp DESC
                         ) AS rn
                     FROM _catalog
-                    WHERE symbol_id IN ({sym_list})
+                    WHERE symbol_id IN ({placeholders})
                       AND exchange = 'NSE'
                 ),
                 agg AS (
@@ -336,7 +336,7 @@ def _load_latest_technicals(ohlcv_db: str, symbols: list[str]) -> pd.DataFrame:
                 FROM ranked r
                 JOIN agg a USING (symbol_id)
                 WHERE r.rn = 1
-            """).fetchdf()
+            """, symbols).fetchdf()
         finally:
             conn.close()
         return df
@@ -355,7 +355,7 @@ def _load_indicators_for_symbols(root: Path, symbols: list[str]) -> pd.DataFrame
         return pd.DataFrame()
     paths = ensure_domain_layout(project_root=str(root), data_domain="operational")
     fs_root = paths.feature_store_dir
-    sym_list = ", ".join(f"'{s}'" for s in symbols)
+    placeholders = ", ".join("?" for _ in symbols)
     try:
         conn = duckdb.connect(":memory:")
         try:
@@ -363,12 +363,12 @@ def _load_indicators_for_symbols(root: Path, symbols: list[str]) -> pd.DataFrame
                 col_select = ", ".join(cols)
                 return conn.execute(f"""
                     SELECT symbol_id, {col_select}
-                    FROM read_parquet('{table_glob}', union_by_name = true)
-                    WHERE symbol_id IN ({sym_list})
+                    FROM read_parquet(?, union_by_name = true)
+                    WHERE symbol_id IN ({placeholders})
                     QUALIFY ROW_NUMBER() OVER (
                         PARTITION BY symbol_id ORDER BY timestamp DESC
                     ) = 1
-                """).fetchdf()
+                """, [table_glob, *symbols]).fetchdf()
 
             sma = _latest(f"{fs_root}/sma/NSE/*.parquet", ["sma_20", "sma_50", "sma_200"])
             rsi = _latest(f"{fs_root}/rsi/NSE/*.parquet", ["rsi_14"])
@@ -389,8 +389,8 @@ def _load_indicators_for_symbols(root: Path, symbols: list[str]) -> pd.DataFrame
                         ROW_NUMBER() OVER (
                             PARTITION BY symbol_id ORDER BY timestamp DESC
                         ) AS rn
-                    FROM read_parquet('{fs_root}/atr/NSE/*.parquet', union_by_name = true)
-                    WHERE symbol_id IN ({sym_list})
+                    FROM read_parquet(?, union_by_name = true)
+                    WHERE symbol_id IN ({placeholders})
                 )
                 SELECT
                     symbol_id,
@@ -398,7 +398,7 @@ def _load_indicators_for_symbols(root: Path, symbols: list[str]) -> pd.DataFrame
                     AVG(atr_14) FILTER (WHERE rn BETWEEN 2 AND 21) AS atr_20_prev_avg
                 FROM ranked
                 GROUP BY symbol_id
-            """).fetchdf()
+            """, [f"{fs_root}/atr/NSE/*.parquet", *symbols]).fetchdf()
         finally:
             conn.close()
         out = (

@@ -42,6 +42,45 @@ def test_investigator_keeps_unavailable_components_null():
     assert snapshot.market_alignment is None
 
 
+def test_investigator_freezes_weekly_primary_lane_and_complete_context():
+    result = adapt_investigator_rows(
+        [{
+            "symbol_id": "ABC",
+            "final_score": "67",
+            "verdict": "MEDIUM_CONVICTION",
+            "trigger_reason": "WEEKLY_GAINER",
+            "move_tag": "WEEKLY_MOMENTUM",
+            "pattern_family": "VCP",
+            "pattern_state": "CONFIRMED",
+            "pattern_score": "78",
+            "setup_quality": "72",
+            "breakout_type": "BASE",
+            "candidate_tier": "A",
+            "qualified_breakout": "true",
+            "market_regime": "BULL",
+            "breadth_velocity_bucket": "ACCELERATING",
+            "sector_rs_bucket": "HIGH",
+            "close": "110",
+            "volume": "100000",
+            "sma50": "100",
+            "high_52w": "120",
+            "pivot_price": "108",
+            "invalidation_price": "102",
+        }],
+        source=SOURCE,
+        as_of=NOW,
+    )
+    context = result.records[0].value.investigator_context
+    assert context.review_lane == "PRIMARY"
+    assert context.review_eligible is True
+    assert context.attribution_score == 67
+    assert context.pattern_score == 78
+    assert context.breakout_tier == "A"
+    assert context.distance_from_sma50_pct == 10
+    assert context.source_lineage[0]["stage_attempt"] == 1
+    assert context.evaluation_states["pattern"] == "KNOWN"
+
+
 def test_stock_stage_separates_provisional_and_locked():
     provisional = adapt_stock_stage_rows(
         [{"symbol_id": "ABC", "weekly_stage_label": "S1_TO_S2", "weekly_stage_confidence": "0.8", "week_end_date": "2026-07-14"}],

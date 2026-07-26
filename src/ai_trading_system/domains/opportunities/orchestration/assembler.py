@@ -200,9 +200,20 @@ def _investigator_context(bundle: OpportunitySourceBundle) -> InvestigatorContex
         "stage_confidence": stage_confidence,
         "pattern_family": pattern_family,
         "pattern_state": pattern_state,
+        "pattern_score": (
+            _optional_number(primary_pattern.get("score"))
+            if primary_pattern
+            else base.pattern_score
+        ),
+        "setup_quality_score": (
+            _optional_number(primary_pattern.get("setup_quality"))
+            if primary_pattern
+            else base.setup_quality_score
+        ),
         "setup_quality_bucket": setup_bucket,
         "breakout_type": breakout_type,
         "candidate_tier": candidate_tier,
+        "breakout_tier": candidate_tier,
         "qualified_breakout": qualified,
         "confirmed_regime": _known(bundle.market_regime),
         "raw_regime": _known(bundle.raw_market_regime),
@@ -211,6 +222,12 @@ def _investigator_context(bundle: OpportunitySourceBundle) -> InvestigatorContex
         "breadth_velocity_quantile": _known(bundle.breadth_velocity_quantile),
         "regime_score_chg_5d": bundle.regime_score_chg_5d,
         "sector_relative_strength_bucket": _sector_rs_bucket(sector_rs),
+        "sector_leadership": _known(
+            bundle.sector_stage.sector_rotation_state
+            if bundle.sector_stage is not None
+            else None,
+            base.sector_leadership,
+        ),
     }
     required = (
         "stage_label",
@@ -229,6 +246,40 @@ def _investigator_context(bundle: OpportunitySourceBundle) -> InvestigatorContex
         name
         for name in required
         if values[name] is None or str(values[name]).upper() == "UNKNOWN"
+    )
+    evaluation_states = dict(base.evaluation_states)
+    evaluation_states.update(
+        {
+            "stage": _context_state(stage_label),
+            "pattern_attempted": (
+                "KNOWN" if patterns else evaluation_states.get("pattern_attempted", "UNKNOWN")
+            ),
+            "pattern": _context_state(pattern_family),
+            "setup_quality": _context_state(values["setup_quality_bucket"]),
+            "breakout": _context_state(breakout_type),
+            "regime": _context_state(values["confirmed_regime"]),
+            "breadth": _context_state(values["breadth_velocity_bucket"]),
+            "sector": _context_state(values["sector_relative_strength_bucket"]),
+            "lineage": "KNOWN" if bundle.source_lineage else "UNKNOWN",
+        }
+    )
+    source_lineage = tuple(
+        {
+            "artifact_type": item.artifact_type,
+            "run_id": item.run_id,
+            "stage_attempt": item.stage_attempt,
+            "observed_at": bundle.as_of,
+            "artifact_hash": item.artifact_hash,
+        }
+        for item in sorted(
+            bundle.source_lineage,
+            key=lambda item: (
+                item.stage_name,
+                item.artifact_type,
+                item.stage_attempt,
+                item.artifact_hash,
+            ),
+        )
     )
     return replace(
         base,
@@ -251,13 +302,15 @@ def _investigator_context(bundle: OpportunitySourceBundle) -> InvestigatorContex
         missing_fields=missing,
         pattern_events=patterns,
         breakout_events=breakouts,
+        source_lineage=source_lineage or base.source_lineage,
+        evaluation_states=evaluation_states,
     )
 
 
 def _known(*values: Any) -> str:
     for value in values:
         text = str(value or "").strip().upper().replace(" ", "_").replace("-", "_")
-        if text not in {"", "UNKNOWN", "NONE", "NAN", "<NA>"}:
+        if text not in {"", "UNKNOWN", "NAN", "<NA>"}:
             return text
     return "UNKNOWN"
 
@@ -268,6 +321,18 @@ def _number(value: Any) -> float:
     except (TypeError, ValueError):
         return -1.0
     return parsed if parsed == parsed else -1.0
+
+
+def _optional_number(value: Any) -> float | None:
+    parsed = _number(value)
+    return parsed if parsed >= 0 else None
+
+
+def _context_state(value: Any) -> str:
+    text = _known(value)
+    if text == "NONE":
+        return "NONE"
+    return "KNOWN" if text != "UNKNOWN" else "UNKNOWN"
 
 
 def _setup_bucket(value: Any, fallback: Any) -> str:

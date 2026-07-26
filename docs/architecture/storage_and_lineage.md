@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-07-15
+- **Last verified:** 2026-07-26
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -21,7 +21,7 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 |---|---|---|---|
 | OHLCV | `$DATA_ROOT/ohlcv.duckdb` | Ingest, trust, features | Price/volume, delivery, provenance, quarantine, source freshness, and feature metadata. |
 | Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, lifecycle-aware alert incidents, models, operator state, decision history, canonical opportunity-registry history, immutable Investigator performance events and derived horizons, Phase 3B universal stage/routing history, Phase 3C-1 governance, and Phase 3C-3 recovery proposals/actions. |
-| Execution ledger | `$DATA_ROOT/execution.duckdb` | `ExecutionStore` | Orders, fills, positions, stops, and broker/paper execution state supported by the active code. |
+| Execution ledger | `$DATA_ROOT/execution.duckdb` | `ExecutionStore` | Normalized decisions, orders, fills, positions, stops, and broker/paper execution state supported by the active code. |
 | Candidate tracker | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate tracker domain | Candidate episodes, transitions, snapshots, fundamental reviews, alerts, and current lifecycle state. |
 | Master data | `$DATA_ROOT/masterdata.db` | Ingest/master-data services | Shared instrument and symbol identity data. |
 | Fundamentals | `$DATA_ROOT/fundamentals/` | Fundamentals domain | Imported source snapshots and fundamental read models. |
@@ -192,6 +192,15 @@ Later evidence can be retained only as `RETROSPECTIVE_ENRICHED` and is excluded
 from primary metrics. The reconstruction CLI refuses the configured live control
 plane and symlinks and writes only to an explicit regular-file copy.
 
+Migration `043_investigator_attribution_policy_validation.sql` adds the frozen
+Investigator review-policy evidence columns, structured artifact lineage and
+evaluation states, executable shadow-fill anchors, append-only evaluation
+transitions, per-horizon stop-touch timing, and daily coverage receipts. A
+coverage replay appends a content-addressed receipt; readers deterministically
+select the latest receipt for each date and metric. The deterministic shadow
+fill is analytical evidence only and never touches the execution ledger or a
+broker adapter.
+
 Migration 038 extends `candidate_decision_context` with nullable completed-week
 sector-gate evidence and taxonomy columns. These columns are also outside the
 semantic payload and idempotency identity; the actual decision blockers remain
@@ -261,7 +270,10 @@ The execution ledger also stores durable submission intents before adapter
 dispatch. A reserved intent without a linked order represents an unknown outcome
 that must be reconciled; retries do not create another order. Execution batches
 and submissions use store-adjacent lock files to serialize competing processes
-for this ledger without changing broker state.
+for this ledger without changing broker state. Every planned action is
+additionally normalized into `execution_decision` as `EXECUTED`, `REJECTED`,
+`SUPPRESSED`, `PREVIEW`, or `ERROR`. Pre-submission heat and portfolio-policy
+blocks are suppressions and have no order row.
 
 ## Phase 3C-5 calibration evidence
 

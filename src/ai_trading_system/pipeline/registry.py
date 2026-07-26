@@ -440,6 +440,9 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
             "last_retention_counted_session",
             "investigator_context_json",
             "investigator_attribution_mode",
+            "investigator_evaluation_states_json",
+            "investigator_source_lineage_json",
+            "review_eligible",
         }
     ),
     "investigator_performance_event": frozenset(
@@ -449,10 +452,23 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
             "event_type",
             "context_json",
             "lifecycle_evaluable",
+            "fill_policy_version",
+            "policy_version",
         }
     ),
     "investigator_performance_horizon": frozenset(
-        {"event_id", "horizon_sessions", "data_quality_status"}
+        {"event_id", "horizon_sessions", "data_quality_status", "days_to_stop"}
+    ),
+    "investigator_evaluation_transition": frozenset(
+        {
+            "evaluation_transition_id",
+            "candidate_id",
+            "to_state",
+            "policy_version",
+        }
+    ),
+    "investigator_attribution_coverage_receipt": frozenset(
+        {"receipt_id", "as_of_date", "metric_name", "status"}
     ),
     "candidate_transition": frozenset({"transition_id", "policy_snapshot_id"}),
     "candidate_decision_context": frozenset(

@@ -466,10 +466,19 @@ class InvestigatorContext:
     stage_confidence: float | None = None
     pattern_family: str = "UNKNOWN"
     pattern_state: str = "UNKNOWN"
+    pattern_score: float | None = None
+    setup_quality_score: float | None = None
     setup_quality_bucket: str = "UNKNOWN"
     breakout_type: str = "UNKNOWN"
     candidate_tier: str = "UNKNOWN"
+    breakout_tier: str = "UNKNOWN"
     qualified_breakout: bool | None = None
+    move_tag: str = "UNKNOWN"
+    trigger_reason: str = "UNKNOWN"
+    final_score: float | None = None
+    attribution_score: float | None = None
+    review_lane: str = "RESEARCH_ONLY"
+    review_eligible: bool = False
     confirmed_regime: str = "UNKNOWN"
     raw_regime: str = "UNKNOWN"
     regime_confidence: float | None = None
@@ -477,6 +486,18 @@ class InvestigatorContext:
     breadth_velocity_quantile: str = "UNKNOWN"
     regime_score_chg_5d: float | None = None
     sector_relative_strength_bucket: str = "UNKNOWN"
+    sector_leadership: str = "UNKNOWN"
+    price: float | None = None
+    volume: float | None = None
+    sma20: float | None = None
+    sma50: float | None = None
+    sma200: float | None = None
+    high_52w: float | None = None
+    breakout_level: float | None = None
+    invalidation_price: float | None = None
+    distance_from_breakout_pct: float | None = None
+    distance_from_sma50_pct: float | None = None
+    distance_from_52w_high_pct: float | None = None
     context_as_of: datetime | None = None
     source_run_id: str = "UNKNOWN"
     source_artifact_hashes: tuple[str, ...] = ()
@@ -485,12 +506,23 @@ class InvestigatorContext:
     attribution_mode: str = "OBSERVED_AT_DECISION"
     pattern_events: tuple[Mapping[str, Any], ...] = ()
     breakout_events: tuple[Mapping[str, Any], ...] = ()
+    source_lineage: tuple[Mapping[str, Any], ...] = ()
+    evaluation_states: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.context_as_of is not None:
             _require_aware(self.context_as_of, "context_as_of")
         if self.stage_confidence is not None:
             _require_range(self.stage_confidence, "stage_confidence")
+        for field_name in (
+            "pattern_score",
+            "setup_quality_score",
+            "final_score",
+            "attribution_score",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                _require_range(value, field_name)
         if (
             self.regime_confidence is not None
             and not 0 <= float(self.regime_confidence) <= 1
@@ -512,6 +544,31 @@ class InvestigatorContext:
             self,
             "breakout_events",
             tuple(_freeze_value(item) for item in self.breakout_events),
+        )
+        object.__setattr__(
+            self,
+            "source_lineage",
+            tuple(_freeze_value(item) for item in self.source_lineage),
+        )
+        allowed_states = {
+            "KNOWN",
+            "NONE",
+            "NOT_ELIGIBLE",
+            "NOT_EVALUATED",
+            "ERROR",
+            "UNKNOWN",
+        }
+        normalized_states = {
+            str(key): str(value).upper()
+            for key, value in dict(self.evaluation_states).items()
+        }
+        invalid_states = sorted(set(normalized_states.values()) - allowed_states)
+        if invalid_states:
+            raise ValueError(
+                f"unsupported Investigator evaluation states: {invalid_states}"
+            )
+        object.__setattr__(
+            self, "evaluation_states", _freeze_value(normalized_states)
         )
 
 

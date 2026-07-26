@@ -21,6 +21,8 @@ TABLES = (
     "candidate_outcome_attribution",
     "investigator_performance_event",
     "investigator_performance_horizon",
+    "investigator_evaluation_transition",
+    "investigator_attribution_coverage_receipt",
 )
 VIEWS = ("candidate_current_state",)
 

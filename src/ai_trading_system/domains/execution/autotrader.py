@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Dict, Optional
 
@@ -174,13 +177,30 @@ class AutoTrader:
         )
 
         if not execution_enabled and not preview_only:
-            return {
+            disabled = {
                 "actions": [action.to_dict() for action in actions],
-                "executions": [],
+                "executions": [
+                    {
+                        "action": action.to_dict(),
+                        "result": {
+                            "status": "SUPPRESSED",
+                            "reason": "execution_disabled",
+                            "reason_code": "EXECUTION_DISABLED",
+                        },
+                    }
+                    for action in actions
+                ],
                 "positions_before": _serialize_positions(positions_before),
                 "positions_after": _serialize_positions(positions_before),
                 "status": "disabled",
             }
+            disabled["decisions"] = _finalize_execution_decisions(
+                store=self.service.store,
+                actions=list(actions),
+                executions=disabled["executions"],
+                submission_scope=submission_scope,
+            )
+            return disabled
 
         if stop_loss_actions:
             actions = stop_loss_actions + list(actions)
@@ -365,9 +385,16 @@ class AutoTrader:
             executions = preview_payloads
         else:
             positions_after = self.portfolio.open_positions()
+        decisions = _finalize_execution_decisions(
+            store=self.service.store,
+            actions=list(actions),
+            executions=executions,
+            submission_scope=submission_scope,
+        )
         return {
             "actions": [action.to_dict() for action in actions],
             "executions": executions,
+            "decisions": decisions,
             "positions_before": _serialize_positions(positions_before),
             "positions_after": _serialize_positions(positions_after),
             "status": "preview" if preview_only else "completed",
@@ -376,6 +403,91 @@ class AutoTrader:
 
 def _serialize_positions(positions: dict[str, Any]) -> list[dict]:
     return [position.to_dict() for position in positions.values()]
+
+
+def _finalize_execution_decisions(
+    *,
+    store: Any,
+    actions: list[Any],
+    executions: list[dict[str, Any]],
+    submission_scope: str | None,
+) -> list[dict[str, Any]]:
+    """Normalize action outcomes and prevent policy suppressions becoming orders."""
+    decided_at = datetime.now(timezone.utc)
+    scope = str(submission_scope or f"adhoc-{decided_at.isoformat()}")
+    decisions: list[dict[str, Any]] = []
+    for index, action in enumerate(actions):
+        execution = executions[index] if index < len(executions) else {
+            "action": action.to_dict(),
+            "result": {
+                "status": "ERROR",
+                "reason": "missing_execution_result",
+                "reason_code": "MISSING_EXECUTION_RESULT",
+            },
+        }
+        result = execution.setdefault("result", {})
+        raw_status = str(result.get("status") or "ERROR").upper()
+        raw_reason = str(result.get("reason") or "")
+        if raw_reason == "heat_gate_exceeded":
+            status, reason_code = "SUPPRESSED", "PORTFOLIO_HEAT_LIMIT"
+        elif raw_reason == "portfolio_constraints_failed":
+            status, reason_code = "SUPPRESSED", "PORTFOLIO_CONSTRAINT_LIMIT"
+        elif raw_status == "PREVIEW":
+            status, reason_code = "PREVIEW", "PREVIEW_ONLY"
+        elif raw_status == "SUPPRESSED":
+            status = "SUPPRESSED"
+            reason_code = str(result.get("reason_code") or "POLICY_SUPPRESSION")
+        elif raw_status == "REJECTED":
+            status, reason_code = "REJECTED", str(
+                result.get("reason_code") or "ORDER_REJECTED"
+            )
+        elif raw_status == "ERROR":
+            status, reason_code = "ERROR", str(
+                result.get("reason_code") or "EXECUTION_ERROR"
+            )
+        else:
+            status, reason_code = "EXECUTED", "ORDER_ACCEPTED"
+        result["status"] = status
+        result["reason_code"] = reason_code
+        order = result.get("order")
+        order_id = order.get("order_id") if isinstance(order, dict) else None
+        action_payload = action.to_dict()
+        identity_payload = {
+            "scope": scope,
+            "index": index,
+            "action": action_payload,
+        }
+        decision_id = "decision-" + hashlib.sha256(
+            json.dumps(
+                identity_payload, sort_keys=True, default=str, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        payload_hash = hashlib.sha256(
+            json.dumps(
+                {"action": action_payload, "result": result},
+                sort_keys=True,
+                default=str,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        decision = {
+            "decision_id": decision_id,
+            "submission_scope": submission_scope,
+            "symbol_id": action.symbol_id,
+            "exchange": action.exchange,
+            "planned_action": action.action,
+            "execution_status": status,
+            "reason_code": reason_code,
+            "correlation_id": _action_correlation_id(submission_scope, action),
+            "order_id": order_id,
+            "decided_at": decided_at,
+            "payload_hash": payload_hash,
+            "action_payload": action_payload,
+            "result_payload": result,
+        }
+        store.record_execution_decision(decision)
+        decisions.append(decision)
+    return decisions
 
 
 def _action_correlation_id(scope: str | None, action: Any) -> str | None:

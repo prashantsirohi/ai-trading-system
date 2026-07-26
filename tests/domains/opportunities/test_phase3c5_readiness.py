@@ -49,6 +49,30 @@ def test_missing_realistic_baseline_is_ready_with_limitations() -> None:
     assert "COPIED_REALISTIC_BASELINE_MISSING" in {item.limitation_id for item in result.limitations}
 
 
+def test_investigator_coverage_failure_blocks_phase4_readiness() -> None:
+    result = _build(
+        copied_realistic_performance_summary={"replay_equivalence": {"equivalent": True}},
+        operator_migrations_applied=True,
+        real_phase3b_history_present=True,
+        readiness_evidence={
+            "investigator_attribution_checks": [
+                {
+                    "metric_name": "sector_context",
+                    "coverage_pct": 97.5,
+                    "target_pct": 98.0,
+                    "status": "FAIL",
+                }
+            ]
+        },
+    )
+
+    assert result.verdict.value == "NOT_READY"
+    assert result.phase4_development_ready is False
+    assert {
+        check.check_id: check.status.value for check in result.readiness_checks
+    }["INVESTIGATOR_SECTOR_CONTEXT"] == "FAIL"
+
+
 def test_operator_migrations_unapplied_is_development_ready_limitation() -> None:
     result = _build(
         copied_realistic_performance_summary={"replay_equivalence": {"equivalent": True}},

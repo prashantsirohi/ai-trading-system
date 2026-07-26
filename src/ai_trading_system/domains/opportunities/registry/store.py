@@ -15,6 +15,9 @@ from ai_trading_system.domains.opportunities.contracts import (
     TransitionReason,
 )
 from ai_trading_system.domains.opportunities.serialization import to_dict
+from ai_trading_system.domains.opportunities.orchestration.contracts import (
+    INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+)
 from ai_trading_system.pipeline.registry import RegistryStore
 
 from .identity import (
@@ -891,6 +894,29 @@ class DuckDBOpportunityRegistryStore:
             "investigator_attribution_mode",
             "investigator_missing_fields_json",
             "investigator_context_json",
+            "pattern_score",
+            "setup_quality_score",
+            "breakout_tier",
+            "move_tag",
+            "trigger_reason",
+            "final_score",
+            "attribution_score",
+            "review_lane",
+            "review_eligible",
+            "sector_leadership",
+            "investigator_price",
+            "investigator_volume",
+            "investigator_sma20",
+            "investigator_sma50",
+            "investigator_sma200",
+            "investigator_high_52w",
+            "investigator_breakout_level",
+            "investigator_invalidation_price",
+            "distance_from_breakout_pct",
+            "distance_from_sma50_pct",
+            "distance_from_52w_high_pct",
+            "investigator_source_lineage_json",
+            "investigator_evaluation_states_json",
         )
         context = snapshot.investigator_context
         values = [
@@ -949,6 +975,29 @@ class DuckDBOpportunityRegistryStore:
             context.attribution_mode,
             canonical_json(context.missing_fields),
             canonical_json(context),
+            context.pattern_score,
+            context.setup_quality_score,
+            context.breakout_tier,
+            context.move_tag,
+            context.trigger_reason,
+            context.final_score,
+            context.attribution_score,
+            context.review_lane,
+            context.review_eligible,
+            context.sector_leadership,
+            context.price,
+            context.volume,
+            context.sma20,
+            context.sma50,
+            context.sma200,
+            context.high_52w,
+            context.breakout_level,
+            context.invalidation_price,
+            context.distance_from_breakout_pct,
+            context.distance_from_sma50_pct,
+            context.distance_from_52w_high_pct,
+            canonical_json(context.source_lineage),
+            canonical_json(context.evaluation_states),
         ]
         return self._insert_append(
             conn,
@@ -1622,6 +1671,7 @@ class DuckDBOpportunityRegistryStore:
         primary_eligible = bool(
             context.attribution_mode
             in {"OBSERVED_AT_DECISION", "RECONSTRUCTED_SAME_RUN"}
+            and context.review_eligible
             and (
                 context.context_as_of is None
                 or context.context_as_of <= observation.event_at
@@ -1680,6 +1730,11 @@ class DuckDBOpportunityRegistryStore:
             "data_quality_reason",
             "semantic_payload_hash",
             "idempotency_key",
+            "next_session_open",
+            "simulated_fill_price",
+            "invalidation_price",
+            "fill_policy_version",
+            "policy_version",
         )
         values = [
             record_id,
@@ -1707,6 +1762,11 @@ class DuckDBOpportunityRegistryStore:
             observation.data_quality_reason,
             semantic_hash,
             key,
+            None,
+            None,
+            context.invalidation_price,
+            None,
+            INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
         ]
         return self._insert_append(
             conn,

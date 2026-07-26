@@ -62,7 +62,7 @@ def test_explicit_range_migration_is_backup_gated_and_verified(
         db_path=db_path,
         backup_dir=backup_dir,
         first="033",
-        last="041",
+        last="043",
         apply=True,
     )
 
@@ -77,6 +77,8 @@ def test_explicit_range_migration_is_backup_gated_and_verified(
         "039_trading_session_retention_counters.sql",
         "040_candidate_episode_relation.sql",
         "041_admission_rule_evaluations.sql",
+        "042_investigator_performance_evaluation.sql",
+        "043_investigator_attribution_policy_validation.sql",
     ]
     RegistryStore(tmp_path, db_path=db_path, allow_migrations=False).verify_schema_current()
 

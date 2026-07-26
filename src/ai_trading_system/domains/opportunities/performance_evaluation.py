@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import hashlib
+import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -10,6 +12,9 @@ from typing import Any
 import duckdb
 
 from ai_trading_system.pipeline.registry import RegistryStore
+from ai_trading_system.domains.opportunities.orchestration.contracts import (
+    INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+)
 
 
 HORIZONS = (3, 5, 10, 20)
@@ -20,6 +25,18 @@ PRIMARY_ATTRIBUTION_MODES = {
 SUSTAINED_STATES = {"confirmed", "advancing", "extended"}
 FAILED_STATES = {"failed", "weakening", "exited", "archived"}
 BENCHMARK_SYMBOL = "NIFTY_50"
+SHADOW_FILL_POLICY_VERSION = "investigator-shadow-fill-v1"
+SHADOW_FILL_SLIPPAGE_BPS = 5.0
+COVERAGE_TARGETS = {
+    "stage_attribution": 95.0,
+    "pattern_evaluation_attempted": 95.0,
+    "pattern_known_or_none": 90.0,
+    "setup_quality": 90.0,
+    "breakout_classification": 95.0,
+    "regime_and_breadth_context": 100.0,
+    "sector_context": 98.0,
+    "run_artifact_lineage": 100.0,
+}
 
 
 def mature_performance_events(
@@ -42,8 +59,19 @@ def mature_performance_events(
             )
         )
         if not events:
-            return _empty_outputs()
+            _append_coverage_receipts(conn)
+            return _build_outputs(conn)
         prices, index_prices, sector_map = _load_market_data(path, events)
+        _append_executable_events(conn, events, prices)
+        events = _records(
+            conn.execute(
+                """
+                SELECT *
+                FROM investigator_performance_event
+                ORDER BY session_date, exchange, symbol_id, event_type, event_id
+                """
+            )
+        )
         transitions = _transition_history(conn)
         updates = [
             _mature_horizon(
@@ -58,8 +86,115 @@ def mature_performance_events(
             for horizon in HORIZONS
         ]
         _upsert_horizons(conn, updates)
+        _append_evaluation_transitions(conn)
+        _append_coverage_receipts(conn)
         _project_discovery_events_to_legacy_cohort(conn)
         return _build_outputs(conn)
+
+
+def _append_executable_events(
+    conn: duckdb.DuckDBPyConnection,
+    events: list[dict[str, Any]],
+    prices: dict[tuple[str, str], list[dict[str, Any]]],
+) -> None:
+    """Append a deterministic next-session shadow entry without broker dispatch."""
+    for event in events:
+        if str(event.get("event_type")) != "ENTRY_CONFIRMED":
+            continue
+        series = prices.get(
+            (
+                str(event.get("exchange") or "").upper(),
+                str(event.get("symbol_id") or "").upper(),
+            ),
+            [],
+        )
+        anchor_date = _date(event["session_date"])
+        anchor_index = next(
+            (
+                index
+                for index, row in enumerate(series)
+                if _date(row["session_date"]) == anchor_date
+            ),
+            None,
+        )
+        if anchor_index is None or anchor_index + 1 >= len(series):
+            continue
+        next_bar = series[anchor_index + 1]
+        next_open = _float(next_bar.get("open"))
+        if next_open in (None, 0.0):
+            continue
+        fill_price = round(
+            float(next_open) * (1.0 + SHADOW_FILL_SLIPPAGE_BPS / 10_000.0), 6
+        )
+        session_date = _date(next_bar["session_date"])
+        event_at = datetime.combine(
+            session_date, datetime.min.time(), tzinfo=timezone.utc
+        )
+        identity = {
+            "candidate_id": event["candidate_id"],
+            "event_type": "EXECUTABLE_AVAILABLE",
+            "session_date": session_date.isoformat(),
+            "fill_policy_version": SHADOW_FILL_POLICY_VERSION,
+            "source_event_id": event["event_id"],
+        }
+        digest = _digest(identity)
+        context_json = str(event.get("context_json") or "{}")
+        semantic_hash = _digest(
+            {
+                **identity,
+                "next_session_open": next_open,
+                "simulated_fill_price": fill_price,
+                "context_json": context_json,
+            }
+        )
+        conn.execute(
+            """
+            INSERT INTO investigator_performance_event (
+                event_id, candidate_id, setup_id, symbol_id, exchange,
+                sector_name, overlap_group_id, event_type, event_at,
+                session_date, anchor_price, anchor_price_basis,
+                source_snapshot_id, source_transition_id, attribution_mode,
+                primary_eligible, lifecycle_evaluable, context_as_of,
+                context_json, source_run_id, source_artifact_hash,
+                data_quality_status, data_quality_reason,
+                semantic_payload_hash, idempotency_key, next_session_open,
+                simulated_fill_price, invalidation_price,
+                fill_policy_version, policy_version
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, 'EXECUTABLE_AVAILABLE', ?, ?, ?,
+                'DETERMINISTIC_SHADOW_FILL', ?, ?, ?, ?, TRUE, ?, ?, ?, ?,
+                'PENDING', NULL, ?, ?, ?, ?, ?, ?, ?
+            )
+            ON CONFLICT DO NOTHING
+            """,
+            [
+                f"event-{digest}",
+                event["candidate_id"],
+                event["setup_id"],
+                event["symbol_id"],
+                event["exchange"],
+                event.get("sector_name"),
+                event["overlap_group_id"],
+                event_at.replace(tzinfo=None),
+                session_date,
+                fill_price,
+                event["source_snapshot_id"],
+                event.get("source_transition_id"),
+                event["attribution_mode"],
+                bool(event.get("primary_eligible")),
+                event.get("context_as_of"),
+                context_json,
+                event["source_run_id"],
+                event["source_artifact_hash"],
+                semantic_hash,
+                f"executable-{digest}",
+                next_open,
+                fill_price,
+                event.get("invalidation_price"),
+                SHADOW_FILL_POLICY_VERSION,
+                INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+            ],
+        )
 
 
 def _load_market_data(
@@ -198,6 +333,7 @@ def _mature_horizon(
         "maximum_adverse_excursion_pct": None,
         "days_to_2pct": None,
         "days_to_5pct": None,
+        "days_to_stop": None,
         "drawdown_before_2pct_pct": None,
         "drawdown_before_5pct_pct": None,
         "benchmark_symbol": BENCHMARK_SYMBOL,
@@ -240,6 +376,9 @@ def _mature_horizon(
     mae = _return_pct(min(valid_lows), anchor) if valid_lows else None
     day_2 = _first_touch(highs, anchor, 2.0)
     day_5 = _first_touch(highs, anchor, 5.0)
+    day_stop = _first_stop_touch(
+        lows, _float(event.get("invalidation_price"))
+    )
     drawdown_2 = _drawdown_before(lows, anchor, day_2)
     drawdown_5 = _drawdown_before(lows, anchor, day_5)
     target_date = _date(target["session_date"])
@@ -275,6 +414,7 @@ def _mature_horizon(
         "maximum_adverse_excursion_pct": mae,
         "days_to_2pct": day_2,
         "days_to_5pct": day_5,
+        "days_to_stop": day_stop,
         "drawdown_before_2pct_pct": drawdown_2,
         "drawdown_before_5pct_pct": drawdown_5,
         "benchmark_return_pct": benchmark_return,
@@ -305,9 +445,21 @@ def _lifecycle_outcome(
         if _date(row["session_date"]) <= target_date
         and _date(row["session_date"]) >= _date(event["session_date"])
     ]
+    reasons = [
+        str(row.get("transition_reason") or "").lower()
+        for row in transitions
+        if _date(row["session_date"]) <= target_date
+        and _date(row["session_date"]) >= _date(event["session_date"])
+    ]
     if event_type == "CANDIDATE_DISCOVERED" and horizon == 3:
         if any(state == "confirmed" for state in states):
             return "CONFIRMED"
+        if any(
+            marker in reason
+            for reason in reasons
+            for marker in ("stagnation", "timeout", "expired", "no_longer_eligible")
+        ):
+            return "EXPIRED"
         if any(state in FAILED_STATES for state in states):
             return "FAILED"
         return "STILL_DEVELOPING"
@@ -344,6 +496,297 @@ def _upsert_horizons(
         """,
         [[row[column] for column in columns] for row in rows],
     )
+
+
+def _append_evaluation_transitions(conn: duckdb.DuckDBPyConnection) -> None:
+    events = _records(
+        conn.execute(
+            """
+            SELECT e.*, h3.lifecycle_outcome AS outcome_3d,
+                   h3.target_session_date AS outcome_3d_date,
+                   h10.lifecycle_outcome AS outcome_10d,
+                   h10.target_session_date AS outcome_10d_date
+            FROM investigator_performance_event e
+            LEFT JOIN investigator_performance_horizon h3
+              ON h3.event_id = e.event_id AND h3.horizon_sessions = 3
+            LEFT JOIN investigator_performance_horizon h10
+              ON h10.event_id = e.event_id AND h10.horizon_sessions = 10
+            ORDER BY e.session_date, e.event_type, e.event_id
+            """
+        )
+    )
+    for event in events:
+        event_type = str(event["event_type"])
+        if event_type == "CANDIDATE_DISCOVERED":
+            _insert_evaluation_transition(
+                conn,
+                event,
+                from_state="DISCOVERED",
+                to_state="PENDING_3D",
+                transitioned_at=event["event_at"],
+                session_date=_date(event["session_date"]),
+                reason_code="DISCOVERY_REQUIRES_3D_FOLLOWTHROUGH",
+            )
+            outcome = str(event.get("outcome_3d") or "")
+            if outcome:
+                _insert_evaluation_transition(
+                    conn,
+                    event,
+                    from_state="PENDING_3D",
+                    to_state=outcome,
+                    transitioned_at=event["outcome_3d_date"],
+                    session_date=_date(event["outcome_3d_date"]),
+                    reason_code={
+                        "CONFIRMED": "CANONICAL_CONFIRMATION_OBSERVED",
+                        "FAILED": "CANONICAL_FAILURE_OBSERVED",
+                        "EXPIRED": "CANONICAL_EXPIRY_OBSERVED",
+                        "STILL_DEVELOPING": "NO_TERMINAL_TRANSITION_AT_3D",
+                    }.get(outcome, "EVALUATION_OUTCOME_OBSERVED"),
+                )
+        elif event_type == "ENTRY_CONFIRMED":
+            _insert_evaluation_transition(
+                conn,
+                event,
+                from_state="PENDING_3D",
+                to_state="CONFIRMED",
+                transitioned_at=event["event_at"],
+                session_date=_date(event["session_date"]),
+                reason_code="CANONICAL_CONFIRMATION_TRANSITION",
+            )
+            outcome = str(event.get("outcome_10d") or "")
+            if outcome:
+                _insert_evaluation_transition(
+                    conn,
+                    event,
+                    from_state="EXECUTABLE",
+                    to_state=outcome,
+                    transitioned_at=event["outcome_10d_date"],
+                    session_date=_date(event["outcome_10d_date"]),
+                    reason_code=(
+                        "SUSTAINED_THROUGH_10D"
+                        if outcome == "SUSTAINED_10D"
+                        else "FAILED_AFTER_CONFIRMATION_BY_10D"
+                    ),
+                )
+        elif event_type == "EXECUTABLE_AVAILABLE":
+            _insert_evaluation_transition(
+                conn,
+                event,
+                from_state="CONFIRMED",
+                to_state="EXECUTABLE",
+                transitioned_at=event["event_at"],
+                session_date=_date(event["session_date"]),
+                reason_code="NEXT_SESSION_SHADOW_FILL_AVAILABLE",
+            )
+
+
+def _insert_evaluation_transition(
+    conn: duckdb.DuckDBPyConnection,
+    event: dict[str, Any],
+    *,
+    from_state: str,
+    to_state: str,
+    transitioned_at: Any,
+    session_date: date,
+    reason_code: str,
+) -> None:
+    if conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM investigator_evaluation_transition
+        WHERE candidate_id = ? AND to_state = ? AND policy_version = ?
+        """,
+        [
+            event["candidate_id"],
+            to_state,
+            INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+        ],
+    ).fetchone()[0]:
+        return
+    identity = {
+        "candidate_id": event["candidate_id"],
+        "source_event_id": event["event_id"],
+        "from_state": from_state,
+        "to_state": to_state,
+        "session_date": session_date.isoformat(),
+        "policy_version": INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+    }
+    digest = _digest(identity)
+    context_json = str(event.get("context_json") or "{}")
+    conn.execute(
+        """
+        INSERT INTO investigator_evaluation_transition (
+            evaluation_transition_id, candidate_id, setup_id, from_state,
+            to_state, transitioned_at, session_date, reason_code,
+            policy_version, source_event_id, source_snapshot_id,
+            source_transition_id, originating_run_id, confirming_run_id,
+            price_anchor, price_anchor_basis, evidence_snapshot_json,
+            evidence_snapshot_hash, idempotency_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT DO NOTHING
+        """,
+        [
+            f"evaluation-transition-{digest}",
+            event["candidate_id"],
+            event["setup_id"],
+            from_state,
+            to_state,
+            transitioned_at,
+            session_date,
+            reason_code,
+            INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+            event["event_id"],
+            event.get("source_snapshot_id"),
+            event.get("source_transition_id"),
+            event["source_run_id"],
+            event["source_run_id"] if to_state == "CONFIRMED" else None,
+            event.get("anchor_price"),
+            event.get("anchor_price_basis"),
+            context_json,
+            hashlib.sha256(context_json.encode("utf-8")).hexdigest(),
+            f"evaluation-transition-{digest}",
+        ],
+    )
+
+
+def _append_coverage_receipts(conn: duckdb.DuckDBPyConnection) -> None:
+    snapshots = _records(
+        conn.execute(
+            """
+            SELECT CAST(as_of AS DATE) AS as_of_date, run_id, review_eligible,
+                   investigator_evaluation_states_json,
+                   investigator_missing_fields_json
+            FROM candidate_snapshot
+            WHERE investigator_context_json IS NOT NULL
+            ORDER BY as_of_date, as_of, snapshot_id
+            """
+        )
+    )
+    grouped: dict[date, list[dict[str, Any]]] = defaultdict(list)
+    for snapshot in snapshots:
+        grouped[_date(snapshot["as_of_date"])].append(snapshot)
+    for as_of_date, rows in sorted(grouped.items()):
+        source_run_id = str(rows[-1].get("run_id") or "UNKNOWN")
+        decoded = [
+            {
+                **row,
+                "states": _json_mapping(
+                    row.get("investigator_evaluation_states_json")
+                ),
+                "missing": _json_list(row.get("investigator_missing_fields_json")),
+            }
+            for row in rows
+        ]
+        eligible = [row for row in decoded if bool(row.get("review_eligible"))]
+        definitions = {
+            "stage_attribution": (
+                decoded,
+                lambda row: row["states"].get("stage") == "KNOWN",
+            ),
+            "pattern_evaluation_attempted": (
+                decoded,
+                lambda row: row["states"].get("pattern_attempted")
+                in {"KNOWN", "NONE", "NOT_ELIGIBLE", "ERROR"},
+            ),
+            "pattern_known_or_none": (
+                decoded,
+                lambda row: row["states"].get("pattern") in {"KNOWN", "NONE"},
+            ),
+            "setup_quality": (
+                eligible,
+                lambda row: row["states"].get("setup_quality") == "KNOWN",
+            ),
+            "breakout_classification": (
+                decoded,
+                lambda row: row["states"].get("breakout")
+                in {"KNOWN", "NONE", "NOT_ELIGIBLE"},
+            ),
+            "regime_and_breadth_context": (
+                decoded,
+                lambda row: row["states"].get("regime") == "KNOWN"
+                and row["states"].get("breadth") == "KNOWN",
+            ),
+            "sector_context": (
+                decoded,
+                lambda row: row["states"].get("sector") == "KNOWN",
+            ),
+            "run_artifact_lineage": (
+                decoded,
+                lambda row: row["states"].get("lineage") == "KNOWN",
+            ),
+        }
+        for metric_name, (population, predicate) in definitions.items():
+            denominator = len(population)
+            numerator = sum(1 for row in population if predicate(row))
+            coverage_pct = (
+                round(100.0 * numerator / denominator, 6)
+                if denominator
+                else 0.0
+            )
+            status = (
+                "NOT_EVALUATED"
+                if denominator == 0
+                else "PASS"
+                if coverage_pct >= COVERAGE_TARGETS[metric_name]
+                else "FAIL"
+            )
+            reason_counts: dict[str, int] = defaultdict(int)
+            for row in population:
+                if predicate(row):
+                    continue
+                state = row["states"].get(
+                    {
+                        "stage_attribution": "stage",
+                        "pattern_evaluation_attempted": "pattern_attempted",
+                        "pattern_known_or_none": "pattern",
+                        "setup_quality": "setup_quality",
+                        "breakout_classification": "breakout",
+                        "regime_and_breadth_context": "regime",
+                        "sector_context": "sector",
+                        "run_artifact_lineage": "lineage",
+                    }[metric_name],
+                    "UNKNOWN",
+                )
+                reason_counts[str(state)] += 1
+            unknown_count = int(reason_counts.get("UNKNOWN", 0))
+            payload = {
+                "as_of_date": as_of_date.isoformat(),
+                "source_run_id": source_run_id,
+                "metric_name": metric_name,
+                "numerator": numerator,
+                "denominator": denominator,
+                "coverage_pct": coverage_pct,
+                "target_pct": COVERAGE_TARGETS[metric_name],
+                "status": status,
+                "reasons": dict(sorted(reason_counts.items())),
+            }
+            digest = _digest(payload)
+            conn.execute(
+                """
+                INSERT INTO investigator_attribution_coverage_receipt (
+                    receipt_id, as_of_date, source_run_id, policy_version,
+                    policy_snapshot_id, metric_name, numerator, denominator,
+                    coverage_pct, target_pct, status, exclusion_reasons_json,
+                    unexplained_unknown_count, idempotency_key
+                ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT DO NOTHING
+                """,
+                [
+                    f"coverage-{digest}",
+                    as_of_date,
+                    source_run_id,
+                    INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+                    metric_name,
+                    numerator,
+                    denominator,
+                    coverage_pct,
+                    COVERAGE_TARGETS[metric_name],
+                    status,
+                    json.dumps(dict(sorted(reason_counts.items())), sort_keys=True),
+                    unknown_count,
+                    f"coverage-{digest}",
+                ],
+            )
 
 
 def _project_discovery_events_to_legacy_cohort(
@@ -439,7 +882,8 @@ def _build_outputs(
         conn.execute(
             """
             SELECT h.*, e.event_type, e.candidate_id, e.symbol_id, e.exchange,
-                   e.primary_eligible, e.attribution_mode
+                   e.setup_id, e.session_date, e.primary_eligible,
+                   e.attribution_mode, e.context_json
             FROM investigator_performance_horizon h
             JOIN investigator_performance_event e USING (event_id)
             ORDER BY e.event_type, h.horizon_sessions, e.session_date, e.event_id
@@ -456,12 +900,28 @@ def _build_outputs(
                    AVG(CASE WHEN h.close_to_close_return_pct > 0 THEN 100.0 ELSE 0.0 END) AS win_rate_pct,
                    AVG(h.maximum_favourable_excursion_pct) AS avg_mfe_pct,
                    AVG(h.maximum_adverse_excursion_pct) AS avg_mae_pct,
+                   AVG(h.next_open_entry_return_pct) AS avg_next_open_return_pct,
+                   AVG(h.days_to_2pct) AS avg_days_to_2pct,
+                   AVG(h.days_to_5pct) AS avg_days_to_5pct,
+                   AVG(h.days_to_stop) AS avg_days_to_stop,
                    AVG(h.benchmark_relative_return_pct) AS avg_benchmark_relative_return_pct,
                    AVG(h.sector_relative_return_pct) AS avg_sector_relative_return_pct,
+                   COUNT(DISTINCT e.symbol_id) AS unique_symbol_count,
+                   COUNT(DISTINCT e.candidate_id) AS unique_episode_count,
+                   COUNT(*) - COUNT(DISTINCT e.symbol_id) AS overlapping_episode_count,
+                   AVG(h.close_to_close_return_pct) AS expectancy_pct,
+                   (
+                       AVG(h.close_to_close_return_pct)
+                           FILTER (WHERE h.close_to_close_return_pct > 0)
+                   ) / NULLIF(ABS(
+                       AVG(h.close_to_close_return_pct)
+                           FILTER (WHERE h.close_to_close_return_pct <= 0)
+                   ), 0) AS payoff_ratio,
                    CASE
-                       WHEN COUNT(*) >= 50 THEN 'HIGH'
-                       WHEN COUNT(*) >= 20 THEN 'MEDIUM'
-                       ELSE 'LOW'
+                       WHEN COUNT(*) >= 120 THEN 'POLICY_ELIGIBLE'
+                       WHEN COUNT(*) >= 60 THEN 'MODERATE'
+                       WHEN COUNT(*) >= 30 THEN 'PROVISIONAL'
+                       ELSE 'EXPLORATORY'
                    END AS sample_confidence,
                    COUNT(*) >= 30 AS subgroup_min_sample_pass,
                    COUNT(*) >= 100 AS overall_tuning_sample_pass
@@ -492,18 +952,14 @@ def _build_outputs(
     coverage = _records(
         conn.execute(
             """
-            SELECT investigator_attribution_mode AS attribution_mode,
-                   COUNT(*) AS snapshot_count,
-                   SUM(CASE WHEN stage_label NOT IN ('UNKNOWN', '') THEN 1 ELSE 0 END) AS stage_label_present,
-                   SUM(CASE WHEN stage_confidence IS NOT NULL THEN 1 ELSE 0 END) AS stage_confidence_present,
-                   SUM(CASE WHEN pattern_family NOT IN ('UNKNOWN', '') THEN 1 ELSE 0 END) AS pattern_family_present,
-                   SUM(CASE WHEN setup_quality_bucket NOT IN ('UNKNOWN', '') THEN 1 ELSE 0 END) AS setup_quality_present,
-                   SUM(CASE WHEN confirmed_regime NOT IN ('UNKNOWN', '') THEN 1 ELSE 0 END) AS regime_present,
-                   SUM(CASE WHEN breadth_velocity_bucket NOT IN ('UNKNOWN', '') THEN 1 ELSE 0 END) AS breadth_velocity_present,
-                   SUM(CASE WHEN sector_relative_strength_bucket NOT IN ('UNKNOWN', '') THEN 1 ELSE 0 END) AS sector_rs_present
-            FROM candidate_snapshot
-            GROUP BY investigator_attribution_mode
-            ORDER BY investigator_attribution_mode
+            SELECT *
+            FROM investigator_attribution_coverage_receipt
+            QUALIFY as_of_date = MAX(as_of_date) OVER ()
+                AND ROW_NUMBER() OVER (
+                    PARTITION BY as_of_date, metric_name
+                    ORDER BY created_at DESC, receipt_id DESC
+                ) = 1
+            ORDER BY metric_name, receipt_id
             """
         )
     )
@@ -529,6 +985,31 @@ def _build_outputs(
         )
     )
     sensitivity = _symbol_sensitivity(events, horizons)
+    evaluation_transitions = _records(
+        conn.execute(
+            """
+            SELECT *
+            FROM investigator_evaluation_transition
+            ORDER BY session_date, candidate_id, transitioned_at,
+                     evaluation_transition_id
+            """
+        )
+    )
+    cohort_outputs = _cohort_outputs(horizons)
+    calendar_windows = _calendar_windows(horizons)
+    readiness_inputs = [
+        {
+            "check_id": f"INVESTIGATOR_{str(row['metric_name']).upper()}",
+            "category": "investigator_attribution",
+            "status": row["status"],
+            "observed": row["coverage_pct"],
+            "expected": f">={row['target_pct']}",
+            "production_blocking": True,
+            "policy_version": row["policy_version"],
+            "as_of_date": row["as_of_date"],
+        }
+        for row in coverage
+    ]
     return {
         "investigator_performance_events": events,
         "investigator_performance_horizons": horizons,
@@ -538,10 +1019,20 @@ def _build_outputs(
         "investigator_entry_scorecard": [
             row for row in scorecard if row["event_type"] == "ENTRY_CONFIRMED"
         ],
+        "investigator_executable_scorecard": [
+            row for row in scorecard if row["event_type"] == "EXECUTABLE_AVAILABLE"
+        ],
         "investigator_transition_matrix": transitions,
+        "investigator_evaluation_transitions": evaluation_transitions,
         "investigator_attribution_coverage": coverage,
+        "investigator_coverage_receipt": coverage,
+        "investigator_readiness_inputs": readiness_inputs,
         "investigator_missing_data_reasons": missing_reasons,
         "investigator_symbol_sensitivity": sensitivity,
+        "investigator_primary_cohorts": cohort_outputs["primary"],
+        "investigator_diagnostic_cohorts": cohort_outputs["diagnostic"],
+        "investigator_research_cohorts": cohort_outputs["research"],
+        "investigator_calendar_windows": calendar_windows,
     }
 
 
@@ -589,6 +1080,142 @@ def _symbol_sensitivity(
     return rows
 
 
+def _cohort_outputs(
+    horizons: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    matured = [
+        row for row in horizons if row.get("close_to_close_return_pct") is not None
+    ]
+    prepared = [
+        {**row, "context": _json_mapping(row.get("context_json"))}
+        for row in matured
+    ]
+    primary = _aggregate_cohorts(
+        [row for row in prepared if bool(row.get("primary_eligible"))],
+        dimensions=("event_type", "horizon_sessions"),
+        cohort_type="PRIMARY_MUTUALLY_EXCLUSIVE",
+    )
+    diagnostic = _aggregate_cohorts(
+        prepared,
+        dimensions=(
+            "event_type",
+            "horizon_sessions",
+            "stage_label",
+            "pattern_family",
+            "trigger_reason",
+            "breakout_type",
+        ),
+        cohort_type="OVERLAPPING_DIAGNOSTIC",
+    )
+    research = _aggregate_cohorts(
+        [row for row in prepared if not bool(row.get("primary_eligible"))],
+        dimensions=("event_type", "horizon_sessions", "review_lane", "trigger_reason"),
+        cohort_type="INSUFFICIENT_SAMPLE_RESEARCH",
+    )
+    return {"primary": primary, "diagnostic": diagnostic, "research": research}
+
+
+def _aggregate_cohorts(
+    rows: list[dict[str, Any]],
+    *,
+    dimensions: tuple[str, ...],
+    cohort_type: str,
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        key = tuple(
+            row.get(dimension)
+            if dimension in row
+            else row["context"].get(dimension, "UNKNOWN")
+            for dimension in dimensions
+        )
+        grouped[key].append(row)
+    output = []
+    for key, group in sorted(grouped.items(), key=lambda item: str(item[0])):
+        returns = [float(row["close_to_close_return_pct"]) for row in group]
+        winners = [value for value in returns if value > 0]
+        losers = [value for value in returns if value <= 0]
+        average_winner = sum(winners) / len(winners) if winners else None
+        average_loser = sum(losers) / len(losers) if losers else None
+        sample_count = len(group)
+        output.append(
+            {
+                "cohort_type": cohort_type,
+                **dict(zip(dimensions, key, strict=True)),
+                "sample_count": sample_count,
+                "unique_symbol_count": len(
+                    {str(row["symbol_id"]) for row in group}
+                ),
+                "unique_episode_count": len(
+                    {str(row["candidate_id"]) for row in group}
+                ),
+                "overlapping_episode_count": sample_count
+                - len({str(row["symbol_id"]) for row in group}),
+                "avg_return_pct": round(sum(returns) / sample_count, 6),
+                "win_rate_pct": round(100.0 * len(winners) / sample_count, 6),
+                "payoff_ratio": (
+                    round(average_winner / abs(average_loser), 6)
+                    if average_winner is not None
+                    and average_loser not in (None, 0.0)
+                    else None
+                ),
+                "expectancy_pct": round(sum(returns) / sample_count, 6),
+                "sample_confidence": _confidence_label(sample_count),
+            }
+        )
+    return output
+
+
+def _calendar_windows(horizons: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    eligible = [
+        row
+        for row in horizons
+        if bool(row.get("primary_eligible"))
+        and row.get("close_to_close_return_pct") is not None
+    ]
+    sessions = sorted({_date(row["session_date"]) for row in eligible})
+    window_by_session = {
+        session: index // 10 for index, session in enumerate(sessions)
+    }
+    grouped: dict[tuple[str, int, int], list[dict[str, Any]]] = defaultdict(list)
+    for row in eligible:
+        grouped[
+            (
+                str(row["event_type"]),
+                int(row["horizon_sessions"]),
+                window_by_session[_date(row["session_date"])],
+            )
+        ].append(row)
+    output = []
+    for (event_type, horizon, window_index), group in sorted(grouped.items()):
+        window_sessions = sorted(_date(row["session_date"]) for row in group)
+        returns = [float(row["close_to_close_return_pct"]) for row in group]
+        output.append(
+            {
+                "event_type": event_type,
+                "horizon_sessions": horizon,
+                "window_index": window_index,
+                "window_start": window_sessions[0],
+                "window_end": window_sessions[-1],
+                "sample_count": len(group),
+                "avg_return_pct": round(sum(returns) / len(returns), 6),
+                "positive_expectancy": sum(returns) / len(returns) > 0,
+                "sample_confidence": _confidence_label(len(group)),
+            }
+        )
+    return output
+
+
+def _confidence_label(sample_count: int) -> str:
+    if sample_count >= 120:
+        return "POLICY_ELIGIBLE"
+    if sample_count >= 60:
+        return "MODERATE"
+    if sample_count >= 30:
+        return "PROVISIONAL"
+    return "EXPLORATORY"
+
+
 def _index_return(rows: list[dict[str, Any]], start: date, end: date) -> float | None:
     by_date = {_date(row["session_date"]): _float(row.get("close")) for row in rows}
     return _return_pct(by_date.get(end), by_date.get(start))
@@ -603,6 +1230,21 @@ def _first_touch(
             index
             for index, value in enumerate(highs, start=1)
             if value is not None and value >= target
+        ),
+        None,
+    )
+
+
+def _first_stop_touch(
+    lows: list[float | None], stop_price: float | None
+) -> int | None:
+    if stop_price is None:
+        return None
+    return next(
+        (
+            index
+            for index, value in enumerate(lows, start=1)
+            if value is not None and value <= stop_price
         ),
         None,
     )
@@ -648,14 +1290,54 @@ def _records(cursor: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
 
+def _digest(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, default=str, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+def _json_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return list(value)
+    if not value:
+        return []
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return list(parsed) if isinstance(parsed, list) else []
+
+
 def _empty_outputs() -> dict[str, list[dict[str, Any]]]:
     return {
         "investigator_performance_events": [],
         "investigator_performance_horizons": [],
         "investigator_discovery_scorecard": [],
         "investigator_entry_scorecard": [],
+        "investigator_executable_scorecard": [],
         "investigator_transition_matrix": [],
+        "investigator_evaluation_transitions": [],
         "investigator_attribution_coverage": [],
+        "investigator_coverage_receipt": [],
+        "investigator_readiness_inputs": [],
         "investigator_missing_data_reasons": [],
         "investigator_symbol_sensitivity": [],
+        "investigator_primary_cohorts": [],
+        "investigator_diagnostic_cohorts": [],
+        "investigator_research_cohorts": [],
+        "investigator_calendar_windows": [],
     }

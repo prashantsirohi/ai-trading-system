@@ -22,6 +22,12 @@ from ai_trading_system.domains.opportunities.coverage import SECTOR_AGGREGATION_
 from ai_trading_system.domains.opportunities.orchestration import contracts as admission_policy
 from ai_trading_system.domains.opportunities.orchestration.contracts import (
     ADMISSION_RULE_VERSION,
+    INVESTIGATOR_ACTIVE_REVIEW_SCORE,
+    INVESTIGATOR_ATTRIBUTION_ONLY_DIMENSIONS,
+    INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+    INVESTIGATOR_CONDITIONAL_LANES,
+    INVESTIGATOR_PRIMARY_LANE,
+    INVESTIGATOR_RESEARCH_ONLY_LANES,
     LIFECYCLE_RULE_VERSION,
     RETENTION_RULE_VERSION,
     SECTOR_GATE_RULES,
@@ -158,6 +164,17 @@ def policy_content(
         STAGE_CONFIDENCE_FORMULA_VERSION: {
             "weights": dict(STAGE_CONFIDENCE_WEIGHTS),
             "band_bounds": dict(STAGE_CONFIDENCE_BAND_BOUNDS),
+        },
+        INVESTIGATOR_ATTRIBUTION_POLICY_VERSION: {
+            "primary_lane": INVESTIGATOR_PRIMARY_LANE,
+            "active_review_score_min": INVESTIGATOR_ACTIVE_REVIEW_SCORE,
+            "conditional_lanes": list(INVESTIGATOR_CONDITIONAL_LANES),
+            "research_only_lanes": list(INVESTIGATOR_RESEARCH_ONLY_LANES),
+            "attribution_only_dimensions": list(
+                INVESTIGATOR_ATTRIBUTION_ONLY_DIMENSIONS
+            ),
+            "stage2_bonus_contribution": 0.0,
+            "execution_eligibility": False,
         },
     }
 

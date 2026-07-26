@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-07-17
+- **Last verified:** 2026-07-26
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -92,6 +92,16 @@ snapshot IDs, completed-week sector-gate cohorts, and structured evaluate-all
 admission records into calibration rows. The immutable manifest records policy
 snapshot coverage, and the Phase 4 API exposes snapshot and primary-admission
 coverage alongside readiness, health, and response limitations.
+
+Phase 3.5B freezes Investigator attribution under
+`investigator-attribution-policy-v1`: `WEEKLY_MOMENTUM` with score 65 or above
+is the only primary review cohort, daily gainers are conditional evidence, and
+stealth accumulation remains research-only. Stage, pattern, setup, and breakout
+evidence is retained point-in-time but cannot create primary eligibility.
+Migration 043 adds complete evidence lineage/states, deterministic next-session
+shadow-fill events, append-only evaluation transitions, and daily coverage
+receipts. The readiness builder consumes those receipts from copied stores.
+This path remains shadow-only and never dispatches a broker order.
 
 ADR-0007 R0 is a separate research-only calibration harness for the proposed
 four-lane pattern evidence classifier. `ai-trading-pattern-r0-calibrate` reads
@@ -294,7 +304,7 @@ backup byte-for-byte:
 ```bash
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.migrate_control_plane \
   --backup-dir "$DATA_ROOT/backups/<timestamp>" \
-  --from-migration 033 --to-migration 042 --apply
+  --from-migration 033 --to-migration 043 --apply
 ```
 
 `--apply-control-plane-migrations` is an explicit startup override for

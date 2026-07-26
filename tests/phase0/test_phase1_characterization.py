@@ -292,13 +292,13 @@ def test_aud_004_batch_orders_cannot_exceed_portfolio_heat(tmp_path: Path) -> No
         item
         for item in result["executions"]
         if item["action"]["action"] == "BUY"
-        and item["result"].get("status") not in {"REJECTED", "ERROR"}
+        and item["result"].get("status") not in {"REJECTED", "SUPPRESSED", "ERROR"}
     ]
     rejected_buy = next(
         item
         for item in result["executions"]
         if item["action"]["action"] == "BUY"
-        and item["result"].get("status") == "REJECTED"
+        and item["result"].get("status") == "SUPPRESSED"
     )
     heat_ok, _ = portfolio.check_heat_gate(
         portfolio.open_positions(),
@@ -308,6 +308,7 @@ def test_aud_004_batch_orders_cannot_exceed_portfolio_heat(tmp_path: Path) -> No
 
     assert len(accepted_buys) == 1
     assert rejected_buy["result"]["reason"] == "heat_gate_exceeded"
+    assert rejected_buy["result"]["reason_code"] == "PORTFOLIO_HEAT_LIMIT"
     assert rejected_buy["result"]["open_risk"] == 0.1
     assert rejected_buy["result"]["candidate_risk"] == 0.1
     assert rejected_buy["result"]["projected_risk"] == 0.2

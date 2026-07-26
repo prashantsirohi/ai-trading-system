@@ -163,6 +163,13 @@ def test_matures_discovery_and_confirmed_entry_metrics(tmp_path: Path) -> None:
             """,
             [datetime.combine(sessions[2], datetime.min.time())],
         )
+        conn.execute(
+            """
+            UPDATE investigator_performance_event
+            SET invalidation_price = 103.0
+            WHERE event_id = 'event-entry'
+            """
+        )
 
     outputs = mature_performance_events(registry, ohlcv_db_path=ohlcv)
 
@@ -184,6 +191,32 @@ def test_matures_discovery_and_confirmed_entry_metrics(tmp_path: Path) -> None:
             WHERE event_id = 'event-entry' AND horizon_sessions = 10
             """
         ).fetchone()
+        executable = conn.execute(
+            """
+            SELECT session_date, next_session_open, simulated_fill_price,
+                   fill_policy_version
+            FROM investigator_performance_event
+            WHERE candidate_id = 'candidate-1'
+              AND event_type = 'EXECUTABLE_AVAILABLE'
+            """
+        ).fetchone()
+        stop_day = conn.execute(
+            """
+            SELECT days_to_stop
+            FROM investigator_performance_horizon
+            WHERE event_id = 'event-entry' AND horizon_sessions = 3
+            """
+        ).fetchone()[0]
+        evaluation_states = {
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT to_state
+                FROM investigator_evaluation_transition
+                WHERE candidate_id = 'candidate-1'
+                """
+            ).fetchall()
+        }
 
     assert discovery_3d[0] == pytest.approx(3.0)
     assert discovery_3d[1] == pytest.approx(4.0)
@@ -194,8 +227,98 @@ def test_matures_discovery_and_confirmed_entry_metrics(tmp_path: Path) -> None:
     assert discovery_3d[6] == "MATURED"
     assert entry_10d[0] == pytest.approx((112.0 / 102.0 - 1.0) * 100.0)
     assert entry_10d[1] == "SUSTAINED_10D"
+    assert executable[0] == sessions[3]
+    assert executable[1] == 103.0
+    assert executable[2] == pytest.approx(103.0515)
+    assert executable[3] == "investigator-shadow-fill-v1"
+    assert stop_day == 1
+    assert {"PENDING_3D", "CONFIRMED", "EXECUTABLE", "SUSTAINED_10D"}.issubset(
+        evaluation_states
+    )
     assert outputs["investigator_discovery_scorecard"]
     assert outputs["investigator_entry_scorecard"]
+    assert outputs["investigator_executable_scorecard"]
+
+
+def test_daily_coverage_receipt_preserves_unknown_failure_modes(
+    tmp_path: Path,
+) -> None:
+    ohlcv = tmp_path / "ohlcv.duckdb"
+    _seed_market(ohlcv)
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    required = {
+        "candidate_id": "candidate",
+        "setup_id": "setup",
+        "as_of": datetime(2026, 1, 2),
+        "observed_at": datetime(2026, 1, 2),
+        "run_id": "shadow-run",
+        "stage_name": "opportunities",
+        "stage_attempt": 1,
+        "source_artifact_type": "investigator_scores",
+        "source_artifact_path": "/tmp/scores.csv",
+        "source_artifact_hash": "hash",
+        "lifecycle_state": "pending_followthrough",
+        "followthrough_status": "pending_3d",
+        "days_in_state": 0,
+        "days_without_progress": 0,
+        "active_position": False,
+        "latest_action": "watch",
+        "eligibility": "unknown",
+        "contract_version": "opportunity-contract-v1",
+        "serialization_version": "opportunity-serialization-v1",
+        "snapshot_json": "{}",
+        "semantic_payload_hash": "semantic",
+        "idempotency_key": "idempotency",
+    }
+    known_states = {
+        "stage": "KNOWN",
+        "pattern_attempted": "KNOWN",
+        "pattern": "NONE",
+        "setup_quality": "KNOWN",
+        "breakout": "NONE",
+        "regime": "KNOWN",
+        "breadth": "KNOWN",
+        "sector": "KNOWN",
+        "lineage": "KNOWN",
+    }
+    unknown_states = {key: "UNKNOWN" for key in known_states}
+    with registry._writer() as conn:  # noqa: SLF001
+        for index, states in enumerate((known_states, unknown_states)):
+            row = {
+                **required,
+                "snapshot_id": f"snapshot-{index}",
+                "candidate_id": f"candidate-{index}",
+                "setup_id": f"setup-{index}",
+                "semantic_payload_hash": f"semantic-{index}",
+                "idempotency_key": f"idempotency-{index}",
+                "review_eligible": index == 0,
+                "investigator_context_json": "{}",
+                "investigator_evaluation_states_json": json.dumps(states),
+                "investigator_missing_fields_json": "[]",
+            }
+            columns = ", ".join(row)
+            placeholders = ", ".join("?" for _ in row)
+            conn.execute(
+                f"INSERT INTO candidate_snapshot ({columns}) VALUES ({placeholders})",
+                list(row.values()),
+            )
+
+    outputs = mature_performance_events(registry, ohlcv_db_path=ohlcv)
+    stage = next(
+        row
+        for row in outputs["investigator_coverage_receipt"]
+        if row["metric_name"] == "stage_attribution"
+    )
+    setup = next(
+        row
+        for row in outputs["investigator_coverage_receipt"]
+        if row["metric_name"] == "setup_quality"
+    )
+    assert stage["coverage_pct"] == 50
+    assert stage["status"] == "FAIL"
+    assert stage["unexplained_unknown_count"] == 1
+    assert setup["coverage_pct"] == 100
+    assert setup["status"] == "PASS"
 
 
 def test_missing_sector_mapping_is_partial_not_fallback(tmp_path: Path) -> None:

@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-07-17
+- **Last verified:** 2026-07-26
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -135,10 +135,15 @@ See [`docs/stages/events.md`](../stages/events.md).
 
 Writes:
 - `trade_actions.csv`
+- `execution_decisions.csv`
 - `executed_orders.csv`
 - `executed_fills.csv`
 - `positions.csv`
 - `execute_summary.json`
+
+`execution_decisions.csv` has exactly one row per planned action. Policy gates
+use `SUPPRESSED` with a stable reason code; `executed_orders.csv` contains only
+real order records and never a placeholder or blank row.
 
 Authority split:
 - CSV artifacts are authoritative for that run attempt
@@ -260,6 +265,15 @@ The coverage summary separates routed, complete-data, complete-evidence, fully
 monitored, and missing-coverage counts plus alert emit/dedupe/resolve counts.
 
 When routing is enabled, Investigator additionally writes `routed_investigator_scores.csv`, `routed_pattern_scan.csv`, `position_risk_monitor.csv`, and `routed_routing_conflicts.csv`. Existing Investigator artifacts and publish consumers are unchanged.
+
+The Phase 3 opportunity stage also publishes Phase 3.5B evidence:
+`investigator_executable_scorecard.csv`,
+`investigator_evaluation_transitions.csv`,
+`investigator_coverage_receipt.csv`,
+`investigator_readiness_inputs.csv`, mutually exclusive primary,
+overlapping diagnostic, research-only cohort CSVs, and
+`investigator_calendar_windows.csv`. These are registered attempt artifacts;
+the corresponding control-plane rows remain the durable source.
 
 ## Phase 3C-4 performance artifacts
 

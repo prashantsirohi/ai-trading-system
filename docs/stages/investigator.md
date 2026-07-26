@@ -2,7 +2,7 @@
 
 - **Purpose:** Convert post-rank gainer, accumulation, trap, repeat, and pattern evidence into an operator-facing investigation queue.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-06-19
+- **Last verified:** 2026-07-26
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/investigator.py`
   - `src/ai_trading_system/domains/investigator/service.py`
@@ -138,6 +138,8 @@ The stage persists selected artifact rows to the control-plane registry database
 | clean final-gate cohorts | `investigator_cohort_performance` |
 | canonical discovery/entry events | `investigator_performance_event` |
 | per-event horizon outcomes | `investigator_performance_horizon` |
+| evaluation lifecycle | `investigator_evaluation_transition` |
+| daily attribution coverage | `investigator_attribution_coverage_receipt` |
 
 Rows are scoped by `run_id` and `attempt_number`. On rerun of the same attempt, existing rows for that scope are deleted and reinserted.
 `investigator_cohort_performance` is keyed by `trade_date`, `symbol_id`, and
@@ -162,6 +164,13 @@ selection is deterministic: valid/qualified observations precede score,
 quality/tier, and stable source identity. Sector relative strength is `HIGH` at
 or above percentile 75, `MID` from 25 through below 75, `LOW` below 25, and
 `UNKNOWN` when unavailable.
+
+Phase 3.5B uses frozen policy `investigator-attribution-policy-v1`.
+`WEEKLY_MOMENTUM` with `final_score >= 65` is the only primary review cohort.
+`DAILY_GAINER` is conditional evidence and `STEALTH_ACCUMULATION` is
+research-only. Stage, pattern, setup-quality, breakout, and their raw scores
+remain immutable attribution dimensions; their contribution to the frozen
+review score is zero and they cannot independently create primary eligibility.
 
 ## Process flow
 
@@ -399,6 +408,9 @@ The canonical evaluator separates two immutable event grains:
 - `CANDIDATE_DISCOVERED`, once per setup episode at discovery-session close.
 - `ENTRY_CONFIRMED`, once at the first canonical transition to `CONFIRMED`, at
   that session's close. An imported status string alone cannot create it.
+- `EXECUTABLE_AVAILABLE`, once a next-session open exists after confirmation.
+  Its deterministic shadow fill uses `investigator-shadow-fill-v1` and never
+  submits an order.
 
 At session 3, discovery episodes become `CONFIRMED`, `STILL_DEVELOPING`, or
 `FAILED` only when a valid canonical `PENDING_3D` sequence and enough history
@@ -410,6 +422,18 @@ first +2%/+5% touch, pre-touch drawdown, and NIFTY 50/sector-index relative
 returns. Missing trusted benchmark or mapped sector history stays null with a DQ
 reason. Primary aggregation is episode-based; a sensitivity view keeps only the
 earliest event per symbol within overlapping 20-session windows.
+
+Migration 043 also records append-only evaluation transitions, stop-touch
+timing, mutually exclusive primary cohorts, overlapping diagnostic cohorts,
+research-only cohorts, and non-overlapping ten-session calendar windows.
+Confidence is `EXPLORATORY` below 30 samples, `PROVISIONAL` for 30–59,
+`MODERATE` for 60–119, and `POLICY_ELIGIBLE` at 120 or more.
+
+The daily coverage receipt enforces the frozen targets for stage, pattern
+attempt/classification, setup quality, breakout, regime/breadth, sector, and
+artifact lineage. `KNOWN`, `NONE`, `NOT_ELIGIBLE`, `NOT_EVALUATED`, `ERROR`,
+and `UNKNOWN` remain distinct; unexplained `UNKNOWN` counts are published and
+fed into copied-store Phase 3C-5 readiness checks.
 
 Do not recommend score changes until at least 100 matured observations overall
 and 30 in each compared subgroup are available.

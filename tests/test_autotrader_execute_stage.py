@@ -90,11 +90,17 @@ def test_autotrader_blocks_buy_when_sector_exposure_would_be_breached(tmp_path: 
 
     executions = result["executions"]
     blocked = next(item for item in executions if item["action"]["symbol_id"] == "BBB")
-    assert blocked["result"]["status"] == "REJECTED"
+    assert blocked["result"]["status"] == "SUPPRESSED"
+    assert blocked["result"]["reason_code"] == "PORTFOLIO_CONSTRAINT_LIMIT"
     assert blocked["result"]["reason"] == "portfolio_constraints_failed"
     assert "max_sector_exposure_exceeded" in blocked["result"]["constraints"]["reasons"]
     positions_after = {row["symbol_id"]: row["quantity"] for row in result["positions_after"]}
     assert positions_after == {"AAA": 10}
+    decisions = store.list_execution_decisions()
+    suppressed = next(row for row in decisions if row["symbol_id"] == "BBB")
+    assert suppressed["execution_status"] == "SUPPRESSED"
+    assert suppressed["reason_code"] == "PORTFOLIO_CONSTRAINT_LIMIT"
+    assert suppressed["order_id"] is None
 
 
 def test_portfolio_heat_gate_uses_risk_at_stop_instead_of_capital_exposure(tmp_path: Path) -> None:
@@ -252,7 +258,10 @@ def test_execute_stage_preview_mode_does_not_create_fills(tmp_path: Path) -> Non
     assert result.metadata["preview_only"] is True
     assert result.metadata["fill_count"] == 0
     orders = pd.read_csv(context.output_dir() / "executed_orders.csv")
-    assert orders.iloc[0]["symbol_id"] == "AAA"
+    assert orders.empty
+    decisions = pd.read_csv(context.output_dir() / "execution_decisions.csv")
+    assert decisions.iloc[0]["symbol_id"] == "AAA"
+    assert decisions.iloc[0]["execution_status"] == "PREVIEW"
     fills = pd.read_csv(context.output_dir() / "executed_fills.csv")
     assert fills.empty
     summary = json.loads((context.output_dir() / "execute_summary.json").read_text(encoding="utf-8"))

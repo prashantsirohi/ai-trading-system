@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical reference for every DuckDB table the system reads or writes — file location, owning stage, columns, indexes.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-07-16
+- **Last verified:** 2026-07-26
 - **Source of truth:** `src/ai_trading_system/pipeline/migrations/*.sql`, `src/ai_trading_system/research/perf_tracker/schema.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/ingest/repository.py`.
 
 ---
@@ -662,6 +662,19 @@ Schema source: `src/ai_trading_system/domains/execution/store.py::ExecutionStore
 | portfolio_heat | DOUBLE | |
 | metadata_json | TEXT | |
 
+### Table: `execution_decision`
+
+| Column | Type | Notes |
+|---|---|---|
+| decision_id | TEXT | PK; deterministic within the submission scope. |
+| submission_scope | TEXT | Pipeline run ID when available. |
+| symbol_id, exchange, planned_action | TEXT | Planned action identity. |
+| execution_status | TEXT | `EXECUTED`, `REJECTED`, `SUPPRESSED`, `PREVIEW`, or `ERROR`. |
+| reason_code | TEXT | Stable machine-readable outcome reason. |
+| correlation_id, order_id | TEXT | Nullable; suppressions and previews have no order ID. |
+| decided_at | TIMESTAMP | Decision time. |
+| payload_hash, payload_json | TEXT | Action/result audit payload. |
+
 ---
 
 ## `data/research.duckdb` — perf tracker
@@ -794,12 +807,20 @@ A4 by adding nullable `candidate_episode.satisfied_admission_rules_json` and
 and family. Recovery and legacy episodes may leave both structured columns
 null; the columns are outside episode identity.
 
+Migration `042_investigator_performance_evaluation.sql` adds immutable
+Investigator discovery/confirmation events and derived horizon outcomes.
+Migration `043_investigator_attribution_policy_validation.sql` extends
+candidate snapshots with complete evidence/lineage/evaluation-state columns,
+adds executable shadow-fill anchors and `days_to_stop`, and creates
+`investigator_evaluation_transition` plus
+`investigator_attribution_coverage_receipt`.
+
 ## Phase 3C-5 schema boundary
 
 Phase 3C-5 introduces no DuckDB migration or canonical table. It reads an
 explicit copied control-plane store only in read-only mode and emits immutable
 CSV, JSON, and Markdown evidence under a temporary output root. Migrations
-034–036 remain operator-controlled and are not applied by the builder or
+034–043 remain operator-controlled and are not applied by the builder or
 readiness checker.
 
 - Control-plane DDL is applied by `RegistryStore`; it reads packaged SQL files from `pipeline/migrations/` in lexicographic order.

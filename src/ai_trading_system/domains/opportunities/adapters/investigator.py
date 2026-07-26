@@ -17,6 +17,8 @@ from ai_trading_system.domains.opportunities.orchestration.contracts import (
     AdaptedRecord,
     AdapterResult,
     AdapterWarning,
+    INVESTIGATOR_ACTIVE_REVIEW_SCORE,
+    INVESTIGATOR_PRIMARY_LANE,
     RejectedSourceRow,
     SourceDescriptor,
 )
@@ -128,6 +130,30 @@ def adapt_investigator_rows(
                     "combined volume/delivery score retained as volume quality; delivery quality remains unavailable",
                 )
             )
+        pattern_family = _text(first(row, "pattern_family"))
+        pattern_state = _text(first(row, "pattern_state"))
+        pattern_score = as_float(
+            first(row, "pattern_score", "base_pattern_freshness_score")
+        )
+        setup_quality_score = as_float(first(row, "setup_quality"))
+        breakout_type = _text(first(row, "breakout_type", "setup_family"))
+        breakout_tier = _tier(
+            first(row, "breakout_tier", "candidate_tier", "pattern_operational_tier")
+        )
+        move_tag = _text(first(row, "move_tag"))
+        trigger_reason = _text(first(row, "trigger_reason"))
+        if move_tag == "UNKNOWN" and trigger_reason == "WEEKLY_GAINER":
+            move_tag = "WEEKLY_MOMENTUM"
+        review_eligible = (
+            move_tag == INVESTIGATOR_PRIMARY_LANE
+            and score >= INVESTIGATOR_ACTIVE_REVIEW_SCORE
+        )
+        price = as_float(first(row, "close", "price", "latest_close"))
+        sma50 = as_float(first(row, "sma50", "sma_50", "ma50", "dma_50"))
+        high_52w = as_float(first(row, "high_52w", "52w_high", "week_52_high"))
+        breakout_level = as_float(
+            first(row, "breakout_level", "trigger_price", "pivot_price")
+        )
         context = InvestigatorContext(
             stage_label=_text(first(row, "stage_label")),
             stage_confidence=_confidence(
@@ -138,14 +164,67 @@ def adapt_investigator_rows(
                     "stage1_score_confidence",
                 )
             ),
-            pattern_family=_text(first(row, "pattern_family")),
-            pattern_state=_text(first(row, "pattern_state")),
+            pattern_family=pattern_family,
+            pattern_state=pattern_state,
+            pattern_score=pattern_score,
+            setup_quality_score=setup_quality_score,
             setup_quality_bucket=_setup_bucket(
                 first(row, "setup_quality_bucket", "setup_quality")
             ),
-            breakout_type=_text(first(row, "breakout_type", "setup_family")),
-            candidate_tier=_tier(first(row, "candidate_tier")),
+            breakout_type=breakout_type,
+            candidate_tier=breakout_tier,
+            breakout_tier=breakout_tier,
             qualified_breakout=_optional_bool(first(row, "qualified_breakout")),
+            move_tag=move_tag,
+            trigger_reason=trigger_reason,
+            final_score=score,
+            attribution_score=score,
+            review_lane=(
+                "PRIMARY"
+                if review_eligible
+                else "CONDITIONAL"
+                if trigger_reason == "DAILY_GAINER"
+                else "RESEARCH_ONLY"
+            ),
+            review_eligible=review_eligible,
+            confirmed_regime=_text(
+                first(row, "confirmed_regime", "market_regime", "regime")
+            ),
+            raw_regime=_text(first(row, "raw_regime")),
+            regime_confidence=_ratio_confidence(first(row, "regime_confidence")),
+            breadth_velocity_bucket=_text(first(row, "breadth_velocity_bucket")),
+            breadth_velocity_quantile=_text(
+                first(row, "breadth_velocity_quantile")
+            ),
+            regime_score_chg_5d=as_float(first(row, "regime_score_chg_5d")),
+            sector_relative_strength_bucket=_text(
+                first(
+                    row,
+                    "sector_relative_strength_bucket",
+                    "sector_rs_bucket",
+                )
+            ),
+            sector_leadership=_text(
+                first(row, "sector_leadership", "sector_quadrant")
+            ),
+            price=price,
+            volume=as_float(first(row, "volume", "latest_volume")),
+            sma20=as_float(first(row, "sma20", "sma_20", "ma20", "dma_20")),
+            sma50=sma50,
+            sma200=as_float(first(row, "sma200", "sma_200", "ma200", "dma_200")),
+            high_52w=high_52w,
+            breakout_level=breakout_level,
+            invalidation_price=as_float(
+                first(
+                    row,
+                    "invalidation_price",
+                    "pattern_invalidation_price",
+                    "invalidation_level",
+                )
+            ),
+            distance_from_breakout_pct=_distance_pct(price, breakout_level),
+            distance_from_sma50_pct=_distance_pct(price, sma50),
+            distance_from_52w_high_pct=_distance_pct(price, high_52w),
             context_as_of=as_of,
             source_run_id=source.run_id,
             source_artifact_hashes=(source.artifact_hash,),
@@ -169,6 +248,48 @@ def adapt_investigator_rows(
                 if value
             ),
             attribution_mode="OBSERVED_AT_DECISION",
+            source_lineage=(
+                {
+                    "artifact_type": source.artifact_type,
+                    "run_id": source.run_id,
+                    "stage_attempt": source.stage_attempt,
+                    "observed_at": as_of,
+                    "artifact_hash": source.artifact_hash,
+                },
+            ),
+            evaluation_states={
+                "stage": _evaluation_state(
+                    first(row, "stage_evaluation_state"), _text(first(row, "stage_label"))
+                ),
+                "pattern_attempted": _evaluation_state(
+                    first(row, "pattern_evaluation_state"),
+                    pattern_family,
+                    known_default="KNOWN" if pattern_score is not None else "UNKNOWN",
+                ),
+                "pattern": _evaluation_state(
+                    first(row, "pattern_classification_state"), pattern_family
+                ),
+                "setup_quality": _evaluation_state(
+                    first(row, "setup_quality_state"),
+                    setup_quality_score,
+                ),
+                "breakout": _evaluation_state(
+                    first(row, "breakout_evaluation_state"), breakout_type
+                ),
+                "regime": _evaluation_state(
+                    first(row, "regime_evaluation_state"),
+                    _text(first(row, "confirmed_regime", "market_regime", "regime")),
+                ),
+                "breadth": _evaluation_state(
+                    first(row, "breadth_evaluation_state"),
+                    _text(first(row, "breadth_velocity_bucket")),
+                ),
+                "sector": _evaluation_state(
+                    first(row, "sector_evaluation_state"),
+                    _text(first(row, "sector_relative_strength_bucket", "sector_rs_bucket")),
+                ),
+                "lineage": "KNOWN" if source.artifact_hash and source.run_id else "UNKNOWN",
+            },
         )
         records.append(
             AdaptedRecord(
@@ -184,7 +305,7 @@ def adapt_investigator_rows(
 
 def _text(value: Any) -> str:
     text = str(value or "").strip().upper().replace(" ", "_").replace("-", "_")
-    return text if text and text not in {"NAN", "NONE", "<NA>"} else "UNKNOWN"
+    return text if text and text not in {"NAN", "<NA>"} else "UNKNOWN"
 
 
 def _confidence(value: Any) -> float | None:
@@ -192,6 +313,13 @@ def _confidence(value: Any) -> float | None:
     if parsed is None:
         return None
     return max(0.0, min(100.0, parsed * 100.0 if parsed <= 1.0 else parsed))
+
+
+def _ratio_confidence(value: Any) -> float | None:
+    parsed = as_float(value)
+    if parsed is None:
+        return None
+    return max(0.0, min(1.0, parsed / 100.0 if parsed > 1.0 else parsed))
 
 
 def _setup_bucket(value: Any) -> str:
@@ -216,3 +344,34 @@ def _optional_bool(value: Any) -> bool | None:
     if text in {"false", "0", "no", "n"}:
         return False
     return None
+
+
+def _distance_pct(value: float | None, reference: float | None) -> float | None:
+    if value is None or reference in (None, 0.0):
+        return None
+    return round(((float(value) / float(reference)) - 1.0) * 100.0, 6)
+
+
+def _evaluation_state(
+    explicit: Any,
+    value: Any,
+    *,
+    known_default: str = "KNOWN",
+) -> str:
+    allowed = {
+        "KNOWN",
+        "NONE",
+        "NOT_ELIGIBLE",
+        "NOT_EVALUATED",
+        "ERROR",
+        "UNKNOWN",
+    }
+    normalized = _text(explicit)
+    if explicit not in (None, "") and normalized in allowed:
+        return normalized
+    normalized_value = _text(value)
+    if normalized_value == "NONE":
+        return "NONE"
+    if normalized_value == "UNKNOWN":
+        return "UNKNOWN"
+    return known_default

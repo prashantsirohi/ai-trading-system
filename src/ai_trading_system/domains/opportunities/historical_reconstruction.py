@@ -14,6 +14,10 @@ from ai_trading_system.domains.opportunities.contracts import InvestigatorContex
 from ai_trading_system.domains.opportunities.orchestration.assembler import (
     _sector_rs_bucket,
 )
+from ai_trading_system.domains.opportunities.orchestration.contracts import (
+    INVESTIGATOR_ACTIVE_REVIEW_SCORE,
+    INVESTIGATOR_PRIMARY_LANE,
+)
 from ai_trading_system.domains.opportunities.registry import (
     DuckDBOpportunityRegistryStore,
     PerformanceEventObservation,
@@ -290,6 +294,37 @@ def _reconstructed_context(
     stock_snapshot = stock_snapshot if isinstance(stock_snapshot, dict) else {}
     primary_pattern = _best_pattern(pattern_rows)
     primary_breakout = _best_breakout(breakout_rows)
+    final_score = _float(
+        (investigator or {}).get("final_score")
+        or (investigator or {}).get("investigator_score")
+    )
+    trigger_reason = _text((investigator or {}).get("trigger_reason"))
+    move_tag = _text((investigator or {}).get("move_tag"))
+    if move_tag == "UNKNOWN" and trigger_reason == "WEEKLY_GAINER":
+        move_tag = "WEEKLY_MOMENTUM"
+    review_eligible = bool(
+        move_tag == INVESTIGATOR_PRIMARY_LANE
+        and final_score is not None
+        and final_score >= INVESTIGATOR_ACTIVE_REVIEW_SCORE
+    )
+    price = _float(
+        (investigator or {}).get("close")
+        or (ranked or {}).get("close")
+        or (investigator or {}).get("latest_close")
+    )
+    sma50 = _float(
+        (investigator or {}).get("sma50")
+        or (ranked or {}).get("sma_50")
+        or (ranked or {}).get("sma50")
+    )
+    high_52w = _float(
+        (investigator or {}).get("high_52w")
+        or (ranked or {}).get("high_52w")
+    )
+    breakout_level = _float(
+        (primary_breakout or {}).get("trigger_price")
+        or (primary_breakout or {}).get("pivot_price")
+    )
     stage_label = _text(
         (investigator or {}).get("stage_label")
         or (stock or {}).get("stage_label")
@@ -313,6 +348,15 @@ def _reconstructed_context(
             (primary_pattern or {}).get("pattern_state")
             or (investigator or {}).get("pattern_state")
         ),
+        "pattern_score": _float(
+            (primary_pattern or {}).get("pattern_score")
+            or (primary_pattern or {}).get("score")
+            or (investigator or {}).get("pattern_score")
+        ),
+        "setup_quality_score": _float(
+            (primary_pattern or {}).get("setup_quality")
+            or (investigator or {}).get("setup_quality")
+        ),
         "setup_quality_bucket": _setup_bucket(
             (primary_pattern or {}).get("setup_quality_bucket")
             or (primary_pattern or {}).get("setup_quality")
@@ -327,6 +371,10 @@ def _reconstructed_context(
             (primary_breakout or {}).get("candidate_tier")
             or (investigator or {}).get("candidate_tier")
         ),
+        "breakout_tier": _tier(
+            (primary_breakout or {}).get("candidate_tier")
+            or (investigator or {}).get("candidate_tier")
+        ),
         "qualified_breakout": _bool(
             (primary_breakout or {}).get("qualified")
             or (primary_breakout or {}).get("qualified_breakout")
@@ -336,7 +384,13 @@ def _reconstructed_context(
             market.get("regime") or market.get("confirmed_regime")
         ),
         "raw_regime": _text(market.get("raw_regime") or market.get("regime")),
-        "regime_confidence": _float(
+        "move_tag": move_tag,
+        "trigger_reason": trigger_reason,
+        "final_score": final_score,
+        "attribution_score": final_score,
+        "review_lane": "PRIMARY" if review_eligible else "RESEARCH_ONLY",
+        "review_eligible": review_eligible,
+        "regime_confidence": _ratio(
             market.get("regime_confidence_capped", market.get("regime_confidence"))
         ),
         "breadth_velocity_bucket": _text(market.get("breadth_velocity_bucket")),
@@ -347,6 +401,30 @@ def _reconstructed_context(
             or (sector or {}).get("RS_rank_pct")
             or (sector or {}).get("rs_state")
         ),
+        "sector_leadership": _text(
+            (sector or {}).get("sector_rotation_state")
+            or (sector or {}).get("quadrant")
+        ),
+        "price": price,
+        "volume": _float(
+            (investigator or {}).get("volume") or (ranked or {}).get("volume")
+        ),
+        "sma20": _float(
+            (investigator or {}).get("sma20") or (ranked or {}).get("sma_20")
+        ),
+        "sma50": sma50,
+        "sma200": _float(
+            (investigator or {}).get("sma200") or (ranked or {}).get("sma_200")
+        ),
+        "high_52w": high_52w,
+        "breakout_level": breakout_level,
+        "invalidation_price": _float(
+            (primary_pattern or {}).get("invalidation_price")
+            or (investigator or {}).get("invalidation_price")
+        ),
+        "distance_from_breakout_pct": _distance(price, breakout_level),
+        "distance_from_sma50_pct": _distance(price, sma50),
+        "distance_from_52w_high_pct": _distance(price, high_52w),
     }
     required = (
         "stage_label",
@@ -386,6 +464,27 @@ def _reconstructed_context(
             attribution_mode="RECONSTRUCTED_SAME_RUN",
             pattern_events=tuple(pattern_rows),
             breakout_events=tuple(breakout_rows),
+            source_lineage=tuple(
+                {
+                    "artifact_type": artifact_type,
+                    "run_id": item["run_id"],
+                    "stage_attempt": item["attempt_number"],
+                    "observed_at": item["created_at"],
+                    "artifact_hash": item["content_hash"],
+                }
+                for artifact_type, item in sorted(artifacts.items())
+            ),
+            evaluation_states={
+                "stage": _state(values["stage_label"]),
+                "pattern_attempted": "KNOWN" if pattern_rows else "NOT_EVALUATED",
+                "pattern": _state(values["pattern_family"]),
+                "setup_quality": _state(values["setup_quality_bucket"]),
+                "breakout": _state(values["breakout_type"]),
+                "regime": _state(values["confirmed_regime"]),
+                "breadth": _state(values["breadth_velocity_bucket"]),
+                "sector": _state(values["sector_relative_strength_bucket"]),
+                "lineage": "KNOWN" if artifacts else "UNKNOWN",
+            },
         ),
         sector_name,
     )
@@ -553,6 +652,26 @@ def _float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return None if parsed != parsed else parsed
+
+
+def _ratio(value: Any) -> float | None:
+    parsed = _float(value)
+    if parsed is None:
+        return None
+    return max(0.0, min(1.0, parsed / 100.0 if parsed > 1.0 else parsed))
+
+
+def _distance(value: float | None, reference: float | None) -> float | None:
+    if value is None or reference in (None, 0.0):
+        return None
+    return round((value / reference - 1.0) * 100.0, 6)
+
+
+def _state(value: Any) -> str:
+    text = str(value or "").upper()
+    if text == "NONE":
+        return "NONE"
+    return "KNOWN" if text not in {"", "UNKNOWN", "NAN", "<NA>"} else "UNKNOWN"
 
 
 def _bool(value: Any) -> bool | None:

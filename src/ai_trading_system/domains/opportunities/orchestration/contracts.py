@@ -45,6 +45,17 @@ LIFECYCLE_RULE_VERSION = "lifecycle-policy-v1.1"
 PROGRESS_RULE_VERSION = "opportunity-progress-v1"
 RETENTION_RULE_VERSION = "opportunity-retention-v1.1"
 LEGACY_STAGE_CONFIDENCE_VERSION = "weekly-stage-legacy-v1"
+INVESTIGATOR_ATTRIBUTION_POLICY_VERSION = "investigator-attribution-policy-v1"
+INVESTIGATOR_PRIMARY_LANE = "WEEKLY_MOMENTUM"
+INVESTIGATOR_ACTIVE_REVIEW_SCORE = 65.0
+INVESTIGATOR_CONDITIONAL_LANES: tuple[str, ...] = ("DAILY_GAINER",)
+INVESTIGATOR_RESEARCH_ONLY_LANES: tuple[str, ...] = ("STEALTH_ACCUMULATION",)
+INVESTIGATOR_ATTRIBUTION_ONLY_DIMENSIONS: tuple[str, ...] = (
+    "stage",
+    "pattern",
+    "setup_quality",
+    "breakout",
+)
 
 
 # ADR-0006 A2. These values are consumed by the gate and by the A3 policy

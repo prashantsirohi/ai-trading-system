@@ -381,7 +381,6 @@ def load_rank_history_for_symbols(
         )
 
     path_sql = "[" + ", ".join(f"'{_safe_sql_literal(path)}'" for path in path_strings) + "]"
-    symbols_sql = "(" + ", ".join(f"'{_safe_sql_literal(symbol)}'" for symbol in symbol_list) + ")"
     query = f"""
         WITH raw AS (
             SELECT
@@ -389,7 +388,7 @@ def load_rank_history_for_symbols(
                 symbol_id,
                 composite_score
             FROM read_csv_auto({path_sql}, filename = true)
-            WHERE symbol_id IN {symbols_sql}
+            WHERE symbol_id IN (SELECT UNNEST(?))
         ),
         ranked AS (
             SELECT
@@ -409,7 +408,7 @@ def load_rank_history_for_symbols(
 
     conn = duckdb.connect()
     try:
-        history_df = conn.execute(query).fetchdf()
+        history_df = conn.execute(query, [symbol_list]).fetchdf()
     finally:
         conn.close()
 

@@ -32,6 +32,10 @@ _REQUIRED_CALIBRATION_TABLES = frozenset({
     "position_recovery_proposal",
     "position_recovery_action",
     "candidate_episode_relation",
+    "investigator_performance_event",
+    "investigator_performance_horizon",
+    "investigator_evaluation_transition",
+    "investigator_attribution_coverage_receipt",
 })
 _REQUIRED_CALIBRATION_COLUMNS = {
     "stage_observation_governance": frozenset({
@@ -53,7 +57,12 @@ _REQUIRED_CALIBRATION_COLUMNS = {
     }),
     "candidate_snapshot": frozenset({
         "last_progress_at", "last_retention_counted_session",
+        "investigator_evaluation_states_json", "review_eligible",
     }),
+    "investigator_performance_event": frozenset({
+        "fill_policy_version", "policy_version", "simulated_fill_price",
+    }),
+    "investigator_performance_horizon": frozenset({"days_to_stop"}),
 }
 
 
@@ -270,12 +279,42 @@ def copied_store_readiness_evidence(path: Path) -> dict[str, Any]:
                      AND lower(stage_run.status) = 'completed'
                      AND length(trim(history.source_artifact_hash)) > 0"""
             ).fetchone()[0])
+        investigator_checks: list[dict[str, Any]] = []
+        if "investigator_attribution_coverage_receipt" in tables:
+            investigator_checks = [
+                dict(zip(
+                    [
+                        "metric_name",
+                        "coverage_pct",
+                        "target_pct",
+                        "status",
+                        "as_of_date",
+                        "policy_version",
+                    ],
+                    row,
+                    strict=True,
+                ))
+                for row in conn.execute(
+                    """
+                    SELECT metric_name, coverage_pct, target_pct, status,
+                           as_of_date, policy_version
+                    FROM investigator_attribution_coverage_receipt
+                    QUALIFY as_of_date = MAX(as_of_date) OVER ()
+                        AND ROW_NUMBER() OVER (
+                            PARTITION BY as_of_date, metric_name
+                            ORDER BY created_at DESC, receipt_id DESC
+                        ) = 1
+                    ORDER BY metric_name, receipt_id
+                    """
+                ).fetchall()
+            ]
         return {
             "operator_migrations_applied": not missing_tables and not missing_columns,
             "missing_migration_tables": missing_tables,
             "missing_migration_columns": missing_columns,
             "real_phase3b_history_present": real_history_rows > 0,
             "real_phase3b_history_rows": real_history_rows,
+            "investigator_attribution_checks": investigator_checks,
         }
 
 

@@ -2,7 +2,7 @@
 
 - **Purpose:** Convert ranked signals into paper (or live-scaffold) orders, persist fills, and update portfolio state.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-07-26
 - **Source of truth:** [`src/ai_trading_system/pipeline/stages/execute.py`](../../src/ai_trading_system/pipeline/stages/execute.py), [`src/ai_trading_system/domains/execution/`](../../src/ai_trading_system/domains/execution/), [`src/ai_trading_system/domains/risk/`](../../src/ai_trading_system/domains/risk/)
 
 ---
@@ -37,12 +37,13 @@ Written under `data/pipeline_runs/<run_id>/execute/attempt_<n>/`:
 | Artifact | File | Notes |
 |---|---|---|
 | `trade_actions` | `trade_actions.csv` | High-level actions (BUY/SELL/HOLD/SKIP) with reason |
+| `execution_decisions` | `execution_decisions.csv` | One normalized status/reason row per planned action |
 | `executed_orders` | `executed_orders.csv` | One row per placed order |
 | `executed_fills` | `executed_fills.csv` | One row per fill (paper fills synthesised by `PaperExecutionAdapter`) |
 | `positions` | `positions.csv` | Open positions after the cycle |
 | `execute_summary` | `execute_summary.json` | Full metadata: counts, regime, trust, drawdown, params |
 
-Persistent state written to **`data/execution.duckdb`** (default in [`store.py`](../../src/ai_trading_system/domains/execution/store.py)) — tables: `execution_submission_intent`, `execution_order`, `execution_fill`, `execution_trade_note`, `execution_position_stop`, plus drawdown snapshots.
+Persistent state written to **`data/execution.duckdb`** (default in [`store.py`](../../src/ai_trading_system/domains/execution/store.py)) — tables: `execution_decision`, `execution_submission_intent`, `execution_order`, `execution_fill`, `execution_trade_note`, `execution_position_stop`, plus drawdown snapshots.
 
 ## Main modules
 
@@ -66,7 +67,9 @@ Persistent state written to **`data/execution.duckdb`** (default in [`store.py`]
 6. `AutoTrader.run(...)` holds the execution-ledger batch lock while producing `actions`, `executions`, and `positions_before/after`. Defaults: order_type=MARKET, product_type=INTRADAY, validity=DAY. Pipeline-generated correlation IDs are scoped to `run_id`, so a retry of the same run is stable while a later run can legitimately trade the symbol again. Before adapter dispatch, `ExecutionService` durably reserves the intent, replays a completed identical key, rejects conflicting reuse, and leaves unknown outcomes for explicit reconciliation without redispatch.
 7. If `execution_enabled` and not preview: refresh trailing stops via `service.maintain_trailing_stops(...)` using current prices + ATR from ranked df.
 8. Compute MTM portfolio value, record intraday drawdown snapshot (and EOD if `is_eod`).
-9. Write CSVs + `execute_summary.json`.
+9. Normalize every action as `EXECUTED`, `REJECTED`, `SUPPRESSED`, `PREVIEW`,
+   or `ERROR`, persist the decision, and reconcile action/decision/order counts.
+10. Write CSVs + `execute_summary.json`.
 
 ## DQ / trust gates
 
@@ -74,9 +77,9 @@ Persistent state written to **`data/execution.duckdb`** (default in [`store.py`]
 - Stage-2 (`stage2_gate`), breakout-linkage tier counts surfaced in summary.
 - Heat gate: `execution_heat_gate_threshold` (default `0.08`) — before each
   buy submission, projects existing risk plus the candidate's stop risk and
-  risk reserved by earlier accepted buys in the same batch. The buy is rejected
-  when projected cumulative heat exceeds the threshold; rejected orders do not
-  consume a reservation.
+  risk reserved by earlier accepted buys in the same batch. The buy is
+  suppressed with `PORTFOLIO_HEAT_LIMIT` when projected cumulative heat exceeds
+  the threshold; suppressed actions create no order and consume no reservation.
 - Competing AutoTrader batches for the same execution store are serialized by a
   store-adjacent inter-process lock, so each batch reloads positions and heat
   after the prior batch finishes.

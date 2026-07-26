@@ -2,7 +2,7 @@
 
 - **Purpose:** Describe how the execute stage turns ranked signals into orders, which risk gates run, and where the paper / live boundary sits.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-07-13
+- **Last verified:** 2026-07-26
 - **Source of truth:** `src/ai_trading_system/domains/execution/`, `src/ai_trading_system/domains/risk/`, `config/risk_profiles/`.
 
 > **Disclaimer — live trading is NOT verified.** Paper trading is the only execution path that has been smoke-tested end-to-end. The live Dhan adapter is disabled at the adapter level: `src/ai_trading_system/domains/execution/adapters/dhan.py:63-65` raises `RuntimeError("Live Dhan execution is intentionally disabled...")` unless the adapter is constructed with `dry_run=True`. Production guardrails for live execution (margin checks, kill-switch, broker error handling, sandbox parity) have not been audited. **Do not enable live execution from these docs.**
@@ -61,7 +61,11 @@ After all gates pass, the initial stop is computed via `calculate_initial_stop` 
 
 ### Heat gate (portfolio-level, applies in both engine and legacy modes)
 
-`PortfolioManager.check_heat_gate` (`portfolio.py:129`) sums per-position risk (using each position's ACTIVE stop, else `avg_entry_price * 10%`) and rejects any new `BUY` when `total_risk / capital > heat_gate_threshold` (default `0.15`, autotrader.py:52). Rejected BUYs are recorded with `result.status="REJECTED"`, `reason="heat_gate_exceeded"` (`autotrader.py:222-234`).
+`PortfolioManager.check_heat_gate` sums per-position risk using each position's
+ACTIVE stop (or the documented fallback) and suppresses a new `BUY` when
+projected cumulative risk exceeds `heat_gate_threshold`. The normalized
+decision uses `execution_status="SUPPRESSED"` and
+`reason_code="PORTFOLIO_HEAT_LIMIT"`; no order row is created.
 
 ### Portfolio constraints (legacy autotrader path, opt-in)
 
@@ -221,7 +225,7 @@ Unknown keys in each section are silently dropped by `_coerce` (`config.py:82-86
 
 | Artifact | Destination |
 |---|---|
-| `trade_actions.csv`, `executed_orders.csv`, `executed_fills.csv`, `positions.csv`, `execute_summary.json` | `$DATA_ROOT/pipeline_runs/<run_id>/execute/attempt_<n>/` |
+| `trade_actions.csv`, `execution_decisions.csv`, `executed_orders.csv`, `executed_fills.csv`, `positions.csv`, `execute_summary.json` | `$DATA_ROOT/pipeline_runs/<run_id>/execute/attempt_<n>/` |
 | `execution_order`, `execution_fill`, `execution_position_stop`, `execution_drawdown` tables | `$DATA_ROOT/execution.duckdb` via `ExecutionStore` |
 
 ---

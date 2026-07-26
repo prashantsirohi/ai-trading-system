@@ -176,6 +176,24 @@ class ExecutionStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS execution_decision (
+                    decision_id TEXT PRIMARY KEY,
+                    submission_scope TEXT,
+                    symbol_id TEXT NOT NULL,
+                    exchange TEXT NOT NULL,
+                    planned_action TEXT NOT NULL,
+                    execution_status TEXT NOT NULL,
+                    reason_code TEXT NOT NULL,
+                    correlation_id TEXT,
+                    order_id TEXT,
+                    decided_at TIMESTAMP NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                )
+                """
+            )
         finally:
             conn.close()
 
@@ -206,6 +224,73 @@ class ExecutionStore:
 
     def execution_batch_lock(self):
         return self._file_lock("batch")
+
+    def record_execution_decision(self, decision: dict[str, Any]) -> None:
+        """Persist exactly one normalized decision for a planned action."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO execution_decision (
+                    decision_id, submission_scope, symbol_id, exchange,
+                    planned_action, execution_status, reason_code,
+                    correlation_id, order_id, decided_at, payload_hash,
+                    payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(decision_id) DO UPDATE SET
+                    execution_status = excluded.execution_status,
+                    reason_code = excluded.reason_code,
+                    correlation_id = excluded.correlation_id,
+                    order_id = excluded.order_id,
+                    decided_at = excluded.decided_at,
+                    payload_hash = excluded.payload_hash,
+                    payload_json = excluded.payload_json
+                """,
+                [
+                    decision["decision_id"],
+                    decision.get("submission_scope"),
+                    decision["symbol_id"],
+                    decision.get("exchange") or "NSE",
+                    decision["planned_action"],
+                    decision["execution_status"],
+                    decision["reason_code"],
+                    decision.get("correlation_id"),
+                    decision.get("order_id"),
+                    decision["decided_at"],
+                    decision["payload_hash"],
+                    json.dumps(decision, sort_keys=True, default=str),
+                ],
+            )
+        finally:
+            conn.close()
+
+    def list_execution_decisions(
+        self, *, submission_scope: str | None = None
+    ) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            if submission_scope:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM execution_decision
+                    WHERE submission_scope = ?
+                    ORDER BY decided_at, decision_id
+                    """,
+                    [submission_scope],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM execution_decision
+                    ORDER BY decided_at DESC, decision_id DESC
+                    """
+                ).fetchall()
+            columns = [item[0] for item in conn.description]
+            return [dict(zip(columns, row, strict=True)) for row in rows]
+        finally:
+            conn.close()
 
     def reserve_submission_intent(
         self,

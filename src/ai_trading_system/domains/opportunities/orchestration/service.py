@@ -315,10 +315,18 @@ class OpportunityShadowOrchestrator:
                 "investigator_performance_horizons",
                 "investigator_discovery_scorecard",
                 "investigator_entry_scorecard",
+                "investigator_executable_scorecard",
                 "investigator_transition_matrix",
+                "investigator_evaluation_transitions",
                 "investigator_attribution_coverage",
+                "investigator_coverage_receipt",
+                "investigator_readiness_inputs",
                 "investigator_missing_data_reasons",
                 "investigator_symbol_sensitivity",
+                "investigator_primary_cohorts",
+                "investigator_diagnostic_cohorts",
+                "investigator_research_cohorts",
+                "investigator_calendar_windows",
             )
         }
         for result in results:
