@@ -189,3 +189,20 @@ def test_top_ranked_section_keeps_ranked_names_without_pattern_setup() -> None:
 
     assert frame.iloc[0]["Symbol"] == "RANKONLY"
     assert frame.iloc[0]["Composite Score"] == 91
+
+
+def test_top_ranked_section_defaults_to_top_25() -> None:
+    rows = [
+        _row(
+            symbol_id=f"RANK{rank:02d}",
+            rank=rank,
+            composite_score=101 - rank,
+        )
+        for rank in range(1, 31)
+    ]
+
+    frame = build_top_ranked(rows, _context())
+
+    assert len(frame) == 25
+    assert frame["Rank"].tolist() == list(range(1, 26))
+    assert frame.iloc[-1]["Symbol"] == "RANK25"

@@ -76,7 +76,7 @@ From [`publish.py:30-61`](../../src/ai_trading_system/pipeline/stages/publish.py
 2. Require `rank.ranked_signals`. Build datasets via `build_publish_datasets`.
 3. Attach event datasets (snapshot + enrichment + summary), insight datasets (telegram summary + confluence + latest insight), and decision bundle.
 4. Compute watchlist buckets; persist `watchlist_buckets.csv`; attach to datasets.
-5. Select channel handlers in `_build_handlers`. `local_publish=true` overrides to a single `local_summary` channel. Google Sheets writes fixed operator tabs: `01_Daily_Report`, `02_Watchlist_Current`, `03_Portfolio`, `04_Sector_Leadership`, `05_Market_Breadth`, `06_Investigator`, and `99_Run_Log`. `quantstats_dashboard_tearsheet` is enabled by default; `weekly_pdf` requires `publish_weekly_pdf=true` and bypasses delivery dedup.
+5. Select channel handlers in `_build_handlers`. `local_publish=true` overrides to a single `local_summary` channel. Google Sheets writes fixed operator tabs: `01_Daily_Report`, `02_Watchlist_Current`, `03_Portfolio`, `04_Sector_Leadership`, `05_Market_Breadth`, `06_Investigator`, and `99_Run_Log`. The `TOP RANKED` section in `01_Daily_Report` displays the first 25 ranked rows. `quantstats_dashboard_tearsheet` is enabled by default; `weekly_pdf` requires `publish_weekly_pdf=true` and bypasses delivery dedup.
 6. For each channel: `delivery_manager.deliver(...)` runs idempotency check, then up to `max_attempts=3` retries with exponential backoff, records every attempt in the delivery log, and returns one of `delivered` / `duplicate` / `failed`.
 7. Build `publish_summary` metadata + fundamentals adds.
 8. If any blocking-role channel failed → raise `PublishStageError` with concatenated messages.

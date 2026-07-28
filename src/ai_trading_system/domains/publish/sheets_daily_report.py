@@ -81,6 +81,8 @@ TOP_RANKED_COLUMNS = [
     "Links",
 ]
 
+TOP_RANKED_LIMIT = 25
+
 OPTIONAL_COLUMNS = {
     "ranked_signals": [
         "symbol_id",
@@ -440,7 +442,12 @@ def build_pattern_watchlist(
     return frame.sort_values(["Watchlist Score", "Composite Score", "Symbol"], ascending=[False, False, True], na_position="last", kind="stable").reset_index(drop=True)
 
 
-def build_top_ranked(rows: list[dict[str, Any]], context: MarketContext, *, limit: int = 10) -> pd.DataFrame:
+def build_top_ranked(
+    rows: list[dict[str, Any]],
+    context: MarketContext,
+    *,
+    limit: int = TOP_RANKED_LIMIT,
+) -> pd.DataFrame:
     ranked = [row for row in rows if not _is_missing(_first(row, ["composite_score"]))]
     out = []
     for idx, row in enumerate(ranked, start=1):
