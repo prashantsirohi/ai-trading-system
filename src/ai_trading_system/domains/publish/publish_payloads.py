@@ -159,9 +159,9 @@ def build_publish_datasets(
                     if domain == "rank":
                         frame = frame.copy()
                         frame.loc[:, "rank"] = frame.get("rank_position")
-                        ranked_df = frame
+                        ranked_df = _overlay_decision_rows(ranked_df, frame)
                     elif domain == "stage":
-                        stage_df = frame
+                        stage_df = _overlay_decision_rows(stage_df, frame)
                     else:
                         pattern_df = frame
                     decision_read_sources.append(payload["metadata"])
@@ -280,6 +280,32 @@ def build_publish_datasets(
         summary_artifact = context_artifact_for("fundamental_summary")
         datasets["fundamental_summary"] = read_json_artifact(summary_artifact) if summary_artifact else {}
     return datasets
+
+
+def _overlay_decision_rows(
+    artifact_frame: pd.DataFrame,
+    decision_frame: pd.DataFrame,
+) -> pd.DataFrame:
+    """Overlay governed decision fields without discarding artifact enrichment."""
+    if artifact_frame is None or artifact_frame.empty:
+        return decision_frame.copy()
+    if decision_frame is None or decision_frame.empty:
+        return artifact_frame.copy()
+
+    key_columns = [
+        column
+        for column in ("symbol_id", "exchange")
+        if column in artifact_frame.columns and column in decision_frame.columns
+    ]
+    if "symbol_id" not in key_columns:
+        return decision_frame.copy()
+
+    artifact = artifact_frame.drop_duplicates(key_columns, keep="first").set_index(key_columns)
+    decision = decision_frame.drop_duplicates(key_columns, keep="first").set_index(key_columns)
+    combined = decision.combine_first(artifact)
+    decision_order = list(decision.index)
+    artifact_only_order = [key for key in artifact.index if key not in decision.index]
+    return combined.reindex(decision_order + artifact_only_order).reset_index()
 
 
 def build_publish_metadata(

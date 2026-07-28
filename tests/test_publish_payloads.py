@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from ai_trading_system.domains.ranking.payloads import (
     attach_market_direction_to_payload,
@@ -15,6 +16,9 @@ from ai_trading_system.pipeline.contracts import StageContext
 from ai_trading_system.domains.publish.publish_payloads import (
     build_publish_datasets,
     build_publish_metadata,
+)
+from ai_trading_system.domains.publish.sheets_daily_report import (
+    build_daily_report_sections,
 )
 from ai_trading_system.domains.publish.telegram_summary_builder import build_telegram_summary
 from ai_trading_system.domains.fundamentals.insight_readmodels import (
@@ -75,6 +79,138 @@ def test_build_publish_datasets_loads_optional_artifacts_with_defaults(tmp_path:
     assert datasets["publish_rows_telegram"][0]["publish_confidence"] is None
     assert datasets["stage2_summary"]["uptrend_count"] == 0
     assert datasets["stage2_breakdown_symbols"] == ["AAA"]
+
+
+def test_decision_reads_overlay_artifacts_without_losing_daily_report_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ranked_artifact = StageArtifact(
+        artifact_type="ranked_signals",
+        uri=str(tmp_path / "ranked_signals.csv"),
+        content_hash="ranked-hash",
+    )
+    stock_artifact = StageArtifact(
+        artifact_type="stock_scan",
+        uri=str(tmp_path / "stock_scan.csv"),
+        content_hash="stock-hash",
+    )
+    ranked_frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "SYM01",
+                "exchange": "NSE",
+                "rank": 1,
+                "composite_score": 90.0,
+                "close": 101.0,
+                "delivery_pct": 55.0,
+                "rel_strength_score": 88.0,
+                "sector_name": "Technology",
+                "stage2_label": "strong_stage2",
+            }
+        ]
+    )
+    stock_frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": f"SYM{rank:02d}",
+                "exchange": "NSE",
+                "rank": rank,
+                "composite_score": 101.0 - rank,
+                "close": 100.0 + rank,
+                "delivery_pct": 40.0 + rank,
+                "rel_strength_score": 90.0 - rank,
+                "sector_name": "Technology",
+                "stage2_label": "strong_stage2",
+            }
+            for rank in range(1, 31)
+        ]
+    )
+
+    class FakeRankRepository:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_current_rankings(self, **_kwargs):
+            return {
+                "rows": [
+                    {
+                        "symbol_id": "SYM01",
+                        "exchange": "NSE",
+                        "rank_position": 1,
+                        "composite_score": 99.0,
+                    }
+                ],
+                "metadata": {"domain": "rank", "data_source": "DUCKDB"},
+            }
+
+    class FakeStageRepository:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_current_stage_snapshot(self, **_kwargs):
+            return {
+                "rows": [
+                    {
+                        "symbol_id": "SYM01",
+                        "exchange": "NSE",
+                        "close": 102.0,
+                        "stage_label": "S2",
+                    }
+                ],
+                "metadata": {"domain": "stage", "data_source": "DUCKDB"},
+            }
+
+    class FakePatternRepository:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_current_patterns(self, **_kwargs):
+            return {
+                "rows": [],
+                "metadata": {"domain": "pattern", "data_source": "DUCKDB"},
+            }
+
+    from ai_trading_system.ui.execution_api.services.readmodels import decision_reads
+
+    monkeypatch.setattr(decision_reads, "RankHistoryReadRepository", FakeRankRepository)
+    monkeypatch.setattr(decision_reads, "StageHistoryReadRepository", FakeStageRepository)
+    monkeypatch.setattr(decision_reads, "PatternHistoryReadRepository", FakePatternRepository)
+
+    frames = {
+        "ranked_signals": ranked_frame,
+        "stock_scan": stock_frame,
+    }
+    datasets = build_publish_datasets(
+        context_artifact_for=lambda name: {"stock_scan": stock_artifact}.get(name),
+        read_artifact=lambda artifact: frames[artifact.artifact_type].copy(),
+        read_json_artifact=lambda _artifact: {},
+        ranked_signals_artifact=ranked_artifact,
+        project_root=tmp_path,
+        run_date="2026-07-28",
+        run_id="publish-overlay-test",
+    )
+
+    ranked_row = datasets["ranked_signals"].iloc[0]
+    assert ranked_row["composite_score"] == 99.0
+    assert ranked_row["close"] == 101.0
+    assert ranked_row["delivery_pct"] == 55.0
+    assert ranked_row["rel_strength_score"] == 88.0
+    assert ranked_row["sector_name"] == "Technology"
+    assert len(datasets["stock_scan"]) == 30
+    assert datasets["stock_scan"].iloc[0]["close"] == 102.0
+
+    report = build_daily_report_sections(
+        ranked_df=datasets["ranked_signals"],
+        stock_scan_df=datasets["stock_scan"],
+    )
+    top_ranked = dict(report.sections)["TOP RANKED"]
+    assert len(top_ranked) == 25
+    assert top_ranked.iloc[-1]["Rank"] == 25
+    assert top_ranked.iloc[-1]["Symbol"] == "SYM25"
+    assert top_ranked.iloc[-1]["Close"] == 125.0
+    assert top_ranked.iloc[-1]["Sector"] == "Technology"
+    assert top_ranked.iloc[-1]["Stage"] == "Stage 2 / Uptrend"
 
 
 def test_build_publish_datasets_loads_sector_rotation_artifacts(tmp_path: Path) -> None:

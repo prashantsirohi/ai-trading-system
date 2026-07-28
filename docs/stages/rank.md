@@ -167,7 +167,7 @@ workers, and commits a resumable checkpoint after every completed date.
 - [`fundamentals`](./fundamentals.md) — reads `ranked_signals` and writes alongside under `rank/attempt_<n>/`.
 - [`candidates`](./candidates.md) — requires `ranked_signals` (hard), optionally reads `breakout_scan`, `pattern_scan`, `sector_dashboard`, plus `fundamentals.watchlist_candidates`.
 - [`events`](./events.md) — reads `breakout_scan` (Tier A/B) and `volume_shockers`.
-- `execute`, `insight`, `narrative`, `publish` — consume `ranked_signals` and/or `dashboard_payload` indirectly via the candidates/events outputs.
+- `execute`, `insight`, `narrative`, `publish` — consume `ranked_signals` and/or `dashboard_payload` indirectly via the candidates/events outputs. The Google Sheets daily report may use ranked rows from the full-universe `stock_scan` to fill its operator-only top-25 view; this does not widen the regime-aware execution shortlist.
 
 ## Commands
 
