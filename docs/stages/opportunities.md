@@ -2,7 +2,7 @@
 
 - **Purpose:** Operate the optional canonical opportunity-registry shadow stage.
 - **Audience:** Operators and engineers debugging opportunity reconciliation.
-- **Last verified:** 2026-07-15
+- **Last verified:** 2026-08-02
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
@@ -17,7 +17,7 @@ The optional `opportunities` stage follows `investigator` in `PIPELINE_ORDER`. I
 
 ## Input data
 
-Required input is registered `rank/ranked_signals`. Optional inputs are Investigator scores and Stage-1 state plus rank breakout, pattern, stock-scan, and sector-dashboard artifacts. Missing optional inputs become audit warnings. The stage reads the weekly stage snapshot store only to enrich the registered stock-stage row with source-week and creation metadata.
+Required input is registered `rank/ranked_signals`. Optional inputs are full Investigator scores and Stage-1 state plus rank breakout, pattern, stock-scan, sector-dashboard, weekly-stage, and routing artifacts. In shadow routing mode full `investigator_scores` remains authoritative; routed scores are diagnostic-only. Rank and routed pattern evidence are unioned. Weekly sector structure and rank sector RS/quadrant are complementary and neither replaces the other. Missing optional inputs become audit warnings. The stage reads the weekly stage snapshot store only to enrich the registered stock-stage row with source-week and creation metadata.
 
 ## Output artifacts
 
@@ -50,7 +50,7 @@ Exact same-run source replay is detected before writes and leaves current histor
 
 ## Downstream consumers
 
-Phase 3A through Phase 3C-3 have no execution, publish, candidate-tracker, API, or UI consumer. Registry query callers and audit review are the only consumers. In shadow mode, routing lineage is added to reconciliation and routed Investigator sidecars may supply evidence. Incomplete active-position evidence records `evidence_complete=false`, suppresses positive shadow actions, and keeps legacy execution unchanged. Recovery defaults to report-only proposals; reviewed recovery requires reviewer, timestamp, and notes, while automatic recovery remains disabled unless explicitly configured.
+Phase 3A through Phase 3C-3 have no execution, publish, candidate-tracker, API, or UI consumer. Registry query callers and audit review are the only consumers. In shadow mode, routing lineage is added to reconciliation; routed Investigator sidecars cannot replace attribution. Qualifying weekly-momentum onsets use an independent `investigator_primary` shadow family so structural dimensions remain attribution-only. Incomplete active-position evidence records `evidence_complete=false`, suppresses positive shadow actions, and keeps legacy execution unchanged. Recovery defaults to report-only proposals; reviewed recovery requires reviewer, timestamp, and notes, while automatic recovery remains disabled unless explicitly configured.
 
 ## Commands
 

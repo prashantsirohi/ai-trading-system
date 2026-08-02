@@ -2,7 +2,7 @@
 
 - **Purpose:** Convert post-rank gainer, accumulation, trap, repeat, and pattern evidence into an operator-facing investigation queue.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-07-26
+- **Last verified:** 2026-08-02
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/investigator.py`
   - `src/ai_trading_system/domains/investigator/service.py`
@@ -171,6 +171,18 @@ Phase 3.5B uses frozen policy `investigator-attribution-policy-v1`.
 research-only. Stage, pattern, setup-quality, breakout, and their raw scores
 remain immutable attribution dimensions; their contribution to the frozen
 review score is zero and they cannot independently create primary eligibility.
+
+Phase 3.5C registers successor `investigator-attribution-policy-v2` without
+changing those thresholds or factor weights. In shadow routing mode the full
+`investigator_scores` artifact now owns `final_score`, `move_tag`,
+`trigger_reason`, breakout classification, and market evidence. Routed scores
+may report divergence but cannot overwrite attribution. Each first qualifying
+onset is admitted to an independent `investigator_primary` shadow episode;
+continued observations match that open family rather than adding a daily event.
+Forward sector-relative evaluation uses governed
+`investigator-sector-index-taxonomy-v1` aliases for Pharma, IT Services, and
+Minerals/Mining names. An alias is usable only when its target has an existing
+primary `sector_to_index` row; Consumer remains unmapped by policy.
 
 ## Process flow
 
@@ -434,6 +446,14 @@ attempt/classification, setup quality, breakout, regime/breadth, sector, and
 artifact lineage. `KNOWN`, `NONE`, `NOT_ELIGIBLE`, `NOT_EVALUATED`, `ERROR`,
 and `UNKNOWN` remain distinct; unexplained `UNKNOWN` counts are published and
 fed into copied-store Phase 3C-5 readiness checks.
+
+`investigator_primary_sampling.csv` and
+`investigator_source_fidelity.csv` enforce 100% qualifying-observation capture
+and exact authoritative-field fidelity. The readiness artifact also keeps
+Phase 4 blocked until 20 consecutive complete coverage sessions, at least 30
+primary discovery sessions, at least 120 matured primary 20-session episodes,
+and positive executable and benchmark-relative results in three non-overlapping
+windows are observed.
 
 Do not recommend score changes until at least 100 matured observations overall
 and 30 in each compared subgroup are available.

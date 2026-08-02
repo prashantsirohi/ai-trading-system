@@ -15,6 +15,7 @@ from ai_trading_system.domains.opportunities.contracts import (
     EvidenceSnapshot,
     EvidenceVerdict,
     FollowthroughStatus,
+    InvestigatorContext,
     OpportunitySnapshot,
     ProgressStatus,
     RiskLevel,
@@ -90,7 +91,7 @@ def test_evaluate_all_records_every_rule_and_preserves_primary_precedence(
         AdmissionReason.RANK_THRESHOLD,
     )
     assert result.reason is AdmissionReason.EARLY_ACCUMULATION
-    assert len(result.rule_evaluations) == 7
+    assert len(result.rule_evaluations) == 8
 
 
 def test_breakout_and_rank_velocity_keep_frozen_primary_order(
@@ -243,8 +244,31 @@ def test_admission_identity_pin_and_structured_json_are_deterministic(
         }
     )
     assert result.admission_identity == expected
-    assert result.rule_version == "admission-rules-v1.1"
+    assert result.rule_version == "admission-rules-v1.2"
     assert rule_evaluations_json(result) == rule_evaluations_json(result)
+
+
+def test_primary_investigator_onset_is_independent_of_stage_and_pattern(
+    stage_factory, sector_factory
+):
+    base = _bundle(stage_factory, sector_factory)
+    primary = replace(
+        base,
+        stock_stage=stage_factory(locked=WeinsteinStage.STAGE_4),
+        investigator_context=InvestigatorContext(
+            move_tag="WEEKLY_MOMENTUM",
+            final_score=65,
+            attribution_score=65,
+            review_lane="PRIMARY",
+            review_eligible=True,
+            breakout_type="NONE",
+            evaluation_states={"breakout": "NONE"},
+        ),
+    )
+    result = evaluate_admission(primary, OpportunityShadowConfig())
+    assert result.admitted is True
+    assert result.reason is AdmissionReason.INVESTIGATOR_PRIMARY_ONSET
+    assert result.setup_family.value == "investigator_primary"
 
 
 def test_ready_trigger_requires_real_event(stage_factory, sector_factory):

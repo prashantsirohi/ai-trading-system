@@ -308,6 +308,9 @@ def copied_store_readiness_evidence(path: Path) -> dict[str, Any]:
                     """
                 ).fetchall()
             ]
+        investigator_operational_checks = _copied_investigator_operational_checks(
+            conn, tables=tables
+        )
         return {
             "operator_migrations_applied": not missing_tables and not missing_columns,
             "missing_migration_tables": missing_tables,
@@ -315,7 +318,137 @@ def copied_store_readiness_evidence(path: Path) -> dict[str, Any]:
             "real_phase3b_history_present": real_history_rows > 0,
             "real_phase3b_history_rows": real_history_rows,
             "investigator_attribution_checks": investigator_checks,
+            "investigator_operational_checks": investigator_operational_checks,
         }
+
+
+def _copied_investigator_operational_checks(
+    conn: duckdb.DuckDBPyConnection, *, tables: set[str]
+) -> list[dict[str, Any]]:
+    required = {
+        "investigator_performance_event",
+        "investigator_performance_horizon",
+        "investigator_attribution_coverage_receipt",
+    }
+    if not required.issubset(tables):
+        return []
+    required_columns = {
+        "investigator_performance_event": {
+            "event_id", "event_type", "session_date", "primary_eligible",
+            "attribution_mode",
+        },
+        "investigator_performance_horizon": {
+            "event_id", "horizon_sessions", "close_to_close_return_pct",
+            "benchmark_relative_return_pct",
+        },
+        "investigator_attribution_coverage_receipt": {
+            "as_of_date", "metric_name", "status", "created_at", "receipt_id",
+        },
+    }
+    if any(
+        not columns.issubset(_table_columns(conn, table))
+        for table, columns in required_columns.items()
+    ):
+        return []
+    coverage_dates = conn.execute(
+        """
+        WITH latest AS (
+            SELECT as_of_date, metric_name, status
+            FROM investigator_attribution_coverage_receipt
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY as_of_date, metric_name
+                ORDER BY created_at DESC, receipt_id DESC
+            ) = 1
+        )
+        SELECT as_of_date,
+               COUNT(*) AS metric_count,
+               COUNT(*) FILTER (WHERE status = 'PASS') AS pass_count
+        FROM latest
+        GROUP BY as_of_date
+        ORDER BY as_of_date DESC
+        """
+    ).fetchall()
+    coverage_streak = 0
+    for _, metric_count, pass_count in coverage_dates:
+        if int(metric_count) != 8 or int(pass_count) != 8:
+            break
+        coverage_streak += 1
+    discovery_sessions = int(
+        conn.execute(
+            """
+            SELECT COUNT(DISTINCT session_date)
+            FROM investigator_performance_event
+            WHERE event_type = 'CANDIDATE_DISCOVERED'
+              AND primary_eligible = TRUE
+              AND attribution_mode IN (
+                  'OBSERVED_AT_DECISION', 'RECONSTRUCTED_SAME_RUN'
+              )
+            """
+        ).fetchone()[0]
+    )
+    matured_20 = int(
+        conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM investigator_performance_horizon h
+            JOIN investigator_performance_event e USING (event_id)
+            WHERE e.event_type = 'CANDIDATE_DISCOVERED'
+              AND e.primary_eligible = TRUE
+              AND e.attribution_mode IN (
+                  'OBSERVED_AT_DECISION', 'RECONSTRUCTED_SAME_RUN'
+              )
+              AND h.horizon_sessions = 20
+              AND h.close_to_close_return_pct IS NOT NULL
+            """
+        ).fetchone()[0]
+    )
+    stable_windows = int(
+        conn.execute(
+            """
+            WITH eligible AS (
+                SELECT e.session_date, h.close_to_close_return_pct,
+                       h.benchmark_relative_return_pct
+                FROM investigator_performance_horizon h
+                JOIN investigator_performance_event e USING (event_id)
+                WHERE e.event_type = 'EXECUTABLE_AVAILABLE'
+                  AND e.primary_eligible = TRUE
+                  AND e.attribution_mode IN (
+                      'OBSERVED_AT_DECISION', 'RECONSTRUCTED_SAME_RUN'
+                  )
+                  AND h.horizon_sessions = 20
+                  AND h.close_to_close_return_pct IS NOT NULL
+            ), sessions AS (
+                SELECT session_date, ROW_NUMBER() OVER (ORDER BY session_date) - 1 AS rn
+                FROM (SELECT DISTINCT session_date FROM eligible)
+            ), windows AS (
+                SELECT FLOOR(s.rn / 10) AS window_id,
+                       AVG(e.close_to_close_return_pct) AS expectancy,
+                       AVG(e.benchmark_relative_return_pct) AS relative_expectancy
+                FROM eligible e
+                JOIN sessions s USING (session_date)
+                GROUP BY FLOOR(s.rn / 10)
+            )
+            SELECT COUNT(*)
+            FROM windows
+            WHERE expectancy > 0 AND relative_expectancy > 0
+            """
+        ).fetchone()[0]
+    )
+    checks = (
+        ("20_SESSION_COVERAGE_GATE", coverage_streak, 20),
+        ("DISCOVERY_SESSION_SAMPLE", discovery_sessions, 30),
+        ("PRIMARY_MATURED_20D_SAMPLE", matured_20, 120),
+        ("POSITIVE_NON_OVERLAP_WINDOWS", stable_windows, 3),
+    )
+    return [
+        {
+            "metric_name": metric_name,
+            "observed": observed,
+            "target": target,
+            "status": "PASS" if observed >= target else "FAIL",
+        }
+        for metric_name, observed, target in checks
+    ]
 
 
 def _membership_evidence(

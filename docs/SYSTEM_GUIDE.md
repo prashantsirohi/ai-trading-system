@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-07-26
+- **Last verified:** 2026-08-02
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -103,6 +103,20 @@ shadow-fill events, append-only evaluation transitions, and daily coverage
 receipts. The readiness builder consumes those receipts from copied stores.
 This path remains shadow-only and never dispatches a broker order.
 
+Phase 3.5C corrects shadow source ownership under immutable successor
+`investigator-attribution-policy-v2` and `admission-rules-v1.2`. Full
+`investigator_scores` is authoritative for attribution; routed Investigator
+artifacts are diagnostic/routing sidecars only. Weekly sector structure and
+rank sector RS/quadrant are merged as complementary evidence, and explicit
+`NONE` classifications are preserved. A qualifying primary onset opens an
+independent `investigator_primary` shadow episode even when structural context
+would block a new-long admission; it remains non-executable. Sampling capture,
+source fidelity, 20-session coverage, discovery-session count, 20-session
+maturation, and three-window stability are fail-closed readiness inputs.
+Sector-index aliases are separately frozen under
+`investigator-sector-index-taxonomy-v1`; aliases resolve only to an existing
+primary mapping, while unresolved Consumer comparison remains fail-closed.
+
 ADR-0007 R0 is a separate research-only calibration harness for the proposed
 four-lane pattern evidence classifier. `ai-trading-pattern-r0-calibrate` reads
 `_catalog` and `weekly_stage_snapshot` point-in-time through read-only DuckDB
@@ -198,7 +212,7 @@ When rank is skipped because its inputs are unchanged, downstream stages that re
 | `weekly_stage` | Classify full-universe stock and sector structure and run light Stage 1 discovery. | Universal stage history and coverage artifacts | [weekly stage](stages/weekly_stage.md) |
 | `scan_router` | Resolve rank, stage, candidate, active-position, and recent-exit coverage. | Routing and comparison artifacts | [scan router](stages/scan_router.md) |
 | `investigator` | Build a non-executable operator investigation queue from post-rank evidence. | Investigator artifacts and control-plane history | [investigator](stages/investigator.md) |
-| `opportunities` | Optionally reconcile canonical candidate episodes in non-authoritative shadow mode. | Opportunity registry and audit artifacts | [opportunities](stages/opportunities.md) |
+| `opportunities` | Optionally reconcile canonical candidate episodes and Investigator attribution onsets in non-authoritative shadow mode. | Opportunity registry, immutable performance events, and audit artifacts | [opportunities](stages/opportunities.md) |
 | `fundamentals` | Optionally import and score fundamental evidence. | Fundamental scores and watchlists | [fundamentals](stages/fundamentals.md) |
 | `candidates` | Deterministically select the operator/execution shortlist. | `final_candidates.csv` | [candidates](stages/candidates.md) |
 | `candidate_tracker` | Maintain durable lifecycle episodes, reviews, alerts, and current candidate state. | Tracker DB and tracker artifacts | [candidate tracker](stages/candidate_tracker.md) |

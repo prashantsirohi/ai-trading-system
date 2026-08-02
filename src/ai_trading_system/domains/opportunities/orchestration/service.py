@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import time
+from collections import defaultdict
 from dataclasses import replace
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
@@ -80,9 +81,11 @@ from .admission import (
 )
 from .assembler import assemble_candidate_snapshot
 from .contracts import (
+    AdmissionReason,
     AdapterWarning,
     ClosureReason,
     EpisodeRelationType,
+    INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
     OpportunityRegistryMode,
     OpportunityShadowConfig,
     OpportunityShadowRunResult,
@@ -107,10 +110,13 @@ class OpportunityShadowSourceError(RuntimeError):
 class OpportunityArtifactSet:
     ranked_signals: StageArtifact
     investigator_scores: StageArtifact | None = None
+    routed_investigator_scores: StageArtifact | None = None
     breakout_scan: StageArtifact | None = None
     pattern_scan: StageArtifact | None = None
+    supplemental_pattern_scan: StageArtifact | None = None
     stock_scan: StageArtifact | None = None
     sector_dashboard: StageArtifact | None = None
+    supplemental_sector_dashboard: StageArtifact | None = None
     lifecycle_state: StageArtifact | None = None
     scan_routing: StageArtifact | None = None
     market_context: StageArtifact | None = None
@@ -156,10 +162,15 @@ class OpportunityShadowOrchestrator:
                 "ranked_signals is required and contains no usable rows"
             )
         raw_investigator = _read_csv(artifacts.investigator_scores)
+        raw_routed_investigator = _read_csv(artifacts.routed_investigator_scores)
         raw_breakout = _read_csv(artifacts.breakout_scan)
         raw_pattern = _read_csv(artifacts.pattern_scan)
+        raw_supplemental_pattern = _read_csv(artifacts.supplemental_pattern_scan)
         raw_stock = _read_csv(artifacts.stock_scan)
         raw_sector = _read_csv(artifacts.sector_dashboard)
+        raw_supplemental_sector = _read_csv(
+            artifacts.supplemental_sector_dashboard
+        )
         raw_lifecycle = _read_csv(artifacts.lifecycle_state)
         raw_routing = _read_csv(artifacts.scan_routing)
         raw_market_context = _read_json(artifacts.market_context)
@@ -187,11 +198,25 @@ class OpportunityShadowOrchestrator:
             "pattern": _descriptor_optional(
                 artifacts.pattern_scan, "rank", "pattern_scan", run_id, stage_attempt
             ),
+            "supplemental_pattern": _descriptor_optional(
+                artifacts.supplemental_pattern_scan,
+                "investigator",
+                "routed_pattern_scan",
+                run_id,
+                stage_attempt,
+            ),
             "stock": _descriptor_optional(
                 artifacts.stock_scan, "rank", "stock_scan", run_id, stage_attempt
             ),
             "sector": _descriptor_optional(
                 artifacts.sector_dashboard,
+                "rank",
+                "sector_dashboard",
+                run_id,
+                stage_attempt,
+            ),
+            "supplemental_sector": _descriptor_optional(
+                artifacts.supplemental_sector_dashboard,
                 "rank",
                 "sector_dashboard",
                 run_id,
@@ -212,6 +237,32 @@ class OpportunityShadowOrchestrator:
             as_of=as_of,
             prior_rank_positions=prior_positions,
         )
+        rank_keys = {
+            (
+                str(row.get("exchange") or "NSE").upper(),
+                str(row.get("symbol_id") or row.get("symbol") or "").upper(),
+            )
+            for row in raw_rank
+        }
+        investigator_rank_fallback_rows = [
+            row
+            for row in raw_investigator
+            if (
+                str(row.get("exchange") or "NSE").upper(),
+                str(row.get("symbol_id") or row.get("symbol") or "").upper(),
+            )
+            not in rank_keys
+        ]
+        investigator_rank_result = (
+            adapt_ranking_rows(
+                investigator_rank_fallback_rows,
+                source=descriptors["investigator"],
+                as_of=as_of,
+                prior_rank_positions=prior_positions,
+            )
+            if descriptors["investigator"] and investigator_rank_fallback_rows
+            else None
+        )
         evidence_result = (
             adapt_investigator_rows(
                 raw_investigator, source=descriptors["investigator"], as_of=as_of
@@ -231,6 +282,15 @@ class OpportunityShadowOrchestrator:
             if descriptors["pattern"]
             else None
         )
+        supplemental_pattern_result = (
+            adapt_pattern_rows(
+                raw_supplemental_pattern,
+                source=descriptors["supplemental_pattern"],
+                as_of=as_of,
+            )
+            if descriptors["supplemental_pattern"]
+            else None
+        )
         stock_result = (
             adapt_stock_stage_rows(raw_stock, source=descriptors["stock"], as_of=as_of)
             if descriptors["stock"]
@@ -241,6 +301,15 @@ class OpportunityShadowOrchestrator:
                 raw_sector, source=descriptors["sector"], as_of=as_of
             )
             if descriptors["sector"]
+            else None
+        )
+        supplemental_sector_result = (
+            adapt_sector_stage_rows(
+                raw_supplemental_sector,
+                source=descriptors["supplemental_sector"],
+                as_of=as_of,
+            )
+            if descriptors["supplemental_sector"]
             else None
         )
         lifecycle_result = (
@@ -254,17 +323,29 @@ class OpportunityShadowOrchestrator:
             item
             for item in (
                 rank_result,
+                investigator_rank_result,
                 evidence_result,
                 breakout_result,
                 pattern_result,
+                supplemental_pattern_result,
                 stock_result,
                 sector_result,
+                supplemental_sector_result,
                 lifecycle_result,
             )
             if item is not None
         )
         bundles, routing_rejections = _attach_routing(
-            _reconcile(results, raw_rank, raw_stock, as_of), raw_routing, as_of
+            _reconcile(results, raw_rank, raw_stock, as_of),
+            raw_routing,
+            as_of,
+            descriptor=_descriptor_optional(
+                artifacts.scan_routing,
+                "scan_router",
+                "scan_routing",
+                run_id,
+                stage_attempt,
+            ),
         )
         bundles = _attach_market_context(
             bundles,
@@ -327,6 +408,8 @@ class OpportunityShadowOrchestrator:
                 "investigator_diagnostic_cohorts",
                 "investigator_research_cohorts",
                 "investigator_calendar_windows",
+                "investigator_primary_sampling",
+                "investigator_source_fidelity",
             )
         }
         for result in results:
@@ -360,6 +443,12 @@ class OpportunityShadowOrchestrator:
             bundles,
         )
         sector_gate_taxonomy_counts: dict[str, int] = {}
+        authoritative_context = {
+            (record.exchange, record.symbol_id): record.value.investigator_context
+            for record in (evidence_result.records if evidence_result else ())
+            if record.value.investigator_context is not None
+        }
+        captured_context: dict[tuple[str, str], Any] = {}
         for bundle in bundles:
             if bundle.active_position:
                 counters["active_positions_total"] += 1
@@ -489,6 +578,29 @@ class OpportunityShadowOrchestrator:
                 continue
             elif recovery:
                 match_outcome = SetupMatchOutcome.NEW_EPISODE
+            elif (
+                admission.admitted
+                and admission.reason is AdmissionReason.INVESTIGATOR_PRIMARY_ONSET
+            ):
+                exact_primary = [
+                    item
+                    for item in matching_for_symbol
+                    if item.setup_family == "investigator_primary"
+                ]
+                if len(exact_primary) > 1:
+                    _conflict(
+                        rows,
+                        bundle,
+                        "multiple open investigator_primary episodes",
+                    )
+                    counters["registry_conflicts"] += 1
+                    continue
+                episode = exact_primary[0] if exact_primary else None
+                match_outcome = (
+                    SetupMatchOutcome.EXACT
+                    if episode is not None
+                    else SetupMatchOutcome.NEW_EPISODE
+                )
             elif admission.admitted and admission.setup_family:
                 match = match_open_episode(
                     exchange=bundle.exchange,
@@ -650,6 +762,10 @@ class OpportunityShadowOrchestrator:
                 and lineage.source_artifact_hash
                 in run_observation_hashes.get(episode.candidate_id, ())
             ):
+                if bundle.investigator_context is not None:
+                    captured_context[(bundle.exchange, bundle.symbol_id)] = (
+                        bundle.investigator_context
+                    )
                 counters["registry_duplicates"] += 1
                 rows["candidate_reconciliation"].append(
                     _reconciliation_row(
@@ -734,6 +850,10 @@ class OpportunityShadowOrchestrator:
                 days_without_progress=days_without_progress,
                 active_position=active_position,
             )
+            if snapshot is not None:
+                captured_context[(bundle.exchange, bundle.symbol_id)] = (
+                    snapshot.investigator_context
+                )
             try:
                 if transition.allowed:
                     rows["candidate_transitions"].append(
@@ -892,6 +1012,17 @@ class OpportunityShadowOrchestrator:
             )
             for name, output_rows in performance_outputs.items():
                 rows[name].extend(output_rows)
+        sampling_rows, fidelity_rows = _primary_sampling_evidence(
+            authoritative_context=authoritative_context,
+            captured_context=captured_context,
+            raw_routed_investigator=raw_routed_investigator,
+            policy_snapshot_id=policy_snapshot_id,
+        )
+        rows["investigator_primary_sampling"].extend(sampling_rows)
+        rows["investigator_source_fidelity"].extend(fidelity_rows)
+        rows["investigator_readiness_inputs"].extend(
+            _runtime_readiness_inputs(sampling_rows, fidelity_rows)
+        )
         if not config.dry_run:
             for state in self.registry.query_current_states():
                 rows["current_candidate_state"].append(asdict(state))
@@ -969,6 +1100,11 @@ class OpportunityShadowOrchestrator:
                 "transition_evidence_sufficient": bool(
                     rows["investigator_transition_matrix"]
                 ),
+                "primary_qualifying_observations": sampling_rows[0]["denominator"],
+                "primary_observations_captured": sampling_rows[0]["numerator"],
+                "investigator_source_fidelity_pct": fidelity_rows[0][
+                    "fidelity_pct"
+                ],
             }
         )
         return OpportunityShadowRunResult(
@@ -1467,12 +1603,14 @@ def _reconcile(
             str(row.get("symbol_id") or row.get("symbol") or "").upper(),
         )
         sector_by_key[key] = sector_name
-    sector_records: dict[str, Any] = {}
+    sector_records: dict[str, list[tuple[Any, SourceDescriptor]]] = defaultdict(list)
     for result in results:
         for record in result.records:
             value = record.value
             if hasattr(value, "sector_name") and hasattr(value, "stage_snapshot"):
-                sector_records[value.sector_name.strip().lower()] = value
+                sector_records[value.sector_name.strip().lower()].append(
+                    (value, record.source)
+                )
                 continue
             key = (record.exchange, record.symbol_id)
             item = by_key.setdefault(
@@ -1500,8 +1638,15 @@ def _reconcile(
     for key in sorted(by_key):
         item = by_key[key]
         sector_name = sector_by_key.get(key, "unknown")
-        sector = sector_records.get(sector_name.lower())
-        sources = {source.artifact_hash: source for source in item["sources"]}
+        sector_evidence = sector_records.get(sector_name.lower(), [])
+        sector = _merge_sector_snapshots(sector_evidence)
+        sources = {
+            source.artifact_hash: source
+            for source in (
+                *item["sources"],
+                *(source for _, source in sector_evidence),
+            )
+        }
         bundles.append(
             OpportunitySourceBundle(
                 symbol_id=key[1],
@@ -1531,6 +1676,8 @@ def _attach_routing(
     bundles: tuple[OpportunitySourceBundle, ...],
     rows: list[dict[str, Any]],
     as_of: datetime,
+    *,
+    descriptor: SourceDescriptor | None = None,
 ) -> tuple[tuple[OpportunitySourceBundle, ...], tuple[RejectedSourceRow, ...]]:
     routing = {
         (
@@ -1560,6 +1707,11 @@ def _attach_routing(
         existing = by_key.get(
             key, OpportunitySourceBundle(symbol_id=key[1], exchange=key[0], as_of=as_of)
         )
+        sources = existing.source_lineage
+        if descriptor is not None and all(
+            item.artifact_hash != descriptor.artifact_hash for item in sources
+        ):
+            sources = (*sources, descriptor)
         by_key[key] = replace(
             existing,
             scan_tier=str(
@@ -1579,8 +1731,48 @@ def _attach_routing(
             missing_data_fields=tuple(
                 str(item) for item in _list_value(row.get("missing_data_fields"))
             ),
+            source_lineage=sources,
         )
     return tuple(by_key[key] for key in sorted(by_key)), tuple(rejections)
+
+
+def _merge_sector_snapshots(
+    evidence: list[tuple[Any, SourceDescriptor]],
+) -> Any | None:
+    """Combine structural stage and rank RS without allowing either to erase the other."""
+    if not evidence:
+        return None
+    structural = next(
+        (
+            value
+            for value, _ in evidence
+            if value.stage_snapshot.effective_stage is not WeinsteinStage.UNKNOWN
+        ),
+        evidence[0][0],
+    )
+    relative_strength = next(
+        (
+            value.sector_relative_strength_state
+            for value, _ in evidence
+            if str(value.sector_relative_strength_state or "").strip().lower()
+            not in {"", "unknown", "none", "nan", "<na>"}
+        ),
+        structural.sector_relative_strength_state,
+    )
+    rotation = next(
+        (
+            value.sector_rotation_state
+            for value, _ in evidence
+            if str(value.sector_rotation_state or "").strip().lower()
+            not in {"", "unknown", "none", "nan", "<na>"}
+        ),
+        structural.sector_rotation_state,
+    )
+    return replace(
+        structural,
+        sector_relative_strength_state=relative_strength,
+        sector_rotation_state=rotation,
+    )
 
 
 def _recovery_bundle(bundle: OpportunitySourceBundle) -> OpportunitySourceBundle:
@@ -2075,6 +2267,136 @@ def _initial_counts(*args: Any) -> dict[str, Any]:
         "active_positions_with_complete_evidence": 0,
         "active_positions_fully_monitored": 0,
     }
+
+
+def _primary_sampling_evidence(
+    *,
+    authoritative_context: dict[tuple[str, str], Any],
+    captured_context: dict[tuple[str, str], Any],
+    raw_routed_investigator: list[dict[str, Any]],
+    policy_snapshot_id: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    primary = {
+        key: context
+        for key, context in authoritative_context.items()
+        if bool(context.review_eligible)
+    }
+    captured = {
+        key: captured_context[key]
+        for key in primary
+        if key in captured_context and captured_context[key].review_eligible
+    }
+    denominator = len(primary)
+    numerator = len(captured)
+    sampling_pct = round(100.0 * numerator / denominator, 6) if denominator else 100.0
+    sampling = [
+        {
+            "metric_name": "primary_observation_capture",
+            "numerator": numerator,
+            "denominator": denominator,
+            "capture_pct": sampling_pct,
+            "target_pct": 100.0,
+            "status": "PASS" if sampling_pct >= 100.0 else "FAIL",
+            "missing_symbols": sorted(
+                f"{exchange}:{symbol}" for exchange, symbol in set(primary) - set(captured)
+            ),
+            "policy_version": INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+            "policy_snapshot_id": policy_snapshot_id,
+        }
+    ]
+    fields = (
+        "move_tag",
+        "trigger_reason",
+        "final_score",
+        "breakout_type",
+    )
+    mismatches: list[str] = []
+    for key, expected in primary.items():
+        observed = captured.get(key)
+        if observed is None:
+            mismatches.append(f"{key[0]}:{key[1]}:snapshot_missing")
+            continue
+        for field in fields:
+            if _fidelity_value(getattr(expected, field, None)) != _fidelity_value(
+                getattr(observed, field, None)
+            ):
+                mismatches.append(f"{key[0]}:{key[1]}:{field}")
+    routed_by_key = {
+        (
+            str(row.get("exchange") or "NSE").upper(),
+            str(row.get("symbol_id") or row.get("symbol") or "").upper(),
+        ): row
+        for row in raw_routed_investigator
+        if str(row.get("symbol_id") or row.get("symbol") or "").strip()
+    }
+    routed_divergence = 0
+    for key, expected in authoritative_context.items():
+        routed = routed_by_key.get(key)
+        if routed is None:
+            continue
+        if any(
+            _fidelity_value(getattr(expected, field, None))
+            != _fidelity_value(routed.get(field))
+            for field in fields
+        ):
+            routed_divergence += 1
+    fidelity_numerator = max(denominator - len({item.rsplit(":", 1)[0] for item in mismatches}), 0)
+    fidelity_pct = (
+        round(100.0 * fidelity_numerator / denominator, 6)
+        if denominator
+        else 100.0
+    )
+    fidelity = [
+        {
+            "metric_name": "authoritative_investigator_source_fidelity",
+            "numerator": fidelity_numerator,
+            "denominator": denominator,
+            "fidelity_pct": fidelity_pct,
+            "target_pct": 100.0,
+            "status": "PASS" if fidelity_pct >= 100.0 else "FAIL",
+            "mismatch_reasons": sorted(mismatches),
+            "routed_sidecar_divergence_count": routed_divergence,
+            "authoritative_artifact": "investigator_scores",
+            "policy_version": INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+            "policy_snapshot_id": policy_snapshot_id,
+        }
+    ]
+    return sampling, fidelity
+
+
+def _runtime_readiness_inputs(
+    sampling_rows: list[dict[str, Any]],
+    fidelity_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    sampling = sampling_rows[0]
+    fidelity = fidelity_rows[0]
+    return [
+        {
+            "check_id": "INVESTIGATOR_PRIMARY_OBSERVATION_CAPTURE",
+            "category": "investigator_sampling",
+            "status": sampling["status"],
+            "observed": sampling["capture_pct"],
+            "expected": ">=100.0",
+            "production_blocking": True,
+            "policy_version": sampling["policy_version"],
+        },
+        {
+            "check_id": "INVESTIGATOR_SOURCE_FIDELITY",
+            "category": "investigator_sampling",
+            "status": fidelity["status"],
+            "observed": fidelity["fidelity_pct"],
+            "expected": ">=100.0",
+            "production_blocking": True,
+            "policy_version": fidelity["policy_version"],
+        },
+    ]
+
+
+def _fidelity_value(value: Any) -> Any:
+    parsed = _optional_float(value)
+    if parsed is not None:
+        return round(parsed, 8)
+    return str(value or "UNKNOWN").strip().upper().replace(" ", "_").replace("-", "_")
 
 
 def _list_value(value: Any) -> list[Any]:

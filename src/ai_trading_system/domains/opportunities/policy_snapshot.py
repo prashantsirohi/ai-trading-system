@@ -28,6 +28,8 @@ from ai_trading_system.domains.opportunities.orchestration.contracts import (
     INVESTIGATOR_CONDITIONAL_LANES,
     INVESTIGATOR_PRIMARY_LANE,
     INVESTIGATOR_RESEARCH_ONLY_LANES,
+    INVESTIGATOR_SECTOR_INDEX_ALIASES,
+    INVESTIGATOR_SECTOR_INDEX_POLICY_VERSION,
     LIFECYCLE_RULE_VERSION,
     RETENTION_RULE_VERSION,
     SECTOR_GATE_RULES,
@@ -175,6 +177,19 @@ def policy_content(
             ),
             "stage2_bonus_contribution": 0.0,
             "execution_eligibility": False,
+            "authoritative_investigator_artifact": "investigator_scores",
+            "routed_investigator_role": "diagnostic_only",
+            "primary_episode_family": "investigator_primary",
+            "primary_onset_structural_blocking": False,
+            "sector_evidence_ownership": {
+                "weekly_sector_stage_universe": "structural_stage",
+                "sector_dashboard": "relative_strength_and_quadrant",
+            },
+        },
+        INVESTIGATOR_SECTOR_INDEX_POLICY_VERSION: {
+            "aliases": dict(INVESTIGATOR_SECTOR_INDEX_ALIASES),
+            "requires_primary_mapping": True,
+            "unmapped_consumer_policy": "fail_closed",
         },
     }
 

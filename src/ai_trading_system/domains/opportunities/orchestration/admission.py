@@ -103,6 +103,24 @@ def _investigator_promotion(bundle: OpportunitySourceBundle, config: Opportunity
     }
 
 
+def _investigator_primary_onset(
+    bundle: OpportunitySourceBundle, config: OpportunityShadowConfig
+) -> RuleResult:
+    """Admit the frozen primary lane independently of structural dimensions."""
+    del config
+    context = bundle.investigator_context
+    passed = bool(context and context.review_eligible)
+    return passed, {
+        "move_tag": context.move_tag if context else None,
+        "final_score": context.final_score if context else None,
+        "review_eligible": context.review_eligible if context else False,
+    }, {
+        "move_tag": "WEEKLY_MOMENTUM",
+        "final_score_min": 65.0,
+        "attribution_dimensions_can_block": False,
+    }
+
+
 def _qualified_pattern(bundle: OpportunitySourceBundle, config: OpportunityShadowConfig) -> RuleResult:
     event = next(
         (item for item in bundle.pattern_events if item.qualified and not item.failed),
@@ -149,6 +167,12 @@ def _rank_threshold(bundle: OpportunitySourceBundle, config: OpportunityShadowCo
 _RULES_BY_NAME: dict[str, AdmissionRuleDefinition] = {
     item.rule.value: item
     for item in (
+        AdmissionRuleDefinition(
+            AdmissionReason.INVESTIGATOR_PRIMARY_ONSET,
+            SetupFamily.INVESTIGATOR_PRIMARY,
+            "first qualifying frozen-policy Investigator onset",
+            _investigator_primary_onset,
+        ),
         AdmissionRuleDefinition(AdmissionReason.QUALIFIED_BREAKOUT, SetupFamily.BREAKOUT, "qualified breakout", _qualified_breakout),
         AdmissionRuleDefinition(AdmissionReason.STAGE_TRANSITION, SetupFamily.STAGE_1_TO_2_TRANSITION, "high-confidence Stage 1 to 2 transition", _stage_transition),
         AdmissionRuleDefinition(AdmissionReason.EARLY_ACCUMULATION, SetupFamily.EARLY_ACCUMULATION, "strong early accumulation", _early_accumulation),
@@ -209,6 +233,20 @@ def evaluate_admission(
     config: OpportunityShadowConfig,
     policy_snapshot_id: str | None = None,
 ) -> AdmissionEvaluation:
+    evaluations = evaluate_all_admission_rules(bundle, config)
+    primary = choose_by_precedence(evaluations)
+    satisfied = tuple(item.rule for item in evaluations if item.passed)
+    # Frozen Investigator attribution is sampled independently. Stage, pattern,
+    # setup quality, and breakout remain context and cannot block this lane.
+    if primary is not None and primary.rule is AdmissionReason.INVESTIGATOR_PRIMARY_ONSET:
+        return _admitted_evaluation(
+            bundle,
+            primary,
+            satisfied,
+            evaluations,
+            policy_snapshot_id,
+        )
+
     stage = (
         bundle.stock_stage.effective_stage
         if bundle.stock_stage
@@ -230,9 +268,6 @@ def evaluate_admission(
             None,
         )
 
-    evaluations = evaluate_all_admission_rules(bundle, config)
-    primary = choose_by_precedence(evaluations)
-    satisfied = tuple(item.rule for item in evaluations if item.passed)
     if primary is None:
         return AdmissionEvaluation(
             False,
@@ -245,6 +280,22 @@ def evaluate_admission(
             satisfied_rules=satisfied,
             rule_evaluations=evaluations,
         )
+    return _admitted_evaluation(
+        bundle,
+        primary,
+        satisfied,
+        evaluations,
+        policy_snapshot_id,
+    )
+
+
+def _admitted_evaluation(
+    bundle: OpportunitySourceBundle,
+    primary: AdmissionRuleEvaluation,
+    satisfied: tuple[AdmissionReason, ...],
+    evaluations: tuple[AdmissionRuleEvaluation, ...],
+    policy_snapshot_id: str | None,
+) -> AdmissionEvaluation:
     identity = stable_digest(
         {
             "exchange": bundle.exchange,

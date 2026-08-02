@@ -131,7 +131,7 @@ def test_shadow_service_writes_and_replay_is_idempotent(tmp_path):
     assert admission["primary_admission_reason"] == "qualified_breakout"
     assert admission["primary_setup_family"] == "breakout"
     assert "rank_threshold" in json.loads(admission["satisfied_admission_rules"])
-    assert len(json.loads(admission["rule_evaluations"])) == 7
+    assert len(json.loads(admission["rule_evaluations"])) == 8
     episode = service.registry.list_open_episodes()[0]
     assert (
         episode.satisfied_admission_rules_json == admission["satisfied_admission_rules"]
@@ -177,7 +177,7 @@ def test_not_admitted_reconciliation_surfaces_rule_evaluations(tmp_path):
     row = result.artifact_rows["candidate_reconciliation"][0]
     assert row["outcome"] == "not_admitted"
     evaluations = json.loads(row["rule_evaluations"])
-    assert len(evaluations) == 7
+    assert len(evaluations) == 8
     assert not any(item["passed"] for item in evaluations)
 
 

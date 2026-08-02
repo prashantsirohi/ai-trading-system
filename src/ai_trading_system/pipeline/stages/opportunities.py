@@ -68,19 +68,24 @@ class OpportunityStage:
         )
         artifact_set = OpportunityArtifactSet(
             ranked_signals=ranked,
-            investigator_scores=(
+            # The full Investigator output owns attribution.  Routed scores are
+            # a scan-efficiency sidecar and must never replace score, move-tag,
+            # trigger, breakout, or price evidence.
+            investigator_scores=context.artifact_for(
+                "investigator", "investigator_scores"
+            ),
+            routed_investigator_scores=(
                 context.artifact_for("investigator", "routed_investigator_scores")
                 if phase3b_shadow
                 else None
-            )
-            or context.artifact_for("investigator", "investigator_scores"),
+            ),
             breakout_scan=context.artifact_for("rank", "breakout_scan"),
-            pattern_scan=(
+            pattern_scan=context.artifact_for("rank", "pattern_scan"),
+            supplemental_pattern_scan=(
                 context.artifact_for("investigator", "routed_pattern_scan")
                 if phase3b_shadow
                 else None
-            )
-            or context.artifact_for("rank", "pattern_scan"),
+            ),
             stock_scan=(
                 context.artifact_for("weekly_stage", "weekly_stock_stage_universe")
                 if phase3b_shadow
@@ -93,6 +98,11 @@ class OpportunityStage:
                 else None
             )
             or context.artifact_for("rank", "sector_dashboard"),
+            supplemental_sector_dashboard=(
+                context.artifact_for("rank", "sector_dashboard")
+                if phase3b_shadow
+                else None
+            ),
             lifecycle_state=(
                 context.artifact_for("investigator", "stage1_current_state")
                 or context.artifact_for("investigator", "stage1_state")
@@ -201,6 +211,8 @@ class OpportunityStage:
             "investigator_diagnostic_cohorts": "investigator_diagnostic_cohorts.csv",
             "investigator_research_cohorts": "investigator_research_cohorts.csv",
             "investigator_calendar_windows": "investigator_calendar_windows.csv",
+            "investigator_primary_sampling": "investigator_primary_sampling.csv",
+            "investigator_source_fidelity": "investigator_source_fidelity.csv",
         }
         for artifact_type, filename in filenames.items():
             rows = [dict(row) for row in result.artifact_rows.get(artifact_type, ())]

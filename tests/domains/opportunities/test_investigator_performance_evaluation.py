@@ -194,7 +194,7 @@ def test_matures_discovery_and_confirmed_entry_metrics(tmp_path: Path) -> None:
         executable = conn.execute(
             """
             SELECT session_date, next_session_open, simulated_fill_price,
-                   fill_policy_version
+                   fill_policy_version, policy_version
             FROM investigator_performance_event
             WHERE candidate_id = 'candidate-1'
               AND event_type = 'EXECUTABLE_AVAILABLE'
@@ -217,6 +217,16 @@ def test_matures_discovery_and_confirmed_entry_metrics(tmp_path: Path) -> None:
                 """
             ).fetchall()
         }
+        evaluation_policy_versions = {
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT DISTINCT policy_version
+                FROM investigator_evaluation_transition
+                WHERE candidate_id = 'candidate-1'
+                """
+            ).fetchall()
+        }
 
     assert discovery_3d[0] == pytest.approx(3.0)
     assert discovery_3d[1] == pytest.approx(4.0)
@@ -231,10 +241,12 @@ def test_matures_discovery_and_confirmed_entry_metrics(tmp_path: Path) -> None:
     assert executable[1] == 103.0
     assert executable[2] == pytest.approx(103.0515)
     assert executable[3] == "investigator-shadow-fill-v1"
+    assert executable[4] == "investigator-attribution-policy-v1"
     assert stop_day == 1
     assert {"PENDING_3D", "CONFIRMED", "EXECUTABLE", "SUSTAINED_10D"}.issubset(
         evaluation_states
     )
+    assert evaluation_policy_versions == {"investigator-attribution-policy-v1"}
     assert outputs["investigator_discovery_scorecard"]
     assert outputs["investigator_entry_scorecard"]
     assert outputs["investigator_executable_scorecard"]
@@ -358,6 +370,52 @@ def test_missing_sector_mapping_is_partial_not_fallback(tmp_path: Path) -> None:
         and "sector_index_mapping_missing" in item["data_quality_reason"]
         for item in outputs["investigator_missing_data_reasons"]
     )
+
+
+def test_governed_sector_alias_resolves_primary_index_mapping(tmp_path: Path) -> None:
+    ohlcv = tmp_path / "ohlcv.duckdb"
+    sessions = _seed_market(ohlcv)
+    with duckdb.connect(str(ohlcv)) as conn:
+        conn.execute(
+            """
+            INSERT INTO sector_to_index
+            VALUES ('Pharma', 'NIFTY_PHARMA', 'NIFTY PHARMA', TRUE, NULL, CURRENT_TIMESTAMP)
+            """
+        )
+        conn.executemany(
+            "INSERT INTO _index_catalog VALUES ('NIFTY_PHARMA', ?, ?, ?, ?, ?)",
+            [
+                (session, 400 + index, 401 + index, 399 + index, 400 + index)
+                for index, session in enumerate(sessions)
+            ],
+        )
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    with registry._writer() as conn:  # noqa: SLF001
+        _insert_event(
+            conn,
+            event_id="event-pharma-alias",
+            event_type="CANDIDATE_DISCOVERED",
+            event_date=sessions[0],
+            anchor=100.0,
+        )
+        conn.execute(
+            "UPDATE investigator_performance_event SET sector_name = ? WHERE event_id = ?",
+            ["Pharmaceuticals & Biotechnology", "event-pharma-alias"],
+        )
+
+    mature_performance_events(registry, ohlcv_db_path=ohlcv)
+
+    with registry._connect(read_only=True) as conn:  # noqa: SLF001
+        row = conn.execute(
+            """
+            SELECT sector_index_code, sector_return_pct, data_quality_reason
+            FROM investigator_performance_horizon
+            WHERE event_id = 'event-pharma-alias' AND horizon_sessions = 3
+            """
+        ).fetchone()
+    assert row[0] == "NIFTY_PHARMA"
+    assert row[1] is not None
+    assert not row[2] or "sector_index_mapping_missing" not in row[2]
 
 
 def test_missing_pending_3d_sequence_does_not_force_transition_label(

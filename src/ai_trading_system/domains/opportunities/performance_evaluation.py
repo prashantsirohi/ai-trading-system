@@ -14,6 +14,7 @@ import duckdb
 from ai_trading_system.pipeline.registry import RegistryStore
 from ai_trading_system.domains.opportunities.orchestration.contracts import (
     INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+    INVESTIGATOR_SECTOR_INDEX_ALIASES,
 )
 
 
@@ -27,6 +28,9 @@ FAILED_STATES = {"failed", "weakening", "exited", "archived"}
 BENCHMARK_SYMBOL = "NIFTY_50"
 SHADOW_FILL_POLICY_VERSION = "investigator-shadow-fill-v1"
 SHADOW_FILL_SLIPPAGE_BPS = 5.0
+# Event-sector names are governed aliases to existing primary mappings.  This
+# does not invent a fallback comparator; Consumer intentionally remains absent
+# until its non-primary FMCG mapping receives an explicit policy decision.
 COVERAGE_TARGETS = {
     "stage_attribution": 95.0,
     "pattern_evaluation_attempted": 95.0,
@@ -139,6 +143,9 @@ def _append_executable_events(
         }
         digest = _digest(identity)
         context_json = str(event.get("context_json") or "{}")
+        event_policy_version = str(
+            event.get("policy_version") or "investigator-attribution-policy-v1"
+        )
         semantic_hash = _digest(
             {
                 **identity,
@@ -192,7 +199,7 @@ def _append_executable_events(
                 fill_price,
                 event.get("invalidation_price"),
                 SHADOW_FILL_POLICY_VERSION,
-                INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+                event_policy_version,
             ],
         )
 
@@ -250,10 +257,14 @@ def _load_market_data(
             else []
         )
         sector_map = {
-            str(sector): str(index_code)
+            _normalize_sector(sector): str(index_code)
             for sector, index_code in sector_rows
             if sector and index_code
         }
+        for event_sector, governed_sector in INVESTIGATOR_SECTOR_INDEX_ALIASES.items():
+            index_code = sector_map.get(_normalize_sector(governed_sector))
+            if index_code:
+                sector_map[_normalize_sector(event_sector)] = index_code
         index_codes = sorted({BENCHMARK_SYMBOL, *sector_map.values()})
         index_placeholders = ", ".join("?" for _ in index_codes)
         index_rows = (
@@ -339,7 +350,9 @@ def _mature_horizon(
         "benchmark_symbol": BENCHMARK_SYMBOL,
         "benchmark_return_pct": None,
         "benchmark_relative_return_pct": None,
-        "sector_index_code": sector_map.get(str(event.get("sector_name") or "")),
+        "sector_index_code": sector_map.get(
+            _normalize_sector(event.get("sector_name"))
+        ),
         "sector_return_pct": None,
         "sector_relative_return_pct": None,
         "lifecycle_outcome": None,
@@ -590,6 +603,9 @@ def _insert_evaluation_transition(
     session_date: date,
     reason_code: str,
 ) -> None:
+    event_policy_version = str(
+        event.get("policy_version") or "investigator-attribution-policy-v1"
+    )
     if conn.execute(
         """
         SELECT COUNT(*)
@@ -599,7 +615,7 @@ def _insert_evaluation_transition(
         [
             event["candidate_id"],
             to_state,
-            INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+            event_policy_version,
         ],
     ).fetchone()[0]:
         return
@@ -609,7 +625,7 @@ def _insert_evaluation_transition(
         "from_state": from_state,
         "to_state": to_state,
         "session_date": session_date.isoformat(),
-        "policy_version": INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+        "policy_version": event_policy_version,
     }
     digest = _digest(identity)
     context_json = str(event.get("context_json") or "{}")
@@ -634,7 +650,7 @@ def _insert_evaluation_transition(
             transitioned_at,
             session_date,
             reason_code,
-            INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+            event_policy_version,
             event["event_id"],
             event.get("source_snapshot_id"),
             event.get("source_transition_id"),
@@ -963,6 +979,19 @@ def _build_outputs(
             """
         )
     )
+    coverage_history = _records(
+        conn.execute(
+            """
+            SELECT as_of_date, metric_name, status
+            FROM investigator_attribution_coverage_receipt
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY as_of_date, metric_name
+                ORDER BY created_at DESC, receipt_id DESC
+            ) = 1
+            ORDER BY as_of_date, metric_name
+            """
+        )
+    )
     missing_reasons = _records(
         conn.execute(
             """
@@ -1010,6 +1039,15 @@ def _build_outputs(
         }
         for row in coverage
     ]
+    readiness_inputs.extend(
+        _phase35_readiness_inputs(
+            events=events,
+            horizons=horizons,
+            coverage=coverage,
+            coverage_history=coverage_history,
+            calendar_windows=calendar_windows,
+        )
+    )
     return {
         "investigator_performance_events": events,
         "investigator_performance_horizons": horizons,
@@ -1034,6 +1072,96 @@ def _build_outputs(
         "investigator_research_cohorts": cohort_outputs["research"],
         "investigator_calendar_windows": calendar_windows,
     }
+
+
+def _phase35_readiness_inputs(
+    *,
+    events: list[dict[str, Any]],
+    horizons: list[dict[str, Any]],
+    coverage: list[dict[str, Any]],
+    coverage_history: list[dict[str, Any]],
+    calendar_windows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    primary_discovery = [
+        row
+        for row in events
+        if row.get("event_type") == "CANDIDATE_DISCOVERED"
+        and bool(row.get("primary_eligible"))
+        and row.get("attribution_mode") in PRIMARY_ATTRIBUTION_MODES
+    ]
+    discovery_sessions = len({_date(row["session_date"]) for row in primary_discovery})
+    matured_20 = [
+        row
+        for row in horizons
+        if row.get("event_type") == "CANDIDATE_DISCOVERED"
+        and int(row.get("horizon_sessions") or 0) == 20
+        and bool(row.get("primary_eligible"))
+        and row.get("attribution_mode") in PRIMARY_ATTRIBUTION_MODES
+        and row.get("close_to_close_return_pct") is not None
+    ]
+    positive_windows = [
+        row
+        for row in calendar_windows
+        if row.get("event_type") == "EXECUTABLE_AVAILABLE"
+        and int(row.get("horizon_sessions") or 0) == 20
+        and bool(row.get("window_stable"))
+    ]
+    by_date: dict[date, dict[str, str]] = defaultdict(dict)
+    for row in coverage_history:
+        by_date[_date(row["as_of_date"])][str(row["metric_name"])] = str(
+            row["status"]
+        )
+    coverage_streak = 0
+    for session in sorted(by_date, reverse=True):
+        statuses = by_date[session]
+        if len(statuses) != len(COVERAGE_TARGETS) or any(
+            statuses.get(metric) != "PASS" for metric in COVERAGE_TARGETS
+        ):
+            break
+        coverage_streak += 1
+    checks = (
+        (
+            "INVESTIGATOR_20_SESSION_COVERAGE_GATE",
+            coverage_streak,
+            20,
+            "PASS" if coverage_streak >= 20 else "PENDING",
+            "consecutive receipt dates with all eight coverage metrics passing",
+        ),
+        (
+            "INVESTIGATOR_DISCOVERY_SESSION_SAMPLE",
+            discovery_sessions,
+            30,
+            "PASS" if discovery_sessions >= 30 else "PENDING",
+            "30 discovery sessions minimum; continue toward 40 before Phase 4",
+        ),
+        (
+            "INVESTIGATOR_PRIMARY_MATURED_20D_SAMPLE",
+            len(matured_20),
+            120,
+            "PASS" if len(matured_20) >= 120 else "PENDING",
+            "policy-eligible confidence requires at least 120 primary 20-session episodes",
+        ),
+        (
+            "INVESTIGATOR_POSITIVE_NON_OVERLAP_WINDOWS",
+            len(positive_windows),
+            3,
+            "PASS" if len(positive_windows) >= 3 else "PENDING",
+            "requires positive slippage-adjusted executable return and benchmark-relative return in at least three non-overlapping windows",
+        ),
+    )
+    return [
+        {
+            "check_id": check_id,
+            "category": "investigator_operational_readiness",
+            "status": status,
+            "observed": observed,
+            "expected": f">={expected}",
+            "production_blocking": True,
+            "policy_version": INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+            "details": details,
+        }
+        for check_id, observed, expected, status, details in checks
+    ]
 
 
 def _symbol_sensitivity(
@@ -1190,6 +1318,17 @@ def _calendar_windows(horizons: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for (event_type, horizon, window_index), group in sorted(grouped.items()):
         window_sessions = sorted(_date(row["session_date"]) for row in group)
         returns = [float(row["close_to_close_return_pct"]) for row in group]
+        benchmark_relative = [
+            float(row["benchmark_relative_return_pct"])
+            for row in group
+            if row.get("benchmark_relative_return_pct") is not None
+        ]
+        avg_return = sum(returns) / len(returns)
+        avg_benchmark_relative = (
+            sum(benchmark_relative) / len(benchmark_relative)
+            if benchmark_relative
+            else None
+        )
         output.append(
             {
                 "event_type": event_type,
@@ -1198,8 +1337,18 @@ def _calendar_windows(horizons: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "window_start": window_sessions[0],
                 "window_end": window_sessions[-1],
                 "sample_count": len(group),
-                "avg_return_pct": round(sum(returns) / len(returns), 6),
-                "positive_expectancy": sum(returns) / len(returns) > 0,
+                "avg_return_pct": round(avg_return, 6),
+                "avg_benchmark_relative_return_pct": (
+                    round(avg_benchmark_relative, 6)
+                    if avg_benchmark_relative is not None
+                    else None
+                ),
+                "positive_expectancy": avg_return > 0,
+                "window_stable": bool(
+                    avg_return > 0
+                    and avg_benchmark_relative is not None
+                    and avg_benchmark_relative > 0
+                ),
                 "sample_confidence": _confidence_label(len(group)),
             }
         )
@@ -1283,6 +1432,10 @@ def _date(value: Any) -> date:
     if isinstance(value, date):
         return value
     return date.fromisoformat(str(value)[:10])
+
+
+def _normalize_sector(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
 
 
 def _records(cursor: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:

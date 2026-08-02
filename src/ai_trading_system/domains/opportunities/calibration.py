@@ -492,8 +492,9 @@ def build_calibration_dataset(
         copied_realistic_performance_summary=copied_realistic_performance_summary,
         operator_migrations_applied=operator_migrations_applied,
         real_phase3b_history_present=real_phase3b_history_present,
-        investigator_readiness_checks=readiness_evidence_payload.get(
-            "investigator_attribution_checks", ()
+        investigator_readiness_checks=(
+            *readiness_evidence_payload.get("investigator_attribution_checks", ()),
+            *readiness_evidence_payload.get("investigator_operational_checks", ()),
         ),
     )
     return CalibrationBuildResult(
@@ -653,15 +654,24 @@ def evaluate_phase4_readiness(
             else ReadinessStatus.NOT_EVALUATED
         )
         metric = str(item.get("metric_name") or "unknown").upper()
+        is_coverage = item.get("coverage_pct") is not None
+        observed = (
+            item.get("coverage_pct") if is_coverage else item.get("observed")
+        )
+        expected = (
+            f">={item.get('target_pct')}%"
+            if is_coverage
+            else f">={item.get('target')}"
+        )
         add(
             f"INVESTIGATOR_{metric}",
             "investigator_attribution",
             status,
-            item.get("coverage_pct"),
-            f">={item.get('target_pct')}%",
+            observed,
+            expected,
             severity="critical",
             limitation_id=f"INVESTIGATOR_{metric}_BELOW_TARGET",
-            description=f"Investigator {metric.lower()} coverage is below its frozen target",
+            description=f"Investigator {metric.lower()} evidence is below its frozen target",
             remediation="repair point-in-time evidence and rerun the shadow window",
             development_blocking=status is ReadinessStatus.FAIL,
         )

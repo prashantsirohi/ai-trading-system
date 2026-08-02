@@ -26,12 +26,13 @@ from ai_trading_system.domains.opportunities.position_monitoring import (
 )
 
 
-ADMISSION_RULE_VERSION = "admission-rules-v1.1"
+ADMISSION_RULE_VERSION = "admission-rules-v1.2"
 # Intentionally pinned: the label may point-bump without adding a second
 # avoidable candidate-ID discontinuity. Exact policy content remains identity
 # bound independently through policy_snapshot_id.
 ADMISSION_IDENTITY_RULE_VERSION = "admission-rules-v1"
 ADMISSION_RULE_PRECEDENCE: tuple[str, ...] = (
+    "investigator_primary_onset",
     "qualified_breakout",
     "stage_transition",
     "early_accumulation",
@@ -45,7 +46,7 @@ LIFECYCLE_RULE_VERSION = "lifecycle-policy-v1.1"
 PROGRESS_RULE_VERSION = "opportunity-progress-v1"
 RETENTION_RULE_VERSION = "opportunity-retention-v1.1"
 LEGACY_STAGE_CONFIDENCE_VERSION = "weekly-stage-legacy-v1"
-INVESTIGATOR_ATTRIBUTION_POLICY_VERSION = "investigator-attribution-policy-v1"
+INVESTIGATOR_ATTRIBUTION_POLICY_VERSION = "investigator-attribution-policy-v2"
 INVESTIGATOR_PRIMARY_LANE = "WEEKLY_MOMENTUM"
 INVESTIGATOR_ACTIVE_REVIEW_SCORE = 65.0
 INVESTIGATOR_CONDITIONAL_LANES: tuple[str, ...] = ("DAILY_GAINER",)
@@ -56,6 +57,12 @@ INVESTIGATOR_ATTRIBUTION_ONLY_DIMENSIONS: tuple[str, ...] = (
     "setup_quality",
     "breakout",
 )
+INVESTIGATOR_SECTOR_INDEX_POLICY_VERSION = "investigator-sector-index-taxonomy-v1"
+INVESTIGATOR_SECTOR_INDEX_ALIASES: dict[str, str] = {
+    "pharmaceuticals & biotechnology": "pharma",
+    "it - services": "it",
+    "minerals & mining": "metals/mining",
+}
 
 
 # ADR-0006 A2. These values are consumed by the gate and by the A3 policy
@@ -76,6 +83,7 @@ class OpportunityRegistryMode(str, Enum):
 
 
 class AdmissionReason(str, Enum):
+    INVESTIGATOR_PRIMARY_ONSET = "investigator_primary_onset"
     RANK_THRESHOLD = "rank_threshold"
     RANK_VELOCITY = "rank_velocity"
     INVESTIGATOR_PROMOTION = "investigator_promotion"
@@ -88,6 +96,7 @@ class AdmissionReason(str, Enum):
 
 
 class SetupFamily(str, Enum):
+    INVESTIGATOR_PRIMARY = "investigator_primary"
     EARLY_ACCUMULATION = "early_accumulation"
     BASE_BUILDING = "base_building"
     STAGE_1_TO_2_TRANSITION = "stage_1_to_2_transition"

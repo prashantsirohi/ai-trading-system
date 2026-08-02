@@ -2,7 +2,7 @@
 
 - **Purpose:** Define the non-authoritative Phase 3A adapter, admission, lifecycle, retention, and registry-write workflow.
 - **Audience:** Engineers operating or changing canonical opportunity reconciliation.
-- **Last verified:** 2026-07-16
+- **Last verified:** 2026-08-02
 - **Source of truth:** `src/ai_trading_system/domains/opportunities/adapters/`, `src/ai_trading_system/domains/opportunities/orchestration/`, and `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
@@ -38,7 +38,7 @@ flowchart TD
 
 Adapters are pure and return records, warnings, rejected rows, and source metadata. Rank position may come from stable artifact order; percentile may come from position and row count. Rank velocity requires a prior registry rank. Investigator total score remains required, while unavailable components remain null. Missing Investigator output is not negative evidence.
 
-Weekly stock confidence is converted from `0–1` to `0–100`. A source week is locked only when explicitly locked or already completed, and a source creation/lock timestamp must exist. Same-day weeks remain provisional. Current sector artifacts supply RS and rotation but not Weinstein structure, so their structural stage is `UNKNOWN`; positive sector rank never implies Stage 2.
+Weekly stock confidence is converted from `0–1` to `0–100`. A source week is locked only when explicitly locked or already completed, and a source creation/lock timestamp must exist. Same-day weeks remain provisional. Weekly sector artifacts own Weinstein structure; rank sector artifacts own RS percentile and quadrant. Reconciliation combines those fields by ownership, so positive sector rank never implies Stage 2 and missing rank context cannot erase valid weekly structure.
 
 Legacy Stage-1 lifecycle, follow-through, and tracker-health values use the Phase 1 warning-bearing compatibility mappings. Tracker health affects progress only.
 
@@ -46,7 +46,7 @@ Legacy Stage-1 lifecycle, follow-through, and tracker-health values use the Phas
 
 `admission-rules-v1` defaults are rank percentile 90, rank improvement of five positions with percentile 75, Investigator score 70, accumulation 75, ready pattern 80, qualified Tier A breakout 80, and S1→S2 confidence 75. Stage 3/4 blocks new long admission.
 
-Every admission evaluates all seven predicates, records their observed values, thresholds, pass status, and bundle-level source row IDs, then selects one primary reason and `setup-family-v1.1` family using the fingerprinted `admission-rules-v1.1` precedence. The canonical primary values remain `opening_reason` and `setup_family`; structured results are nullable episode columns and artifact fields. Exact open-family matching wins. The configured progression is `early_accumulation → base_building → stage_1_to_2_transition → breakout → post_breakout_followthrough`, with a 30-day continuity limit. Episode setup identity remains immutable. When no exact or progression-compatible episode exists, a qualified breakout supersedes exactly one open `momentum_leader`: one transaction opens the breakout episode, closes the predecessor, writes `MOMENTUM_SUPERSEDED_BY_BREAKOUT`, and appends the successor observations. Multiple momentum episodes or any mixed incompatible open set remains a conflict. Closed episodes are never reopened.
+Every admission evaluates all eight predicates, records their observed values, thresholds, pass status, and bundle-level source row IDs, then selects one primary reason and setup family using fingerprinted `admission-rules-v1.2` precedence. The new highest-precedence `investigator_primary_onset` predicate uses only the frozen weekly-momentum lane and score threshold. It opens the independent `investigator_primary` family and is not blocked by stage, pattern, setup-quality, or breakout context. Exact open-family matching prevents daily duplicate onset events. Other admissions retain the configured progression `early_accumulation → base_building → stage_1_to_2_transition → breakout → post_breakout_followthrough`, with a 30-day continuity limit. Episode setup identity remains immutable. When no exact or progression-compatible episode exists, a qualified breakout supersedes exactly one open `momentum_leader`: one transaction opens the breakout episode, closes the predecessor, writes `MOMENTUM_SUPERSEDED_BY_BREAKOUT`, and appends the successor observations. Multiple momentum episodes or any mixed incompatible open set remains a conflict. Closed episodes are never reopened.
 
 ## Lifecycle, progress, and retention
 
@@ -82,7 +82,7 @@ A missing required `ranked_signals` artifact fails only the `opportunities` stag
 
 ## Artifacts and multi-day example
 
-Each attempt writes the summary plus admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, position-episode compatibility, recovery proposal/action, and position-monitor reconciliation CSVs under `$DATA_ROOT/pipeline_runs/<run_id>/opportunities/attempt_<n>/`. DuckDB remains authoritative.
+Each attempt writes the summary plus admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, position-episode compatibility, recovery proposal/action, position-monitor reconciliation, Investigator sampling, source-fidelity, performance, coverage, and readiness CSVs under `$DATA_ROOT/pipeline_runs/<run_id>/opportunities/attempt_<n>/`. DuckDB remains authoritative.
 
 ```text
 Day 1   strong Stage-1 accumulation opens episode 1

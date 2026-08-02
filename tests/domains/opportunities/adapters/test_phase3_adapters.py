@@ -10,6 +10,9 @@ from ai_trading_system.domains.opportunities.adapters import (
 )
 from ai_trading_system.domains.opportunities.contracts import StageConfidenceBand, StageStatus, WeinsteinStage
 from ai_trading_system.domains.opportunities.orchestration.contracts import SourceDescriptor
+from ai_trading_system.domains.opportunities.orchestration.service import (
+    _merge_sector_snapshots,
+)
 
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
@@ -124,6 +127,39 @@ def test_sector_rotation_does_not_imply_structural_stage():
     assert snapshot.stage_snapshot.effective_stage is WeinsteinStage.UNKNOWN
     assert snapshot.sector_rotation_state == "Leading"
     assert any(item.code == "sector_structural_stage_unavailable" for item in result.warnings)
+
+
+def test_sector_merge_preserves_weekly_structure_and_rank_relative_strength():
+    weekly = adapt_sector_stage_rows(
+        [{
+            "sector_name": "Capital Goods",
+            "effective_stage": "stage_1_basing",
+            "stage_status": "provisional",
+            "stage_confidence_score": "80",
+            "source_week_end": "2026-07-14",
+            "as_of": "2026-07-14T00:00:00+00:00",
+        }],
+        source=SourceDescriptor(
+            "weekly_stage", "weekly_sector_stage_universe", "/tmp/weekly.csv",
+            "weekly", "run-1", 1, 1
+        ),
+        as_of=NOW,
+    ).records[0]
+    ranked = adapt_sector_stage_rows(
+        [{"Sector": "Capital Goods", "RS_rank_pct": "95", "Quadrant": "Leading"}],
+        source=SourceDescriptor(
+            "rank", "sector_dashboard", "/tmp/sector.csv", "rank", "run-1", 1, 1
+        ),
+        as_of=NOW,
+    ).records[0]
+
+    merged = _merge_sector_snapshots(
+        [(weekly.value, weekly.source), (ranked.value, ranked.source)]
+    )
+
+    assert merged.stage_snapshot.effective_stage is WeinsteinStage.STAGE_1
+    assert merged.sector_relative_strength_state == "95"
+    assert merged.sector_rotation_state == "Leading"
 
 
 def test_locked_unknown_stage_remains_canonical_unknown():

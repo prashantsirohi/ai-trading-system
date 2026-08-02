@@ -275,6 +275,11 @@ overlapping diagnostic, research-only cohort CSVs, and
 `investigator_calendar_windows.csv`. These are registered attempt artifacts;
 the corresponding control-plane rows remain the durable source.
 
+Phase 3.5C additionally registers `investigator_primary_sampling.csv` and
+`investigator_source_fidelity.csv`. They reconcile qualifying full-Investigator
+observations to captured snapshots and report routed-sidecar divergence without
+allowing the routed values to become attribution inputs.
+
 ## Phase 3C-4 performance artifacts
 
 Instrumented runs and benchmark roots contain exactly these canonical telemetry

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 import duckdb
@@ -173,3 +174,128 @@ def test_phase3b_sector_membership_comes_from_full_universe_stock_rows(tmp_path,
     }
     result = OpportunityStage().run(context)
     assert result.metadata["unmatched_sector_mappings"] == 0
+
+
+def test_shadow_routing_cannot_replace_authoritative_investigator_scores(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path / "runtime"))
+    context = _context(tmp_path, mode="shadow")
+    context.params["opportunity_scan_routing_mode"] = "shadow"
+    full = tmp_path / "investigator_scores.csv"
+    full.write_text(
+        "symbol_id,exchange,final_score,verdict,move_tag,trigger_reason,breakout_type,sector_name\n"
+        "ABC,NSE,67,MEDIUM_CONVICTION,WEEKLY_MOMENTUM,WEEKLY_GAINER,NONE,Capital Goods\n",
+        encoding="utf-8",
+    )
+    routed = tmp_path / "routed_investigator_scores.csv"
+    routed.write_text(
+        "symbol_id,exchange,final_score,verdict,move_tag,trigger_reason,sector_name\n"
+        "ABC,NSE,42,WATCH_ONLY,RANDOM_NOISE,WEEKLY_GAINER,Capital Goods\n",
+        encoding="utf-8",
+    )
+    context.artifacts["investigator"] = {
+        "investigator_scores": StageArtifact.from_file(
+            "investigator_scores", full, row_count=1
+        ),
+        "routed_investigator_scores": StageArtifact.from_file(
+            "routed_investigator_scores", routed, row_count=1
+        ),
+    }
+
+    result = OpportunityStage().run(context)
+
+    assert result.metadata["primary_qualifying_observations"] == 1
+    assert result.metadata["primary_observations_captured"] == 1
+    assert result.metadata["investigator_source_fidelity_pct"] == 100
+    fidelity_artifact = next(
+        item
+        for item in result.artifacts
+        if item.artifact_type == "investigator_source_fidelity"
+    )
+    with Path(fidelity_artifact.uri).open(newline="", encoding="utf-8") as handle:
+        fidelity = next(csv.DictReader(handle))
+    assert fidelity["authoritative_artifact"] == "investigator_scores"
+    assert fidelity["routed_sidecar_divergence_count"] == "1"
+
+
+def test_primary_onset_appends_one_immutable_event_and_preserves_none(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path / "runtime"))
+    context = _context(tmp_path, mode="shadow")
+    context.params["opportunity_registry_dry_run"] = False
+    scores = tmp_path / "investigator_scores.csv"
+    scores.write_text(
+        "symbol_id,exchange,final_score,verdict,move_tag,trigger_reason,breakout_type,sector_name\n"
+        "ABC,NSE,67,MEDIUM_CONVICTION,WEEKLY_MOMENTUM,WEEKLY_GAINER,NONE,Capital Goods\n",
+        encoding="utf-8",
+    )
+    context.artifacts["investigator"] = {
+        "investigator_scores": StageArtifact.from_file(
+            "investigator_scores", scores, row_count=1
+        )
+    }
+    with duckdb.connect(str(context.db_path)) as conn:
+        conn.execute("ALTER TABLE _catalog ADD COLUMN symbol_id VARCHAR")
+        conn.execute("ALTER TABLE _catalog ADD COLUMN open DOUBLE")
+        conn.execute("ALTER TABLE _catalog ADD COLUMN high DOUBLE")
+        conn.execute("ALTER TABLE _catalog ADD COLUMN low DOUBLE")
+        conn.execute("ALTER TABLE _catalog ADD COLUMN close DOUBLE")
+        conn.execute("ALTER TABLE _catalog ADD COLUMN is_benchmark BOOLEAN")
+        conn.execute(
+            "UPDATE _catalog SET symbol_id = 'ABC', open = 100, high = 102, low = 99, close = 101, is_benchmark = FALSE"
+        )
+
+    first = OpportunityStage().run(context)
+    second = OpportunityStage().run(context)
+
+    with context.registry._reader() as conn:  # noqa: SLF001
+        episode = conn.execute(
+            "SELECT setup_family, opening_reason FROM candidate_episode"
+        ).fetchone()
+        event = conn.execute(
+            """
+            SELECT COUNT(*), BOOL_AND(primary_eligible),
+                   MIN(json_extract_string(context_json, '$.breakout_type'))
+            FROM investigator_performance_event
+            WHERE event_type = 'CANDIDATE_DISCOVERED'
+            """
+        ).fetchone()
+    assert episode == ("investigator_primary", "investigator_primary_onset")
+    assert event == (1, True, "NONE")
+    assert first.metadata["primary_observations_captured"] == 1
+    assert second.metadata["primary_observations_captured"] == 1
+
+
+def test_primary_onset_uses_full_investigator_rank_context_when_rank_artifact_is_sparse(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path / "runtime"))
+    context = _context(tmp_path, mode="shadow")
+    scores = tmp_path / "investigator_scores.csv"
+    scores.write_text(
+        "symbol_id,exchange,composite_score,rank_position,final_score,verdict,move_tag,trigger_reason,breakout_type,sector_name\n"
+        "DEF,NSE,72,30,66,MEDIUM_CONVICTION,WEEKLY_MOMENTUM,WEEKLY_GAINER,NONE,Technology\n",
+        encoding="utf-8",
+    )
+    context.artifacts["investigator"] = {
+        "investigator_scores": StageArtifact.from_file(
+            "investigator_scores", scores, row_count=1
+        )
+    }
+
+    result = OpportunityStage().run(context)
+
+    assert result.metadata["primary_qualifying_observations"] == 1
+    assert result.metadata["primary_observations_captured"] == 1
+    admissions = next(
+        item for item in result.artifacts if item.artifact_type == "candidate_admissions"
+    )
+    with Path(admissions.uri).open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert any(
+        row["symbol_id"] == "DEF"
+        and row["reason"] == "investigator_primary_onset"
+        for row in rows
+    )

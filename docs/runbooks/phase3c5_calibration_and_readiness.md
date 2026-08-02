@@ -2,7 +2,7 @@
 
 - **Purpose:** Build immutable calibration eligibility and Phase 4 readiness evidence safely.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-07-16
+- **Last verified:** 2026-08-02
 - **Source of truth:** `domains/opportunities/calibration.py` and `interfaces/cli/build_phase3c5_calibration.py`.
 - **Policy:** `phase3c5-calibration-policy-v1`
 
@@ -73,7 +73,7 @@ The command opens the source read-only. It rejects the configured operator
 store and symlinked source/output paths. Sparse or pre-Phase-3B copies produce
 honest exclusions and limitations; do not fabricate missing history.
 
-For copied-realistic builds, `OPERATOR_MIGRATIONS_034_041` passes only when the
+For copied-realistic builds, `OPERATOR_MIGRATIONS_034_043` passes only when the
 copied store contains the Phase 3C-1/1A/3 tables and required additive schema
 through migration 041. Pre-037/041 copies remain readable but report an honest
 migration limitation and emit null policy/admission provenance.
@@ -84,6 +84,14 @@ decision-linked correction impacts from the copied governance tables; missing
 or conflicting evidence remains fail-closed. These observations are embedded
 in `readiness_evidence` in the calibration manifest so a later readiness-only
 check preserves the copied-store verdict without reopening the source.
+
+The copied-store readiness evidence also derives the Phase 3.5C operational
+gates directly from canonical tables: 20 consecutive all-pass coverage receipt
+dates, at least 30 primary discovery sessions, at least 120 matured primary
+20-session discovery outcomes, and at least three non-overlapping executable
+windows with positive slippage-adjusted and benchmark-relative expectancy.
+Any unmet gate is a critical Investigator readiness failure; immature evidence
+is never promoted to a pass.
 
 Builder `phase3c5-calibration-builder-v1.1` also projects the decision-time
 `policy_snapshot_id`, episode-open `admission_policy_snapshot_id`, primary

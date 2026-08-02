@@ -73,6 +73,29 @@ def test_investigator_coverage_failure_blocks_phase4_readiness() -> None:
     }["INVESTIGATOR_SECTOR_CONTEXT"] == "FAIL"
 
 
+def test_investigator_operational_sample_gate_blocks_phase4_readiness() -> None:
+    result = _build(
+        copied_realistic_performance_summary={"replay_equivalence": {"equivalent": True}},
+        operator_migrations_applied=True,
+        real_phase3b_history_present=True,
+        readiness_evidence={
+            "investigator_operational_checks": [
+                {
+                    "metric_name": "PRIMARY_MATURED_20D_SAMPLE",
+                    "observed": 12,
+                    "target": 120,
+                    "status": "FAIL",
+                }
+            ]
+        },
+    )
+
+    assert result.verdict.value == "NOT_READY"
+    assert {
+        check.check_id: check.status.value for check in result.readiness_checks
+    }["INVESTIGATOR_PRIMARY_MATURED_20D_SAMPLE"] == "FAIL"
+
+
 def test_operator_migrations_unapplied_is_development_ready_limitation() -> None:
     result = _build(
         copied_realistic_performance_summary={"replay_equivalence": {"equivalent": True}},

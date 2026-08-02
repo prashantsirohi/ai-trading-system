@@ -10,10 +10,12 @@ import pytest
 
 from ai_trading_system.interfaces.cli import benchmark_phase3c4
 from ai_trading_system.interfaces.cli.build_phase3c5_calibration import (
+    copied_store_readiness_evidence,
     load_copied_rows,
     main as build_main,
     run_build,
 )
+from ai_trading_system.pipeline.registry import RegistryStore
 from ai_trading_system.interfaces.cli.check_phase4_readiness import main as readiness_main
 
 
@@ -42,6 +44,27 @@ def test_small_fixture_cli_writes_machine_readable_artifacts(tmp_path: Path) -> 
     assert json.loads(row["rule_evaluations"])[0]["source_observation_ids"] == [
         "fixture-row-0000"
     ]
+
+
+def test_copied_store_emits_fail_closed_investigator_operational_gates(
+    tmp_path: Path,
+) -> None:
+    copied = tmp_path / "control_plane.duckdb"
+    RegistryStore(tmp_path, db_path=copied)
+
+    evidence = copied_store_readiness_evidence(copied)
+
+    checks = {
+        row["metric_name"]: row
+        for row in evidence["investigator_operational_checks"]
+    }
+    assert set(checks) == {
+        "20_SESSION_COVERAGE_GATE",
+        "DISCOVERY_SESSION_SAMPLE",
+        "PRIMARY_MATURED_20D_SAMPLE",
+        "POSITIVE_NON_OVERLAP_WINDOWS",
+    }
+    assert all(row["status"] == "FAIL" for row in checks.values())
 
 
 def test_exact_fixture_replay_has_same_manifest_and_dataset_hash(tmp_path: Path) -> None:
@@ -221,11 +244,11 @@ def test_copied_profile_derives_governance_and_readiness_evidence(tmp_path: Path
         copied_control_plane=copied, as_of="2026-07-15",
     )
     manifest = json.loads((output / "phase3c5_calibration_manifest.json").read_text())
-    assert manifest["readiness_evidence"]["operator_migrations_applied"] is True
+    assert manifest["readiness_evidence"]["operator_migrations_applied"] is False
     assert manifest["readiness_evidence"]["real_phase3b_history_present"] is True
     assert manifest["policy_snapshot_ids"] == ["snapshot-decision"]
     assert manifest["query_or_builder_version"] == "phase3c5-calibration-builder-v1.1"
-    assert "OPERATOR_MIGRATIONS_NOT_APPLIED" not in result["limitations"]
+    assert "OPERATOR_MIGRATIONS_NOT_APPLIED" in result["limitations"]
     assert "EMPTY_REAL_PHASE3B_HISTORY" not in result["limitations"]
 
     readiness_output = tmp_path / "readiness"
@@ -237,7 +260,7 @@ def test_copied_profile_derives_governance_and_readiness_evidence(tmp_path: Path
         (readiness_output / "phase3c5_phase4_readiness.json").read_text()
     )
     limitation_ids = {item["limitation_id"] for item in readiness["limitations"]}
-    assert "OPERATOR_MIGRATIONS_NOT_APPLIED" not in limitation_ids
+    assert "OPERATOR_MIGRATIONS_NOT_APPLIED" in limitation_ids
     assert "EMPTY_REAL_PHASE3B_HISTORY" not in limitation_ids
 
 

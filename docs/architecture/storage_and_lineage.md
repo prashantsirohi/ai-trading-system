@@ -201,6 +201,13 @@ select the latest receipt for each date and metric. The deterministic shadow
 fill is analytical evidence only and never touches the execution ledger or a
 broker adapter.
 
+Phase 3.5C needs no new migration. Successor
+`investigator-attribution-policy-v2` changes source ownership and sampling
+admission: full Investigator scores own attribution, while routed artifacts add
+lineage and routing diagnostics only. New sampling and source-fidelity files are
+immutable attempt artifacts; canonical snapshots, events, horizons, evaluation
+transitions, and coverage receipts remain in the migration-043 tables.
+
 Migration 038 extends `candidate_decision_context` with nullable completed-week
 sector-gate evidence and taxonomy columns. These columns are also outside the
 semantic payload and idempotency identity; the actual decision blockers remain
