@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-07-26
+- **Last verified:** 2026-08-08
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -22,6 +22,7 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 | OHLCV | `$DATA_ROOT/ohlcv.duckdb` | Ingest, trust, features | Price/volume, delivery, provenance, quarantine, source freshness, and feature metadata. |
 | Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, lifecycle-aware alert incidents, models, operator state, decision history, canonical opportunity-registry history, immutable Investigator performance events and derived horizons, Phase 3B universal stage/routing history, Phase 3C-1 governance, and Phase 3C-3 recovery proposals/actions. |
 | Execution ledger | `$DATA_ROOT/execution.duckdb` | `ExecutionStore` | Normalized decisions, orders, fills, positions, stops, and broker/paper execution state supported by the active code. |
+| Actual Trading Journal | `$DATA_ROOT/trade_journal.duckdb` | `TradeJournalStore` | Append-oriented broker import provenance, identity evidence, fills/orders, actual-position reconstruction, snapshots/reconciliations, episodes, analysis and annotations. It is isolated from the execution ledger and daily pipeline. |
 | Candidate tracker | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate tracker domain | Candidate episodes, transitions, snapshots, fundamental reviews, alerts, and current lifecycle state. |
 | Master data | `$DATA_ROOT/masterdata.db` | Ingest/master-data services | Shared instrument and symbol identity data. |
 | Fundamentals | `$DATA_ROOT/fundamentals/` | Fundamentals domain | Imported source snapshots and fundamental read models. |

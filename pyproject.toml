@@ -25,6 +25,7 @@ dependencies = [
   "playwright>=1.52",
   "pyarrow",
   "pydantic",
+  "python-multipart>=0.0.9",
   "python-dotenv",
   "python-telegram-bot==22.7",
   "pyotp>=2.9.0",
@@ -84,6 +85,7 @@ ai-trading-shadow-session-gate = "ai_trading_system.interfaces.cli.check_shadow_
 ai-trading-shadow-ab-proof = "ai_trading_system.interfaces.cli.build_shadow_ab_proof:main"
 ai-trading-cross-shadow = "ai_trading_system.interfaces.cli.build_cross_shadow_reconciliation:main"
 ai-trading-phase4-api = "ai_trading_system.interfaces.cli.serve_phase4_api:main"
+ai-trading-journal = "ai_trading_system.domains.trade_journal.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -103,6 +105,7 @@ exclude = [
 [tool.setuptools.package-data]
 ai_trading_system = [
   "pipeline/migrations/*.sql",
+  "domains/trade_journal/migrations/*.sql",
   "domains/publish/channels/weekly_pdf/templates/*.html",
   "domains/publish/channels/weekly_pdf/static/*.css",
   "domains/publish/channels/daily_gainers/templates/*.html",

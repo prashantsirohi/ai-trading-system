@@ -2,10 +2,12 @@
 
 - **Purpose:** Explain how ingest assigns a per-run trust status, how quarantine works, how the DQ engine classifies rule failures, and what blocks the pipeline vs what is recorded and ignored.
 - **Audience:** Operators triaging a failed run; engineers writing or relaxing a DQ rule.
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-08-08
 - **Source of truth:** `src/ai_trading_system/domains/ingest/trust.py` (lines 868–1095, 424–500, 750–860), `src/ai_trading_system/pipeline/contracts.py` (`TrustConfidenceEnvelope` from line 12), `src/ai_trading_system/pipeline/dq/engine.py`, `src/ai_trading_system/pipeline/stages/narrative.py:174-176`, `src/ai_trading_system/pipeline/orchestrator.py:1249-1290`.
 
 ## Trust statuses
+
+The Actual Trading Journal has an isolated trust ledger described in [its architecture contract](trade_journal.md). `MALFORMED_ISIN` rows are quarantined unless uniquely resolved by valid same-file identity evidence. `POSITION_DEFICIT` is blocking: no naked-short or replacement lot is fabricated. Identity/economic collisions and checkpoint conflicts remain unresolved historical evidence. Missing or quarantined OHLCV makes enrichment incomplete; current holdings value is never substituted for missing market history.
 
 Computed by `load_data_trust_summary` (`domains/ingest/trust.py:868-1095`) and wrapped by `TrustConfidenceEnvelope` (`pipeline/contracts.py:12`).
 

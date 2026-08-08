@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical reference for every DuckDB table the system reads or writes — file location, owning stage, columns, indexes.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-07-26
+- **Last verified:** 2026-08-08
 - **Source of truth:** `src/ai_trading_system/pipeline/migrations/*.sql`, `src/ai_trading_system/research/perf_tracker/schema.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/ingest/repository.py`.
 
 ---
@@ -14,6 +14,9 @@
 | `data/ohlcv.duckdb` | Ingest stage (operational domain) | `domains/ingest/repository.py::initialize_ingest_duckdb` (+ `trust.py`, `delivery.py`, `masterdata.py`) | Catalog of OHLCV bars, snapshots, parquet pointers, masterdata, trust state. |
 | `data/control_plane.duckdb` | Pipeline orchestrator (writes governance) + several read paths | `src/ai_trading_system/pipeline/migrations/*.sql` (37 SQL files, applied by `pipeline/registry.py`) | Run lifecycle, DQ, artifacts, model registry, monitoring, optimizer, universe, pattern cache, opportunity history, alert incidents, recovery proposals/actions, and the policy version registry. |
 | `data/execution.duckdb` | Execute stage (`domains/execution/service.py`) | `domains/execution/store.py::ExecutionStore._init_db` | Orders, fills, trade journal, stops, drawdown snapshots. **Created by `ExecutionStore`** — default path is `<project_root>/data/execution.duckdb` (`store.py:29`). |
+| `$DATA_ROOT/trade_journal.duckdb` | Actual Trading Journal bounded domain | `domains/trade_journal/migrations/001_initial.sql` | Versioned import/DQ, identity/governance, ledger/lot/episode, checkpoint/reconciliation, valuation/risk, evaluation and append-only annotation tables. Financial columns use `DECIMAL(38,8)`. |
+
+The actual journal's complete table-family and trust contract is documented in [Actual Trading Journal Architecture](../architecture/trade_journal.md). It is not the legacy execution-store trade journal and does not share execution tables.
 | `data/research.duckdb` | Perf tracker stage + research perf-tracker API endpoints | `research/perf_tracker/schema.py::RANK_COHORT_DDL` | `rank_cohort_performance`. Path resolved via `research_db_path()` -> `paths.root_dir / "research.duckdb"` (`schema.py:55-60`). |
 | `data/research_ohlcv.duckdb` | Research-domain OHLCV (selected when `DATA_DOMAIN=research`) | `domains/ingest/repository.py` (same DDL as operational) | Isolation per `platform/db/paths.py:111`: ohlcv file name is `research_ohlcv.duckdb` for the research domain. |
 

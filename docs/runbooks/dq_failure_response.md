@@ -2,12 +2,14 @@
 
 - **Purpose:** Triage DQ rule failures by severity, inspect `dq_result`, and rerun safely.
 - **Audience:** Operator.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-08-08
 - **Source of truth:** [`docs/architecture/data_trust_and_dq.md`](../architecture/data_trust_and_dq.md), [`docs/stages/ingest.md`](../stages/ingest.md), `src/ai_trading_system/pipeline/dq/engine.py`.
 
 ---
 
 ## Severity ladder
+
+For journal-specific failures, use the [Actual Trading Journal runbook](trade_journal.md). Resolve `POSITION_DEFICIT` with earlier tradebooks or an explicitly reviewed opening proposal; do not convert a reconciliation-only holdings snapshot into inventory. Re-preview schema/formula errors from a corrected broker export. Identifier collisions require manual evidence and never overwrite prior economics.
 
 The DQ engine classifies failures into severity bands. Reference: `src/ai_trading_system/pipeline/dq/engine.py`.
 

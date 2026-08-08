@@ -17,6 +17,7 @@ uvicorn==0.34.0
 plotly>=5.17.0
 
 python-dotenv>=1.0.0
+python-multipart>=0.0.9
 requests>=2.31.0
 playwright>=1.52
 pyotp>=2.9.0

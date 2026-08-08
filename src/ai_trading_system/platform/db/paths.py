@@ -279,6 +279,13 @@ def research_static_end_date(today: date | None = None) -> str:
     return date(current.year - 1, 12, 31).isoformat()
 
 
+def trade_journal_db_path(project_root: Path | str | None = None) -> Path:
+    """Resolve the operational Actual Portfolio/Trading Journal database."""
+    return get_domain_paths(
+        project_root=project_root, data_domain="operational"
+    ).root_dir / "trade_journal.duckdb"
+
+
 __all__ = [
     "DataDomain",
     "DataDomainPaths",
@@ -290,4 +297,5 @@ __all__ = [
     "find_latest_pipeline_artifact",
     "require_data_root_available",
     "research_static_end_date",
+    "trade_journal_db_path",
 ]

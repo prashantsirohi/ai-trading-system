@@ -16,6 +16,10 @@ const CalibrationPage = lazy(() => import('./pages').then((module) => ({ default
 const PerformancePage = lazy(() => import('./pages').then((module) => ({ default: module.PerformancePage })));
 const ReadinessPage = lazy(() => import('./pages').then((module) => ({ default: module.ReadinessPage })));
 const DetailPage = lazy(() => import('./pages').then((module) => ({ default: module.DetailPage })));
+const ImportReconciliationPage = lazy(() => import('../trade-journal/pages').then((module) => ({ default: module.ImportReconciliationPage })));
+const ActualPortfolioPage = lazy(() => import('../trade-journal/pages').then((module) => ({ default: module.ActualPortfolioPage })));
+const TradingJournalPage = lazy(() => import('../trade-journal/pages').then((module) => ({ default: module.TradingJournalPage })));
+const BehaviourPerformancePage = lazy(() => import('../trade-journal/pages').then((module) => ({ default: module.BehaviourPerformancePage })));
 
 function AuthenticatedApp() {
   const auth = useAuth();
@@ -38,6 +42,10 @@ function AuthenticatedApp() {
       <Route path="/calibration" element={<CalibrationPage />} />
       <Route path="/performance" element={<PerformancePage />} />
       <Route path="/readiness" element={<ReadinessPage />} />
+      <Route path="/journal/imports" element={<ImportReconciliationPage />} />
+      <Route path="/actual-portfolio" element={<ActualPortfolioPage />} />
+      <Route path="/trade-journal" element={<TradingJournalPage />} />
+      <Route path="/trade-journal/behaviour" element={<BehaviourPerformancePage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes></Suspense>
   </AppShell>;

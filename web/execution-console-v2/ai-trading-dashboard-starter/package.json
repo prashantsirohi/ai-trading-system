@@ -15,6 +15,8 @@
     "test:e2e:headed": "playwright test --headed",
     "gen:api": "openapi-typescript ./openapi.snapshot.json -o ./src/types/api.gen.ts",
     "check:api": "PYTHONPATH=../../../src ../../../.venv/bin/python ../../../scripts/export_phase4_openapi.py --check",
+    "gen:execution-api": "openapi-typescript ./execution-openapi.snapshot.json -o ./src/types/execution-api.gen.ts",
+    "check:execution-api": "PYTHONPATH=../../../src ../../../.venv/bin/python ../../../scripts/export_execution_openapi.py --check",
     "gen:api:live": "openapi-typescript http://127.0.0.1:8090/openapi.json -o ./src/types/api.gen.ts"
   },
   "dependencies": {

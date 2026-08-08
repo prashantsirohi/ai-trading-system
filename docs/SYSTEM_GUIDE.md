@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-08-02
+- **Last verified:** 2026-08-08
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -19,6 +19,8 @@ The main surfaces are:
 - The FastAPI operator backend under `src/ai_trading_system/ui/execution_api/`.
 - The React operator console under `web/execution-console-v2/ai-trading-dashboard-starter/`.
 - External runtime storage resolved from `.env`, normally through `DATA_ROOT`.
+
+The on-demand [Actual Trading Journal](architecture/trade_journal.md) is a separate bounded domain. It owns `$DATA_ROOT/trade_journal.duckdb`, is not a daily-pipeline stage, never writes `execution.duckdb`, and reads trusted operational market data only for point-in-time enrichment. Its authenticated mutation routes live under the execution API; Phase 4 `/api/v1` remains GET-only. See the [operator runbook](runbooks/trade_journal.md).
 
 The canonical, persistence-free vocabulary for future opportunity management is
 owned by `src/ai_trading_system/domains/opportunities/`. It keeps ranking
@@ -258,6 +260,7 @@ Canonical operational paths are resolved beneath `$DATA_ROOT`:
 | `$DATA_ROOT/ohlcv.duckdb` | Operational OHLCV, delivery, trust/provenance, quarantine, registries, and feature metadata. |
 | `$DATA_ROOT/control_plane.duckdb` | Pipeline runs, stage attempts, artifacts, DQ, alerts, models, operator state, durable decision history, canonical opportunity-registry history, immutable Investigator discovery/entry events and outcomes, and Phase 3B/3C structural governance history. |
 | `$DATA_ROOT/execution.duckdb` | Orders, fills, positions, and execution ledger state. |
+| `$DATA_ROOT/trade_journal.duckdb` | On-demand broker imports, provenance, actual-portfolio reconstruction, reconciliations, episodes, evaluations, and annotations. |
 | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate episodes, snapshots, reviews, alerts, and current lifecycle state. |
 | `$DATA_ROOT/masterdata.db` | Shared instrument/master data. |
 | `$DATA_ROOT/fundamentals/` | Fundamental snapshots and stores. |

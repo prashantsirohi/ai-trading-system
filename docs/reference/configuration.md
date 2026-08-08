@@ -2,7 +2,7 @@
 
 - **Purpose:** Configuration sources, CLI flags, and mode selectors. For env vars see [`environment_variables.md`](environment_variables.md). For commands see [`commands.md`](commands.md).
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-07-17
+- **Last verified:** 2026-08-08
 - **Source of truth:** `argparse` parsers in `pipeline/orchestrator.py` and `pipeline/daily_pipeline.py`; env loading in `platform/`; config files under `config/`.
 
 ---
@@ -15,6 +15,7 @@ Runtime behavior is controlled by:
 - **Environment variables** loaded from `.env` when present — see [`environment_variables.md`](environment_variables.md)
 - **Config files** under `config/` and `src/ai_trading_system/platform/config/`
 - **Request payloads** sent to the FastAPI backend (`ai-trading-execution-api`)
+- **Versioned journal analytics defaults** in `domains/trade_journal/config.py`, including 80% score coverage and behavioural cohort gates.
 
 `platform/config/settings.py` defines a Pydantic `AppConfig` but it is **not** the canonical source of runtime configuration today — flags and env vars dominate.
 

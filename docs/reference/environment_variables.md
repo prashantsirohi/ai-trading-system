@@ -2,7 +2,7 @@
 
 - **Purpose:** All env vars actually read by the code, with source module and default.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-08-08
 - **Source of truth:** Grep of `os.environ`, `os.getenv`, `getenv(`, and pydantic `Settings` in `src/`. Cited modules per row.
 
 
@@ -15,6 +15,8 @@ Sourced by grepping `os.environ`, `os.getenv`, `getenv(`, and pydantic `Settings
 ## Variables
 
 | Name | Required | Used by | Default | Notes |
+| `TRADE_JOURNAL_SAMPLE_TRADEBOOK` | no | opt-in journal characterization test | — | Local path only; never committed. |
+| `TRADE_JOURNAL_SAMPLE_HOLDINGS` | no | opt-in journal characterization test | — | Local path only; never committed. |
 |---|---|---|---|---|
 | `DHAN_API_KEY` | live trading | `domains/ingest/providers/dhan.py` | — | secret |
 | `DHAN_CLIENT_ID` | live trading | same | — | |
@@ -44,4 +46,3 @@ Sourced by grepping `os.environ`, `os.getenv`, `getenv(`, and pydantic `Settings
 ## EXECUTION_MODE
 
 Not an explicit env var. Inferred from Dhan credential presence. Verify in execute stage before stating otherwise.
-

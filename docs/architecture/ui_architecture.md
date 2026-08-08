@@ -2,10 +2,14 @@
 
 - **Purpose:** Describe the operator UI as it is built today — the FastAPI execution backend and the React V2 console — including auth, CORS, router layout, and frontend stack.
 - **Audience:** Operators running the console; engineers adding routes or React views.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-08-08
 - **Source of truth:** `src/ai_trading_system/ui/execution_api/app.py`, `src/ai_trading_system/ui/execution_api/routes/`, `web/execution-console-v2/ai-trading-dashboard-starter/package.json`, `pyproject.toml [project.scripts]`, `grep -rni streamlit src/`.
 
 ## FastAPI execution console — `ai-trading-execution-api`
+
+The React shell is labelled **Operator Workspace**. Existing Phase 4 routes retain their development/read-only warnings. Four lazy journal routes—Import & Reconciliation, Actual Portfolio, Trading Journal, and Behaviour & Performance—call `VITE_EXECUTION_API_BASE_URL` and always send the same in-memory credential as `X-API-Key`. Financial calculations stay in backend services; the UI retains authoritative decimal strings while formatting copies for display.
+
+Actual Portfolio is visually and semantically separate from the Phase 4 system-positions view. Journal pages distinguish loading, empty, stale/provisional/partial, blocked/conflict, error, and trusted evidence and state their `gross`, `securities_only`, or `holdings_only` scope. Backend tasks are polled by opaque run ID. The Actual Portfolio route renders backend-calculated value/drawdown and exposure series; Trading Journal renders adjusted daily candlesticks with fill markers and append-only annotations; reconciliation and governance views retain the explicit proposal/approval boundary.
 
 - App factory: `src/ai_trading_system/ui/execution_api/app.py::create_app` (line 38).
 - Launched by the `ai-trading-execution-api` console script (`pyproject.toml` → `ui.execution_api.app:main`).

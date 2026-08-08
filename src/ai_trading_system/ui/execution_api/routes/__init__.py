@@ -18,6 +18,7 @@ from ai_trading_system.ui.execution_api.routes import (
     snapshots,
     stocks,
     tasks,
+    trade_journal,
 )
 
 ALL_ROUTERS = (
@@ -39,6 +40,7 @@ ALL_ROUTERS = (
     optimization.router,
     decision_history.router,
     decision_history.diagnostics_router,
+    trade_journal.router,
 )
 
 
@@ -61,4 +63,5 @@ __all__ = [
     "snapshots",
     "stocks",
     "tasks",
+    "trade_journal",
 ]

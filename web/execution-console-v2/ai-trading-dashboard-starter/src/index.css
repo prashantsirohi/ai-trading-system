@@ -27,8 +27,8 @@ body {
 }
 
 a { color: var(--accent); }
-button, input, select { font: inherit; }
-button, input, select { border: 1px solid var(--line); border-radius: .45rem; background: var(--panel-2); color: var(--text); padding: .55rem .75rem; }
+button, input, select, textarea { font: inherit; }
+button, input, select, textarea { border: 1px solid var(--line); border-radius: .45rem; background: var(--panel-2); color: var(--text); padding: .55rem .75rem; }
 button { cursor: pointer; }
 button:hover:not(:disabled), button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 3px solid #8ce9da; outline-offset: 2px; }
 button:disabled { opacity: .45; cursor: not-allowed; }
@@ -68,6 +68,7 @@ main { min-width: 0; padding: 1.2rem 1.5rem 3rem; }
 .notice { border: 1px solid; border-radius: .55rem; padding: .8rem 1rem; margin: .8rem 0; display: grid; gap: .35rem; }
 .notice-warning { background: #302711; border-color: #806929; }
 .notice-conflict { background: #37191e; border-color: #a64b55; }
+.notice-trusted { background: #10352e; border-color: #317d6c; }
 .limitation-list { display: grid; gap: .55rem; padding-left: 1.25rem; }
 .limitation-list li { padding-left: .25rem; }
 .limitation-list code { display: block; color: var(--warning); overflow-wrap: anywhere; }
@@ -118,6 +119,14 @@ tr.clickable:hover, tr.clickable:focus { background: #18313d; outline: 2px solid
 .login-card { width: min(32rem, 100%); display: grid; gap: .8rem; padding: 1.5rem; border: 1px solid var(--line); border-radius: .8rem; background: var(--panel); box-shadow: 0 2rem 5rem #0008; }
 .login-card h1 { margin: 0; }
 .timeline { display: grid; gap: .75rem; }
+.journal-selector { display: grid; gap: .3rem; width: min(28rem, 100%); color: var(--muted); margin: .6rem 0; }
+.journal-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); align-items: end; gap: .75rem; }
+.journal-form label { display: grid; gap: .3rem; color: var(--muted); font-size: .82rem; }
+.journal-form textarea { min-height: 5rem; resize: vertical; }
+.task-strip { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; margin: .8rem 0; }
+.task-action { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.task-action [role="alert"] { color: var(--danger); }
+.journal-chart { width: 100%; min-height: 420px; border: 1px solid var(--line); border-radius: .5rem; overflow: hidden; margin: .8rem 0; }
 
 @media (max-width: 1200px) {
   .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

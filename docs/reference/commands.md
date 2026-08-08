@@ -2,12 +2,16 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-07-17
+- **Last verified:** 2026-08-08
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
 
 Start with the common workflows in the [System Guide](../SYSTEM_GUIDE.md). Commands below are run from the repository root unless they explicitly change directories.
+
+## Actual Trading Journal
+
+`ai-trading-journal` (or `python -m ai_trading_system.domains.trade_journal`) provides `migrate --apply`, tradebook and holdings preview/commit imports, `reconstruct`, `reconcile`, and `analyze`. Reviewed governance commands are `propose-opening-lot`, `approve-opening-lot`, `propose-adjustment`, `approve-adjustment`, `propose-corporate-action`, and `approve-corporate-action`. Imports and governance mutations require explicit `--commit`; otherwise they preview. Holdings accept `--mode reconciliation_only` or the explicit `opening_anchor` bootstrap mode. See the [operator runbook](../runbooks/trade_journal.md) for safe examples.
 
 ## Environment
 

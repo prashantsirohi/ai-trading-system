@@ -2,7 +2,7 @@
 
 - **Purpose:** Complete map of all documentation under `docs/`.
 - **Audience:** Anyone navigating the docs.
-- **Last verified:** 2026-07-17
+- **Last verified:** 2026-08-08
 - **Source of truth:** This file is the source of truth for the doc inventory; `SYSTEM_GUIDE.md` is the source of truth for system orientation.
 
 > Each document records its own verification date. See [`development/legacy_cleanup_plan.md`](development/legacy_cleanup_plan.md) for the cleanup history.
@@ -16,6 +16,7 @@
 - [storage_and_lineage](architecture/storage_and_lineage.md)
 - [data_trust_and_dq](architecture/data_trust_and_dq.md)
 - [ui_architecture](architecture/ui_architecture.md)
+- [trade_journal](architecture/trade_journal.md)
 - [target_architecture](architecture/target_architecture.md)
 - [opportunity_lifecycle_contracts](architecture/opportunity_lifecycle_contracts.md)
 - [opportunity_registry](architecture/opportunity_registry.md)
@@ -66,6 +67,7 @@
 - [publish_contracts](reference/publish_contracts.md)
 
 ## Runbooks
+- [trade_journal](runbooks/trade_journal.md)
 - [daily_operations](runbooks/daily_operations.md)
 - [weekly_operations](runbooks/weekly_operations.md)
 - [troubleshooting](runbooks/troubleshooting.md)
