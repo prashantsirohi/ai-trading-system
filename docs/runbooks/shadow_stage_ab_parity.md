@@ -2,8 +2,8 @@
 
 - **Purpose:** Prove that enabling an optional *shadow* pipeline stage leaves every legacy decision artifact byte-identical under identical inputs — the core safety gate before a shadow stage counts toward its observation clock.
 - **Audience:** Operator / engineer.
-- **Last verified:** 2026-07-19 (R1a `pattern_lane_scan`, run date 2026-07-17).
-- **Source of truth:** side-by-side pipeline artifacts under `pipeline_runs/<run_id>/<stage>/attempt_*`.
+- **Last verified:** 2026-07-19
+- **Source of truth:** side-by-side pipeline artifacts under `pipeline_runs/<run_id>/<stage>/attempt_*`. Last executed for R1a `pattern_lane_scan`, run date 2026-07-17.
 
 ---
 

@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-07-17
+- **Last verified:** 2026-08-08
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -83,7 +83,7 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator --new-run
 ```
 
-The default CLI stage string includes `fundamentals` and `candidate_tracker` but omits `weekly_stage`, `scan_router`, `opportunities`, and `narrative`. `--opportunity-scan-routing-mode compare|shadow` inserts Phase 3B after rank. `--opportunity-registry-mode shadow` inserts Phase 3A after Investigator. Existing execution and publish consumers are unchanged.
+The default CLI stage string includes `fundamentals` and `candidate_tracker` but omits `weekly_stage`, `pattern_lane_scan`, `scan_router`, `opportunities`, and `narrative`. `--opportunity-scan-routing-mode compare|shadow` inserts Phase 3B after rank. `--pattern-lane-scan-mode shadow` inserts the ADR-0007 R1a lane scan after `weekly_stage`, adding `weekly_stage` first if it is not already scheduled; `--pattern-lane-scan-workers` (default 1) sets its process-pool size. `--opportunity-registry-mode shadow` inserts Phase 3A after Investigator. These insertions apply only while `--stages` is left at its default. Existing execution and publish consumers are unchanged.
 
 Opportunity shadow run and isolated retry:
 
@@ -310,6 +310,10 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-bootstrap-data` | Runtime-data bootstrap |
 | `ai-trading-repair-ingest-schema` | Ingest schema repair |
 | `ai-trading-repair-control-plane-timestamps` | Control-plane timestamp repair |
+| `ai-trading-migrate-control-plane` | Control-plane schema migration runner |
+| `ai-trading-shadow-session-gate` | Score one shadow session (`--fail-on-not-counted` to hard-fail) |
+| `ai-trading-shadow-ab-proof` | Build the shadow-stage A/B/C safety-proof bundle |
+| `ai-trading-cross-shadow` | Read-only cross-shadow reconciliation report |
 | `ai-trading-benchmark-phase3c4` | Isolated Phase 3C-4 performance/replay benchmark |
 | `ai-trading-build-phase3c5-calibration` | Immutable calibration/readiness evidence builder |
 | `ai-trading-check-phase4-readiness` | Re-evaluate Phase 4 readiness from a calibration manifest |
