@@ -26,7 +26,11 @@ Copy `.env.example` to `.env` and adjust values when connecting to live APIs.
 - `VITE_USE_MOCK_API=true` forces full mock mode.
 - `VITE_EXECUTION_API_BASE_URL` defaults to empty, which keeps browser requests same-origin (`/api/...`).
 - `VITE_EXECUTION_PROXY_TARGET` controls the Vite dev proxy target (default `http://127.0.0.1:8090`).
-- `VITE_EXECUTION_API_KEY` is injected by the Vite proxy for `/api/execution/*` requests in local dev.
+- `EXECUTION_API_KEY` from the repository-root `.env` is injected by the Vite
+  proxy for execution requests; it is never bundled into browser JavaScript.
+- When the repository-root `.env` contains `EXECUTION_API_KEY`, `vite dev` automatically
+  uses it only inside the server-side proxy and opens the local Operator Workspace
+  without a credential prompt. Production builds do not embed or enable this shortcut.
 
 ## UI E2E Testing (Playwright)
 Permanent UI regression tests are configured for iterative UI improvements.

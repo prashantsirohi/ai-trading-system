@@ -20,7 +20,7 @@ The main surfaces are:
 - The React operator console under `web/execution-console-v2/ai-trading-dashboard-starter/`.
 - External runtime storage resolved from `.env`, normally through `DATA_ROOT`.
 
-The on-demand [Actual Trading Journal](architecture/trade_journal.md) is a separate bounded domain. It owns `$DATA_ROOT/trade_journal.duckdb`, is not a daily-pipeline stage, never writes `execution.duckdb`, and reads trusted operational market data only for point-in-time enrichment. Its authenticated mutation routes live under the execution API; Phase 4 `/api/v1` remains GET-only. See the [operator runbook](runbooks/trade_journal.md).
+The on-demand [Actual Trading Journal](architecture/trade_journal.md) is a separate bounded domain. It owns `$DATA_ROOT/trade_journal.duckdb`, is not a daily-pipeline stage, never writes `execution.duckdb`, and reads trusted operational market data only for point-in-time enrichment. Its authenticated mutation routes live under the execution API; Phase 4 `/api/v1` remains GET-only. Loopback development uses a server-side Vite/API handshake when no operator key is configured, while non-loopback execution-API startup requires an explicit key. See the [operator runbook](runbooks/trade_journal.md).
 
 The canonical, persistence-free vocabulary for future opportunity management is
 owned by `src/ai_trading_system/domains/opportunities/`. It keeps ranking
@@ -382,16 +382,18 @@ Start the API and React console in separate terminals:
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.ui.execution_api.app --port 8090
 ```
 
-Start the separate Phase 4A read-only API against deterministic fixtures:
+Start the separate Phase 4A read-only API against the operator store:
 
 ```bash
-PHASE4_API_AUTH_ENABLED=false PHASE4_API_LOCAL_DEV_MODE=true \
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.serve_phase4_api \
-  --fixture-profile small_fixture --host 127.0.0.1 --port 8765
+  --fixture-profile operator_read_only --host 127.0.0.1 --port 8765
 ```
 
-It never applies migrations, triggers a pipeline, imports a broker adapter, or
-exposes business mutation methods. See the [API runbook](runbooks/phase4a_read_only_api.md).
+Loopback CLI startup automatically enables local development access when no
+`PHASE4_API_KEY` is configured. A non-loopback bind still requires an explicit
+key. The API never applies migrations, triggers a pipeline, imports a broker
+adapter, or exposes business mutation methods. See the [API
+runbook](runbooks/phase4a_read_only_api.md).
 
 ```bash
 cd web/execution-console-v2/ai-trading-dashboard-starter
@@ -399,9 +401,9 @@ npm install
 VITE_PHASE4_API_BASE_URL=http://127.0.0.1:8765 npm run dev -- --host 127.0.0.1
 ```
 
-Enter the runtime Phase 4 API key in the session-only login view. See the
-[dashboard runbook](runbooks/phase4b_operator_dashboard.md) for routes,
-configuration, fixture smoke testing, and the public-bundle credential caveat.
+Local Vite development requires no login. See the [dashboard
+runbook](runbooks/phase4b_operator_dashboard.md) for routes, configuration,
+fixture smoke testing, and the public-bundle credential caveat.
 
 Run safe diagnostics:
 

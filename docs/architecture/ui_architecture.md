@@ -9,6 +9,8 @@
 
 The React shell is labelled **Operator Workspace**. Existing Phase 4 routes retain their development/read-only warnings. Four lazy journal routes—Import & Reconciliation, Actual Portfolio, Trading Journal, and Behaviour & Performance—call `VITE_EXECUTION_API_BASE_URL` and always send the same in-memory credential as `X-API-Key`. Financial calculations stay in backend services; the UI retains authoritative decimal strings while formatting copies for display.
 
+During the loopback Vite development workflow, the server-side proxy reads `EXECUTION_API_KEY` from the repository-root `.env` or uses the matching internal loopback handshake when it is unset. It injects the credential into execution requests and starts the browser session in local-access mode without exposing it to client JavaScript. The execution API defaults to `127.0.0.1` and refuses a non-loopback bind without an explicit key. This shortcut exists only for `vite dev`; production builds retain the normal in-memory login and the execution API always enforces authentication.
+
 Actual Portfolio is visually and semantically separate from the Phase 4 system-positions view. Journal pages distinguish loading, empty, stale/provisional/partial, blocked/conflict, error, and trusted evidence and state their `gross`, `securities_only`, or `holdings_only` scope. Backend tasks are polled by opaque run ID. The Actual Portfolio route renders backend-calculated value/drawdown and exposure series; Trading Journal renders adjusted daily candlesticks with fill markers and append-only annotations; reconciliation and governance views retain the explicit proposal/approval boundary.
 
 - App factory: `src/ai_trading_system/ui/execution_api/app.py::create_app` (line 38).

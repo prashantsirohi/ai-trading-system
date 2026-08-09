@@ -218,9 +218,10 @@ operator-store override.
 ## Phase 4A API configuration
 
 Phase 4A uses environment-backed `ApiSettings`; secrets are never stored in a
-config file. Defaults bind to `127.0.0.1`, require authentication, disable
-caching, use 50 rows per page (500 maximum), and allow 120 requests per minute
-per credential.
+config file. Defaults bind to `127.0.0.1`, disable caching, use 50 rows per page
+(500 maximum), and allow 120 requests per minute per credential. CLI startup
+automatically enables local development access on a loopback bind when no key
+is configured; non-loopback startup requires an explicit key.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -228,7 +229,7 @@ per credential.
 | `PHASE4_API_COPIED_CONTROL_PLANE` | unset | Explicit copy; operator paths and symlinks are rejected. |
 | `PHASE4_API_ARTIFACT_ROOT` | unset | Fixed immutable evidence root; safe-root and symlink checks apply. |
 | `PHASE4_API_AUTH_ENABLED` | `true` | Require bearer or `X-API-Key` authentication outside public health. |
-| `PHASE4_API_LOCAL_DEV_MODE` | `false` | Explicit local-only authentication bypass. |
+| `PHASE4_API_LOCAL_DEV_MODE` | `false` | Explicit authentication bypass; the CLI also enables it automatically for a keyless loopback bind. |
 | `PHASE4_API_KEY` | unset | Runtime secret; never logged. |
 | `PHASE4_API_HOST` / `PHASE4_API_PORT` | `127.0.0.1` / `8765` | Bind address and port. |
 | `PHASE4_API_DEFAULT_PAGE_SIZE` / `PHASE4_API_MAX_PAGE_SIZE` | `50` / `500` | Cursor-page bounds. |
@@ -251,6 +252,12 @@ HTTP contract.
 | `VITE_PHASE4_API_AUTH_MODE` | `bearer` | `bearer` or `api-key`; credentials remain in headers. |
 | `VITE_PHASE4_API_KEY` | unset | Optional build-time development credential. Prefer session entry or a secure reverse proxy. |
 | `VITE_PHASE4_DEFAULT_POLL_SECONDS` | `60` | Conservative polling interval for live operator pages. |
+
+For `vite dev`, the execution proxy reads `EXECUTION_API_KEY` from the
+repository-root `.env`. If it is unset, the loopback-bound execution API and
+proxy use an internal development handshake and the browser skips the login
+prompt. This behavior is not included in production builds; non-loopback API
+startup requires an explicit `EXECUTION_API_KEY`.
 
 `VITE_*` values are public bundle configuration. Never use
 `VITE_PHASE4_API_KEY` for a production secret. Credentials entered in the UI

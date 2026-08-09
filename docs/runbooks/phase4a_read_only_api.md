@@ -48,8 +48,10 @@ source-version mismatches. A conflicted stock or sector detail returns
 
 Live and ready health are public and disclose no rows. Other routes require
 `Authorization: Bearer <key>` or `X-API-Key: <key>` by default. Keys come from
-`PHASE4_API_KEY`, use constant-time comparison, and are not logged. Bypass
-requires explicit local-development mode.
+`PHASE4_API_KEY`, use constant-time comparison, and are not logged. The CLI
+automatically enables local-development bypass only when it is bound to a
+loopback address and no key is configured. A non-loopback bind without a key
+fails at startup; explicit local-development mode remains available for tests.
 
 Valid `X-Request-ID` values are propagated; invalid values are replaced with a
 UUID. Structured logs contain request ID, route, status, duration, and
@@ -104,7 +106,17 @@ Versioned details use semantic ETags and return 304 for matching
 
 Errors omit stack traces, SQL, paths, credentials, and raw exceptions.
 
-## Safe fixture smoke test
+## Local operator startup
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.serve_phase4_api \
+  --fixture-profile operator_read_only --host 127.0.0.1 --port 8765
+```
+
+No API key is needed for this loopback-only workflow. Restart the process after
+changing authentication environment settings.
+
+## Safe authenticated fixture smoke test
 
 ```bash
 export PHASE4_API_KEY='local-test-key'

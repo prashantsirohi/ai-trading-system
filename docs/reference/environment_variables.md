@@ -41,7 +41,7 @@ Sourced by grepping `os.environ`, `os.getenv`, `getenv(`, and pydantic `Settings
 | `DATA_DOMAIN` | optional | `platform/db/paths.py` | `operational` | `operational` or `research` |
 | `ENV` | optional | `pipeline/daily_pipeline.py` | — | label only |
 | `MPLCONFIGDIR` | optional | `platform/logging/` | auto-set | matplotlib cache |
-| `EXECUTION_API_KEY` | required for `/api/*` | [`ui/execution_api/routes/_deps.py:31`](../../src/ai_trading_system/ui/execution_api/routes/_deps.py) | — | **secret**. Blank/unset → every `/api/*` returns HTTP 500. Client header: `x-api-key`. |
+| `EXECUTION_API_KEY` | optional on loopback; required for non-loopback binds | [`ui/execution_api/routes/_deps.py:31`](../../src/ai_trading_system/ui/execution_api/routes/_deps.py) | internal local proxy handshake | **secret for deployments**. The CLI supplies an internal development handshake only when bound to loopback; non-loopback startup fails closed if blank. Client header: `x-api-key`. |
 
 ## EXECUTION_MODE
 

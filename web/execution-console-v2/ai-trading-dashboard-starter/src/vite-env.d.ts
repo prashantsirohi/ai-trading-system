@@ -9,6 +9,7 @@ interface ImportMetaEnv {
    * "use the dev-server proxy" (request paths stay relative).
    */
   readonly VITE_EXECUTION_API_BASE_URL?: string;
+  readonly VITE_LOCAL_NO_AUTH?: string;
 
   /** API key sent as the `x-api-key` header on every backend request. */
   readonly VITE_EXECUTION_API_KEY?: string;

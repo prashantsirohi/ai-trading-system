@@ -9,6 +9,8 @@ and the CLI entry point. Endpoint logic lives in
 from __future__ import annotations
 
 import argparse
+import ipaddress
+import os
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -21,6 +23,8 @@ from ai_trading_system.ui.execution_api.routes._deps import (
     DEFAULT_PROJECT_ROOT,
     configured_api_key,
 )
+
+LOCAL_DEVELOPMENT_API_KEY = "local-loopback-vite-proxy"
 
 
 # Re-exported for backwards compatibility with callers that imported these
@@ -73,13 +77,33 @@ app = create_app()
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Launch the FastAPI execution backend")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8090)
     return parser
 
 
+def _is_loopback_bind(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _configure_startup_api_key(host: str) -> None:
+    if configured_api_key() is not None:
+        return
+    if not _is_loopback_bind(host):
+        raise SystemExit(
+            "EXECUTION_API_KEY is required when the execution API is not bound to loopback"
+        )
+    os.environ["EXECUTION_API_KEY"] = LOCAL_DEVELOPMENT_API_KEY
+
+
 def main() -> None:
     args = build_parser().parse_args()
+    _configure_startup_api_key(args.host)
     uvicorn.run(
         "ai_trading_system.ui.execution_api.app:app",
         host=args.host,

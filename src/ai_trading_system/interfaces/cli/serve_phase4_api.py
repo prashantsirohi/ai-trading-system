@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
+from dataclasses import replace
 from pathlib import Path
 
 import uvicorn
@@ -19,6 +21,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixture-profile", choices=[item.value for item in SourceProfile], default="operator_read_only")
     parser.add_argument("--copied-control-plane", type=Path)
     return parser
+
+
+def _is_loopback_bind(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _configure_startup_auth(settings: ApiSettings, host: str) -> ApiSettings:
+    if not settings.auth_enabled or settings.local_dev_mode or settings.api_key:
+        return settings
+    if not _is_loopback_bind(host):
+        raise SystemExit(
+            "PHASE4_API_KEY is required when the Phase 4 API is not bound to loopback"
+        )
+    return replace(settings, local_dev_mode=True)
 
 
 def main() -> None:
@@ -44,6 +65,7 @@ def main() -> None:
         max_response_rows=settings.max_response_rows,
         cors_allowed_origins=settings.cors_allowed_origins,
     )
+    settings = _configure_startup_auth(settings, args.host)
     uvicorn.run(create_app(settings=settings), host=args.host, port=args.port, reload=args.reload)
 
 

@@ -10,7 +10,7 @@ function baseUrl(): string {
 async function request<T>(path: string, credential: string, init: RequestInit = {}): Promise<T> {
   if (!path.startsWith('/api/trade-journal/')) throw new Error('Journal requests must use /api/trade-journal');
   const headers = new Headers(init.headers);
-  headers.set('X-API-Key', credential);
+  if (credential !== 'local-no-auth') headers.set('X-API-Key', credential);
   if (!(init.body instanceof FormData)) headers.set('Accept', 'application/json');
   const response = await fetch(`${baseUrl()}${path}`, { ...init, headers });
   const body = await response.json().catch(() => ({ detail: response.statusText }));

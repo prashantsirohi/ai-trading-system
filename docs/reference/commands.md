@@ -204,6 +204,12 @@ npm install
 VITE_PHASE4_API_BASE_URL=http://127.0.0.1:8765 npm run dev -- --host 127.0.0.1
 ```
 
+For local journal use, no API-key setup or browser login is required. When the
+repository-root `.env` has no `EXECUTION_API_KEY`, the loopback-bound API and
+Vite use an internal development handshake. Vite injects it only in the
+server-side proxy. A non-loopback API bind still requires an explicit key, and
+production builds do not enable this local shortcut.
+
 ```bash
 curl http://localhost:8090/api/execution/health
 ```
@@ -211,10 +217,13 @@ curl http://localhost:8090/api/execution/health
 The Phase 4A API is a separate read-only process and defaults to loopback:
 
 ```bash
-export PHASE4_API_KEY='<runtime-secret>'
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.serve_phase4_api \
   --fixture-profile operator_read_only --host 127.0.0.1 --port 8765
 ```
+
+When no key is configured, loopback CLI startup automatically enables local
+development access. Binding to a non-loopback address requires an explicit
+`PHASE4_API_KEY`.
 
 Use `small_fixture` for deterministic smoke tests. A copied store uses
 `--fixture-profile copied_store --copied-control-plane /path/to/copy`; the CLI

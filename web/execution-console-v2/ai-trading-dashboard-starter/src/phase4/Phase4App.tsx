@@ -23,7 +23,7 @@ const BehaviourPerformancePage = lazy(() => import('../trade-journal/pages').the
 
 function AuthenticatedApp() {
   const auth = useAuth();
-  const readiness = usePhase4Query<JsonRecord>('/api/v1/system/readiness', { enabled: Boolean(auth.credential), poll: true });
+  const readiness = usePhase4Query<JsonRecord>('/api/v1/system/readiness', { enabled: Boolean(auth.credential) && !auth.localNoAuth, poll: true });
   if (!auth.credential) return <LoginView />;
   return <AppShell readiness={readiness.data?.data}><Suspense fallback={<div className="loading" role="status">Loading dashboard view…</div>}>
     <Routes>

@@ -1,9 +1,10 @@
 import { createContext, useContext, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { CONFIGURED_API_KEY, CONFIGURED_AUTH_MODE, type AuthMode } from './api';
+import { CONFIGURED_API_KEY, CONFIGURED_AUTH_MODE, LOCAL_NO_AUTH, type AuthMode } from './api';
 
 interface AuthState {
   credential: string;
   authMode: AuthMode;
+  localNoAuth: boolean;
   signIn: (credential: string, mode: AuthMode) => void;
   signOut: () => void;
 }
@@ -11,11 +12,12 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [credential, setCredential] = useState(CONFIGURED_API_KEY);
+  const [credential, setCredential] = useState(LOCAL_NO_AUTH ? 'local-no-auth' : CONFIGURED_API_KEY);
   const [authMode, setAuthMode] = useState<AuthMode>(CONFIGURED_AUTH_MODE);
   const value = useMemo<AuthState>(() => ({
     credential,
     authMode,
+    localNoAuth: LOCAL_NO_AUTH,
     signIn: (next, mode) => { setCredential(next.trim()); setAuthMode(mode); },
     signOut: () => setCredential(''),
   }), [credential, authMode]);

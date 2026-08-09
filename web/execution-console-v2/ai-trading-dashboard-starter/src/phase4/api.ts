@@ -13,6 +13,9 @@ export const CONFIGURED_AUTH_MODE: AuthMode =
     ? 'api-key'
     : 'bearer';
 export const CONFIGURED_API_KEY = String(import.meta.env.VITE_PHASE4_API_KEY ?? '');
+export const LOCAL_NO_AUTH = ['1', 'true', 'yes'].includes(
+  String(import.meta.env.VITE_LOCAL_NO_AUTH ?? '').toLowerCase(),
+);
 
 function apiBase(): string {
   if (!configuredBase) return '';

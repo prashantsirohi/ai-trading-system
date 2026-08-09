@@ -16,6 +16,17 @@ describe('journalApi', () => {
     expect(new Headers(options.headers).get('X-API-Key')).toBe('local-secret');
   });
 
+  it('leaves local development authentication to the server-side Vite proxy', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    await journalApi.get('/api/trade-journal/accounts', 'local-no-auth');
+    const [, options] = fetchMock.mock.calls[0];
+    expect(new Headers(options.headers).has('X-API-Key')).toBe(false);
+  });
+
   it('rejects requests outside the journal route family', async () => {
     await expect(journalApi.get('/api/v1/positions', 'credential')).rejects.toThrow(
       'Journal requests must use /api/trade-journal',
