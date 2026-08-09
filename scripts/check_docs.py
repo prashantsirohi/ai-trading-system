@@ -2,7 +2,7 @@
 """Lightweight validation for docs/.
 
 Checks:
-  1. No broken relative links in docs/**/*.md (excluding docs/_legacy/).
+  1. No broken relative links in docs/**/*.md (excluding docs/_legacy/ and docs/evidence/).
   2. Frontmatter is present (every doc has Purpose / Audience / Last verified / Source of truth).
   3. No "Status: STUB" markers in current docs (only allowed under docs/_legacy/).
   4. No forbidden stale terms in current docs unless inside a fenced code block or explicit
@@ -14,14 +14,22 @@ Checks:
   8. Every logical stage has a detailed stage document.
   9. Current docs and AGENTS.md route readers through the System Guide.
  10. Optional git change-impact checks require canonical docs with design changes.
+ 11. Every current doc is linked from docs/INDEX.md.
+ 12. Every `[project.scripts]` console script appears in docs/reference/commands.md.
+ 13. Every env var read in src/ appears in docs/reference/environment_variables.md.
+
+Advisory (warns, never fails): a doc whose git history shows it changed after
+the "Last verified" date it claims. Re-stamping without re-reading the content
+against code would make the claim worse, so this is a prompt for a human.
 
 Exit code:
   0 — all checks passed.
   1 — at least one check failed; details printed.
 
 Usage:
-  python scripts/check_docs.py            # validate
-  python scripts/check_docs.py --fix      # not implemented (placeholder for future)
+  python scripts/check_docs.py                 # validate
+  python scripts/check_docs.py --no-warnings   # errors only
+  python scripts/check_docs.py --fix           # not implemented (placeholder for future)
 
 This is intentionally simple — it's a lint, not a full doc engine.
 """
@@ -33,15 +41,25 @@ import ast
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Iterable
 
 REPO = Path(__file__).resolve().parent.parent
 DOCS = REPO / "docs"
 LEGACY = DOCS / "_legacy"
+EVIDENCE = DOCS / "evidence"
+# Frozen trees are excluded from current-doc lint. `_legacy` is archived; `evidence`
+# holds immutable audit bundles whose files are covered by their own `bundle.sha256`,
+# so editing them (e.g. to add frontmatter) would invalidate the proof.
+FROZEN_TREES = (LEGACY, EVIDENCE)
 SRC_PACKAGE_ROOT = REPO / "src" / "ai_trading_system"
 SYSTEM_GUIDE = DOCS / "SYSTEM_GUIDE.md"
+INDEX = DOCS / "INDEX.md"
+COMMANDS_DOC = DOCS / "reference" / "commands.md"
+ENV_VARS_DOC = DOCS / "reference" / "environment_variables.md"
 ORCHESTRATOR = SRC_PACKAGE_ROOT / "pipeline" / "orchestrator.py"
+PYPROJECT = REPO / "pyproject.toml"
 
 # Forbidden stale terms in NON-legacy docs (case-sensitive substring match outside code fences)
 FORBIDDEN_TERMS = [
@@ -97,6 +115,9 @@ LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 CODE_FENCE_RE = re.compile(r"```")
 PYTHON_M_RE = re.compile(r"python -m (ai_trading_system\.[a-zA-Z0-9_.]+)")
 GUIDE_MARKER_RE = re.compile(r"<!-- system-guide-([a-z-]+):\s*([^>]+?)\s*-->")
+ENV_NAME_RE = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
+LAST_VERIFIED_RE = re.compile(r"\*\*Last verified:\*\*\s*(\d{4}-\d{2}-\d{2})\s*$", re.M)
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 GUIDE_REQUIRED_SECTIONS = [
     "## System purpose and boundaries",
@@ -123,11 +144,17 @@ GUIDE_REQUIRED_TOKENS = [
 
 def iter_current_docs() -> Iterable[Path]:
     for p in DOCS.rglob("*.md"):
-        try:
-            p.relative_to(LEGACY)
+        if any(_is_under(p, frozen) for frozen in FROZEN_TREES):
             continue
-        except ValueError:
-            yield p
+        yield p
+
+
+def _is_under(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
 
 
 def strip_code_fences(text: str) -> str:
@@ -323,6 +350,173 @@ def check_system_guide() -> list[str]:
     return errors
 
 
+def check_index_completeness(docs: list[Path]) -> list[str]:
+    """Every current doc must be reachable from the doc index.
+
+    Compares against resolved link targets rather than raw text, so a short path
+    like `README.md` is not satisfied by an unrelated `_legacy/README.md` link.
+    """
+    linked = {
+        (INDEX.parent / m.group(1).split("#")[0].strip()).resolve()
+        for m in LINK_RE.finditer(INDEX.read_text())
+        if not m.group(1).startswith(("http://", "https://", "mailto:", "/"))
+    }
+    return [
+        f"docs/INDEX.md: does not link {doc.relative_to(DOCS).as_posix()} "
+        "(the index claims to be a complete map)"
+        for doc in sorted(docs)
+        if doc != INDEX and doc.resolve() not in linked
+    ]
+
+
+def console_scripts(path: Path = PYPROJECT) -> list[str]:
+    """Return the console-script aliases declared in pyproject."""
+    with path.open("rb") as handle:
+        return sorted(tomllib.load(handle).get("project", {}).get("scripts", {}))
+
+
+def check_console_scripts_documented() -> list[str]:
+    text = COMMANDS_DOC.read_text()
+    return [
+        f"docs/reference/commands.md: console script {alias!r} is declared in pyproject but not documented"
+        for alias in console_scripts()
+        if alias not in text
+    ]
+
+
+def _env_names_from_module(tree: ast.Module) -> set[str]:
+    """Env var names read by one module.
+
+    Handles the direct forms (`os.getenv("X")`, `os.environ.get("X")`,
+    `os.environ["X"]`) plus module-local wrappers: a function that reads the env
+    using one of its own parameters is treated as an env reader, so calls like
+    `_bool("PHASE4_API_AUTH_ENABLED", True)` are counted too. Without this,
+    helper-wrapped settings silently escape the check.
+    """
+    names: set[str] = set()
+    wrappers: dict[str, int] = {}
+
+    def direct_read(node: ast.AST) -> ast.AST | None:
+        """Return the env-name argument node if this is a direct env read."""
+        if isinstance(node, ast.Subscript) and _is_os_environ(node.value):
+            return node.slice
+        if not isinstance(node, ast.Call):
+            return None
+        func = node.func
+        if not isinstance(func, ast.Attribute) or not node.args:
+            return None
+        if func.attr == "getenv" and isinstance(func.value, ast.Name) and func.value.id == "os":
+            return node.args[0]
+        if func.attr == "get" and _is_os_environ(func.value):
+            return node.args[0]
+        return None
+
+    # Pass 1: module-local wrappers, and direct reads with literal names.
+    for parent in ast.walk(tree):
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            params = [arg.arg for arg in parent.args.args]
+            for node in ast.walk(parent):
+                arg = direct_read(node)
+                if isinstance(arg, ast.Name) and arg.id in params:
+                    wrappers[parent.name] = params.index(arg.id)
+    for node in ast.walk(tree):
+        arg = direct_read(node)
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            names.add(arg.value)
+
+    # Pass 2: calls into those wrappers with a literal name.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        index = wrappers.get(node.func.id)
+        if index is None or index >= len(node.args):
+            continue
+        arg = node.args[index]
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            names.add(arg.value)
+
+    return {name for name in names if ENV_NAME_RE.fullmatch(name)}
+
+
+def _is_os_environ(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "environ"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+    )
+
+
+def env_vars_in_source(root: Path = SRC_PACKAGE_ROOT) -> set[str]:
+    names: set[str] = set()
+    for path in sorted(root.rglob("*.py")):
+        try:
+            names |= _env_names_from_module(ast.parse(path.read_text(), filename=str(path)))
+        except (OSError, SyntaxError):
+            continue
+    return names
+
+
+def check_env_vars_documented() -> list[str]:
+    text = ENV_VARS_DOC.read_text()
+    return [
+        f"docs/reference/environment_variables.md: {name} is read in src/ but not documented"
+        for name in sorted(env_vars_in_source())
+        if name not in text
+    ]
+
+
+def last_commit_dates(paths: Iterable[Path]) -> dict[Path, str]:
+    """Map each path to its most recent commit date (YYYY-MM-DD), in one git call."""
+    result = subprocess.run(
+        ["git", "log", "--format=%ad", "--date=short", "--name-only", "--", str(DOCS)],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "git log failed")
+
+    dates: dict[str, str] = {}
+    current = ""
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if DATE_RE.fullmatch(line):
+            current = line
+        elif current:
+            dates.setdefault(line, current)  # log is newest-first
+    known = {p.relative_to(REPO).as_posix(): p for p in paths}
+    return {known[rel]: date for rel, date in dates.items() if rel in known}
+
+
+def check_verification_stamps(docs: list[Path]) -> list[str]:
+    """Warn when a doc changed after the date it claims to have been verified.
+
+    This is advisory: it means someone edited content without re-verifying it.
+    Re-stamping without actually checking the content against code would make
+    the claim worse, so this never fails the build.
+    """
+    try:
+        committed = last_commit_dates(docs)
+    except RuntimeError as exc:
+        return [f"could not read git history for verification stamps: {exc}"]
+
+    warnings = []
+    for doc in sorted(docs):
+        match = LAST_VERIFIED_RE.search(doc.read_text())
+        rel = doc.relative_to(REPO)
+        if not match:
+            warnings.append(f"{rel}: 'Last verified' is not a bare YYYY-MM-DD date")
+            continue
+        changed = committed.get(doc)
+        if changed and changed > match.group(1):
+            warnings.append(f"{rel}: last verified {match.group(1)} but last changed {changed}")
+    return warnings
+
+
 def check_canonical_routing() -> list[str]:
     errors: list[str] = []
     agents = (REPO / "AGENTS.md").read_text()
@@ -394,6 +588,11 @@ def main(argv: list[str] | None = None) -> int:
         "--base-ref",
         help="Optional git base ref used to enforce design-change documentation impact rules.",
     )
+    parser.add_argument(
+        "--no-warnings",
+        action="store_true",
+        help="Skip advisory checks (stale verification stamps). Errors are unaffected.",
+    )
     args = parser.parse_args(argv)
     errors: list[str] = []
     docs = list(iter_current_docs())
@@ -417,16 +616,27 @@ def main(argv: list[str] | None = None) -> int:
 
     errors.extend(check_system_guide())
     errors.extend(check_canonical_routing())
+    errors.extend(check_index_completeness(docs))
+    errors.extend(check_console_scripts_documented())
+    errors.extend(check_env_vars_documented())
     if args.base_ref:
         try:
             errors.extend(check_change_impact(changed_paths_from_git(args.base_ref)))
         except RuntimeError as exc:
             errors.append(str(exc))
 
+    warnings = [] if args.no_warnings else check_verification_stamps(docs)
+
     if errors:
         print(f"\n{len(errors)} issue(s) found:\n")
         for e in errors:
             print(f"  - {e}")
+    if warnings:
+        print(f"\n{len(warnings)} doc(s) changed since they were last verified (advisory):\n")
+        for w in warnings:
+            print(f"  - {w}")
+        print("\nRe-verify the content against code before bumping 'Last verified'.")
+    if errors:
         return 1
 
     print(f"\nOK — validated {len(docs)} current docs, no issues.")

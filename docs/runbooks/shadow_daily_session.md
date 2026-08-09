@@ -2,7 +2,7 @@
 
 - **Purpose:** Run and score one R1a shadow session without the full A/B/C parity test.
 - **Audience:** Operator.
-- **Last verified:** 2026-07-19.
+- **Last verified:** 2026-08-08
 - **Source of truth:** the run's registered `pattern_lane_*` artifacts + the pipeline registry.
 
 ---
@@ -24,8 +24,14 @@ scripts/run_daily_shadow.sh                 # today, real publish
 RUN_DATE=2026-07-18 scripts/run_daily_shadow.sh --local-publish
 ```
 
-- Env overrides: `RUN_DATE` (default today), `RUN_ID` (default
-  `shadow-<date>-<HHMMSS>`, unique per run), `PATTERN_LANE_WORKERS` (default 4).
+- Env overrides: `RUN_DATE` (default today), `RUN_ID`, `PATTERN_LANE_WORKERS`
+  (default 4).
+- Run-id resolution, in order: an explicit `RUN_ID` pins that run; otherwise a
+  plain re-run **auto-resumes** the latest failed or interrupted run for
+  `RUN_DATE` (`registry.find_latest_resumable_run` — the same definition the
+  orchestrator uses, so completed stages are skipped rather than restarting from
+  ingest); otherwise it mints `shadow-<date>-<HHMMSS>`. The startup line reports
+  which path was taken (`pinned` · `auto-resume` · `new`).
 - Extra args pass straight through to the pipeline (e.g. `--local-publish`,
   `--data-domain`).
 - Holds a single-run lock (`$TMPDIR/run_daily_shadow.lock`) so two daily runs

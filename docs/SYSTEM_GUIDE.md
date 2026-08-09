@@ -192,15 +192,15 @@ equality hashes. See the [rank contract](stages/rank.md#offline-r0-pattern-lane-
 
 ## Operational design and stages
 
-<!-- system-guide-logical-stages: ingest,features,rank,weekly_stage,scan_router,investigator,opportunities,fundamentals,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker -->
+<!-- system-guide-logical-stages: ingest,features,rank,weekly_stage,pattern_lane_scan,scan_router,investigator,opportunities,fundamentals,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker -->
 
 ```text
-ingest -> features -> rank -> weekly_stage* -> scan_router* -> investigator -> opportunities* -> fundamentals* -> candidates
+ingest -> features -> rank -> weekly_stage* -> pattern_lane_scan* -> scan_router* -> investigator -> opportunities* -> fundamentals* -> candidates
        -> candidate_tracker -> events -> execute -> insight -> narrative
        -> publish -> perf_tracker
 ```
 
-`PIPELINE_ORDER` contains all 16 logical stages above. The current CLI default omits `weekly_stage`, `scan_router`, `opportunities`, and `narrative`, so its normal stage list remains `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker`. Phase 3B `compare` or `shadow` mode inserts `weekly_stage,scan_router` after `rank`; registry shadow mode inserts `opportunities` after `investigator`. Canary mode replaces the unchanged default with `ingest,features,rank`.
+`PIPELINE_ORDER` contains all 17 logical stages above. The current CLI default omits `weekly_stage`, `pattern_lane_scan`, `scan_router`, `opportunities`, and `narrative`, so its normal stage list remains `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker`. Phase 3B `compare` or `shadow` mode inserts `weekly_stage,scan_router` after `rank`; `--pattern-lane-scan-mode shadow` inserts `pattern_lane_scan` after `weekly_stage`, adding `weekly_stage` first if it is not already scheduled; registry shadow mode inserts `opportunities` after `investigator`. Canary mode replaces the unchanged default with `ingest,features,rank`.
 
 When rank is skipped because its inputs are unchanged, downstream stages that require rank evidence—including `scan_router`—hydrate the latest promoted artifacts from a completed run. A failed rank attempt is never eligible for this reuse.
 
@@ -212,6 +212,7 @@ When rank is skipped because its inputs are unchanged, downstream stages that re
 | `features` | Compute technical, sector, valuation, earnings, and derived feature snapshots. | Feature Parquet and snapshot metadata | [features](stages/features.md) |
 | `rank` | Score the universe and materialize ranking, breakout, pattern, stock, sector, and Stage 1 evidence. | Rank artifact family | [rank](stages/rank.md) |
 | `weekly_stage` | Classify full-universe stock and sector structure and run light Stage 1 discovery. | Universal stage history and coverage artifacts | [weekly stage](stages/weekly_stage.md) |
+| `pattern_lane_scan` | Optionally run the ADR-0007 R1a lane-aware pattern scan in shadow only; non-actionable and non-blocking. | Seven `pattern_lane_*` evidence artifacts with no operational consumer | [pattern lane scan](stages/pattern_lane_scan.md) |
 | `scan_router` | Resolve rank, stage, candidate, active-position, and recent-exit coverage. | Routing and comparison artifacts | [scan router](stages/scan_router.md) |
 | `investigator` | Build a non-executable operator investigation queue from post-rank evidence. | Investigator artifacts and control-plane history | [investigator](stages/investigator.md) |
 | `opportunities` | Optionally reconcile canonical candidate episodes and Investigator attribution onsets in non-authoritative shadow mode. | Opportunity registry, immutable performance events, and audit artifacts | [opportunities](stages/opportunities.md) |

@@ -10,6 +10,7 @@
 ## Landing
 - [SYSTEM_GUIDE](SYSTEM_GUIDE.md) — canonical system orientation and operating contract
 - [README](README.md) — role-based documentation landing page
+- [DOCS_STANDARD](DOCS_STANDARD.md) — rules for writing docs in this repo
 
 ## Architecture
 - [operational_data_flow](architecture/operational_data_flow.md)
@@ -18,15 +19,17 @@
 - [ui_architecture](architecture/ui_architecture.md)
 - [trade_journal](architecture/trade_journal.md)
 - [target_architecture](architecture/target_architecture.md)
+- [decision_read_model_migration](architecture/decision_read_model_migration.md)
 - [opportunity_lifecycle_contracts](architecture/opportunity_lifecycle_contracts.md)
 - [opportunity_registry](architecture/opportunity_registry.md)
 - [opportunity_shadow_orchestration](architecture/opportunity_shadow_orchestration.md)
 
-## Stages (16)
+## Stages (17)
 - [ingest](stages/ingest.md)
 - [features](stages/features.md)
 - [rank](stages/rank.md)
 - [weekly_stage](stages/weekly_stage.md)
+- [pattern_lane_scan](stages/pattern_lane_scan.md)
 - [scan_router](stages/scan_router.md)
 - [investigator](stages/investigator.md)
 - [opportunities](stages/opportunities.md)
@@ -65,6 +68,7 @@
 - [breakout_and_patterns](reference/breakout_and_patterns.md)
 - [execution_policy](reference/execution_policy.md)
 - [publish_contracts](reference/publish_contracts.md)
+- [glossary](reference/glossary.md)
 
 ## Runbooks
 - [trade_journal](runbooks/trade_journal.md)
@@ -77,6 +81,10 @@
 - [backup_and_restore](runbooks/backup_and_restore.md)
 - [copied_data_canary](runbooks/copied_data_canary.md)
 - [phase3b_shadow_verification](runbooks/phase3b_shadow_verification.md)
+- [phase3c4_performance_benchmark](runbooks/phase3c4_performance_benchmark.md)
+- [phase3c5_calibration_and_readiness](runbooks/phase3c5_calibration_and_readiness.md)
+- [phase4a_read_only_api](runbooks/phase4a_read_only_api.md)
+- [phase4b_operator_dashboard](runbooks/phase4b_operator_dashboard.md)
 - [shadow_stage_ab_parity](runbooks/shadow_stage_ab_parity.md)
 - [shadow_daily_session](runbooks/shadow_daily_session.md)
 - [deployment_mac_mini](runbooks/deployment_mac_mini.md)
@@ -106,8 +114,13 @@
 ## Evidence
 - [R1a shadow A/B safety proof (2026-07-17 @ 7d5f03a)](evidence/adr-0007/r1a-safety-proof/2026-07-17-7d5f03a/README.md)
 
+## Research findings
+- [performance_tracker_diagnostics](performance_tracker_diagnostics.md)
+- [regime_alternate_signals_findings](regime_alternate_signals_findings.md)
+
 ## Audit
 - [documentation_inventory](_audit/documentation_inventory.md)
+- [documentation_cleanup_report](_audit/documentation_cleanup_report.md)
 - [stale_reference_report](_audit/stale_reference_report.md)
 - [retired code-truth-map tombstone](_audit/current_code_truth_map.md)
 
