@@ -15,10 +15,10 @@
 | `data/control_plane.duckdb` | Pipeline orchestrator (writes governance) + several read paths | `src/ai_trading_system/pipeline/migrations/*.sql` (37 SQL files, applied by `pipeline/registry.py`) | Run lifecycle, DQ, artifacts, model registry, monitoring, optimizer, universe, pattern cache, opportunity history, alert incidents, recovery proposals/actions, and the policy version registry. |
 | `data/execution.duckdb` | Execute stage (`domains/execution/service.py`) | `domains/execution/store.py::ExecutionStore._init_db` | Orders, fills, trade journal, stops, drawdown snapshots. **Created by `ExecutionStore`** — default path is `<project_root>/data/execution.duckdb` (`store.py:29`). |
 | `$DATA_ROOT/trade_journal.duckdb` | Actual Trading Journal bounded domain | `domains/trade_journal/migrations/001_initial.sql` | Versioned import/DQ, identity/governance, ledger/lot/episode, checkpoint/reconciliation, valuation/risk, evaluation and append-only annotation tables. Financial columns use `DECIMAL(38,8)`. |
-
-The actual journal's complete table-family and trust contract is documented in [Actual Trading Journal Architecture](../architecture/trade_journal.md). It is not the legacy execution-store trade journal and does not share execution tables.
 | `data/research.duckdb` | Perf tracker stage + research perf-tracker API endpoints | `research/perf_tracker/schema.py::RANK_COHORT_DDL` | `rank_cohort_performance`. Path resolved via `research_db_path()` -> `paths.root_dir / "research.duckdb"` (`schema.py:55-60`). |
 | `data/research_ohlcv.duckdb` | Research-domain OHLCV (selected when `DATA_DOMAIN=research`) | `domains/ingest/repository.py` (same DDL as operational) | Isolation per `platform/db/paths.py:111`: ohlcv file name is `research_ohlcv.duckdb` for the research domain. |
+
+The actual journal's complete table-family and trust contract is documented in [Actual Trading Journal Architecture](../architecture/trade_journal.md). It is not the legacy execution-store trade journal and does not share execution tables.
 
 > **Correction vs older docs.** Documentation prior to 2026-05-16 sometimes asserted that execution tables live in `data/control_plane.duckdb`. **This is wrong.** `ExecutionStore` writes to `data/execution.duckdb` by default (`domains/execution/store.py:29`). The control-plane database does *not* contain `execution_order`/`execution_fill` rows.
 

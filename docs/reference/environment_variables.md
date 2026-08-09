@@ -29,9 +29,9 @@ defaults are used.
 ## Variables
 
 | Name | Required | Used by | Default | Notes |
+|---|---|---|---|---|
 | `TRADE_JOURNAL_SAMPLE_TRADEBOOK` | no | opt-in journal characterization test | — | Local path only; never committed. |
 | `TRADE_JOURNAL_SAMPLE_HOLDINGS` | no | opt-in journal characterization test | — | Local path only; never committed. |
-|---|---|---|---|---|
 | `DHAN_API_KEY` | live trading | `domains/ingest/providers/dhan.py` | — | secret |
 | `DHAN_CLIENT_ID` | live trading | same | — | |
 | `DHAN_ACCESS_TOKEN` | live trading | same | — | secret |
