@@ -78,7 +78,7 @@ flowchart LR
 | `events` | Candidate/rank context | Event packet and enriched evidence | Missing optional enrichment must remain distinguishable from trusted evidence. |
 | `execute` | Candidate/event inputs plus trust and policy context | Actions, orders, fills, positions | Paper is safe default; critical DQ and risk gates block dispatch. |
 | `insight` | Upstream decision and execution artifacts | Structured analyst brief | Consumes artifacts; does not recompute upstream stages. |
-| `narrative` | Insight artifact and LLM configuration | Market report | Can be omitted from an explicit stage list. |
+| `narrative` | Insight artifact and LLM configuration | Market report | Can be omitted from an explicit stage list. `--insight-report-type` selects the cadence, so the artifact names are `daily_insight_*` (default) or `weekly_insight_*`. |
 | `publish` | Registered materialized artifacts | External/local deliveries and summary | Retryable for the same `run_id`; must not recompute upstream data. |
 | `perf_tracker` | Published/ranked cohort context | Research-domain cohort updates | Operational and research persistence remain separated. |
 

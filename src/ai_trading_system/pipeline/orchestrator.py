@@ -1594,6 +1594,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fundamental watchlist scoring mode.",
     )
     parser.add_argument(
+        "--insight-report-type",
+        choices=["daily", "weekly"],
+        default="daily",
+        help="Report cadence for the insight and narrative stages. 'weekly' selects the weekly LLM route and writes weekly_insight_* artifacts.",
+    )
+    parser.add_argument(
         "--screener-financials-db-path",
         default=str(default_screener_db_path()),
         help="Canonical Screener SQLite fundamentals DB path.",
@@ -2098,6 +2104,7 @@ def main() -> None:
         "fundamental_max_stale_days": int(args.fundamental_max_stale_days),
         "fundamental_scores_path": args.fundamental_scores_path,
         "fundamental_watchlist_mode": args.fundamental_watchlist_mode,
+        "insight_report_type": args.insight_report_type,
         "screener_financials_db_path": args.screener_financials_db_path,
         "enable_valuation_features": bool(args.enable_valuation_features),
         "valuation_universes": args.valuation_universes,

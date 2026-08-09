@@ -187,6 +187,12 @@ not environment variables or mutable rank-stage flags.
 
 **Current behavior:** stage always uses paper execution. Live Dhan adapter is disabled at the source — see [`docs/reference/execution_policy.md`](execution_policy.md). UI-triggered default pipeline runs do not include `execute`.
 
+## Insight and narrative cadence
+
+- `--insight-report-type` — `daily` (default) or `weekly`. Sets `insight_report_type`, read by both the `insight` and `narrative` stages.
+
+`weekly` selects the `weekly_market_report` LLM route instead of `daily_market_report`, titles the report "Weekly Market Insight", and makes `narrative` write `weekly_insight.json` / `weekly_insight.md` with artifact types `weekly_insight_json` and `weekly_insight_markdown`. `publish` resolves either cadence.
+
 ## Publish configuration
 
 - `--local-publish` — switches publish to local summary only (no external delivery)

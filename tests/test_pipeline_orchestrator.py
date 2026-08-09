@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 from datetime import date
 from pathlib import Path
@@ -38,6 +39,40 @@ def test_orchestrator_cli_default_stages_include_perf_tracker() -> None:
     args = orchestrator_module.build_parser().parse_args([])
 
     assert args.stages.split(",")[-1] == "perf_tracker"
+
+
+def test_insight_report_type_defaults_to_daily_and_accepts_weekly() -> None:
+    parser = orchestrator_module.build_parser()
+
+    assert parser.parse_args([]).insight_report_type == "daily"
+    assert parser.parse_args(["--insight-report-type", "weekly"]).insight_report_type == "weekly"
+
+
+def test_insight_report_type_rejects_unknown_cadence() -> None:
+    with pytest.raises(SystemExit):
+        orchestrator_module.build_parser().parse_args(["--insight-report-type", "monthly"])
+
+
+def test_insight_report_type_reaches_stage_params() -> None:
+    """The flag is only useful if it lands in the params dict both stages read.
+
+    Guards the exact defect this flag fixed: insight/narrative read
+    `insight_report_type` from params, but nothing ever put it there, so the
+    weekly branch was unreachable.
+    """
+    tree = ast.parse(Path(orchestrator_module.__file__).read_text())
+    wired = {
+        key.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+        for key, value in zip(node.keys, node.values)
+        if isinstance(key, ast.Constant)
+        and isinstance(value, ast.Attribute)
+        and isinstance(value.value, ast.Name)
+        and value.value.id == "args"
+    }
+
+    assert "insight_report_type" in wired
 
 
 def test_scan_router_coverage_failure_is_nonblocking_for_execution_and_publish(
