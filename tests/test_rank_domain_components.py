@@ -565,6 +565,18 @@ def test_ranker_input_loader_loads_mixed_schema_adx_files(tmp_path):
             }
         ]
     ).to_parquet(feature_dir / "COMPACT.parquet", index=False)
+    bse_feature_dir = tmp_path / "feature_store" / "adx" / "BSE"
+    bse_feature_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "symbol_id": "BSEONLY",
+                "exchange": "BSE",
+                "timestamp": "2026-06-23",
+                "adx_14": 44.0,
+            }
+        ]
+    ).to_parquet(bse_feature_dir / "BSEONLY.parquet", index=False)
 
     loader = RankerInputLoader(
         ohlcv_db_path=str(db_path),
@@ -573,15 +585,55 @@ def test_ranker_input_loader_loads_mixed_schema_adx_files(tmp_path):
     )
 
     adx = (
-        loader.load_latest_adx(date="2026-06-23")
+        loader.load_latest_adx(date="2026-06-23", exchanges=["NSE", "BSE"])
         .sort_values("symbol_id")
         .reset_index(drop=True)
     )
 
     assert adx[["symbol_id", "exchange", "adx_14"]].to_dict("records") == [
+        {"symbol_id": "BSEONLY", "exchange": "BSE", "adx_14": 44.0},
         {"symbol_id": "COMPACT", "exchange": "NSE", "adx_14": 33.0},
         {"symbol_id": "LEGACY", "exchange": "NSE", "adx_14": 22.0},
     ]
+
+
+def test_ranker_input_loader_partitions_sma_and_highs_by_exchange(tmp_path):
+    db_path = tmp_path / "ohlcv.duckdb"
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE _catalog (
+                symbol_id VARCHAR,
+                exchange VARCHAR,
+                timestamp TIMESTAMP,
+                close DOUBLE,
+                high DOUBLE
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO _catalog VALUES (?, ?, ?, ?, ?)",
+            [
+                ("SAME", "NSE", "2026-06-20", 100.0, 101.0),
+                ("SAME", "NSE", "2026-06-23", 110.0, 111.0),
+                ("SAME", "BSE", "2026-06-20", 200.0, 201.0),
+                ("SAME", "BSE", "2026-06-23", 220.0, 221.0),
+            ],
+        )
+    finally:
+        conn.close()
+    loader = RankerInputLoader(
+        ohlcv_db_path=str(db_path),
+        feature_store_dir=str(tmp_path / "feature_store"),
+        master_db_path="unused.db",
+    )
+
+    sma = loader.load_latest_sma(date="2026-06-23", exchanges=["NSE", "BSE"])
+    highs = loader.load_latest_highs(date="2026-06-23", window=2, exchanges=["NSE", "BSE"])
+
+    assert sma.set_index("exchange")["close"].to_dict() == {"NSE": 110.0, "BSE": 220.0}
+    assert highs.set_index("exchange")["high_52w"].to_dict() == {"NSE": 111.0, "BSE": 221.0}
 
 
 def test_stock_ranker_exposes_externalized_default_weights():

@@ -32,6 +32,7 @@ CANDIDATE_GROUP_PRIORITY = {
 
 FINAL_CANDIDATE_COLUMNS = [
     "symbol",
+    "exchange",
     "name",
     "industry_group",
     "composite_score",

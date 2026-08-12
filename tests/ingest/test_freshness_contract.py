@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
+import pandas as pd
 
 from ai_trading_system.pipeline.contracts import StageContext
 from ai_trading_system.domains.ingest.service import IngestOrchestrationService
@@ -92,6 +93,7 @@ def test_ingest_service_passes_context_run_date_to_daily_update_runner(
     payload = service.run_default(context)
 
     assert captured["target_end_date"] == "2026-04-08"
+    assert captured["include_bse"] is True
     assert payload["target_end_date"] == "2026-04-08"
     assert payload["freshness_status"] == "stale"
     assert captured["nse_allow_yfinance_fallback"] is True
@@ -144,6 +146,56 @@ def test_ingest_reapplies_corporate_actions_after_catalog_refresh(
 
     assert calls == [("catalog_refresh", None), ("corporate_actions", ["AAA"])]
     assert payload["downstream_changed_symbols"] == ["AAA"]
+
+
+def test_ingest_keeps_bse_updates_downstream_but_scopes_nse_validation_and_actions(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute("CREATE TABLE _catalog (symbol_id VARCHAR, exchange VARCHAR, timestamp TIMESTAMP)")
+        conn.execute(
+            "INSERT INTO _catalog VALUES "
+            "('AAA', 'NSE', TIMESTAMP '2026-04-08'), "
+            "('SPICEJET', 'BSE', TIMESTAMP '2026-04-08')"
+        )
+    finally:
+        conn.close()
+
+    service = IngestOrchestrationService(
+        operation=lambda _context: {
+            "target_end_date": "2026-04-08",
+            "updated_symbols": ["AAA", "SPICEJET"],
+            "nse_updated_symbols": ["AAA"],
+            "bse_updated_symbols": ["SPICEJET"],
+            "rows_written": 2,
+        }
+    )
+    action_scopes: list[list[str] | None] = []
+
+    def fake_normalize(_context, *, recompute_symbols=None):
+        action_scopes.append(recompute_symbols)
+        return {"status": "success", "rows_adjusted": 0, "affected_symbols": []}
+
+    monkeypatch.setattr(service, "run_corporate_action_normalization", fake_normalize)
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=db_path,
+        run_id="run-bse",
+        run_date="2026-04-08",
+        stage_name="ingest",
+        attempt_number=1,
+        params={"include_delivery": False, "validate_bhavcopy_after_ingest": False},
+    )
+
+    payload = service.run_default(context)
+
+    assert action_scopes == [["AAA"]]
+    assert payload["downstream_changed_symbols"] == ["AAA", "SPICEJET"]
+    catalog = pd.DataFrame({"symbol_id": ["AAA", "SPICEJET"]})
+    assert service.resolve_validation_scope_symbols(payload, catalog) == {"AAA"}
 
 
 def test_ingest_service_respects_explicitly_disabled_yfinance_fallback(

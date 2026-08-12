@@ -58,6 +58,29 @@ TASK_FILE_MAP = {
 }
 
 
+def resolve_rank_exchanges(params: dict[str, Any]) -> list[str]:
+    """Resolve the trusted exchange universe for one ranking decision."""
+    raw = params.get("rank_exchanges") or params.get("exchanges")
+    if isinstance(raw, str):
+        requested = [item.strip().upper() for item in raw.split(",") if item.strip()]
+    elif raw:
+        requested = [str(item).strip().upper() for item in raw if str(item).strip()]
+    else:
+        primary = str(params.get("exchange", "NSE")).strip().upper() or "NSE"
+        requested = [primary]
+        if (
+            bool(params.get("include_bse", False))
+            and str(params.get("data_domain", "operational")) == "operational"
+            and primary == "NSE"
+        ):
+            requested.append("BSE")
+    supported = {"NSE", "BSE"}
+    unsupported = sorted(set(requested) - supported)
+    if unsupported:
+        raise ValueError(f"Unsupported rank exchanges: {unsupported}")
+    return list(dict.fromkeys(requested))
+
+
 def attach_rank_confidence_from_features(frame: pd.DataFrame) -> pd.DataFrame:
     """Propagate feature confidence when rank confidence is absent."""
     output = frame.copy()
@@ -664,6 +687,8 @@ class RankOrchestrationService:
         except Exception as exc:
             warnings.append(f"regime overlay unavailable: {exc}")
 
+        rank_exchanges = resolve_rank_exchanges(effective_params)
+
         ranked, _ = self.execute_rank_task(
             context=context,
             task_name="rank_core",
@@ -676,6 +701,7 @@ class RankOrchestrationService:
                 "min_score": float(effective_params.get("min_score", 0.0)),
                 "top_n": effective_params.get("top_n"),
                 "symbol_limit": effective_params.get("symbol_limit"),
+                "exchanges": rank_exchanges,
                 "market_stage": stage_info["market_stage"],
                 "market_regime": regime_snapshot.to_dict() if regime_snapshot is not None else None,
                 "regime_profile": regime_profile.to_dict() if regime_profile is not None else None,
@@ -685,6 +711,7 @@ class RankOrchestrationService:
             previous_statuses=previous_statuses,
             builder=lambda: ranker.rank_all(
                 date=context.run_date,
+                exchanges=rank_exchanges,
                 min_score=float(effective_params.get("min_score", 0.0)),
                 top_n=effective_params.get("top_n"),
                 rank_mode=str(effective_params.get("rank_mode", "default")),
@@ -749,6 +776,7 @@ class RankOrchestrationService:
                 ),
                 "weekly_stage_gate": bool(effective_params.get("weekly_stage_gate", False)),
                 "symbol_limit": effective_params.get("symbol_limit"),
+                "exchanges": rank_exchanges,
                 "market_stage": stage_info["market_stage"],
                 "market_regime": regime_snapshot.to_dict() if regime_snapshot is not None else None,
             },
@@ -757,6 +785,7 @@ class RankOrchestrationService:
             previous_statuses=previous_statuses,
             builder=lambda: ranker.rank_all(
                 date=context.run_date,
+                exchanges=rank_exchanges,
                 min_score=0.0,
                 top_n=None,
                 rank_mode=str(effective_params.get("rank_mode", "default")),
@@ -833,35 +862,50 @@ class RankOrchestrationService:
         _breakout_active = cfg.breakout_active
         _bt_market_stage = stage_info["market_stage"]
         if _breakout_active:
-            breakout_builder = lambda: scan_breakouts(  # noqa: E731
-                ohlcv_db_path=str(context.db_path),
-                feature_store_dir=str(paths.feature_store_dir),
-                master_db_path=str(paths.master_db_path),
-                date=context.run_date,
-                ranked_df=ranked,
-                breakout_engine=str(effective_params.get("breakout_engine", "v2")),
-                include_legacy_families=bool(effective_params.get("breakout_include_legacy_families", True)),
-                market_bias_allowlist=breakout_market_bias_allowlist,
-                min_breadth_score=float(effective_params.get("breakout_min_breadth_score", 45.0)),
-                sector_rs_min=(
-                    float(effective_params.get("breakout_sector_rs_min"))
-                    if effective_params.get("breakout_sector_rs_min") not in (None, "")
-                    else None
-                ),
-                sector_rs_percentile_min=(
-                    float(effective_params.get("breakout_sector_rs_percentile_min", 60.0))
-                    if effective_params.get("breakout_sector_rs_percentile_min") not in (None, "")
-                    else None
-                ),
-                breakout_qualified_min_score=int(effective_params.get("breakout_qualified_min_score", 3)),
-                breakout_symbol_trend_gate_enabled=bool(
-                    effective_params.get("breakout_symbol_trend_gate_enabled", True)
-                ),
-                breakout_symbol_near_high_max_pct=float(
-                    effective_params.get("breakout_symbol_near_high_max_pct", 15.0)
-                ),
-                market_stage=_bt_market_stage,
-            )
+            def breakout_builder() -> pd.DataFrame:
+                frames: list[pd.DataFrame] = []
+                for exchange in rank_exchanges:
+                    exchange_ranked = ranked
+                    if not ranked.empty and "exchange" in ranked.columns:
+                        exchange_ranked = ranked.loc[ranked["exchange"].astype(str) == exchange].copy()
+                    frame = scan_breakouts(
+                        ohlcv_db_path=str(context.db_path),
+                        feature_store_dir=str(paths.feature_store_dir),
+                        master_db_path=str(paths.master_db_path),
+                        date=context.run_date,
+                        exchange=exchange,
+                        ranked_df=exchange_ranked,
+                        breakout_engine=str(effective_params.get("breakout_engine", "v2")),
+                        include_legacy_families=bool(effective_params.get("breakout_include_legacy_families", True)),
+                        market_bias_allowlist=breakout_market_bias_allowlist,
+                        min_breadth_score=float(effective_params.get("breakout_min_breadth_score", 45.0)),
+                        sector_rs_min=(
+                            float(effective_params.get("breakout_sector_rs_min"))
+                            if effective_params.get("breakout_sector_rs_min") not in (None, "")
+                            else None
+                        ),
+                        sector_rs_percentile_min=(
+                            float(effective_params.get("breakout_sector_rs_percentile_min", 60.0))
+                            if effective_params.get("breakout_sector_rs_percentile_min") not in (None, "")
+                            else None
+                        ),
+                        breakout_qualified_min_score=int(effective_params.get("breakout_qualified_min_score", 3)),
+                        breakout_symbol_trend_gate_enabled=bool(
+                            effective_params.get("breakout_symbol_trend_gate_enabled", True)
+                        ),
+                        breakout_symbol_near_high_max_pct=float(
+                            effective_params.get("breakout_symbol_near_high_max_pct", 15.0)
+                        ),
+                        market_stage=_bt_market_stage,
+                    )
+                    if frame is not None and not frame.empty:
+                        frames.append(frame)
+                if not frames:
+                    return pd.DataFrame()
+                output = pd.concat(frames, ignore_index=True, sort=False)
+                if "breakout_score" in output.columns:
+                    output = output.sort_values("breakout_score", ascending=False, kind="stable")
+                return output.reset_index(drop=True)
         else:
             breakout_builder = lambda: pd.DataFrame()  # noqa: E731
         breakout_df, breakout_status = self.execute_rank_task(
@@ -872,6 +916,7 @@ class RankOrchestrationService:
                 "task": "breakout_scan",
                 "run_date": context.run_date,
                 "breakout_engine": str(effective_params.get("breakout_engine", "v2")),
+                "exchanges": rank_exchanges,
                 "market_bias_allowlist": list(breakout_market_bias_allowlist),
                 "breakout_min_breadth_score": float(effective_params.get("breakout_min_breadth_score", 45.0)),
                 "ranked_fingerprint": self.dataframe_fingerprint(ranked),
@@ -889,69 +934,85 @@ class RankOrchestrationService:
                 f"breakout_scan unavailable: {breakout_status.get('error_message', breakout_status.get('detail'))}"
             )
 
-        fallback_pattern_symbols = (
-            ranked["symbol_id"].astype(str).tolist()
-            if not ranked.empty and "symbol_id" in ranked.columns
-            else []
-        )
-        pattern_seed_metadata: dict[str, Any] = {
-            "seed_source_counts": {
-                "cached": 0,
-                "stage2_structural": 0,
-                "unusual_movers": 0,
-                "liquidity_remaining": 0,
-            },
-            "broad_universe_count": 0,
-            "feature_ready_count": 0,
-            "liquidity_pass_count": 0,
-            "seed_symbol_count": 0,
-            "latest_cached_signal_date": None,
-            "pattern_seed_max_symbols": int(context.params.get("pattern_seed_max_symbols", 400) or 400),
-            "pattern_min_liquidity_score": float(context.params.get("pattern_min_liquidity_score", 0.2)),
-            "pattern_unusual_mover_min_vol20_avg": float(
-                context.params.get("pattern_unusual_mover_min_vol20_avg", 100_000)
-            ),
-            "seed_symbols_digest": "empty",
-            "fallback_used": False,
-            "fallback_reason": None,
-        }
-        try:
-            pattern_symbols, discovered_seed_metadata = build_pattern_seed_universe(
-                project_root=context.project_root,
-                ohlcv_db_path=context.db_path,
-                signal_date=context.run_date,
-                exchange=str(context.params.get("exchange", "NSE")),
-                data_domain=str(context.params.get("data_domain", "operational")),
-                max_symbols=int(context.params.get("pattern_seed_max_symbols", 400) or 400),
-                min_liquidity_score=float(context.params.get("pattern_min_liquidity_score", 0.2)),
-                unusual_mover_min_vol20_avg=float(
+        pattern_symbols_by_exchange: dict[str, list[str]] = {}
+        pattern_seed_by_exchange: dict[str, dict[str, Any]] = {}
+        for exchange in rank_exchanges:
+            exchange_ranked = ranked
+            if not ranked.empty and "exchange" in ranked.columns:
+                exchange_ranked = ranked.loc[ranked["exchange"].astype(str) == exchange].copy()
+            fallback_symbols = (
+                exchange_ranked["symbol_id"].astype(str).tolist()
+                if not exchange_ranked.empty and "symbol_id" in exchange_ranked.columns
+                else []
+            )
+            exchange_metadata: dict[str, Any] = {
+                "exchange": exchange,
+                "seed_source_counts": {
+                    "cached": 0,
+                    "stage2_structural": 0,
+                    "unusual_movers": 0,
+                    "liquidity_remaining": 0,
+                },
+                "broad_universe_count": 0,
+                "feature_ready_count": 0,
+                "liquidity_pass_count": 0,
+                "seed_symbol_count": 0,
+                "latest_cached_signal_date": None,
+                "pattern_seed_max_symbols": int(context.params.get("pattern_seed_max_symbols", 400) or 400),
+                "pattern_min_liquidity_score": float(context.params.get("pattern_min_liquidity_score", 0.2)),
+                "pattern_unusual_mover_min_vol20_avg": float(
                     context.params.get("pattern_unusual_mover_min_vol20_avg", 100_000)
                 ),
-            )
-            pattern_seed_metadata.update(discovered_seed_metadata)
-            if not pattern_symbols:
-                raise RuntimeError("broad seed universe resolved to zero usable symbols")
-        except Exception as exc:
-            pattern_symbols = fallback_pattern_symbols
-            pattern_seed_metadata["fallback_used"] = True
-            pattern_seed_metadata["fallback_reason"] = str(exc)
-            pattern_seed_metadata["seed_symbol_count"] = len(pattern_symbols)
-            pattern_seed_metadata["seed_symbols_digest"] = (
-                hashlib.sha256(
-                    json.dumps([str(symbol) for symbol in pattern_symbols], sort_keys=False).encode("utf-8")
-                ).hexdigest()
-                if pattern_symbols
-                else "empty"
-            )
-            if pattern_symbols:
-                warnings.append(f"pattern seed universe unavailable: {exc}; reverted to ranked symbols")
-            else:
-                warnings.append(f"pattern seed universe unavailable: {exc}")
+                "seed_symbols_digest": "empty",
+                "fallback_used": False,
+                "fallback_reason": None,
+            }
+            try:
+                pattern_symbols, discovered_seed_metadata = build_pattern_seed_universe(
+                    project_root=context.project_root,
+                    ohlcv_db_path=context.db_path,
+                    signal_date=context.run_date,
+                    exchange=exchange,
+                    data_domain=str(context.params.get("data_domain", "operational")),
+                    max_symbols=int(context.params.get("pattern_seed_max_symbols", 400) or 400),
+                    min_liquidity_score=float(context.params.get("pattern_min_liquidity_score", 0.2)),
+                    unusual_mover_min_vol20_avg=float(
+                        context.params.get("pattern_unusual_mover_min_vol20_avg", 100_000)
+                    ),
+                )
+                exchange_metadata.update(discovered_seed_metadata)
+                if not pattern_symbols:
+                    raise RuntimeError("broad seed universe resolved to zero usable symbols")
+            except Exception as exc:
+                pattern_symbols = fallback_symbols
+                exchange_metadata["fallback_used"] = True
+                exchange_metadata["fallback_reason"] = str(exc)
+                exchange_metadata["seed_symbol_count"] = len(pattern_symbols)
+                exchange_metadata["seed_symbols_digest"] = (
+                    hashlib.sha256(json.dumps(pattern_symbols).encode("utf-8")).hexdigest()
+                    if pattern_symbols
+                    else "empty"
+                )
+                suffix = "; reverted to ranked symbols" if pattern_symbols else ""
+                warnings.append(f"pattern seed universe unavailable for {exchange}: {exc}{suffix}")
+            pattern_symbols_by_exchange[exchange] = pattern_symbols
+            pattern_seed_by_exchange[exchange] = exchange_metadata
+
+        primary_pattern_exchange = rank_exchanges[0]
+        pattern_seed_metadata = dict(pattern_seed_by_exchange.get(primary_pattern_exchange, {}))
+        pattern_seed_metadata["by_exchange"] = pattern_seed_by_exchange
+        pattern_seed_metadata["exchanges"] = rank_exchanges
+        pattern_seed_metadata["seed_symbol_count"] = sum(
+            len(symbols) for symbols in pattern_symbols_by_exchange.values()
+        )
+        pattern_seed_metadata["seed_symbols_digest"] = hashlib.sha256(
+            json.dumps(pattern_symbols_by_exchange, sort_keys=True).encode("utf-8")
+        ).hexdigest()
         pattern_output_max_symbols = context.params.get("pattern_max_symbols", 150)
         pattern_enabled = bool(context.params.get("pattern_scan_enabled", True))
 
         def build_pattern_output() -> pd.DataFrame:
-            if not pattern_symbols:
+            if not any(pattern_symbols_by_exchange.values()):
                 return pd.DataFrame()
             lookback_days = int(context.params.get("pattern_lookback_days", 420))
             from_ts = (pd.Timestamp(context.run_date) - pd.Timedelta(days=lookback_days)).date().isoformat()
@@ -973,53 +1034,72 @@ class RankOrchestrationService:
                     },
                 )
 
-            pattern_frame = load_pattern_frame(
-                context.project_root,
-                from_date=from_ts,
-                to_date=context.run_date,
-                exchange=str(context.params.get("exchange", "NSE")),
-                symbols=pattern_symbols,
-                data_domain=str(context.params.get("data_domain", "operational")),
-            )
-            pattern_config = PatternScanConfig(
-                exchange=str(context.params.get("exchange", "NSE")),
-                data_domain=str(context.params.get("data_domain", "operational")),
-                symbols=tuple(pattern_symbols or ()),
-                bandwidth=float(context.params.get("pattern_bandwidth", 3.0)),
-                extrema_prominence=float(context.params.get("pattern_extrema_prominence", 0.02)),
-                breakout_volume_ratio_min=float(context.params.get("pattern_breakout_volume_ratio_min", 1.5)),
-                volume_zscore_min=float(context.params.get("pattern_volume_zscore_min", 2.0)),
-                smoothing_method=str(context.params.get("pattern_smoothing_method", "rolling")),
-            )
-            return build_pattern_signals(
-                project_root=context.project_root,
-                signal_date=context.run_date,
-                exchange=str(context.params.get("exchange", "NSE")),
-                data_domain=str(context.params.get("data_domain", "operational")),
-                symbols=pattern_symbols,
-                config=pattern_config,
-                ranked_df=ranked,
-                frame=pattern_frame,
-                lookback_days=lookback_days,
-                progress_callback=progress,
-                pattern_workers=int(context.params.get("pattern_workers", 1) or 1),
-                scan_mode=str(context.params.get("pattern_scan_mode", "incremental")),
-                stage2_only=bool(context.params.get("pattern_stage2_only", True)),
-                min_stage2_score=float(context.params.get("pattern_min_stage2_score", 70.0)),
-                pattern_seed_metadata=pattern_seed_metadata,
-                pattern_watchlist_expiry_bars=int(
-                    context.params.get("pattern_watchlist_expiry_bars", 10)
+            frames: list[pd.DataFrame] = []
+            metrics_by_exchange: dict[str, Any] = {}
+            for exchange in rank_exchanges:
+                pattern_symbols = pattern_symbols_by_exchange.get(exchange, [])
+                if not pattern_symbols:
+                    continue
+                exchange_ranked = ranked
+                if not ranked.empty and "exchange" in ranked.columns:
+                    exchange_ranked = ranked.loc[ranked["exchange"].astype(str) == exchange].copy()
+                pattern_frame = load_pattern_frame(
+                    context.project_root,
+                    from_date=from_ts,
+                    to_date=context.run_date,
+                    exchange=exchange,
+                    symbols=pattern_symbols,
+                    data_domain=str(context.params.get("data_domain", "operational")),
+                )
+                pattern_config = PatternScanConfig(
+                    exchange=exchange,
+                    data_domain=str(context.params.get("data_domain", "operational")),
+                    symbols=tuple(pattern_symbols),
+                    bandwidth=float(context.params.get("pattern_bandwidth", 3.0)),
+                    extrema_prominence=float(context.params.get("pattern_extrema_prominence", 0.02)),
+                    breakout_volume_ratio_min=float(context.params.get("pattern_breakout_volume_ratio_min", 1.5)),
+                    volume_zscore_min=float(context.params.get("pattern_volume_zscore_min", 2.0)),
+                    smoothing_method=str(context.params.get("pattern_smoothing_method", "rolling")),
+                )
+                frame = build_pattern_signals(
+                    project_root=context.project_root,
+                    signal_date=context.run_date,
+                    exchange=exchange,
+                    data_domain=str(context.params.get("data_domain", "operational")),
+                    symbols=pattern_symbols,
+                    config=pattern_config,
+                    ranked_df=exchange_ranked,
+                    frame=pattern_frame,
+                    lookback_days=lookback_days,
+                    progress_callback=progress,
+                    pattern_workers=int(context.params.get("pattern_workers", 1) or 1),
+                    scan_mode=str(context.params.get("pattern_scan_mode", "incremental")),
+                    stage2_only=bool(context.params.get("pattern_stage2_only", True)),
+                    min_stage2_score=float(context.params.get("pattern_min_stage2_score", 70.0)),
+                    pattern_seed_metadata=pattern_seed_by_exchange[exchange],
+                    pattern_watchlist_expiry_bars=int(context.params.get("pattern_watchlist_expiry_bars", 10)),
+                    pattern_confirmed_expiry_bars=int(context.params.get("pattern_confirmed_expiry_bars", 20)),
+                    pattern_invalidated_retention_bars=int(context.params.get("pattern_invalidated_retention_bars", 5)),
+                    pattern_incremental_ranked_buffer=int(context.params.get("pattern_incremental_ranked_buffer", 50)),
+                )
+                metrics_by_exchange[exchange] = dict(
+                    getattr(frame, "attrs", {}).get("pattern_scan_metrics", {})
+                )
+                if frame is not None and not frame.empty:
+                    frames.append(frame)
+            if not frames:
+                output = pd.DataFrame()
+            else:
+                output = pd.concat(frames, ignore_index=True, sort=False)
+            output.attrs["pattern_scan_metrics"] = {
+                "by_exchange": metrics_by_exchange,
+                "pattern_parallelism": "per_exchange",
+                "pattern_effective_workers": sum(
+                    int(metrics.get("pattern_effective_workers") or 0)
+                    for metrics in metrics_by_exchange.values()
                 ),
-                pattern_confirmed_expiry_bars=int(
-                    context.params.get("pattern_confirmed_expiry_bars", 20)
-                ),
-                pattern_invalidated_retention_bars=int(
-                    context.params.get("pattern_invalidated_retention_bars", 5)
-                ),
-                pattern_incremental_ranked_buffer=int(
-                    context.params.get("pattern_incremental_ranked_buffer", 50)
-                ),
-            )
+            }
+            return output
 
         pattern_df, pattern_status = self.execute_rank_task(
             context=context,
@@ -1033,7 +1113,9 @@ class RankOrchestrationService:
                     int(pattern_output_max_symbols) if pattern_output_max_symbols else None
                 ),
                 "pattern_seed_max_symbols": pattern_seed_metadata.get("pattern_seed_max_symbols"),
-                "pattern_seed_symbol_count": len(pattern_symbols),
+                "pattern_seed_symbol_count": sum(
+                    len(symbols) for symbols in pattern_symbols_by_exchange.values()
+                ),
                 "pattern_seed_symbols_digest": pattern_seed_metadata.get("seed_symbols_digest"),
                 "pattern_seed_metadata": pattern_seed_metadata,
                 "pattern_scan_mode": str(context.params.get("pattern_scan_mode", "incremental")),
@@ -1067,6 +1149,21 @@ class RankOrchestrationService:
         )
         pattern_scan_metadata = dict(getattr(pattern_df, "attrs", {}).get("pattern_scan_metrics", {}))
         if pattern_output_max_symbols and not pattern_df.empty:
+            score_column = next(
+                (
+                    column
+                    for column in ("pattern_priority_score", "pattern_score", "setup_quality")
+                    if column in pattern_df.columns
+                ),
+                None,
+            )
+            if score_column is not None:
+                pattern_df = pattern_df.sort_values(
+                    score_column,
+                    ascending=False,
+                    na_position="last",
+                    kind="stable",
+                )
             pattern_df = pattern_df.head(int(pattern_output_max_symbols)).reset_index(drop=True)
         if pattern_scan_metadata:
             pattern_seed_metadata["pattern_scan_metrics"] = pattern_scan_metadata
@@ -1634,6 +1731,7 @@ class RankOrchestrationService:
             "symbol_universe_count": len(ranked_universe),
             "ranked_shortlist_count": len(ranked),
             "ranked_universe_count": len(ranked_universe),
+            "rank_exchanges": rank_exchanges,
             "early_accumulation_count": int(len(early_accumulation_df)),
             "early_accumulation_summary": early_summary,
             "canary_blocked": bool(context.params.get("canary")) and context.params.get("canary_blocked", False),

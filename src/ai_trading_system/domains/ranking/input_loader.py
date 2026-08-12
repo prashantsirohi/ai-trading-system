@@ -416,9 +416,19 @@ class RankerInputLoader:
             conn.close()
         return volume
 
-    def load_latest_adx(self, *, date: str) -> pd.DataFrame:
-        adx_path = Path(self.feature_store_dir) / "adx" / "NSE"
-        if not adx_path.exists():
+    def load_latest_adx(
+        self,
+        *,
+        date: str,
+        exchanges: list[str] | None = None,
+    ) -> pd.DataFrame:
+        normalized_exchanges, _ = self._query_exchanges(exchanges or ["NSE"])
+        parquet_files = [
+            str(path)
+            for exchange in normalized_exchanges
+            for path in sorted((Path(self.feature_store_dir) / "adx" / exchange).glob("*.parquet"))
+        ]
+        if not parquet_files:
             return pd.DataFrame(columns=["symbol_id", "exchange", "adx_14"])
 
         conn = self.get_conn()
@@ -429,10 +439,10 @@ class RankerInputLoader:
                 FROM read_parquet(?, union_by_name = true)
                 WHERE CAST(timestamp AS DATE) <= CAST(? AS DATE)
                 QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY symbol_id ORDER BY timestamp DESC
+                    PARTITION BY symbol_id, exchange ORDER BY timestamp DESC
                 ) = 1
                 """,
-                [str(adx_path / "*.parquet"), date],
+                [parquet_files, date],
             ).fetchdf()
         finally:
             conn.close()
@@ -445,54 +455,67 @@ class RankerInputLoader:
             adx_latest.loc[:, "adx_14"] = adx_latest["adx_value"]
         return adx_latest
 
-    def load_latest_sma(self, *, date: str) -> pd.DataFrame:
+    def load_latest_sma(
+        self,
+        *,
+        date: str,
+        exchanges: list[str] | None = None,
+    ) -> pd.DataFrame:
+        normalized_exchanges, exchange_placeholders = self._query_exchanges(exchanges or ["NSE"])
         conn = self.get_conn()
         try:
             sma_latest = conn.execute(
-                """
+                f"""
                 SELECT symbol_id, exchange, close, sma_20, sma_50, sma_200, sma_200_bars, timestamp
                 FROM (
                     SELECT
                         symbol_id, exchange, close, timestamp,
                         AVG(close) OVER (
-                            PARTITION BY symbol_id
+                            PARTITION BY symbol_id, exchange
                             ORDER BY timestamp
                             ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                         ) AS sma_20,
                         AVG(close) OVER (
-                            PARTITION BY symbol_id
+                            PARTITION BY symbol_id, exchange
                             ORDER BY timestamp
                             ROWS BETWEEN 49 PRECEDING AND CURRENT ROW
                         ) AS sma_50,
                         AVG(close) OVER (
-                            PARTITION BY symbol_id
+                            PARTITION BY symbol_id, exchange
                             ORDER BY timestamp
                             ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
                         ) AS sma_200,
                         COUNT(close) OVER (
-                            PARTITION BY symbol_id
+                            PARTITION BY symbol_id, exchange
                             ORDER BY timestamp
                             ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
                         ) AS sma_200_bars
                     FROM _catalog
-                    WHERE exchange = 'NSE'
+                    WHERE exchange IN ({exchange_placeholders})
                       AND timestamp IS NOT NULL
                       AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
                 ) sub
                 QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY symbol_id ORDER BY timestamp DESC
+                    PARTITION BY symbol_id, exchange ORDER BY timestamp DESC
                 ) = 1
                 """,
-                [date],
+                [*normalized_exchanges, date],
             ).fetchdf()
         finally:
             conn.close()
         return sma_latest
 
-    def load_latest_highs(self, *, date: str, window: int) -> pd.DataFrame:
+    def load_latest_highs(
+        self,
+        *,
+        date: str,
+        window: int,
+        exchanges: list[str] | None = None,
+    ) -> pd.DataFrame:
         window = int(window)
         if window < 1 or window > 5_000:
             raise ValueError("window must be between 1 and 5000")
+        normalized_exchanges, exchange_placeholders = self._query_exchanges(exchanges or ["NSE"])
         conn = self.get_conn()
         try:
             highs = conn.execute(
@@ -504,20 +527,20 @@ class RankerInputLoader:
                         MAX(high) OVER w AS high_52w,
                         COUNT(*) OVER w AS prox_lookback_days
                     FROM _catalog
-                    WHERE exchange = 'NSE'
+                    WHERE exchange IN ({exchange_placeholders})
                       AND timestamp IS NOT NULL
                       AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
                     WINDOW w AS (
-                        PARTITION BY symbol_id
+                        PARTITION BY symbol_id, exchange
                         ORDER BY timestamp
                         ROWS BETWEEN {window - 1} PRECEDING AND CURRENT ROW
                     )
                 ) sub
                 QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY symbol_id ORDER BY timestamp DESC
+                    PARTITION BY symbol_id, exchange ORDER BY timestamp DESC
                 ) = 1
                 """,
-                [date],
+                [*normalized_exchanges, date],
             ).fetchdf()
         finally:
             conn.close()
@@ -632,7 +655,7 @@ class RankerInputLoader:
                     SELECT s.symbol_id, COALESCE(sm.system_sector, 'Other')
                     FROM symbols s
                     LEFT JOIN sector_mapping sm ON s.sector = sm.industry
-                    WHERE s.exchange = 'NSE'
+                    WHERE s.exchange IN ('NSE', 'BSE')
                 """).fetchall()
                 sector_map = {symbol: sector for symbol, sector in rows}
             finally:

@@ -170,6 +170,65 @@ def _apply_canary_metadata(result: dict, *, canary_mode: bool, canary_symbol_lim
     return result
 
 
+def _merge_bse_ingest_result(nse_result: dict, bse_result: dict) -> dict:
+    """Merge incremental BSE outcomes into the canonical ingest result contract."""
+    result = dict(nse_result or {})
+    nse_updated = sorted({str(symbol) for symbol in result.get("updated_symbols", [])})
+    bse_updated = sorted({str(symbol) for symbol in bse_result.get("updated_symbols", [])})
+    result["nse_updated_symbols"] = nse_updated
+    result["bse_updated_symbols"] = bse_updated
+    result["updated_symbols"] = sorted(set(nse_updated).union(bse_updated))
+    result["symbols_updated"] = len(result["updated_symbols"])
+    result["rows_written"] = int(result.get("rows_written", 0) or 0) + int(
+        bse_result.get("rows_written", 0) or 0
+    )
+    providers = [str(provider) for provider in result.get("providers_used", [])]
+    if int(bse_result.get("rows_written", 0) or 0) > 0 and "bse_bhavcopy" not in providers:
+        providers.append("bse_bhavcopy")
+    result["providers_used"] = providers
+    result["bse_bhavcopy"] = dict(bse_result)
+    result["bse_bhavcopy_dates"] = list(bse_result.get("source_sessions", []))
+    result["bse_missing_weekdays"] = list(bse_result.get("missing_weekdays", []))
+
+    known_exchange_sessions = set(result.get("nse_bhavcopy_dates", [])) | set(
+        result.get("yfinance_fallback_dates", [])
+    )
+    bse_unresolved = sorted(
+        set(result["bse_missing_weekdays"]).intersection(known_exchange_sessions)
+    )
+    result["bse_unresolved_dates"] = bse_unresolved
+    if bse_unresolved:
+        unresolved = sorted(set(result.get("unresolved_dates", [])).union(bse_unresolved))
+        unresolved_all = sorted(
+            set(result.get("unresolved_dates_all", result.get("unresolved_dates", []))).union(
+                bse_unresolved
+            )
+        )
+        result["unresolved_dates"] = unresolved
+        result["unresolved_dates_all"] = unresolved_all
+        result["unresolved_date_count"] = len(unresolved)
+        result["unresolved_date_count_all"] = len(unresolved_all)
+        result["symbols_errors"] = int(result.get("symbols_errors", 0) or 0) + len(
+            bse_unresolved
+        )
+    return result
+
+
+def _run_bse_incremental_update(
+    *, target_end_date: str, run_id: str | None, symbol_limit: int | None
+) -> dict:
+    from ai_trading_system.domains.ingest.bse_bhavcopy_backfill import (
+        update_bse_bhavcopy_incremental,
+    )
+
+    return update_bse_bhavcopy_incremental(
+        project_root=Path(project_root),
+        target_end_date=target_end_date,
+        run_id=run_id,
+        symbol_limit=symbol_limit,
+    )
+
+
 def apply_adjustment_fields(frame: pd.DataFrame, corporate_actions: pd.DataFrame | None = None) -> pd.DataFrame:
     """Add additive adjusted-price scaffolding while preserving raw OHLC values."""
     if frame is None or frame.empty:
@@ -596,6 +655,8 @@ def _rows_to_symbol_frames(rows: pd.DataFrame) -> list[pd.DataFrame]:
         "adjustment_source",
         "adjusted_at",
         "adjustment_version",
+        "series",
+        "trading_segment",
         "instrument_type",
         "is_benchmark",
         "benchmark_label",
@@ -632,6 +693,8 @@ def _rows_to_symbol_frames(rows: pd.DataFrame) -> list[pd.DataFrame]:
                     "adjustment_source",
                     "adjusted_at",
                     "adjustment_version",
+                    "series",
+                    "trading_segment",
                     "instrument_type",
                     "is_benchmark",
                     "benchmark_label",
@@ -1356,6 +1419,7 @@ def run(
     target_end_date: str | None = None,
     stale_missing_symbol_grace_days: int = 3,
     nse_allow_yfinance_fallback: bool = False,
+    include_bse: bool = False,
     feature_progress_callback: Optional[Callable[[dict], None]] = None,
 ):
     paths = ensure_domain_layout(project_root=project_root, data_domain=data_domain)
@@ -1513,6 +1577,18 @@ def run(
                 stale_missing_symbol_grace_days=stale_missing_symbol_grace_days,
                 nse_allow_yfinance_fallback=bool(nse_allow_yfinance_fallback),
             )
+            if include_bse and data_domain == "operational":
+                effective_target = str(
+                    result.get("target_end_date")
+                    or target_end_date
+                    or dhan_daily_window_ist()[1]
+                )
+                bse_result = _run_bse_incremental_update(
+                    target_end_date=effective_target,
+                    run_id=run_id,
+                    symbol_limit=effective_symbol_limit,
+                )
+                result = _merge_bse_ingest_result(result, bse_result)
         else:
             ensure_live_dhan_access()
             logger.info("=" * 60)
@@ -1550,6 +1626,18 @@ def run(
             symbol_limit=effective_symbol_limit,
             run_id=run_id,
         )
+        if include_bse and data_domain == "operational":
+            effective_target = str(
+                result.get("target_end_date")
+                or target_end_date
+                or dhan_daily_window_ist()[1]
+            )
+            bse_result = _run_bse_incremental_update(
+                target_end_date=effective_target,
+                run_id=run_id,
+                symbol_limit=effective_symbol_limit,
+            )
+            result = _merge_bse_ingest_result(result, bse_result)
     else:
         ensure_live_dhan_access()
         result = _run_dhan_primary_daily_update(
@@ -1653,6 +1741,11 @@ def main():
         help="Use NSE bhavcopy -> yfinance fallback as the primary OHLC source (legacy mode).",
     )
     parser.add_argument(
+        "--no-bse",
+        action="store_true",
+        help="Disable the default incremental official-BSE update for mastered BSE-only symbols.",
+    )
+    parser.add_argument(
         "--symbol-limit",
         type=int,
         default=None,
@@ -1701,6 +1794,7 @@ def main():
         data_domain=args.data_domain,
         full_rebuild=args.full_rebuild,
         feature_tail_bars=args.feature_tail_bars,
+        include_bse=not bool(args.no_bse),
     )
 
 

@@ -141,8 +141,11 @@ def _watchlist() -> pd.DataFrame:
 
 
 def test_build_final_candidates_assigns_groups_and_rejects_red_flags() -> None:
+    ranked = _ranked()
+    ranked.loc[:, "exchange"] = "NSE"
+    ranked.loc[ranked["symbol_id"].eq("AAA"), "exchange"] = "BSE"
     result, summary = build_final_candidates(
-        ranked_signals=_ranked(),
+        ranked_signals=ranked,
         breakout_scan=_breakout(),
         pattern_scan=_pattern(),
         sector_dashboard=_sector(),
@@ -152,6 +155,7 @@ def test_build_final_candidates_assigns_groups_and_rejects_red_flags() -> None:
 
     assert list(result.columns) == FINAL_CANDIDATE_COLUMNS
     by_symbol = result.set_index("symbol")
+    assert by_symbol.loc["AAA", "exchange"] == "BSE"
     assert by_symbol.loc["AAA", "candidate_group"] == "LEADING_SECTOR_BREAKOUT"
     assert by_symbol.loc["BBB", "candidate_group"] == "FUNDAMENTAL_IMPROVER"
     assert by_symbol.loc["CCC", "candidate_group"] == "RESULTS_OR_CATALYST_PENDING"

@@ -9,6 +9,7 @@ import pandas as pd
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 from ai_trading_system.domains.features.compute_features_batch import register_features, run_batch_feature_computation
 from ai_trading_system.domains.features.feature_store import FeatureStore
+from ai_trading_system.domains.features.service import FeaturesOrchestrationService
 from ai_trading_system.pipeline.stages.features import FeaturesStage
 
 
@@ -283,6 +284,61 @@ def test_features_stage_duckdb_batch_engine_records_metadata(tmp_path: Path, mon
     assert result.metadata["feature_parallelism"] == "duckdb_internal"
     assert result.metadata["feature_rows_by_type"] == {"rsi": 20, "adx": 10}
     assert result.metadata["target_symbol_count"] == 2
+
+
+def test_features_technical_targets_nse_and_bse_when_daily_bse_is_enabled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    ingest_summary = tmp_path / "ingest_summary.json"
+    ingest_summary.write_text(
+        '{"nse_updated_symbols": ["NSECO"], "bse_updated_symbols": ["BSECO"], '
+        '"updated_symbols": ["NSECO", "BSECO"]}',
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_batch_run(**kwargs):
+        captured.update(kwargs)
+        return {
+            "mode": "duckdb_batch",
+            "symbols_targeted": 2,
+            "feature_result": {"rsi": 2},
+            "rows_written_total": 2,
+        }
+
+    monkeypatch.setattr(
+        "ai_trading_system.domains.features.compute_features_batch.run_batch_feature_computation",
+        fake_batch_run,
+    )
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "ohlcv.duckdb",
+        run_id="run-bse-features",
+        run_date="2026-08-10",
+        stage_name="features_technical",
+        attempt_number=1,
+        params={
+            "data_domain": "operational",
+            "include_bse": True,
+            "feature_compute_engine": "duckdb_batch",
+            "feature_types": ["rsi"],
+        },
+        artifacts={
+            "ingest": {
+                "ingest_summary": StageArtifact(
+                    artifact_type="ingest_summary",
+                    uri=str(ingest_summary),
+                )
+            }
+        },
+    )
+
+    result = FeaturesOrchestrationService().run_technical(context)
+
+    assert captured["symbols"] == ["NSECO", "BSECO"]
+    assert captured["exchanges"] == ["NSE", "BSE"]
+    assert result["exchanges"] == ["NSE", "BSE"]
 
 
 def test_duckdb_batch_features_write_compatible_symbol_parquet(tmp_path: Path) -> None:

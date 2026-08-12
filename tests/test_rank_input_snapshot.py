@@ -9,8 +9,9 @@ class _SnapshotLoader:
     def __init__(self) -> None:
         self.sma_calls = 0
 
-    def load_latest_sma(self, *, date: str) -> pd.DataFrame:
+    def load_latest_sma(self, *, date: str, exchanges: list[str]) -> pd.DataFrame:
         self.sma_calls += 1
+        assert exchanges == ["NSE"]
         return pd.DataFrame([{"symbol_id": "SAFE", "timestamp": date, "sma_200": 90.0}])
 
     def load_sector_inputs(self):

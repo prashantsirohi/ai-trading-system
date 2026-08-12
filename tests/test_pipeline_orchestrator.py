@@ -836,19 +836,26 @@ def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_can
         }
         for i in range(1, 31)
     ]
+    universe_rows[-1]["exchange"] = "BSE"
     universe = pd.DataFrame(universe_rows)
+    rank_calls: list[dict] = []
+    pattern_exchanges: list[str] = []
 
     import ai_trading_system.analytics.data_trust as data_trust_module
     import ai_trading_system.analytics.ranker as ranker_module
     from ai_trading_system.domains.ranking import breakout as breakout_module
+    from ai_trading_system.domains.ranking.patterns import universe as pattern_universe_module
     from ai_trading_system.domains.ranking import sector_dashboard as sector_dashboard_module
     from ai_trading_system.domains.ranking import stock_scan as stock_scan_module
+    import ai_trading_system.analytics.patterns as patterns_module
+    import ai_trading_system.analytics.patterns.data as pattern_data_module
 
     class _FakeRanker:
         def __init__(self, *args, **kwargs):
             pass
 
         def rank_all(self, **kwargs):
+            rank_calls.append(dict(kwargs))
             output = universe.copy()
             min_score = float(kwargs.get("min_score", 0.0) or 0.0)
             top_n = kwargs.get("top_n")
@@ -868,6 +875,23 @@ def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_can
     monkeypatch.setattr(sector_dashboard_module, "load_sector_rs", lambda: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8]}))
     monkeypatch.setattr(sector_dashboard_module, "compute_sector_momentum", lambda *args, **kwargs: pd.DataFrame({"Sector": ["Tech"], "Momentum": [0.2]}))
     monkeypatch.setattr(sector_dashboard_module, "build_dashboard", lambda *args, **kwargs: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8], "Momentum": [0.2]}))
+    monkeypatch.setattr(
+        pattern_universe_module,
+        "build_pattern_seed_universe",
+        lambda **kwargs: (
+            universe.loc[universe["exchange"].eq(kwargs["exchange"]), "symbol_id"].tolist(),
+            {"seed_symbol_count": int(universe["exchange"].eq(kwargs["exchange"]).sum())},
+        ),
+    )
+    monkeypatch.setattr(pattern_data_module, "load_pattern_frame", lambda *args, **kwargs: pd.DataFrame())
+
+    def fake_pattern_signals(**kwargs):
+        pattern_exchanges.append(kwargs["exchange"])
+        return pd.DataFrame(
+            [{"symbol_id": kwargs["symbols"][0], "exchange": kwargs["exchange"], "pattern_score": 75.0}]
+        )
+
+    monkeypatch.setattr(patterns_module, "build_pattern_signals", fake_pattern_signals)
 
     context = StageContext(
         project_root=project_root,
@@ -879,10 +903,11 @@ def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_can
         registry=registry,
         params={
             "data_domain": "operational",
+            "include_bse": True,
             "market_stage_override": "NEUTRAL",
             "min_score": 0,
             "top_n": 20,
-            "pattern_scan_enabled": False,
+            "pattern_scan_enabled": True,
             "watchlist_enabled": False,
         },
     )
@@ -892,11 +917,13 @@ def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_can
     ranked_shortlist = pd.read_csv(context.output_dir() / "ranked_signals.csv")
     ranked_universe = pd.read_csv(context.output_dir() / "ranked_universe.csv")
     stock_scan = pd.read_csv(context.output_dir() / "stock_scan.csv")
+    pattern_scan = pd.read_csv(context.output_dir() / "pattern_scan.csv")
     dashboard_payload = json.loads((context.output_dir() / "dashboard_payload.json").read_text(encoding="utf-8"))
 
     assert len(ranked_shortlist) == 20
     assert len(ranked_universe) == 30
     assert len(stock_scan) == 30
+    assert set(pattern_scan["exchange"].astype(str)) == {"NSE", "BSE"}
     assert "stage2_label" in stock_scan.columns
     assert dashboard_payload["summary"]["ranked_shortlist_count"] == 20
     assert dashboard_payload["summary"]["ranked_universe_count"] == 30
@@ -904,6 +931,9 @@ def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_can
     assert dashboard_payload["summary"]["stage2_total_count"] == 30
     assert result.metadata["ranked_rows"] == 20
     assert result.metadata["ranked_universe_rows"] == 30
+    assert len(rank_calls) == 2
+    assert all(call["exchanges"] == ["NSE", "BSE"] for call in rank_calls)
+    assert pattern_exchanges == ["NSE", "BSE"]
 
 
 def test_ranking_readmodel_keeps_top_ranked_shortlist_but_stage_summary_uses_stock_scan(tmp_path: Path) -> None:

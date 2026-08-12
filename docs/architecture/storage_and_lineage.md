@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-08-11
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -45,7 +45,7 @@ Do not infer that execution or legacy candidate-tracker tables live in the contr
 
 | Tree | Layout and use |
 |---|---|
-| Raw inputs | `$DATA_ROOT/raw/` for provider-native downloads and source snapshots. |
+| Raw inputs | `$DATA_ROOT/raw/` for provider-native downloads and source snapshots. Canonical official cash bhavcopy caches are exchange-isolated under `NSE_EQ/` and `BSE_EQ/`; BSE cache filenames use the requested trade date and never reuse a lower-priority generic archive. |
 | Feature store | `$DATA_ROOT/feature_store/<symbol_id>/features_<start>_<end>.parquet`. |
 | Stage store | `$DATA_ROOT/stage_store/` for stage-owned durable materializations. |
 | Pipeline attempts | `$DATA_ROOT/pipeline_runs/<run_id>/<stage>/attempt_<n>/`. |
@@ -252,6 +252,52 @@ and `setup_family` remain the primary admission reason and family.
 At minimum, back up OHLCV, control-plane, execution, candidate-tracker, master-data, fundamentals, and feature-store state before migrations or repairs. Treat `pipeline_runs/` as audit evidence even where upstream stores can reproduce some artifacts.
 
 Never run repair or migration commands against live stores without explicit task scope and a verified backup. Follow [backup and restore](../runbooks/backup_and_restore.md).
+
+The BSE-only bhavcopy backfill resolves `masterdata.db` and `ohlcv.duckdb`
+through the operational path helpers. Preview mode writes only canonical raw
+source caches. Apply mode first checkpoints and copies the complete OHLCV store
+plus the targeted pre-write rows, then appends provenance and upserts only the
+requested `(symbol_id, BSE, timestamp)` keys. Legacy and UDiFF source rows share
+the canonical provider label `bse_bhavcopy`; missing weekday files and sessions
+with no target trades remain separately visible in the run report.
+
+The new-symbol onboarding workflow composes that backfill rather than owning a
+second OHLCV writer. Before its other mutations it creates
+`$DATA_ROOT/backups/symbol-onboarding-<UTC>/`, using SQLite's backup API for
+`masterdata.db` and the canonical Screener store and copying only pre-existing
+target feature Parquet files. Official BSE profile classifications are current
+master state in `symbols.sector`/`symbols.industry`; their source URL, observed
+taxonomy, and payload hash are retained in `symbol_classification`. Apply-mode
+reports are written beneath `$REPORTS_ROOT/symbol_onboarding/`. Preview opens
+the canonical stores read-only and creates neither backups nor reports.
+Pre-master `--discover-missing` preview reads only `masterdata.db` plus official
+BSE active-equity and company-profile responses; it does not open OHLCV, insert
+candidate rows, create a checkpoint, or write a report artifact.
+Combining discovery with `--promote-discovered --apply` changes that contract
+only after the complete explicit scope passes identity, collision, company-ISIN,
+and classification checks. It then checkpoints `masterdata.db`, inserts all
+approved rows in one SQLite transaction without replacement semantics, persists
+the official classification lineage, and continues through the same OHLCV,
+feature, Phase 1, fundamentals, and verification path. A discovery gap produces
+no partial master insertion.
+
+Daily operational ingest reuses the same canonical BSE cache and identity
+normalizer without invoking the historical command's full-store backup. It
+starts each mastered symbol after its latest stored BSE date, uses the target
+session only for a symbol with no existing BSE history, and performs the same
+pre-write OHLC validation, provenance recording, targeted upsert, and anomaly
+quarantine. BSE missing dates are promoted into the shared unresolved-session
+contract only when the NSE primary path confirms the date was an exchange
+session, preventing ordinary weekday holidays from creating false blockers.
+
+The normal daily pipeline passes `feature_exchanges=[NSE,BSE]` to technical and
+Phase 1 feature computation and `rank_exchanges=[NSE,BSE]` to ranking. Technical
+Parquet remains exchange-partitioned below
+`$DATA_ROOT/feature_store/<family>/<exchange>/<symbol>.parquet`; Phase 1 and rank
+inputs use `(symbol_id, exchange)` as their analytical identity. Canonical rank,
+breakout, pattern, candidate, and publish artifacts may therefore contain both
+exchanges. The execution candidate boundary independently defaults to
+`execution_exchanges=[NSE]`; BSE analytics do not authorize BSE order placement.
 
 `PipelineOrchestrator` does not implicitly migrate `control_plane.duckdb`.
 Its default `RegistryStore` opens in schema-verification mode and fails before a

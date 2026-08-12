@@ -2,7 +2,7 @@
 
 - **Purpose:** Describe the seven feature substages that compute technical, sector, valuation, earnings, and Phase 1 feature materializations and then register the feature snapshot.
 - **Audience:** Operators, developers, and reviewers diagnosing feature attempts.
-- **Last verified:** 2026-07-13
+- **Last verified:** 2026-08-10
 - **Source of truth:** `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/pipeline/stages/features.py`, `src/ai_trading_system/domains/features/service.py`, and `src/ai_trading_system/pipeline/dq/engine.py`.
 
 ---
@@ -41,7 +41,7 @@ All runtime locations resolve through `get_domain_paths()`:
 - attempt artifacts: `$DATA_ROOT/pipeline_runs/<run_id>/<feature_substage>/attempt_<n>/`;
 - research runs: the corresponding paths below `$DATA_ROOT/research/` when `DATA_DOMAIN=research`.
 
-The service reads `ingest_summary.json` to obtain `downstream_changed_symbols` or `updated_symbols`. Missing/unreadable ingest metadata falls back to the full catalog, which can make a retry materially larger. Operational technical computation is incremental unless `full_rebuild` is set; research defaults to a full rebuild.
+The service reads `ingest_summary.json` to obtain `downstream_changed_symbols` or `updated_symbols`. Missing/unreadable ingest metadata falls back to the full catalog, which can make a retry materially larger. Operational technical computation is incremental unless `full_rebuild` is set; research defaults to a full rebuild. The daily operational pipeline supplies `feature_exchanges=[NSE,BSE]`, so the same changed-symbol set refreshes exchange-isolated technical partitions for both exchanges. Phase 1 also runs once per configured feature exchange; NSE-only sector, valuation, and earnings materializations retain their existing contracts.
 
 ## Output artifacts
 
@@ -83,6 +83,9 @@ Hard-floor failures block downstream stages. Computational substage failures sto
 ## Failure modes
 
 - Missing/unreadable `ingest_summary` expands technical work to the full catalog.
+- A symbol requested for the wrong exchange produces no feature rows; the
+  multi-exchange runner preserves `(symbol_id, exchange)` and writes only the
+  partition that has trusted OHLCV input.
 - DuckDB or Parquet schema/write failures fail the owning computational substage.
 - Disabled optional valuation or earnings inputs yield an explicit skipped/disabled metadata result rather than synthetic data.
 - Missing snapshot identifiers or zero completed feature rows fail the final hard floors.
@@ -124,4 +127,4 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
   --stages features --data-domain research --full-rebuild
 ```
 
-Relevant parameters include `batch_size`, `bulk`, `symbol_limit`, `data_domain`, `full_rebuild`, `feature_tail_bars`, `benchmark_symbol`, and the valuation/sector-earnings enablement settings. See [commands](../reference/commands.md), [environment variables](../reference/environment_variables.md), and [storage and lineage](../architecture/storage_and_lineage.md) for the current operator contracts.
+Relevant parameters include `batch_size`, `bulk`, `symbol_limit`, `data_domain`, `full_rebuild`, `feature_tail_bars`, `feature_exchanges`, `benchmark_symbol`, and the valuation/sector-earnings enablement settings. See [commands](../reference/commands.md), [environment variables](../reference/environment_variables.md), and [storage and lineage](../architecture/storage_and_lineage.md) for the current operator contracts.

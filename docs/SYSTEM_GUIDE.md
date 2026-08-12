@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-08-12
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -11,7 +11,7 @@ This is the single starting point for understanding the system. Code is authorit
 
 ## System purpose and boundaries
 
-The repository contains a single-operator, NSE-focused trading and research system. The operational domain ingests trusted market data, computes features, ranks opportunities, prepares and tracks candidates, optionally enriches them, dispatches paper or explicitly authorized live orders, and publishes operator views. The research domain runs isolated backtests, optimizations, model training, and performance tracking.
+The repository contains a single-operator, NSE-led trading and research system with combined NSE+BSE operational analytics for mastered securities. The operational domain ingests trusted market data, computes features, ranks opportunities, prepares and tracks candidates, optionally enriches them, dispatches paper or explicitly authorized live orders, and publishes operator views. Execution remains NSE-only by default. The research domain runs isolated backtests, optimizations, model training, and performance tracking.
 
 The main surfaces are:
 
@@ -134,7 +134,22 @@ equality hashes. See the [rank contract](stages/rank.md#offline-r0-pattern-lane-
 
 - Resolve live data through the existing path helpers and `$DATA_ROOT`; never hardcode a repo-local `data/...` path in application code.
 - The local operator setting is `DATA_ROOT=/Volumes/MacData/Trading/data`. If `DATA_ROOT` is unset, code retains a legacy repo-local fallback; operational work must load `.env` and use the configured external root.
-- NSE bhavcopy is the operational OHLC source of record. Historical collection
+- NSE bhavcopy is the operational OHLC source of record for NSE securities.
+  Official BSE cash-market bhavcopies are the source of record for explicitly
+  mastered BSE-only securities. The BSE collector validates and normalizes the
+  legacy equity ZIP, standardized T0 ZIP, and current UDiFF CSV schemas, maps
+  rows by BSE security code, and isolates canonical caches under
+  `$DATA_ROOT/raw/BSE_EQ/`. The normal operational `ingest` stage incrementally
+  refreshes mastered BSE-only rows after its NSE-primary update and merges BSE
+  row counts, changed symbols, source sessions, and unresolved-session evidence
+  into the ingest summary. NSE close validation and NSE corporate-action
+  normalization remain scoped to NSE symbols. The daily `features_technical`
+  and `features_phase1` substages then refresh both NSE and BSE partitions, and
+  `rank` scores the combined `NSE+BSE` universe while retaining exchange on
+  every ranked row. Breakout and pattern scans run once per ranked exchange;
+  candidates and publishing inherit the combined rank artifacts. Execution
+  remains restricted to NSE unless `execution_exchanges` is explicitly widened,
+  so analytical coverage does not silently widen broker placement. Historical collection
   prefers the standard NSE equity bhavcopy ZIP before the security-full report;
   collector-owned canonical caches are isolated from legacy generic archives so
   a stale fallback file cannot override that order. Provider fallback and
@@ -353,6 +368,85 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
 ```
 
 The command above uses the configured runtime stores. When validation must not mutate live stores, follow the [copied-data canary](runbooks/copied_data_canary.md) maintenance-window procedure instead.
+
+Preview an official BSE bhavcopy backfill for mastered BSE-only symbols, then
+apply it after reviewing source-session coverage. Apply mode checkpoints and
+backs up `ohlcv.duckdb`, records source provenance, runs the bulk price-basis
+guard, performs targeted BSE upserts, and recomputes technical features unless
+`--skip-features` is supplied:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.ingest.bse_bhavcopy_backfill \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD --symbols SYMBOL1 SYMBOL2
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.ingest.bse_bhavcopy_backfill \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD --symbols SYMBOL1 SYMBOL2 --apply
+```
+
+The daily pipeline enables incremental BSE ingestion by default. Direct
+`daily_update_runner` CLI use does the same unless `--no-bse` is supplied;
+research-domain and Dhan-primary modes do not invoke the official BSE path.
+
+For a newly inserted BSE-only master row, use the unified onboarding command
+instead of running the individual repair stages by hand. Preview is fully
+read-only and requires an explicit symbol list. Apply mode checkpoints
+`masterdata.db`, the targeted technical-feature files, and the Screener store
+when present; the nested official bhavcopy step independently backs up
+`ohlcv.duckdb`. It then resolves identity-checked BSE sector/industry
+classification, backfills official price history, rebuilds targeted technical
+features, refreshes the cross-sectional BSE Phase 1 tables, optionally parses
+or downloads Screener fundamentals, and writes a per-symbol verification report:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.ingest.new_symbol_onboarding \
+  --symbol SYMBOL1 --symbol SYMBOL2 \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.ingest.new_symbol_onboarding \
+  --symbol SYMBOL1 --symbol SYMBOL2 \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD --apply
+```
+
+Before the symbols exist in `masterdata.db`, add `--discover-missing` to run a
+strictly read-only pre-master preview. It resolves each requested symbol from
+the official active BSE equity master, rejects non-company ISINs, checks local
+symbol/ISIN/security-code collisions, and resolves BSE company-profile
+classification. Discovery alone never inserts master rows:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.ingest.new_symbol_onboarding \
+  --discover-missing --symbols-file proposed_bse_symbols.txt \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD
+```
+
+After reviewing a clean discovery preview, promote that exact explicit scope
+and run the complete onboarding in one backed-up command:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.ingest.new_symbol_onboarding \
+  --discover-missing --promote-discovered --apply \
+  --symbols-file proposed_bse_symbols.txt \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD
+```
+
+Promotion fails closed unless every requested symbol is an unseen active BSE
+company equity with a unique symbol, ISIN, and BSE security code plus complete
+official classification. The command checkpoints `masterdata.db` before its
+transactional inserts and reuses the identity-checked discovery classification
+for lineage; any discovery gap prevents all master insertion.
+
+Screener uses cached exports unless `--allow-fundamentals-download` is supplied.
+The report always exposes the current BSE delivery-history and BSE
+corporate-action-adjustment gaps; it does not label onboarding fully complete
+while those exchange-specific capabilities remain unsupported. The next normal
+daily pipeline run performs combined NSE+BSE ranking and downstream artifact
+generation; onboarding does not create a synthetic standalone rank run.
 
 Reconstruct Investigator performance for historical shadow runs only on a
 regular-file copy of the control plane. The command rejects the configured live

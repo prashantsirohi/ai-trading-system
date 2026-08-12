@@ -58,6 +58,7 @@ def test_execution_request_normalizes_context_params(tmp_path: Path) -> None:
     request = ExecutionRequest.from_context(context)
 
     assert request.strategy_mode == "hybrid_confirm"
+    assert request.allowed_exchanges == ("NSE",)
     assert request.execution_enabled is False
     assert request.preview_only is True
     assert request.target_position_count == 7
@@ -104,6 +105,7 @@ def test_execution_candidate_builder_applies_soft_gate_and_loads_overlay(tmp_pat
         [
             {"symbol_id": "AAA", "exchange": "NSE", "close": 100.0, "composite_score": 92.0},
             {"symbol_id": "BBB", "exchange": "NSE", "close": 99.0, "composite_score": 91.0},
+            {"symbol_id": "BSEONLY", "exchange": "BSE", "close": 98.0, "composite_score": 96.0},
         ]
     ).to_csv(ranked_path, index=False)
 

@@ -96,16 +96,32 @@ class RankInputSnapshot:
         return self._cached(("benchmark", str(symbol), normalized_periods), load)
 
     def adx(self) -> pd.DataFrame:
-        return self._cached(("adx",), lambda: self.loader.load_latest_adx(date=self.as_of))
+        return self._cached(
+            ("adx",),
+            lambda: self.loader.load_latest_adx(
+                date=self.as_of,
+                exchanges=list(self.exchanges),
+            ),
+        )
 
     def sma(self) -> pd.DataFrame:
-        return self._cached(("sma",), lambda: self.loader.load_latest_sma(date=self.as_of))
+        return self._cached(
+            ("sma",),
+            lambda: self.loader.load_latest_sma(
+                date=self.as_of,
+                exchanges=list(self.exchanges),
+            ),
+        )
 
     def highs(self, window: int) -> pd.DataFrame:
         normalized = int(window)
         return self._cached(
             ("highs", normalized),
-            lambda: self.loader.load_latest_highs(date=self.as_of, window=normalized),
+            lambda: self.loader.load_latest_highs(
+                date=self.as_of,
+                window=normalized,
+                exchanges=list(self.exchanges),
+            ),
         )
 
     def delivery(self) -> pd.DataFrame:

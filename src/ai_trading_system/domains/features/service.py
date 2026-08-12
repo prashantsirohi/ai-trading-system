@@ -226,12 +226,34 @@ class FeaturesOrchestrationService:
             return [str(item).strip().lower() for item in raw if str(item).strip()]
         return ["rsi", "adx", "sma", "ema", "macd", "atr", "bb", "roc", "supertrend"]
 
+    def _target_exchanges(self, context: StageContext) -> list[str]:
+        raw = context.params.get("feature_exchanges") or context.params.get("exchanges")
+        if isinstance(raw, str):
+            requested = [item.strip().upper() for item in raw.split(",") if item.strip()]
+        elif raw:
+            requested = [str(item).strip().upper() for item in raw if str(item).strip()]
+        else:
+            primary = str(context.params.get("exchange", "NSE")).strip().upper() or "NSE"
+            requested = [primary]
+            if (
+                bool(context.params.get("include_bse", False))
+                and str(context.params.get("data_domain", "operational")) == "operational"
+                and primary == "NSE"
+            ):
+                requested.append("BSE")
+        supported = {"NSE", "BSE"}
+        unsupported = sorted(set(requested) - supported)
+        if unsupported:
+            raise ValueError(f"Unsupported feature exchanges: {unsupported}")
+        return list(dict.fromkeys(requested))
+
     def run_technical(self, context: StageContext) -> dict[str, Any]:
         if self.operation is not None:
             return self.operation(context)
 
         full_rebuild = self._full_rebuild(context)
         feature_types = self._default_feature_types(context)
+        target_exchanges = self._target_exchanges(context)
         feature_compute_engine, fallback_reason = self._resolve_feature_engine(context, feature_types)
         updated_symbols = self._load_updated_symbols(context)
         feature_run_summary: dict[str, Any] = {}
@@ -254,7 +276,7 @@ class FeaturesOrchestrationService:
                 project_root=context.project_root,
                 data_domain=str(context.params.get("data_domain", "operational")),
                 symbols=batch_symbols,
-                exchanges=[str(context.params.get("exchange", "NSE"))],
+                exchanges=target_exchanges,
                 feature_types=feature_types,
                 full_rebuild=full_rebuild,
                 incremental=not full_rebuild,
@@ -285,10 +307,10 @@ class FeaturesOrchestrationService:
                         """
                         SELECT DISTINCT symbol_id
                         FROM _catalog_feature_source
-                        WHERE exchange = ?
+                        WHERE exchange IN (SELECT UNNEST(?))
                         ORDER BY symbol_id
                         """,
-                        [str(context.params.get("exchange", "NSE"))],
+                        [target_exchanges],
                     ).fetchall()
                     symbols = [row[0] for row in rows]
                     if context.params.get("symbol_limit") is not None:
@@ -302,7 +324,7 @@ class FeaturesOrchestrationService:
             )
             result = fs.compute_and_store_features(
                 symbols=symbols,
-                exchanges=[str(context.params.get("exchange", "NSE"))],
+                exchanges=target_exchanges,
                 feature_types=feature_types,
                 incremental=not full_rebuild,
                 tail_bars=int(context.params.get("feature_tail_bars", 252)),
@@ -331,6 +353,7 @@ class FeaturesOrchestrationService:
                 or {}
             ),
             "target_symbol_count": int(feature_run_summary.get("symbols_targeted") or 0),
+            "exchanges": target_exchanges,
             "rows_written_total": int(feature_run_summary.get("rows_written_total") or 0),
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -429,14 +452,21 @@ class FeaturesOrchestrationService:
             return {"status": "disabled"}
         from ai_trading_system.domains.features.phase1 import refresh_phase1_features
 
-        try:
-            return refresh_phase1_features(
-                ohlcv_db_path=context.db_path,
-                as_of=context.run_date,
-                exchange=str(context.params.get("exchange", "NSE")),
-            ).to_dict()
-        except Exception as exc:
-            return {"status": "degraded", "error": str(exc)}
+        summaries: dict[str, Any] = {}
+        for exchange in self._target_exchanges(context):
+            try:
+                summaries[exchange] = refresh_phase1_features(
+                    ohlcv_db_path=context.db_path,
+                    as_of=context.run_date,
+                    exchange=exchange,
+                ).to_dict()
+            except Exception as exc:
+                summaries[exchange] = {"status": "degraded", "error": str(exc)}
+        statuses = {str(summary.get("status", "completed")) for summary in summaries.values()}
+        return {
+            "status": "degraded" if "degraded" in statuses else "completed",
+            "exchanges": summaries,
+        }
 
     def _latest_substage_metadata(self, context: StageContext, stage_name: str) -> dict[str, Any]:
         if context.registry is None:

@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-08-11
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -63,6 +63,54 @@ Daily wrapper:
 ```bash
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.daily_pipeline
 ```
+
+Unified BSE-only new-symbol onboarding (preview, then apply):
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.ingest.new_symbol_onboarding \
+  --symbol SYMBOL1 --symbol SYMBOL2 \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.ingest.new_symbol_onboarding \
+  --symbol SYMBOL1 --symbol SYMBOL2 \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD --apply
+```
+
+Read-only discovery before master insertion:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.ingest.new_symbol_onboarding \
+  --discover-missing --symbols-file proposed_bse_symbols.txt \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD
+```
+
+Discovery verifies active BSE identity, company ISIN, local collisions, market
+capitalization/group metadata, and official classification. Discovery by itself
+is always read-only. After approving a clean preview, promote the exact scope
+and run all onboarding stages with:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.ingest.new_symbol_onboarding \
+  --discover-missing --promote-discovered --apply \
+  --symbols-file proposed_bse_symbols.txt \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD
+```
+
+This mode fails closed on any discovery or classification gap, checkpoints the
+master before a transactional no-replacement insert, and then performs the
+standard classification, official BSE history, technical, Phase 1,
+fundamentals, and verification workflow.
+
+Use `--symbols-file FILE` for a larger explicit scope,
+`--allow-fundamentals-download` only when authenticated Screener acquisition is
+intended, or `--skip-fundamentals` to omit that non-critical stage. The command
+never expands its scope to every recently updated master row. Apply mode exits
+non-zero when official history or its dependent feature stages fail and stores
+the verification report under `$REPORTS_ROOT/symbol_onboarding/`.
 
 ## Stage selection and retry
 

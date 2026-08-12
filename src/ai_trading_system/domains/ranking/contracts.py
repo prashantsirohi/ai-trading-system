@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-RANK_INPUT_CONTRACT_VERSION = "point_in_time_v2"
+RANK_INPUT_CONTRACT_VERSION = "point_in_time_multi_exchange_v3"
 
 
 @dataclass(frozen=True)

@@ -18,7 +18,7 @@ VOLUME_Z50_CONFIRM_THRESHOLD = 2.0
 VOLUME_Z20_STRONG_THRESHOLD = 3.0
 
 
-def _load_sector_map(master_db_path: str) -> dict[str, str]:
+def _load_sector_map(master_db_path: str, exchange: str = "NSE") -> dict[str, str]:
     if not os.path.exists(master_db_path):
         return {}
     conn = sqlite3.connect(master_db_path)
@@ -27,8 +27,8 @@ def _load_sector_map(master_db_path: str) -> dict[str, str]:
             SELECT s.symbol_id, COALESCE(sm.system_sector, 'Other')
             FROM symbols s
             LEFT JOIN sector_mapping sm ON s.sector = sm.industry
-            WHERE s.exchange = 'NSE'
-        """).fetchall()
+            WHERE s.exchange = ?
+        """, [exchange]).fetchall()
     finally:
         conn.close()
     return {symbol: sector for symbol, sector in rows}
@@ -843,7 +843,7 @@ def scan_breakouts(
     supertrend_df = _load_supertrend_flags(feature_store_dir, symbols, date, exchange=exchange)
     latest = latest.merge(supertrend_df, on="symbol_id", how="left")
 
-    sector_map = _load_sector_map(master_db_path)
+    sector_map = _load_sector_map(master_db_path, exchange=exchange)
     latest.loc[:, "sector"] = latest["symbol_id"].map(sector_map).fillna("Other")
 
     if not delivery_df.empty:

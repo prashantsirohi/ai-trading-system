@@ -60,7 +60,7 @@ def run_sync(
     )
     if symbols:
         requested_symbols = _normalize_symbols(symbols)
-        available_symbols = set(all_symbols)
+        available_symbols = set(all_symbols) | _load_explicit_master_tickers(resolved_master_db_path)
         all_symbols = [
             symbol
             for symbol in requested_symbols
@@ -374,6 +374,31 @@ def _load_symbols(master_db_path: Path, *, exports_dir: Path) -> list[str]:
     finally:
         conn.close()
     return [str(row[0]).upper().strip() for row in rows if str(row[0]).strip()]
+
+
+def _load_explicit_master_tickers(master_db_path: Path) -> set[str]:
+    """Allow explicitly requested mastered BSE-only tickers without expanding default sync scope."""
+    if not master_db_path.exists():
+        return set()
+    conn = sqlite3.connect(f"file:{master_db_path}?mode=ro", uri=True)
+    try:
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(symbols)").fetchall()
+        }
+        identifiers = [column for column in ("symbol_id", "nse_symbol", "bse_symbol") if column in columns]
+        if not identifiers:
+            return set()
+        select_list = ", ".join(identifiers)
+        rows = conn.execute(f"SELECT {select_list} FROM symbols").fetchall()
+    finally:
+        conn.close()
+    return {
+        str(value).strip().upper()
+        for row in rows
+        for value in row
+        if value is not None and str(value).strip()
+    }
 
 
 def _requested_symbols(symbols: list[str] | None, symbols_file: str | Path | None) -> list[str] | None:

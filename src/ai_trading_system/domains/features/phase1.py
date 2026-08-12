@@ -474,9 +474,15 @@ def _replace_symbol_features(conn: duckdb.DuckDBPyConnection, frame: pd.DataFram
     frame.loc[:, "date"] = pd.to_datetime(frame["timestamp"]).dt.date
     min_date = frame["date"].min()
     max_date = frame["date"].max()
+    exchanges = sorted(frame["exchange"].astype(str).str.upper().unique().tolist())
+    if len(exchanges) != 1:
+        raise ValueError(f"Phase 1 symbol replacement requires exactly one exchange, observed {exchanges}")
     conn.execute(
-        "DELETE FROM feat_phase1_symbol_features WHERE date BETWEEN ? AND ?",
-        [min_date, max_date],
+        """
+        DELETE FROM feat_phase1_symbol_features
+        WHERE exchange = ? AND date BETWEEN ? AND ?
+        """,
+        [exchanges[0], min_date, max_date],
     )
     conn.execute("INSERT INTO feat_phase1_symbol_features BY NAME SELECT * FROM frame")
     return int(len(frame))

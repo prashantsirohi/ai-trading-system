@@ -7,6 +7,8 @@ import pandas as pd
 import pytest
 
 from ai_trading_system.domains.features.phase1 import (
+    PHASE1_SYMBOL_COLUMNS,
+    _replace_symbol_features,
     compute_phase1_symbol_features,
     refresh_phase1_features,
 )
@@ -166,3 +168,28 @@ def test_phase1_delivery_trend_supports_timestamp_and_date_columns(tmp_path: Pat
             assert pd.notna(features.loc["AAA", "delivery_trend_score"])
         finally:
             conn.close()
+
+
+def test_phase1_symbol_replacement_preserves_other_exchange_partition(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    conn = duckdb.connect(str(db_path))
+
+    def frame(symbol: str, exchange: str) -> pd.DataFrame:
+        row = {
+            "symbol_id": symbol,
+            "exchange": exchange,
+            "timestamp": pd.Timestamp("2026-08-10"),
+        }
+        row.update({column: 1.0 for column in PHASE1_SYMBOL_COLUMNS})
+        return pd.DataFrame([row])
+
+    try:
+        assert _replace_symbol_features(conn, frame("NSECO", "NSE")) == 1
+        assert _replace_symbol_features(conn, frame("BSECO", "BSE")) == 1
+        rows = conn.execute(
+            "SELECT symbol_id, exchange FROM feat_phase1_symbol_features ORDER BY exchange"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert rows == [("BSECO", "BSE"), ("NSECO", "NSE")]

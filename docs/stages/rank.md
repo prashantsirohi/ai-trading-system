@@ -2,7 +2,7 @@
 
 - **Purpose:** Build the canonical ranked-signal artifact set (composite ranking, breakout scan, pattern scan, sector dashboard, dashboard payload) consumed by every downstream stage.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-07-17
+- **Last verified:** 2026-08-10
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/rank.py`
   - `src/ai_trading_system/domains/ranking/service.py` (`RankOrchestrationService`)
@@ -14,7 +14,7 @@
 
 ## Purpose
 
-The rank stage turns the per-symbol feature store into a prioritized list of trade-worthy symbols and supporting evidence artifacts. It is the central operational stage: every other stage downstream of rank reads its CSV/JSON outputs.
+The rank stage turns the per-symbol, per-exchange feature store into a prioritized list of trade-worthy symbols and supporting evidence artifacts. The daily pipeline ranks the combined NSE+BSE universe and retains `exchange` on canonical rows. It is the central operational stage: every other stage downstream of rank reads its CSV/JSON outputs.
 
 ## Entrypoints
 
@@ -85,11 +85,16 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
    within that decision. The current default decision-history version is
    `point_in_time_v2`, and the rank-core task fingerprint includes this input
    contract so retries cannot reuse pre-fix output.
+   The current `point_in_time_multi_exchange_v3` input contract partitions ADX,
+   SMA, highs, returns, volume, and Stage 2 inputs by `(symbol_id, exchange)`.
+   NSE market regime and sector context remain the common India-market context;
+   unavailable BSE delivery or fundamental fields degrade through existing
+   missing-feature confidence rules rather than being synthesized.
 4. Run resumable tasks in order — each is fingerprinted, persisted in `task_status.json`, and skipped on retry if the fingerprint matches (`service.py:495`–end of `run_default`):
-   - `rank_core` → `ranked_signals.csv`
+   - `rank_core` → combined NSE+BSE `ranked_signals.csv`
    - volume shockers → `volume_shockers.csv`
-   - `breakout_scan` (no-op DataFrame when market stage disables breakouts)
-   - `pattern_scan` (broad seed universe with ranked-symbol fallback)
+   - `breakout_scan` (one scan per ranked exchange; no-op DataFrame when market stage disables breakouts)
+   - `pattern_scan` (one seed/scan lifecycle per ranked exchange, with ranked-symbol fallback)
    - `stock_scan` (integrated view via `build_integrated_stock_scan_view`)
    - `sector_dashboard`
    - `watchlist_prefilter` / `watchlist_catalyst` / `watchlist_final` (+ markdown digest)
@@ -119,6 +124,9 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
 
 - Data trust quarantine blocks the run (see above).
 - Feature store missing symbols → `StockRanker.rank_all` returns an empty or thin frame, `ranked_rows=0`, downstream stages emit empty artifacts.
+- Unsupported `rank_exchanges` values fail before ranking. The operational
+  daily default is `[NSE, BSE]`; direct callers without that parameter retain
+  the legacy NSE-only default.
 - Pattern subsystem failure → fallback path engages; `pattern_seed_metadata.fallback_reason` records the cause.
 - ML overlay exception → `ml_status="degraded"`, overlay omitted, run continues (`service.py:1192`).
 - Optional task failure (`breakout_scan`, `pattern_scan`, `sector_dashboard`, watchlist sub-tasks) is recorded in `task_status.json` with status `failed | timed_out | degraded`, surfaced via warnings, and does not fail the stage.
@@ -168,6 +176,9 @@ workers, and commits a resumable checkpoint after every completed date.
 - [`candidates`](./candidates.md) — requires `ranked_signals` (hard), optionally reads `breakout_scan`, `pattern_scan`, `sector_dashboard`, plus `fundamentals.watchlist_candidates`.
 - [`events`](./events.md) — reads `breakout_scan` (Tier A/B) and `volume_shockers`.
 - `execute`, `insight`, `narrative`, `publish` — consume `ranked_signals` and/or `dashboard_payload` indirectly via the candidates/events outputs. The Google Sheets daily report may use ranked rows from the full-universe `stock_scan` to fill its operator-only top-25 view; this does not widen the regime-aware execution shortlist.
+- Execution independently defaults to `execution_exchanges=[NSE]`. Including
+  BSE in analytical ranking does not widen broker placement unless the operator
+  explicitly changes that execution parameter.
 
 ## Commands
 

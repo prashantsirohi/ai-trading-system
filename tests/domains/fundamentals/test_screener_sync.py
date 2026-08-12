@@ -503,6 +503,25 @@ def test_export_only_symbol_discovery_strips_consolidated_suffix(tmp_path: Path)
     assert screener_sync._load_symbols(tmp_path / "missing-master.db", exports_dir=exports) == ["RELIANCE"]
 
 
+def test_explicit_master_tickers_include_bse_only_identifiers(tmp_path: Path) -> None:
+    master_path = tmp_path / "masterdata.db"
+    with sqlite3.connect(master_path) as conn:
+        conn.execute(
+            "CREATE TABLE symbols (symbol_id TEXT, nse_symbol TEXT, bse_symbol TEXT, exchange TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO symbols VALUES (?, ?, ?, ?)",
+            [
+                ("ONLYBSE", None, "ONLYBSE", "BSE"),
+                ("RELIANCE", "RELIANCE", "RELIANCE", "NSE"),
+            ],
+        )
+
+    tickers = screener_sync._load_explicit_master_tickers(master_path)
+
+    assert tickers == {"ONLYBSE", "RELIANCE"}
+
+
 def _company_data(report_date: str) -> dict:
     return {
         "metadata": {"face_value": 10, "market_cap_cr": 1200},

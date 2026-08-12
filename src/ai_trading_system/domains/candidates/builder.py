@@ -127,7 +127,7 @@ def build_final_candidates(
     result = selected.head(target_max).reset_index(drop=True)
     for column in FINAL_CANDIDATE_COLUMNS:
         if column not in result.columns:
-            result.loc[:, column] = pd.NA
+            result.loc[:, column] = pd.Series(pd.NA, index=result.index, dtype="object")
     result.loc[:, "final_candidate_score"] = pd.to_numeric(result["final_candidate_score"], errors="coerce").round(2)
     result = result[FINAL_CANDIDATE_COLUMNS]
     summary = _summary("completed", result, rows_ranked=len(ranked), warnings=warnings)

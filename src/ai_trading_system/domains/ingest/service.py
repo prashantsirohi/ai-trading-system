@@ -57,6 +57,7 @@ class IngestOrchestrationService:
                 target_end_date=context.run_date,
                 stale_missing_symbol_grace_days=int(context.params.get("stale_missing_symbol_grace_days", 3)),
                 nse_allow_yfinance_fallback=fallback_enabled,
+                include_bse=bool(context.params.get("include_bse", True)),
             )
 
         updated_symbols = (
@@ -64,9 +65,14 @@ class IngestOrchestrationService:
             if isinstance(result, dict) and isinstance(result.get("updated_symbols"), list)
             else []
         )
+        corporate_recompute_symbols = (
+            result.get("nse_updated_symbols", updated_symbols)
+            if isinstance(result, dict)
+            else updated_symbols
+        )
         corporate_actions_result = self.run_corporate_action_normalization(
             context,
-            recompute_symbols=updated_symbols,
+            recompute_symbols=corporate_recompute_symbols,
         )
 
         catalog_rows, symbol_count, latest_ts = fetch_catalog_summary(context.db_path)
@@ -489,7 +495,7 @@ class IngestOrchestrationService:
         return summary
 
     def resolve_validation_scope_symbols(self, ingest_payload: Dict, catalog_df: pd.DataFrame) -> set[str]:
-        updated_symbols = ingest_payload.get("updated_symbols")
+        updated_symbols = ingest_payload.get("nse_updated_symbols", ingest_payload.get("updated_symbols"))
         if isinstance(updated_symbols, list) and updated_symbols:
             return {str(symbol).strip() for symbol in updated_symbols if str(symbol).strip()}
         return set(catalog_df["symbol_id"].astype(str).tolist())

@@ -45,6 +45,7 @@ class ExecutionRequest:
 
     data_domain: str
     strategy_mode: str
+    allowed_exchanges: tuple[str, ...]
     execution_enabled: bool
     preview_only: bool
     target_position_count: int
@@ -74,9 +75,19 @@ class ExecutionRequest:
     def from_context(cls, context: StageContext) -> "ExecutionRequest":
         quantity_raw = context.params.get("execution_fixed_quantity")
         require_stage2_raw = context.params.get("execution_require_stage2")
+        exchanges_raw = context.params.get("execution_exchanges") or ["NSE"]
+        exchanges = (
+            [item.strip().upper() for item in exchanges_raw.split(",") if item.strip()]
+            if isinstance(exchanges_raw, str)
+            else [str(item).strip().upper() for item in exchanges_raw if str(item).strip()]
+        )
+        unsupported = sorted(set(exchanges) - {"NSE", "BSE"})
+        if unsupported:
+            raise ValueError(f"Unsupported execution exchanges: {unsupported}")
         return cls(
             data_domain=str(context.params.get("data_domain", "operational")),
             strategy_mode=str(context.params.get("strategy_mode", "technical")),
+            allowed_exchanges=tuple(dict.fromkeys(exchanges)),
             execution_enabled=bool(context.params.get("execution_enabled", True)),
             preview_only=bool(context.params.get("execution_preview", False)),
             target_position_count=int(context.params.get("execution_top_n", context.params.get("top_n") or 5)),
@@ -132,6 +143,9 @@ class ExecutionCandidateBuilder:
     def build(self, context: StageContext, *, request: ExecutionRequest) -> ExecutionCandidateBundle:
         rank_artifact = context.artifact_for("rank", "ranked_signals")
         ranked_df = self._read_csv_artifact(context, "rank", "ranked_signals")
+        if "exchange" in ranked_df.columns:
+            normalized_exchange = ranked_df["exchange"].fillna("NSE").astype(str).str.upper()
+            ranked_df = ranked_df.loc[normalized_exchange.isin(request.allowed_exchanges)].copy()
         ranked_rows_before_linkage = int(len(ranked_df))
         dashboard_payload = self._read_json_artifact(context, "rank", "dashboard_payload")
         data_trust_status = str((dashboard_payload.get("summary", {}) or {}).get("data_trust_status", "unknown"))
