@@ -26,6 +26,7 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 | Candidate tracker | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate tracker domain | Candidate episodes, transitions, snapshots, fundamental reviews, alerts, and current lifecycle state. |
 | Master data | `$DATA_ROOT/masterdata.db` | Ingest/master-data services | Shared instrument and symbol identity data. |
 | Fundamentals | `$DATA_ROOT/fundamentals/` | Fundamentals domain | Imported source snapshots and fundamental read models. |
+| Research screener | `$DATA_ROOT/research_screener/control_plane.duckdb` | Persistent screener domain | Single-writer, append-oriented provenance, identity, immutable screen inputs/decisions/DQ, and versioned research-document/evidence history. It has no pipeline or execution consumer. |
 
 The Screener SQLite store under `$DATA_ROOT/fundamentals/` records the detected
 statement basis on financial facts and derived market valuations. Financial
@@ -41,6 +42,14 @@ performs and row-count-verifies the transactional table rebuild.
 
 Do not infer that execution or legacy candidate-tracker tables live in the control plane merely because their artifacts are registered there. The canonical opportunity registry is a distinct control-plane model and does not migrate or synchronize the existing tracker.
 
+The isolated research-screener control plane treats acquisition attempts and
+content artifacts as separate identities. `ingestion_run` is version/run scoped;
+`source_artifact` is content-and-locator addressed and may therefore be reused;
+`ingestion_artifact` is the many-to-many bridge that proves which acquisition
+attempt attached each artifact to a screen run. `source_artifact.ingestion_run_id`
+retains the first acquisition only as a compatibility pointer. Complete run
+lineage must use the bridge or the artifact IDs frozen in `dataset_snapshot`.
+
 ## Runtime trees
 
 | Tree | Layout and use |
@@ -54,6 +63,22 @@ Do not infer that execution or legacy candidate-tracker tables live in the contr
 | Models, reports, logs | Resolved independently through `MODELS_ROOT`, `REPORTS_ROOT`, and `LOGS_ROOT`, falling back to repository roots when unset. |
 
 ## Research-domain isolation
+
+The persistent screener is separately isolated beneath
+`$DATA_ROOT/research_screener/`. Completed output packs live at
+`runs/<run_id>/`; raw official responses, normalized Parquet/CSV records, and a
+checksum manifest are immutable. The store is not the operational
+`control_plane.duckdb` and its migration never touches pipeline, execution,
+candidate-tracker, master-data, OHLCV, or fundamentals stores. See the
+[screener architecture and rollback note](../research_screener/architecture_and_schema.md).
+
+Annual-report research output is separately immutable under
+`research_runs/<research_run_id>/`, with resumable source checkpoints under
+`checkpoints/annual_reports/<parent_filing_run>/<semantic_version>/`. The
+`research_discovery_run` row names the immutable parent filing run and snapshot
+hash. `research_document` and `research_evidence` payloads retain the research
+run, company, source artifact, cutoff, page, confidence, and review state.
+`source_artifact` stores both valid reports and failed/truncated exchange bytes.
 
 With `DATA_DOMAIN=research`, `get_domain_paths()` re-roots domain-owned data under `$DATA_ROOT/research/`:
 

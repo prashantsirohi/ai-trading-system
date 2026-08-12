@@ -1,0 +1,88 @@
+{
+  "registry_version": "2.5.0",
+  "sources": {
+    "combined_security_master": {
+      "provider": "NSE",
+      "dataset": "CM_MII_SECURITY_COMBINED",
+      "url_template": "https://nsearchives.nseindia.com/content/cm/NSE_CM_security_{date_ddmmyyyy}.csv.gz",
+      "enrichment_urls": [
+        "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
+        "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&industry=&segment=Equity&status=Active"
+      ],
+      "failure": "STOP_UNIVERSE_CONSTRUCTION"
+    },
+    "full_universe_policy": {
+      "dedupe_key": "ISIN",
+      "company_equity_isin_prefix": "INE",
+      "nse_main_board_series": ["EQ", "BE", "BZ"],
+      "bse_sme_groups": ["M", "MT", "MS", "TS"],
+      "non_company_equity_action": "INELIGIBLE_BOARD_OR_INSTRUMENT",
+      "missing_isin_action": "DATA_REPAIR_REQUIRED",
+      "identity_coverage_floor": 0.98
+    },
+    "nse_market_cap": {
+      "provider": "NSE",
+      "dataset": "NEXT_GET_QUOTE_SYMBOL_DATA",
+      "metadata_url_template": "https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getMetaData&symbol={symbol}",
+      "url_template": "https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getSymbolData&marketType={market_type}&series={active_series}&symbol={symbol}",
+      "full_field": "equityResponse[0].tradeInfo.totalMarketCap",
+      "free_float_field": "equityResponse[0].tradeInfo.ffmc",
+      "raw_unit": "INR_RUPEES",
+      "normalized_unit": "INR_CRORE",
+      "conversion_divisor": 10000000,
+      "failure": "ELIGIBILITY_UNKNOWN"
+    },
+    "bse_market_cap": {
+      "provider": "BSE",
+      "dataset": "ACTIVE_EQUITY_MASTER_MKTCAP",
+      "url": "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&industry=&segment=Equity&status=Active",
+      "full_field": "Mktcap",
+      "failure": "ELIGIBILITY_UNKNOWN"
+    },
+    "ohlcv": {
+      "provider": "EXISTING_TRADING_SYSTEM",
+      "dataset": "ohlcv.duckdb._catalog",
+      "failure": "TECHNICAL_UNAVAILABLE"
+    },
+    "corporate_actions": {
+      "provider_order": ["NSE_FOR_NSE_LISTING", "BSE_FOR_BSE_LISTING"],
+      "nse_url": "https://www.nseindia.com/api/corporates-corporateActions?index=equities&symbol={symbol}",
+      "bse_url": "https://api.bseindia.com/BseIndiaAPI/api/CorporateAction/w?scripcode={bse_code}",
+      "stored_adjustment_dataset": "ohlcv.duckdb._corporate_actions",
+      "taxonomy": ["split", "bonus", "rights", "consolidation", "dividend", "demerger", "merger", "symbol_name_change", "trading_series"],
+      "failure": "ADJUSTMENT_INCOMPLETE"
+    },
+    "fundamentals": {
+      "provider_order": ["NSE_XBRL_PRIMARY", "BSE_XBRL_EXACT_DUAL_LISTING_FALLBACK", "CHECKSUM_LOCKED_COMPANY_IR_MISSING_PERIOD_REPAIR"],
+      "nse_metadata_urls": [
+        "https://www.nseindia.com/api/corporates-financial-results?index=equities&symbol={symbol}&period={period}",
+        "https://www.nseindia.com/api/integrated-filing-results?index=equities&symbol={symbol}"
+      ],
+      "bse_metadata_url": "https://api.bseindia.com/BseIndiaAPI/api/Corp_FinanceResult_ng_new/w?SCRIP_CD={bse_code}&FlagDur=7&segment=C",
+      "bse_document_formats": ["XBRL_XML", "INLINE_XBRL_HTML"],
+      "selection_policy": "ORDERED_EXCHANGE_SNAPSHOT_V2_WITH_SAME_SCOPE_ISSUER_MISSING_PERIOD_REPAIR",
+      "identity_policy": "PERIOD_EFFECTIVE_ISIN_FROM_PROVEN_IDENTIFIER_HISTORY",
+      "issuer_repair_contract": "configs/research_screener/issuer_filing_repairs.json",
+      "secondary_diagnostic_dataset": "fundamentals/screener_financials.db",
+      "required_validation": ["statement_scope", "available_at", "provider", "source_row_hash", "filing_source"],
+      "failure": "DATA_REPAIR_REQUIRED"
+    },
+    "filings": {
+      "provider_order": ["NSE", "BSE", "COMPANY_IR"],
+      "failure": "NOT_DISCLOSED"
+    },
+    "annual_reports": {
+      "provider_order": ["NSE_ANNUAL_REPORT_API", "BSE_CORPORATE_ANNOUNCEMENT", "COMPANY_IR_REVIEWED_CONTRACT_ONLY"],
+      "nse_metadata_url": "https://www.nseindia.com/api/annual-reports?index=equities&symbol={symbol}",
+      "bse_metadata_url": "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w",
+      "document_policy": "LATEST_PUBLISHED_NOT_AFTER_AS_OF_DATE_PDF_ONLY",
+      "evidence_policy": "ATTRIBUTABLE_PAGE_TEXT_MATCH_LOW_CONFIDENCE_HUMAN_REVIEW_REQUIRED",
+      "failure": "NOT_DISCLOSED"
+    },
+    "kpi_contracts": {
+      "provider": "REPOSITORY",
+      "dataset": "configs/research_screener/kpi_contracts.json",
+      "failure": "STOP_SCREENING_RUN"
+    }
+  }
+}

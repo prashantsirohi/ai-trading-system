@@ -287,6 +287,7 @@ Canonical operational paths are resolved beneath `$DATA_ROOT`:
 | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate episodes, snapshots, reviews, alerts, and current lifecycle state. |
 | `$DATA_ROOT/masterdata.db` | Shared instrument/master data. |
 | `$DATA_ROOT/fundamentals/` | Fundamental snapshots and stores. |
+| `$DATA_ROOT/research_screener/` | Isolated persistent screener control plane, immutable canary/universe/filing packs, and annual-report research checkpoints/packs; no daily-pipeline or execution consumer. |
 | `$DATA_ROOT/raw/` | Provider-native raw inputs. |
 | `$DATA_ROOT/feature_store/<symbol_id>/` | Per-symbol feature Parquet snapshots. |
 | `$DATA_ROOT/stage_store/` | Stage-owned durable materializations. |
@@ -296,6 +297,18 @@ Canonical operational paths are resolved beneath `$DATA_ROOT`:
 For `DATA_DOMAIN=research`, domain-owned stores are re-rooted under `$DATA_ROOT/research/`; master data remains shared. `MODELS_ROOT`, `REPORTS_ROOT`, and `LOGS_ROOT` can independently relocate their trees.
 
 The control plane records one `pipeline_run`, one `pipeline_stage_run` per stage attempt, and a content-hashed `pipeline_artifact` row per registered output. Discover lineage through the registry rather than assuming a filesystem listing is complete. See [storage and lineage](architecture/storage_and_lineage.md), [database schema](reference/database_schema.md), and [artifacts](reference/artifacts.md).
+
+The isolated research screener separately records every acquisition attempt in
+`ingestion_run`. Content-identical `source_artifact` rows are reused, while the
+`ingestion_artifact` bridge retains the many-to-many link from each screen run's
+acquisition attempts to every artifact in that run's immutable input snapshot.
+Its filing adapter selects one NSE or BSE XBRL snapshot without cross-exchange
+period splicing. Explicit recent-listing or corrected-filing gaps may then be
+completed from checksum-locked official RHP, prospectus, audited-result, or BSE
+attachment PDFs registered in `issuer_filing_repairs.json`. Those repairs are
+same-scope and missing-period-only; they validate legal-name/CIN page markers,
+preserve the raw PDF and page evidence, reconcile configured overlaps, and fail
+closed on hash, identity, scope, publication-date, or value mismatch.
 
 ## Operator quick start
 
@@ -319,6 +332,118 @@ Run a reduced real-data canary without network publishing:
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
   --canary --symbol-limit 25 --local-publish
 ```
+
+Run the isolated persistent research-screener canaries:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.domains.research_screener.cli \
+  --as-of-date 2026-08-08 --run-mode regression_replay
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.domains.research_screener.cli \
+  --as-of-date YYYY-MM-DD --run-mode live_canary
+```
+
+After the canary gate has passed, run controlled full-universe Phase 1 discovery:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.domains.research_screener.cli \
+  --as-of-date YYYY-MM-DD --run-mode full_universe
+```
+
+After reviewing that completed parent pack, acquire filing-grade evidence for
+its frozen cap-eligible cohort:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.domains.research_screener.cli \
+  --as-of-date YYYY-MM-DD --run-mode filing_discovery \
+  --parent-run-id <completed-full-universe-run-id> --batch-size 25
+```
+
+After a superseding filing snapshot passes, discover non-scoring annual-report
+evidence for its exact `BOUNDARY_REVIEW` cohort:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.annual_report_service \
+  --as-of-date YYYY-MM-DD --parent-run-id <completed-filing-run-id> \
+  --batch-size 25 --workers 4
+```
+
+The screener routes regression replay to immutable fixture v1.0.0 and live
+canaries to the checksum-locked current fixture registered in
+`configs/research_screener/canary_fixture_versions.json`.
+
+The live command uses only the fixed official-source registry, freezes official
+market-cap, filing-XBRL, and corporate-action evidence, persists versioned KPI
+contracts, fails closed on unavailable or incomplete evidence, and never feeds
+the operational pipeline. See [Phase 0 screener architecture](research_screener/architecture_and_schema.md).
+For dual-listed securities, fundamentals use one complete official-provider
+snapshot: NSE first, then exact-listing BSE fallback when NSE is incomplete;
+periods are never spliced across providers. Filing identity accepts a prior ISIN
+only inside a transition window proven by stored, checksum-valid official action
+evidence.
+
+`full_universe` uses the active NSE and BSE exchange masters, deduplicates company
+equities by ISIN, explicitly retains unresolved and non-company-equity listings,
+classifies NSE `EQ`/`BE`/`BZ` as main-board and BSE `M`/`MT`/`MS`/`TS` as SME,
+and applies the same fixed official full-market-cap band without estimates or
+provider switching. This first controlled expansion is deliberately an identity,
+instrument/board, and eligibility discovery pass: an in-band security remains
+`DATA_REPAIR_REQUIRED` until filing-grade scope, annual, quarterly, and
+corporate-action discovery completes. It does not rank, recommend, schedule,
+publish, or execute.
+Validated same-cutoff NSE market-cap responses use checksum-verified resumable
+checkpoints beneath `$DATA_ROOT/research_screener/checkpoints/full_universe/`;
+failed responses are not cached, and only the final completed immutable pack is
+authoritative.
+The first completed Phase 1 discovery run is documented in the
+[full-universe handoff](research_screener/full_universe_handoff.md).
+
+`filing_discovery` freezes the named parent's security, market, status, and
+manifest files and processes only its `ELIGIBLE` members. It uses NSE financial
+result XBRL first, exact dual-listing BSE whole-snapshot fallback, and no
+cross-provider period splicing. It enforces filing availability by the cutoff,
+period-effective ISIN, one statement scope, latest-period parsing, six annual
+and twelve quarterly targets, 70% mandatory-field completeness, and official
+corporate-action continuity. Each security and its raw responses are
+checksum-checkpointed under
+`$DATA_ROOT/research_screener/checkpoints/filing_discovery/`; an interrupted
+command resumes at the next missing security. The final pack records pass as
+`BOUNDARY_REVIEW`, not `QUALIFIED`: this stage performs no score, rank,
+recommendation, schedule, publication, or execution action.
+Definition 1.2.0 additionally freezes current-master sector and industry
+evidence by exact ISIN before selecting a bank, financial-institution,
+market-infrastructure, or industrial metric contract. Missing, ambiguous,
+post-cutoff, or incomplete evidence fails closed as `UNCLASSIFIED`; company
+names and symbol-only matches do not route a contract. The immutable 1.1.0
+repair partition and mutation boundary are documented in the
+[filing repair baseline](research_screener/filing_repair_baseline.md).
+The CLI defaults to four independent sessions paced at one quarter of the
+single-session frequency, so network latency overlaps while the aggregate
+official-source request ceiling remains unchanged; use `--workers 1` for a
+strictly serial diagnostic run. An explicit five-to-sixty-four-worker backfill stays
+individually paced and caps the aggregate cadence at twice the default; repeated
+429 or schema failures remain failed artifacts and must be reviewed.
+The completed 2026-08-12 filing-discovery result and its next repair/research
+gates are recorded in the
+[filing-discovery handoff](research_screener/filing_discovery_handoff.md).
+
+Annual-report discovery freezes the named filing run's exact
+`BOUNDARY_REVIEW` cohort. It queries official NSE annual-report metadata first,
+then official BSE announcement attachments for BSE-only listings or unusable
+NSE documents. It validates publication cutoff and expected archive byte count,
+retains failed bytes, and extracts only LOW-confidence page-attributed topic
+anchors. Every topic is explicit, including `NOT_DISCLOSED`; no text match is
+an accepted fact until human review. Completed packs live under
+`$DATA_ROOT/research_screener/research_runs/`, and checkpoints live under
+`checkpoints/annual_reports/`. This stage cannot change filed statements,
+screening dispositions, ranks, schedules, or execution. See the
+[annual-report handoff](research_screener/annual_report_discovery_handoff.md).
+
+Preview an evidence-bound demerger repair with
+`python -m ai_trading_system.domains.ingest.demerger_repair --evidence-file
+configs/corporate_actions/stltech_2025_demerger.json`. `--apply` first creates a
+checksummed full OHLCV backup and then changes only the named action and symbol's
+adjusted history; it does not alter raw OHLCV.
 
 Run a read-only ADR-0007 R0 replay into a new research bundle:
 

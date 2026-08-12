@@ -1,0 +1,14 @@
+{
+  "fixture_version": "2026-08-08.1",
+  "label": "historical_regression_fixture_not_current_market_data",
+  "as_of_date": "2026-08-08",
+  "pilot_company_count": 17,
+  "historical_in_band_count": 13,
+  "broad_market_cap_coverage": 17,
+  "old_index_route_eligible_coverage": 10,
+  "silently_lost_symbols": ["SJS", "HAWKINCOOK", "E2E"],
+  "forced_consolidated_required_fields": {"HAWKINCOOK": "0/8", "E2E": "1/8"},
+  "standalone_usable_symbols": ["HAWKINCOOK", "E2E"],
+  "sjs_consolidated_annual_observations": 5,
+  "required_preserved_symbols": ["SJS", "KIRLPNU", "HAWKINCOOK", "E2E"]
+}

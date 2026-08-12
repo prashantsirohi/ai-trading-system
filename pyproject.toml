@@ -20,6 +20,7 @@ dependencies = [
   "mplfinance>=0.12",
   "numpy==1.26.4",
   "pandas==2.2.3",
+  "pdfplumber>=0.11",
   "openpyxl>=3.1",
   "plotly",
   "playwright>=1.52",
@@ -74,6 +75,8 @@ ai-trading-fundamentals-validate-exports = "ai_trading_system.domains.fundamenta
 ai-trading-valuation-refresh = "ai_trading_system.domains.features.valuation_refresh:main"
 ai-trading-sector-earnings-refresh = "ai_trading_system.domains.features.sector_earnings_leadership:main"
 ai-trading-backfill-operational-valuation = "ai_trading_system.interfaces.cli.backfill_operational_valuation:main"
+ai-trading-onboard-symbols = "ai_trading_system.domains.ingest.new_symbol_onboarding:main"
+ai-trading-repair-demerger = "ai_trading_system.domains.ingest.demerger_repair:main"
 ai-trading-winner-validation-report = "ai_trading_system.research.backtesting.winner_validation:main"
 ai-trading-early-accumulation-validate = "ai_trading_system.research.backtesting.early_accumulation_validation:main"
 ai-trading-symbol-report = "ai_trading_system.research.symbol_report.cli:main"
@@ -86,6 +89,8 @@ ai-trading-shadow-ab-proof = "ai_trading_system.interfaces.cli.build_shadow_ab_p
 ai-trading-cross-shadow = "ai_trading_system.interfaces.cli.build_cross_shadow_reconciliation:main"
 ai-trading-phase4-api = "ai_trading_system.interfaces.cli.serve_phase4_api:main"
 ai-trading-journal = "ai_trading_system.domains.trade_journal.cli:main"
+ai-trading-research-screener = "ai_trading_system.domains.research_screener.cli:main"
+ai-trading-annual-report-discovery = "ai_trading_system.domains.research_screener.annual_report_service:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -106,6 +111,7 @@ exclude = [
 ai_trading_system = [
   "pipeline/migrations/*.sql",
   "domains/trade_journal/migrations/*.sql",
+  "domains/research_screener/migrations/*.sql",
   "domains/publish/channels/weekly_pdf/templates/*.html",
   "domains/publish/channels/weekly_pdf/static/*.css",
   "domains/publish/channels/daily_gainers/templates/*.html",
