@@ -2,7 +2,7 @@
 
 - **Purpose:** Optional enrichment of rank artifacts from the canonical Screener.in SQLite fundamentals store — adds tiering, watchlist bucketing, hard red-flag flags, and industry-level scores.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-08-09
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/fundamentals.py` (`FundamentalsStage`)
   - `src/ai_trading_system/domains/fundamentals/enrich_rank.py`
@@ -32,7 +32,8 @@ It does **not**:
 ## Input data
 
 - `data/fundamentals/screener_financials.db` (canonical SQLite source; overridable via `--screener-financials-db-path` / param `screener_financials_db_path`).
-- `data/fundamentals/exports/*_screener.xlsx` (local Screener Excel exports used by sync).
+- `$DATA_ROOT/fundamentals/exports/*_screener.xlsx` (standalone exports) and
+  `*_consolidated_screener.xlsx` (consolidated exports) used by sync.
 - `data/fundamentals/fundamental_scores_latest.csv` (generated compatibility readmodel; overridable via `--fundamental-scores-path` / param `fundamental_scores_path`).
 - `data/fundamentals/fundamental_trends_latest.csv` (optional; default from `DEFAULT_TRENDS_PATH`).
 - `data/fundamentals/industry_fundamental_scores_latest.csv` (optional).
@@ -45,8 +46,9 @@ Operator workflow for syncing Screener Excel exports into the canonical DB:
 
 ```bash
 ai-trading-fundamentals-sync \
-  --db-path /Volumes/MacData/Trading/data/fundamentals/screener_financials.db \
-  --exports-dir /Volumes/MacData/Trading/data/fundamentals/exports
+  --statement-basis standalone \
+  --db-path "$DATA_ROOT/fundamentals/screener_financials.db" \
+  --exports-dir "$DATA_ROOT/fundamentals/exports"
 
 ai-trading-fundamentals-refresh-readmodels \
   --db-path /Volumes/MacData/Trading/data/fundamentals/screener_financials.db
@@ -112,6 +114,9 @@ Skip path: when the scores CSV is missing, the stage writes only `fundamental_su
 
 - The stage has no internal task-level resumability; a retry re-runs the full enrichment.
 - Because `enable_fundamentals` may be auto-derived from snapshot presence (`orchestrator.py:578`), a missing-snapshot retry will continue to emit a `skipped_missing_snapshot` summary until the operator imports a new CSV.
+- Screener download sync is separately resumable by requested basis through
+  `screener_sync_result`. HTTP 429 responses are never parsed and retry with a
+  bounded backoff, honoring numeric `Retry-After` when supplied.
 
 ## Downstream consumers
 
@@ -122,8 +127,13 @@ Skip path: when the scores CSV is missing, the stage writes only `fundamental_su
 ## Commands
 
 ```bash
-# Sync downloaded Screener Excel files and refresh derived scoring CSVs.
-ai-trading-fundamentals-sync
+# Sync downloaded standalone Excel files and refresh derived scoring CSVs.
+ai-trading-fundamentals-sync --statement-basis standalone
+
+# Consolidated canary into isolated paths (credentials required).
+ai-trading-fundamentals-sync --statement-basis consolidated --allow-download --force \
+  --symbol RELIANCE --db-path /tmp/screener-canary/screener_financials.db \
+  --exports-dir /tmp/screener-canary/exports
 
 # Refresh only derived scoring/trend CSVs from SQLite.
 ai-trading-fundamentals-refresh-readmodels
@@ -139,3 +149,8 @@ python -m ai_trading_system.domains.fundamentals.enrich_rank \
 ```
 
 > **Status:** This stage is part of the canonical `ai-trading-pipeline` order but is registered as optional. The current orchestrator CLI enables it by default; explicit stage lists and daily-wrapper behavior depend on their current flags/defaults.
+
+The active read policy remains standalone. `fundamentals.duckdb` also exposes
+`screener_statement_basis_resolution` and `screener_financials_resolved` for a
+future gated activation that prefers consolidated per symbol and falls back to
+standalone without mixing bases.

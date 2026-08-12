@@ -8,7 +8,11 @@ from typing import Any
 
 import pandas as pd
 
-from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
+from ai_trading_system.domains.fundamentals.contracts import (
+    DEFAULT_STATEMENT_BASIS,
+    PREFERRED_AVAILABLE_STATEMENT_POLICY,
+    normalize_statement_basis,
+)
 from ai_trading_system.domains.fundamentals.scoring import compute_fundamental_scores
 from ai_trading_system.domains.fundamentals.screener_store import ScreenerFinancialsStore, default_screener_db_path
 from ai_trading_system.domains.fundamentals.trends import compute_fundamental_trends
@@ -55,10 +59,16 @@ def refresh_fundamental_readmodels(
     return scores
 
 
-def build_raw_factor_frame(store: ScreenerFinancialsStore) -> pd.DataFrame:
+def build_raw_factor_frame(
+    store: ScreenerFinancialsStore,
+    *,
+    statement_basis_policy: str = DEFAULT_STATEMENT_BASIS,
+) -> pd.DataFrame:
     financials = store.read_financials_frame()
     if financials.empty:
         return pd.DataFrame()
+    policy = str(statement_basis_policy).strip().lower()
+    basis_by_symbol: dict[str, str]
     if "statement_basis" in financials.columns:
         basis = (
             financials["statement_basis"]
@@ -68,8 +78,38 @@ def build_raw_factor_frame(store: ScreenerFinancialsStore) -> pd.DataFrame:
             .str.lower()
             .replace({"": DEFAULT_STATEMENT_BASIS})
         )
-        financials = financials.loc[basis.eq(DEFAULT_STATEMENT_BASIS)].copy()
+        financials = financials.assign(statement_basis=basis)
+        if policy == PREFERRED_AVAILABLE_STATEMENT_POLICY:
+            consolidated_symbols = set(
+                financials.loc[financials["statement_basis"].eq("consolidated"), "symbol"].astype(str)
+            )
+            basis_by_symbol = {
+                str(symbol): "consolidated" if str(symbol) in consolidated_symbols else DEFAULT_STATEMENT_BASIS
+                for symbol in financials["symbol"].astype(str).unique()
+            }
+            selected = financials["symbol"].astype(str).map(basis_by_symbol)
+            financials = financials.loc[financials["statement_basis"].eq(selected)].copy()
+        else:
+            selected_basis = normalize_statement_basis(policy)
+            financials = financials.loc[financials["statement_basis"].eq(selected_basis)].copy()
+            basis_by_symbol = {str(symbol): selected_basis for symbol in financials["symbol"].astype(str).unique()}
+    else:
+        if policy not in {DEFAULT_STATEMENT_BASIS, PREFERRED_AVAILABLE_STATEMENT_POLICY}:
+            normalize_statement_basis(policy)
+        basis_by_symbol = {str(symbol): DEFAULT_STATEMENT_BASIS for symbol in financials["symbol"].astype(str).unique()}
     valuations = store.read_valuations_frame()
+    if not valuations.empty and "statement_basis" in valuations.columns:
+        valuation_basis = (
+            valuations["statement_basis"]
+            .fillna(DEFAULT_STATEMENT_BASIS)
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .replace({"": DEFAULT_STATEMENT_BASIS})
+        )
+        valuations = valuations.assign(statement_basis=valuation_basis)
+        selected = valuations["symbol"].astype(str).map(basis_by_symbol)
+        valuations = valuations.loc[valuations["statement_basis"].eq(selected)].copy()
     snapshots = store.read_company_snapshot_frame()
     factors = store.read_factor_snapshot_frame()
     annual = _pivot(financials.loc[financials["period_type"].eq("annual")])
@@ -94,6 +134,7 @@ def build_raw_factor_frame(store: ScreenerFinancialsStore) -> pd.DataFrame:
         investing = _num(latest, "cash_from_investing")
         row = {
             "symbol": symbol,
+            "statement_basis": basis_by_symbol.get(str(symbol), DEFAULT_STATEMENT_BASIS),
             "name": symbol,
             "industry_group": "",
             "industry": "",

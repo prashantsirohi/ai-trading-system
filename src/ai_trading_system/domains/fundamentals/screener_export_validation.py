@@ -10,7 +10,11 @@ from typing import Any
 import duckdb
 import pandas as pd
 
-from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
+from ai_trading_system.domains.fundamentals.contracts import (
+    DEFAULT_STATEMENT_BASIS,
+    SUPPORTED_STATEMENT_BASES,
+    normalize_statement_basis,
+)
 from ai_trading_system.domains.fundamentals.screener_client import ScreenerClient
 from ai_trading_system.platform.db.paths import get_domain_paths
 
@@ -71,7 +75,7 @@ def validate_screener_exports_against_duckdb(
     checked_cells = 0
     checked_symbols = 0
     for symbol, db_rows in db_frame.groupby("symbol", sort=True):
-        export_path = resolved_exports / f"{symbol}_screener.xlsx"
+        export_path = client.excel_path(str(symbol), statement_basis=resolved_basis)
         if not export_path.exists():
             rows.append(
                 {
@@ -213,8 +217,7 @@ def _has_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: s
 
 
 def _normalize_statement_basis(value: object) -> str:
-    basis = str(value or DEFAULT_STATEMENT_BASIS).strip().lower()
-    return basis or DEFAULT_STATEMENT_BASIS
+    return normalize_statement_basis(value)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -223,7 +226,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fundamentals-db-path", default=str(paths.root_dir / "fundamentals.duckdb"))
     parser.add_argument("--exports-dir", default=str(paths.fundamentals_dir / "exports"))
     parser.add_argument("--report-date", default=None, help="Quarter report date; defaults to latest quarterly DB date.")
-    parser.add_argument("--statement-basis", default=DEFAULT_STATEMENT_BASIS, help="Statement basis to validate.")
+    parser.add_argument(
+        "--statement-basis",
+        default=DEFAULT_STATEMENT_BASIS,
+        choices=SUPPORTED_STATEMENT_BASES,
+        help="Statement basis to validate.",
+    )
     parser.add_argument("--symbol", action="append", dest="symbols", help="Limit to one symbol; repeatable.")
     parser.add_argument("--tolerance", type=float, default=0.01)
     parser.add_argument("--output-csv", default=None, help="Write mismatch details to this CSV path.")

@@ -130,6 +130,7 @@ def test_validate_screener_exports_against_duckdb_compares_selected_basis(tmp_pa
     exports_dir = tmp_path / "exports"
     _create_basis_db(db_path)
     _write_export(exports_dir / "AAA_screener.xlsx")
+    _write_export(exports_dir / "AAA_consolidated_screener.xlsx")
 
     standalone = validate_screener_exports_against_duckdb(
         fundamentals_db_path=db_path,

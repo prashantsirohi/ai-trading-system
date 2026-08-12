@@ -8,7 +8,6 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
 from ai_trading_system.platform.db.paths import get_domain_paths
 
 
@@ -101,6 +100,37 @@ def ensure_fundamentals_analytical_schema(conn: duckdb.DuckDBPyConnection) -> No
     _ensure_duckdb_column(conn, "screener_financials", "statement_basis", "VARCHAR DEFAULT 'standalone'")
     _ensure_duckdb_column(conn, "fundamental_period_facts", "statement_basis", "VARCHAR DEFAULT 'standalone'")
     _ensure_duckdb_column(conn, "company_growth_features", "statement_basis", "VARCHAR DEFAULT 'standalone'")
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW screener_statement_basis_resolution AS
+        SELECT
+            symbol,
+            CASE
+                WHEN count(*) FILTER (
+                    WHERE coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = 'consolidated'
+                ) > 0 THEN 'consolidated'
+                ELSE 'standalone'
+            END AS statement_basis,
+            CASE
+                WHEN count(*) FILTER (
+                    WHERE coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = 'consolidated'
+                ) > 0 THEN 'consolidated_available'
+                ELSE 'standalone_fallback'
+            END AS basis_resolution_reason
+        FROM screener_financials
+        GROUP BY symbol
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW screener_financials_resolved AS
+        SELECT f.*, r.basis_resolution_reason
+        FROM screener_financials f
+        JOIN screener_statement_basis_resolution r
+          ON r.symbol = f.symbol
+         AND r.statement_basis = coalesce(nullif(lower(trim(f.statement_basis)), ''), 'standalone')
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS company_insight_tags (

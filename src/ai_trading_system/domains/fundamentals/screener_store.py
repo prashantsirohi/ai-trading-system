@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -11,7 +12,7 @@ from typing import Any
 
 import pandas as pd
 
-from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
+from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS, normalize_statement_basis
 from ai_trading_system.platform.db.paths import get_domain_paths
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ _READMODEL_TABLES = {
     "screener_market_valuation",
     "screener_company_snapshot",
     "screener_factor_snapshot",
+    "screener_sync_result",
 }
 
 
@@ -105,10 +107,23 @@ def default_screener_db_path(project_root: Path | str | None = None) -> Path:
 class ScreenerFinancialsStore:
     """Repository for Screener Excel financials stored in SQLite."""
 
-    def __init__(self, db_path: str | Path | None = None, *, initialize: bool = True):
+    def __init__(
+        self,
+        db_path: str | Path | None = None,
+        *,
+        initialize: bool = True,
+        valuation_migration_backup_dir: str | Path | None = None,
+    ):
         self.db_path = Path(db_path) if db_path is not None else default_screener_db_path()
         if initialize:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            if self.requires_statement_basis_migration():
+                if valuation_migration_backup_dir is None:
+                    raise RuntimeError(
+                        "Screener financial or valuation tables require a basis-key migration; rerun with an "
+                        "explicit statement-basis migration backup directory"
+                    )
+                self.backup_for_statement_basis_migration(valuation_migration_backup_dir)
             self.init_db()
 
     def connect(self) -> sqlite3.Connection:
@@ -138,6 +153,7 @@ class ScreenerFinancialsStore:
                 CREATE TABLE IF NOT EXISTS screener_market_valuation (
                     symbol TEXT NOT NULL,
                     date DATE NOT NULL,
+                    statement_basis TEXT NOT NULL DEFAULT 'standalone',
                     price REAL,
                     market_cap_cr REAL,
                     pe REAL,
@@ -147,10 +163,11 @@ class ScreenerFinancialsStore:
                     source TEXT NOT NULL DEFAULT 'screener',
                     sync_batch_id TEXT,
                     synced_at TIMESTAMP NOT NULL,
-                    PRIMARY KEY (symbol, date, source)
+                    PRIMARY KEY (symbol, date, statement_basis, source)
                 )
                 """
             )
+            _migrate_valuation_basis_table(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS screener_metric_catalog (
@@ -165,6 +182,15 @@ class ScreenerFinancialsStore:
                 )
                 """
             )
+            for metric_id, info in PREDEFINED_METRICS.items():
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO screener_metric_catalog (
+                        metric_id, metric_name, category, statement_type, unit, scale, higher_is_better
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (metric_id, *info),
+                )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS screener_financials (
@@ -189,6 +215,7 @@ class ScreenerFinancialsStore:
                 "statement_basis",
                 "TEXT NOT NULL DEFAULT 'standalone'",
             )
+            _migrate_financial_basis_table(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS screener_sync_batch (
@@ -217,6 +244,21 @@ class ScreenerFinancialsStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS screener_sync_result (
+                    sync_batch_id TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    requested_basis TEXT NOT NULL,
+                    detected_basis TEXT,
+                    export_path TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL,
+                    PRIMARY KEY (sync_batch_id, symbol),
+                    FOREIGN KEY (sync_batch_id) REFERENCES screener_sync_batch(sync_batch_id)
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS screener_factor_snapshot (
                     symbol TEXT NOT NULL,
                     snapshot_date DATE NOT NULL,
@@ -228,16 +270,54 @@ class ScreenerFinancialsStore:
                 )
                 """
             )
-            for metric_id, info in PREDEFINED_METRICS.items():
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO screener_metric_catalog (
-                        metric_id, metric_name, category, statement_type, unit, scale, higher_is_better
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (metric_id, *info),
-                )
             conn.commit()
+
+    def requires_statement_basis_migration(self) -> bool:
+        if not self.db_path.exists() or self.db_path.stat().st_size == 0:
+            return False
+        conn = sqlite3.connect(self.db_path)
+        try:
+            return any(
+                _table_primary_key_missing_basis(conn, table_name)
+                for table_name in ("screener_financials", "screener_market_valuation")
+            )
+        finally:
+            conn.close()
+
+    def requires_valuation_basis_migration(self) -> bool:
+        """Backward-compatible alias for callers checking the legacy migration gate."""
+
+        return self.requires_statement_basis_migration()
+
+    def backup_for_statement_basis_migration(self, backup_dir: str | Path) -> Path:
+        resolved_dir = Path(backup_dir).expanduser().resolve()
+        resolved_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup_path = resolved_dir / f"{self.db_path.stem}.pre_statement_basis.{timestamp}{self.db_path.suffix}"
+        if backup_path.exists():
+            raise FileExistsError(f"Refusing to overwrite migration backup: {backup_path}")
+        source = sqlite3.connect(self.db_path)
+        destination = sqlite3.connect(backup_path)
+        try:
+            source.backup(destination)
+            integrity = destination.execute("PRAGMA integrity_check").fetchone()
+        finally:
+            destination.close()
+            source.close()
+        if not integrity or str(integrity[0]).lower() != "ok":
+            backup_path.unlink(missing_ok=True)
+            raise RuntimeError("Screener valuation migration backup integrity verification failed")
+        checksum = _sha256_file(backup_path)
+        backup_path.with_suffix(f"{backup_path.suffix}.sha256").write_text(
+            f"{checksum}  {backup_path.name}\n",
+            encoding="utf-8",
+        )
+        return backup_path
+
+    def backup_for_valuation_migration(self, backup_dir: str | Path) -> Path:
+        """Backward-compatible alias for the expanded statement-basis migration backup."""
+
+        return self.backup_for_statement_basis_migration(backup_dir)
 
     def begin_batch(self, sync_batch_id: str, *, symbols_total: int, exports_dir: Path, force: bool) -> None:
         now = _utc_now()
@@ -278,20 +358,65 @@ class ScreenerFinancialsStore:
             )
             conn.commit()
 
-    def get_synced_symbols(self) -> set[str]:
+    def record_sync_result(
+        self,
+        sync_batch_id: str,
+        symbol: str,
+        *,
+        requested_basis: str,
+        detected_basis: str | None,
+        export_path: str | Path,
+        status: str = "succeeded",
+    ) -> None:
+        requested = normalize_statement_basis(requested_basis)
+        detected = normalize_statement_basis(detected_basis) if detected_basis is not None else None
         with self.connect() as conn:
-            rows = conn.execute("SELECT DISTINCT symbol FROM screener_company_snapshot").fetchall()
-        return {str(row["symbol"]).upper() for row in rows}
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO screener_sync_result (
+                    sync_batch_id, symbol, requested_basis, detected_basis, export_path, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sync_batch_id,
+                    symbol.upper().strip(),
+                    requested,
+                    detected,
+                    str(export_path),
+                    str(status).strip().lower(),
+                    _utc_now(),
+                ),
+            )
+            conn.commit()
+
+    def get_synced_symbols(self, *, requested_basis: str = DEFAULT_STATEMENT_BASIS) -> set[str]:
+        basis = normalize_statement_basis(requested_basis)
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT symbol
+                FROM screener_sync_result
+                WHERE requested_basis = ? AND status = 'succeeded'
+                """,
+                (basis,),
+            ).fetchall()
+            symbols = {str(row["symbol"]).upper() for row in rows}
+            if basis == DEFAULT_STATEMENT_BASIS:
+                legacy_rows = conn.execute("SELECT DISTINCT symbol FROM screener_company_snapshot").fetchall()
+                symbols.update(str(row["symbol"]).upper() for row in legacy_rows)
+        return symbols
 
     def save_company_financials(
         self,
         symbol: str,
         data: dict[str, Any],
         *,
+        statement_basis: str = DEFAULT_STATEMENT_BASIS,
         sync_batch_id: str | None = None,
         as_of_date: str | None = None,
     ) -> None:
         symbol = symbol.upper().strip()
+        basis = normalize_statement_basis(statement_basis)
         synced_at = _utc_now()
         snapshot_date = as_of_date or datetime.now(timezone.utc).date().isoformat()
         metadata = data.get("metadata", {})
@@ -304,18 +429,18 @@ class ScreenerFinancialsStore:
                 """,
                 (symbol, snapshot_date, _to_float(metadata.get("face_value")), _to_float(metadata.get("market_cap_cr")), sync_batch_id, synced_at),
             )
-            valuation_rows = self._compute_market_valuations(symbol, data, synced_at, sync_batch_id)
+            valuation_rows = self._compute_market_valuations(symbol, data, basis, synced_at, sync_batch_id)
             if valuation_rows:
                 conn.executemany(
                     """
                     INSERT OR REPLACE INTO screener_market_valuation (
-                        symbol, date, price, market_cap_cr, pe, pb, ev_ebitda,
+                        symbol, date, statement_basis, price, market_cap_cr, pe, pb, ev_ebitda,
                         dividend_yield, source, sync_batch_id, synced_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     valuation_rows,
                 )
-            financial_rows = self._financial_rows(conn, symbol, data, synced_at, sync_batch_id)
+            financial_rows = self._financial_rows(conn, symbol, data, basis, synced_at, sync_batch_id)
             if financial_rows:
                 conn.executemany(
                     """
@@ -355,8 +480,14 @@ class ScreenerFinancialsStore:
                 return pd.DataFrame()
             return pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
 
-    def get_company_data(self, symbol: str) -> dict[str, Any] | None:
+    def get_company_data(
+        self,
+        symbol: str,
+        *,
+        statement_basis: str = DEFAULT_STATEMENT_BASIS,
+    ) -> dict[str, Any] | None:
         symbol = symbol.upper().strip()
+        basis = normalize_statement_basis(statement_basis)
         with self.connect() as conn:
             meta = conn.execute(
                 """
@@ -374,13 +505,16 @@ class ScreenerFinancialsStore:
                 SELECT f.period_type, f.report_date, f.value, c.metric_name, c.statement_type
                 FROM screener_financials f
                 JOIN screener_metric_catalog c ON c.metric_id = f.metric_id
-                WHERE f.symbol = ?
+                WHERE f.symbol = ? AND f.statement_basis = ?
                 """,
-                (symbol,),
+                (symbol, basis),
             ).fetchall()
             prices = conn.execute(
-                "SELECT date, price FROM screener_market_valuation WHERE symbol = ? ORDER BY date",
-                (symbol,),
+                """
+                SELECT date, price FROM screener_market_valuation
+                WHERE symbol = ? AND statement_basis = ? ORDER BY date
+                """,
+                (symbol, basis),
             ).fetchall()
         result: dict[str, Any] = {
             "metadata": {"symbol": symbol, **dict(meta)},
@@ -400,6 +534,7 @@ class ScreenerFinancialsStore:
         conn: sqlite3.Connection,
         symbol: str,
         data: dict[str, Any],
+        statement_basis: str,
         synced_at: str,
         sync_batch_id: str | None,
     ) -> list[tuple[Any, ...]]:
@@ -426,7 +561,7 @@ class ScreenerFinancialsStore:
                             symbol,
                             period_type,
                             str(report_date)[:10],
-                            DEFAULT_STATEMENT_BASIS,
+                            statement_basis,
                             metric_id,
                             numeric,
                             _available_at(period_type, str(report_date)[:10]),
@@ -441,6 +576,7 @@ class ScreenerFinancialsStore:
         self,
         symbol: str,
         data: dict[str, Any],
+        statement_basis: str,
         synced_at: str,
         sync_batch_id: str | None,
     ) -> list[tuple[Any, ...]]:
@@ -469,7 +605,22 @@ class ScreenerFinancialsStore:
             pb = _safe_div(mcap, book)
             ev_ebitda = _safe_div((mcap or 0.0) + borrowings - cash, operating_profit)
             dividend_yield = (_safe_div(dividend, mcap) or 0.0) * 100.0 if dividend is not None else None
-            rows.append((symbol, str(date_str)[:10], p, mcap, pe, pb, ev_ebitda, dividend_yield, "screener", sync_batch_id, synced_at))
+            rows.append(
+                (
+                    symbol,
+                    str(date_str)[:10],
+                    statement_basis,
+                    p,
+                    mcap,
+                    pe,
+                    pb,
+                    ev_ebitda,
+                    dividend_yield,
+                    "screener",
+                    sync_batch_id,
+                    synced_at,
+                )
+            )
         return rows
 
 
@@ -498,6 +649,114 @@ def _ensure_sqlite_column(conn: sqlite3.Connection, table_name: str, column_name
     columns = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
     if column_name not in columns:
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+
+def _migrate_valuation_basis_table(conn: sqlite3.Connection) -> None:
+    columns = conn.execute("PRAGMA table_info(screener_market_valuation)").fetchall()
+    primary_key = [str(row[1]) for row in sorted(columns, key=lambda row: int(row[5])) if int(row[5]) > 0]
+    if "statement_basis" in primary_key:
+        return
+    before_count = int(conn.execute("SELECT COUNT(*) FROM screener_market_valuation").fetchone()[0])
+    conn.execute(
+        """
+        CREATE TABLE screener_market_valuation_basis_new (
+            symbol TEXT NOT NULL,
+            date DATE NOT NULL,
+            statement_basis TEXT NOT NULL DEFAULT 'standalone',
+            price REAL,
+            market_cap_cr REAL,
+            pe REAL,
+            pb REAL,
+            ev_ebitda REAL,
+            dividend_yield REAL,
+            source TEXT NOT NULL DEFAULT 'screener',
+            sync_batch_id TEXT,
+            synced_at TIMESTAMP NOT NULL,
+            PRIMARY KEY (symbol, date, statement_basis, source)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO screener_market_valuation_basis_new (
+            symbol, date, statement_basis, price, market_cap_cr, pe, pb, ev_ebitda,
+            dividend_yield, source, sync_batch_id, synced_at
+        )
+        SELECT symbol, date, 'standalone', price, market_cap_cr, pe, pb, ev_ebitda,
+               dividend_yield, source, sync_batch_id, synced_at
+        FROM screener_market_valuation
+        """
+    )
+    after_count = int(conn.execute("SELECT COUNT(*) FROM screener_market_valuation_basis_new").fetchone()[0])
+    if after_count != before_count:
+        raise RuntimeError(
+            f"Screener valuation migration row-count mismatch: before={before_count} after={after_count}"
+        )
+    conn.execute("DROP TABLE screener_market_valuation")
+    conn.execute("ALTER TABLE screener_market_valuation_basis_new RENAME TO screener_market_valuation")
+
+
+def _migrate_financial_basis_table(conn: sqlite3.Connection) -> None:
+    if not _table_primary_key_missing_basis(conn, "screener_financials"):
+        return
+    before_count = int(conn.execute("SELECT COUNT(*) FROM screener_financials").fetchone()[0])
+    conn.execute(
+        """
+        CREATE TABLE screener_financials_basis_new (
+            symbol TEXT NOT NULL,
+            period_type TEXT NOT NULL,
+            report_date DATE NOT NULL,
+            statement_basis TEXT NOT NULL DEFAULT 'standalone',
+            metric_id TEXT NOT NULL,
+            value REAL,
+            available_at DATE NOT NULL,
+            source TEXT DEFAULT 'screener',
+            sync_batch_id TEXT,
+            synced_at TIMESTAMP NOT NULL,
+            PRIMARY KEY (symbol, period_type, report_date, statement_basis, metric_id, available_at),
+            FOREIGN KEY (metric_id) REFERENCES screener_metric_catalog(metric_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO screener_financials_basis_new (
+            symbol, period_type, report_date, statement_basis, metric_id, value,
+            available_at, source, sync_batch_id, synced_at
+        )
+        SELECT symbol, period_type, report_date,
+               coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone'),
+               metric_id, value, available_at, source, sync_batch_id, synced_at
+        FROM screener_financials
+        """
+    )
+    after_count = int(conn.execute("SELECT COUNT(*) FROM screener_financials_basis_new").fetchone()[0])
+    if after_count != before_count:
+        raise RuntimeError(
+            f"Screener financial migration row-count mismatch: before={before_count} after={after_count}"
+        )
+    conn.execute("DROP TABLE screener_financials")
+    conn.execute("ALTER TABLE screener_financials_basis_new RENAME TO screener_financials")
+
+
+def _table_primary_key_missing_basis(conn: sqlite3.Connection, table_name: str) -> bool:
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    if exists is None:
+        return False
+    columns = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    primary_key = [str(row[1]) for row in sorted(columns, key=lambda row: int(row[5])) if int(row[5]) > 0]
+    return "statement_basis" not in primary_key
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _available_at(period_type: str, report_date: str) -> str:

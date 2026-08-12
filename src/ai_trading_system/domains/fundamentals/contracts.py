@@ -3,6 +3,16 @@
 from __future__ import annotations
 
 DEFAULT_STATEMENT_BASIS = "standalone"
+SUPPORTED_STATEMENT_BASES = ("standalone", "consolidated")
+PREFERRED_AVAILABLE_STATEMENT_POLICY = "preferred_available"
+
+
+def normalize_statement_basis(value: object) -> str:
+    basis = str(value or "").strip().lower()
+    if basis not in SUPPORTED_STATEMENT_BASES:
+        supported = ", ".join(SUPPORTED_STATEMENT_BASES)
+        raise ValueError(f"Unsupported statement basis {value!r}; expected one of: {supported}")
+    return basis
 
 FUNDAMENTAL_SCORE_COLUMNS = [
     "quality_score",

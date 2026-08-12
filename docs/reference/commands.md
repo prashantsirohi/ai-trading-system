@@ -336,7 +336,7 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-research-recipe` | Research recipe runner |
 | `ai-trading-optimize` | Optimization runner |
 | `ai-trading-optimize-promote` | Optimization promotion workflow |
-| `ai-trading-fundamentals-sync` | Screener fundamentals sync |
+| `ai-trading-fundamentals-sync` | Basis-explicit Screener fundamentals sync (`--statement-basis` required) |
 | `ai-trading-fundamentals-refresh-readmodels` | Fundamentals read-model refresh |
 | `ai-trading-fundamentals-validate-exports` | Fundamentals export validation |
 | `ai-trading-valuation-refresh` | Valuation feature refresh |
@@ -349,6 +349,12 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-symbol-report` | Symbol research report |
 
 For any mutating repair, migration, backfill, promotion, or live execution command, inspect `--help`, confirm the target data domain, and take the required backup first.
+
+Screener sync accepts `--statement-basis standalone` or `consolidated`. When a
+legacy `screener_market_valuation` key is detected, also supply
+`--statement-basis-migration-backup-dir <directory>`; the deprecated
+`--valuation-migration-backup-dir` spelling remains an alias. The command refuses to migrate
+without creating and checksumming that backup.
 
 For a read-only Phase 4A copied-store smoke with immutable evidence:
 

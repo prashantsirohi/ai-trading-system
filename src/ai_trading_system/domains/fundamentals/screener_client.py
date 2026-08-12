@@ -4,14 +4,48 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from ai_trading_system.platform.db.paths import get_domain_paths
+from ai_trading_system.domains.fundamentals.contracts import normalize_statement_basis
 
 logger = logging.getLogger(__name__)
+DEFAULT_DOWNLOAD_TIMEOUT_MS = 10_000
+
+
+@dataclass(frozen=True)
+class ScreenerDownloadResult:
+    path: Path
+    requested_basis: str
+    detected_basis: str
+
+
+@dataclass(frozen=True)
+class ScreenerFetchResult:
+    data: dict[str, Any]
+    export_path: Path
+    requested_basis: str
+    detected_basis: str
+
+
+class ScreenerHTTPError(RuntimeError):
+    """Raised before page parsing when Screener returns a non-success response."""
+
+    def __init__(self, status: int, url: str, *, retry_after: float | None = None):
+        super().__init__(f"Screener request failed with HTTP {status}: {url}")
+        self.status = int(status)
+        self.url = str(url)
+        self.retry_after = retry_after
+
+
+class ScreenerRateLimitError(ScreenerHTTPError):
+    """Retryable HTTP 429 response."""
 
 
 class ScreenerClient:
@@ -35,20 +69,52 @@ class ScreenerClient:
         self.storage_state_path = Path(storage_state_path) if storage_state_path else self.data_dir / "cache" / "screener_auth_state.json"
         self.storage_state_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def excel_path(self, ticker: str) -> Path:
-        return self.exports_dir / f"{ticker.upper().strip()}_screener.xlsx"
+    def excel_path(self, ticker: str, *, statement_basis: str) -> Path:
+        ticker = ticker.upper().strip()
+        basis = normalize_statement_basis(statement_basis)
+        suffix = "_consolidated" if basis == "consolidated" else ""
+        return self.exports_dir / f"{ticker}{suffix}_screener.xlsx"
 
-    def fetch_company_data(self, ticker: str, *, force_download: bool = False, allow_download: bool = False) -> dict[str, Any]:
-        path = self.download_excel(ticker, force_download=force_download) if allow_download else self.excel_path(ticker)
+    def fetch_company_data(
+        self,
+        ticker: str,
+        *,
+        statement_basis: str,
+        force_download: bool = False,
+        allow_download: bool = False,
+    ) -> ScreenerFetchResult:
+        requested_basis = normalize_statement_basis(statement_basis)
+        download = (
+            self.download_excel(ticker, statement_basis=requested_basis, force_download=force_download)
+            if allow_download
+            else ScreenerDownloadResult(
+                path=self.excel_path(ticker, statement_basis=requested_basis),
+                requested_basis=requested_basis,
+                detected_basis=requested_basis,
+            )
+        )
+        path = download.path
         if not path.exists():
             raise FileNotFoundError(f"Screener export not found for {ticker}: {path}")
-        return self.parse_excel(path)
+        return ScreenerFetchResult(
+            data=self.parse_excel(path),
+            export_path=path,
+            requested_basis=download.requested_basis,
+            detected_basis=download.detected_basis,
+        )
 
-    def download_excel(self, ticker: str, *, force_download: bool = False) -> Path:
+    def download_excel(
+        self,
+        ticker: str,
+        *,
+        statement_basis: str,
+        force_download: bool = False,
+    ) -> ScreenerDownloadResult:
         ticker = ticker.upper().strip()
-        output_path = self.excel_path(ticker)
+        requested_basis = normalize_statement_basis(statement_basis)
+        output_path = self.excel_path(ticker, statement_basis=requested_basis)
         if output_path.exists() and not force_download:
-            return output_path
+            return ScreenerDownloadResult(output_path, requested_basis, requested_basis)
         if not self.username or not self.password:
             raise RuntimeError("SCREENER_USERNAME and SCREENER_PASSWORD are required for live downloads")
         try:
@@ -72,20 +138,42 @@ class ScreenerClient:
                 page.click("button[type='submit']")
                 page.wait_for_url("https://www.screener.in/dash/")
                 context.storage_state(path=str(self.storage_state_path))
-            page.goto(f"https://www.screener.in/company/{ticker}/")
+            company_url = _company_url(ticker, requested_basis)
+            response = page.goto(company_url, wait_until="domcontentloaded")
+            _validate_company_response(response, company_url)
             if "Page not found" in page.title() or "404" in page.title():
                 raise ValueError(f"Company ticker '{ticker}' not found on Screener.in")
+            try:
+                detected_basis = _detect_rendered_basis(page)
+            except RuntimeError:
+                if requested_basis != "consolidated" or _has_rendered_financial_periods(page):
+                    raise
+                standalone_url = _company_url(ticker, "standalone")
+                response = page.goto(standalone_url, wait_until="domcontentloaded")
+                _validate_company_response(response, standalone_url)
+                if "Page not found" in page.title() or "404" in page.title():
+                    raise ValueError(f"Company ticker '{ticker}' not found on Screener.in")
+                try:
+                    detected_basis = _detect_rendered_basis(page)
+                except RuntimeError:
+                    if not _has_rendered_financial_periods(page):
+                        raise RuntimeError(
+                            "Unable to detect Screener statement basis: consolidated page has no toggle or "
+                            "financial periods, and the canonical standalone page is also empty"
+                        ) from None
+                    detected_basis = "standalone"
+            output_path = self.excel_path(ticker, statement_basis=detected_basis)
             button_selector = (
                 "button:has-text('EXPORT TO EXCEL'), "
                 "button:has-text('Export to Excel'), "
                 "button:has-text('Export to excel')"
             )
             page.wait_for_selector(button_selector, timeout=10000)
-            with page.expect_download() as download_info:
+            with page.expect_download(timeout=DEFAULT_DOWNLOAD_TIMEOUT_MS) as download_info:
                 page.click(button_selector)
             download_info.value.save_as(str(output_path))
             browser.close()
-        return output_path
+        return ScreenerDownloadResult(output_path, requested_basis, detected_basis)
 
     def parse_excel(self, file_path: str | Path) -> dict[str, Any]:
         path = Path(file_path)
@@ -186,4 +274,63 @@ def _values_by_date(section_dates: list[tuple[int, str]], row: pd.Series) -> dic
     }
 
 
-__all__ = ["ScreenerClient"]
+def _detect_rendered_basis(page: Any) -> str:
+    standalone_toggle = page.locator("a", has_text="View Standalone").count() > 0
+    consolidated_toggle = page.locator("a", has_text="View Consolidated").count() > 0
+    if standalone_toggle == consolidated_toggle:
+        raise RuntimeError(
+            "Unable to detect Screener statement basis: expected exactly one of "
+            "'View Standalone' or 'View Consolidated'"
+        )
+    return "consolidated" if standalone_toggle else "standalone"
+
+
+def _has_rendered_financial_periods(page: Any) -> bool:
+    selectors = (
+        "#quarters table thead th:not(:first-child), "
+        "section#quarters table thead th:not(:first-child), "
+        "#profit-loss table thead th:not(:first-child), "
+        "section#profit-loss table thead th:not(:first-child)"
+    )
+    return page.locator(selectors).count() > 0
+
+
+def _company_url(ticker: str, statement_basis: str) -> str:
+    basis = normalize_statement_basis(statement_basis)
+    suffix = "consolidated/" if basis == "consolidated" else ""
+    return f"https://www.screener.in/company/{ticker.upper().strip()}/{suffix}"
+
+
+def _validate_company_response(response: Any, url: str) -> None:
+    if response is None:
+        raise RuntimeError(f"Screener navigation returned no HTTP response: {url}")
+    status = int(response.status)
+    if status == 200:
+        return
+    retry_after = _retry_after_seconds(response.headers.get("retry-after"))
+    error_type = ScreenerRateLimitError if status == 429 else ScreenerHTTPError
+    raise error_type(status, url, retry_after=retry_after)
+
+
+def _retry_after_seconds(value: object) -> float | None:
+    try:
+        seconds = float(str(value).strip())
+    except (TypeError, ValueError):
+        try:
+            retry_at = parsedate_to_datetime(str(value).strip())
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+    else:
+        return max(0.0, seconds)
+
+
+__all__ = [
+    "ScreenerClient",
+    "ScreenerDownloadResult",
+    "ScreenerFetchResult",
+    "ScreenerHTTPError",
+    "ScreenerRateLimitError",
+]

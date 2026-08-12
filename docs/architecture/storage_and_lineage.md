@@ -27,6 +27,18 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 | Master data | `$DATA_ROOT/masterdata.db` | Ingest/master-data services | Shared instrument and symbol identity data. |
 | Fundamentals | `$DATA_ROOT/fundamentals/` | Fundamentals domain | Imported source snapshots and fundamental read models. |
 
+The Screener SQLite store under `$DATA_ROOT/fundamentals/` records the detected
+statement basis on financial facts and derived market valuations. Financial
+facts use `(symbol, period_type, report_date, statement_basis, metric_id,
+available_at)` identity; valuation rows use `(symbol, date, statement_basis,
+source)`. A legacy financial table whose column exists but whose primary key
+omits `statement_basis` is rebuilt to the same basis-aware identity before any
+consolidated write. `screener_sync_result` retains requested-versus-detected basis and
+export-path evidence for each attempted symbol. Existing valuation stores with
+either legacy key refuse implicit upgrade: the sync requires an explicit migration
+backup directory, creates a consistent SQLite backup plus SHA-256 sidecar, then
+performs and row-count-verifies the transactional table rebuild.
+
 Do not infer that execution or legacy candidate-tracker tables live in the control plane merely because their artifacts are registered there. The canonical opportunity registry is a distinct control-plane model and does not migrate or synchronize the existing tracker.
 
 ## Runtime trees

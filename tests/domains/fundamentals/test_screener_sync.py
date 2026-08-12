@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from ai_trading_system.domains.fundamentals import screener_sync
+from ai_trading_system.domains.fundamentals.screener_client import ScreenerFetchResult, ScreenerRateLimitError
 from ai_trading_system.domains.fundamentals.screener_store import ScreenerFinancialsStore
 from ai_trading_system.domains.fundamentals.screener_sync import build_parser
 
@@ -15,25 +16,33 @@ def test_screener_sync_defaults_follow_data_root(monkeypatch, tmp_path: Path) ->
     data_root.mkdir()
     monkeypatch.setenv("DATA_ROOT", str(data_root))
 
-    args = build_parser().parse_args([])
+    args = build_parser().parse_args(["--statement-basis", "standalone"])
 
     assert Path(args.db_path) == data_root / "fundamentals" / "screener_financials.db"
     assert Path(args.exports_dir) == data_root / "fundamentals" / "exports"
     assert Path(args.master_db_path) == data_root / "masterdata.db"
 
 
+def test_screener_sync_requires_explicit_statement_basis() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args([])
+
+
 def test_screener_sync_reports_per_symbol_failures(monkeypatch, tmp_path: Path) -> None:
     class FakeStore:
-        def __init__(self, db_path):
+        def __init__(self, db_path, **_kwargs):
             self.db_path = Path(db_path)
 
-        def get_synced_symbols(self):
+        def get_synced_symbols(self, **_kwargs):
             return set()
 
         def begin_batch(self, *_args, **_kwargs):
             return None
 
         def record_error(self, *_args, **_kwargs):
+            return None
+
+        def record_sync_result(self, *_args, **_kwargs):
             return None
 
         def finish_batch(self, *_args, **_kwargs):
@@ -46,6 +55,9 @@ def test_screener_sync_reports_per_symbol_failures(monkeypatch, tmp_path: Path) 
         def fetch_company_data(self, symbol, **_kwargs):
             raise RuntimeError(f"download blocked for {symbol}")
 
+        def excel_path(self, symbol, **_kwargs):
+            return tmp_path / f"{symbol}_screener.xlsx"
+
     monkeypatch.setattr(screener_sync, "ScreenerFinancialsStore", FakeStore)
     monkeypatch.setattr(screener_sync, "ScreenerClient", FakeClient)
     monkeypatch.setattr(screener_sync, "_load_symbols", lambda *_args, **_kwargs: ["AAA"])
@@ -53,6 +65,7 @@ def test_screener_sync_reports_per_symbol_failures(monkeypatch, tmp_path: Path) 
     messages: list[str] = []
 
     result = screener_sync.run_sync(
+        statement_basis="standalone",
         db_path=tmp_path / "screener_financials.db",
         master_db_path=tmp_path / "masterdata.db",
         exports_dir=tmp_path / "exports",
@@ -94,6 +107,7 @@ def test_symbols_missing_quarterly_report_date_selects_only_missing(tmp_path: Pa
         db_path,
         ["AAA", "BBB"],
         report_date="2025-12-31",
+        statement_basis="standalone",
     )
 
     assert missing == ["BBB"]
@@ -109,7 +123,7 @@ def test_missing_current_results_reparses_local_export_when_expected_quarter_pre
 
         def fetch_company_data(self, symbol, **kwargs):
             calls.append((symbol, kwargs))
-            return _company_data("2025-12-31")
+            return _fetch_result(tmp_path, symbol, _company_data("2025-12-31"))
 
     calls: list[tuple[str, dict]] = []
     db_path = tmp_path / "screener_financials.db"
@@ -117,6 +131,7 @@ def test_missing_current_results_reparses_local_export_when_expected_quarter_pre
     monkeypatch.setattr(screener_sync, "_load_symbols", lambda *_args, **_kwargs: ["AAA"])
 
     result = screener_sync.run_sync(
+        statement_basis="standalone",
         db_path=db_path,
         master_db_path=tmp_path / "masterdata.db",
         exports_dir=tmp_path / "exports",
@@ -128,7 +143,12 @@ def test_missing_current_results_reparses_local_export_when_expected_quarter_pre
     assert result["succeeded"] == 1
     assert result["failed"] == 0
     assert result["expected_report_date"] == "2025-12-31"
-    assert calls == [("AAA", {"force_download": False, "allow_download": False})]
+    assert calls == [
+        (
+            "AAA",
+            {"statement_basis": "standalone", "force_download": False, "allow_download": False},
+        )
+    ]
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
             """
@@ -152,13 +172,14 @@ def test_missing_current_results_download_forces_fresh_export_when_allowed(
 
         def fetch_company_data(self, symbol, **kwargs):
             calls.append((symbol, kwargs))
-            return _company_data("2025-12-31")
+            return _fetch_result(tmp_path, symbol, _company_data("2025-12-31"))
 
     calls: list[tuple[str, dict]] = []
     monkeypatch.setattr(screener_sync, "ScreenerClient", FakeClient)
     monkeypatch.setattr(screener_sync, "_load_symbols", lambda *_args, **_kwargs: ["AAA"])
 
     result = screener_sync.run_sync(
+        statement_basis="standalone",
         db_path=tmp_path / "screener_financials.db",
         master_db_path=tmp_path / "masterdata.db",
         exports_dir=tmp_path / "exports",
@@ -169,7 +190,12 @@ def test_missing_current_results_download_forces_fresh_export_when_allowed(
     )
 
     assert result["succeeded"] == 1
-    assert calls == [("AAA", {"force_download": True, "allow_download": True})]
+    assert calls == [
+        (
+            "AAA",
+            {"statement_basis": "standalone", "force_download": True, "allow_download": True},
+        )
+    ]
 
 
 def test_missing_current_results_skips_stale_export_without_expected_quarter(
@@ -182,7 +208,7 @@ def test_missing_current_results_skips_stale_export_without_expected_quarter(
 
         def fetch_company_data(self, _symbol, **_kwargs):
             calls.append(_symbol)
-            return _company_data("2025-09-30")
+            return _fetch_result(tmp_path, _symbol, _company_data("2025-09-30"))
 
     calls: list[str] = []
     db_path = tmp_path / "screener_financials.db"
@@ -190,6 +216,7 @@ def test_missing_current_results_skips_stale_export_without_expected_quarter(
     monkeypatch.setattr(screener_sync, "_load_symbols", lambda *_args, **_kwargs: ["AAA"])
 
     result = screener_sync.run_sync(
+        statement_basis="standalone",
         db_path=db_path,
         master_db_path=tmp_path / "masterdata.db",
         exports_dir=tmp_path / "exports",
@@ -216,7 +243,7 @@ def test_sync_retries_transient_symbol_failure(monkeypatch, tmp_path: Path) -> N
             calls.append(symbol)
             if len(calls) == 1:
                 raise TimeoutError("temporary browser timeout")
-            return _company_data("2025-12-31")
+            return _fetch_result(tmp_path, symbol, _company_data("2025-12-31"))
 
     calls: list[str] = []
     messages: list[str] = []
@@ -225,6 +252,7 @@ def test_sync_retries_transient_symbol_failure(monkeypatch, tmp_path: Path) -> N
     monkeypatch.setattr(screener_sync, "DEFAULT_RETRY_BACKOFF_SEC", 0.0)
 
     result = screener_sync.run_sync(
+        statement_basis="standalone",
         db_path=tmp_path / "screener_financials.db",
         master_db_path=tmp_path / "masterdata.db",
         exports_dir=tmp_path / "exports",
@@ -241,6 +269,43 @@ def test_sync_retries_transient_symbol_failure(monkeypatch, tmp_path: Path) -> N
     assert any("retry attempt 2/3" in message for message in messages)
 
 
+def test_sync_honors_retry_after_for_http_429(monkeypatch, tmp_path: Path) -> None:
+    class FakeClient:
+        def fetch_company_data(self, symbol, **_kwargs):
+            calls.append(symbol)
+            if len(calls) == 1:
+                raise ScreenerRateLimitError(429, "https://example.test", retry_after=7)
+            return _fetch_result(tmp_path, symbol, _company_data("2025-12-31"))
+
+    class FakeStore:
+        def save_company_financials(self, *_args, **_kwargs):
+            return None
+
+        def record_sync_result(self, *_args, **_kwargs):
+            return None
+
+    calls: list[str] = []
+    delays: list[float] = []
+    monkeypatch.setattr(screener_sync.time, "sleep", delays.append)
+
+    detected = screener_sync._sync_symbol_with_retries(
+        client=FakeClient(),
+        store=FakeStore(),
+        symbol="AAA",
+        statement_basis="standalone",
+        force_download=True,
+        allow_download=True,
+        expected_report_date=None,
+        sync_batch_id="batch",
+        progress=None,
+        label="AAA",
+    )
+
+    assert detected == "standalone"
+    assert calls == ["AAA", "AAA"]
+    assert delays == [7.0]
+
+
 def test_sync_records_failure_after_three_attempts(monkeypatch, tmp_path: Path) -> None:
     class FakeClient:
         def __init__(self, **_kwargs):
@@ -250,6 +315,9 @@ def test_sync_records_failure_after_three_attempts(monkeypatch, tmp_path: Path) 
             calls.append(symbol)
             raise TimeoutError("browser timeout")
 
+        def excel_path(self, symbol, **_kwargs):
+            return tmp_path / f"{symbol}_screener.xlsx"
+
     calls: list[str] = []
     db_path = tmp_path / "screener_financials.db"
     monkeypatch.setattr(screener_sync, "ScreenerClient", FakeClient)
@@ -257,6 +325,7 @@ def test_sync_records_failure_after_three_attempts(monkeypatch, tmp_path: Path) 
     monkeypatch.setattr(screener_sync, "DEFAULT_RETRY_BACKOFF_SEC", 0.0)
 
     result = screener_sync.run_sync(
+        statement_basis="standalone",
         db_path=db_path,
         master_db_path=tmp_path / "masterdata.db",
         exports_dir=tmp_path / "exports",
@@ -275,10 +344,10 @@ def test_sync_records_failure_after_three_attempts(monkeypatch, tmp_path: Path) 
 
 def test_default_sync_still_skips_already_synced_symbols(monkeypatch, tmp_path: Path) -> None:
     class FakeStore:
-        def __init__(self, _db_path):
+        def __init__(self, _db_path, **_kwargs):
             pass
 
-        def get_synced_symbols(self):
+        def get_synced_symbols(self, **_kwargs):
             return {"AAA"}
 
         def begin_batch(self, *_args, **_kwargs):
@@ -286,6 +355,9 @@ def test_default_sync_still_skips_already_synced_symbols(monkeypatch, tmp_path: 
 
         def save_company_financials(self, symbol, *_args, **_kwargs):
             saved.append(symbol)
+
+        def record_sync_result(self, *_args, **_kwargs):
+            return None
 
         def finish_batch(self, *_args, **_kwargs):
             return None
@@ -296,7 +368,10 @@ def test_default_sync_still_skips_already_synced_symbols(monkeypatch, tmp_path: 
 
         def fetch_company_data(self, symbol, **_kwargs):
             fetched.append(symbol)
-            return _company_data("2025-12-31")
+            return _fetch_result(tmp_path, symbol, _company_data("2025-12-31"))
+
+        def excel_path(self, symbol, **_kwargs):
+            return tmp_path / f"{symbol}_screener.xlsx"
 
     fetched: list[str] = []
     saved: list[str] = []
@@ -305,6 +380,7 @@ def test_default_sync_still_skips_already_synced_symbols(monkeypatch, tmp_path: 
     monkeypatch.setattr(screener_sync, "_load_symbols", lambda *_args, **_kwargs: ["AAA", "BBB"])
 
     result = screener_sync.run_sync(
+        statement_basis="standalone",
         db_path=tmp_path / "screener_financials.db",
         master_db_path=tmp_path / "masterdata.db",
         exports_dir=tmp_path / "exports",
@@ -318,10 +394,10 @@ def test_default_sync_still_skips_already_synced_symbols(monkeypatch, tmp_path: 
 
 def test_sync_can_be_limited_to_requested_symbols(monkeypatch, tmp_path: Path) -> None:
     class FakeStore:
-        def __init__(self, _db_path):
+        def __init__(self, _db_path, **_kwargs):
             pass
 
-        def get_synced_symbols(self):
+        def get_synced_symbols(self, **_kwargs):
             return set()
 
         def begin_batch(self, *_args, **_kwargs):
@@ -329,6 +405,9 @@ def test_sync_can_be_limited_to_requested_symbols(monkeypatch, tmp_path: Path) -
 
         def save_company_financials(self, symbol, *_args, **_kwargs):
             saved.append(symbol)
+
+        def record_sync_result(self, *_args, **_kwargs):
+            return None
 
         def finish_batch(self, *_args, **_kwargs):
             return None
@@ -339,7 +418,10 @@ def test_sync_can_be_limited_to_requested_symbols(monkeypatch, tmp_path: Path) -
 
         def fetch_company_data(self, symbol, **_kwargs):
             fetched.append(symbol)
-            return _company_data("2025-12-31")
+            return _fetch_result(tmp_path, symbol, _company_data("2025-12-31"))
+
+        def excel_path(self, symbol, **_kwargs):
+            return tmp_path / f"{symbol}_screener.xlsx"
 
     fetched: list[str] = []
     saved: list[str] = []
@@ -348,6 +430,7 @@ def test_sync_can_be_limited_to_requested_symbols(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(screener_sync, "_load_symbols", lambda *_args, **_kwargs: ["AAA", "BBB", "CCC"])
 
     result = screener_sync.run_sync(
+        statement_basis="standalone",
         db_path=tmp_path / "screener_financials.db",
         master_db_path=tmp_path / "masterdata.db",
         exports_dir=tmp_path / "exports",
@@ -358,6 +441,66 @@ def test_sync_can_be_limited_to_requested_symbols(monkeypatch, tmp_path: Path) -
     assert result["succeeded"] == 1
     assert fetched == ["BBB"]
     assert saved == ["BBB"]
+
+
+def test_consolidated_request_stores_detected_standalone_and_is_resumable(monkeypatch, tmp_path: Path) -> None:
+    class FakeClient:
+        def __init__(self, *, exports_dir, **_kwargs):
+            self.exports_dir = Path(exports_dir)
+
+        def excel_path(self, symbol, *, statement_basis):
+            suffix = "_consolidated" if statement_basis == "consolidated" else ""
+            return self.exports_dir / f"{symbol}{suffix}_screener.xlsx"
+
+        def fetch_company_data(self, symbol, **_kwargs):
+            fetched.append(symbol)
+            return ScreenerFetchResult(
+                data=_company_data("2025-12-31"),
+                export_path=self.excel_path(symbol, statement_basis="standalone"),
+                requested_basis="consolidated",
+                detected_basis="standalone",
+            )
+
+    fetched: list[str] = []
+    db_path = tmp_path / "screener_financials.db"
+    monkeypatch.setattr(screener_sync, "ScreenerClient", FakeClient)
+    monkeypatch.setattr(screener_sync, "_load_symbols", lambda *_args, **_kwargs: ["AAA"])
+
+    first = screener_sync.run_sync(
+        statement_basis="consolidated",
+        db_path=db_path,
+        master_db_path=tmp_path / "masterdata.db",
+        exports_dir=tmp_path / "exports",
+        refresh_readmodels=False,
+    )
+    second = screener_sync.run_sync(
+        statement_basis="consolidated",
+        db_path=db_path,
+        master_db_path=tmp_path / "masterdata.db",
+        exports_dir=tmp_path / "exports",
+        refresh_readmodels=False,
+    )
+
+    assert first["succeeded"] == 1
+    assert first["detected_standalone"] == 1
+    assert second["total"] == 0
+    assert fetched == ["AAA"]
+    with sqlite3.connect(db_path) as conn:
+        bases = conn.execute("SELECT DISTINCT statement_basis FROM screener_financials").fetchall()
+        audit = conn.execute(
+            "SELECT requested_basis, detected_basis, status FROM screener_sync_result ORDER BY created_at LIMIT 1"
+        ).fetchone()
+    assert bases == [("standalone",)]
+    assert audit == ("consolidated", "standalone", "succeeded")
+
+
+def test_export_only_symbol_discovery_strips_consolidated_suffix(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    (exports / "RELIANCE_screener.xlsx").touch()
+    (exports / "RELIANCE_consolidated_screener.xlsx").touch()
+
+    assert screener_sync._load_symbols(tmp_path / "missing-master.db", exports_dir=exports) == ["RELIANCE"]
 
 
 def _company_data(report_date: str) -> dict:
@@ -382,3 +525,12 @@ def _company_data(report_date: str) -> dict:
         "cash_flow": {"Cash from Operating Activity": {"2025-03-31": 180}},
         "derived": {"Adjusted Equity Shares in Cr": {"2025-03-31": 10}},
     }
+
+
+def _fetch_result(tmp_path: Path, symbol: str, data: dict, *, basis: str = "standalone") -> ScreenerFetchResult:
+    return ScreenerFetchResult(
+        data=data,
+        export_path=tmp_path / f"{symbol}_screener.xlsx",
+        requested_basis=basis,
+        detected_basis=basis,
+    )

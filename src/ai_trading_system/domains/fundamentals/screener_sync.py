@@ -11,7 +11,8 @@ from datetime import date
 from pathlib import Path
 from typing import Callable
 
-from ai_trading_system.domains.fundamentals.screener_client import ScreenerClient
+from ai_trading_system.domains.fundamentals.contracts import SUPPORTED_STATEMENT_BASES, normalize_statement_basis
+from ai_trading_system.domains.fundamentals.screener_client import ScreenerClient, ScreenerRateLimitError
 from ai_trading_system.domains.fundamentals.screener_readmodels import refresh_fundamental_readmodels
 from ai_trading_system.domains.fundamentals.screener_store import ScreenerFinancialsStore
 from ai_trading_system.platform.db.paths import get_domain_paths
@@ -27,6 +28,7 @@ class MissingExpectedQuarterError(ValueError):
 
 def run_sync(
     *,
+    statement_basis: str,
     limit: int | None = None,
     force: bool = False,
     db_path: str | Path | None = None,
@@ -40,12 +42,17 @@ def run_sync(
     expected_report_date: str | None = None,
     symbols: list[str] | None = None,
     progress: Callable[[str], None] | None = None,
+    valuation_migration_backup_dir: str | Path | None = None,
 ) -> dict[str, int | str]:
+    requested_basis = normalize_statement_basis(statement_basis)
     paths = get_domain_paths()
     resolved_db_path = Path(db_path) if db_path is not None else paths.fundamentals_dir / "screener_financials.db"
     resolved_exports_dir = Path(exports_dir) if exports_dir is not None else paths.fundamentals_dir / "exports"
     resolved_master_db_path = Path(master_db_path) if master_db_path is not None else paths.master_db_path
-    store = ScreenerFinancialsStore(resolved_db_path)
+    store = ScreenerFinancialsStore(
+        resolved_db_path,
+        valuation_migration_backup_dir=valuation_migration_backup_dir,
+    )
     client = ScreenerClient(exports_dir=resolved_exports_dir)
     all_symbols = _load_symbols(
         resolved_master_db_path,
@@ -57,7 +64,7 @@ def run_sync(
         all_symbols = [
             symbol
             for symbol in requested_symbols
-            if symbol in available_symbols or (resolved_exports_dir / f"{symbol}_screener.xlsx").exists()
+            if symbol in available_symbols or client.excel_path(symbol, statement_basis=requested_basis).exists()
         ]
     resolved_expected_report_date = None
     if missing_current_results:
@@ -66,9 +73,10 @@ def run_sync(
             resolved_db_path,
             all_symbols,
             report_date=resolved_expected_report_date,
+            statement_basis=requested_basis,
         )
     else:
-        synced = set() if force else store.get_synced_symbols()
+        synced = set() if force else store.get_synced_symbols(requested_basis=requested_basis)
         symbols = [symbol for symbol in all_symbols if symbol not in synced]
     if limit is not None:
         symbols = symbols[: int(limit)]
@@ -80,6 +88,7 @@ def run_sync(
         f"sync_batch_id={batch_id} total={len(symbols)} "
         f"db_path={resolved_db_path} master_db_path={resolved_master_db_path} "
         f"exports_dir={resolved_exports_dir} allow_download={allow_download} force={force}"
+        f" statement_basis={requested_basis}"
         f"{f' missing_current_results=True expected_report_date={resolved_expected_report_date}' if missing_current_results else ''}",
     )
     if not symbols:
@@ -93,6 +102,8 @@ def run_sync(
     succeeded = 0
     failed = 0
     skipped = 0
+    detected_standalone = 0
+    detected_consolidated = 0
     for index, symbol in enumerate(symbols):
         item_start = time.monotonic()
         action = "download+parse" if allow_download else "parse export"
@@ -100,10 +111,11 @@ def run_sync(
         try:
             if index > 0 and throttle_sec > 0 and allow_download:
                 time.sleep(float(throttle_sec))
-            _sync_symbol_with_retries(
+            detected_basis = _sync_symbol_with_retries(
                 client=client,
                 store=store,
                 symbol=symbol,
+                statement_basis=requested_basis,
                 force_download=force or bool(missing_current_results and allow_download),
                 allow_download=allow_download,
                 expected_report_date=resolved_expected_report_date,
@@ -111,6 +123,16 @@ def run_sync(
                 progress=progress,
                 label=f"[{index + 1}/{len(symbols)}] {symbol}",
             )
+            if detected_basis == "consolidated":
+                detected_consolidated += 1
+            else:
+                detected_standalone += 1
+            if detected_basis != requested_basis:
+                _emit(
+                    progress,
+                    f"[{index + 1}/{len(symbols)}] {symbol}: statement basis fallback "
+                    f"requested={requested_basis} detected={detected_basis}",
+                )
             succeeded += 1
             _emit(
                 progress,
@@ -127,6 +149,14 @@ def run_sync(
             )
         except Exception as exc:  # noqa: BLE001
             failed += 1
+            store.record_sync_result(
+                batch_id,
+                symbol,
+                requested_basis=requested_basis,
+                detected_basis=None,
+                export_path=client.excel_path(symbol, statement_basis=requested_basis),
+                status="failed",
+            )
             store.record_error(batch_id, symbol, str(exc))
             _emit(
                 progress,
@@ -158,6 +188,8 @@ def run_sync(
         "succeeded": succeeded,
         "skipped": skipped,
         "failed": failed,
+        "detected_standalone": detected_standalone,
+        "detected_consolidated": detected_consolidated,
         "expected_report_date": resolved_expected_report_date or "",
     }
 
@@ -167,29 +199,52 @@ def _sync_symbol_with_retries(
     client: ScreenerClient,
     store: ScreenerFinancialsStore,
     symbol: str,
+    statement_basis: str,
     force_download: bool,
     allow_download: bool,
     expected_report_date: str | None,
     sync_batch_id: str,
     progress: Callable[[str], None] | None,
     label: str,
-) -> None:
+) -> str:
     last_exc: Exception | None = None
     for attempt in range(1, DEFAULT_SYMBOL_ATTEMPTS + 1):
         try:
             if attempt > 1:
                 _emit(progress, f"{label}: retry attempt {attempt}/{DEFAULT_SYMBOL_ATTEMPTS}")
-            data = client.fetch_company_data(
+            fetched = client.fetch_company_data(
                 symbol,
+                statement_basis=statement_basis,
                 force_download=force_download,
                 allow_download=allow_download,
             )
-            if expected_report_date is not None and not _has_quarterly_report_date(data, expected_report_date):
+            if expected_report_date is not None and not _has_quarterly_report_date(fetched.data, expected_report_date):
+                store.record_sync_result(
+                    sync_batch_id,
+                    symbol,
+                    requested_basis=fetched.requested_basis,
+                    detected_basis=fetched.detected_basis,
+                    export_path=fetched.export_path,
+                    status="skipped",
+                )
                 raise MissingExpectedQuarterError(
                     f"expected quarterly report_date={expected_report_date} not found in Screener export"
                 )
-            store.save_company_financials(symbol, data, sync_batch_id=sync_batch_id)
-            return
+            store.save_company_financials(
+                symbol,
+                fetched.data,
+                statement_basis=fetched.detected_basis,
+                sync_batch_id=sync_batch_id,
+            )
+            store.record_sync_result(
+                sync_batch_id,
+                symbol,
+                requested_basis=fetched.requested_basis,
+                detected_basis=fetched.detected_basis,
+                export_path=fetched.export_path,
+                status="succeeded",
+            )
+            return fetched.detected_basis
         except MissingExpectedQuarterError as exc:
             last_exc = exc
             break
@@ -202,8 +257,13 @@ def _sync_symbol_with_retries(
                 f"{label}: attempt {attempt}/{DEFAULT_SYMBOL_ATTEMPTS} failed "
                 f"error={type(exc).__name__}: {exc}; retrying",
             )
-            if allow_download and DEFAULT_RETRY_BACKOFF_SEC > 0:
-                time.sleep(DEFAULT_RETRY_BACKOFF_SEC)
+            if allow_download:
+                if isinstance(exc, ScreenerRateLimitError) and exc.retry_after is not None:
+                    delay = min(60.0, float(exc.retry_after))
+                else:
+                    delay = min(60.0, DEFAULT_RETRY_BACKOFF_SEC * (2 ** (attempt - 1)))
+                if delay > 0:
+                    time.sleep(delay)
     if last_exc is not None:
         raise last_exc
 
@@ -216,6 +276,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--statement-basis",
+        required=True,
+        choices=SUPPORTED_STATEMENT_BASES,
+        help="Statement basis to request from Screener.in.",
+    )
     parser.add_argument(
         "--db-path",
         default=str(paths.fundamentals_dir / "screener_financials.db"),
@@ -251,6 +317,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbols-file", default=None, help="Text file of symbols to sync, one per line.")
     parser.add_argument("--throttle-sec", type=float, default=2.0)
     parser.add_argument("--no-refresh-readmodels", action="store_true")
+    parser.add_argument(
+        "--statement-basis-migration-backup-dir",
+        "--valuation-migration-backup-dir",
+        dest="valuation_migration_backup_dir",
+        default=None,
+        help="Required backup directory when upgrading legacy financial or valuation tables to basis-aware keys.",
+    )
     return parser
 
 
@@ -258,6 +331,7 @@ def main() -> None:
     args = build_parser().parse_args()
     try:
         result = run_sync(
+            statement_basis=args.statement_basis,
             limit=args.limit,
             force=args.force,
             db_path=args.db_path,
@@ -271,6 +345,7 @@ def main() -> None:
             expected_report_date=args.expected_report_date,
             symbols=_requested_symbols(args.symbols, args.symbols_file),
             progress=lambda message: print(message, flush=True),
+            valuation_migration_backup_dir=args.valuation_migration_backup_dir,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"FATAL Screener sync failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
@@ -283,7 +358,7 @@ def main() -> None:
 
 def _load_symbols(master_db_path: Path, *, exports_dir: Path) -> list[str]:
     if not master_db_path.exists():
-        return sorted({path.name.removesuffix("_screener.xlsx").upper() for path in exports_dir.glob("*_screener.xlsx")})
+        return sorted({_symbol_from_export_path(path) for path in exports_dir.glob("*_screener.xlsx")})
     conn = sqlite3.connect(master_db_path)
     try:
         rows = conn.execute(
@@ -339,6 +414,7 @@ def _symbols_missing_quarterly_report_date(
     symbols: list[str],
     *,
     report_date: str,
+    statement_basis: str,
 ) -> list[str]:
     if not symbols:
         return []
@@ -350,8 +426,9 @@ def _symbols_missing_quarterly_report_date(
             FROM screener_financials
             WHERE lower(trim(period_type)) = 'quarterly'
               AND date(report_date) = date(?)
+              AND lower(trim(statement_basis)) = ?
             """,
-            (report_date,),
+            (report_date, normalize_statement_basis(statement_basis)),
         ).fetchall()
     finally:
         conn.close()
@@ -376,6 +453,11 @@ def _parse_date(value: str | date) -> date:
     if isinstance(value, date):
         return value
     return date.fromisoformat(str(value)[:10])
+
+
+def _symbol_from_export_path(path: Path) -> str:
+    stem = path.name.removesuffix("_screener.xlsx")
+    return stem.removesuffix("_consolidated").upper()
 
 
 def _emit(progress: Callable[[str], None] | None, message: str) -> None:
