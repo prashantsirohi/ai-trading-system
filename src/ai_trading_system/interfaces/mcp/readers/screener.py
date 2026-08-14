@@ -15,6 +15,7 @@ is not knowable on 2026-01-05, so ``report_date`` alone is never a valid cutoff.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from datetime import date
 from typing import Any
 
@@ -55,12 +56,14 @@ def company_snapshot(
 
     symbol_id = ctx.normalize_symbol(symbol)
     cutoff = coerce_date(as_of)
+    stack = ExitStack()
     try:
-        store = ctx.sqlite(ctx.screener_db)
+        conn = stack.enter_context(ctx.sqlite(ctx.screener_db))
     except StoreUnavailableError:
+        stack.close()
         return None
 
-    with store as conn:
+    with stack:
         if not _table_exists(conn, "screener_company_snapshot"):
             return None
         clauses = ["symbol = ?"]
@@ -94,12 +97,14 @@ def financials(
     symbol_id = ctx.normalize_symbol(symbol)
     basis = normalize_statement_basis(statement_basis)
     cutoff = coerce_date(as_of)
+    stack = ExitStack()
     try:
-        store = ctx.sqlite(ctx.screener_db)
+        conn = stack.enter_context(ctx.sqlite(ctx.screener_db))
     except StoreUnavailableError:
+        stack.close()
         return []
 
-    with store as conn:
+    with stack:
         if not _table_exists(conn, "screener_financials"):
             return []
         clauses = ["f.symbol = ?", "f.statement_basis = ?"]
@@ -143,12 +148,14 @@ def market_valuation(
     symbol_id = ctx.normalize_symbol(symbol)
     basis = normalize_statement_basis(statement_basis)
     cutoff = coerce_date(as_of)
+    stack = ExitStack()
     try:
-        store = ctx.sqlite(ctx.screener_db)
+        conn = stack.enter_context(ctx.sqlite(ctx.screener_db))
     except StoreUnavailableError:
+        stack.close()
         return None
 
-    with store as conn:
+    with stack:
         if not _table_exists(conn, "screener_market_valuation"):
             return None
         clauses = ["symbol = ?", "statement_basis = ?"]
@@ -174,12 +181,14 @@ def available_bases(ctx: McpContext, symbol: str) -> list[str]:
     """
 
     symbol_id = ctx.normalize_symbol(symbol)
+    stack = ExitStack()
     try:
-        store = ctx.sqlite(ctx.screener_db)
+        conn = stack.enter_context(ctx.sqlite(ctx.screener_db))
     except StoreUnavailableError:
+        stack.close()
         return []
 
-    with store as conn:
+    with stack:
         if not _table_exists(conn, "screener_financials"):
             return []
         rows = conn.execute(

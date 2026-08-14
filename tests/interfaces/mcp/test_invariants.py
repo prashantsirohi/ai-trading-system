@@ -31,7 +31,6 @@ from ai_trading_system.interfaces.mcp.envelope import (
 
 from .conftest import ConnectionGuard, ReadOnlyViolation
 
-
 # ---------------------------------------------------------------------------
 # I1 — no writable handle
 # ---------------------------------------------------------------------------
@@ -73,7 +72,9 @@ def test_context_connections_pass_the_guard(ctx: McpContext) -> None:
     with ctx.sqlite(ctx.master_db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] > 0
     with ctx.sqlite(ctx.screener_db) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM screener_financials").fetchone()[0] > 0
+        assert (
+            conn.execute("SELECT COUNT(*) FROM screener_financials").fetchone()[0] > 0
+        )
     with ctx.parquet() as conn:
         assert conn.execute("SELECT 1").fetchone() == (1,)
 
@@ -201,6 +202,19 @@ def test_envelope_enforces_the_cutoff() -> None:
 def test_envelope_rejects_an_unknown_status() -> None:
     with pytest.raises(ValueError, match="Unknown as_of_status"):
         envelope([], source="x:y", as_of_status="MAYBE")
+
+
+def test_envelope_rejects_an_invalid_requested_date() -> None:
+    """An invalid cutoff must not collapse to an unrestricted latest read."""
+
+    with pytest.raises(ValueError, match="Invalid as_of date"):
+        envelope(
+            [{"trade_date": "2026-08-11"}],
+            source="control_plane.duckdb:rank_history",
+            as_of_status=AS_OF_EXACT,
+            as_of_requested="not-a-date",
+            date_fields=["trade_date"],
+        )
 
 
 def test_unsupported_surface_returns_no_rows() -> None:

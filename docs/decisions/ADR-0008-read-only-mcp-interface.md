@@ -2,7 +2,7 @@
 
 - **Purpose:** Record why the trading system exposes its read surfaces through a strictly read-only MCP server, and fix the four invariants that make an agent's answers trustworthy.
 - **Audience:** Operator (decision owner), developers, future agents.
-- **Last verified:** 2026-08-12
+- **Last verified:** 2026-08-14
 - **Source of truth:** `src/ai_trading_system/interfaces/mcp/` (`server.py`, `context.py`, `envelope.py`, `schema_catalog.py`, `tools/`, `readers/`), `tests/interfaces/mcp/conftest.py`, `tests/lint/test_layer_boundaries.py`.
 - **Status:** Accepted — implemented 2026-08-12. Read-only by construction; no pipeline, execution, or broker path is reachable from it.
 
@@ -78,6 +78,14 @@ answer historically instead of being handed the present.
 
 `envelope.assert_not_future` runs on every response and raises on any row dated
 after the cutoff, so a tool that forgets its `WHERE` clause fails loudly.
+Invalid cutoff values are rejected, rather than being coerced to an unbounded
+latest-data request.
+
+The governed weekly stage surface resolves observation payloads through
+`stage_observation_governance`, including correction authority, supersession,
+recording time, and payload availability. Historical sector and screening
+queries do not enrich missing classifications from the current symbol master,
+because doing so would leak present identity state into a past answer.
 
 Fundamentals cut off on **publication** date, not fiscal period.
 `screener_financials.available_at` is bitemporal and part of the primary key;

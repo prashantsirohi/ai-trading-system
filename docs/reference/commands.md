@@ -378,7 +378,9 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.mcp.server --s
 (default `2026-01-02`), prints each response's metadata, and exits non-zero on
 any failure — including a point-in-time leak, which raises rather than
 returning. `--list-tools` prints the tool catalog as JSON without opening a
-store. Claude Code picks the server up from the repo-root `.mcp.json`.
+store. Claude Code picks the server up from the repo-root `.mcp.json`; OpenCode
+picks it up from the repo-root `opencode.json`. Both registrations launch the
+same local stdio server, so no HTTP/SSE endpoint is required.
 
 See [MCP tools](mcp_tools.md) for the tool catalog and
 [ADR-0008](../decisions/ADR-0008-read-only-mcp-interface.md) for the invariants.

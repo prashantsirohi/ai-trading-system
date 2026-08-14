@@ -39,7 +39,7 @@ from ai_trading_system.interfaces.mcp.envelope import (
     envelope,
     json_safe,
 )
-from ai_trading_system.interfaces.mcp.readers import decisions
+from ai_trading_system.interfaces.mcp.readers import decisions, governed_stage
 
 GRANULARITY_WEEKLY_GOVERNED = "weekly_governed"
 GRANULARITY_WEEKLY_LEGACY = "weekly_legacy"
@@ -82,10 +82,10 @@ def _decorate(row: dict[str, Any], raw_stage: Any) -> dict[str, Any]:
     return row
 
 
-def _bounds(
-    to_date: str | date | None, as_of: str | date | None
-) -> date | None:
-    candidates = [value for value in (coerce_date(to_date), coerce_date(as_of)) if value]
+def _bounds(to_date: str | date | None, as_of: str | date | None) -> date | None:
+    candidates = [
+        value for value in (coerce_date(to_date), coerce_date(as_of)) if value
+    ]
     return min(candidates) if candidates else None
 
 
@@ -107,40 +107,20 @@ def _governed(
             [symbol_id, exchange],
         ).fetchone()
 
-        clauses = ["UPPER(symbol_id) = ?", "exchange = ?"]
-        params: list[Any] = [symbol_id, exchange]
-        start = coerce_date(from_date)
-        if start is not None:
-            clauses.append("as_of >= CAST(? AS DATE)")
-            params.append(start.isoformat())
-        if upper is not None:
-            clauses.append("as_of <= CAST(? AS DATE)")
-            params.append(upper.isoformat())
-
-        frame = conn.execute(
-            f"""
-            SELECT * FROM (
-                SELECT
-                    as_of AS observation_date,
-                    source_week_start, source_week_end,
-                    effective_stage, stage_status,
-                    sector_id, sector_name,
-                    classifier_version, run_id
-                FROM {_GOVERNED_TABLE}
-                WHERE {' AND '.join(clauses)}
-                ORDER BY as_of DESC LIMIT ?
-            ) ordered ORDER BY observation_date
-            """,
-            [*params, limit],
-        ).fetchdf()
-
-    rows = [
-        _decorate(
-            {key: json_safe(value) for key, value in record.items()},
-            record.get("effective_stage"),
+        records = governed_stage.history(
+            conn,
+            symbol_id=symbol_id,
+            exchange=exchange,
+            from_date=from_date,
+            through=upper,
+            limit=limit,
         )
-        for record in frame.to_dict(orient="records")
-    ]
+
+    rows = []
+    for record in records:
+        row = {key: json_safe(value) for key, value in record.items()}
+        row["observation_date"] = row.pop("as_of", None)
+        rows.append(_decorate(row, record.get("effective_stage")))
     first = coerce_date(coverage_row[0]) if coverage_row else None
     last = coerce_date(coverage_row[1]) if coverage_row else None
     coverage = {

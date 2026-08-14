@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "ai-trading-system": {
+      "type": "local",
+      "command": [
+        "/Users/prashant/my-ai-project/trading_system/ai-trading-system/.venv/bin/python",
+        "-m",
+        "ai_trading_system.interfaces.mcp.server",
+        "--profile",
+        "operator",
+        "--data-domain",
+        "operational"
+      ],
+      "cwd": "/Users/prashant/my-ai-project/trading_system/ai-trading-system",
+      "environment": {
+        "PYTHONPATH": "/Users/prashant/my-ai-project/trading_system/ai-trading-system/src"
+      },
+      "enabled": true,
+      "timeout": 10000
+    }
+  }
+}

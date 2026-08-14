@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from ai_trading_system.interfaces.mcp.context import McpContext
 from ai_trading_system.interfaces.mcp.readers import featurestore, master, screener
-
 
 # ---------------------------------------------------------------------------
 # master
@@ -66,6 +67,15 @@ def test_search_query_cannot_inject_sql(ctx: McpContext) -> None:
 def test_get_symbol_record_is_exchange_aware(ctx: McpContext) -> None:
     assert master.get_symbol_record(ctx, "CCC", "BSE")["symbol_id"] == "CCC"
     assert master.get_symbol_record(ctx, "CCC", "NSE") is None
+
+
+def test_missing_master_store_returns_empty(ctx: McpContext, tmp_path) -> None:
+    missing = replace(
+        ctx, paths=replace(ctx.paths, master_db_path=tmp_path / "absent.db")
+    )
+    assert master.search_symbols(missing, "AAA") == []
+    assert master.get_symbol_record(missing, "AAA", "NSE") is None
+    assert master.sector_members(missing, "Capital Goods") == []
 
 
 def test_sector_members_and_listing(ctx: McpContext) -> None:
@@ -207,3 +217,13 @@ def test_unknown_symbol_reads_empty(ctx: McpContext) -> None:
     assert screener.financials(ctx, "ZZZ") == []
     assert screener.company_snapshot(ctx, "ZZZ") is None
     assert screener.market_valuation(ctx, "ZZZ") is None
+
+
+def test_missing_screener_store_returns_empty(ctx: McpContext, tmp_path) -> None:
+    missing = replace(
+        ctx, paths=replace(ctx.paths, fundamentals_dir=tmp_path / "absent")
+    )
+    assert screener.financials(missing, "AAA") == []
+    assert screener.company_snapshot(missing, "AAA") is None
+    assert screener.market_valuation(missing, "AAA") is None
+    assert screener.available_bases(missing, "AAA") == []

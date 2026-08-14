@@ -174,13 +174,19 @@ def envelope(
     if as_of_status not in AS_OF_STATUSES:
         raise ValueError(f"Unknown as_of_status: {as_of_status!r}")
 
+    requested = coerce_date(as_of_requested)
+    if as_of_requested is not None and requested is None:
+        raise ValueError(
+            f"Invalid as_of date: {as_of_requested!r}; expected an ISO date "
+            "such as YYYY-MM-DD."
+        )
+
     if isinstance(data, list):
-        assert_not_future(data, as_of_requested, date_fields)
+        assert_not_future(data, requested, date_fields)
         row_count = len(data)
     else:
         row_count = None
 
-    requested = coerce_date(as_of_requested)
     effective = coerce_date(as_of_effective)
 
     meta: dict[str, Any] = {

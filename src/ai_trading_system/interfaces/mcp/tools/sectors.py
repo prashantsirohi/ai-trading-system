@@ -33,7 +33,7 @@ from ai_trading_system.interfaces.mcp.envelope import (
     envelope,
     json_safe,
 )
-from ai_trading_system.interfaces.mcp.readers import decisions, master
+from ai_trading_system.interfaces.mcp.readers import decisions, governed_stage, master
 
 _GOVERNED_TABLE = "weekly_stock_stage_history"
 
@@ -47,31 +47,7 @@ def _latest_observations(
 ) -> list[dict[str, Any]]:
     """Newest governed observation per symbol at or before ``cutoff``."""
 
-    if not decisions.table_exists(conn, _GOVERNED_TABLE):
-        return []
-
-    clauses = ["exchange = ?"]
-    params: list[Any] = [exchange]
-    if cutoff is not None:
-        clauses.append("as_of <= CAST(? AS DATE)")
-        params.append(cutoff.isoformat())
-
-    frame = conn.execute(
-        f"""
-        SELECT symbol_id, as_of, effective_stage, stage_status,
-               sector_id, sector_name
-        FROM (
-            SELECT *, ROW_NUMBER() OVER (
-                PARTITION BY symbol_id ORDER BY as_of DESC
-            ) AS row_number
-            FROM {_GOVERNED_TABLE}
-            WHERE {' AND '.join(clauses)}
-        ) ranked
-        WHERE row_number = 1
-        """,
-        params,
-    ).fetchdf()
-    return frame.to_dict(orient="records")
+    return governed_stage.snapshot(conn, exchange=exchange, cutoff=cutoff)
 
 
 def get_sector_overview(
@@ -202,17 +178,22 @@ def get_sector_constituents(
         str(record.get("symbol_id", "")).upper(): record for record in rank_rows
     }
 
-    # Governed observations carry sector membership point-in-time; the master
-    # fills in symbols the stage store has not observed yet.
+    # Governed observations carry sector membership point-in-time. The current
+    # master may fill gaps only for a latest query; using it for ``as_of`` would
+    # leak later listings, classifications, market caps and industries.
     stage_members = {
         str(record.get("symbol_id", "")).upper(): record
         for record in observations
         if str(record.get("sector_name") or "").lower() == sector_name.lower()
     }
-    master_members = {
-        str(row["symbol_id"]).upper(): row
-        for row in master.sector_members(ctx, sector_name, exchange=exchange_code)
-    }
+    master_members = (
+        {
+            str(row["symbol_id"]).upper(): row
+            for row in master.sector_members(ctx, sector_name, exchange=exchange_code)
+        }
+        if as_of is None
+        else {}
+    )
 
     rows: list[dict[str, Any]] = []
     for symbol in sorted(set(stage_members) | set(master_members)):
@@ -253,18 +234,21 @@ def get_sector_constituents(
 
     notes: list[str] = []
     if not rows:
-        known = master.list_sectors(ctx, exchange=exchange_code)
-        notes.append(
-            f"No constituents found for sector {sector_name!r} on "
-            f"{exchange_code}. Known sectors: {known}."
-        )
+        if as_of is None:
+            known = master.list_sectors(ctx, exchange=exchange_code)
+            notes.append(
+                f"No constituents found for sector {sector_name!r} on "
+                f"{exchange_code}. Known sectors: {known}."
+            )
+        else:
+            notes.append(
+                f"No governed constituents found for sector {sector_name!r} on "
+                f"{exchange_code} at or before the requested date. The current "
+                "symbol master was not used as a historical fallback."
+            )
 
     effective = max(
-        (
-            coerce_date(row["stage_as_of"])
-            for row in rows
-            if row.get("stage_as_of")
-        ),
+        (coerce_date(row["stage_as_of"]) for row in rows if row.get("stage_as_of")),
         default=None,
     )
 
@@ -278,8 +262,12 @@ def get_sector_constituents(
     return envelope(
         rows,
         source=(
-            f"control_plane.duckdb:{_GOVERNED_TABLE} + "
-            f"masterdata.db:{master.TABLE}"
+            ctx.store_label(ctx.control_plane_db, _GOVERNED_TABLE)
+            if as_of is not None
+            else (
+                f"control_plane.duckdb:{_GOVERNED_TABLE} + "
+                f"masterdata.db:{master.TABLE}"
+            )
         ),
         as_of_status=status,
         as_of_requested=as_of,

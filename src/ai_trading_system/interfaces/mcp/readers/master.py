@@ -16,6 +16,7 @@ reach them.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import ExitStack
 from typing import Any
 
 from ai_trading_system.interfaces.mcp.context import McpContext, StoreUnavailableError
@@ -73,12 +74,14 @@ def search_symbols(
         return []
     upper = text.upper()
 
+    stack = ExitStack()
     try:
-        store = ctx.sqlite(ctx.master_db)
+        conn = stack.enter_context(ctx.sqlite(ctx.master_db))
     except StoreUnavailableError:
+        stack.close()
         return []
 
-    with store as conn:
+    with stack:
         columns = _available_columns(conn)
         if not columns:
             return []
@@ -142,12 +145,14 @@ def get_symbol_record(
 
     symbol_id = ctx.normalize_symbol(symbol)
     exchange_code = ctx.resolve_exchange(exchange)
+    stack = ExitStack()
     try:
-        store = ctx.sqlite(ctx.master_db)
+        conn = stack.enter_context(ctx.sqlite(ctx.master_db))
     except StoreUnavailableError:
+        stack.close()
         return None
 
-    with store as conn:
+    with stack:
         columns = _available_columns(conn)
         if not columns:
             return None
@@ -175,12 +180,14 @@ def sector_members(
     if not name:
         return []
     exchange_code = ctx.resolve_exchange(exchange)
+    stack = ExitStack()
     try:
-        store = ctx.sqlite(ctx.master_db)
+        conn = stack.enter_context(ctx.sqlite(ctx.master_db))
     except StoreUnavailableError:
+        stack.close()
         return []
 
-    with store as conn:
+    with stack:
         columns = _available_columns(conn)
         if not columns or "sector" not in columns:
             return []
@@ -202,12 +209,14 @@ def sector_by_symbol(ctx: McpContext, *, exchange: str = "NSE") -> dict[str, str
     """Map ``symbol_id`` to sector name for one exchange."""
 
     exchange_code = ctx.resolve_exchange(exchange)
+    stack = ExitStack()
     try:
-        store = ctx.sqlite(ctx.master_db)
+        conn = stack.enter_context(ctx.sqlite(ctx.master_db))
     except StoreUnavailableError:
+        stack.close()
         return {}
 
-    with store as conn:
+    with stack:
         columns = _available_columns(conn)
         if "sector" not in columns:
             return {}

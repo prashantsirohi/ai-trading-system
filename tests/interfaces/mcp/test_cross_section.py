@@ -16,7 +16,6 @@ from ai_trading_system.interfaces.mcp.tools.sectors import (
     get_sector_overview,
 )
 
-
 # ---------------------------------------------------------------------------
 # get_symbol_profile
 # ---------------------------------------------------------------------------
@@ -69,7 +68,9 @@ def test_a_block_without_data_is_empty_not_backfilled(ctx: McpContext) -> None:
     assert response["data"]["rank"] is None
     assert response["meta"]["blocks"]["rank"]["as_of_status"] == AS_OF_NO_DATA
     assert response["meta"]["alignment"] == "INCOMPLETE"
-    assert any("left\nempty" in n or "left empty" in n for n in response["meta"]["notes"])
+    assert any(
+        "left\nempty" in n or "left empty" in n for n in response["meta"]["notes"]
+    )
 
 
 def test_alignment_is_reported(ctx: McpContext) -> None:
@@ -156,6 +157,30 @@ def test_screen_sorting(ctx: McpContext) -> None:
     assert by_score["meta"]["sort_by"] == "composite_score"
 
 
+def test_screen_score_sort_keeps_nulls_last(
+    ctx: McpContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_trading_system.interfaces.mcp.tools import screen as screen_module
+
+    original = screen_module.decisions.latest_rows
+
+    def with_null_score(*args, **kwargs):
+        rows = original(*args, **kwargs)
+        rows.append(
+            {
+                **rows[-1],
+                "symbol_id": "NULLSCORE",
+                "rank_position": 999,
+                "composite_score": None,
+            }
+        )
+        return rows
+
+    monkeypatch.setattr(screen_module.decisions, "latest_rows", with_null_score)
+    response = screen_module.screen_universe(ctx, sort_by="composite_score")
+    assert response["data"][-1]["symbol_id"] == "NULLSCORE"
+
+
 def test_screen_rejects_unknown_sort(ctx: McpContext) -> None:
     with pytest.raises(ValueError, match="Unknown sort_by"):
         screen_universe(ctx, sort_by="pe_ratio")
@@ -177,6 +202,19 @@ def test_screen_as_of_is_point_in_time(ctx: McpContext) -> None:
     assert row["rank_position"] == 11
     # The governed stage store only had stage_1_basing by then.
     assert row["stage_label"] == "stage_1_basing"
+
+
+def test_historical_screen_does_not_use_current_master_sector_fallback(
+    ctx: McpContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_trading_system.interfaces.mcp.tools import screen as screen_module
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("current master must not classify historical rows")
+
+    monkeypatch.setattr(screen_module.master, "sector_by_symbol", fail_if_called)
+    response = screen_module.screen_universe(ctx, as_of="2026-01-06")
+    assert response["data"]
 
 
 def test_screen_before_coverage_is_empty(ctx: McpContext) -> None:
@@ -241,6 +279,21 @@ def test_sector_constituents_are_point_in_time(ctx: McpContext) -> None:
     row = response["data"][0]
     assert row["rank_position"] == 11
     assert row["stage_label"] == "stage_1_basing"
+
+
+def test_historical_sector_constituents_do_not_read_current_master(
+    ctx: McpContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_trading_system.interfaces.mcp.tools import sectors as sectors_module
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("current master must not backfill a historical answer")
+
+    monkeypatch.setattr(sectors_module.master, "sector_members", fail_if_called)
+    response = sectors_module.get_sector_constituents(
+        ctx, "Capital Goods", as_of="2026-01-06"
+    )
+    assert [row["symbol_id"] for row in response["data"]] == ["AAA"]
 
 
 def test_sector_constituents_case_insensitive(ctx: McpContext) -> None:

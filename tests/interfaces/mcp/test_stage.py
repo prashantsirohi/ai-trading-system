@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+
+import duckdb
 import pytest
 
 from ai_trading_system.interfaces.mcp.context import McpContext
@@ -92,6 +95,52 @@ def test_as_of_cuts_off_governed_rows(ctx: McpContext) -> None:
     assert response["meta"]["as_of_status"] == AS_OF_EXACT
     assert [row["observation_date"] for row in response["data"]] == ["2026-01-02"]
     assert response["data"][0]["stage_label"] == "stage_1_basing"
+
+
+def test_governed_stage_resolves_corrections_by_availability(
+    ctx: McpContext, connection_guard
+) -> None:
+    """A correction is invisible before publication and supersedes afterward."""
+
+    corrected = {
+        "exchange": "NSE",
+        "symbol_id": "AAA",
+        "sector_id": "SEC-CAP",
+        "sector_name": "Capital Goods",
+        "as_of": "2026-01-09",
+        "source_week_start": "2026-01-09",
+        "source_week_end": "2026-01-09",
+        "stage_status": "locked",
+        "effective_stage": "stage_2_advancing",
+        "classifier_version": "weekly-stage-v2",
+        "run_id": "repair-run",
+    }
+    with connection_guard.paused():
+        conn = duckdb.connect(str(ctx.control_plane_db))
+        try:
+            conn.execute(
+                """INSERT INTO weekly_stock_stage_history VALUES (
+                    'obs-corrected', 'NSE', 'AAA', 'SEC-CAP', 'Capital Goods',
+                    CAST('2026-01-09' AS DATE), CAST('2026-01-09' AS DATE),
+                    CAST('2026-01-09' AS DATE), 'locked', 'stage_2_advancing',
+                    'weekly-stage-v2', 'corrected-hash', ?, 'repair-run', 1,
+                    CAST('2026-01-10 09:00:00' AS TIMESTAMP)
+                )""",
+                [json.dumps(corrected)],
+            )
+            conn.execute("""INSERT INTO stage_observation_governance VALUES (
+                    'gov-corrected', 'STOCK', 'obs-corrected', 'obs-1', TRUE,
+                    'reviewed_operator_correction',
+                    CAST('2026-01-10 09:00:00' AS TIMESTAMP)
+                )""")
+        finally:
+            conn.close()
+
+    before = get_stage_history(ctx, "AAA", as_of="2026-01-09")
+    assert before["data"][-1]["stage_label"] == "transition_1_to_2"
+
+    after = get_stage_history(ctx, "AAA", as_of="2026-01-10")
+    assert after["data"][-1]["stage_label"] == "stage_2_advancing"
 
 
 def test_as_of_before_coverage_returns_no_rows_and_says_why(ctx: McpContext) -> None:

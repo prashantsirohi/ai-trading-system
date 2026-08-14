@@ -2,7 +2,7 @@
 
 - **Purpose:** Catalog of the read-only MCP tool surface: parameters, response shape, point-in-time support, and the store each tool reads.
 - **Audience:** Operators, developers, and AI agents consuming the server.
-- **Last verified:** 2026-08-12
+- **Last verified:** 2026-08-14
 - **Source of truth:** `src/ai_trading_system/interfaces/mcp/server.py`, `.../tools/*.py`, `.../readers/*.py`, `.../schema_catalog.py`.
 
 ---
@@ -46,6 +46,8 @@ A historical request never returns data published after the requested date, and
 `AS_OF_UNSUPPORTED` returns no rows rather than substituting the present.
 `envelope.assert_not_future` raises if a tool's cutoff is missing or wrong, so a
 leak fails loudly instead of answering incorrectly.
+Malformed `as_of` values are rejected rather than being interpreted as an
+unbounded latest-data request.
 
 ## Tools
 
@@ -59,9 +61,9 @@ leak fails loudly instead of answering incorrectly.
 | `get_stage_history` | Weinstein stage observations from a chosen store. | `EXACT` | see [stage stores](#stage-stores) |
 | `get_rank_detail` | Newest ranked row with the factor breakdown. | `EXACT` | `control_plane.duckdb:rank_history` |
 | `get_rank_history` | Rank position over time. | `EXACT` | `control_plane.duckdb:rank_history` |
-| `screen_universe` | Cross-sectional filter over the ranked universe. | `EXACT` | `rank_history` + `weekly_stock_stage_history` |
-| `get_sector_overview` | Stage distribution per sector. | `EXACT` | `control_plane.duckdb:weekly_stock_stage_history` |
-| `get_sector_constituents` | Symbols in a sector with stage, rank and market cap. | `EXACT` | governed stage store + `masterdata.db:symbols` |
+| `screen_universe` | Cross-sectional filter over the ranked universe. | `EXACT` | `rank_history` + governed stage observations |
+| `get_sector_overview` | Stage distribution per sector. | `EXACT` | governed stage observations |
+| `get_sector_constituents` | Symbols in a sector with stage, rank and market cap. | `EXACT` | governed stage observations; current master enrichment only for latest requests |
 | `get_fundamentals` | Five fundamental blocks. | `EXACT` | `screener_financials.db`, `fundamentals.duckdb` |
 
 Row limits are clamped server-side. Most tools default to 250 rows and cap at
@@ -83,7 +85,7 @@ selects one, and `meta.coverage` always reports that store's window.
 
 | `granularity` | Store | Grain | Notes |
 |---|---|---|---|
-| `weekly_governed` (default) | `control_plane.duckdb:weekly_stock_stage_history` | weekly | Exchange-aware, canonical vocabulary including transition states. |
+| `weekly_governed` (default) | `control_plane.duckdb:weekly_stock_stage_history` + `stage_observation_governance` | weekly | Exchange-aware, canonical vocabulary including transition states; correction authority and publication availability are resolved at the requested cutoff. |
 | `weekly_legacy` | `ohlcv.duckdb:weekly_stage_snapshot` | weekly | No `exchange` column; coverage typically ends well before the governed store begins. |
 | `daily` | `control_plane.duckdb:stage_history` | daily | Version-pinned; legacy `S1..S4` spelling in the store. |
 
@@ -102,6 +104,12 @@ fields so neither a canonical nor a legacy filter silently misses rows:
 `screen_universe` accepts either spelling in `stage_label` (exact match) and a
 family in `stage_family_filter` (looser, admits transitions).
 `describe_schema("stage")` returns the full mapping.
+
+Governed stage reads use the same correction-resolution contract as the
+pipeline. Superseded observations disappear only when their authoritative
+correction was recorded and available by the query cutoff. Historical sector
+and screening requests derive classification solely from those governed
+observations; they never fill missing sectors from today's symbol master.
 
 ## Fundamentals and publication dates
 

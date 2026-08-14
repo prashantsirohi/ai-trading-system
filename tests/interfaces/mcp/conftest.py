@@ -16,6 +16,7 @@ pytest resolves it first and the ordering is deterministic.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -372,7 +373,8 @@ def _build_control_plane_db(path: Path) -> None:
                 source_week_start DATE, source_week_end DATE,
                 stage_status VARCHAR, effective_stage VARCHAR,
                 classifier_version VARCHAR, source_artifact_hash VARCHAR,
-                observation_json VARCHAR, run_id VARCHAR, stage_attempt INTEGER
+                observation_json VARCHAR, run_id VARCHAR, stage_attempt INTEGER,
+                created_at TIMESTAMP
             )
             """
         )
@@ -386,10 +388,47 @@ def _build_control_plane_db(path: Path) -> None:
                 INSERT INTO weekly_stock_stage_history VALUES (
                     ?, 'NSE', 'AAA', 'SEC-CAP', 'Capital Goods', CAST(? AS DATE),
                     CAST(? AS DATE), CAST(? AS DATE),
-                    'locked', ?, 'weekly-stage-v2', 'hash', '{}', 'run-1', 1
+                    'locked', ?, 'weekly-stage-v2', 'hash', ?, 'run-1', 1,
+                    CAST(? AS TIMESTAMP)
                 )
                 """,
-                [f"obs-{index}", as_of, as_of, as_of, stage],
+                [
+                    f"obs-{index}", as_of, as_of, as_of, stage,
+                    json.dumps({
+                        "exchange": "NSE",
+                        "symbol_id": "AAA",
+                        "sector_id": "SEC-CAP",
+                        "sector_name": "Capital Goods",
+                        "as_of": as_of,
+                        "source_week_start": as_of,
+                        "source_week_end": as_of,
+                        "stage_status": "locked",
+                        "effective_stage": stage,
+                        "classifier_version": "weekly-stage-v2",
+                        "run_id": "run-1",
+                    }),
+                    as_of,
+                ],
+            )
+        conn.execute(
+            """
+            CREATE TABLE stage_observation_governance (
+                governance_event_id VARCHAR, observation_scope VARCHAR,
+                observation_id VARCHAR, supersedes_observation_id VARCHAR,
+                authoritative BOOLEAN, correction_authority VARCHAR,
+                recorded_at TIMESTAMP
+            )
+            """
+        )
+        for index, (as_of, _stage) in enumerate(governed):
+            conn.execute(
+                """
+                INSERT INTO stage_observation_governance VALUES (
+                    ?, 'STOCK', ?, NULL, TRUE, 'original_observation',
+                    CAST(? AS TIMESTAMP)
+                )
+                """,
+                [f"gov-{index}", f"obs-{index}", as_of],
             )
     finally:
         conn.close()

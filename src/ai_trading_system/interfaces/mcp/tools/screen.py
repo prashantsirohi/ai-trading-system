@@ -27,7 +27,7 @@ from ai_trading_system.interfaces.mcp.envelope import (
     envelope,
     json_safe,
 )
-from ai_trading_system.interfaces.mcp.readers import decisions, master
+from ai_trading_system.interfaces.mcp.readers import decisions, governed_stage, master
 
 DEFAULT_UNIVERSE_ID = "NSE_OPERATIONAL"
 DEFAULT_LIMIT = 50
@@ -49,33 +49,8 @@ def _governed_stage_at(
 ) -> dict[str, dict[str, Any]]:
     """Latest governed stage observation per symbol at or before ``cutoff``."""
 
-    if not decisions.table_exists(conn, _GOVERNED_TABLE):
-        return {}
-
-    clauses = ["exchange = ?"]
-    params: list[Any] = [exchange]
-    if cutoff is not None:
-        clauses.append("as_of <= CAST(? AS DATE)")
-        params.append(cutoff.isoformat())
-
-    frame = conn.execute(
-        f"""
-        SELECT symbol_id, as_of, effective_stage, stage_status,
-               sector_id, sector_name
-        FROM (
-            SELECT *, ROW_NUMBER() OVER (
-                PARTITION BY symbol_id ORDER BY as_of DESC
-            ) AS row_number
-            FROM {_GOVERNED_TABLE}
-            WHERE {' AND '.join(clauses)}
-        ) ranked
-        WHERE row_number = 1
-        """,
-        params,
-    ).fetchdf()
-
     result: dict[str, dict[str, Any]] = {}
-    for record in frame.to_dict(orient="records"):
+    for record in governed_stage.snapshot(conn, exchange=exchange, cutoff=cutoff):
         symbol = str(record.get("symbol_id", "")).upper()
         observed = coerce_date(record.get("as_of"))
         stage = normalize_stage(record.get("effective_stage"))
@@ -154,7 +129,11 @@ def screen_universe(
                 )
         stages = _governed_stage_at(conn, exchange_code, cutoff)
 
-    sector_by_symbol = master.sector_by_symbol(ctx, exchange=exchange_code)
+    # The symbol master is current-state only. It may fill missing sector names
+    # for a latest query, but must never be projected into a historical answer.
+    sector_by_symbol = (
+        master.sector_by_symbol(ctx, exchange=exchange_code) if as_of is None else {}
+    )
 
     rows: list[dict[str, Any]] = []
     for record in records:
@@ -181,28 +160,32 @@ def screen_universe(
             continue
         if sector and str(row["sector_name"] or "").lower() != sector.strip().lower():
             continue
-        if (
-            min_composite_score is not None
-            and (row["composite_score"] is None
-                 or row["composite_score"] < float(min_composite_score))
+        if min_composite_score is not None and (
+            row["composite_score"] is None
+            or row["composite_score"] < float(min_composite_score)
         ):
             continue
-        if (
-            max_rank_position is not None
-            and (row["rank_position"] is None
-                 or row["rank_position"] > int(max_rank_position))
+        if max_rank_position is not None and (
+            row["rank_position"] is None
+            or row["rank_position"] > int(max_rank_position)
         ):
             continue
         rows.append(row)
 
-    reverse = sort_key == "composite_score"
-    rows.sort(
-        key=lambda item: (
-            item.get(sort_key) is None,
-            item.get(sort_key) if item.get(sort_key) is not None else 0,
-        ),
-        reverse=reverse,
-    )
+    if sort_key == "composite_score":
+        rows.sort(
+            key=lambda item: (
+                item.get(sort_key) is None,
+                -(float(item[sort_key])) if item.get(sort_key) is not None else 0.0,
+            )
+        )
+    else:
+        rows.sort(
+            key=lambda item: (
+                item.get(sort_key) is None,
+                item.get(sort_key) if item.get(sort_key) is not None else 0,
+            )
+        )
 
     matched = len(rows)
     truncated = matched > row_limit
