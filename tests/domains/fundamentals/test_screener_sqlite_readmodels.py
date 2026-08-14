@@ -8,7 +8,11 @@ import duckdb
 import pandas as pd
 import pytest
 
-from ai_trading_system.domains.fundamentals.analytical_store import mirror_screener_financials
+from ai_trading_system.domains.fundamentals.analytical_store import (
+    ensure_fundamentals_analytical_schema,
+    migrate_fundamentals_analytical_basis_keys,
+    mirror_screener_financials,
+)
 from ai_trading_system.domains.fundamentals.screener_readmodels import (
     build_raw_factor_frame,
     build_scores_from_screener_db,
@@ -117,10 +121,125 @@ def test_duckdb_resolved_view_prefers_one_consolidated_basis_per_symbol(tmp_path
     finally:
         conn.close()
     assert resolution == [
-        ("AAA", "consolidated", "consolidated_available"),
-        ("BBB", "standalone", "standalone_fallback"),
+        ("AAA", "consolidated", "consolidated_current"),
+        ("BBB", "standalone", "standalone_fallback_no_consolidated_quarterly"),
     ]
     assert resolved_bases == [("AAA", ["consolidated"]), ("BBB", ["standalone"])]
+
+
+def test_analytical_derived_key_migration_is_backup_gated_and_preserves_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "fundamentals.duckdb"
+    backup_path = tmp_path / "fundamentals.backup.duckdb"
+    conn = duckdb.connect(str(db_path))
+    try:
+        ensure_fundamentals_analytical_schema(conn)
+        conn.execute("DROP VIEW company_growth_features_resolved")
+        for table, legacy_key in (
+            ("fundamental_period_facts", "symbol, period_type, report_date"),
+            ("company_growth_features", "symbol, report_date"),
+        ):
+            ddl = conn.execute(
+                "SELECT sql FROM duckdb_tables() WHERE table_name = ?",
+                [table],
+            ).fetchone()[0]
+            conn.execute(f"DROP TABLE {table}")
+            conn.execute(
+                ddl.replace(
+                    "PRIMARY KEY(symbol, period_type, report_date, statement_basis)"
+                    if table == "fundamental_period_facts"
+                    else "PRIMARY KEY(symbol, report_date, statement_basis)",
+                    f"PRIMARY KEY({legacy_key})",
+                )
+            )
+        conn.execute(
+            """
+            INSERT INTO fundamental_period_facts
+                (symbol, period_type, report_date, statement_basis, available_at, sales_cr)
+            VALUES ('AAA', 'quarterly', DATE '2026-03-31', 'standalone', DATE '2026-05-01', 100)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO company_growth_features
+                (symbol, report_date, statement_basis, available_at, sales_cr)
+            VALUES ('AAA', DATE '2026-03-31', 'standalone', DATE '2026-05-01', 100)
+            """
+        )
+
+        with pytest.raises(RuntimeError, match="primary key omits statement_basis"):
+            ensure_fundamentals_analytical_schema(conn)
+        with pytest.raises(RuntimeError, match="verified DuckDB backup"):
+            migrate_fundamentals_analytical_basis_keys(conn, verified_backup_path=backup_path)
+
+        backup_path.write_bytes(b"verified-test-backup")
+        counts = migrate_fundamentals_analytical_basis_keys(conn, verified_backup_path=backup_path)
+        keys = {
+            table: conn.execute(
+                """
+                SELECT constraint_column_names FROM duckdb_constraints()
+                WHERE table_name = ? AND constraint_type = 'PRIMARY KEY'
+                """,
+                [table],
+            ).fetchone()[0]
+            for table in counts
+        }
+        rows = conn.execute(
+            "SELECT symbol, statement_basis, sales_cr FROM fundamental_period_facts"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert counts == {"fundamental_period_facts": 1, "company_growth_features": 1}
+    assert keys == {
+        "fundamental_period_facts": ["symbol", "period_type", "report_date", "statement_basis"],
+        "company_growth_features": ["symbol", "report_date", "statement_basis"],
+    }
+    assert rows == [("AAA", "standalone", 100.0)]
+
+
+def test_resolved_policy_falls_back_from_stale_or_shallow_consolidated_history(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / "screener_financials.db"
+    duckdb_path = tmp_path / "fundamentals.duckdb"
+    store = ScreenerFinancialsStore(sqlite_path)
+
+    stale = copy.deepcopy(_company_data())
+    stale["quarters"]["Net profit"].pop("2026-06-30")
+    stale["quarters"]["Net profit"]["2025-03-31"] = 35
+
+    shallow = copy.deepcopy(_company_data())
+    shallow["profit_loss"] = {
+        metric: {"2026-03-31": values["2026-03-31"]}
+        for metric, values in shallow["profit_loss"].items()
+    }
+    shallow["quarters"]["Net profit"] = {"2026-06-30": 140}
+
+    for symbol in ("STALE", "SHALLOW"):
+        store.save_company_financials(symbol, _company_data(), statement_basis="standalone")
+    store.save_company_financials("STALE", stale, statement_basis="consolidated")
+    store.save_company_financials("SHALLOW", shallow, statement_basis="consolidated")
+
+    raw = build_raw_factor_frame(store)
+    mirror_screener_financials(screener_db_path=sqlite_path, fundamentals_db_path=duckdb_path)
+    conn = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        resolution = conn.execute(
+            """
+            SELECT symbol, statement_basis, basis_resolution_reason
+            FROM screener_statement_basis_resolution
+            ORDER BY symbol
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert raw[["symbol", "statement_basis", "basis_resolution_reason"]].to_records(index=False).tolist() == [
+        ("SHALLOW", "standalone", "standalone_fallback_insufficient_consolidated_history"),
+        ("STALE", "standalone", "standalone_fallback_newer_quarter"),
+    ]
+    assert resolution == [
+        ("SHALLOW", "standalone", "standalone_fallback_insufficient_consolidated_history"),
+        ("STALE", "standalone", "standalone_fallback_newer_quarter"),
+    ]
 
 
 def test_missing_screener_db_readmodel_returns_empty_without_creating_db(tmp_path: Path) -> None:
@@ -267,7 +386,7 @@ def test_legacy_basis_key_migrations_require_and_verify_backup(tmp_path: Path) -
     ]
 
 
-def test_readmodel_default_stays_standalone_and_preferred_policy_resolves_consolidated(tmp_path: Path) -> None:
+def test_readmodel_default_prefers_current_consolidated_and_explicit_standalone_remains_available(tmp_path: Path) -> None:
     db_path = tmp_path / "screener_financials.db"
     store = ScreenerFinancialsStore(db_path)
     standalone = _company_data()
@@ -278,8 +397,9 @@ def test_readmodel_default_stays_standalone_and_preferred_policy_resolves_consol
     store.save_company_financials("AAA", consolidated, statement_basis="consolidated", as_of_date="2026-05-25")
 
     default_frame = build_raw_factor_frame(store)
-    preferred_frame = build_raw_factor_frame(store, statement_basis_policy="preferred_available")
+    standalone_frame = build_raw_factor_frame(store, statement_basis_policy="standalone")
 
-    assert default_frame.loc[0, "statement_basis"] == "standalone"
-    assert preferred_frame.loc[0, "statement_basis"] == "consolidated"
-    assert default_frame.loc[0, "sales_growth_3y"] != preferred_frame.loc[0, "sales_growth_3y"]
+    assert default_frame.loc[0, "statement_basis"] == "consolidated"
+    assert default_frame.loc[0, "basis_resolution_reason"] == "consolidated_current"
+    assert standalone_frame.loc[0, "statement_basis"] == "standalone"
+    assert default_frame.loc[0, "sales_growth_3y"] != standalone_frame.loc[0, "sales_growth_3y"]

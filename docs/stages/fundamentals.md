@@ -2,7 +2,7 @@
 
 - **Purpose:** Optional enrichment of rank artifacts from the canonical Screener.in SQLite fundamentals store — adds tiering, watchlist bucketing, hard red-flag flags, and industry-level scores.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-08-09
+- **Last verified:** 2026-08-14
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/fundamentals.py` (`FundamentalsStage`)
   - `src/ai_trading_system/domains/fundamentals/enrich_rank.py`
@@ -46,7 +46,6 @@ Operator workflow for syncing Screener Excel exports into the canonical DB:
 
 ```bash
 ai-trading-fundamentals-sync \
-  --statement-basis standalone \
   --db-path "$DATA_ROOT/fundamentals/screener_financials.db" \
   --exports-dir "$DATA_ROOT/fundamentals/exports"
 
@@ -117,6 +116,16 @@ Skip path: when the scores CSV is missing, the stage writes only `fundamental_su
 - Screener download sync is separately resumable by requested basis through
   `screener_sync_result`. HTTP 429 responses are never parsed and retry with a
   bounded backoff, honoring numeric `Retry-After` when supplied.
+- The unified command defaults to `--statement-basis both`: it resumes the
+  standalone and consolidated ledgers independently and refreshes resolved
+  score/trend readmodels once after both passes. A consolidated request that
+  renders standalone remains a terminal standalone-only classification and is
+  not repeatedly downloaded during ordinary sync.
+- A standalone-only company may omit the basis toggle. The downloader accepts
+  that page only from the explicit standalone URL and only when statement
+  period headers are rendered. A small explicit alias map resolves known
+  exchange ticker renames without changing the mastered symbol stored in the
+  fundamentals tables.
 
 ## Downstream consumers
 
@@ -127,7 +136,13 @@ Skip path: when the scores CSV is missing, the stage writes only `fundamental_su
 ## Commands
 
 ```bash
-# Sync downloaded standalone Excel files and refresh derived scoring CSVs.
+# Unified first/backfill sync: resume standalone and consolidated, then refresh once.
+ai-trading-fundamentals-sync --allow-download --throttle-sec 2
+
+# Unified quarterly update: fetch only symbols missing the expected current quarter.
+ai-trading-fundamentals-sync --allow-download --missing-current-results --throttle-sec 2
+
+# Explicit physical-basis modes remain available for diagnosis or replay.
 ai-trading-fundamentals-sync --statement-basis standalone
 
 # Consolidated canary into isolated paths (credentials required).
@@ -150,7 +165,17 @@ python -m ai_trading_system.domains.fundamentals.enrich_rank \
 
 > **Status:** This stage is part of the canonical `ai-trading-pipeline` order but is registered as optional. The current orchestrator CLI enables it by default; explicit stage lists and daily-wrapper behavior depend on their current flags/defaults.
 
-The active read policy remains standalone. `fundamentals.duckdb` also exposes
-`screener_statement_basis_resolution` and `screener_financials_resolved` for a
-future gated activation that prefers consolidated per symbol and falls back to
-standalone without mixing bases.
+The active read policy is `preferred_available`. The
+`screener_statement_basis_resolution`, `screener_financials_resolved`, and
+`company_growth_features_resolved` views select exactly one basis per symbol.
+Consolidated is selected only when its latest quarter is at least as current as
+standalone and its history is deep enough for the active comparisons; otherwise
+the symbol falls back to standalone. Scores, growth features, quarterly-result
+scoring, insight tags, sector earnings views, valuation joins, validation, and
+stage summaries use this resolved policy. Explicit standalone and consolidated
+modes remain available for diagnostics and replay.
+
+On a legacy analytical DuckDB, the derived `fundamental_period_facts` and
+`company_growth_features` tables must first pass the backup-gated basis-key
+migration. Schema initialization refuses to write both bases through a legacy
+key, preventing partial cross-basis replacement.

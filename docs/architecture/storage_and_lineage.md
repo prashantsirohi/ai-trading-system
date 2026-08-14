@@ -40,6 +40,21 @@ either legacy key refuse implicit upgrade: the sync requires an explicit migrati
 backup directory, creates a consistent SQLite backup plus SHA-256 sidecar, then
 performs and row-count-verifies the transactional table rebuild.
 
+The active analytical policy is `preferred_available`. The
+`screener_statement_basis_resolution` view chooses exactly one physical basis
+per symbol: consolidated must be at least as current as standalone and retain
+enough quarterly and annual history for the active comparisons; otherwise the
+symbol resolves to standalone. `screener_financials_resolved` and
+`company_growth_features_resolved` carry that choice and its reason downstream.
+Financial and valuation joins use the same selected basis, so a symbol cannot
+mix standalone facts with consolidated valuations. The physical tables remain
+unchanged and both explicit bases stay queryable for audit and replay.
+Legacy `fundamental_period_facts` and `company_growth_features` keys that omit
+`statement_basis` fail closed. Their explicit transactional migration requires
+a verified DuckDB backup, preserves every existing row as its recorded basis
+(legacy rows default to standalone), verifies counts, and only then swaps to
+the basis-aware keys.
+
 Do not infer that execution or legacy candidate-tracker tables live in the control plane merely because their artifacts are registered there. The canonical opportunity registry is a distinct control-plane model and does not migrate or synchronize the existing tracker.
 
 The isolated research-screener control plane treats acquisition attempts and

@@ -221,12 +221,22 @@ When rank is skipped because its inputs are unchanged, downstream stages that re
 
 `fundamentals` is optional in the orchestrator's implicit-stage contract, but the CLI's default stage string names it explicitly. To omit it from a CLI run, pass an explicit `--stages` list without `fundamentals`; the current `--no-enable-fundamentals` flag does not remove it from that default string. `candidate_tracker` is enabled by default and `--no-enable-candidate-tracker` removes it from the default CLI list. Any other explicit `--stages` list runs only the requested stages after expanding the `features` alias.
 
-Screener Excel sync requires an explicit `--statement-basis standalone` or
-`consolidated`. The downloader verifies HTTP 200 before basis detection, records
-the rendered basis from the inverse page toggle, and keeps standalone and
-consolidated financial and valuation rows under separate keys. Pipeline
-consumers remain on standalone by default; the consolidated-preferred DuckDB
-projection is present but is not the active production read policy.
+`ai-trading-fundamentals-sync` is the unified Screener ingestion command. Its
+default `--statement-basis both` mode runs the independently resumable
+standalone and consolidated syncs, then refreshes score/trend readmodels once;
+explicit `standalone` and `consolidated` modes remain available for diagnostics
+and replay. The downloader verifies HTTP 200 before basis detection, records the
+rendered basis from the inverse page toggle, and keeps standalone and
+consolidated financial and valuation rows under separate keys. Production
+fundamentals consumers use the `preferred_available` policy: exactly one basis
+is selected per symbol, preferring consolidated only when it is current and has
+enough quarterly and annual history, otherwise falling back to standalone.
+Resolved output exposes the selected basis and resolution reason, and never
+joins facts or valuations across bases.
+Standalone-only pages without a basis toggle are accepted only when the
+canonical standalone URL renders financial period headers. Known exchange
+ticker renames are resolved through an explicit Screener alias map while rows
+remain keyed by the mastered symbol.
 
 | Stage | Responsibility | Primary handoff | Detailed contract |
 |---|---|---|---|

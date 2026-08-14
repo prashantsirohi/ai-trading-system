@@ -100,35 +100,111 @@ def ensure_fundamentals_analytical_schema(conn: duckdb.DuckDBPyConnection) -> No
     _ensure_duckdb_column(conn, "screener_financials", "statement_basis", "VARCHAR DEFAULT 'standalone'")
     _ensure_duckdb_column(conn, "fundamental_period_facts", "statement_basis", "VARCHAR DEFAULT 'standalone'")
     _ensure_duckdb_column(conn, "company_growth_features", "statement_basis", "VARCHAR DEFAULT 'standalone'")
+    _require_basis_aware_derived_keys(conn)
     conn.execute(
         """
         CREATE OR REPLACE VIEW screener_statement_basis_resolution AS
+        WITH coverage AS (
+            SELECT
+                symbol,
+                max(report_date) FILTER (
+                    WHERE lower(trim(period_type)) = 'quarterly'
+                      AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = 'consolidated'
+                ) AS consolidated_latest_quarter,
+                max(report_date) FILTER (
+                    WHERE lower(trim(period_type)) = 'quarterly'
+                      AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = 'standalone'
+                ) AS standalone_latest_quarter,
+                count(*) FILTER (
+                    WHERE coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = 'consolidated'
+                ) AS consolidated_rows,
+                count(*) FILTER (
+                    WHERE coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = 'standalone'
+                ) AS standalone_rows
+                ,count(DISTINCT report_date) FILTER (
+                    WHERE lower(trim(period_type)) = 'quarterly'
+                      AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = 'consolidated'
+                ) AS consolidated_quarter_count
+                ,count(DISTINCT report_date) FILTER (
+                    WHERE lower(trim(period_type)) = 'quarterly'
+                      AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = 'standalone'
+                ) AS standalone_quarter_count
+                ,count(DISTINCT report_date) FILTER (
+                    WHERE lower(trim(period_type)) = 'annual'
+                      AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = 'consolidated'
+                ) AS consolidated_annual_count
+                ,count(DISTINCT report_date) FILTER (
+                    WHERE lower(trim(period_type)) = 'annual'
+                      AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = 'standalone'
+                ) AS standalone_annual_count
+            FROM screener_financials
+            GROUP BY symbol
+        )
         SELECT
             symbol,
             CASE
-                WHEN count(*) FILTER (
-                    WHERE coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = 'consolidated'
-                ) > 0 THEN 'consolidated'
+                WHEN consolidated_latest_quarter IS NOT NULL
+                 AND (standalone_latest_quarter IS NULL OR consolidated_latest_quarter >= standalone_latest_quarter)
+                 AND consolidated_quarter_count >= least(standalone_quarter_count, 5)
+                 AND consolidated_annual_count >= least(standalone_annual_count, 2)
+                    THEN 'consolidated'
+                WHEN standalone_rows > 0 THEN 'standalone'
+                WHEN consolidated_rows > 0 THEN 'consolidated'
                 ELSE 'standalone'
             END AS statement_basis,
             CASE
-                WHEN count(*) FILTER (
-                    WHERE coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = 'consolidated'
-                ) > 0 THEN 'consolidated_available'
+                WHEN consolidated_latest_quarter IS NOT NULL
+                 AND standalone_latest_quarter IS NULL
+                 AND consolidated_quarter_count >= least(standalone_quarter_count, 5)
+                 AND consolidated_annual_count >= least(standalone_annual_count, 2)
+                    THEN 'consolidated_only_quarterly'
+                WHEN consolidated_latest_quarter IS NOT NULL
+                 AND consolidated_latest_quarter >= standalone_latest_quarter
+                 AND consolidated_quarter_count >= least(standalone_quarter_count, 5)
+                 AND consolidated_annual_count >= least(standalone_annual_count, 2)
+                    THEN 'consolidated_current'
+                WHEN standalone_rows > 0 AND consolidated_latest_quarter IS NULL
+                    THEN 'standalone_fallback_no_consolidated_quarterly'
+                WHEN standalone_rows > 0
+                 AND (
+                    consolidated_quarter_count < least(standalone_quarter_count, 5)
+                    OR consolidated_annual_count < least(standalone_annual_count, 2)
+                 ) THEN 'standalone_fallback_insufficient_consolidated_history'
+                WHEN standalone_rows > 0 THEN 'standalone_fallback_newer_quarter'
+                WHEN consolidated_rows > 0 THEN 'consolidated_only_no_quarterly'
                 ELSE 'standalone_fallback'
-            END AS basis_resolution_reason
-        FROM screener_financials
-        GROUP BY symbol
+            END AS basis_resolution_reason,
+            consolidated_latest_quarter,
+            standalone_latest_quarter
+        FROM coverage
         """
     )
     conn.execute(
         """
         CREATE OR REPLACE VIEW screener_financials_resolved AS
-        SELECT f.*, r.basis_resolution_reason
+        SELECT
+            f.*,
+            r.basis_resolution_reason,
+            r.consolidated_latest_quarter,
+            r.standalone_latest_quarter
         FROM screener_financials f
         JOIN screener_statement_basis_resolution r
           ON r.symbol = f.symbol
          AND r.statement_basis = coalesce(nullif(lower(trim(f.statement_basis)), ''), 'standalone')
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW company_growth_features_resolved AS
+        SELECT
+            g.*,
+            r.basis_resolution_reason,
+            r.consolidated_latest_quarter,
+            r.standalone_latest_quarter
+        FROM company_growth_features g
+        JOIN screener_statement_basis_resolution r
+          ON r.symbol = g.symbol
+         AND r.statement_basis = coalesce(nullif(lower(trim(g.statement_basis)), ''), 'standalone')
         """
     )
     conn.execute(
@@ -232,6 +308,66 @@ def ensure_fundamentals_analytical_schema(conn: duckdb.DuckDBPyConnection) -> No
         conn.execute(statement)
 
 
+def migrate_fundamentals_analytical_basis_keys(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    verified_backup_path: str | Path,
+) -> dict[str, int]:
+    """Rebuild legacy derived tables with basis-aware keys after a verified backup."""
+
+    targets = {
+        "fundamental_period_facts": ["symbol", "period_type", "report_date", "statement_basis"],
+        "company_growth_features": ["symbol", "report_date", "statement_basis"],
+    }
+    legacy = {
+        table: key
+        for table, key in targets.items()
+        if _relation_exists(conn, table) and _primary_key_columns(conn, table) != key
+    }
+    if not legacy:
+        return {}
+    backup = Path(verified_backup_path)
+    if not backup.is_file() or backup.stat().st_size <= 0:
+        raise RuntimeError(
+            "Legacy fundamentals analytical keys require a verified DuckDB backup before migration"
+        )
+
+    counts: dict[str, int] = {}
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        conn.execute("DROP VIEW IF EXISTS company_growth_features_resolved")
+        for table in legacy:
+            temp_table = f"{table}__basis_key_migration"
+            conn.execute(f"DROP TABLE IF EXISTS {temp_table}")
+            conn.execute(_derived_table_ddl(table=temp_table, kind=table))
+            columns = _derived_table_columns(table)
+            basis_select = (
+                "coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') AS statement_basis"
+                if _has_column(conn, table, "statement_basis")
+                else "'standalone' AS statement_basis"
+            )
+            select_columns = [basis_select if column == "statement_basis" else column for column in columns]
+            conn.execute(
+                f"INSERT INTO {temp_table} ({', '.join(columns)}) "
+                f"SELECT {', '.join(select_columns)} FROM {table}"
+            )
+            old_count = int(conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
+            new_count = int(conn.execute(f"SELECT count(*) FROM {temp_table}").fetchone()[0])
+            if old_count != new_count:
+                raise RuntimeError(
+                    f"{table} basis-key migration row-count mismatch: {old_count} != {new_count}"
+                )
+            conn.execute(f"DROP TABLE {table}")
+            conn.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
+            counts[table] = new_count
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    ensure_fundamentals_analytical_schema(conn)
+    return counts
+
+
 def _ensure_duckdb_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: str, column_type: str) -> None:
     exists = conn.execute(
         """
@@ -243,6 +379,99 @@ def _ensure_duckdb_column(conn: duckdb.DuckDBPyConnection, table_name: str, colu
     ).fetchone()[0]
     if not exists:
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+
+def _require_basis_aware_derived_keys(conn: duckdb.DuckDBPyConnection) -> None:
+    expected = {
+        "fundamental_period_facts": ["symbol", "period_type", "report_date", "statement_basis"],
+        "company_growth_features": ["symbol", "report_date", "statement_basis"],
+    }
+    legacy = [table for table, key in expected.items() if _primary_key_columns(conn, table) != key]
+    if legacy:
+        raise RuntimeError(
+            "Legacy fundamentals analytical primary key omits statement_basis for "
+            f"{', '.join(legacy)}; create and verify a DuckDB backup, then run "
+            "migrate_fundamentals_analytical_basis_keys"
+        )
+
+
+def _primary_key_columns(conn: duckdb.DuckDBPyConnection, table_name: str) -> list[str]:
+    row = conn.execute(
+        """
+        SELECT constraint_column_names
+        FROM duckdb_constraints()
+        WHERE table_name = ? AND constraint_type = 'PRIMARY KEY'
+        """,
+        [table_name],
+    ).fetchone()
+    return [str(column) for column in (row[0] if row else [])]
+
+
+def _relation_exists(conn: duckdb.DuckDBPyConnection, relation_name: str) -> bool:
+    return bool(
+        conn.execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = ?",
+            [relation_name],
+        ).fetchone()[0]
+    )
+
+
+def _has_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: str) -> bool:
+    return bool(
+        conn.execute(
+            "SELECT count(*) FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
+            [table_name, column_name],
+        ).fetchone()[0]
+    )
+
+
+def _derived_table_columns(table: str) -> list[str]:
+    if table == "fundamental_period_facts":
+        return [
+            "symbol", "period_type", "report_date", "statement_basis", "available_at",
+            "sales_cr", "net_profit_cr", "operating_profit_cr", "expenses_cr", "opm_pct", "npm_pct",
+        ]
+    if table == "company_growth_features":
+        return [
+            "symbol", "report_date", "statement_basis", "available_at", "sales_cr", "net_profit_cr",
+            "operating_profit_cr", "opm_pct", "npm_pct", "sales_qoq_growth", "sales_yoy_growth",
+            "profit_qoq_growth", "profit_yoy_growth", "operating_profit_qoq_growth",
+            "operating_profit_yoy_growth", "opm_qoq_change", "opm_yoy_change", "npm_qoq_change",
+            "npm_yoy_change", "sales_4q_cagr", "profit_4q_cagr", "sales_8q_cagr", "profit_8q_cagr",
+            "positive_profit_quarters_4q", "sales_growth_positive_quarters_4q",
+            "profit_growth_positive_quarters_4q", "margin_expansion_quarters_4q", "created_at",
+        ]
+    raise ValueError(f"Unsupported derived fundamentals table: {table}")
+
+
+def _derived_table_ddl(*, table: str, kind: str) -> str:
+    if kind == "fundamental_period_facts":
+        return f"""
+            CREATE TABLE {table} (
+                symbol VARCHAR NOT NULL, period_type VARCHAR NOT NULL, report_date DATE NOT NULL,
+                statement_basis VARCHAR NOT NULL DEFAULT 'standalone', available_at DATE,
+                sales_cr DOUBLE, net_profit_cr DOUBLE, operating_profit_cr DOUBLE, expenses_cr DOUBLE,
+                opm_pct DOUBLE, npm_pct DOUBLE,
+                PRIMARY KEY (symbol, period_type, report_date, statement_basis)
+            )
+        """
+    if kind == "company_growth_features":
+        return f"""
+            CREATE TABLE {table} (
+                symbol VARCHAR NOT NULL, report_date DATE NOT NULL,
+                statement_basis VARCHAR NOT NULL DEFAULT 'standalone', available_at DATE NOT NULL,
+                sales_cr DOUBLE, net_profit_cr DOUBLE, operating_profit_cr DOUBLE, opm_pct DOUBLE, npm_pct DOUBLE,
+                sales_qoq_growth DOUBLE, sales_yoy_growth DOUBLE, profit_qoq_growth DOUBLE, profit_yoy_growth DOUBLE,
+                operating_profit_qoq_growth DOUBLE, operating_profit_yoy_growth DOUBLE,
+                opm_qoq_change DOUBLE, opm_yoy_change DOUBLE, npm_qoq_change DOUBLE, npm_yoy_change DOUBLE,
+                sales_4q_cagr DOUBLE, profit_4q_cagr DOUBLE, sales_8q_cagr DOUBLE, profit_8q_cagr DOUBLE,
+                positive_profit_quarters_4q INTEGER, sales_growth_positive_quarters_4q INTEGER,
+                profit_growth_positive_quarters_4q INTEGER, margin_expansion_quarters_4q INTEGER,
+                created_at TIMESTAMP,
+                PRIMARY KEY (symbol, report_date, statement_basis)
+            )
+        """
+    raise ValueError(f"Unsupported derived fundamentals table: {kind}")
 
 
 def mirror_screener_financials(
@@ -311,5 +540,6 @@ __all__ = [
     "connect_fundamentals_duckdb",
     "default_fundamentals_duckdb_path",
     "ensure_fundamentals_analytical_schema",
+    "migrate_fundamentals_analytical_basis_keys",
     "mirror_screener_financials",
 ]

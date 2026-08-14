@@ -220,6 +220,10 @@ def compute_fundamental_scores(df: pd.DataFrame, snapshot_date: str) -> pd.DataF
             "name": source["name"],
             "industry_group": source["industry_group"],
             "industry": source["industry"],
+            "statement_basis": source.get("statement_basis", "standalone"),
+            "basis_resolution_reason": source.get("basis_resolution_reason", "explicit_basis"),
+            "consolidated_latest_quarter": source.get("consolidated_latest_quarter"),
+            "standalone_latest_quarter": source.get("standalone_latest_quarter"),
             "quality_score": quality,
             "growth_score": growth,
             "balance_sheet_score": balance,
@@ -235,4 +239,3 @@ def compute_fundamental_scores(df: pd.DataFrame, snapshot_date: str) -> pd.DataF
     for column in ("quality_score", "growth_score", "balance_sheet_score", "valuation_score", "ownership_score", "fundamental_score"):
         output.loc[:, column] = pd.to_numeric(output[column], errors="coerce").round(2)
     return output[FUNDAMENTAL_OUTPUT_COLUMNS].reset_index(drop=True)
-

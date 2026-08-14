@@ -23,9 +23,71 @@ def test_screener_sync_defaults_follow_data_root(monkeypatch, tmp_path: Path) ->
     assert Path(args.master_db_path) == data_root / "masterdata.db"
 
 
-def test_screener_sync_requires_explicit_statement_basis() -> None:
-    with pytest.raises(SystemExit):
-        build_parser().parse_args([])
+def test_screener_sync_defaults_to_unified_both_basis_mode() -> None:
+    assert build_parser().parse_args([]).statement_basis == "both"
+
+
+def test_unified_sync_runs_both_bases_and_refreshes_once(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, bool]] = []
+    refreshed: list[Path] = []
+
+    def fake_run_sync(*, statement_basis, refresh_readmodels, **_kwargs):
+        calls.append((statement_basis, refresh_readmodels))
+        return {
+            "sync_batch_id": f"batch-{statement_basis}",
+            "total": 2,
+            "succeeded": 2,
+            "skipped": 0,
+            "failed": 0,
+            "detected_standalone": 2 if statement_basis == "standalone" else 0,
+            "detected_consolidated": 2 if statement_basis == "consolidated" else 0,
+            "expected_report_date": "",
+        }
+
+    monkeypatch.setattr(screener_sync, "run_sync", fake_run_sync)
+    monkeypatch.setattr(screener_sync, "refresh_fundamental_readmodels", lambda *, db_path: refreshed.append(Path(db_path)))
+
+    result = screener_sync.run_unified_sync(
+        statement_basis="both",
+        db_path=tmp_path / "screener.db",
+        refresh_readmodels=True,
+        throttle_sec=0,
+    )
+
+    assert calls == [("standalone", False), ("consolidated", False)]
+    assert refreshed == [tmp_path / "screener.db"]
+    assert result["sync_batch_ids"] == ["batch-standalone", "batch-consolidated"]
+    assert result["succeeded"] == 4
+
+
+def test_unified_sync_refreshes_existing_readmodels_when_both_runs_are_resumed(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "screener.db"
+    db_path.touch()
+    refreshed: list[Path] = []
+
+    def fake_run_sync(*, statement_basis, refresh_readmodels, **_kwargs):
+        return {
+            "sync_batch_id": f"batch-{statement_basis}",
+            "total": 0,
+            "succeeded": 0,
+            "skipped": 0,
+            "failed": 0,
+            "detected_standalone": 0,
+            "detected_consolidated": 0,
+            "expected_report_date": "",
+        }
+
+    monkeypatch.setattr(screener_sync, "run_sync", fake_run_sync)
+    monkeypatch.setattr(screener_sync, "refresh_fundamental_readmodels", lambda *, db_path: refreshed.append(Path(db_path)))
+
+    result = screener_sync.run_unified_sync(
+        db_path=db_path,
+        refresh_readmodels=True,
+        throttle_sec=0,
+    )
+
+    assert result["succeeded"] == 0
+    assert refreshed == [db_path]
 
 
 def test_screener_sync_reports_per_symbol_failures(monkeypatch, tmp_path: Path) -> None:

@@ -11,9 +11,11 @@ import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.fundamentals.contracts import (
-    DEFAULT_STATEMENT_BASIS,
+    ACTIVE_STATEMENT_BASIS_POLICY,
+    PREFERRED_AVAILABLE_STATEMENT_POLICY,
     SUPPORTED_STATEMENT_BASES,
     normalize_statement_basis,
+    normalize_statement_policy,
 )
 from ai_trading_system.domains.fundamentals.screener_client import ScreenerClient
 from ai_trading_system.platform.db.paths import get_domain_paths
@@ -40,7 +42,7 @@ def validate_screener_exports_against_duckdb(
     fundamentals_db_path: str | Path | None = None,
     exports_dir: str | Path | None = None,
     report_date: str | None = None,
-    statement_basis: str = DEFAULT_STATEMENT_BASIS,
+    statement_basis: str = ACTIVE_STATEMENT_BASIS_POLICY,
     symbols: list[str] | None = None,
     tolerance: float = 0.01,
 ) -> ScreenerExportValidationResult:
@@ -57,7 +59,7 @@ def validate_screener_exports_against_duckdb(
     conn = duckdb.connect(str(db_path), read_only=True)
     try:
         target_report_date = str(report_date or _latest_quarterly_report_date(conn))[:10]
-        resolved_basis = _normalize_statement_basis(statement_basis)
+        resolved_basis = normalize_statement_policy(statement_basis)
         db_frame = _load_db_quarter(conn, target_report_date, statement_basis=resolved_basis, symbols=symbols)
     finally:
         conn.close()
@@ -75,14 +77,18 @@ def validate_screener_exports_against_duckdb(
     checked_cells = 0
     checked_symbols = 0
     for symbol, db_rows in db_frame.groupby("symbol", sort=True):
-        export_path = client.excel_path(str(symbol), statement_basis=resolved_basis)
+        actual_bases = set(db_rows["statement_basis"].astype(str))
+        if len(actual_bases) != 1:
+            raise ValueError(f"Resolved validation rows mix statement bases for {symbol}: {sorted(actual_bases)}")
+        actual_basis = actual_bases.pop()
+        export_path = client.excel_path(str(symbol), statement_basis=actual_basis)
         if not export_path.exists():
             rows.append(
                 {
                     "symbol": symbol,
                     "report_date": target_report_date,
                     "metric_id": "",
-                    "statement_basis": resolved_basis,
+                    "statement_basis": actual_basis,
                     "db_value": None,
                     "export_value": None,
                     "delta": None,
@@ -116,7 +122,7 @@ def validate_screener_exports_against_duckdb(
                     "symbol": symbol,
                     "report_date": target_report_date,
                     "metric_id": metric_id,
-                    "statement_basis": resolved_basis,
+                    "statement_basis": actual_basis,
                     "db_value": db_value,
                     "export_value": export_value,
                     "delta": delta,
@@ -149,13 +155,62 @@ def _load_db_quarter(
     symbols: list[str] | None,
 ) -> pd.DataFrame:
     params: list[Any] = [str(report_date)[:10]]
+    has_statement_basis = _has_column(conn, "screener_financials", "statement_basis")
     basis_expr = (
         "coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone')"
-        if _has_column(conn, "screener_financials", "statement_basis")
+        if has_statement_basis
         else "'standalone'"
     )
-    basis_filter = f" AND {basis_expr} = ?"
-    params.append(_normalize_statement_basis(statement_basis))
+    policy = normalize_statement_policy(statement_basis)
+    source_table = "screener_financials"
+    basis_filter = ""
+    if policy == PREFERRED_AVAILABLE_STATEMENT_POLICY:
+        if has_statement_basis:
+            if _relation_exists(conn, "screener_financials_resolved"):
+                source_table = "screener_financials_resolved"
+            else:
+                source_table = """
+                (
+                    WITH coverage AS (
+                        SELECT
+                            symbol,
+                            max(report_date) FILTER (WHERE period_type='quarterly' AND lower(trim(statement_basis))='consolidated') AS cq,
+                            max(report_date) FILTER (WHERE period_type='quarterly' AND lower(trim(statement_basis))='standalone') AS sq,
+                            count(DISTINCT report_date) FILTER (WHERE period_type='quarterly' AND lower(trim(statement_basis))='consolidated') AS cqn,
+                            count(DISTINCT report_date) FILTER (WHERE period_type='quarterly' AND lower(trim(statement_basis))='standalone') AS sqn,
+                            count(DISTINCT report_date) FILTER (WHERE period_type='annual' AND lower(trim(statement_basis))='consolidated') AS can,
+                            count(DISTINCT report_date) FILTER (WHERE period_type='annual' AND lower(trim(statement_basis))='standalone') AS san
+                        FROM screener_financials
+                        GROUP BY symbol
+                    ), selected AS (
+                        SELECT
+                            symbol,
+                            CASE
+                                WHEN cq IS NOT NULL
+                                 AND (sq IS NULL OR cq >= sq)
+                                 AND cqn >= least(sqn, 5)
+                                 AND can >= least(san, 2)
+                                    THEN 'consolidated'
+                                ELSE 'standalone'
+                            END AS statement_basis
+                        FROM coverage
+                    )
+                    SELECT f.*
+                    FROM screener_financials f
+                    JOIN selected s
+                      ON s.symbol=f.symbol
+                     AND s.statement_basis=coalesce(nullif(lower(trim(f.statement_basis)), ''), 'standalone')
+                )
+                """
+        # Legacy mirrors without statement_basis contain standalone rows only.
+    elif has_statement_basis:
+        basis_filter = f" AND {basis_expr} = ?"
+        params.append(normalize_statement_basis(policy))
+    else:
+        # Preserve backward-compatible standalone validation for legacy mirrors.
+        # A consolidated request must not silently validate standalone data.
+        if normalize_statement_basis(policy) == "consolidated":
+            return pd.DataFrame(columns=["symbol", "statement_basis", "metric_id", "value"])
     symbol_filter = ""
     if symbols:
         clean_symbols = [str(symbol).upper().strip() for symbol in symbols if str(symbol).strip()]
@@ -164,8 +219,12 @@ def _load_db_quarter(
             params.append(clean_symbols)
     return conn.execute(
         f"""
-        SELECT upper(trim(symbol)) AS symbol, lower(trim(metric_id)) AS metric_id, value
-        FROM screener_financials
+        SELECT
+            upper(trim(symbol)) AS symbol,
+            {basis_expr} AS statement_basis,
+            lower(trim(metric_id)) AS metric_id,
+            value
+        FROM {source_table}
         WHERE lower(trim(period_type)) = 'quarterly'
           AND report_date = CAST(? AS DATE)
           AND lower(trim(metric_id)) IN ('sales', 'expenses', 'operating_profit', 'net_profit')
@@ -216,6 +275,19 @@ def _has_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: s
     )
 
 
+def _relation_exists(conn: duckdb.DuckDBPyConnection, relation_name: str) -> bool:
+    return bool(
+        conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_name = ?
+            """,
+            [relation_name],
+        ).fetchone()[0]
+    )
+
+
 def _normalize_statement_basis(value: object) -> str:
     return normalize_statement_basis(value)
 
@@ -228,9 +300,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report-date", default=None, help="Quarter report date; defaults to latest quarterly DB date.")
     parser.add_argument(
         "--statement-basis",
-        default=DEFAULT_STATEMENT_BASIS,
-        choices=SUPPORTED_STATEMENT_BASES,
-        help="Statement basis to validate.",
+        default=ACTIVE_STATEMENT_BASIS_POLICY,
+        choices=(*SUPPORTED_STATEMENT_BASES, PREFERRED_AVAILABLE_STATEMENT_POLICY),
+        help="Statement basis or resolved preference policy to validate.",
     )
     parser.add_argument("--symbol", action="append", dest="symbols", help="Limit to one symbol; repeatable.")
     parser.add_argument("--tolerance", type=float, default=0.01)

@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-08-11
+- **Last verified:** 2026-08-14
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -384,7 +384,7 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-research-recipe` | Research recipe runner |
 | `ai-trading-optimize` | Optimization runner |
 | `ai-trading-optimize-promote` | Optimization promotion workflow |
-| `ai-trading-fundamentals-sync` | Basis-explicit Screener fundamentals sync (`--statement-basis` required) |
+| `ai-trading-fundamentals-sync` | Unified resumable Screener sync (defaults to standalone + consolidated, then one resolved readmodel refresh) |
 | `ai-trading-fundamentals-refresh-readmodels` | Fundamentals read-model refresh |
 | `ai-trading-fundamentals-validate-exports` | Fundamentals export validation |
 | `ai-trading-valuation-refresh` | Valuation feature refresh |
@@ -462,7 +462,12 @@ Add `--apply` only after reviewing the preview. Apply mode creates and checksums
 a full `ohlcv.duckdb` backup, reconciles the single named action, and recomputes
 adjusted prices only for the evidence-bound symbol.
 
-Screener sync accepts `--statement-basis standalone` or `consolidated`. When a
+Screener sync defaults to `--statement-basis both`, which resumes standalone
+and consolidated independently and refreshes resolved readmodels once. Use
+`--statement-basis standalone` or `consolidated` only for diagnostics, targeted
+replay, or canaries. Add `--missing-current-results` for a quarterly update; it
+selects only symbols missing the inferred expected quarter and forces a fresh
+download when `--allow-download` is present. When a
 legacy `screener_market_valuation` key is detected, also supply
 `--statement-basis-migration-backup-dir <directory>`; the deprecated
 `--valuation-migration-backup-dir` spelling remains an alias. The command refuses to migrate

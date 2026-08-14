@@ -8,7 +8,13 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
+from ai_trading_system.domains.fundamentals.contracts import (
+    ACTIVE_STATEMENT_BASIS_POLICY,
+    DEFAULT_STATEMENT_BASIS,
+    PREFERRED_AVAILABLE_STATEMENT_POLICY,
+    normalize_statement_basis,
+    normalize_statement_policy,
+)
 from ai_trading_system.domains.fundamentals.analytical_store import (
     connect_fundamentals_duckdb,
     ensure_fundamentals_analytical_schema,
@@ -28,33 +34,25 @@ def refresh_company_growth_features(
     fundamentals_db_path: str | Path | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
-    statement_basis: str = DEFAULT_STATEMENT_BASIS,
+    statement_basis: str = ACTIVE_STATEMENT_BASIS_POLICY,
 ) -> CompanyGrowthFeaturesResult:
     conn = connect_fundamentals_duckdb(fundamentals_db_path)
     try:
         ensure_fundamentals_analytical_schema(conn)
-        resolved_basis = _normalize_statement_basis(statement_basis)
-        facts = _load_quarterly_facts(conn, to_date=to_date, statement_basis=resolved_basis)
+        resolved_policy = normalize_statement_policy(statement_basis)
+        facts = _load_quarterly_facts(conn, to_date=to_date, statement_basis=resolved_policy)
         features_all = compute_company_growth_features(facts)
         features = _filter_dates(features_all, from_date, to_date)
         if not features.empty:
             start, end = str(features["report_date"].min())[:10], str(features["report_date"].max())[:10]
-            conn.execute(
-                """
-                DELETE FROM company_growth_features
-                WHERE report_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                  AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = ?
-                """,
-                [start, end, resolved_basis],
-            )
-            conn.execute(
-                """
-                DELETE FROM fundamental_period_facts
-                WHERE period_type = 'quarterly'
-                  AND report_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                  AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = ?
-                """,
-                [start, end, resolved_basis],
+            _delete_selected_basis_rows(conn, "company_growth_features", features, start=start, end=end)
+            _delete_selected_basis_rows(
+                conn,
+                "fundamental_period_facts",
+                facts,
+                start=start,
+                end=end,
+                extra_filter="period_type = 'quarterly'",
             )
             _insert_frame(conn, "fundamental_period_facts", _filter_dates(facts, from_date, to_date))
             _insert_frame(conn, "company_growth_features", features)
@@ -65,9 +63,8 @@ def refresh_company_growth_features(
                 """
                 DELETE FROM company_growth_features
                 WHERE report_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                  AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = ?
                 """,
-                [start, end, resolved_basis],
+                [start, end],
             )
         else:
             start = end = None
@@ -139,15 +136,19 @@ def _load_quarterly_facts(
     conn: duckdb.DuckDBPyConnection,
     *,
     to_date: str | None,
-    statement_basis: str = DEFAULT_STATEMENT_BASIS,
+    statement_basis: str = ACTIVE_STATEMENT_BASIS_POLICY,
 ) -> pd.DataFrame:
     params: list[str] = []
+    policy = normalize_statement_policy(statement_basis)
     filters = ["period_type = 'quarterly'"]
     has_basis = _has_column(conn, "screener_financials", "statement_basis")
     basis_expr = "coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone')" if has_basis else "'standalone'"
-    if has_basis:
+    source_table = "screener_financials"
+    if policy == PREFERRED_AVAILABLE_STATEMENT_POLICY and has_basis:
+        source_table = "screener_financials_resolved"
+    elif has_basis:
         filters.append("coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = ?")
-        params.append(_normalize_statement_basis(statement_basis))
+        params.append(normalize_statement_basis(policy))
     if to_date:
         filters.append("report_date <= CAST(? AS DATE)")
         params.append(str(to_date)[:10])
@@ -163,7 +164,7 @@ def _load_quarterly_facts(
             max(CASE WHEN metric_id = 'net_profit' THEN value END) AS net_profit_cr,
             max(CASE WHEN metric_id = 'operating_profit' THEN value END) AS operating_profit_cr,
             max(CASE WHEN metric_id = 'expenses' THEN value END) AS expenses_cr
-        FROM screener_financials
+        FROM {source_table}
         WHERE {' AND '.join(filters)}
         GROUP BY symbol, report_date, {basis_expr}
         ORDER BY symbol, {basis_expr}, report_date
@@ -215,6 +216,34 @@ def _insert_frame(conn: duckdb.DuckDBPyConnection, table: str, frame: pd.DataFra
         conn.execute(f"INSERT INTO {table} ({', '.join(columns)}) SELECT {', '.join(columns)} FROM _company_growth_frame")
     finally:
         conn.unregister("_company_growth_frame")
+
+
+def _delete_selected_basis_rows(
+    conn: duckdb.DuckDBPyConnection,
+    table: str,
+    frame: pd.DataFrame,
+    *,
+    start: str,
+    end: str,
+    extra_filter: str | None = None,
+) -> None:
+    keys = frame[["symbol", "statement_basis"]].drop_duplicates().reset_index(drop=True)
+    conn.register("_selected_statement_bases", keys)
+    try:
+        extra = f"AND {extra_filter}" if extra_filter else ""
+        conn.execute(
+            f"""
+            DELETE FROM {table}
+            USING _selected_statement_bases selected
+            WHERE {table}.symbol = selected.symbol
+              AND coalesce(nullif(lower(trim({table}.statement_basis)), ''), 'standalone') = selected.statement_basis
+              AND {table}.report_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+              {extra}
+            """,
+            [start, end],
+        )
+    finally:
+        conn.unregister("_selected_statement_bases")
 
 
 def _fact_columns() -> list[str]:
@@ -280,8 +309,7 @@ def _has_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: s
 
 
 def _normalize_statement_basis(value: object) -> str:
-    basis = str(value or DEFAULT_STATEMENT_BASIS).strip().lower()
-    return basis or DEFAULT_STATEMENT_BASIS
+    return normalize_statement_basis(value or DEFAULT_STATEMENT_BASIS)
 
 
 __all__ = ["CompanyGrowthFeaturesResult", "compute_company_growth_features", "refresh_company_growth_features"]

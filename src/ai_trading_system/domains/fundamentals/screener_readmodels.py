@@ -9,10 +9,12 @@ from typing import Any
 import pandas as pd
 
 from ai_trading_system.domains.fundamentals.contracts import (
+    ACTIVE_STATEMENT_BASIS_POLICY,
     DEFAULT_STATEMENT_BASIS,
     PREFERRED_AVAILABLE_STATEMENT_POLICY,
     normalize_statement_basis,
 )
+from ai_trading_system.domains.fundamentals.statement_basis import resolve_statement_basis
 from ai_trading_system.domains.fundamentals.scoring import compute_fundamental_scores
 from ai_trading_system.domains.fundamentals.screener_store import ScreenerFinancialsStore, default_screener_db_path
 from ai_trading_system.domains.fundamentals.trends import compute_fundamental_trends
@@ -23,9 +25,10 @@ def build_scores_from_screener_db(
     *,
     db_path: str | Path | None = None,
     snapshot_date: str | None = None,
+    statement_basis_policy: str = ACTIVE_STATEMENT_BASIS_POLICY,
 ) -> pd.DataFrame:
     store = ScreenerFinancialsStore(db_path, initialize=False)
-    raw = build_raw_factor_frame(store)
+    raw = build_raw_factor_frame(store, statement_basis_policy=statement_basis_policy)
     resolved_snapshot_date = snapshot_date or _snapshot_date(store)
     return compute_fundamental_scores(raw, snapshot_date=resolved_snapshot_date)
 
@@ -36,12 +39,13 @@ def refresh_fundamental_readmodels(
     latest_output: str | Path | None = None,
     trends_output: str | Path | None = None,
     snapshot_date: str | None = None,
+    statement_basis_policy: str = ACTIVE_STATEMENT_BASIS_POLICY,
 ) -> pd.DataFrame:
     paths = get_domain_paths()
     latest_path = Path(latest_output) if latest_output is not None else paths.fundamentals_dir / "fundamental_scores_latest.csv"
     trends_path = Path(trends_output) if trends_output is not None else paths.fundamentals_dir / "fundamental_trends_latest.csv"
     store = ScreenerFinancialsStore(db_path, initialize=False)
-    raw = build_raw_factor_frame(store)
+    raw = build_raw_factor_frame(store, statement_basis_policy=statement_basis_policy)
     resolved_snapshot_date = snapshot_date or _snapshot_date(store)
     scores = compute_fundamental_scores(raw, snapshot_date=resolved_snapshot_date)
     previous_scores = _read_existing(latest_path)
@@ -62,13 +66,14 @@ def refresh_fundamental_readmodels(
 def build_raw_factor_frame(
     store: ScreenerFinancialsStore,
     *,
-    statement_basis_policy: str = DEFAULT_STATEMENT_BASIS,
+    statement_basis_policy: str = ACTIVE_STATEMENT_BASIS_POLICY,
 ) -> pd.DataFrame:
     financials = store.read_financials_frame()
     if financials.empty:
         return pd.DataFrame()
     policy = str(statement_basis_policy).strip().lower()
     basis_by_symbol: dict[str, str]
+    resolution_by_symbol: dict[str, dict[str, Any]] = {}
     if "statement_basis" in financials.columns:
         basis = (
             financials["statement_basis"]
@@ -80,15 +85,15 @@ def build_raw_factor_frame(
         )
         financials = financials.assign(statement_basis=basis)
         if policy == PREFERRED_AVAILABLE_STATEMENT_POLICY:
-            consolidated_symbols = set(
-                financials.loc[financials["statement_basis"].eq("consolidated"), "symbol"].astype(str)
-            )
-            basis_by_symbol = {
-                str(symbol): "consolidated" if str(symbol) in consolidated_symbols else DEFAULT_STATEMENT_BASIS
-                for symbol in financials["symbol"].astype(str).unique()
+            resolution = resolve_statement_basis(financials)
+            basis_by_symbol = dict(zip(resolution["symbol"].astype(str), resolution["statement_basis"], strict=True))
+            resolution_by_symbol = {
+                str(row["symbol"]): row.to_dict()
+                for _, row in resolution.iterrows()
             }
             selected = financials["symbol"].astype(str).map(basis_by_symbol)
             financials = financials.loc[financials["statement_basis"].eq(selected)].copy()
+            financials = financials.merge(resolution, on=["symbol", "statement_basis"], how="left")
         else:
             selected_basis = normalize_statement_basis(policy)
             financials = financials.loc[financials["statement_basis"].eq(selected_basis)].copy()
@@ -132,9 +137,13 @@ def build_raw_factor_frame(
         operating_profit = _num(latest, "operating_profit")
         cfo = _num(latest, "cash_from_operations")
         investing = _num(latest, "cash_from_investing")
+        resolution_metadata = resolution_by_symbol.get(str(symbol), {})
         row = {
             "symbol": symbol,
             "statement_basis": basis_by_symbol.get(str(symbol), DEFAULT_STATEMENT_BASIS),
+            "basis_resolution_reason": resolution_metadata.get("basis_resolution_reason", "explicit_basis"),
+            "consolidated_latest_quarter": resolution_metadata.get("consolidated_latest_quarter"),
+            "standalone_latest_quarter": resolution_metadata.get("standalone_latest_quarter"),
             "name": symbol,
             "industry_group": "",
             "industry": "",

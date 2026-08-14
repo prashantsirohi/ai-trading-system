@@ -20,10 +20,61 @@ from ai_trading_system.platform.db.paths import get_domain_paths
 
 DEFAULT_SYMBOL_ATTEMPTS = 3
 DEFAULT_RETRY_BACKOFF_SEC = 5.0
+BOTH_STATEMENT_BASES = "both"
 
 
 class MissingExpectedQuarterError(ValueError):
     """Raised when a Screener export is valid but not updated to the expected quarter."""
+
+
+def run_unified_sync(
+    *,
+    statement_basis: str = BOTH_STATEMENT_BASES,
+    **kwargs,
+) -> dict[str, object]:
+    """Run one or both physical statement-basis syncs and refresh readmodels once."""
+
+    requested = str(statement_basis or BOTH_STATEMENT_BASES).strip().lower()
+    if requested != BOTH_STATEMENT_BASES:
+        return run_sync(statement_basis=normalize_statement_basis(requested), **kwargs)
+    refresh_readmodels = bool(kwargs.pop("refresh_readmodels", True))
+    progress = kwargs.get("progress")
+    results: list[dict[str, int | str]] = []
+    for index, basis in enumerate(SUPPORTED_STATEMENT_BASES):
+        if index and bool(kwargs.get("allow_download")) and float(kwargs.get("throttle_sec", 2.0)) > 0:
+            time.sleep(float(kwargs.get("throttle_sec", 2.0)))
+        _emit(progress, f"Starting unified Screener basis {index + 1}/{len(SUPPORTED_STATEMENT_BASES)}: {basis}")
+        results.append(
+            run_sync(
+                statement_basis=basis,
+                refresh_readmodels=False,
+                **kwargs,
+            )
+        )
+    succeeded = sum(int(result["succeeded"]) for result in results)
+    if refresh_readmodels:
+        paths = get_domain_paths()
+        resolved_db_path = Path(kwargs["db_path"]) if kwargs.get("db_path") is not None else paths.fundamentals_dir / "screener_financials.db"
+        if succeeded or resolved_db_path.exists():
+            _emit(progress, f"Refreshing resolved fundamentals readmodels from {resolved_db_path}")
+            refresh_fundamental_readmodels(db_path=resolved_db_path)
+            _emit(progress, "Resolved readmodel refresh completed")
+    return {
+        "sync_batch_id": ",".join(str(result["sync_batch_id"]) for result in results),
+        "sync_batch_ids": [str(result["sync_batch_id"]) for result in results],
+        "statement_basis": BOTH_STATEMENT_BASES,
+        "total": sum(int(result["total"]) for result in results),
+        "succeeded": succeeded,
+        "skipped": sum(int(result["skipped"]) for result in results),
+        "failed": sum(int(result["failed"]) for result in results),
+        "detected_standalone": sum(int(result["detected_standalone"]) for result in results),
+        "detected_consolidated": sum(int(result["detected_consolidated"]) for result in results),
+        "expected_report_date": next(
+            (str(result["expected_report_date"]) for result in results if result["expected_report_date"]),
+            "",
+        ),
+        "basis_results": results,
+    }
 
 
 def run_sync(
@@ -278,9 +329,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
         "--statement-basis",
-        required=True,
-        choices=SUPPORTED_STATEMENT_BASES,
-        help="Statement basis to request from Screener.in.",
+        default=BOTH_STATEMENT_BASES,
+        choices=(*SUPPORTED_STATEMENT_BASES, BOTH_STATEMENT_BASES),
+        help="Statement basis to request; 'both' runs standalone then consolidated with one final readmodel refresh.",
     )
     parser.add_argument(
         "--db-path",
@@ -330,7 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     try:
-        result = run_sync(
+        result = run_unified_sync(
             statement_basis=args.statement_basis,
             limit=args.limit,
             force=args.force,
@@ -490,7 +541,7 @@ def _emit(progress: Callable[[str], None] | None, message: str) -> None:
         progress(message)
 
 
-__all__ = ["expected_quarterly_report_date", "run_sync"]
+__all__ = ["expected_quarterly_report_date", "run_sync", "run_unified_sync"]
 
 
 if __name__ == "__main__":

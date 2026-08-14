@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-
 import duckdb
 import pandas as pd
 
@@ -85,13 +83,18 @@ def _read_latest_company_growth(db_path: str | Path, as_of: str, warnings: list[
         return pd.DataFrame()
     conn = duckdb.connect(str(path), read_only=True)
     try:
-        if not _table_exists(conn, "company_growth_features"):
+        source_relation = (
+            "company_growth_features_resolved"
+            if _table_exists(conn, "company_growth_features_resolved")
+            else "company_growth_features"
+        )
+        if not _table_exists(conn, source_relation):
             warnings.append("company_growth_features table missing")
             return pd.DataFrame()
         return conn.execute(
-            """
+            f"""
             SELECT *
-            FROM company_growth_features
+            FROM {source_relation}
             WHERE available_at <= CAST(? AS DATE)
             QUALIFY ROW_NUMBER() OVER (
                 PARTITION BY symbol

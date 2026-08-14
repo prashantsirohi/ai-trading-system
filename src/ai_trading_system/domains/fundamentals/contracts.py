@@ -5,6 +5,8 @@ from __future__ import annotations
 DEFAULT_STATEMENT_BASIS = "standalone"
 SUPPORTED_STATEMENT_BASES = ("standalone", "consolidated")
 PREFERRED_AVAILABLE_STATEMENT_POLICY = "preferred_available"
+ACTIVE_STATEMENT_BASIS_POLICY = PREFERRED_AVAILABLE_STATEMENT_POLICY
+SUPPORTED_STATEMENT_POLICIES = (*SUPPORTED_STATEMENT_BASES, PREFERRED_AVAILABLE_STATEMENT_POLICY)
 
 
 def normalize_statement_basis(value: object) -> str:
@@ -13,6 +15,14 @@ def normalize_statement_basis(value: object) -> str:
         supported = ", ".join(SUPPORTED_STATEMENT_BASES)
         raise ValueError(f"Unsupported statement basis {value!r}; expected one of: {supported}")
     return basis
+
+
+def normalize_statement_policy(value: object) -> str:
+    policy = str(value or "").strip().lower()
+    if policy not in SUPPORTED_STATEMENT_POLICIES:
+        supported = ", ".join(SUPPORTED_STATEMENT_POLICIES)
+        raise ValueError(f"Unsupported statement policy {value!r}; expected one of: {supported}")
+    return policy
 
 FUNDAMENTAL_SCORE_COLUMNS = [
     "quality_score",
@@ -29,6 +39,10 @@ FUNDAMENTAL_OUTPUT_COLUMNS = [
     "name",
     "industry_group",
     "industry",
+    "statement_basis",
+    "basis_resolution_reason",
+    "consolidated_latest_quarter",
+    "standalone_latest_quarter",
     *FUNDAMENTAL_SCORE_COLUMNS,
     "fundamental_tier",
     "red_flags",
