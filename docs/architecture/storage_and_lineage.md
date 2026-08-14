@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-08-11
+- **Last verified:** 2026-08-14
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -26,6 +26,7 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 | Candidate tracker | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate tracker domain | Candidate episodes, transitions, snapshots, fundamental reviews, alerts, and current lifecycle state. |
 | Master data | `$DATA_ROOT/masterdata.db` | Ingest/master-data services | Shared instrument and symbol identity data. |
 | Fundamentals | `$DATA_ROOT/fundamentals/` | Fundamentals domain | Imported source snapshots and fundamental read models. |
+| Research screener | `$DATA_ROOT/research_screener/control_plane.duckdb` | Persistent screener domain | Single-writer, append-oriented provenance, identity, immutable screen inputs/decisions/DQ, versioned research-document/evidence history, and qualitative claim/review policy history. It has no pipeline or execution consumer. |
 
 The Screener SQLite store under `$DATA_ROOT/fundamentals/` records the detected
 statement basis on financial facts and derived market valuations. Financial
@@ -39,7 +40,30 @@ either legacy key refuse implicit upgrade: the sync requires an explicit migrati
 backup directory, creates a consistent SQLite backup plus SHA-256 sidecar, then
 performs and row-count-verifies the transactional table rebuild.
 
+The active analytical policy is `preferred_available`. The
+`screener_statement_basis_resolution` view chooses exactly one physical basis
+per symbol: consolidated must be at least as current as standalone and retain
+enough quarterly and annual history for the active comparisons; otherwise the
+symbol resolves to standalone. `screener_financials_resolved` and
+`company_growth_features_resolved` carry that choice and its reason downstream.
+Financial and valuation joins use the same selected basis, so a symbol cannot
+mix standalone facts with consolidated valuations. The physical tables remain
+unchanged and both explicit bases stay queryable for audit and replay.
+Legacy `fundamental_period_facts` and `company_growth_features` keys that omit
+`statement_basis` fail closed. Their explicit transactional migration requires
+a verified DuckDB backup, preserves every existing row as its recorded basis
+(legacy rows default to standalone), verifies counts, and only then swaps to
+the basis-aware keys.
+
 Do not infer that execution or legacy candidate-tracker tables live in the control plane merely because their artifacts are registered there. The canonical opportunity registry is a distinct control-plane model and does not migrate or synchronize the existing tracker.
+
+The isolated research-screener control plane treats acquisition attempts and
+content artifacts as separate identities. `ingestion_run` is version/run scoped;
+`source_artifact` is content-and-locator addressed and may therefore be reused;
+`ingestion_artifact` is the many-to-many bridge that proves which acquisition
+attempt attached each artifact to a screen run. `source_artifact.ingestion_run_id`
+retains the first acquisition only as a compatibility pointer. Complete run
+lineage must use the bridge or the artifact IDs frozen in `dataset_snapshot`.
 
 ## Runtime trees
 
@@ -54,6 +78,26 @@ Do not infer that execution or legacy candidate-tracker tables live in the contr
 | Models, reports, logs | Resolved independently through `MODELS_ROOT`, `REPORTS_ROOT`, and `LOGS_ROOT`, falling back to repository roots when unset. |
 
 ## Research-domain isolation
+
+The persistent screener is separately isolated beneath
+`$DATA_ROOT/research_screener/`. Completed output packs live at
+`runs/<run_id>/`; raw official responses, normalized Parquet/CSV records, and a
+checksum manifest are immutable. The store is not the operational
+`control_plane.duckdb` and its migration never touches pipeline, execution,
+candidate-tracker, master-data, OHLCV, or fundamentals stores. See the
+[screener architecture and rollback note](../research_screener/architecture_and_schema.md).
+Migration 008 adds qualitative claims, independent agent reviews with token and
+batch usage, and deterministic policy decisions to this isolated store. The
+tables have no operational consumer; see the
+[qualitative claim contract](../research_screener/qualitative_claim_contract.md).
+
+Annual-report research output is separately immutable under
+`research_runs/<research_run_id>/`, with resumable source checkpoints under
+`checkpoints/annual_reports/<parent_filing_run>/<semantic_version>/`. The
+`research_discovery_run` row names the immutable parent filing run and snapshot
+hash. `research_document` and `research_evidence` payloads retain the research
+run, company, source artifact, cutoff, page, confidence, and review state.
+`source_artifact` stores both valid reports and failed/truncated exchange bytes.
 
 With `DATA_DOMAIN=research`, `get_domain_paths()` re-roots domain-owned data under `$DATA_ROOT/research/`:
 

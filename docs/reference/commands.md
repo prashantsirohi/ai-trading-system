@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-08-11
+- **Last verified:** 2026-08-14
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -411,21 +411,90 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-research-recipe` | Research recipe runner |
 | `ai-trading-optimize` | Optimization runner |
 | `ai-trading-optimize-promote` | Optimization promotion workflow |
-| `ai-trading-fundamentals-sync` | Basis-explicit Screener fundamentals sync (`--statement-basis` required) |
+| `ai-trading-fundamentals-sync` | Unified resumable Screener sync (defaults to standalone + consolidated, then one resolved readmodel refresh) |
 | `ai-trading-fundamentals-refresh-readmodels` | Fundamentals read-model refresh |
 | `ai-trading-fundamentals-validate-exports` | Fundamentals export validation |
 | `ai-trading-valuation-refresh` | Valuation feature refresh |
 | `ai-trading-sector-earnings-refresh` | Sector earnings refresh |
 | `ai-trading-backfill-operational-valuation` | Operational valuation backfill |
+| `ai-trading-onboard-symbols` | Preview/apply unified BSE-only new-symbol onboarding |
+| `ai-trading-repair-demerger` | Preview/apply one evidence-bound demerger adjustment after backing up OHLCV |
 | `ai-trading-daily-gainers-report` | Daily gainers report |
 | `ai-trading-fundamental-opportunity-report` | Fundamental opportunities report |
 | `ai-trading-winner-validation-report` | Winner validation report |
 | `ai-trading-early-accumulation-validate` | Early accumulation validation |
 | `ai-trading-symbol-report` | Symbol research report |
+| `ai-trading-research-screener` | Isolated persistent screener (`regression_replay`, `live_canary`, `full_universe`, or `filing_discovery`) |
+| `ai-trading-annual-report-discovery` | Immutable official annual-report evidence discovery for a completed filing-grade cohort |
 
 For any mutating repair, migration, backfill, promotion, or live execution command, inspect `--help`, confirm the target data domain, and take the required backup first.
 
-Screener sync accepts `--statement-basis standalone` or `consolidated`. When a
+The research screener requires `--as-of-date YYYY-MM-DD` and `--run-mode`
+(`regression_replay`, `live_canary`, `full_universe`, or `filing_discovery`). It writes only beneath
+`$DATA_ROOT/research_screener/` unless explicit test paths are supplied. Live
+runs stop if the combined official security master is unavailable and preserve
+typed unknown/repair outcomes for other fixed-source failures.
+Regression replay automatically selects checksum-locked canary fixture v1.0.0;
+live canary selects the registered current fixture. `--canary-file` is an
+audited override and cannot bypass the registered version/mode contract.
+The current default screen version is `0.2.5`; pass `--screen-version` only when
+intentionally replaying or introducing different rule/parser semantics.
+`full_universe` rejects `--canary-file`, defaults to the separate
+`persistent_screener_phase1` definition at version `1.0.0`, and produces
+`universe_company_status.csv`, `universe_decision_explanations.md`, and
+`universe_summary.md` beside the common P0 Parquet/manifest files. It is a
+fail-closed discovery pass; in-band membership is not a qualified investment
+decision.
+`filing_discovery` also rejects `--canary-file`, defaults to definition
+`persistent_screener_filing_discovery` version `1.2.0`, and should name a
+completed same-date `full_universe` run with `--parent-run-id`. If omitted, the
+latest completed same-date parent is selected. `--batch-size` controls durable
+progress/checkpoint cadence, not cohort membership. Its output uses
+`filing_company_status.csv`, `filing_decision_explanations.md`, and
+`filing_summary.md`; it never ranks or writes to execution. Version 1.2.0
+freezes read-only exact-ISIN sector/industry evidence from the current master,
+routes bank, financial-institution, market-infrastructure, and industrial
+contracts explicitly, and blocks unclassified issuers instead of using company
+name similarity or symbol-only fallback.
+The CLI default `--workers 4` divides the single-session request cadence across
+four sessions, preserving the aggregate rate while overlapping network latency.
+Explicit values from five through sixty-four remain per-session rate-limited and cap
+the aggregate request cadence at twice the default.
+
+Run annual-report discovery only after naming a completed filing-discovery
+parent. The command preserves the exact parent `BOUNDARY_REVIEW` cohort, uses
+NSE then official BSE fallback, checkpoints each ISIN, and writes only beneath
+the isolated research-screener root:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.annual_report_service \
+  --as-of-date YYYY-MM-DD --parent-run-id <completed-filing-run-id> \
+  --workers 4 --batch-size 25
+```
+
+Its text matches are LOW-confidence page anchors requiring human review.
+Missing topics remain `NOT_DISCLOSED`; the command does not score, rank,
+recommend, schedule, publish, or execute.
+
+Preview the evidence-bound STLTECH demerger repair before applying it:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.ingest.demerger_repair \
+  --evidence-file configs/corporate_actions/stltech_2025_demerger.json
+```
+
+Add `--apply` only after reviewing the preview. Apply mode creates and checksums
+a full `ohlcv.duckdb` backup, reconciles the single named action, and recomputes
+adjusted prices only for the evidence-bound symbol.
+
+Screener sync defaults to `--statement-basis both`, which resumes standalone
+and consolidated independently and refreshes resolved readmodels once. Use
+`--statement-basis standalone` or `consolidated` only for diagnostics, targeted
+replay, or canaries. Add `--missing-current-results` for a quarterly update; it
+selects only symbols missing the inferred expected quarter and forces a fresh
+download when `--allow-download` is present. When a
 legacy `screener_market_valuation` key is detected, also supply
 `--statement-basis-migration-backup-dir <directory>`; the deprecated
 `--valuation-migration-backup-dir` spelling remains an alias. The command refuses to migrate

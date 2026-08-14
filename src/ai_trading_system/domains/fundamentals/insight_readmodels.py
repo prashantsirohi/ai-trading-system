@@ -109,7 +109,7 @@ def refresh_fundamental_insight_readmodels(
     artifacts: dict[str, str] = {}
     if resolved_output is not None:
         exports = {
-            "company_growth_features": ("company_growth_features", "report_date", "company_growth_features.csv"),
+            "company_growth_features": ("company_growth_features_resolved", "report_date", "company_growth_features.csv"),
             "company_insight_tags": ("company_insight_tags", "report_date", "company_insight_tags.csv"),
             "universe_valuation_daily": ("universe_valuation_daily", "date", "universe_valuation_daily.csv"),
             "valuation_cycle_features": ("valuation_cycle_features", "date", "valuation_cycle_features.csv"),
@@ -166,10 +166,38 @@ def refresh_fundamental_insight_readmodels(
         "fundamentals_db_path": str(resolved_fundamentals),
         "screener_rows_mirrored": int(mirrored_rows),
         "company_growth_features": asdict(growth),
+        "statement_basis_resolution": _statement_basis_resolution_summary(resolved_fundamentals),
         "company_insight_tags": asdict(tags),
         "sector_earnings_leadership": sector,
         "valuation": valuation_status,
         "artifacts": artifacts,
+    }
+
+
+def _statement_basis_resolution_summary(db_path: Path) -> dict[str, Any]:
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT statement_basis, basis_resolution_reason, count(*) AS symbols
+            FROM screener_statement_basis_resolution
+            GROUP BY statement_basis, basis_resolution_reason
+            ORDER BY statement_basis, basis_resolution_reason
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        "policy": "preferred_available",
+        "symbols": int(sum(int(row[2]) for row in rows)),
+        "counts": [
+            {
+                "statement_basis": str(row[0]),
+                "basis_resolution_reason": str(row[1]),
+                "symbols": int(row[2]),
+            }
+            for row in rows
+        ],
     }
 
 

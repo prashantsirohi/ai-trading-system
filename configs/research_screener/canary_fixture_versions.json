@@ -1,0 +1,88 @@
+{
+  "current_fixture_version": "1.2.0",
+  "current_fixture": "configs/research_screener/canary_companies.csv",
+  "versions": {
+    "1.0.0": {
+      "path": "configs/research_screener/canary_companies_v1.0.0.csv",
+      "sha256": "36c53f1c6a7503a62648476851b4c9a6c8b8f32bed4491cbcfdbffd5c560b830",
+      "status": "superseded_for_live_use",
+      "allowed_run_modes": ["regression_replay"]
+    },
+    "1.1.0": {
+      "path": "configs/research_screener/canary_companies_v1.1.0.csv",
+      "sha256": "876b2c1d685fc87fe26504ca6c1ca66e81f9e06d560f1b09a30bf6ebafaad071",
+      "status": "superseded_for_live_use",
+      "allowed_run_modes": [],
+      "supersedes_fixture_version": "1.0.0",
+      "corrections": [
+        {
+          "symbol": "HAWKINCOOK",
+          "field": "isin",
+          "old_value": "INE979A01025",
+          "new_value": "INE979B01015",
+          "reason": "The old value resolves to Saregama India Limited; both frozen official symbol masters resolve Hawkins Cookers Limited to the new value.",
+          "effective_for_live_runs_from": "2026-08-09",
+          "source_artifacts": [
+            {
+              "artifact_id": "artifact:combined_security_master:2026-08-07:091bbde81933c3583f0d",
+              "sha256": "091bbde81933c3583f0d8e64c2061470103a3501d8a84375a653f9934833cc37"
+            },
+            {
+              "artifact_id": "artifact:nse_equity_master:2026-08-07:153db8e940a615513151",
+              "sha256": "153db8e940a615513151a7e2aed74eb9551f9529755861959a8c1f7f80ce914b"
+            },
+            {
+              "artifact_id": "artifact:bse_active_equity_master:2026-08-07:221e2ac9345918778637",
+              "sha256": "221e2ac9345918778637cba703ce590f8ca3dcbea4ce12f30cefb4b2f9d20897"
+            }
+          ]
+        }
+      ]
+    },
+    "1.2.0": {
+      "path": "configs/research_screener/canary_companies.csv",
+      "sha256": "f907114e29ef6c9e0ca005eb4dd9be6e84c4613a1968498d78f615455df41a59",
+      "status": "current",
+      "allowed_run_modes": ["live_canary"],
+      "supersedes_fixture_version": "1.1.0",
+      "corrections": [
+        {
+          "symbol": "E2E",
+          "field": "isin",
+          "old_value": "INE255Z01019",
+          "new_value": "INE255Z01027",
+          "reason": "The frozen NSE corporate-action row records a 10-to-1 face-value split under the prior ISIN; current frozen NSE and BSE security masters resolve E2E to the new ISIN.",
+          "transition_kind": "effective_dated_identifier_transition",
+          "effective_date": "2026-06-05",
+          "effective_date_basis": "nse_corporate_action_ex_date",
+          "prior_identifier_observation_start": "2026-06-04",
+          "corporate_action_evidence": {
+            "source_store": "operational_ohlcv",
+            "source_table": "_corporate_actions",
+            "source": "nse_corporate_actions",
+            "symbol": "E2E",
+            "isin": "INE255Z01019",
+            "action_type": "split",
+            "parsed_ratio": "10->1",
+            "ex_date": "2026-06-05",
+            "raw_payload_hash": "ffcede0741c8edcb51c3996ab5613935f12a6193e734b560a3e1bfc09f470b1b"
+          },
+          "current_identity_source_artifacts": [
+            {
+              "artifact_id": "artifact:combined_security_master:2026-08-07:091bbde81933c3583f0d",
+              "sha256": "091bbde81933c3583f0d8e64c2061470103a3501d8a84375a653f9934833cc37"
+            },
+            {
+              "artifact_id": "artifact:nse_equity_master:2026-08-07:153db8e940a615513151",
+              "sha256": "153db8e940a615513151a7e2aed74eb9551f9529755861959a8c1f7f80ce914b"
+            },
+            {
+              "artifact_id": "artifact:bse_active_equity_master:2026-08-07:e0381d1bf562ec9aeb15",
+              "sha256": "e0381d1bf562ec9aeb15859e008a86692f5ea1466d123d1e829fddb4f45f5a2d"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

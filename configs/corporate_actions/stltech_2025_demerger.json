@@ -1,0 +1,31 @@
+{
+  "contract_version": "nse-special-preopen-demerger-v1",
+  "symbol": "STLTECH",
+  "isin": "INE089C01029",
+  "ex_date": "2025-04-24",
+  "entitlement_ratio": "1:1",
+  "last_cum_date": "2025-04-23",
+  "expected_last_cum_close": 86.97,
+  "expected_special_preopen_price": 61.11,
+  "official_action": {
+    "bcEndDate": "-",
+    "bcStartDate": "-",
+    "caBroadcastDate": null,
+    "comp": "Sterlite Technologies Limited",
+    "exDate": "24-Apr-2025",
+    "faceVal": "2",
+    "ind": "-",
+    "isin": "INE089C01029",
+    "ndEndDate": "-",
+    "ndStartDate": "-",
+    "recDate": "24-Apr-2025",
+    "series": "EQ",
+    "subject": "Demerger",
+    "symbol": "STLTECH"
+  },
+  "official_action_sha256": "3474c85816fcfac58f0b0f06b655ba3f4f62e42e85e8af977df3b3a374261161",
+  "official_action_url": "https://www.nseindia.com/api/corporates-corporateActions?index=equities&symbol=STLTECH",
+  "special_preopen_circular_url": "https://nsearchives.nseindia.com/content/circulars/CML67599.pdf",
+  "special_preopen_method_url": "https://www.nseindia.com/static/products-services/equity-market-special-pre-open-session",
+  "entitlement_source_url": "https://stl.tech/wp-content/uploads/2025/05/Earnings-Presentation-Q4-FY25.pdf"
+}

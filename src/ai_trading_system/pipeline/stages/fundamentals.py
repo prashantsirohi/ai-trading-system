@@ -10,7 +10,10 @@ from typing import Any
 import duckdb
 import pandas as pd
 
-from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
+from ai_trading_system.domains.fundamentals.contracts import (
+    ACTIVE_STATEMENT_BASIS_POLICY,
+    DEFAULT_STATEMENT_BASIS,
+)
 from ai_trading_system.domains.fundamentals.enrich_rank import (
     DEFAULT_CATALYSTS_PATH,
     DEFAULT_INDUSTRY_SCORES_PATH,
@@ -45,7 +48,9 @@ class FundamentalsStage:
         industry_trends_path = self._resolve_industry_trends_path(context)
         max_stale_days = int(context.params.get("fundamental_max_stale_days", 135) or 135)
         warnings: list[str] = []
-        statement_basis = str(context.params.get("fundamental_statement_basis") or DEFAULT_STATEMENT_BASIS).strip().lower()
+        statement_basis = str(
+            context.params.get("fundamental_statement_basis") or ACTIVE_STATEMENT_BASIS_POLICY
+        ).strip().lower()
 
         if not scores_path.exists():
             db_path = self._resolve_screener_db_path(context)
@@ -56,6 +61,7 @@ class FundamentalsStage:
                         latest_output=scores_path,
                         trends_output=trends_path,
                         snapshot_date=context.run_date,
+                        statement_basis_policy=statement_basis,
                     )
                 except Exception as exc:  # noqa: BLE001
                     warnings.append(f"Failed to refresh fundamental scores from Screener SQLite: {exc}")
@@ -478,8 +484,8 @@ class FundamentalsStage:
         valuation_band_rows: int = 0,
         valuation_bucket_counts: dict[str, int] | None = None,
         fundamental_watchlist_mode: str = "legacy",
-        fundamental_statement_basis: str = DEFAULT_STATEMENT_BASIS,
-        quarterly_result_statement_basis: str = DEFAULT_STATEMENT_BASIS,
+        fundamental_statement_basis: str = ACTIVE_STATEMENT_BASIS_POLICY,
+        quarterly_result_statement_basis: str = ACTIVE_STATEMENT_BASIS_POLICY,
     ) -> dict[str, Any]:
         return {
             "status": status,

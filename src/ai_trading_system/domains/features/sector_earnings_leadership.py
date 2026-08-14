@@ -276,7 +276,7 @@ def refresh_sector_earnings_leadership_analytical(
         company = conn.execute(
             """
             SELECT *
-            FROM company_growth_features
+            FROM company_growth_features_resolved
             WHERE report_date <= COALESCE(CAST(? AS DATE), DATE '9999-12-31')
             ORDER BY symbol, report_date
             """,

@@ -121,7 +121,7 @@ def test_validate_screener_exports_against_duckdb_passes_when_export_matches_db(
 
     assert result.checked_symbols == 1
     assert result.checked_cells == 4
-    assert result.statement_basis == "standalone"
+    assert result.statement_basis == "preferred_available"
     assert result.mismatches.empty
 
 

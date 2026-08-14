@@ -1,0 +1,159 @@
+{
+  "contract_version": "issuer-filing-repair-v1",
+  "symbols": {
+    "PREMIERENE": {
+      "expected_isin": "INE0BS701011",
+      "scope": "consolidated",
+      "document": {
+        "provider": "COMPANY_IR",
+        "document_kind": "RED_HERRING_PROSPECTUS",
+        "url": "https://www.premierenergies.com/downloads/PremierEnergiesLimited_RedHerringProspectus_August202024.pdf",
+        "referer": "https://www.premierenergies.com/",
+        "published_at": "2024-08-20T00:00:00+05:30",
+        "sha256": "f80e6dbb37376d26aa6265b66f36a4497cf0c9104dad05a2bb6afebbf7932df3",
+        "identity_pages": [339, 340, 341],
+        "required_text_markers": [
+          "Premier Energies Limited",
+          "U40106TG1995PLC019909",
+          "Restated Consolidated Statement of Profit and Loss"
+        ]
+      },
+      "statements": [
+        {
+          "period_type": "annual",
+          "period_end": "2024-03-31",
+          "evidence_pages": [339, 340, 341],
+          "metrics": {"sales": 3143.793, "operating_profit": 506.641, "net_profit": 231.36, "eps": 5.48, "reserves": 450.631, "borrowings": 1392.24, "cash_and_bank": 402.692, "cash_from_operations": 90.154, "capex": 451.359}
+        },
+        {
+          "period_type": "annual",
+          "period_end": "2023-03-31",
+          "evidence_pages": [339, 340, 341],
+          "metrics": {"sales": 1428.534, "operating_profit": 114.1, "net_profit": -13.336, "eps": -0.38, "reserves": 214.995, "borrowings": 763.542, "cash_and_bank": 193.469, "cash_from_operations": 36.685, "capex": 276.042}
+        },
+        {
+          "period_type": "annual",
+          "period_end": "2022-03-31",
+          "evidence_pages": [339, 340, 341],
+          "metrics": {"sales": 742.871, "operating_profit": 54.913, "net_profit": -14.408, "eps": -0.44, "reserves": 198.404, "borrowings": 453.297, "cash_and_bank": 159.677, "cash_from_operations": 4.964, "capex": 198.73}
+        },
+        {
+          "period_type": "quarterly",
+          "period_end": "2024-06-30",
+          "evidence_pages": [340],
+          "metrics": {"sales": 1657.367, "operating_profit": 370.398, "net_profit": 198.16, "exceptional_items": 0.0, "eps": 4.7}
+        }
+      ]
+    },
+    "WAAREEENER": {
+      "expected_isin": "INE377N01017",
+      "scope": "consolidated",
+      "document": {
+        "provider": "COMPANY_IR",
+        "document_kind": "FINAL_PROSPECTUS",
+        "url": "https://www.waaree.com/upload/media/waaree_energies_limited_prospectus_1758800305.pdf",
+        "referer": "https://www.waaree.com/",
+        "published_at": "2024-10-23T00:00:00+05:30",
+        "sha256": "e43eccf533fbe81ebe875f9792d32d4f541570b035d39df17326ead11b8a5c89",
+        "identity_pages": [335, 336, 337],
+        "required_text_markers": [
+          "WAAREE ENERGIES LIMITED",
+          "U29248MH1990PLC059463",
+          "Restated Consolidated Summary Statement of Profit and Loss"
+        ]
+      },
+      "statements": [
+        {
+          "period_type": "annual",
+          "period_end": "2024-03-31",
+          "evidence_pages": [335, 336, 337],
+          "metrics": {"sales": 11397.609, "operating_profit": 1809.577, "net_profit": 1274.377, "eps": 47.86, "reserves": 3824.85, "borrowings": 317.319, "cash_and_bank": 3779.169, "cash_from_operations": 2305.021, "capex": 1342.336}
+        },
+        {
+          "period_type": "annual",
+          "period_end": "2023-03-31",
+          "evidence_pages": [335, 336, 337],
+          "metrics": {"sales": 6750.873, "operating_profit": 944.134, "net_profit": 500.277, "eps": 21.57, "reserves": 1595.044, "borrowings": 273.48, "cash_and_bank": 1736.417, "cash_from_operations": 1560.228, "capex": 865.435}
+        },
+        {
+          "period_type": "annual",
+          "period_end": "2022-03-31",
+          "evidence_pages": [335, 336, 337],
+          "metrics": {"sales": 2854.265, "operating_profit": 202.532, "net_profit": 79.65, "eps": 3.84, "reserves": 230.51, "borrowings": 313.083, "cash_and_bank": 366.367, "cash_from_operations": 700.856, "capex": 496.466}
+        },
+        {
+          "period_type": "quarterly",
+          "period_end": "2024-06-30",
+          "evidence_pages": [336],
+          "metrics": {"sales": 3408.901, "operating_profit": 639.989, "net_profit": 401.125, "exceptional_items": 0.0, "eps": 14.93}
+        }
+      ]
+    },
+    "E2E": {
+      "expected_isin": "INE255Z01027",
+      "scope": "standalone",
+      "document": {
+        "provider": "COMPANY_IR",
+        "document_kind": "AUDITED_FINANCIAL_RESULTS",
+        "url": "https://e2e-mainsite-ui.objectstore.e2enetworks.net/Financial_Compliance/Financial_Information/Financial_Results/20212022/Audited_Financial_Results_for_the_year_ended_March_31_2022_31_03_2022.pdf",
+        "referer": "https://www.e2enetworks.com/investors/financial-information",
+        "published_at": "2022-05-27T00:00:00+05:30",
+        "sha256": "4383596909f5d834c4feda27024f5a29951c84cb75455062e3c713ac17af550a",
+        "identity_pages": [1, 3, 4],
+        "required_text_markers": [
+          "E2E Networks Limited",
+          "L72900DL2009PLC341980",
+          "Statement of audited results"
+        ]
+      },
+      "statements": [
+        {
+          "period_type": "annual",
+          "period_end": "2022-03-31",
+          "evidence_pages": [1, 3, 4],
+          "reconcile_metrics": ["sales", "operating_profit", "net_profit", "reserves", "borrowings", "cash_and_bank", "cash_from_operations", "capex"],
+          "metrics": {"sales": 51.8734, "operating_profit": 23.2984, "net_profit": 6.451, "eps": 4.44, "reserves": 23.9836, "borrowings": 1.224, "cash_and_bank": 6.7958, "cash_from_operations": 25.8852, "capex": 21.4143}
+        },
+        {
+          "period_type": "annual",
+          "period_end": "2021-03-31",
+          "evidence_pages": [1, 3, 4],
+          "metrics": {"sales": 35.3026, "operating_profit": 11.2958, "net_profit": -1.2411, "eps": -0.86, "reserves": 12.9803, "borrowings": 3.8038, "cash_and_bank": 5.191, "cash_from_operations": 12.7202, "capex": 24.7941}
+        }
+      ]
+    },
+    "MCX": {
+      "expected_isin": "INE745G01043",
+      "scope": "standalone",
+      "document": {
+        "provider": "BSE",
+        "document_kind": "AUDITED_FINANCIAL_RESULTS_ATTACHMENT",
+        "url": "https://www.bseindia.com/xml-data/corpfiling/AttachHis/f82b98aa-28a3-45c0-a40c-6dfce754beae.pdf",
+        "referer": "https://www.bseindia.com/",
+        "published_at": "2026-05-08T21:01:43+05:30",
+        "sha256": "5bcd442227feebad9d119a2af8b636b9b72b4593928f1460e4185c051d38444f",
+        "identity_pages": [8, 9, 10],
+        "required_text_markers": [
+          "Multi Commodity Exchange of India Limited",
+          "L51909MH2002PLC135594",
+          "AUDITED STANDALONE FINANCIAL RESULTS"
+        ]
+      },
+      "statements": [
+        {
+          "period_type": "annual",
+          "period_end": "2026-03-31",
+          "evidence_pages": [8, 9, 10],
+          "metrics": {"sales": 2153.67, "operating_profit": 1449.63, "net_profit": 1029.04, "eps": 40.36, "reserves": 2765.24, "borrowings": null, "cash_and_bank": 23.13, "cash_from_operations": 1463.86, "capex": 67.11}
+        },
+        {
+          "period_type": "annual",
+          "period_end": "2025-03-31",
+          "evidence_pages": [8, 9, 10],
+          "reconcile_metrics": ["sales", "operating_profit", "net_profit", "reserves", "cash_and_bank", "cash_from_operations", "capex"],
+          "metrics": {"sales": 1011.58, "operating_profit": 615.83, "net_profit": 414.78, "eps": 16.27, "reserves": 1876.5, "borrowings": null, "cash_and_bank": 44.78, "cash_from_operations": 611.07, "capex": 93.58}
+        }
+      ]
+    }
+  }
+}

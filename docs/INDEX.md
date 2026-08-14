@@ -2,7 +2,7 @@
 
 - **Purpose:** Complete map of all documentation under `docs/`.
 - **Audience:** Anyone navigating the docs.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-08-14
 - **Source of truth:** This file is the source of truth for the doc inventory; `SYSTEM_GUIDE.md` is the source of truth for system orientation.
 
 > Each document records its own verification date. See [`development/legacy_cleanup_plan.md`](development/legacy_cleanup_plan.md) for the cleanup history.
@@ -119,6 +119,18 @@
 ## Research findings
 - [performance_tracker_diagnostics](performance_tracker_diagnostics.md)
 - [regime_alternate_signals_findings](regime_alternate_signals_findings.md)
+
+## Persistent research screener
+- [architecture_and_schema](research_screener/architecture_and_schema.md)
+- [existing_data_inventory](research_screener/existing_data_inventory.md)
+- [canary_data_quality](research_screener/canary_data_quality.md)
+- [canary_decision_explanations](research_screener/canary_decision_explanations.md)
+- [canary_handoff](research_screener/canary_handoff.md)
+- [full_universe_handoff](research_screener/full_universe_handoff.md)
+- [filing_discovery_handoff](research_screener/filing_discovery_handoff.md)
+- [filing_repair_baseline](research_screener/filing_repair_baseline.md)
+- [annual_report_discovery_handoff](research_screener/annual_report_discovery_handoff.md)
+- [qualitative_claim_contract](research_screener/qualitative_claim_contract.md)
 
 ## Audit
 - [documentation_inventory](_audit/documentation_inventory.md)

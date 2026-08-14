@@ -2,8 +2,8 @@
 
 - **Purpose:** Canonical reference for every DuckDB table the system reads or writes — file location, owning stage, columns, indexes.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-08
-- **Source of truth:** `src/ai_trading_system/pipeline/migrations/*.sql`, `src/ai_trading_system/research/perf_tracker/schema.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/ingest/repository.py`.
+- **Last verified:** 2026-08-14
+- **Source of truth:** `src/ai_trading_system/pipeline/migrations/*.sql`, `src/ai_trading_system/domains/research_screener/migrations/*.sql`, `src/ai_trading_system/research/perf_tracker/schema.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/ingest/repository.py`.
 
 ---
 
@@ -17,8 +17,15 @@
 | `$DATA_ROOT/trade_journal.duckdb` | Actual Trading Journal bounded domain | `domains/trade_journal/migrations/001_initial.sql` | Versioned import/DQ, identity/governance, ledger/lot/episode, checkpoint/reconciliation, valuation/risk, evaluation and append-only annotation tables. Financial columns use `DECIMAL(38,8)`. |
 | `data/research.duckdb` | Perf tracker stage + research perf-tracker API endpoints | `research/perf_tracker/schema.py::RANK_COHORT_DDL` | `rank_cohort_performance`. Path resolved via `research_db_path()` -> `paths.root_dir / "research.duckdb"` (`schema.py:55-60`). |
 | `data/research_ohlcv.duckdb` | Research-domain OHLCV (selected when `DATA_DOMAIN=research`) | `domains/ingest/repository.py` (same DDL as operational) | Isolation per `platform/db/paths.py:111`: ohlcv file name is `research_ohlcv.duckdb` for the research domain. |
+| `$DATA_ROOT/research_screener/control_plane.duckdb` | Isolated research-screener domain | `domains/research_screener/migrations/*.sql` | Screener runs, provenance, identity, filing/annual-report evidence, and qualitative claim/review policy history; no operational consumer. |
 
 The actual journal's complete table-family and trust contract is documented in [Actual Trading Journal Architecture](../architecture/trade_journal.md). It is not the legacy execution-store trade journal and does not share execution tables.
+
+The research-screener database is documented in
+[Persistent screener architecture and schema](../research_screener/architecture_and_schema.md).
+Migration 008 adds `qualitative_claim`, `qualitative_claim_review`, and
+`qualitative_claim_policy_decision`; their exact decision and cost boundary is
+the [qualitative claim contract](../research_screener/qualitative_claim_contract.md).
 
 > **Correction vs older docs.** Documentation prior to 2026-05-16 sometimes asserted that execution tables live in `data/control_plane.duckdb`. **This is wrong.** `ExecutionStore` writes to `data/execution.duckdb` by default (`domains/execution/store.py:29`). The control-plane database does *not* contain `execution_order`/`execution_fill` rows.
 

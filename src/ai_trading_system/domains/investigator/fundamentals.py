@@ -27,10 +27,15 @@ def load_fundamental_snapshot(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
             ).fetchall()
         }
-        if "company_growth_features" not in tables:
+        source_relation = (
+            "company_growth_features_resolved"
+            if "company_growth_features_resolved" in tables
+            else "company_growth_features"
+        )
+        if source_relation not in tables:
             return pd.DataFrame(columns=["symbol_id", "fundamental_status"])
         rows = conn.execute(
-            """
+            f"""
             SELECT *
             FROM (
               SELECT
@@ -42,7 +47,7 @@ def load_fundamental_snapshot(
                 positive_profit_quarters_4q,
                 margin_expansion_quarters_4q,
                 ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY report_date DESC) AS rn
-              FROM company_growth_features
+              FROM {source_relation}
               WHERE symbol = ANY(?)
             )
             WHERE rn = 1

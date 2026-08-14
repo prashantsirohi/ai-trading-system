@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.fundamentals.analytical_store import (
@@ -37,7 +36,7 @@ def refresh_company_insight_tags(
         features = conn.execute(
             """
             SELECT *
-            FROM company_growth_features
+            FROM company_growth_features_resolved
             WHERE report_date <= COALESCE(CAST(? AS DATE), DATE '9999-12-31')
             ORDER BY symbol, report_date
             """,

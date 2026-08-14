@@ -8,7 +8,13 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from ai_trading_system.domains.fundamentals.contracts import DEFAULT_STATEMENT_BASIS
+from ai_trading_system.domains.fundamentals.contracts import (
+    ACTIVE_STATEMENT_BASIS_POLICY,
+    DEFAULT_STATEMENT_BASIS,
+    PREFERRED_AVAILABLE_STATEMENT_POLICY,
+    normalize_statement_basis,
+    normalize_statement_policy,
+)
 
 
 OUTPUT_COLUMNS = [
@@ -43,7 +49,7 @@ def build_quarterly_result_scores(
     fundamentals_db_path: str | Path,
     asof_date: str,
     lookback_days: int = 150,
-    statement_basis: str = DEFAULT_STATEMENT_BASIS,
+    statement_basis: str = ACTIVE_STATEMENT_BASIS_POLICY,
     output_path: str | Path | None = None,
 ) -> pd.DataFrame:
     """Build latest available quarterly result scores per symbol."""
@@ -70,7 +76,7 @@ def build_quarterly_result_scores(
             frame = pd.DataFrame(columns=OUTPUT_COLUMNS)
             _write(frame, output_path)
             return frame
-        resolved_basis = _normalize_statement_basis(statement_basis)
+        resolved_policy = normalize_statement_policy(statement_basis)
         if _has_column(conn, "company_growth_features", "statement_basis"):
             invalid_basis = conn.execute(
                 """
@@ -89,16 +95,59 @@ def build_quarterly_result_scores(
             if invalid_basis:
                 raise ValueError("company_growth_features contains unknown statement_basis rows in scoring window")
             basis_select = "* EXCLUDE (statement_basis), coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') AS statement_basis"
-            basis_filter = "AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = ?"
-            params = [str(asof), str(start), resolved_basis]
+            if resolved_policy == PREFERRED_AVAILABLE_STATEMENT_POLICY:
+                if _relation_exists(conn, "company_growth_features_resolved"):
+                    source_relation = "company_growth_features_resolved"
+                else:
+                    source_relation = """
+                    (
+                        WITH coverage AS (
+                            SELECT
+                                symbol,
+                                max(report_date) FILTER (WHERE lower(trim(statement_basis)) = 'consolidated') AS consolidated_latest,
+                                max(report_date) FILTER (WHERE lower(trim(statement_basis)) = 'standalone') AS standalone_latest,
+                                count(DISTINCT report_date) FILTER (
+                                    WHERE lower(trim(statement_basis)) = 'consolidated'
+                                ) AS consolidated_quarters,
+                                count(DISTINCT report_date) FILTER (
+                                    WHERE lower(trim(statement_basis)) = 'standalone'
+                                ) AS standalone_quarters
+                            FROM company_growth_features
+                            GROUP BY symbol
+                        ), selected AS (
+                            SELECT
+                                symbol,
+                                CASE
+                                    WHEN consolidated_latest IS NOT NULL
+                                     AND (standalone_latest IS NULL OR consolidated_latest >= standalone_latest)
+                                     AND consolidated_quarters >= least(standalone_quarters, 5)
+                                        THEN 'consolidated'
+                                    ELSE 'standalone'
+                                END AS statement_basis
+                            FROM coverage
+                        )
+                        SELECT g.*
+                        FROM company_growth_features g
+                        JOIN selected s
+                          ON s.symbol = g.symbol
+                         AND s.statement_basis = lower(trim(g.statement_basis))
+                    )
+                    """
+                basis_filter = ""
+                params = [str(asof), str(start)]
+            else:
+                source_relation = "company_growth_features"
+                basis_filter = "AND coalesce(nullif(lower(trim(statement_basis)), ''), 'standalone') = ?"
+                params = [str(asof), str(start), normalize_statement_basis(resolved_policy)]
         else:
             basis_select = "*, 'standalone' AS statement_basis"
             basis_filter = ""
             params = [str(asof), str(start)]
+            source_relation = "company_growth_features"
         source = conn.execute(
             """
             SELECT {basis_select}
-            FROM company_growth_features
+            FROM {source_relation}
             WHERE available_at <= CAST(? AS DATE)
               AND available_at >= CAST(? AS DATE)
               {basis_filter}
@@ -106,7 +155,11 @@ def build_quarterly_result_scores(
                 PARTITION BY symbol, statement_basis
                 ORDER BY available_at DESC, report_date DESC
             ) = 1
-            """.format(basis_select=basis_select, basis_filter=basis_filter),
+            """.format(
+                basis_select=basis_select,
+                basis_filter=basis_filter,
+                source_relation=source_relation,
+            ),
             params,
         ).df()
     finally:
@@ -276,9 +329,21 @@ def _has_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: s
     )
 
 
+def _relation_exists(conn: duckdb.DuckDBPyConnection, relation_name: str) -> bool:
+    return bool(
+        conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_name = ?
+            """,
+            [relation_name],
+        ).fetchone()[0]
+    )
+
+
 def _normalize_statement_basis(value: object) -> str:
-    basis = str(value or DEFAULT_STATEMENT_BASIS).strip().lower()
-    return basis or DEFAULT_STATEMENT_BASIS
+    return normalize_statement_basis(value or DEFAULT_STATEMENT_BASIS)
 
 
 __all__ = ["OUTPUT_COLUMNS", "build_quarterly_result_scores"]

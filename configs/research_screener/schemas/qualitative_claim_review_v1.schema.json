@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qualitative-claim-review-v1",
+  "title": "Independent qualitative claim review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "review_id", "schema_version", "claim_id", "reviewer_role", "decision",
+    "reviewer_model", "prompt_version", "independent_context", "normalized_claim_hash",
+    "issue_codes", "input_tokens", "cached_input_tokens", "output_tokens", "request_id",
+    "batch_id"
+  ],
+  "properties": {
+    "review_id": {"type": "string", "minLength": 1},
+    "schema_version": {"const": "qualitative-claim-review-v1"},
+    "claim_id": {"type": "string", "minLength": 1},
+    "reviewer_role": {"enum": ["EXTRACTION", "VERIFICATION"]},
+    "decision": {"enum": ["ACCEPT", "REJECT", "AMBIGUOUS"]},
+    "reviewer_model": {"const": "gpt-4o-mini-2024-07-18"},
+    "prompt_version": {"enum": ["qualitative-extractor-v1", "qualitative-verifier-v1"]},
+    "independent_context": {"type": "boolean"},
+    "normalized_claim_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "issue_codes": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "input_tokens": {"type": "integer", "minimum": 0},
+    "cached_input_tokens": {"type": "integer", "minimum": 0},
+    "output_tokens": {"type": "integer", "minimum": 0},
+    "request_id": {"type": "string", "minLength": 1},
+    "batch_id": {"type": "string", "minLength": 1}
+  }
+}

@@ -99,8 +99,8 @@ def test_fundamentals_stage_writes_attempt_artifacts(tmp_path: Path) -> None:
     assert summary["status"] == "completed"
     assert summary["matched_rank_rows"] == 1
     assert summary["missing_fundamental_rows"] == 1
-    assert summary["fundamental_statement_basis"] == "standalone"
-    assert summary["quarterly_result_statement_basis"] == "standalone"
+    assert summary["fundamental_statement_basis"] == "preferred_available"
+    assert summary["quarterly_result_statement_basis"] == "preferred_available"
 
 
 def test_fundamentals_stage_skips_when_scores_missing(tmp_path: Path) -> None:

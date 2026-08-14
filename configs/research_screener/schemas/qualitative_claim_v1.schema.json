@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qualitative-claim-v1",
+  "title": "Qualitative annual-report claim",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "claim_id", "schema_version", "research_run_id", "document_id", "company_id",
+    "security_id", "isin", "company_type", "topic", "metric_name", "claim_kind",
+    "claim_text", "exact_excerpt", "page", "source_artifact_id", "source_content_hash",
+    "published_at", "fiscal_period", "statement_scope", "value", "unit", "currency",
+    "materiality", "extraction_model", "extraction_prompt_version"
+  ],
+  "properties": {
+    "claim_id": {"type": "string", "minLength": 1},
+    "schema_version": {"const": "qualitative-claim-v1"},
+    "research_run_id": {"type": "string", "minLength": 1},
+    "document_id": {"type": "string", "minLength": 1},
+    "company_id": {"type": "string", "minLength": 1},
+    "security_id": {"type": "string", "minLength": 1},
+    "isin": {"type": "string", "pattern": "^INE[A-Z0-9]{8}[0-9]$"},
+    "company_type": {"enum": ["INDUSTRIAL", "BANK", "FINANCIAL_INSTITUTION", "MARKET_INFRASTRUCTURE"]},
+    "topic": {"enum": ["governance", "shareholding", "business_kpi", "capex_capacity", "order_book", "management_guidance"]},
+    "metric_name": {"type": "string", "minLength": 1},
+    "claim_kind": {"enum": ["ACTUAL", "TARGET", "GUIDANCE", "ASPIRATION", "RISK", "GOVERNANCE_FACT", "OWNERSHIP_FACT", "KPI_DEFINITION"]},
+    "claim_text": {"type": "string", "minLength": 5},
+    "exact_excerpt": {"type": "string", "minLength": 10},
+    "page": {"type": "integer", "minimum": 1},
+    "source_artifact_id": {"type": "string", "minLength": 1},
+    "source_content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "published_at": {"type": "string", "format": "date-time"},
+    "fiscal_period": {"type": "string", "minLength": 1},
+    "statement_scope": {"enum": ["standalone", "consolidated", "not_applicable"]},
+    "value": {"type": ["number", "null"]},
+    "unit": {"type": ["string", "null"]},
+    "currency": {"type": ["string", "null"]},
+    "materiality": {"enum": ["LOW", "MEDIUM", "HIGH"]},
+    "extraction_model": {"const": "gpt-4o-mini-2024-07-18"},
+    "extraction_prompt_version": {"const": "qualitative-extractor-v1"}
+  }
+}

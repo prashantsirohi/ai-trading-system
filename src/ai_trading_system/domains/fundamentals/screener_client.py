@@ -17,6 +17,11 @@ from ai_trading_system.domains.fundamentals.contracts import normalize_statement
 
 logger = logging.getLogger(__name__)
 DEFAULT_DOWNLOAD_TIMEOUT_MS = 10_000
+SCREENER_TICKER_ALIASES = {
+    "AMIRCHAND": "AEROPLANE",
+    "MIRCELECTR": "ONIDA",
+    "SASTASUNDR": "HEALTHX",
+}
 
 
 @dataclass(frozen=True)
@@ -144,7 +149,7 @@ class ScreenerClient:
             if "Page not found" in page.title() or "404" in page.title():
                 raise ValueError(f"Company ticker '{ticker}' not found on Screener.in")
             try:
-                detected_basis = _detect_rendered_basis(page)
+                detected_basis = _detect_rendered_basis(page, explicit_basis=requested_basis)
             except RuntimeError:
                 if requested_basis != "consolidated" or _has_rendered_financial_periods(page):
                     raise
@@ -274,15 +279,24 @@ def _values_by_date(section_dates: list[tuple[int, str]], row: pd.Series) -> dic
     }
 
 
-def _detect_rendered_basis(page: Any) -> str:
+def _detect_rendered_basis(page: Any, *, explicit_basis: str | None = None) -> str:
     standalone_toggle = page.locator("a", has_text="View Standalone").count() > 0
     consolidated_toggle = page.locator("a", has_text="View Consolidated").count() > 0
-    if standalone_toggle == consolidated_toggle:
+    if standalone_toggle and consolidated_toggle:
         raise RuntimeError(
             "Unable to detect Screener statement basis: expected exactly one of "
             "'View Standalone' or 'View Consolidated'"
         )
-    return "consolidated" if standalone_toggle else "standalone"
+    if standalone_toggle:
+        return "consolidated"
+    if consolidated_toggle:
+        return "standalone"
+    if explicit_basis == "standalone" and _has_rendered_financial_periods(page):
+        return "standalone"
+    raise RuntimeError(
+        "Unable to detect Screener statement basis: expected exactly one of "
+        "'View Standalone' or 'View Consolidated'"
+    )
 
 
 def _has_rendered_financial_periods(page: Any) -> bool:
@@ -298,7 +312,9 @@ def _has_rendered_financial_periods(page: Any) -> bool:
 def _company_url(ticker: str, statement_basis: str) -> str:
     basis = normalize_statement_basis(statement_basis)
     suffix = "consolidated/" if basis == "consolidated" else ""
-    return f"https://www.screener.in/company/{ticker.upper().strip()}/{suffix}"
+    normalized_ticker = ticker.upper().strip()
+    screener_ticker = SCREENER_TICKER_ALIASES.get(normalized_ticker, normalized_ticker)
+    return f"https://www.screener.in/company/{screener_ticker}/{suffix}"
 
 
 def _validate_company_response(response: Any, url: str) -> None:

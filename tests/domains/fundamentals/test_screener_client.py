@@ -63,6 +63,17 @@ def test_basis_specific_urls_and_export_paths(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("master_symbol", "screener_symbol"),
+    [("AMIRCHAND", "AEROPLANE"), ("MIRCELECTR", "ONIDA"), ("SASTASUNDR", "HEALTHX")],
+)
+def test_company_url_maps_renamed_screener_tickers(master_symbol: str, screener_symbol: str) -> None:
+    assert _company_url(master_symbol, "standalone") == f"https://www.screener.in/company/{screener_symbol}/"
+    assert _company_url(master_symbol, "consolidated") == (
+        f"https://www.screener.in/company/{screener_symbol}/consolidated/"
+    )
+
+
+@pytest.mark.parametrize(
     ("standalone_toggle", "consolidated_toggle", "expected"),
     [(1, 0, "consolidated"), (0, 1, "standalone")],
 )
@@ -84,6 +95,24 @@ def test_detect_rendered_basis_rejects_missing_or_ambiguous_toggle(
     with pytest.raises(RuntimeError, match="expected exactly one"):
         _detect_rendered_basis(
             _Page(standalone_toggle=standalone_toggle, consolidated_toggle=consolidated_toggle)
+        )
+
+
+def test_detect_rendered_basis_accepts_populated_explicit_standalone_page_without_toggle() -> None:
+    assert (
+        _detect_rendered_basis(
+            _Page(standalone_toggle=0, consolidated_toggle=0, financial_periods=2),
+            explicit_basis="standalone",
+        )
+        == "standalone"
+    )
+
+
+def test_detect_rendered_basis_rejects_empty_explicit_standalone_page_without_toggle() -> None:
+    with pytest.raises(RuntimeError, match="expected exactly one"):
+        _detect_rendered_basis(
+            _Page(standalone_toggle=0, consolidated_toggle=0, financial_periods=0),
+            explicit_basis="standalone",
         )
 
 
