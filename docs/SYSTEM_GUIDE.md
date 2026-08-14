@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-08-12
+- **Last verified:** 2026-08-14
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -438,6 +438,13 @@ an accepted fact until human review. Completed packs live under
 `checkpoints/annual_reports/`. This stage cannot change filed statements,
 screening dispositions, ranks, schedules, or execution. See the
 [annual-report handoff](research_screener/annual_report_discovery_handoff.md).
+The subsequent [qualitative claim contract](research_screener/qualitative_claim_contract.md)
+defines structured extraction and independent verification on bounded page
+context. It pins the low-cost model and Batch transport, rejects invalid
+provenance/company-type/cutoff output deterministically, and requires human
+review for guidance, targets, governance, ownership, high materiality,
+conflicts, or agent disagreement. This milestone defines persistence and policy
+only; it does not yet run agents or promote discovery anchors.
 
 Preview an evidence-bound demerger repair with
 `python -m ai_trading_system.domains.ingest.demerger_repair --evidence-file

@@ -2,7 +2,7 @@
 
 - **Purpose:** Record the first complete annual-report evidence-discovery run for the filing-grade cohort and define its safe use boundary.
 - **Audience:** Operator, research-data engineer, filing reviewer, and investment-research reviewer.
-- **Last verified:** 2026-08-12
+- **Last verified:** 2026-08-14
 - **Source of truth:** Run `research-annual_reports-2026-08-12-62e31fe55217095f`, its immutable output pack, and the research-screener control plane.
 
 ## Outcome
@@ -64,9 +64,11 @@ Its SHA-256 equals the pre-migration database checksum:
 1. Review and curate the six unavailable documents. Use an official issuer IR
    report only after locking URL, publication timestamp, checksum, identity,
    fiscal year, and overlap with exchange metadata.
-2. Human-review the LOW-confidence anchors for the highest-priority companies.
-   Accepted facts should retain exact excerpt, page, document hash, speaker or
-   report section, metric units where relevant, and `NOT_DISCLOSED` states.
+2. Run the bounded 25-company calibration only after the extractor/verifier
+   runner implements the [qualitative claim contract](qualitative_claim_contract.md).
+   The contract now fixes provenance, company-type routing, independent review,
+   low-cost budgets, and human escalation; no existing anchor has yet been
+   promoted to a claim.
 3. Add structured governance/shareholding acquisition from exchange XBRL or
    integrated filings. Annual-report text may corroborate it but must not
    replace point-in-time structured ownership data.

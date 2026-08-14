@@ -2,7 +2,7 @@
 
 - **Purpose:** Architecture, persistence, migration, rollback, and CLI contract for the Phase 0 canary and controlled Phase 1 universe discovery.
 - **Audience:** Developers, data architects, and operators.
-- **Last verified:** 2026-08-12
+- **Last verified:** 2026-08-14
 - **Source of truth:** `src/ai_trading_system/domains/research_screener/` and `configs/research_screener/`.
 
 The canary is a separate research domain under `$DATA_ROOT/research_screener/`. It does not add a pipeline stage, execution dependency, public API, MCP surface, or schedule.
@@ -137,8 +137,13 @@ from becoming canonical. `006_ingestion_artifact.sql` adds the many-to-many
 acquisition/artifact bridge and backfills every recoverable first-acquisition
 link. `007_qualitative_research_runs.sql` adds immutable parent-linked research
 run metadata; the existing extension tables store versioned annual-report
-documents and page-attributed evidence. The
-schema includes Phase 0 provenance, identity, versioned
+documents and page-attributed evidence. Migration
+`008_qualitative_claim_contract.sql` adds proposed claims, separate extraction
+and verification reviews, model usage, and deterministic policy decisions. The
+[qualitative claim contract](qualitative_claim_contract.md) pins the low-cost
+model/batch envelope and keeps high-impact or disputed claims under human
+review. No agent runner is active in this milestone. The schema includes Phase
+0 provenance, identity, versioned
 screen/run/universe/factor/archetype/decision entities, repair/DQ queues, run
 comparisons, and extension-ready qualitative research tables. A file lock
 enforces one writer. All material results for a successful run commit in one

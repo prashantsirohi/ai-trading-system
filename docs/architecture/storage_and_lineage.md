@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-08-11
+- **Last verified:** 2026-08-14
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -26,7 +26,7 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 | Candidate tracker | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate tracker domain | Candidate episodes, transitions, snapshots, fundamental reviews, alerts, and current lifecycle state. |
 | Master data | `$DATA_ROOT/masterdata.db` | Ingest/master-data services | Shared instrument and symbol identity data. |
 | Fundamentals | `$DATA_ROOT/fundamentals/` | Fundamentals domain | Imported source snapshots and fundamental read models. |
-| Research screener | `$DATA_ROOT/research_screener/control_plane.duckdb` | Persistent screener domain | Single-writer, append-oriented provenance, identity, immutable screen inputs/decisions/DQ, and versioned research-document/evidence history. It has no pipeline or execution consumer. |
+| Research screener | `$DATA_ROOT/research_screener/control_plane.duckdb` | Persistent screener domain | Single-writer, append-oriented provenance, identity, immutable screen inputs/decisions/DQ, versioned research-document/evidence history, and qualitative claim/review policy history. It has no pipeline or execution consumer. |
 
 The Screener SQLite store under `$DATA_ROOT/fundamentals/` records the detected
 statement basis on financial facts and derived market valuations. Financial
@@ -71,6 +71,10 @@ checksum manifest are immutable. The store is not the operational
 `control_plane.duckdb` and its migration never touches pipeline, execution,
 candidate-tracker, master-data, OHLCV, or fundamentals stores. See the
 [screener architecture and rollback note](../research_screener/architecture_and_schema.md).
+Migration 008 adds qualitative claims, independent agent reviews with token and
+batch usage, and deterministic policy decisions to this isolated store. The
+tables have no operational consumer; see the
+[qualitative claim contract](../research_screener/qualitative_claim_contract.md).
 
 Annual-report research output is separately immutable under
 `research_runs/<research_run_id>/`, with resumable source checkpoints under
