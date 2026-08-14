@@ -254,7 +254,7 @@ def test_before_any_publication_returns_empty_blocks(ctx: McpContext) -> None:
 
 
 def test_unsupported_basis_is_rejected(ctx: McpContext) -> None:
-    with pytest.raises(ValueError, match="Unsupported statement_basis"):
+    with pytest.raises(ValueError, match="Unsupported statement basis"):
         get_fundamentals(ctx, "AAA", statement_basis="proforma")
 
 

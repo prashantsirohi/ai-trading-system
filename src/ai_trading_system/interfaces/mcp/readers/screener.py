@@ -18,23 +18,27 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from ai_trading_system.domains.fundamentals.contracts import (
+    DEFAULT_STATEMENT_BASIS,
+    SUPPORTED_STATEMENT_BASES,
+)
+from ai_trading_system.domains.fundamentals.contracts import (
+    normalize_statement_basis as _normalize_domain_basis,
+)
 from ai_trading_system.interfaces.mcp.context import McpContext, StoreUnavailableError
 from ai_trading_system.interfaces.mcp.envelope import coerce_date
 
-DEFAULT_STATEMENT_BASIS = "standalone"
-SUPPORTED_STATEMENT_BASES = ("standalone", "consolidated")
-
 
 def normalize_statement_basis(value: str | None) -> str:
-    """Validate the statement basis; standalone is the pipeline default."""
+    """Validate the statement basis, defaulting to the pipeline's standalone.
 
-    basis = str(value or DEFAULT_STATEMENT_BASIS).strip().lower()
-    if basis not in SUPPORTED_STATEMENT_BASES:
-        raise ValueError(
-            f"Unsupported statement_basis: {value!r} "
-            f"(expected one of {list(SUPPORTED_STATEMENT_BASES)})"
-        )
-    return basis
+    The vocabulary is owned by ``domains/fundamentals/contracts.py`` and is
+    reused rather than restated — the same one-source-of-truth rule applied to
+    the stage vocabulary. This wrapper only supplies the default for an
+    omitted argument, since the domain helper rejects an empty value outright.
+    """
+
+    return _normalize_domain_basis(value or DEFAULT_STATEMENT_BASIS)
 
 
 def _table_exists(conn: Any, table: str) -> bool:

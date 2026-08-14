@@ -179,7 +179,7 @@ def test_available_bases_reports_what_is_stored(ctx: McpContext) -> None:
 
 
 def test_unsupported_basis_is_rejected(ctx: McpContext) -> None:
-    with pytest.raises(ValueError, match="Unsupported statement_basis"):
+    with pytest.raises(ValueError, match="Unsupported statement basis"):
         screener.financials(ctx, "AAA", statement_basis="proforma")
 
 
