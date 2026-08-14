@@ -18,7 +18,20 @@ The main surfaces are:
 - The Python pipeline and domain packages under `src/ai_trading_system/`.
 - The FastAPI operator backend under `src/ai_trading_system/ui/execution_api/`.
 - The React operator console under `web/execution-console-v2/ai-trading-dashboard-starter/`.
+- The strictly read-only MCP server under `src/ai_trading_system/interfaces/mcp/`.
 - External runtime storage resolved from `.env`, normally through `DATA_ROOT`.
+
+The MCP server (`ai-trading-mcp`) exposes OHLCV, technical features, weekly
+stage, sector structure, ranking with its factor breakdown, and fundamentals to
+an AI agent over stdio. It is read-only by construction: every DuckDB handle
+opens `read_only=True`, every SQLite handle uses a `mode=ro` URI, and it never
+imports execution, trade-journal, broker, or pipeline-orchestration code. Its
+`operator` profile requires an explicit external `DATA_ROOT` and refuses the
+repo-local fallback. Point-in-time reads never return data published after the
+requested date; a surface that cannot answer historically returns no rows
+rather than substituting the present. See
+[ADR-0008](decisions/ADR-0008-read-only-mcp-interface.md) and the
+[MCP tool catalog](reference/mcp_tools.md).
 
 The on-demand [Actual Trading Journal](architecture/trade_journal.md) is a separate bounded domain. It owns `$DATA_ROOT/trade_journal.duckdb`, is not a daily-pipeline stage, never writes `execution.duckdb`, and reads trusted operational market data only for point-in-time enrichment. Its authenticated mutation routes live under the execution API; Phase 4 `/api/v1` remains GET-only. Loopback development uses a server-side Vite/API handshake when no operator key is configured, while non-loopback execution-API startup requires an explicit key. See the [operator runbook](runbooks/trade_journal.md).
 
@@ -506,6 +519,17 @@ VITE_PHASE4_API_BASE_URL=http://127.0.0.1:8765 npm run dev -- --host 127.0.0.1
 Local Vite development requires no login. See the [dashboard
 runbook](runbooks/phase4b_operator_dashboard.md) for routes, configuration,
 fixture smoke testing, and the public-bundle credential caveat.
+
+Start the read-only MCP server for an AI agent, or verify it without serving:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.mcp.server --self-test
+```
+
+Claude Code discovers the server from the repo-root `.mcp.json`. `--self-test`
+calls every tool once at latest and once historically and exits non-zero on any
+failure, including a point-in-time leak. The server never writes, never starts a
+pipeline, and never touches broker state. See [MCP tools](reference/mcp_tools.md).
 
 Run safe diagnostics:
 

@@ -17,6 +17,7 @@ dependencies = [
   "gspread>=5.0",
   "jinja2>=3.1",
   "markdown-it-py>=4.0",
+  "mcp>=1.2",
   "mplfinance>=0.12",
   "numpy==1.26.4",
   "pandas==2.2.3",
@@ -58,6 +59,7 @@ ai-trading-healthcheck = "ai_trading_system.interfaces.cli.healthcheck:main"
 ai-trading-publish-test = "ai_trading_system.pipeline.publish_test:main"
 ai-trading-daily = "ai_trading_system.pipeline.daily_pipeline:main"
 ai-trading-execution-api = "ai_trading_system.ui.execution_api.app:main"
+ai-trading-mcp = "ai_trading_system.interfaces.mcp.server:main"
 ai-trading-research-recipe = "ai_trading_system.research.run_recipe:main"
 ai-trading-bootstrap-data = "ai_trading_system.interfaces.cli.bootstrap_runtime_data:main"
 ai-trading-repair-ingest-schema = "ai_trading_system.interfaces.cli.repair_ingest_schema:main"

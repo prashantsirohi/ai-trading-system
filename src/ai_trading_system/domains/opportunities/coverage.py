@@ -12,7 +12,10 @@ from typing import Any
 import duckdb
 import pandas as pd
 
-from ai_trading_system.domains.opportunities.contracts import WeinsteinStage
+from ai_trading_system.domains.opportunities.contracts import (
+    LEGACY_STAGE_MAP,
+    WeinsteinStage,
+)
 from ai_trading_system.domains.opportunities.routing import (
     ScanRoutingConfig,
     StageCoverageConfig,
@@ -30,14 +33,6 @@ from ai_trading_system.domains.opportunities.stage_governance import (
 from ai_trading_system.domains.ranking.stage_classifier import classify_latest
 from ai_trading_system.domains.ranking.weekly import to_weekly
 
-
-LEGACY_STAGE_MAP = {
-    "S1": WeinsteinStage.STAGE_1,
-    "S2": WeinsteinStage.STAGE_2,
-    "S3": WeinsteinStage.STAGE_3,
-    "S4": WeinsteinStage.STAGE_4,
-    "UNDEFINED": WeinsteinStage.UNKNOWN,
-}
 
 # Single source of truth for sector-stage-aggregation-v1 semantics. The
 # aggregation below and the policy fingerprint (ADR-0006 A3) both read these

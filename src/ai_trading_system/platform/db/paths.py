@@ -286,6 +286,16 @@ def trade_journal_db_path(project_root: Path | str | None = None) -> Path:
     ).root_dir / "trade_journal.duckdb"
 
 
+def control_plane_db_path(
+    project_root: Path | str | None = None,
+    data_domain: str | None = None,
+) -> Path:
+    """Resolve the pipeline control-plane database for a data domain."""
+    return get_domain_paths(
+        project_root=project_root, data_domain=data_domain
+    ).root_dir / "control_plane.duckdb"
+
+
 __all__ = [
     "DataDomain",
     "DataDomainPaths",
@@ -298,4 +308,5 @@ __all__ = [
     "require_data_root_available",
     "research_static_end_date",
     "trade_journal_db_path",
+    "control_plane_db_path",
 ]

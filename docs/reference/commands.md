@@ -357,6 +357,32 @@ policy/source signature match. Use `--checkpoint-dir` to relocate them or
 `--no-resume` to recompute all dates. `Ctrl-C` preserves completed-date
 checkpoints and exits with status 130.
 
+## Read-only MCP server
+
+`ai-trading-mcp` (or `python -m ai_trading_system.interfaces.mcp.server`) serves
+the read surfaces over stdio for an AI agent. It is strictly read-only: every
+DuckDB handle opens with `read_only=True`, every SQLite handle through a
+`mode=ro` URI, and it never imports execution, trade-journal, broker, or
+pipeline-orchestration code.
+
+The default `operator` profile requires an explicit external `DATA_ROOT`; it
+refuses to fall back to the repo-local `data/` tree. Use `--profile fixture`
+only for temporary or repo-local roots.
+
+```bash
+set -a; source .env; set +a
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.mcp.server --self-test
+```
+
+`--self-test` calls every tool once at latest and once at `--self-test-as-of`
+(default `2026-01-02`), prints each response's metadata, and exits non-zero on
+any failure — including a point-in-time leak, which raises rather than
+returning. `--list-tools` prints the tool catalog as JSON without opening a
+store. Claude Code picks the server up from the repo-root `.mcp.json`.
+
+See [MCP tools](mcp_tools.md) for the tool catalog and
+[ADR-0008](../decisions/ADR-0008-read-only-mcp-interface.md) for the invariants.
+
 ## Installed console scripts
 
 After `pip install -e .`, these aliases are defined by `pyproject.toml`:
@@ -380,6 +406,7 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-check-phase4-readiness` | Re-evaluate Phase 4 readiness from a calibration manifest |
 | `ai-trading-pattern-r0-calibrate` | Read-only four-lane pattern R0 calibration and replay verifier |
 | `ai-trading-phase4-api` | Strictly read-only Phase 4A API |
+| `ai-trading-mcp` | Strictly read-only MCP (stdio) server for AI agents |
 | `ai-trading-annotate-phase3c1-governance` | Copied-store Phase 3B governance annotation |
 | `ai-trading-research-recipe` | Research recipe runner |
 | `ai-trading-optimize` | Optimization runner |

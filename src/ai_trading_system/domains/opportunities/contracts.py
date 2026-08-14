@@ -23,6 +23,11 @@ __all__ = [
     "SetupId",
     "SymbolId",
     "WeinsteinStage",
+    "LEGACY_STAGE_MAP",
+    "normalize_stage",
+    "legacy_code_for",
+    "stage_family",
+    "is_transition",
     "StageStatus",
     "StageConfidenceBand",
     "CandidateState",
@@ -70,6 +75,87 @@ class WeinsteinStage(str, Enum):
     STAGE_4 = "stage_4_declining"
     TRANSITION_4_TO_1 = "transition_4_to_1"
     UNKNOWN = "unknown"
+
+
+# Bridge between the legacy short stage codes emitted by
+# `domains/ranking/stage_classifier.py` (and stored in `weekly_stage_snapshot`
+# and `stage_history`) and the canonical `WeinsteinStage` vocabulary used by the
+# Phase 3B/3C governance stores. Kept here, beside the enum, so read-only
+# consumers can translate without importing `coverage.py` and its DuckDB,
+# SQLite, routing and governance dependencies.
+#
+# The mapping is deliberately asymmetric: the four transition members have no
+# legacy code at all, so `legacy_code_for` returns None for them.
+LEGACY_STAGE_MAP: Mapping[str, "WeinsteinStage"] = MappingProxyType(
+    {
+        "S1": WeinsteinStage.STAGE_1,
+        "S2": WeinsteinStage.STAGE_2,
+        "S3": WeinsteinStage.STAGE_3,
+        "S4": WeinsteinStage.STAGE_4,
+        "UNDEFINED": WeinsteinStage.UNKNOWN,
+    }
+)
+
+_LEGACY_CODE_BY_STAGE: Mapping["WeinsteinStage", str] = MappingProxyType(
+    {stage: code for code, stage in LEGACY_STAGE_MAP.items()}
+)
+
+# The settled stage a transition is leaving, so callers can filter by structural
+# family without having to enumerate transition members.
+_STAGE_FAMILY: Mapping["WeinsteinStage", str] = MappingProxyType(
+    {
+        WeinsteinStage.STAGE_1: "stage_1",
+        WeinsteinStage.TRANSITION_1_TO_2: "stage_1",
+        WeinsteinStage.STAGE_2: "stage_2",
+        WeinsteinStage.TRANSITION_2_TO_3: "stage_2",
+        WeinsteinStage.STAGE_3: "stage_3",
+        WeinsteinStage.TRANSITION_3_TO_4: "stage_3",
+        WeinsteinStage.STAGE_4: "stage_4",
+        WeinsteinStage.TRANSITION_4_TO_1: "stage_4",
+        WeinsteinStage.UNKNOWN: "unknown",
+    }
+)
+
+
+def normalize_stage(value: Any) -> WeinsteinStage:
+    """Coerce either stage spelling into the canonical `WeinsteinStage`.
+
+    Accepts a `WeinsteinStage`, a canonical value such as `stage_2_advancing`,
+    or a legacy code such as `S2`. Anything unrecognised becomes `UNKNOWN`
+    rather than raising, so one odd row cannot fail a whole read.
+    """
+    if isinstance(value, WeinsteinStage):
+        return value
+    if value is None:
+        return WeinsteinStage.UNKNOWN
+    text = str(value).strip()
+    if not text:
+        return WeinsteinStage.UNKNOWN
+    legacy = LEGACY_STAGE_MAP.get(text.upper())
+    if legacy is not None:
+        return legacy
+    try:
+        return WeinsteinStage(text.lower())
+    except ValueError:
+        return WeinsteinStage.UNKNOWN
+
+
+def legacy_code_for(stage: Any) -> str | None:
+    """Legacy short code for a stage, or None when it has no representation.
+
+    The four transition members are exactly the values with no legacy code.
+    """
+    return _LEGACY_CODE_BY_STAGE.get(normalize_stage(stage))
+
+
+def stage_family(stage: Any) -> str:
+    """Structural family of a stage; a transition reports the stage it leaves."""
+    return _STAGE_FAMILY[normalize_stage(stage)]
+
+
+def is_transition(stage: Any) -> bool:
+    """True when the stage is one of the four transition members."""
+    return legacy_code_for(stage) is None
 
 
 class StageStatus(str, Enum):

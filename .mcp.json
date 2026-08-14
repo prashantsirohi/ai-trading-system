@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "ai-trading-system": {
+      "command": "./.venv/bin/python",
+      "args": [
+        "-m",
+        "ai_trading_system.interfaces.mcp.server",
+        "--profile",
+        "operator",
+        "--data-domain",
+        "operational"
+      ],
+      "env": {
+        "PYTHONPATH": "src"
+      }
+    }
+  }
+}

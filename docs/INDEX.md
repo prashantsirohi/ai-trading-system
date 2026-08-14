@@ -61,6 +61,7 @@
 - [configuration](reference/configuration.md)
 - [environment_variables](reference/environment_variables.md)
 - [api_reference](reference/api_reference.md)
+- [mcp_tools](reference/mcp_tools.md)
 - [database_schema](reference/database_schema.md)
 - [artifacts](reference/artifacts.md)
 - [data_sources](reference/data_sources.md)
@@ -110,6 +111,7 @@
 - [ADR-0005 React operator workspace](decisions/ADR-0005-react-operator-workspace.md)
 - [ADR-0006 entry model and stage policy freeze](decisions/ADR-0006-entry-model-and-stage-policy-freeze.md)
 - [ADR-0007 multi-lane pattern evidence scan (proposed)](decisions/ADR-0007-two-lane-pattern-scan.md)
+- [ADR-0008 read-only MCP interface](decisions/ADR-0008-read-only-mcp-interface.md)
 
 ## Evidence
 - [R1a shadow A/B safety proof (2026-07-17 @ 7d5f03a)](evidence/adr-0007/r1a-safety-proof/2026-07-17-7d5f03a/README.md)
