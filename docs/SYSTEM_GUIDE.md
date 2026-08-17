@@ -246,6 +246,12 @@ is selected per symbol, preferring consolidated only when it is current and has
 enough quarterly and annual history, otherwise falling back to standalone.
 Resolved output exposes the selected basis and resolution reason, and never
 joins facts or valuations across bases.
+Quarterly missing-results syncs suppress a symbol for 72 hours after a fresh
+export still lacks the expected quarter; operators can override that cooldown.
+A consolidated request already classified as terminal standalone-only is not
+reselected merely because no consolidated row can exist. Batch history records
+the expected report date, cooldown, and separate succeeded/skipped/failed
+counts.
 Standalone-only pages without a basis toggle are accepted only when the
 canonical standalone URL renders financial period headers. Known exchange
 ticker renames are resolved through an explicit Screener alias map while rows

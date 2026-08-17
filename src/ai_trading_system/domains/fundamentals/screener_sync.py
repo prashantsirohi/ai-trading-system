@@ -7,7 +7,8 @@ import sqlite3
 import sys
 import time
 import uuid
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -20,11 +21,20 @@ from ai_trading_system.platform.db.paths import get_domain_paths
 
 DEFAULT_SYMBOL_ATTEMPTS = 3
 DEFAULT_RETRY_BACKOFF_SEC = 5.0
+DEFAULT_MISSING_RESULTS_RETRY_COOLDOWN_HOURS = 72.0
 BOTH_STATEMENT_BASES = "both"
 
 
 class MissingExpectedQuarterError(ValueError):
     """Raised when a Screener export is valid but not updated to the expected quarter."""
+
+
+@dataclass(frozen=True)
+class MissingQuarterSelection:
+    symbols: list[str]
+    already_present: int
+    terminal_standalone_fallback: int
+    retry_cooldown: int
 
 
 def run_unified_sync(
@@ -89,6 +99,7 @@ def run_sync(
     throttle_sec: float = 2.0,
     refresh_readmodels: bool = True,
     missing_current_results: bool = False,
+    missing_results_retry_cooldown_hours: float = DEFAULT_MISSING_RESULTS_RETRY_COOLDOWN_HOURS,
     as_of_date: str | None = None,
     expected_report_date: str | None = None,
     symbols: list[str] | None = None,
@@ -96,6 +107,8 @@ def run_sync(
     valuation_migration_backup_dir: str | Path | None = None,
 ) -> dict[str, int | str]:
     requested_basis = normalize_statement_basis(statement_basis)
+    if float(missing_results_retry_cooldown_hours) < 0:
+        raise ValueError("missing_results_retry_cooldown_hours must be non-negative")
     paths = get_domain_paths()
     resolved_db_path = Path(db_path) if db_path is not None else paths.fundamentals_dir / "screener_financials.db"
     resolved_exports_dir = Path(exports_dir) if exports_dir is not None else paths.fundamentals_dir / "exports"
@@ -118,21 +131,32 @@ def run_sync(
             if symbol in available_symbols or client.excel_path(symbol, statement_basis=requested_basis).exists()
         ]
     resolved_expected_report_date = None
+    missing_selection: MissingQuarterSelection | None = None
     if missing_current_results:
         resolved_expected_report_date = expected_report_date or expected_quarterly_report_date(as_of_date)
-        symbols = _symbols_missing_quarterly_report_date(
+        missing_selection = _select_symbols_missing_quarterly_report_date(
             resolved_db_path,
             all_symbols,
             report_date=resolved_expected_report_date,
             statement_basis=requested_basis,
+            retry_cooldown_hours=missing_results_retry_cooldown_hours,
         )
+        symbols = missing_selection.symbols
     else:
         synced = set() if force else store.get_synced_symbols(requested_basis=requested_basis)
         symbols = [symbol for symbol in all_symbols if symbol not in synced]
     if limit is not None:
         symbols = symbols[: int(limit)]
     batch_id = f"screener-{uuid.uuid4().hex[:10]}"
-    store.begin_batch(batch_id, symbols_total=len(symbols), exports_dir=resolved_exports_dir, force=force)
+    store.begin_batch(
+        batch_id,
+        symbols_total=len(symbols),
+        exports_dir=resolved_exports_dir,
+        force=force,
+        missing_current_results=missing_current_results,
+        expected_report_date=resolved_expected_report_date,
+        retry_cooldown_hours=missing_results_retry_cooldown_hours if missing_current_results else None,
+    )
     _emit(
         progress,
         "Starting Screener sync "
@@ -142,6 +166,16 @@ def run_sync(
         f" statement_basis={requested_basis}"
         f"{f' missing_current_results=True expected_report_date={resolved_expected_report_date}' if missing_current_results else ''}",
     )
+    if missing_selection is not None:
+        _emit(
+            progress,
+            "Missing-results selection "
+            f"eligible_before_limit={len(missing_selection.symbols)} "
+            f"already_present={missing_selection.already_present} "
+            f"terminal_standalone_fallback={missing_selection.terminal_standalone_fallback} "
+            f"retry_cooldown={missing_selection.retry_cooldown} "
+            f"retry_cooldown_hours={float(missing_results_retry_cooldown_hours):g}",
+        )
     if not symbols:
         if missing_current_results:
             _emit(
@@ -214,7 +248,7 @@ def run_sync(
                 f"[{index + 1}/{len(symbols)}] {symbol}: failed "
                 f"error={type(exc).__name__}: {exc} succeeded={succeeded} skipped={skipped} failed={failed}",
             )
-    store.finish_batch(batch_id, succeeded=succeeded, failed=failed)
+    store.finish_batch(batch_id, succeeded=succeeded, skipped=skipped, failed=failed)
     if refresh_readmodels and succeeded:
         _emit(progress, f"Refreshing fundamentals readmodels from {resolved_db_path}")
         refresh_fundamental_readmodels(db_path=resolved_db_path)
@@ -364,6 +398,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Manual quarterly report_date override for --missing-current-results.",
     )
+    parser.add_argument(
+        "--missing-results-retry-cooldown-hours",
+        type=float,
+        default=DEFAULT_MISSING_RESULTS_RETRY_COOLDOWN_HOURS,
+        help=(
+            "Do not redownload a symbol whose same-basis export was recently checked and still lacked "
+            "the expected quarter; set to 0 to disable the cooldown."
+        ),
+    )
     parser.add_argument("--symbol", action="append", dest="symbols", help="Limit sync to one symbol; repeatable.")
     parser.add_argument("--symbols-file", default=None, help="Text file of symbols to sync, one per line.")
     parser.add_argument("--throttle-sec", type=float, default=2.0)
@@ -392,6 +435,7 @@ def main() -> None:
             throttle_sec=args.throttle_sec,
             refresh_readmodels=not args.no_refresh_readmodels,
             missing_current_results=args.missing_current_results,
+            missing_results_retry_cooldown_hours=args.missing_results_retry_cooldown_hours,
             as_of_date=args.as_of_date,
             expected_report_date=args.expected_report_date,
             symbols=_requested_symbols(args.symbols, args.symbols_file),
@@ -491,9 +535,28 @@ def _symbols_missing_quarterly_report_date(
     *,
     report_date: str,
     statement_basis: str,
+    retry_cooldown_hours: float = 0.0,
 ) -> list[str]:
+    return _select_symbols_missing_quarterly_report_date(
+        db_path,
+        symbols,
+        report_date=report_date,
+        statement_basis=statement_basis,
+        retry_cooldown_hours=retry_cooldown_hours,
+    ).symbols
+
+
+def _select_symbols_missing_quarterly_report_date(
+    db_path: Path,
+    symbols: list[str],
+    *,
+    report_date: str,
+    statement_basis: str,
+    retry_cooldown_hours: float,
+) -> MissingQuarterSelection:
     if not symbols:
-        return []
+        return MissingQuarterSelection([], 0, 0, 0)
+    basis = normalize_statement_basis(statement_basis)
     conn = sqlite3.connect(db_path)
     try:
         rows = conn.execute(
@@ -504,12 +567,55 @@ def _symbols_missing_quarterly_report_date(
               AND date(report_date) = date(?)
               AND lower(trim(statement_basis)) = ?
             """,
-            (report_date, normalize_statement_basis(statement_basis)),
+            (report_date, basis),
         ).fetchall()
+        terminal_fallback_rows = []
+        if basis == "consolidated":
+            terminal_fallback_rows = conn.execute(
+                """
+                SELECT DISTINCT upper(trim(symbol)) AS symbol
+                FROM screener_sync_result
+                WHERE requested_basis = 'consolidated'
+                  AND detected_basis = 'standalone'
+                  AND status = 'succeeded'
+                """
+            ).fetchall()
+        cooldown_rows = []
+        if float(retry_cooldown_hours) > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=float(retry_cooldown_hours))
+            cooldown_rows = conn.execute(
+                """
+                SELECT DISTINCT upper(trim(r.symbol)) AS symbol
+                FROM screener_sync_result r
+                JOIN screener_sync_batch b ON b.sync_batch_id = r.sync_batch_id
+                WHERE r.requested_basis = ?
+                  AND r.status = 'skipped'
+                  AND b.missing_current_results = 1
+                  AND date(b.expected_report_date) = date(?)
+                  AND datetime(r.created_at) >= datetime(?)
+                """,
+                (basis, report_date, cutoff.isoformat()),
+            ).fetchall()
     finally:
         conn.close()
     present = {str(row[0]).upper().strip() for row in rows if str(row[0]).strip()}
-    return [symbol for symbol in symbols if symbol.upper().strip() not in present]
+    terminal_fallback = {
+        str(row[0]).upper().strip() for row in terminal_fallback_rows if str(row[0]).strip()
+    }
+    retry_cooldown = {str(row[0]).upper().strip() for row in cooldown_rows if str(row[0]).strip()}
+    universe = {symbol.upper().strip() for symbol in symbols}
+    return MissingQuarterSelection(
+        symbols=[
+            symbol
+            for symbol in symbols
+            if symbol.upper().strip() not in present
+            and symbol.upper().strip() not in terminal_fallback
+            and symbol.upper().strip() not in retry_cooldown
+        ],
+        already_present=len(universe & present),
+        terminal_standalone_fallback=len((universe - present) & terminal_fallback),
+        retry_cooldown=len((universe - present - terminal_fallback) & retry_cooldown),
+    )
 
 
 def _has_quarterly_report_date(data: dict, report_date: str) -> bool:

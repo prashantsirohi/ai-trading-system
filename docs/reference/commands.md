@@ -496,7 +496,11 @@ and consolidated independently and refreshes resolved readmodels once. Use
 `--statement-basis standalone` or `consolidated` only for diagnostics, targeted
 replay, or canaries. Add `--missing-current-results` for a quarterly update; it
 selects only symbols missing the inferred expected quarter and forces a fresh
-download when `--allow-download` is present. When a
+download when `--allow-download` is present. A fresh export that still lacks
+the quarter is not retried for 72 hours by default; change this with
+`--missing-results-retry-cooldown-hours`, or set it to `0` to disable the
+cooldown. Persisted terminal standalone-only classifications are excluded from
+the consolidated missing-results pass. When a
 legacy `screener_market_valuation` key is detected, also supply
 `--statement-basis-migration-backup-dir <directory>`; the deprecated
 `--valuation-migration-backup-dir` spelling remains an alias. The command refuses to migrate

@@ -116,11 +116,19 @@ Skip path: when the scores CSV is missing, the stage writes only `fundamental_su
 - Screener download sync is separately resumable by requested basis through
   `screener_sync_result`. HTTP 429 responses are never parsed and retry with a
   bounded backoff, honoring numeric `Retry-After` when supplied.
+- Missing-current-results syncs force a fresh export only when the symbol is
+  eligible. A valid export that still lacks the expected quarter starts a
+  72-hour retry cooldown by default; use
+  `--missing-results-retry-cooldown-hours` to change it or `0` to disable it.
+  The cooldown is scoped to the exact requested basis and expected report date.
 - The unified command defaults to `--statement-basis both`: it resumes the
   standalone and consolidated ledgers independently and refreshes resolved
   score/trend readmodels once after both passes. A consolidated request that
   renders standalone remains a terminal standalone-only classification and is
-  not repeatedly downloaded during ordinary sync.
+  excluded from consolidated missing-results retries as well as ordinary sync.
+- `screener_sync_batch` records whether missing-results mode was used, its
+  expected report date and cooldown, and separate succeeded, skipped, and
+  failed counts.
 - A standalone-only company may omit the basis toggle. The downloader accepts
   that page only from the explicit standalone URL and only when statement
   period headers are rendered. A small explicit alias map resolves known
@@ -141,6 +149,10 @@ ai-trading-fundamentals-sync --allow-download --throttle-sec 2
 
 # Unified quarterly update: fetch only symbols missing the expected current quarter.
 ai-trading-fundamentals-sync --allow-download --missing-current-results --throttle-sec 2
+
+# Check skipped symbols sooner than the default 72-hour cooldown.
+ai-trading-fundamentals-sync --allow-download --missing-current-results \
+  --missing-results-retry-cooldown-hours 24
 
 # Explicit physical-basis modes remain available for diagnosis or replay.
 ai-trading-fundamentals-sync --statement-basis standalone

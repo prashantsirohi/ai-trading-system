@@ -35,7 +35,10 @@ available_at)` identity; valuation rows use `(symbol, date, statement_basis,
 source)`. A legacy financial table whose column exists but whose primary key
 omits `statement_basis` is rebuilt to the same basis-aware identity before any
 consolidated write. `screener_sync_result` retains requested-versus-detected basis and
-export-path evidence for each attempted symbol. Existing valuation stores with
+export-path evidence for each attempted symbol. `screener_sync_batch` records
+the missing-results mode, expected report date, retry cooldown, and separate
+succeeded/skipped/failed counts. Those fields let selection suppress a recent
+same-quarter skip without hiding it from audit. Existing valuation stores with
 either legacy key refuse implicit upgrade: the sync requires an explicit migration
 backup directory, creates a consistent SQLite backup plus SHA-256 sidecar, then
 performs and row-count-verifies the transactional table rebuild.

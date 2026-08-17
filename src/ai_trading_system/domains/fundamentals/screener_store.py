@@ -225,12 +225,20 @@ class ScreenerFinancialsStore:
                     status TEXT NOT NULL,
                     symbols_total INTEGER DEFAULT 0,
                     symbols_succeeded INTEGER DEFAULT 0,
+                    symbols_skipped INTEGER DEFAULT 0,
                     symbols_failed INTEGER DEFAULT 0,
                     exports_dir TEXT,
-                    force INTEGER DEFAULT 0
+                    force INTEGER DEFAULT 0,
+                    missing_current_results INTEGER DEFAULT 0,
+                    expected_report_date DATE,
+                    retry_cooldown_hours REAL
                 )
                 """
             )
+            _ensure_sqlite_column(conn, "screener_sync_batch", "symbols_skipped", "INTEGER DEFAULT 0")
+            _ensure_sqlite_column(conn, "screener_sync_batch", "missing_current_results", "INTEGER DEFAULT 0")
+            _ensure_sqlite_column(conn, "screener_sync_batch", "expected_report_date", "DATE")
+            _ensure_sqlite_column(conn, "screener_sync_batch", "retry_cooldown_hours", "REAL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS screener_sync_error (
@@ -319,30 +327,50 @@ class ScreenerFinancialsStore:
 
         return self.backup_for_statement_basis_migration(backup_dir)
 
-    def begin_batch(self, sync_batch_id: str, *, symbols_total: int, exports_dir: Path, force: bool) -> None:
+    def begin_batch(
+        self,
+        sync_batch_id: str,
+        *,
+        symbols_total: int,
+        exports_dir: Path,
+        force: bool,
+        missing_current_results: bool = False,
+        expected_report_date: str | None = None,
+        retry_cooldown_hours: float | None = None,
+    ) -> None:
         now = _utc_now()
         with self.connect() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO screener_sync_batch (
                     sync_batch_id, started_at, status, symbols_total, symbols_succeeded,
-                    symbols_failed, exports_dir, force
-                ) VALUES (?, ?, 'running', ?, 0, 0, ?, ?)
+                    symbols_skipped, symbols_failed, exports_dir, force,
+                    missing_current_results, expected_report_date, retry_cooldown_hours
+                ) VALUES (?, ?, 'running', ?, 0, 0, 0, ?, ?, ?, ?, ?)
                 """,
-                (sync_batch_id, now, int(symbols_total), str(exports_dir), int(force)),
+                (
+                    sync_batch_id,
+                    now,
+                    int(symbols_total),
+                    str(exports_dir),
+                    int(force),
+                    int(missing_current_results),
+                    expected_report_date,
+                    retry_cooldown_hours,
+                ),
             )
             conn.commit()
 
-    def finish_batch(self, sync_batch_id: str, *, succeeded: int, failed: int) -> None:
+    def finish_batch(self, sync_batch_id: str, *, succeeded: int, failed: int, skipped: int = 0) -> None:
         status = "completed" if failed == 0 else "completed_with_errors"
         with self.connect() as conn:
             conn.execute(
                 """
                 UPDATE screener_sync_batch
-                SET finished_at = ?, status = ?, symbols_succeeded = ?, symbols_failed = ?
+                SET finished_at = ?, status = ?, symbols_succeeded = ?, symbols_skipped = ?, symbols_failed = ?
                 WHERE sync_batch_id = ?
                 """,
-                (_utc_now(), status, int(succeeded), int(failed), sync_batch_id),
+                (_utc_now(), status, int(succeeded), int(skipped), int(failed), sync_batch_id),
             )
             conn.commit()
 

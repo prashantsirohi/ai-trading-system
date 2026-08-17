@@ -24,7 +24,9 @@ def test_screener_sync_defaults_follow_data_root(monkeypatch, tmp_path: Path) ->
 
 
 def test_screener_sync_defaults_to_unified_both_basis_mode() -> None:
-    assert build_parser().parse_args([]).statement_basis == "both"
+    args = build_parser().parse_args([])
+    assert args.statement_basis == "both"
+    assert args.missing_results_retry_cooldown_hours == 72.0
 
 
 def test_unified_sync_runs_both_bases_and_refreshes_once(monkeypatch, tmp_path: Path) -> None:
@@ -175,6 +177,78 @@ def test_symbols_missing_quarterly_report_date_selects_only_missing(tmp_path: Pa
     assert missing == ["BBB"]
 
 
+def test_missing_current_results_observes_retry_cooldown_for_recent_skip(tmp_path: Path) -> None:
+    db_path = tmp_path / "screener_financials.db"
+    store = ScreenerFinancialsStore(db_path)
+    store.begin_batch(
+        "batch-recent-skip",
+        symbols_total=1,
+        exports_dir=tmp_path / "exports",
+        force=False,
+        missing_current_results=True,
+        expected_report_date="2025-12-31",
+        retry_cooldown_hours=72.0,
+    )
+    store.record_sync_result(
+        "batch-recent-skip",
+        "AAA",
+        requested_basis="standalone",
+        detected_basis="standalone",
+        export_path=tmp_path / "exports" / "AAA_screener.xlsx",
+        status="skipped",
+    )
+    store.finish_batch("batch-recent-skip", succeeded=0, skipped=1, failed=0)
+
+    selection = screener_sync._select_symbols_missing_quarterly_report_date(
+        db_path,
+        ["AAA", "BBB"],
+        report_date="2025-12-31",
+        statement_basis="standalone",
+        retry_cooldown_hours=72.0,
+    )
+
+    assert selection.symbols == ["BBB"]
+    assert selection.retry_cooldown == 1
+    assert screener_sync._symbols_missing_quarterly_report_date(
+        db_path,
+        ["AAA", "BBB"],
+        report_date="2025-12-31",
+        statement_basis="standalone",
+        retry_cooldown_hours=0,
+    ) == ["AAA", "BBB"]
+
+
+def test_consolidated_missing_results_excludes_terminal_standalone_fallback(tmp_path: Path) -> None:
+    db_path = tmp_path / "screener_financials.db"
+    store = ScreenerFinancialsStore(db_path)
+    store.begin_batch(
+        "batch-terminal-fallback",
+        symbols_total=1,
+        exports_dir=tmp_path / "exports",
+        force=False,
+    )
+    store.record_sync_result(
+        "batch-terminal-fallback",
+        "AAA",
+        requested_basis="consolidated",
+        detected_basis="standalone",
+        export_path=tmp_path / "exports" / "AAA_screener.xlsx",
+        status="succeeded",
+    )
+    store.finish_batch("batch-terminal-fallback", succeeded=1, failed=0)
+
+    selection = screener_sync._select_symbols_missing_quarterly_report_date(
+        db_path,
+        ["AAA", "BBB"],
+        report_date="2025-12-31",
+        statement_basis="consolidated",
+        retry_cooldown_hours=72.0,
+    )
+
+    assert selection.symbols == ["BBB"]
+    assert selection.terminal_standalone_fallback == 1
+
+
 def test_missing_current_results_reparses_local_export_when_expected_quarter_present(
     monkeypatch,
     tmp_path: Path,
@@ -293,7 +367,15 @@ def test_missing_current_results_skips_stale_export_without_expected_quarter(
     assert calls == ["AAA"]
     with sqlite3.connect(db_path) as conn:
         error = conn.execute("SELECT error FROM screener_sync_error WHERE symbol = 'AAA'").fetchone()
+        batch = conn.execute(
+            """
+            SELECT symbols_total, symbols_succeeded, symbols_skipped, symbols_failed,
+                   missing_current_results, expected_report_date, retry_cooldown_hours
+            FROM screener_sync_batch
+            """
+        ).fetchone()
     assert error is None
+    assert batch == (1, 0, 1, 0, 1, "2025-12-31", 72.0)
 
 
 def test_sync_retries_transient_symbol_failure(monkeypatch, tmp_path: Path) -> None:
