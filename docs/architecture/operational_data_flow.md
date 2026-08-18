@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed execution, handoff, DQ, and retry flow for the current operational pipeline.
 - **Audience:** Operators debugging a run, engineers changing a stage, and reviewers tracing artifacts.
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-08-15
 - **Source of truth:** `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/pipeline/preflight.py`, `src/ai_trading_system/pipeline/contracts.py`, and `src/ai_trading_system/pipeline/stages/`.
 
 ---
@@ -19,7 +19,7 @@ Start with the [System Guide](../SYSTEM_GUIDE.md). This document expands only th
 The canonical logical order is:
 
 ```text
-ingest -> features -> rank -> weekly_stage -> scan_router -> investigator -> opportunities -> fundamentals -> candidates
+ingest -> features -> rank -> weekly_stage -> pattern_lane_scan -> scan_router -> investigator -> fundamentals -> fundamental_discovery -> opportunities -> candidates
        -> candidate_tracker -> events -> execute -> insight -> narrative
        -> publish -> perf_tracker
 ```

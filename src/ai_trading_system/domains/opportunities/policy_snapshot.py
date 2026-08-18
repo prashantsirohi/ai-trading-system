@@ -18,6 +18,16 @@ from typing import Any, Mapping
 from ai_trading_system.domains.opportunities.contracts import (
     STAGE_CONFIDENCE_FORMULA_VERSION,
 )
+from ai_trading_system.domains.fundamentals.contracts import (
+    FUNDAMENTAL_DISCOVERY_TAXONOMY_VERSION,
+    FUNDAMENTAL_THESIS_ADMISSION_VERSION,
+    FUNDAMENTAL_THESIS_PRECEDENCE,
+    FUNDAMENTAL_THESIS_RULE_VERSION,
+)
+from ai_trading_system.domains.fundamentals.discovery import (
+    ALLOWED_ADMISSION_STAGES,
+    FUNDAMENTAL_THESIS_RULE_CONTENT,
+)
 from ai_trading_system.domains.opportunities.coverage import SECTOR_AGGREGATION_RULES
 from ai_trading_system.domains.opportunities.orchestration import contracts as admission_policy
 from ai_trading_system.domains.opportunities.orchestration.contracts import (
@@ -190,6 +200,17 @@ def policy_content(
             "aliases": dict(INVESTIGATOR_SECTOR_INDEX_ALIASES),
             "requires_primary_mapping": True,
             "unmapped_consumer_policy": "fail_closed",
+        },
+        FUNDAMENTAL_DISCOVERY_TAXONOMY_VERSION: {
+            "families": [family.value for family in FUNDAMENTAL_THESIS_PRECEDENCE],
+            "unclassified_is_lane": False,
+            "unsupported_financial_model_is_lane": False,
+        },
+        FUNDAMENTAL_THESIS_RULE_VERSION: dict(FUNDAMENTAL_THESIS_RULE_CONTENT),
+        FUNDAMENTAL_THESIS_ADMISSION_VERSION: {
+            "allowed_structural_stages": sorted(ALLOWED_ADMISSION_STAGES),
+            "requires_daily_context": True,
+            "execution_eligibility": False,
         },
     }
 

@@ -2,7 +2,7 @@
 
 - **Purpose:** Operate the optional canonical opportunity-registry shadow stage.
 - **Audience:** Operators and engineers debugging opportunity reconciliation.
-- **Last verified:** 2026-08-02
+- **Last verified:** 2026-08-15
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
@@ -24,6 +24,8 @@ Required input is registered `rank/ranked_signals`. Optional inputs are full Inv
 Writes are append-oriented canonical observations in `$DATA_ROOT/control_plane.duckdb` through `OpportunityRegistryService`. `--opportunity-registry-dry-run` disables those writes while retaining audit files. The stage never writes execution or candidate-tracker stores.
 
 The attempt directory contains `opportunity_shadow_summary.json` and the admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, compatibility, recovery-proposal/action, and position-monitor reconciliation CSVs listed in the [artifact reference](../reference/artifacts.md).
+
+When both `--fundamental-discovery-mode shadow` and registry shadow are enabled, the stage also consumes `fundamental_thesis_universe`, emits `candidate_fundamental_observations.csv`, and persists `candidate_fundamental_observation`. `FUNDAMENTAL_THESIS` uses a separate `fundamental_thesis` setup family and a duplicate typed source bundle, so it neither replaces nor attaches to technical or Investigator-primary episodes. Compare mode never supplies this registry input.
 
 ## Main modules
 

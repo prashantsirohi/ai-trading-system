@@ -2,7 +2,7 @@
 
 - **Purpose:** Define the canonical Phase-1 vocabulary for opportunity, evidence, lifecycle, structural stage, retention, policy guards, and attribution.
 - **Audience:** Ranking, Investigator, candidate-tracker, execution-policy, research, and operator-surface developers.
-- **Last verified:** 2026-07-14
+- **Last verified:** 2026-08-15
 - **Source of truth:** `src/ai_trading_system/domains/opportunities/`.
 
 ---
@@ -10,6 +10,8 @@
 ## Four independent axes
 
 The opportunity domain preserves four independent observations. It does not compute a blended score.
+
+`FundamentalThesisSnapshot` is an additional typed, independent observation. It carries primary and secondary thesis families, seven rule evaluations, source-data hash and dates, statement basis, blockers, and policy lineage. It is never blended into rank or Investigator evidence. In shadow mode, `FUNDAMENTAL_THESIS` / `fundamental_thesis` owns one parallel episode per security; a primary-thesis change appends an observation instead of opening a duplicate episode.
 
 1. **Opportunity** is cross-sectional attractiveness from Ranking.
 2. **Evidence** is pattern, accumulation, volume, delivery, breakout, sector, and market evidence from Investigator and scanners.

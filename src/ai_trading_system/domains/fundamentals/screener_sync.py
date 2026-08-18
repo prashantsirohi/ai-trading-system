@@ -13,8 +13,16 @@ from pathlib import Path
 from typing import Callable
 
 from ai_trading_system.domains.fundamentals.contracts import SUPPORTED_STATEMENT_BASES, normalize_statement_basis
+from ai_trading_system.domains.fundamentals.analytical_store import (
+    connect_fundamentals_duckdb,
+    default_fundamentals_duckdb_path,
+)
+from ai_trading_system.domains.fundamentals.discovery import (
+    fundamental_source_hash,
+    record_sync_receipt,
+)
 from ai_trading_system.domains.fundamentals.screener_client import ScreenerClient, ScreenerRateLimitError
-from ai_trading_system.domains.fundamentals.screener_readmodels import refresh_fundamental_readmodels
+from ai_trading_system.domains.fundamentals.screener_readmodels import build_raw_factor_frame, refresh_fundamental_readmodels
 from ai_trading_system.domains.fundamentals.screener_store import ScreenerFinancialsStore
 from ai_trading_system.platform.db.paths import get_domain_paths
 
@@ -105,6 +113,7 @@ def run_sync(
     symbols: list[str] | None = None,
     progress: Callable[[str], None] | None = None,
     valuation_migration_backup_dir: str | Path | None = None,
+    fundamentals_duckdb_path: str | Path | None = None,
 ) -> dict[str, int | str]:
     requested_basis = normalize_statement_basis(statement_basis)
     if float(missing_results_retry_cooldown_hours) < 0:
@@ -189,6 +198,9 @@ def run_sync(
     skipped = 0
     detected_standalone = 0
     detected_consolidated = 0
+    succeeded_symbols: list[str] = []
+    skipped_symbols: list[str] = []
+    failed_symbols: list[str] = []
     for index, symbol in enumerate(symbols):
         item_start = time.monotonic()
         action = "download+parse" if allow_download else "parse export"
@@ -219,6 +231,7 @@ def run_sync(
                     f"requested={requested_basis} detected={detected_basis}",
                 )
             succeeded += 1
+            succeeded_symbols.append(symbol)
             _emit(
                 progress,
                 f"[{index + 1}/{len(symbols)}] {symbol}: ok "
@@ -226,6 +239,7 @@ def run_sync(
             )
         except MissingExpectedQuarterError as exc:
             skipped += 1
+            skipped_symbols.append(symbol)
             _emit(
                 progress,
                 f"[{index + 1}/{len(symbols)}] {symbol}: skipped "
@@ -234,6 +248,7 @@ def run_sync(
             )
         except Exception as exc:  # noqa: BLE001
             failed += 1
+            failed_symbols.append(symbol)
             store.record_sync_result(
                 batch_id,
                 symbol,
@@ -255,6 +270,47 @@ def run_sync(
         _emit(progress, "Readmodel refresh completed")
     elif refresh_readmodels:
         _emit(progress, "Readmodel refresh skipped because no symbols succeeded")
+    source_versions: dict[str, dict[str, object]] = {}
+    if succeeded_symbols:
+        try:
+            factors = build_raw_factor_frame(
+                store,
+                statement_basis_policy=requested_basis,
+                as_of_date=as_of_date or date.today().isoformat(),
+            )
+            if "symbol" in factors.columns:
+                for _, row in factors.loc[factors["symbol"].isin(succeeded_symbols)].iterrows():
+                    source_versions[str(row["symbol"])] = {
+                        "statement_basis": str(row.get("statement_basis") or requested_basis),
+                        "latest_available_at": str(row.get("source_available_at") or ""),
+                        "source_data_hash": fundamental_source_hash(row),
+                        "source_batch_ids": [batch_id],
+                    }
+        except (AttributeError, KeyError, ValueError):
+            # The receipt still records the batch result if a legacy/fake store
+            # cannot expose the resolved readmodel used for source hashing.
+            source_versions = {}
+    receipt_db = (
+        Path(fundamentals_duckdb_path)
+        if fundamentals_duckdb_path
+        else resolved_db_path.with_name("fundamentals.duckdb")
+    )
+    receipt_conn = connect_fundamentals_duckdb(receipt_db)
+    try:
+        record_sync_receipt(
+            receipt_conn,
+            receipt_id=f"fundamental-sync-receipt-{batch_id}",
+            sync_batch_ids=[batch_id],
+            statement_basis=requested_basis,
+            status="degraded" if failed else "completed",
+            symbols_total=len(symbols),
+            succeeded_symbols=succeeded_symbols,
+            skipped_symbols=skipped_symbols,
+            failed_symbols=failed_symbols,
+            source_versions=source_versions,
+        )
+    finally:
+        receipt_conn.close()
     _emit(
         progress,
         f"Finished Screener sync sync_batch_id={batch_id} total={len(symbols)} "
@@ -368,6 +424,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Statement basis to request; 'both' runs standalone then consolidated with one final readmodel refresh.",
     )
     parser.add_argument(
+        "--fundamentals-duckdb-path",
+        default=str(default_fundamentals_duckdb_path()),
+        help="Analytical fundamentals DuckDB receiving append-only sync receipts.",
+    )
+    parser.add_argument(
         "--db-path",
         default=str(paths.fundamentals_dir / "screener_financials.db"),
         help="Canonical Screener SQLite DB path.",
@@ -441,6 +502,7 @@ def main() -> None:
             symbols=_requested_symbols(args.symbols, args.symbols_file),
             progress=lambda message: print(message, flush=True),
             valuation_migration_backup_dir=args.valuation_migration_backup_dir,
+            fundamentals_duckdb_path=args.fundamentals_duckdb_path,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"FATAL Screener sync failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)

@@ -24,15 +24,17 @@ from ai_trading_system.domains.opportunities.contracts import (
 from ai_trading_system.domains.opportunities.position_monitoring import (
     PositionRecoveryMode,
 )
+from ai_trading_system.domains.fundamentals.contracts import FundamentalThesisSnapshot
 
 
-ADMISSION_RULE_VERSION = "admission-rules-v1.2"
+ADMISSION_RULE_VERSION = "admission-rules-v1.3"
 # Intentionally pinned: the label may point-bump without adding a second
 # avoidable candidate-ID discontinuity. Exact policy content remains identity
 # bound independently through policy_snapshot_id.
 ADMISSION_IDENTITY_RULE_VERSION = "admission-rules-v1"
 ADMISSION_RULE_PRECEDENCE: tuple[str, ...] = (
     "investigator_primary_onset",
+    "fundamental_thesis",
     "qualified_breakout",
     "stage_transition",
     "early_accumulation",
@@ -41,7 +43,7 @@ ADMISSION_RULE_PRECEDENCE: tuple[str, ...] = (
     "rank_velocity",
     "rank_threshold",
 )
-SETUP_FAMILY_RULE_VERSION = "setup-family-v1.1"
+SETUP_FAMILY_RULE_VERSION = "setup-family-v1.2"
 LIFECYCLE_RULE_VERSION = "lifecycle-policy-v1.1"
 PROGRESS_RULE_VERSION = "opportunity-progress-v1"
 RETENTION_RULE_VERSION = "opportunity-retention-v1.1"
@@ -84,6 +86,7 @@ class OpportunityRegistryMode(str, Enum):
 
 class AdmissionReason(str, Enum):
     INVESTIGATOR_PRIMARY_ONSET = "investigator_primary_onset"
+    FUNDAMENTAL_THESIS = "fundamental_thesis"
     RANK_THRESHOLD = "rank_threshold"
     RANK_VELOCITY = "rank_velocity"
     INVESTIGATOR_PROMOTION = "investigator_promotion"
@@ -97,6 +100,7 @@ class AdmissionReason(str, Enum):
 
 class SetupFamily(str, Enum):
     INVESTIGATOR_PRIMARY = "investigator_primary"
+    FUNDAMENTAL_THESIS = "fundamental_thesis"
     EARLY_ACCUMULATION = "early_accumulation"
     BASE_BUILDING = "base_building"
     STAGE_1_TO_2_TRANSITION = "stage_1_to_2_transition"
@@ -246,6 +250,7 @@ class OpportunitySourceBundle:
     missing_data_fields: tuple[str, ...] = ()
     sector_gate: "SectorGateEvidence | None" = None
     investigator_context: InvestigatorContext | None = None
+    fundamental_thesis: FundamentalThesisSnapshot | None = None
     raw_market_regime: str = "unknown"
     regime_confidence: float | None = None
     breadth_velocity_bucket: str = "unknown"

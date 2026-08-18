@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-07-26
+- **Last verified:** 2026-08-15
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -20,6 +20,10 @@ producing stage attempt is `completed`. Failed or interrupted attempts remain
 diagnostic evidence even when their files are intact.
 
 ## Stage artifacts
+
+### `fundamental_discovery`
+
+Writes `fundamental_thesis_universe.csv`, `fundamental_thesis_evaluations.csv`, `fundamental_thesis_exclusions.csv`, `fundamental_thesis_changes.csv`, and `fundamental_thesis_summary.json`. These are shadow evidence only. Each projected/evaluation row carries source-data hash, statement basis/source dates, and taxonomy/rule lineage. `compare` has no registry consumer; in `shadow`, only the `opportunities` shadow stage may consume the universe artifact.
 
 ### `ingest`
 

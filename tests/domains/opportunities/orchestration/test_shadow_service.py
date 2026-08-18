@@ -131,7 +131,7 @@ def test_shadow_service_writes_and_replay_is_idempotent(tmp_path):
     assert admission["primary_admission_reason"] == "qualified_breakout"
     assert admission["primary_setup_family"] == "breakout"
     assert "rank_threshold" in json.loads(admission["satisfied_admission_rules"])
-    assert len(json.loads(admission["rule_evaluations"])) == 8
+    assert len(json.loads(admission["rule_evaluations"])) == 9
     episode = service.registry.list_open_episodes()[0]
     assert (
         episode.satisfied_admission_rules_json == admission["satisfied_admission_rules"]
@@ -157,6 +157,32 @@ def test_shadow_service_writes_and_replay_is_idempotent(tmp_path):
     assert context["breakout_events"][0]["tier"] == "A"
 
 
+def test_fundamental_episode_is_parallel_and_persists_observation(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+    fundamental = _artifact(
+        tmp_path,
+        "fundamental_thesis_universe",
+        "symbol_id,exchange,primary_thesis,secondary_theses_json,evaluations_json,evidence_json,classification_status,admission_eligible,source_data_hash,statement_basis,source_report_date,source_available_at,taxonomy_version,rule_version,admission_version\n"
+        'ABC,NSE,HIGH_GROWTH_EMERGING,"[]","[]","{}",QUALIFIED,true,hash-1,consolidated,2026-03-31,2026-05-15,fundamental-discovery-taxonomy-v1,fundamental-thesis-rules-v1,fundamental-thesis-admission-v1\n',
+    )
+    artifacts = replace(_artifacts(tmp_path), fundamental_thesis_universe=fundamental)
+    config = OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW)
+    result = service.run(
+        run_id="fundamental-run",
+        stage_attempt=1,
+        artifact_set=artifacts,
+        as_of=NOW,
+        mode=config.mode,
+        config=config,
+    )
+    families = {item.setup_family for item in service.registry.list_open_episodes()}
+    assert {"breakout", "fundamental_thesis"}.issubset(families)
+    assert len(result.artifact_rows["candidate_fundamental_observations"]) == 1
+    with registry._connect(read_only=True) as conn:  # noqa: SLF001
+        assert conn.execute("SELECT count(*) FROM candidate_fundamental_observation").fetchone()[0] == 1
+
+
 def test_not_admitted_reconciliation_surfaces_rule_evaluations(tmp_path):
     registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
     service = OpportunityShadowOrchestrator(registry)
@@ -177,7 +203,7 @@ def test_not_admitted_reconciliation_surfaces_rule_evaluations(tmp_path):
     row = result.artifact_rows["candidate_reconciliation"][0]
     assert row["outcome"] == "not_admitted"
     evaluations = json.loads(row["rule_evaluations"])
-    assert len(evaluations) == 8
+    assert len(evaluations) == 9
     assert not any(item["passed"] for item in evaluations)
 
 

@@ -34,6 +34,7 @@
 - [investigator](stages/investigator.md)
 - [opportunities](stages/opportunities.md)
 - [fundamentals](stages/fundamentals.md)
+- [fundamental_discovery](stages/fundamental_discovery.md)
 - [candidates](stages/candidates.md)
 - [candidate_tracker](stages/candidate_tracker.md)
 - [events](stages/events.md)
@@ -97,6 +98,7 @@
 - [testing_strategy](development/testing_strategy.md)
 - [package_migration](development/package_migration.md)
 - [legacy_cleanup_plan](development/legacy_cleanup_plan.md)
+- [mcp_v2_plan](development/mcp_v2_plan.md) — planned behavior; not the current MCP contract
 - [adding_new_stage](development/adding_new_stage.md)
 - [adding_new_factor](development/adding_new_factor.md)
 - [adding_new_publisher](development/adding_new_publisher.md)

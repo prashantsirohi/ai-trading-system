@@ -121,6 +121,23 @@ def _investigator_primary_onset(
     }
 
 
+def _fundamental_thesis(
+    bundle: OpportunitySourceBundle, config: OpportunityShadowConfig
+) -> RuleResult:
+    del config
+    thesis = bundle.fundamental_thesis
+    return bool(thesis and thesis.admission_eligible), {
+        "primary_thesis": thesis.primary_thesis.value if thesis and thesis.primary_thesis else None,
+        "secondary_theses": [item.value for item in thesis.secondary_theses] if thesis else [],
+        "classification_status": thesis.classification_status if thesis else None,
+        "source_data_hash": thesis.source_data_hash if thesis else None,
+        "admission_blockers": list(thesis.admission_blockers) if thesis else [],
+    }, {
+        "admission_eligible": True,
+        "policy_version": thesis.admission_version if thesis else None,
+    }
+
+
 def _qualified_pattern(bundle: OpportunitySourceBundle, config: OpportunityShadowConfig) -> RuleResult:
     event = next(
         (item for item in bundle.pattern_events if item.qualified and not item.failed),
@@ -172,6 +189,12 @@ _RULES_BY_NAME: dict[str, AdmissionRuleDefinition] = {
             SetupFamily.INVESTIGATOR_PRIMARY,
             "first qualifying frozen-policy Investigator onset",
             _investigator_primary_onset,
+        ),
+        AdmissionRuleDefinition(
+            AdmissionReason.FUNDAMENTAL_THESIS,
+            SetupFamily.FUNDAMENTAL_THESIS,
+            "qualified cached fundamental thesis with eligible daily context",
+            _fundamental_thesis,
         ),
         AdmissionRuleDefinition(AdmissionReason.QUALIFIED_BREAKOUT, SetupFamily.BREAKOUT, "qualified breakout", _qualified_breakout),
         AdmissionRuleDefinition(AdmissionReason.STAGE_TRANSITION, SetupFamily.STAGE_1_TO_2_TRANSITION, "high-confidence Stage 1 to 2 transition", _stage_transition),
@@ -238,7 +261,10 @@ def evaluate_admission(
     satisfied = tuple(item.rule for item in evaluations if item.passed)
     # Frozen Investigator attribution is sampled independently. Stage, pattern,
     # setup quality, and breakout remain context and cannot block this lane.
-    if primary is not None and primary.rule is AdmissionReason.INVESTIGATOR_PRIMARY_ONSET:
+    if primary is not None and primary.rule in {
+        AdmissionReason.INVESTIGATOR_PRIMARY_ONSET,
+        AdmissionReason.FUNDAMENTAL_THESIS,
+    }:
         return _admitted_evaluation(
             bundle,
             primary,

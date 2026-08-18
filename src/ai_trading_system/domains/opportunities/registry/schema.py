@@ -19,6 +19,7 @@ TABLES = (
     "candidate_progress_observation",
     "candidate_decision_context",
     "candidate_outcome_attribution",
+    "candidate_fundamental_observation",
     "investigator_performance_event",
     "investigator_performance_horizon",
     "investigator_evaluation_transition",

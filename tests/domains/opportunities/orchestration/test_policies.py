@@ -91,7 +91,7 @@ def test_evaluate_all_records_every_rule_and_preserves_primary_precedence(
         AdmissionReason.RANK_THRESHOLD,
     )
     assert result.reason is AdmissionReason.EARLY_ACCUMULATION
-    assert len(result.rule_evaluations) == 8
+    assert len(result.rule_evaluations) == 9
 
 
 def test_breakout_and_rank_velocity_keep_frozen_primary_order(
@@ -244,7 +244,7 @@ def test_admission_identity_pin_and_structured_json_are_deterministic(
         }
     )
     assert result.admission_identity == expected
-    assert result.rule_version == "admission-rules-v1.2"
+    assert result.rule_version == "admission-rules-v1.3"
     assert rule_evaluations_json(result) == rule_evaluations_json(result)
 
 

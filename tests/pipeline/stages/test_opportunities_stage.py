@@ -68,12 +68,22 @@ def test_pipeline_order_and_cli_defaults_are_feature_flagged(tmp_path):
     parser = build_parser()
     assert parser.parse_args([]).opportunity_registry_mode == "off"
     assert parser.parse_args([]).opportunity_scan_routing_mode == "off"
+    assert parser.parse_args([]).fundamental_discovery_mode == "off"
     assert "opportunities" not in DEFAULT_CLI_STAGES.split(",")
-    assert PIPELINE_ORDER.index("opportunities") == PIPELINE_ORDER.index("investigator") + 1
+    assert PIPELINE_ORDER.index("fundamental_discovery") == PIPELINE_ORDER.index("fundamentals") + 1
+    assert PIPELINE_ORDER.index("opportunities") == PIPELINE_ORDER.index("fundamental_discovery") + 1
     orchestrator = PipelineOrchestrator(tmp_path, allow_control_plane_migrations=True)
     assert "opportunities" not in orchestrator._normalize_stage_names(None)
     enabled = orchestrator._normalize_stage_names(None, opportunity_registry_mode="shadow")
     assert enabled.index("opportunities") == enabled.index("investigator") + 1
+    discovery = orchestrator._normalize_stage_names(None, fundamental_discovery_mode="compare")
+    assert discovery.index("fundamental_discovery") == discovery.index("fundamentals") + 1
+    both = orchestrator._normalize_stage_names(
+        None,
+        fundamental_discovery_mode="shadow",
+        opportunity_registry_mode="shadow",
+    )
+    assert both.index("opportunities") == both.index("fundamental_discovery") + 1
     routed = orchestrator._normalize_stage_names(None, opportunity_scan_routing_mode="compare")
     assert routed.index("weekly_stage") == routed.index("rank") + 1
     assert routed.index("scan_router") == routed.index("weekly_stage") + 1

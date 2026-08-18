@@ -14,6 +14,14 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import duckdb
+from ai_trading_system.domains.fundamentals.contracts import (
+    FUNDAMENTAL_DISCOVERY_TAXONOMY_VERSION,
+    FUNDAMENTAL_THESIS_ADMISSION_VERSION,
+    FUNDAMENTAL_THESIS_RULE_VERSION,
+    FundamentalThesisEvaluation,
+    FundamentalThesisFamily,
+    FundamentalThesisSnapshot,
+)
 
 from ai_trading_system.domains.opportunities.adapters import (
     adapt_breakout_rows,
@@ -120,6 +128,7 @@ class OpportunityArtifactSet:
     lifecycle_state: StageArtifact | None = None
     scan_routing: StageArtifact | None = None
     market_context: StageArtifact | None = None
+    fundamental_thesis_universe: StageArtifact | None = None
 
 
 class OpportunityShadowOrchestrator:
@@ -174,6 +183,7 @@ class OpportunityShadowOrchestrator:
         raw_lifecycle = _read_csv(artifacts.lifecycle_state)
         raw_routing = _read_csv(artifacts.scan_routing)
         raw_market_context = _read_json(artifacts.market_context)
+        raw_fundamental = _read_csv(artifacts.fundamental_thesis_universe)
         if raw_stock and ohlcv_db_path is not None:
             raw_stock = _enrich_stock_stage(raw_stock, ohlcv_db_path, as_of)
 
@@ -358,6 +368,18 @@ class OpportunityShadowOrchestrator:
                 stage_attempt,
             ),
         )
+        bundles = _attach_fundamental_thesis_bundles(
+            bundles,
+            raw_fundamental,
+            as_of=as_of,
+            descriptor=_descriptor_optional(
+                artifacts.fundamental_thesis_universe,
+                "fundamental_discovery",
+                "fundamental_thesis_universe",
+                run_id,
+                stage_attempt,
+            ),
+        )
         bundles = _attach_sector_gate_evidence(
             self.registry_store.registry,
             bundles,
@@ -410,6 +432,7 @@ class OpportunityShadowOrchestrator:
                 "investigator_calendar_windows",
                 "investigator_primary_sampling",
                 "investigator_source_fidelity",
+                "candidate_fundamental_observations",
             )
         }
         for result in results:
@@ -580,18 +603,26 @@ class OpportunityShadowOrchestrator:
                 match_outcome = SetupMatchOutcome.NEW_EPISODE
             elif (
                 admission.admitted
-                and admission.reason is AdmissionReason.INVESTIGATOR_PRIMARY_ONSET
+                and admission.reason in {
+                    AdmissionReason.INVESTIGATOR_PRIMARY_ONSET,
+                    AdmissionReason.FUNDAMENTAL_THESIS,
+                }
             ):
+                exact_family = (
+                    "fundamental_thesis"
+                    if admission.reason is AdmissionReason.FUNDAMENTAL_THESIS
+                    else "investigator_primary"
+                )
                 exact_primary = [
                     item
                     for item in matching_for_symbol
-                    if item.setup_family == "investigator_primary"
+                    if item.setup_family == exact_family
                 ]
                 if len(exact_primary) > 1:
                     _conflict(
                         rows,
                         bundle,
-                        "multiple open investigator_primary episodes",
+                        f"multiple open {exact_family} episodes",
                     )
                     counters["registry_conflicts"] += 1
                     continue
@@ -928,6 +959,16 @@ class OpportunityShadowOrchestrator:
                         )
                     )
                     _count_append_results(counters, write_result.append_results)
+                    if bundle.fundamental_thesis is not None:
+                        observation = _persist_fundamental_observation(
+                            self.registry_store.registry,
+                            candidate_id=episode.candidate_id,
+                            setup_id=episode.setup_id,
+                            bundle=bundle,
+                            run_id=run_id,
+                            policy_snapshot_id=policy_snapshot_id,
+                        )
+                        rows["candidate_fundamental_observations"].append(observation)
                 rows["candidate_updates"].append(
                     {
                         "candidate_id": episode.candidate_id,
@@ -1978,6 +2019,82 @@ def _persist_recovery_action(registry: RegistryStore, action: dict[str, Any]) ->
         )
 
 
+def _persist_fundamental_observation(
+    registry: RegistryStore,
+    *,
+    candidate_id: str,
+    setup_id: str,
+    bundle: OpportunitySourceBundle,
+    run_id: str,
+    policy_snapshot_id: str | None,
+) -> dict[str, Any]:
+    thesis = bundle.fundamental_thesis
+    assert thesis is not None and thesis.primary_thesis is not None
+    evaluations = [
+        {
+            "family": item.family.value,
+            "passed": item.passed,
+            "observed": dict(item.observed),
+            "required": dict(item.required),
+            "blockers": list(item.blockers),
+            "warnings": list(item.warnings),
+            "rule_version": item.rule_version,
+        }
+        for item in thesis.evaluations
+    ]
+    idempotency_key = hashlib.sha256(
+        (
+            f"{candidate_id}|{thesis.as_of}|{thesis.source_data_hash}|"
+            f"{thesis.taxonomy_version}|{thesis.rule_version}|{thesis.admission_version}"
+        ).encode()
+    ).hexdigest()
+    observation_id = f"fundamental-observation-{idempotency_key[:24]}"
+    row = {
+        "observation_id": observation_id,
+        "candidate_id": candidate_id,
+        "setup_id": setup_id,
+        "symbol_id": thesis.symbol_id,
+        "exchange": thesis.exchange,
+        "observed_at": bundle.as_of,
+        "primary_thesis": thesis.primary_thesis.value,
+        "secondary_theses": [item.value for item in thesis.secondary_theses],
+        "evaluations": evaluations,
+        "evidence": dict(thesis.evidence),
+        "blockers": list(thesis.admission_blockers),
+        "source_data_hash": thesis.source_data_hash,
+        "statement_basis": thesis.statement_basis,
+        "source_report_date": thesis.source_report_date,
+        "source_available_at": thesis.source_available_at,
+        "taxonomy_version": thesis.taxonomy_version,
+        "rule_version": thesis.rule_version,
+        "admission_version": thesis.admission_version,
+        "policy_snapshot_id": policy_snapshot_id,
+        "source_run_id": run_id,
+        "idempotency_key": idempotency_key,
+    }
+    with registry._writer() as conn:  # noqa: SLF001
+        conn.execute(
+            """
+            INSERT INTO candidate_fundamental_observation VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                current_timestamp AT TIME ZONE 'UTC'
+            ) ON CONFLICT(idempotency_key) DO NOTHING
+            """,
+            [
+                observation_id, candidate_id, setup_id, thesis.symbol_id, thesis.exchange,
+                bundle.as_of, thesis.primary_thesis.value,
+                json.dumps(row["secondary_theses"], sort_keys=True),
+                json.dumps(evaluations, sort_keys=True, default=str),
+                json.dumps(row["evidence"], sort_keys=True, default=str),
+                json.dumps(row["blockers"], sort_keys=True), thesis.source_data_hash,
+                thesis.statement_basis, thesis.source_report_date, thesis.source_available_at,
+                thesis.taxonomy_version, thesis.rule_version, thesis.admission_version,
+                policy_snapshot_id, run_id, idempotency_key,
+            ],
+        )
+    return row
+
+
 def _aware_datetime(value: str | None, fallback: datetime) -> datetime:
     if not value:
         return fallback
@@ -2051,6 +2168,102 @@ def _attach_market_context(
             )
         )
     return tuple(attached)
+
+
+def _attach_fundamental_thesis_bundles(
+    bundles: tuple[OpportunitySourceBundle, ...],
+    rows: list[dict[str, Any]],
+    *,
+    as_of: datetime,
+    descriptor: SourceDescriptor | None,
+) -> tuple[OpportunitySourceBundle, ...]:
+    """Append a separate fundamental-family bundle, preserving technical episodes."""
+
+    if descriptor is None or not rows:
+        return bundles
+    by_key = {(item.exchange, item.symbol_id): item for item in bundles}
+    fundamental_bundles: list[OpportunitySourceBundle] = []
+    for row in rows:
+        if str(row.get("admission_eligible") or "").strip().lower() not in {"true", "1"}:
+            continue
+        symbol = str(row.get("symbol_id") or "").upper().strip()
+        exchange = str(row.get("exchange") or "NSE").upper().strip()
+        primary_text = str(row.get("primary_thesis") or "").strip()
+        if not symbol or not primary_text:
+            continue
+        try:
+            primary = FundamentalThesisFamily(primary_text)
+            secondary = tuple(
+                FundamentalThesisFamily(value)
+                for value in json.loads(row.get("secondary_theses_json") or "[]")
+            )
+            evidence = json.loads(row.get("evidence_json") or "{}")
+            evaluations = tuple(
+                FundamentalThesisEvaluation(
+                    family=FundamentalThesisFamily(item["family"]),
+                    passed=bool(item["passed"]),
+                    observed=item.get("observed") or {},
+                    required=item.get("required") or {},
+                    blockers=tuple(item.get("blockers") or ()),
+                    warnings=tuple(item.get("warnings") or ()),
+                    rule_version=str(
+                        item.get("rule_version")
+                        or row.get("rule_version")
+                        or FUNDAMENTAL_THESIS_RULE_VERSION
+                    ),
+                )
+                for item in json.loads(row.get("evaluations_json") or "[]")
+            )
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+        thesis = FundamentalThesisSnapshot(
+            symbol_id=symbol,
+            exchange=exchange,
+            as_of=as_of.date(),
+            primary_thesis=primary,
+            secondary_theses=secondary,
+            evaluations=evaluations,
+            source_data_hash=str(row.get("source_data_hash") or ""),
+            statement_basis=str(row.get("statement_basis") or "unknown"),
+            source_report_date=_optional_date(row.get("source_report_date")),
+            source_available_at=_optional_date(row.get("source_available_at")),
+            classification_status=str(row.get("classification_status") or "QUALIFIED"),
+            admission_eligible=True,
+            admission_blockers=(),
+            evidence=evidence,
+            taxonomy_version=str(
+                row.get("taxonomy_version") or FUNDAMENTAL_DISCOVERY_TAXONOMY_VERSION
+            ),
+            rule_version=str(row.get("rule_version") or FUNDAMENTAL_THESIS_RULE_VERSION),
+            admission_version=str(
+                row.get("admission_version") or FUNDAMENTAL_THESIS_ADMISSION_VERSION
+            ),
+        )
+        base = by_key.get(
+            (exchange, symbol),
+            OpportunitySourceBundle(symbol_id=symbol, exchange=exchange, as_of=as_of),
+        )
+        sources = tuple({item.artifact_hash: item for item in (*base.source_lineage, descriptor)}.values())
+        fundamental_bundles.append(
+            replace(
+                base,
+                investigator_context=None,
+                fundamental_thesis=thesis,
+                source_lineage=sources,
+                source_row_identities=(*base.source_row_identities, f"fundamental:{exchange}:{symbol}:{thesis.source_data_hash}"),
+            )
+        )
+    return (*bundles, *fundamental_bundles)
+
+
+def _optional_date(value: Any) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
 
 
 def _optional_float(value: Any) -> float | None:

@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical reference for every DuckDB table the system reads or writes — file location, owning stage, columns, indexes.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-14
+- **Last verified:** 2026-08-15
 - **Source of truth:** `src/ai_trading_system/pipeline/migrations/*.sql`, `src/ai_trading_system/domains/research_screener/migrations/*.sql`, `src/ai_trading_system/research/perf_tracker/schema.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/ingest/repository.py`.
 
 ---
@@ -12,7 +12,8 @@
 | File | Owner stage / domain | Schema source | Notes |
 |---|---|---|---|
 | `data/ohlcv.duckdb` | Ingest stage (operational domain) | `domains/ingest/repository.py::initialize_ingest_duckdb` (+ `trust.py`, `delivery.py`, `masterdata.py`) | Catalog of OHLCV bars, snapshots, parquet pointers, masterdata, trust state. |
-| `data/control_plane.duckdb` | Pipeline orchestrator (writes governance) + several read paths | `src/ai_trading_system/pipeline/migrations/*.sql` (37 SQL files, applied by `pipeline/registry.py`) | Run lifecycle, DQ, artifacts, model registry, monitoring, optimizer, universe, pattern cache, opportunity history, alert incidents, recovery proposals/actions, and the policy version registry. |
+| `data/control_plane.duckdb` | Pipeline orchestrator (writes governance) + several read paths | `src/ai_trading_system/pipeline/migrations/*.sql` (applied by `pipeline/registry.py`) | Run lifecycle, DQ, artifacts, model registry, opportunity history, append-only fundamental observations, alerts, recovery, and policy versions. |
+| `$DATA_ROOT/fundamentals.duckdb` | Fundamentals and fundamental-discovery stages | `domains/fundamentals/analytical_store.py` and `domains/fundamentals/discovery.py` | Mirrored facts/readmodels, append-only sync receipts, immutable source-hash/policy thesis classifications, and daily projections. |
 | `data/execution.duckdb` | Execute stage (`domains/execution/service.py`) | `domains/execution/store.py::ExecutionStore._init_db` | Orders, fills, trade journal, stops, drawdown snapshots. **Created by `ExecutionStore`** — default path is `<project_root>/data/execution.duckdb` (`store.py:29`). |
 | `$DATA_ROOT/trade_journal.duckdb` | Actual Trading Journal bounded domain | `domains/trade_journal/migrations/001_initial.sql` | Versioned import/DQ, identity/governance, ledger/lot/episode, checkpoint/reconciliation, valuation/risk, evaluation and append-only annotation tables. Financial columns use `DECIMAL(38,8)`. |
 | `data/research.duckdb` | Perf tracker stage + research perf-tracker API endpoints | `research/perf_tracker/schema.py::RANK_COHORT_DDL` | `rank_cohort_performance`. Path resolved via `research_db_path()` -> `paths.root_dir / "research.duckdb"` (`schema.py:55-60`). |
@@ -824,6 +825,11 @@ candidate snapshots with complete evidence/lineage/evaluation-state columns,
 adds executable shadow-fill anchors and `days_to_stop`, and creates
 `investigator_evaluation_transition` plus
 `investigator_attribution_coverage_receipt`.
+
+Migration `044_fundamental_discovery.sql` creates append-only
+`candidate_fundamental_observation`, keyed idempotently by candidate, as-of
+date, source-data hash, and taxonomy/rule/admission policy. It is a shadow registry sidecar
+and has no execution or operational-candidate consumer.
 
 ## Phase 3C-5 schema boundary
 

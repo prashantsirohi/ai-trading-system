@@ -2,11 +2,79 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import date
+from enum import Enum
+from types import MappingProxyType
+from typing import Any, Mapping
+
 DEFAULT_STATEMENT_BASIS = "standalone"
 SUPPORTED_STATEMENT_BASES = ("standalone", "consolidated")
 PREFERRED_AVAILABLE_STATEMENT_POLICY = "preferred_available"
 ACTIVE_STATEMENT_BASIS_POLICY = PREFERRED_AVAILABLE_STATEMENT_POLICY
 SUPPORTED_STATEMENT_POLICIES = (*SUPPORTED_STATEMENT_BASES, PREFERRED_AVAILABLE_STATEMENT_POLICY)
+
+FUNDAMENTAL_DISCOVERY_TAXONOMY_VERSION = "fundamental-discovery-taxonomy-v1"
+FUNDAMENTAL_THESIS_RULE_VERSION = "fundamental-thesis-rules-v1.1"
+FUNDAMENTAL_THESIS_ADMISSION_VERSION = "fundamental-thesis-admission-v1"
+
+
+class FundamentalDiscoveryMode(str, Enum):
+    OFF = "off"
+    COMPARE = "compare"
+    SHADOW = "shadow"
+
+
+class FundamentalThesisFamily(str, Enum):
+    QUALITY_COMPOUNDER = "QUALITY_COMPOUNDER"
+    HIGH_GROWTH_EMERGING = "HIGH_GROWTH_EMERGING"
+    EARNINGS_ACCELERATION = "EARNINGS_ACCELERATION"
+    UNDERVALUED_QUALITY = "UNDERVALUED_QUALITY"
+    CASHFLOW_BALANCE_SHEET_INFLECTION = "CASHFLOW_BALANCE_SHEET_INFLECTION"
+    TURNAROUND_CYCLICAL_RECOVERY = "TURNAROUND_CYCLICAL_RECOVERY"
+    CAPITAL_RETURN_INCOME = "CAPITAL_RETURN_INCOME"
+
+
+FUNDAMENTAL_THESIS_PRECEDENCE = tuple(FundamentalThesisFamily)
+
+
+@dataclass(frozen=True, slots=True)
+class FundamentalThesisEvaluation:
+    family: FundamentalThesisFamily
+    passed: bool
+    observed: Mapping[str, Any]
+    required: Mapping[str, Any]
+    blockers: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    rule_version: str = FUNDAMENTAL_THESIS_RULE_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "observed", MappingProxyType(dict(self.observed)))
+        object.__setattr__(self, "required", MappingProxyType(dict(self.required)))
+
+
+@dataclass(frozen=True, slots=True)
+class FundamentalThesisSnapshot:
+    symbol_id: str
+    exchange: str
+    as_of: date
+    primary_thesis: FundamentalThesisFamily | None
+    secondary_theses: tuple[FundamentalThesisFamily, ...]
+    evaluations: tuple[FundamentalThesisEvaluation, ...]
+    source_data_hash: str
+    statement_basis: str
+    source_report_date: date | None
+    source_available_at: date | None
+    classification_status: str
+    admission_eligible: bool
+    admission_blockers: tuple[str, ...] = ()
+    evidence: Mapping[str, Any] = field(default_factory=dict)
+    taxonomy_version: str = FUNDAMENTAL_DISCOVERY_TAXONOMY_VERSION
+    rule_version: str = FUNDAMENTAL_THESIS_RULE_VERSION
+    admission_version: str = FUNDAMENTAL_THESIS_ADMISSION_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "evidence", MappingProxyType(dict(self.evidence)))
 
 
 def normalize_statement_basis(value: object) -> str:

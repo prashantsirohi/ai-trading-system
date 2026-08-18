@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -67,10 +68,17 @@ def build_raw_factor_frame(
     store: ScreenerFinancialsStore,
     *,
     statement_basis_policy: str = ACTIVE_STATEMENT_BASIS_POLICY,
+    as_of_date: str | date | None = None,
 ) -> pd.DataFrame:
     financials = store.read_financials_frame()
     if financials.empty:
         return pd.DataFrame()
+    if as_of_date is not None and "available_at" in financials.columns:
+        cutoff = pd.Timestamp(as_of_date).date()
+        available = pd.to_datetime(financials["available_at"], errors="coerce").dt.date
+        financials = financials.loc[available.notna() & available.le(cutoff)].copy()
+        if financials.empty:
+            return pd.DataFrame()
     policy = str(statement_basis_policy).strip().lower()
     basis_by_symbol: dict[str, str]
     resolution_by_symbol: dict[str, dict[str, Any]] = {}
@@ -103,6 +111,13 @@ def build_raw_factor_frame(
             normalize_statement_basis(policy)
         basis_by_symbol = {str(symbol): DEFAULT_STATEMENT_BASIS for symbol in financials["symbol"].astype(str).unique()}
     valuations = store.read_valuations_frame()
+    if as_of_date is not None and not valuations.empty:
+        cutoff = pd.Timestamp(as_of_date).date()
+        for date_column in ("as_of_date", "date"):
+            if date_column in valuations.columns:
+                observed = pd.to_datetime(valuations[date_column], errors="coerce").dt.date
+                valuations = valuations.loc[observed.notna() & observed.le(cutoff)].copy()
+                break
     if not valuations.empty and "statement_basis" in valuations.columns:
         valuation_basis = (
             valuations["statement_basis"]
@@ -116,9 +131,19 @@ def build_raw_factor_frame(
         selected = valuations["symbol"].astype(str).map(basis_by_symbol)
         valuations = valuations.loc[valuations["statement_basis"].eq(selected)].copy()
     snapshots = store.read_company_snapshot_frame()
+    if as_of_date is not None and not snapshots.empty and "as_of_date" in snapshots.columns:
+        cutoff = pd.Timestamp(as_of_date).date()
+        observed = pd.to_datetime(snapshots["as_of_date"], errors="coerce").dt.date
+        snapshots = snapshots.loc[observed.notna() & observed.le(cutoff)].copy()
     factors = store.read_factor_snapshot_frame()
+    if as_of_date is not None and not factors.empty and "snapshot_date" in factors.columns:
+        cutoff = pd.Timestamp(as_of_date).date()
+        observed = pd.to_datetime(factors["snapshot_date"], errors="coerce").dt.date
+        factors = factors.loc[observed.notna() & observed.le(cutoff)].copy()
     annual = _pivot(financials.loc[financials["period_type"].eq("annual")])
     quarterly = _pivot(financials.loc[financials["period_type"].eq("quarterly")])
+    if annual.empty or "symbol" not in annual.columns:
+        return pd.DataFrame()
     rows: list[dict[str, Any]] = []
     for symbol, group in annual.groupby("symbol", sort=True):
         group = group.sort_values("report_date")
@@ -137,6 +162,9 @@ def build_raw_factor_frame(
         operating_profit = _num(latest, "operating_profit")
         cfo = _num(latest, "cash_from_operations")
         investing = _num(latest, "cash_from_investing")
+        previous_cfo = _num(prev, "cash_from_operations")
+        previous_investing = _num(prev, "cash_from_investing")
+        interest = _num(latest, "interest")
         resolution_metadata = resolution_by_symbol.get(str(symbol), {})
         row = {
             "symbol": symbol,
@@ -164,9 +192,26 @@ def build_raw_factor_frame(
             "roe": _pct_of(net_profit, equity),
             "opm": _first_number([_num(latest, "opm_pct"), _pct_of(operating_profit, sales)]),
             "opm_last_year": _first_number([_num(prev, "opm_pct"), _pct_of(_num(prev, "operating_profit"), _num(prev, "sales"))]),
+            "net_profit_cr": net_profit,
+            "net_profit_previous_year": _num(prev, "net_profit"),
             "debt_to_equity": _safe_div(borrowings, equity),
+            "debt_to_equity_prev": _safe_div(
+                _zero(_num(prev, "borrowings")),
+                _zero(_num(prev, "equity_share_capital")) + _zero(_num(prev, "reserves")),
+            ),
             "cash_from_operations_last_year": cfo,
+            "cash_from_operations_previous_year": previous_cfo,
             "free_cash_flow_last_year": cfo + investing if cfo is not None and investing is not None else cfo,
+            "free_cash_flow_previous_year": (
+                previous_cfo + previous_investing
+                if previous_cfo is not None and previous_investing is not None
+                else previous_cfo
+            ),
+            "interest_coverage": _safe_div(operating_profit, interest),
+            "dividend_payout_pct": _num(latest, "dividend_payout_pct"),
+            "dividend_yield": _num(val, "dividend_yield"),
+            "source_report_date": latest.get("report_date"),
+            "source_available_at": latest.get("available_at"),
             "piotroski_score": 6,
             "pledged_pct": 0,
             "promoter_holding": 50,
@@ -221,7 +266,16 @@ def _pivot(frame: pd.DataFrame) -> pd.DataFrame:
     )
     rows: list[dict[str, Any]] = []
     for (symbol, report_date), group in deduped.groupby(["symbol", "report_date"], sort=True, dropna=False):
-        row: dict[str, Any] = {"symbol": symbol, "report_date": report_date}
+        available_at = (
+            pd.to_datetime(group.get("available_at"), errors="coerce").max()
+            if "available_at" in group.columns
+            else pd.NaT
+        )
+        row: dict[str, Any] = {
+            "symbol": symbol,
+            "report_date": report_date,
+            "available_at": None if pd.isna(available_at) else available_at.date(),
+        }
         row.update(dict(zip(group["metric_id"].astype(str), group["value"], strict=False)))
         rows.append(row)
     return pd.DataFrame(rows).sort_values(["symbol", "report_date"], kind="stable").reset_index(drop=True)

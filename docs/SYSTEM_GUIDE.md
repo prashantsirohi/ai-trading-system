@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-08-14
+- **Last verified:** 2026-08-15
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -220,15 +220,20 @@ equality hashes. See the [rank contract](stages/rank.md#offline-r0-pattern-lane-
 
 ## Operational design and stages
 
-<!-- system-guide-logical-stages: ingest,features,rank,weekly_stage,pattern_lane_scan,scan_router,investigator,opportunities,fundamentals,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker -->
+<!-- system-guide-logical-stages: ingest,features,rank,weekly_stage,pattern_lane_scan,scan_router,investigator,fundamentals,fundamental_discovery,opportunities,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker -->
 
 ```text
-ingest -> features -> rank -> weekly_stage* -> pattern_lane_scan* -> scan_router* -> investigator -> opportunities* -> fundamentals* -> candidates
+ingest -> features -> rank -> weekly_stage* -> pattern_lane_scan* -> scan_router* -> investigator -> fundamentals* -> fundamental_discovery* -> opportunities* -> candidates
        -> candidate_tracker -> events -> execute -> insight -> narrative
        -> publish -> perf_tracker
 ```
 
-`PIPELINE_ORDER` contains all 17 logical stages above. The current CLI default omits `weekly_stage`, `pattern_lane_scan`, `scan_router`, `opportunities`, and `narrative`, so its normal stage list remains `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker`. Phase 3B `compare` or `shadow` mode inserts `weekly_stage,scan_router` after `rank`; `--pattern-lane-scan-mode shadow` inserts `pattern_lane_scan` after `weekly_stage`, adding `weekly_stage` first if it is not already scheduled; registry shadow mode inserts `opportunities` after `investigator`. Canary mode replaces the unchanged default with `ingest,features,rank`.
+`PIPELINE_ORDER` contains all 18 logical stages above. The current CLI default omits `weekly_stage`, `pattern_lane_scan`, `scan_router`, `fundamental_discovery`, `opportunities`, and `narrative`, so its normal stage list remains `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker`. `--fundamental-discovery-mode compare|shadow` inserts `fundamental_discovery` after `fundamentals`; `shadow` makes its qualified rows available to registry shadow while `compare` never writes the registry. Phase 3B and pattern modes retain their documented insertions. Registry shadow inserts `opportunities` after `fundamental_discovery` when present, otherwise after `fundamentals`. Canary mode replaces the unchanged default with `ingest,features,rank`.
+
+Fundamental discovery rule policy `fundamental-thesis-rules-v1.1` treats numeric
+and textual boolean encodings consistently. A security is blocked as
+`SME_INELIGIBLE` only when the local source explicitly identifies it as SME;
+missing legacy SME evidence is not treated as a confirmed SME classification.
 
 When rank is skipped because its inputs are unchanged, downstream stages that require rank evidence—including `scan_router`—hydrate the latest promoted artifacts from a completed run. A failed rank attempt is never eligible for this reuse.
 
@@ -246,6 +251,11 @@ is selected per symbol, preferring consolidated only when it is current and has
 enough quarterly and annual history, otherwise falling back to standalone.
 Resolved output exposes the selected basis and resolution reason, and never
 joins facts or valuations across bases.
+The sync command never runs the pipeline or classifies theses. It appends a
+batch receipt and per-symbol source hashes to `fundamentals.duckdb`. Operators
+schedule it daily during results windows (10 Jan–20 Feb, 10 Apr–15 Jun,
+10 Jul–20 Aug, 10 Oct–20 Nov) and weekly otherwise, before the evening shadow
+pipeline. The normal pipeline never invokes external fundamentals providers.
 Quarterly missing-results syncs suppress a symbol for 72 hours after a fresh
 export still lacks the expected quarter; operators can override that cooldown.
 A consolidated request already classified as terminal standalone-only is not
@@ -268,6 +278,7 @@ remain keyed by the mastered symbol.
 | `investigator` | Build a non-executable operator investigation queue from post-rank evidence. | Investigator artifacts and control-plane history | [investigator](stages/investigator.md) |
 | `opportunities` | Optionally reconcile canonical candidate episodes and Investigator attribution onsets in non-authoritative shadow mode. | Opportunity registry, immutable performance events, and audit artifacts | [opportunities](stages/opportunities.md) |
 | `fundamentals` | Optionally import and score fundamental evidence. | Fundamental scores and watchlists | [fundamentals](stages/fundamentals.md) |
+| `fundamental_discovery` | Reuse or classify local accounting theses, then project current stage, valuation, pattern, Investigator, sector, and regime context. | Five shadow artifacts; optional parallel fundamental registry episodes | [fundamental discovery](stages/fundamental_discovery.md) |
 | `candidates` | Deterministically select the operator/execution shortlist. | `final_candidates.csv` | [candidates](stages/candidates.md) |
 | `candidate_tracker` | Maintain durable lifecycle episodes, reviews, alerts, and current candidate state. | Tracker DB and tracker artifacts | [candidate tracker](stages/candidate_tracker.md) |
 | `events` | Collect and enrich catalyst/event evidence. | Event packet and enriched rank data | [events](stages/events.md) |

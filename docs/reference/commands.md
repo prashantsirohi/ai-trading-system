@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-08-14
+- **Last verified:** 2026-08-15
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -135,7 +135,19 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator \
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.pipeline.orchestrator --new-run
 ```
 
-The default CLI stage string includes `fundamentals` and `candidate_tracker` but omits `weekly_stage`, `pattern_lane_scan`, `scan_router`, `opportunities`, and `narrative`. `--opportunity-scan-routing-mode compare|shadow` inserts Phase 3B after rank. `--pattern-lane-scan-mode shadow` inserts the ADR-0007 R1a lane scan after `weekly_stage`, adding `weekly_stage` first if it is not already scheduled; `--pattern-lane-scan-workers` (default 1) sets its process-pool size. `--opportunity-registry-mode shadow` inserts Phase 3A after Investigator. These insertions apply only while `--stages` is left at its default. Existing execution and publish consumers are unchanged.
+The default CLI stage string includes `fundamentals` and `candidate_tracker` but omits `weekly_stage`, `pattern_lane_scan`, `scan_router`, `fundamental_discovery`, `opportunities`, and `narrative`. `--fundamental-discovery-mode compare|shadow` inserts the discovery stage after `fundamentals`; `compare` cannot write the registry and `shadow` only supplies an isolated input to opportunity registry shadow. `--opportunity-scan-routing-mode compare|shadow` and pattern lane modes retain their documented insertions. `--opportunity-registry-mode shadow` inserts opportunities after fundamental discovery when present. These insertions apply only while `--stages` is left at its default. Existing ranking, execution, candidate, and publish consumers are unchanged.
+
+Fundamental discovery shadow example:
+
+```bash
+ai-trading-pipeline --run-date 2026-08-15 \
+  --fundamental-discovery-mode shadow \
+  --opportunity-registry-mode shadow \
+  --local-publish
+```
+
+`ai-trading-fundamentals-sync` is a separate ingestion command and is never invoked by this pipeline mode. Its `--fundamentals-duckdb-path` selects the append-only receipt store.
+Before first registry-shadow use, apply migration 044 with the backup-gated `ai-trading-migrate-control-plane --backup-dir <verified-dir> --from-migration 044 --to-migration 044 --apply`. Compare mode does not require the control-plane observation table.
 
 Opportunity shadow run and isolated retry:
 

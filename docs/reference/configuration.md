@@ -2,7 +2,7 @@
 
 - **Purpose:** Configuration sources, CLI flags, and mode selectors. For env vars see [`environment_variables.md`](environment_variables.md). For commands see [`commands.md`](commands.md).
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-08-15
 - **Source of truth:** `argparse` parsers in `pipeline/orchestrator.py` and `pipeline/daily_pipeline.py`; env loading in `platform/`; config files under `config/`.
 
 ---
@@ -38,6 +38,7 @@ Primary selectors on `ai-trading-pipeline` (orchestrator):
 |---|---|---|
 | `--stages` | `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker` | Comma-separated logical stage subset. `features` expands to seven internal substages; `narrative` is available but is not in the current CLI default list. |
 | `--opportunity-registry-mode` | `off` | `shadow` inserts the optional canonical opportunity reconciliation stage after Investigator; it never feeds execution. |
+| `--fundamental-discovery-mode` | `off` | `compare` writes thesis artifacts/cache only; `shadow` also permits isolated fundamental registry admission when opportunity registry shadow is enabled. Neither mode syncs providers or feeds rank, operational candidates, publishing, or execution. |
 | `--opportunity-registry-dry-run` | false | Runs adapters, admission, lifecycle, retention, and audit output without opportunity-registry writes. |
 | `--opportunity-scan-routing-mode` | `off` | `compare` writes Phase 3B sidecars; `shadow` also supplies them to opportunity reconciliation. |
 | `--rank-deep-scan-limit` | 250 | Rank-selected daily deep-scan allocation. |

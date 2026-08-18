@@ -111,6 +111,11 @@ class OpportunityStage:
             if phase3b_shadow
             else None,
             market_context=context.artifact_for("rank", "dashboard_payload"),
+            fundamental_thesis_universe=(
+                context.artifact_for("fundamental_discovery", "fundamental_thesis_universe")
+                if str(context.params.get("fundamental_discovery_mode", "off")).lower() == "shadow"
+                else None
+            ),
         )
         as_of = datetime.combine(
             date.fromisoformat(context.run_date), time.min, tzinfo=timezone.utc
@@ -213,6 +218,7 @@ class OpportunityStage:
             "investigator_calendar_windows": "investigator_calendar_windows.csv",
             "investigator_primary_sampling": "investigator_primary_sampling.csv",
             "investigator_source_fidelity": "investigator_source_fidelity.csv",
+            "candidate_fundamental_observations": "candidate_fundamental_observations.csv",
         }
         for artifact_type, filename in filenames.items():
             rows = [dict(row) for row in result.artifact_rows.get(artifact_type, ())]

@@ -2,7 +2,7 @@
 
 - **Purpose:** Optional enrichment of rank artifacts from the canonical Screener.in SQLite fundamentals store — adds tiering, watchlist bucketing, hard red-flag flags, and industry-level scores.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-08-14
+- **Last verified:** 2026-08-15
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/fundamentals.py` (`FundamentalsStage`)
   - `src/ai_trading_system/domains/fundamentals/enrich_rank.py`
@@ -15,6 +15,8 @@
 ## Purpose
 
 `fundamentals` is an **optional** stage that runs between `rank` and `candidates`. It enriches the rank attempt directory with a Screener.in scoring snapshot derived from `screener_financials.db`, builds a fundamentals-aware watchlist, and (when industry inputs are present) scores industry groups and enriches the sector dashboard.
+
+This legacy enrichment remains separate from [`fundamental_discovery`](fundamental_discovery.md). The sync command now appends source-version receipts but performs no thesis classification or registry writes; the pipeline performs no external synchronization. The aggregate `hard_red_flag` remains relevant to legacy watchlist enrichment but is not a universal veto in the thesis-family classifier.
 
 It does **not**:
 
