@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-08-15
+- **Last verified:** 2026-08-18
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -20,7 +20,7 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 | Store | Canonical path | Primary owner | Purpose |
 |---|---|---|---|
 | OHLCV | `$DATA_ROOT/ohlcv.duckdb` | Ingest, trust, features | Price/volume, delivery, provenance, quarantine, source freshness, and feature metadata. |
-| Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, lifecycle-aware alert incidents, models, operator state, decision history, canonical opportunity-registry history, immutable Investigator performance events, append-only fundamental thesis observations, Phase 3B universal stage/routing history, and recovery governance. |
+| Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, actionable shortlist decision history, additive full-universe rank history, canonical opportunity-registry history, immutable Investigator performance events, append-only fundamental thesis observations, Phase 3B universal stage/routing history, and recovery governance. |
 | Execution ledger | `$DATA_ROOT/execution.duckdb` | `ExecutionStore` | Normalized decisions, orders, fills, positions, stops, and broker/paper execution state supported by the active code. |
 | Actual Trading Journal | `$DATA_ROOT/trade_journal.duckdb` | `TradeJournalStore` | Append-oriented broker import provenance, identity evidence, fills/orders, actual-position reconstruction, snapshots/reconciliations, episodes, analysis and annotations. It is isolated from the execution ledger and daily pipeline. |
 | Candidate tracker | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate tracker domain | Candidate episodes, transitions, snapshots, fundamental reviews, alerts, and current lifecycle state. |
@@ -166,6 +166,14 @@ back to a failed attempt merely because its file is newer.
 CSV and JSON artifacts are immutable-attempt evidence and publish/debug inputs. Durable current or historical decision facts live in control-plane tables owned by their read/write models. The current pipeline's mutable candidate lifecycle facts remain in `candidate_tracker.duckdb`; canonical episode history written through the opportunity-registry API lives in `control_plane.duckdb`. The optional Phase 3A/3B shadow stages write canonical and universal structural history, but no synchronization or execution dependency exists between the stores. Orders and fills live in `execution.duckdb` and are read without mutation for Phase 3B/3C monitoring. Migration 036 adds lifecycle-aware alert incidents and deterministic position-recovery proposals/actions only to the control plane; it does not alter execution tables or broker state.
 
 Write modes that distinguish live updates, replay/backfill, and current-state rebuild must preserve their domain's current-state contract. Do not reconstruct or replace current state merely because an older artifact exists.
+
+`rank_universe_history` persists the already-computed `ranked_universe` frame
+before regime `top_n` truncation. Its identity is `(symbol_id, exchange,
+trade_date, universe_id, rank_model_version)`. It is an analytical MCP source
+only; `rank_history` and `ranked_signals` retain shortlist ownership. Each full
+universe row freezes selection policy, effective score/top-N, regime date,
+calculated age, freshness status, and policy version. A same-date/model rerun
+upserts the same identity and cannot widen downstream operational inputs.
 
 ## Phase 3C-1 structural governance
 

@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical reference for every DuckDB table the system reads or writes — file location, owning stage, columns, indexes.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-15
+- **Last verified:** 2026-08-18
 - **Source of truth:** `src/ai_trading_system/pipeline/migrations/*.sql`, `src/ai_trading_system/domains/research_screener/migrations/*.sql`, `src/ai_trading_system/research/perf_tracker/schema.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/ingest/repository.py`.
 
 ---
@@ -201,6 +201,25 @@ Index: `idx_pipeline_stage_attempt(run_id, stage_name, attempt_number)` UNIQUE.
 | failed_count | BIGINT | Default 0. |
 | message, sample_uri | VARCHAR | |
 | created_at | TIMESTAMP | |
+
+The rank stage records `rank_regime_freshness_v1` here. Its message freezes the
+observed regime date, calculated calendar age, any stored age value, freshness
+classification, and policy version. An inconsistency or stale observation is a
+failed warning result rather than silently current regime evidence.
+
+### Table: `rank_universe_history`
+
+- **DDL source:** `migrations/045_rank_universe_history.sql`
+- **Owner:** rank stage (analytical history only)
+- **Purpose:** Full ordered cross-section before regime `top_n` truncation.
+- **Identity:** `(symbol_id, exchange, trade_date, universe_id, rank_model_version)`.
+
+The table retains rank position, raw/adjusted composite, factor scores,
+confidence, eligibility/rejection evidence, liquidity/delivery context,
+model/config/run lineage, selection policy, effective min-score/top-N, and the
+regime date/calculated age/freshness policy. `rank_history` remains the
+actionable shortlist and no candidate, publish, or execute consumer reads this
+table.
 
 ### Table: `model_registry`
 - **DDL source:** `migrations/001` + `002`

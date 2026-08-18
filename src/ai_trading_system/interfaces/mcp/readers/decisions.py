@@ -27,6 +27,7 @@ from ai_trading_system.interfaces.mcp.envelope import coerce_date
 
 # Trusted internal constants: table names cannot be parameterized.
 RANK_TABLE = "rank_history"
+RANK_UNIVERSE_TABLE = "rank_universe_history"
 STAGE_TABLE = "stage_history"
 STAGE1_TABLE = "stage1_history"
 PATTERN_TABLE = "pattern_history"
@@ -34,6 +35,7 @@ PATTERN_TABLE = "pattern_history"
 _VERSION_COLUMNS: dict[str, tuple[str, str, str]] = {
     # table: (decision_domain, version_column, config_column)
     RANK_TABLE: ("rank", "rank_model_version", "rank_config_hash"),
+    RANK_UNIVERSE_TABLE: ("rank", "rank_model_version", "rank_config_hash"),
     STAGE_TABLE: ("stage", "stage_model_version", "stage_config_hash"),
     STAGE1_TABLE: ("stage1", "stage1_model_version", "stage1_config_hash"),
     PATTERN_TABLE: ("pattern", "pattern_model_version", "pattern_config_hash"),
@@ -295,6 +297,7 @@ def history_rows(
 __all__ = [
     "PATTERN_TABLE",
     "RANK_TABLE",
+    "RANK_UNIVERSE_TABLE",
     "STAGE1_TABLE",
     "STAGE_TABLE",
     "DecisionVersion",

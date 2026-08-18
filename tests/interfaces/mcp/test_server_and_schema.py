@@ -127,7 +127,7 @@ def test_tool_names_are_unique_and_described() -> None:
     specs = server._tool_specs()
     names = [name for name, _, _ in specs]
     assert len(names) == len(set(names))
-    assert len(names) == 12
+    assert len(names) == 27
     for name, function, description in specs:
         assert callable(function), name
         assert len(description) > 40, name
@@ -148,6 +148,21 @@ def test_every_expected_tool_is_registered() -> None:
         "get_sector_overview",
         "get_sector_constituents",
         "get_fundamentals",
+        "get_pattern_detail",
+        "get_pattern_history",
+        "get_fundamental_thesis",
+        "get_fundamental_thesis_history",
+        "screen_fundamental_theses",
+        "get_fundamental_lane_overview",
+        "get_sector_leadership",
+        "get_pipeline_run",
+        "get_data_quality_status",
+        "get_artifact_lineage",
+        "get_data_freshness",
+        "get_candidate_status",
+        "get_candidate_history",
+        "get_investigator_evidence",
+        "get_opportunity_episode",
     }
 
 
@@ -172,7 +187,7 @@ def test_list_tools_needs_no_store(capsys: pytest.CaptureFixture[str]) -> None:
     assert server.main(["--list-tools"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["server"] == "ai-trading-system"
-    assert len(payload["tools"]) == 12
+    assert len(payload["tools"]) == 27
     assert set(payload["surfaces"]) == set(SURFACE_NAMES)
 
 
@@ -265,3 +280,57 @@ def test_calling_a_tool_through_the_server_returns_the_envelope(
     assert payload["meta"]["symbol"] == "AAA"
     assert payload["meta"]["price_basis"] == "adjusted"
     assert len(payload["data"]) == 2
+
+
+def test_real_stdio_client_discovers_and_calls_v2_tool(data_root) -> None:
+    """Exercise process transport, initialize, discovery, and one v2 call."""
+
+    import asyncio
+    import os
+    import sys
+
+    from mcp import ClientSession
+    from mcp.client.stdio import StdioServerParameters, stdio_client
+
+    async def exercise() -> None:
+        environment = dict(os.environ)
+        environment["DATA_ROOT"] = str(data_root)
+        environment["DATA_DOMAIN"] = "operational"
+        environment["PYTHONPATH"] = str(server.__file__).split(
+            "/ai_trading_system/"
+        )[0]
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=[
+                "-m",
+                "ai_trading_system.interfaces.mcp.server",
+                "--profile",
+                "fixture",
+            ],
+            env=environment,
+        )
+        async with stdio_client(parameters) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                tools = await session.list_tools()
+                assert "get_fundamental_thesis" in {
+                    tool.name for tool in tools.tools
+                }
+                result = await session.call_tool(
+                    "get_pattern_detail",
+                    {"symbol": "AAA", "as_of": "2026-01-07"},
+                )
+                assert not result.is_error
+                assert result.content
+                thesis = await session.call_tool(
+                    "get_fundamental_thesis",
+                    {"symbol": "AAA", "as_of": "2026-01-07"},
+                )
+                assert not thesis.is_error
+                full = await session.call_tool(
+                    "screen_universe",
+                    {"scope": "full_universe", "limit": 5},
+                )
+                assert not full.is_error
+
+    asyncio.run(exercise())

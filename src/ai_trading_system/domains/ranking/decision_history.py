@@ -16,6 +16,7 @@ _JSON_COLUMNS = {
     "stage_input_missing_fields", "stage1_block_reasons", "stage1_adjustment_reasons",
     "stage1_missing_components", "promotion_block_reasons", "candidate_sources",
     "transition_reason_codes",
+    "rejection_reasons",
 }
 
 
@@ -95,9 +96,16 @@ class DecisionHistoryRepository:
             raise ValueError(f"Unsupported decision_write_mode: {value}")
         return mode
 
-    def persist_rank_outputs(self, context: Any, outputs: dict[str, pd.DataFrame]) -> dict[str, Any]:
+    def persist_rank_outputs(
+        self,
+        context: Any,
+        outputs: dict[str, pd.DataFrame],
+        *,
+        stage_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         params = dict(context.params or {})
         rank = _base(outputs.get("ranked_signals", pd.DataFrame()), run_date=context.run_date)
+        rank_universe = _base(outputs.get("ranked_universe", pd.DataFrame()), run_date=context.run_date)
         stage_candidate = outputs.get("stock_scan", pd.DataFrame())
         if not isinstance(stage_candidate, pd.DataFrame) or stage_candidate.empty:
             stage_candidate = rank
@@ -116,17 +124,52 @@ class DecisionHistoryRepository:
         pattern_version = str(params.get("pattern_model_version") or "pattern_v1")
         pattern_hash = _hash({key: value for key, value in params.items() if str(key).startswith("pattern_")})
 
-        if not rank.empty:
-            rank.loc[:, "universe_id"] = universe_id
-            implicit_position = pd.Series(range(1, len(rank) + 1), index=rank.index, dtype="int64")
-            rank.loc[:, "rank_position"] = _first(rank, ("rank_position", "rank"), implicit_position)
-            rank.loc[:, "rank_percentile"] = _first(rank, ("rank_percentile", "active_rank_pctile"))
-            rank.loc[:, "rs_score"] = _first(rank, ("relative_strength", "rel_strength_score", "rs_score"))
-            rank.loc[:, "volume_score"] = _first(rank, ("vol_intensity_score", "volume_intensity", "volume_score"))
-            rank.loc[:, "trend_score"] = _first(rank, ("trend_score_score", "trend_persistence", "trend_score"))
-            rank.loc[:, "proximity_score"] = _first(rank, ("prox_high_score", "proximity_to_highs", "proximity_score"))
-            rank.loc[:, "sector_score"] = _first(rank, ("sector_strength_score", "sector_strength", "sector_score"))
-            rank.loc[:, "rank_model_version"], rank.loc[:, "rank_formula_name"], rank.loc[:, "rank_config_hash"] = rank_version, rank_formula, rank_hash
+        stage_metadata = stage_metadata if isinstance(stage_metadata, dict) else {}
+        regime = stage_metadata.get("market_regime")
+        regime = regime if isinstance(regime, dict) else {}
+        regime_as_of = pd.to_datetime(regime.get("date") or regime.get("as_of"), errors="coerce")
+        regime_date = None if pd.isna(regime_as_of) else regime_as_of.date()
+        calculated_regime_age = (
+            (pd.Timestamp(context.run_date).date() - regime_date).days
+            if regime_date is not None else None
+        )
+        stored_regime_age = regime.get("regime_age_days")
+        age_consistent = stored_regime_age is None or calculated_regime_age == int(stored_regime_age)
+        stale_days = int(params.get("rank_regime_stale_days", 30) or 30)
+        if regime_date is None:
+            regime_freshness = "INCOMPLETE"
+        elif not age_consistent or calculated_regime_age > stale_days:
+            regime_freshness = "STALE"
+        else:
+            regime_freshness = "ALIGNED"
+
+        for rank_frame in (rank, rank_universe):
+            if rank_frame.empty:
+                continue
+            rank_frame.loc[:, "universe_id"] = universe_id
+            implicit_position = pd.Series(range(1, len(rank_frame) + 1), index=rank_frame.index, dtype="int64")
+            rank_frame.loc[:, "rank_position"] = _first(rank_frame, ("rank_position", "rank"), implicit_position)
+            rank_frame.loc[:, "rank_percentile"] = _first(rank_frame, ("rank_percentile", "active_rank_pctile"))
+            rank_frame.loc[:, "rs_score"] = _first(rank_frame, ("relative_strength", "rel_strength_score", "rs_score"))
+            rank_frame.loc[:, "volume_score"] = _first(rank_frame, ("vol_intensity_score", "volume_intensity", "volume_score"))
+            rank_frame.loc[:, "trend_score"] = _first(rank_frame, ("trend_score_score", "trend_persistence", "trend_score"))
+            rank_frame.loc[:, "proximity_score"] = _first(rank_frame, ("prox_high_score", "proximity_to_highs", "proximity_score"))
+            rank_frame.loc[:, "sector_score"] = _first(rank_frame, ("sector_strength_score", "sector_strength", "sector_score"))
+            rank_frame.loc[:, "rank_model_version"], rank_frame.loc[:, "rank_formula_name"], rank_frame.loc[:, "rank_config_hash"] = rank_version, rank_formula, rank_hash
+        if not rank_universe.empty:
+            rank_universe.loc[:, "composite_score_adjusted"] = _first(rank_universe, ("composite_score_adjusted", "adjusted_composite_score"))
+            rank_universe.loc[:, "momentum_acceleration_score"] = _first(rank_universe, ("momentum_acceleration_score", "momentum_score"))
+            rank_universe.loc[:, "delivery_score"] = _first(rank_universe, ("delivery_score",))
+            rank_universe.loc[:, "rank_eligible"] = _first(rank_universe, ("rank_eligible", "eligible"), True)
+            rank_universe.loc[:, "rejection_reasons"] = _first(rank_universe, ("rejection_reasons", "rank_rejection_reasons"), "[]")
+            rank_universe.loc[:, "selection_policy"] = str((stage_metadata.get("regime_profile") or {}).get("name") or params.get("rank_selection_policy") or "default")
+            rank_universe.loc[:, "effective_min_score"] = stage_metadata.get("effective_min_score")
+            rank_universe.loc[:, "effective_top_n"] = stage_metadata.get("effective_top_n")
+            rank_universe.loc[:, "market_regime"] = regime.get("regime")
+            rank_universe.loc[:, "regime_as_of"] = regime_date
+            rank_universe.loc[:, "regime_age_days"] = calculated_regime_age
+            rank_universe.loc[:, "regime_freshness_status"] = regime_freshness
+            rank_universe.loc[:, "regime_freshness_policy_version"] = "rank-regime-freshness-v1"
         if not stage_source.empty:
             stage_source.loc[:, "trade_date"] = pd.Timestamp(context.run_date).date()
             stage_source.loc[:, "stage_family"] = _first(stage_source, ("stage_family",), "BROAD_STAGE")
@@ -157,7 +200,7 @@ class DecisionHistoryRepository:
             pattern.loc[:, "pattern_model_version"], pattern.loc[:, "pattern_config_hash"] = pattern_version, pattern_hash
             pattern.loc[:, "pivot_price"] = _first(pattern, ("pivot_price", "breakout_level"))
 
-        for frame in (rank, stage_source, stage1, pattern):
+        for frame in (rank, rank_universe, stage_source, stage1, pattern):
             if not frame.empty:
                 frame.loc[:, "pipeline_run_id"] = context.run_id
                 frame.loc[:, "source_attempt"] = context.attempt_number
@@ -171,10 +214,41 @@ class DecisionHistoryRepository:
                 ).fetchone()[0]
             )
             summary["rank_history_rows_upserted"] = _upsert(conn, "rank_history", rank, ["symbol_id", "exchange", "trade_date", "universe_id", "rank_model_version"])
+            summary["rank_universe_history_rows_upserted"] = _upsert(conn, "rank_universe_history", rank_universe, ["symbol_id", "exchange", "trade_date", "universe_id", "rank_model_version"])
+            dq_message = (
+                f"regime_as_of={regime_date}; calculated_age_days={calculated_regime_age}; "
+                f"stored_age_days={stored_regime_age}; freshness={regime_freshness}; "
+                f"policy=rank-regime-freshness-v1"
+            )
+            dq_status = "passed" if regime_freshness == "ALIGNED" else "failed"
+            conn.execute(
+                """INSERT INTO dq_result (
+                       result_id, run_id, stage_name, rule_id, severity, status,
+                       failed_count, message, created_at
+                   ) VALUES (?, ?, 'rank', 'rank_regime_freshness_v1', 'warning', ?, ?, ?, current_timestamp)
+                   ON CONFLICT(result_id) DO UPDATE SET
+                       status=excluded.status, failed_count=excluded.failed_count,
+                       message=excluded.message, created_at=excluded.created_at""",
+                [
+                    _hash([context.run_id, context.attempt_number, "rank_regime_freshness_v1"]),
+                    context.run_id,
+                    dq_status,
+                    0 if dq_status == "passed" else 1,
+                    dq_message,
+                ],
+            )
+            summary["regime_freshness_dq"] = {
+                "status": dq_status,
+                "freshness_status": regime_freshness,
+                "regime_as_of": str(regime_date) if regime_date else None,
+                "calculated_age_days": calculated_regime_age,
+                "stored_age_days": stored_regime_age,
+                "policy_version": "rank-regime-freshness-v1",
+            }
             summary["stage_history_rows_upserted"] = _upsert(conn, "stage_history", stage_source, ["symbol_id", "exchange", "trade_date", "stage_model_version"])
             summary["stage1_history_rows_upserted"] = _upsert(conn, "stage1_history", stage1, ["symbol_id", "exchange", "trade_date", "stage1_model_version"])
             summary["pattern_history_rows_upserted"] = _upsert(conn, "pattern_history", pattern, ["symbol_id", "exchange", "trade_date", "pattern_family", "pattern_model_version"])
-            for table, keys in (("rank_history", "symbol_id, exchange, trade_date, universe_id, rank_model_version"), ("stage_history", "symbol_id, exchange, trade_date, stage_model_version"), ("stage1_history", "symbol_id, exchange, trade_date, stage1_model_version"), ("pattern_history", "symbol_id, exchange, trade_date, pattern_family, pattern_model_version")):
+            for table, keys in (("rank_history", "symbol_id, exchange, trade_date, universe_id, rank_model_version"), ("rank_universe_history", "symbol_id, exchange, trade_date, universe_id, rank_model_version"), ("stage_history", "symbol_id, exchange, trade_date, stage_model_version"), ("stage1_history", "symbol_id, exchange, trade_date, stage1_model_version"), ("pattern_history", "symbol_id, exchange, trade_date, pattern_family, pattern_model_version")):
                 duplicate_count = conn.execute(f"SELECT COUNT(*) FROM (SELECT {keys}, COUNT(*) n FROM {table} GROUP BY {keys} HAVING n > 1)").fetchone()[0]
                 if duplicate_count:
                     summary["validation_errors"].append(f"{table}: duplicate keys={duplicate_count}")

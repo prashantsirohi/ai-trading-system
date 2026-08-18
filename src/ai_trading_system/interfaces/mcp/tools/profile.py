@@ -29,6 +29,8 @@ from ai_trading_system.interfaces.mcp.envelope import (
 )
 from ai_trading_system.interfaces.mcp.readers import master
 from ai_trading_system.interfaces.mcp.tools import fundamentals as fundamentals_tool
+from ai_trading_system.interfaces.mcp.tools import fundamental_discovery as fundamental_discovery_tool
+from ai_trading_system.interfaces.mcp.tools import patterns as patterns_tool
 from ai_trading_system.interfaces.mcp.tools import prices as prices_tool
 from ai_trading_system.interfaces.mcp.tools import rank as rank_tool
 from ai_trading_system.interfaces.mcp.tools import stage as stage_tool
@@ -39,7 +41,7 @@ STALE = "STALE"
 INCOMPLETE = "INCOMPLETE"
 
 # Blocks expected to carry a date; identity has none by nature.
-_DATED_BLOCKS = ("quote", "stage", "rank", "fundamentals")
+_DATED_BLOCKS = ("quote", "stage", "rank", "pattern", "fundamentals", "fundamental_thesis")
 
 
 def _has_content(value: Any) -> bool:
@@ -104,22 +106,32 @@ def get_symbol_profile(
     fundamentals = fundamentals_tool.get_fundamentals(
         ctx, symbol_id, statement_basis=statement_basis, as_of=as_of
     )
+    pattern = patterns_tool.get_pattern_detail(
+        ctx, symbol_id, exchange=exchange_code, as_of=as_of
+    )
+    fundamental_thesis = fundamental_discovery_tool.get_fundamental_thesis(
+        ctx, symbol_id, exchange=exchange_code, as_of=as_of
+    )
 
     blocks: dict[str, Any] = {
         "identity": identity,
         "quote": quote["data"][0] if quote["data"] else None,
         "stage": stage["data"][-1] if stage["data"] else None,
         "rank": rank["data"],
+        "pattern": pattern["data"] if _has_content(pattern["data"]) else None,
         "fundamentals": (
             fundamentals["data"] if _has_content(fundamentals["data"]) else None
         ),
+        "fundamental_thesis": fundamental_thesis["data"],
     }
 
     sources = {
         "quote": quote["meta"],
         "stage": stage["meta"],
         "rank": rank["meta"],
+        "pattern": pattern["meta"],
         "fundamentals": fundamentals["meta"],
+        "fundamental_thesis": fundamental_thesis["meta"],
     }
     block_meta = {
         name: {

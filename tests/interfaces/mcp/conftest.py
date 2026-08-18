@@ -294,6 +294,40 @@ def _build_control_plane_db(path: Path) -> None:
                 [day, 120 + index, 41.0 + index],
             )
 
+        conn.execute(
+            """
+            CREATE TABLE rank_universe_history AS
+            SELECT *,
+                   composite_score AS composite_score_adjusted,
+                   NULL::DOUBLE AS momentum_acceleration_score,
+                   NULL::DOUBLE AS delivery_score,
+                   0.9::DOUBLE AS rank_confidence,
+                   TRUE AS rank_eligible,
+                   '[]'::VARCHAR AS rejection_reasons,
+                   0.8::DOUBLE AS liquidity_score,
+                   10000000::DOUBLE AS avg_value_traded_20,
+                   55.0::DOUBLE AS delivery_pct_20d_avg,
+                   0.5::DOUBLE AS delivery_trend_score,
+                   'profile_C_cash_only'::VARCHAR AS selection_policy,
+                   60.0::DOUBLE AS effective_min_score,
+                   20::INTEGER AS effective_top_n,
+                   'neutral'::VARCHAR AS market_regime,
+                   trade_date AS regime_as_of,
+                   0::INTEGER AS regime_age_days,
+                   'ALIGNED'::VARCHAR AS regime_freshness_status,
+                   'rank-regime-freshness-v1'::VARCHAR AS regime_freshness_policy_version
+            FROM rank_history
+            """
+        )
+        conn.execute(
+            """INSERT INTO rank_universe_history
+               SELECT 'CCC','NSE',CAST('2026-01-09' AS DATE),'NSE_OPERATIONAL',300,0.2,
+                      25.0,20.0,10.0,20.0,15.0,18.0,'v1','weighted_sum','cfg1','run-1',
+                      25.0,NULL,NULL,0.5,TRUE,'[]',0.4,2000000,35.0,-0.1,
+                      'profile_C_cash_only',60.0,20,'neutral',CAST('2026-01-09' AS DATE),0,
+                      'ALIGNED','rank-regime-freshness-v1'"""
+        )
+
         # ROTATOR drops out of the ranked universe before the latest session,
         # which is ordinary for a top-N cross-section. Observed on the live
         # store, where several symbols were last ranked one session back.
@@ -468,6 +502,7 @@ def _build_master_db(path: Path) -> None:
                 ),
             ],
         )
+
         conn.execute(
             """
             CREATE TABLE stock_details (
@@ -668,6 +703,57 @@ def _build_fundamentals_db(path: Path) -> None:
                  22.5, 15.0, 11.1, 19.0, 25.0, 22.0, 16.0, 21.0),
             ],
         )
+        conn.execute(
+            """CREATE TABLE fundamental_thesis_classification (
+                classification_id VARCHAR, symbol_id VARCHAR, exchange VARCHAR,
+                as_of DATE, source_data_hash VARCHAR, statement_basis VARCHAR,
+                source_report_date DATE, source_available_at DATE,
+                primary_thesis VARCHAR, secondary_theses_json VARCHAR,
+                classification_status VARCHAR, evaluations_json VARCHAR,
+                evidence_json VARCHAR, taxonomy_version VARCHAR, rule_version VARCHAR,
+                semantic_payload_hash VARCHAR, created_at TIMESTAMP
+            )"""
+        )
+        evaluations = json.dumps([
+            {"family": family, "passed": family == "QUALITY_COMPOUNDER", "observed": {}, "required": {}, "blockers": [], "warnings": []}
+            for family in (
+                "QUALITY_COMPOUNDER", "HIGH_GROWTH_EMERGING", "EARNINGS_ACCELERATION",
+                "UNDERVALUED_QUALITY", "CASHFLOW_BALANCE_SHEET_INFLECTION",
+                "TURNAROUND_CYCLICAL_RECOVERY", "CAPITAL_RETURN_INCOME",
+            )
+        ])
+        conn.execute(
+            """INSERT INTO fundamental_thesis_classification VALUES (
+                'fc1','AAA','NSE',CAST('2025-11-15' AS DATE),'hash-old','standalone',
+                CAST('2025-09-30' AS DATE),CAST('2025-11-15' AS DATE),
+                'UNDERVALUED_QUALITY','[]','QUALIFIED',?, '{}','taxonomy-v1','rules-v1',
+                'payload-old',CAST('2025-11-15' AS TIMESTAMP))""", [evaluations]
+        )
+        conn.execute(
+            """INSERT INTO fundamental_thesis_classification VALUES (
+                'fc2','AAA','NSE',CAST('2026-01-05' AS DATE),'hash-new','standalone',
+                CAST('2025-12-31' AS DATE),CAST('2026-01-05' AS DATE),
+                'QUALITY_COMPOUNDER','[\"UNDERVALUED_QUALITY\"]','QUALIFIED',?, '{}','taxonomy-v1','rules-v1',
+                'payload-new',CAST('2026-01-05' AS TIMESTAMP))""", [evaluations]
+        )
+        conn.execute(
+            """CREATE TABLE fundamental_thesis_projection (
+                projection_id VARCHAR, symbol_id VARCHAR, exchange VARCHAR, as_of DATE,
+                source_data_hash VARCHAR, primary_thesis VARCHAR, secondary_theses_json VARCHAR,
+                structural_stage VARCHAR, admission_eligible BOOLEAN,
+                admission_blockers_json VARCHAR, daily_context_json VARCHAR,
+                taxonomy_version VARCHAR, rule_version VARCHAR, admission_version VARCHAR,
+                semantic_payload_hash VARCHAR, created_at TIMESTAMP
+            )"""
+        )
+        for day in ("2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"):
+            conn.execute(
+                """INSERT INTO fundamental_thesis_projection VALUES (
+                    ?, 'AAA','NSE',CAST(? AS DATE),'hash-new','QUALITY_COMPOUNDER',
+                    '[\"UNDERVALUED_QUALITY\"]','stage_2_advancing',TRUE,'[]','{}',
+                    'taxonomy-v1','rules-v1','admission-v1',?,CAST(? AS TIMESTAMP))""",
+                [f"fp-{day}", day, f"projection-{day}", day],
+            )
     finally:
         conn.close()
 

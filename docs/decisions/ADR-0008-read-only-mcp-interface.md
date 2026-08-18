@@ -2,7 +2,7 @@
 
 - **Purpose:** Record why the trading system exposes its read surfaces through a strictly read-only MCP server, and fix the four invariants that make an agent's answers trustworthy.
 - **Audience:** Operator (decision owner), developers, future agents.
-- **Last verified:** 2026-08-14
+- **Last verified:** 2026-08-18
 - **Source of truth:** `src/ai_trading_system/interfaces/mcp/` (`server.py`, `context.py`, `envelope.py`, `schema_catalog.py`, `tools/`, `readers/`), `tests/interfaces/mcp/conftest.py`, `tests/lint/test_layer_boundaries.py`.
 - **Status:** Accepted — implemented 2026-08-12. Read-only by construction; no pipeline, execution, or broker path is reachable from it.
 
@@ -33,8 +33,10 @@ Worse, the layout contains several traps that a naive reader gets wrong:
 
 Add a new interface — not new analytics and not new storage — at
 `src/ai_trading_system/interfaces/mcp/`, served over stdio by `ai-trading-mcp`,
-exposing twelve tools over OHLCV, technical features, stage, sector, rank, and
-fundamentals, plus a `describe_schema` column dictionary.
+exposing read-only tools over OHLCV, technical features, stage, sector, rank,
+patterns, fundamentals, the shadow fundamental-discovery lane, pipeline
+governance, and canonical opportunity lifecycle, plus a `describe_schema`
+column dictionary. V2 contains 27 tools; no HTTP endpoint was added.
 
 Four invariants are binding.
 
@@ -124,13 +126,33 @@ still match), and `is_transition`.
   `pipeline/`, `platform/` and `research/`; the layer-boundary lint now
   enforces that, and tool/reader modules stay transport-agnostic so an HTTP
   adapter needs no tool changes.
-- Sector RS and rotation quadrant from the rank artifacts are **not** exposed:
-  they are latest-only and cannot be cut off by date. Sector structure is
-  derived from the governed weekly stage store instead, which is
-  effective-dated.
+- Governed sector structure remains point-in-time. Sector RS, momentum and
+  quadrant are available only through `get_sector_leadership`, which is
+  explicitly latest-only and returns `AS_OF_UNSUPPORTED` rather than
+  substituting current evidence for a historical request.
 - `describe_schema` is a hand-maintained catalog. A test asserts every
   documented column appears in the corresponding tool's output, so it fails
   rather than rots when a schema moves.
+
+## V2 additive storage and domain boundaries
+
+MCP remains read-only, but the rank stage now persists the already-computed
+pre-truncation cross-section in `rank_universe_history`. This does not turn MCP
+into a storage owner: migration 045 and rank persistence own the table. MCP
+reads it only for `screen_universe(scope="full_universe")`; the default scope
+and all operational consumers remain on the shortlist.
+
+Operational `pattern_history` is separate from non-actionable ADR-0007 pattern
+lane evidence. Fundamental thesis tools read only the shadow discovery lane and
+join a projection to its exact classification by symbol/listing, source hash,
+taxonomy version, and rule version. They do not infer theses from generic
+fundamental scores or expose research-screener filings and qualitative claims.
+Candidate fundamental observations are exposed only inside the later lifecycle
+episode aggregate.
+
+Optional positions, exposure, and order-history tools remain rejected pending
+a separate ADR and explicit operator approval; v2 does not read
+`execution.duckdb`.
 
 ## Alternatives considered
 

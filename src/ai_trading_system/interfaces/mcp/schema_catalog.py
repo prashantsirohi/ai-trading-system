@@ -19,6 +19,7 @@ from ai_trading_system.domains.opportunities.contracts import (
     legacy_code_for,
     stage_family,
 )
+from ai_trading_system.domains.fundamentals.contracts import FundamentalThesisFamily
 
 
 def _column(
@@ -179,7 +180,7 @@ RANK_SURFACE: dict[str, Any] = {
     "surface": "rank",
     "tool": "get_rank_detail / get_rank_history / screen_universe",
     "store": "control_plane.duckdb",
-    "tables": ["rank_history"],
+    "tables": ["rank_history", "rank_universe_history"],
     "grain": "one row per (symbol_id, exchange, trade_date, universe_id)",
     "as_of_support": "EXACT",
     "notes": [
@@ -212,6 +213,34 @@ RANK_SURFACE: dict[str, Any] = {
         _column("rank_model_version", "str", "Rank model version this row was scored under."),
         _column("rank_formula_name", "str", "Scoring formula, e.g. weighted_sum."),
         _column("rank_config_hash", "str", "Configuration hash pinning the weights."),
+        _column("pipeline_run_id", "str", "Producing pipeline run."),
+    ],
+}
+
+PATTERN_SURFACE: dict[str, Any] = {
+    "surface": "pattern",
+    "tool": "get_pattern_detail / get_pattern_history / screen_universe",
+    "store": "control_plane.duckdb",
+    "tables": ["pattern_history"],
+    "grain": "one row per (symbol_id, exchange, trade_date, pattern_family, model_version)",
+    "as_of_support": "EXACT",
+    "notes": [
+        "This is operational pattern history. ADR-0007 pattern-lane evidence is research/shadow-only and is never blended into this surface.",
+        "Cross-sectional screening selects the highest-scoring operational pattern per symbol on one model-pinned date.",
+    ],
+    "columns": [
+        _column("trade_date", "date", "Pattern observation date."),
+        _column("pattern_family", "str", "Operational setup family."),
+        _column("pattern_state", "str", "Lifecycle state of the setup."),
+        _column("pattern_score", "float", "Pattern quality score.", units="0-100"),
+        _column("setup_quality", "str", "Categorical setup quality."),
+        _column("pattern_promotion_state", "str", "Promotion state under pattern policy."),
+        _column("pivot_price", "float", "Pattern pivot or breakout level.", units="INR"),
+        _column("distance_to_pivot_pct", "float", "Close distance from pivot.", units="percent"),
+        _column("breakout_status", "str", "Observed breakout state."),
+        _column("breakout_attempt_flag", "bool", "Whether a breakout attempt was observed."),
+        _column("pattern_model_version", "str", "Pattern detector/model version."),
+        _column("pattern_config_hash", "str", "Configuration content hash."),
         _column("pipeline_run_id", "str", "Producing pipeline run."),
     ],
 }
@@ -292,13 +321,120 @@ FUNDAMENTALS_SURFACE: dict[str, Any] = {
     ],
 }
 
+FUNDAMENTAL_DISCOVERY_SURFACE: dict[str, Any] = {
+    "surface": "fundamental_discovery",
+    "tool": "get_fundamental_thesis / get_fundamental_thesis_history / screen_fundamental_theses / get_fundamental_lane_overview",
+    "store": "fundamentals.duckdb",
+    "tables": ["fundamental_thesis_classification", "fundamental_thesis_projection"],
+    "grain": "immutable source classification plus one daily projection per listing/source/policy",
+    "as_of_support": "EXACT",
+    "notes": [
+        "Shadow-only operational discovery lane; it does not expose research-screener filings, annual reports, or qualitative claims.",
+        "Projection joins classification by symbol, exchange, source_data_hash, taxonomy_version and rule_version.",
+        "Blockers and exclusions are evidence, not failed numeric scores. Generic get_fundamentals scores never substitute for thesis state.",
+        "Standalone and consolidated classifications remain separate.",
+    ],
+    "vocabulary": {
+        "thesis_families": [family.value for family in FundamentalThesisFamily],
+        "taxonomy_version": "Meaning and precedence of thesis-family labels.",
+        "rule_version": "Thresholds, blockers and warnings used by all seven evaluations.",
+        "admission_policy_version": "Daily structural/context eligibility policy; independent from accounting classification.",
+    },
+    "columns": [
+        _column("classification", "object", "Immutable accounting/source classification block."),
+        _column("projection", "object", "Daily structural stage, eligibility, blockers and context."),
+        _column("evaluations", "array|null", "Evaluate-all records for all seven thesis families."),
+        _column("change", "object|null", "Previous thesis/source hash when a prior classification exists."),
+        _column("primary_thesis", "str|null", "Highest-precedence passing thesis family."),
+        _column("secondary_theses", "array", "Other passing families in precedence order."),
+        _column("classification_status", "str", "Qualification or fail-closed evidence status."),
+        _column("statement_basis", "str", "standalone or consolidated; never blended."),
+        _column("source_report_date", "date|null", "Newest fiscal source date."),
+        _column("source_available_at", "date|null", "When source evidence became knowable."),
+        _column("source_data_hash", "str", "Immutable source-evidence hash."),
+        _column("taxonomy_version", "str", "Thesis vocabulary/precedence version."),
+        _column("rule_version", "str", "Classification rule-content version."),
+        _column("projection_date", "date", "Daily context date."),
+        _column("structural_stage", "str", "Point-in-time structural stage."),
+        _column("admission_eligible", "bool", "Shadow admission eligibility."),
+        _column("blockers", "array", "Fail-closed eligibility blockers."),
+        _column("daily_context", "object", "Daily technical/structural context."),
+        _column("admission_policy_version", "str", "Daily projection policy version."),
+    ],
+}
+
+SECTOR_LEADERSHIP_SURFACE: dict[str, Any] = {
+    "surface": "sector_leadership",
+    "tool": "get_sector_leadership",
+    "store": "promoted rank artifacts + fundamentals.duckdb",
+    "tables": ["sector_earnings_leadership", "valuation_cycle_features"],
+    "grain": "one row per sector in the latest available snapshots",
+    "as_of_support": "AS_OF_UNSUPPORTED",
+    "notes": ["RS, momentum and quadrant artifacts are latest-only; historical requests return no rows."],
+    "columns": [
+        _column("sector_name", "str", "Sector identity."),
+        _column("relative_strength", "object", "Latest relative-strength evidence."),
+        _column("momentum", "object", "Latest momentum evidence."),
+        _column("quadrant", "str|null", "Latest rotation quadrant."),
+        _column("earnings", "object|null", "Latest sector earnings-leadership record."),
+        _column("valuation", "object|null", "Latest sector valuation-cycle record."),
+    ],
+}
+
+GOVERNANCE_SURFACE: dict[str, Any] = {
+    "surface": "governance",
+    "tool": "get_pipeline_run / get_data_quality_status / get_artifact_lineage / get_data_freshness",
+    "store": "control_plane.duckdb",
+    "tables": ["pipeline_run", "pipeline_stage_run", "pipeline_artifact", "dq_result"],
+    "grain": "run, stage attempt, artifact, DQ result, or freshness surface",
+    "as_of_support": "EXACT",
+    "notes": ["Artifact authority requires the exact producer attempt to be completed; these tools never promote, retry, repair or migrate."],
+    "columns": [
+        _column("run_id", "str", "Logical pipeline run identity."),
+        _column("run_date", "date", "Pipeline decision date."),
+        _column("status", "str", "Persisted run, stage or DQ status."),
+        _column("artifact_type", "str", "Registered artifact semantic type."),
+        _column("content_hash", "str|null", "Artifact content hash."),
+        _column("producer_status", "str", "Exact producing stage-attempt status."),
+        _column("rule_id", "str", "Data-quality rule identity."),
+        _column("severity", "str", "Data-quality severity."),
+        _column("latest_date", "date|null", "Latest knowable surface date."),
+        _column("age_days", "int|null", "Age relative to requested cutoff or today."),
+        _column("freshness_status", "str", "CURRENT, STALE or MISSING."),
+    ],
+}
+
+LIFECYCLE_SURFACE: dict[str, Any] = {
+    "surface": "lifecycle",
+    "tool": "get_candidate_status / get_candidate_history / get_investigator_evidence / get_opportunity_episode",
+    "store": "control_plane.duckdb",
+    "tables": ["candidate_episode", "candidate_snapshot", "candidate_transition", "candidate_evidence_observation", "candidate_fundamental_observation"],
+    "grain": "canonical opportunity episode and append-only observations",
+    "as_of_support": "EXACT",
+    "notes": ["Candidate lifecycle, Investigator evidence and fundamental observations remain distinct blocks; none are execution state."],
+    "columns": [
+        _column("episode", "object", "Canonical candidate episode identity and lifecycle bounds."),
+        _column("latest_snapshot", "object|null", "Newest knowable candidate snapshot."),
+        _column("snapshots", "array", "Point-in-time lifecycle snapshots."),
+        _column("transitions", "array", "Append-only lifecycle transitions."),
+        _column("evidence_observations", "array", "Investigator and other evidence observations."),
+        _column("rank_observations", "array", "Opportunity/rank observations."),
+        _column("fundamental_observations", "array", "Append-only candidate fundamental thesis observations."),
+    ],
+}
+
 SURFACES: dict[str, dict[str, Any]] = {
     "ohlcv": OHLCV_SURFACE,
     "technicals": TECHNICALS_SURFACE,
     "stage": STAGE_SURFACE,
     "rank": RANK_SURFACE,
+    "pattern": PATTERN_SURFACE,
     "sector": SECTOR_SURFACE,
+    "sector_leadership": SECTOR_LEADERSHIP_SURFACE,
     "fundamentals": FUNDAMENTALS_SURFACE,
+    "fundamental_discovery": FUNDAMENTAL_DISCOVERY_SURFACE,
+    "governance": GOVERNANCE_SURFACE,
+    "lifecycle": LIFECYCLE_SURFACE,
 }
 
 SURFACE_NAMES = tuple(SURFACES)

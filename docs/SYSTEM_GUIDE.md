@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-08-15
+- **Last verified:** 2026-08-18
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -22,7 +22,9 @@ The main surfaces are:
 - External runtime storage resolved from `.env`, normally through `DATA_ROOT`.
 
 The MCP server (`ai-trading-mcp`) exposes OHLCV, technical features, weekly
-stage, sector structure, ranking with its factor breakdown, and fundamentals to
+stage, operational patterns, shortlist and full-universe ranking, sector
+structure/leadership, fundamentals, the shadow fundamental-discovery lane,
+pipeline/DQ/lineage evidence, and canonical opportunity lifecycle context to
 an AI agent over stdio. It is read-only by construction: every DuckDB handle
 opens `read_only=True`, every SQLite handle uses a `mode=ro` URI, and it never
 imports execution, trade-journal, broker, or pipeline-orchestration code. Its
@@ -32,6 +34,14 @@ requested date; a surface that cannot answer historically returns no rows
 rather than substituting the present. See
 [ADR-0008](decisions/ADR-0008-read-only-mcp-interface.md) and the
 [MCP tool catalog](reference/mcp_tools.md).
+
+The full analytical rank cross-section is persisted append-oriented in
+`rank_universe_history` before regime `top_n` truncation. The existing
+`rank_history` and `ranked_signals` remain the actionable shortlist and remain
+the only rank inputs to candidates, publishing, and execution. Rank persistence
+also records `rank_regime_freshness_v1` DQ evidence using the observed regime
+date and calculated calendar age; MCP reports stale or inconsistent evidence
+without reinterpreting policy.
 
 The on-demand [Actual Trading Journal](architecture/trade_journal.md) is a separate bounded domain. It owns `$DATA_ROOT/trade_journal.duckdb`, is not a daily-pipeline stage, never writes `execution.duckdb`, and reads trusted operational market data only for point-in-time enrichment. Its authenticated mutation routes live under the execution API; Phase 4 `/api/v1` remains GET-only. Loopback development uses a server-side Vite/API handshake when no operator key is configured, while non-loopback execution-API startup requires an explicit key. See the [operator runbook](runbooks/trade_journal.md).
 

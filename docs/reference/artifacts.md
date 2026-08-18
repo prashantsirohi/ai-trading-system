@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-08-15
+- **Last verified:** 2026-08-18
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -59,6 +59,7 @@ Current meanings include:
 
 Writes:
 - `ranked_signals.csv`
+- `ranked_universe.csv`
 - `breakout_scan.csv`
 - `pattern_scan.csv`
 - `stock_scan.csv`
@@ -70,6 +71,9 @@ Writes:
 
 Authority split:
 - `ranked_signals.csv`: authoritative ranked output for the attempt
+- `ranked_universe.csv`: complete analytical cross-section before regime
+  score/top-N selection; persisted to `rank_universe_history` for MCP analysis
+  and never consumed by candidates, publishing, or execution
 - `dashboard_payload.json`: authoritative aggregated operator payload for the attempt
 - sidecar CSVs: authoritative only for their own sidecar views
 - `task_status.json`: authoritative per-task bookkeeping for retry and operator diagnostics

@@ -2,7 +2,7 @@
 
 - **Purpose:** Catalog of the read-only MCP tool surface: parameters, response shape, point-in-time support, and the store each tool reads.
 - **Audience:** Operators, developers, and AI agents consuming the server.
-- **Last verified:** 2026-08-14
+- **Last verified:** 2026-08-18
 - **Source of truth:** `src/ai_trading_system/interfaces/mcp/server.py`, `.../tools/*.py`, `.../readers/*.py`, `.../schema_catalog.py`.
 
 ---
@@ -55,16 +55,31 @@ unbounded latest-data request.
 |---|---|---|---|
 | `describe_schema` | Column dictionary for a surface: type, meaning, units, owning store, stage-vocabulary mapping. | n/a | constants |
 | `resolve_symbol` | Ticker, name, ISIN or security id to master candidates. | `AS_OF_UNSUPPORTED` | `masterdata.db:symbols` |
-| `get_symbol_profile` | Identity, quote, stage, rank and fundamentals in one call. | `EXACT` | composed |
+| `get_symbol_profile` | Identity, quote, stage, rank, operational pattern, fundamentals, and fundamental thesis in one call. | `EXACT` | composed |
 | `get_ohlcv` | Daily candles plus delivery percentage. | `EXACT` | `ohlcv.duckdb:_catalog[_feature_source]`, `_delivery` |
 | `get_technical_features` | Nine indicator families plus Phase 1 risk/liquidity features. | `EXACT` | `feature_store/*.parquet`, `ohlcv.duckdb:feat_phase1_symbol_features` |
 | `get_stage_history` | Weinstein stage observations from a chosen store. | `EXACT` | see [stage stores](#stage-stores) |
 | `get_rank_detail` | Newest ranked row with the factor breakdown. | `EXACT` | `control_plane.duckdb:rank_history` |
 | `get_rank_history` | Rank position over time. | `EXACT` | `control_plane.duckdb:rank_history` |
-| `screen_universe` | Cross-sectional filter over the ranked universe. | `EXACT` | `rank_history` + governed stage observations |
+| `get_pattern_detail` | Operational patterns on the newest model-pinned session. | `EXACT` | `control_plane.duckdb:pattern_history` |
+| `get_pattern_history` | Operational pattern lifecycle history. | `EXACT` | `control_plane.duckdb:pattern_history` |
+| `screen_universe` | Cross-sectional filter over the shortlist or full analytical universe. | `EXACT` | `rank_history` or `rank_universe_history` + governed stage/pattern/thesis observations |
 | `get_sector_overview` | Stage distribution per sector. | `EXACT` | governed stage observations |
 | `get_sector_constituents` | Symbols in a sector with stage, rank and market cap. | `EXACT` | governed stage observations; current master enrichment only for latest requests |
+| `get_sector_leadership` | Latest RS, momentum, quadrant, earnings, and valuation evidence. | `AS_OF_UNSUPPORTED` | promoted rank artifacts + `fundamentals.duckdb` |
 | `get_fundamentals` | Five fundamental blocks. | `EXACT` | `screener_financials.db`, `fundamentals.duckdb` |
+| `get_fundamental_thesis` | Classification and daily shadow projection for one listing. | `EXACT` | fundamental thesis classification/projection |
+| `get_fundamental_thesis_history` | Historical projections joined to exact classifications. | `EXACT` | fundamental thesis classification/projection |
+| `screen_fundamental_theses` | One-date fundamental-thesis cross-section. | `EXACT` | fundamental thesis classification/projection |
+| `get_fundamental_lane_overview` | Counts by thesis, status, eligibility, and blocker. | `EXACT` | fundamental thesis classification/projection |
+| `get_pipeline_run` | Pipeline run status and counts. | `EXACT` | pipeline governance tables |
+| `get_data_quality_status` | Persisted DQ outcomes. | `EXACT` | `dq_result` |
+| `get_artifact_lineage` | Completed producer/artifact lineage and hashes. | `EXACT` | pipeline artifact/stage tables |
+| `get_data_freshness` | Freshness across MCP surfaces. | `EXACT` | composed |
+| `get_candidate_status` | Latest canonical episode and snapshot. | `EXACT` | opportunity registry |
+| `get_candidate_history` | Episode, snapshot, and transition history. | `EXACT` | opportunity registry |
+| `get_investigator_evidence` | Investigator evidence on canonical episodes. | `EXACT` | candidate evidence observations |
+| `get_opportunity_episode` | Episode aggregate including fundamental observations. | `EXACT` | opportunity registry |
 
 Row limits are clamped server-side. Most tools default to 250 rows and cap at
 2000; `screen_universe` defaults to 50 and caps at 500. `meta.truncated` is set
@@ -160,6 +175,33 @@ session and absent the next. `get_rank_detail` resolves the effective date
 `as_of` and reporting its true date in `meta.as_of_effective` — rather than
 reporting "never ranked" because it is missing from the newest session.
 `screen_universe`, being a cross-section, pins to a single session as expected.
+Its default `scope="shortlist"` preserves the actionable v1 contract.
+`scope="full_universe"` reads the additive `rank_universe_history` snapshot
+persisted before regime `top_n` truncation. The response reports both scope and
+regime-freshness evidence; candidate, publishing, and execution consumers still
+read only `ranked_signals`/`rank_history`.
+
+## Operational patterns
+
+Pattern tools read only version-pinned `pattern_history`. They return family,
+state, score, setup quality, pivot/breakout evidence, distance to pivot, model
+version, and config hash. ADR-0007 pattern-lane research evidence is explicitly
+excluded and never blended into an actionable pattern answer.
+
+## Fundamental discovery
+
+The fundamental-thesis tools expose the shadow-only operational discovery lane,
+not research-screener filings, annual reports, or qualitative claims. A
+projection joins its classification by `(symbol_id, exchange,
+source_data_hash, taxonomy_version, rule_version)`. Historical reads constrain
+projection date, source availability, and both record creation dates to the
+cutoff; cross-sections use one effective projection date.
+
+Classification, projection, seven-family evaluations, and change evidence are
+separate blocks. Blockers and exclusions remain evidence rather than failed
+scores. The generic `get_fundamentals` response is deliberately separate and
+cannot be used to infer a thesis. Candidate-level fundamental observations are
+returned only by `get_opportunity_episode`.
 
 ## Safety
 

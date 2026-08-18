@@ -438,7 +438,9 @@ class RankOrchestrationService:
         if context.registry is not None:
             from ai_trading_system.domains.ranking.decision_history import DecisionHistoryRepository
 
-            decision_persistence = DecisionHistoryRepository(context.registry).persist_rank_outputs(context, outputs)
+            decision_persistence = DecisionHistoryRepository(context.registry).persist_rank_outputs(
+                context, outputs, stage_metadata=stage_metadata
+            )
 
         artifacts = []
         metadata = {"completed_at": datetime.now(timezone.utc).isoformat()}

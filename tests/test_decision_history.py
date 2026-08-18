@@ -34,6 +34,10 @@ def test_rank_decision_histories_are_versioned_and_idempotent(tmp_path: Path) ->
             "rank": 1, "relative_strength": 90.0, "volume_intensity": 70.0,
             "trend_persistence": 75.0, "proximity_to_highs": 85.0, "sector_strength": 60.0,
         }]),
+        "ranked_universe": pd.DataFrame([
+            {"symbol_id": "ABC", "exchange": "NSE", "composite_score": 80.0, "rank": 1},
+            {"symbol_id": "XYZ", "exchange": "NSE", "composite_score": 45.0, "rank": 2},
+        ]),
         "stock_scan": pd.DataFrame([{
             "symbol_id": "ABC", "exchange": "NSE", "stage_label": "STAGE_1",
             "stage_score": 82.0, "close": 101.0, "sma_50": 98.0, "sma_200": 95.0,
@@ -57,6 +61,9 @@ def test_rank_decision_histories_are_versioned_and_idempotent(tmp_path: Path) ->
     with registry._reader() as conn:  # noqa: SLF001
         assert conn.execute("SELECT COUNT(*) FROM rank_history").fetchone()[0] == 1
         assert conn.execute("SELECT composite_score FROM rank_history").fetchone()[0] == 81.0
+        assert conn.execute("SELECT COUNT(*) FROM rank_universe_history").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM rank_history WHERE symbol_id='XYZ'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM dq_result WHERE rule_id='rank_regime_freshness_v1'").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM stage_history").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM stage1_history").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM pattern_history").fetchone()[0] == 1

@@ -2,7 +2,7 @@
 
 - **Purpose:** Complete map of all documentation under `docs/`.
 - **Audience:** Anyone navigating the docs.
-- **Last verified:** 2026-08-14
+- **Last verified:** 2026-08-18
 - **Source of truth:** This file is the source of truth for the doc inventory; `SYSTEM_GUIDE.md` is the source of truth for system orientation.
 
 > Each document records its own verification date. See [`development/legacy_cleanup_plan.md`](development/legacy_cleanup_plan.md) for the cleanup history.
@@ -98,7 +98,7 @@
 - [testing_strategy](development/testing_strategy.md)
 - [package_migration](development/package_migration.md)
 - [legacy_cleanup_plan](development/legacy_cleanup_plan.md)
-- [mcp_v2_plan](development/mcp_v2_plan.md) — planned behavior; not the current MCP contract
+- [mcp_v2_plan](development/mcp_v2_plan.md) — v2 delivery plan and implemented boundaries; current behavior is catalogued in `reference/mcp_tools.md`
 - [adding_new_stage](development/adding_new_stage.md)
 - [adding_new_factor](development/adding_new_factor.md)
 - [adding_new_publisher](development/adding_new_publisher.md)

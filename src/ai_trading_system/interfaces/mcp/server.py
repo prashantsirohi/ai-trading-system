@@ -26,6 +26,11 @@ from ai_trading_system.interfaces.mcp.schema_catalog import (
     describe_schema,
 )
 from ai_trading_system.interfaces.mcp.tools import fundamentals as fundamentals_tool
+from ai_trading_system.interfaces.mcp.tools import fundamental_discovery as fundamental_discovery_tool
+from ai_trading_system.interfaces.mcp.tools import patterns as patterns_tool
+from ai_trading_system.interfaces.mcp.tools import governance as governance_tool
+from ai_trading_system.interfaces.mcp.tools import lifecycle as lifecycle_tool
+from ai_trading_system.interfaces.mcp.tools import sector_leadership as sector_leadership_tool
 from ai_trading_system.interfaces.mcp.tools import prices as prices_tool
 from ai_trading_system.interfaces.mcp.tools import profile as profile_tool
 from ai_trading_system.interfaces.mcp.tools import rank as rank_tool
@@ -71,7 +76,7 @@ def _tool_specs() -> list[tuple[str, Callable[..., Any], str]]:
             "describe_schema",
             _describe_schema_tool,
             "Column dictionary for a surface (ohlcv, technicals, stage, rank, "
-            "sector, fundamentals): type, meaning, units, owning store, and "
+            "pattern, sector, fundamentals, fundamental_discovery): type, meaning, units, owning store, and "
             "the stage-vocabulary mapping. Call this before interpreting "
             "unfamiliar columns. Omit 'surface' for an index of all surfaces.",
         ),
@@ -127,6 +132,16 @@ def _tool_specs() -> list[tuple[str, Callable[..., Any], str]]:
             "oldest first.",
         ),
         (
+            "get_pattern_detail",
+            patterns_tool.get_pattern_detail,
+            "Operational pattern observations for a symbol on the newest model-pinned session at or before the cutoff. Shadow pattern-lane evidence is never blended in.",
+        ),
+        (
+            "get_pattern_history",
+            patterns_tool.get_pattern_history,
+            "Operational pattern lifecycle history for a symbol, including family, state, score, setup quality, pivot distance, breakout state and model provenance.",
+        ),
+        (
             "screen_universe",
             screen_tool.screen_universe,
             "Filter the ranked universe cross-section: by stage (either "
@@ -146,12 +161,77 @@ def _tool_specs() -> list[tuple[str, Callable[..., Any], str]]:
             "cap.",
         ),
         (
+            "get_sector_leadership",
+            sector_leadership_tool.get_sector_leadership,
+            "Latest-only sector relative-strength, momentum, rotation quadrant, earnings-leadership and valuation-cycle evidence from promoted artifacts and analytical stores.",
+        ),
+        (
             "get_fundamentals",
             fundamentals_tool.get_fundamentals,
             "Fundamental evidence in five blocks: company snapshot, scores, "
             "valuation snapshot, quarterly growth, and raw financial line "
             "items. Cutoffs use the publication date, not the fiscal period. "
             "'statement_basis' is standalone or consolidated, never blended.",
+        ),
+        (
+            "get_fundamental_thesis",
+            fundamental_discovery_tool.get_fundamental_thesis,
+            "Point-in-time fundamental-discovery thesis classification and daily shadow projection for one listing, kept separate from generic fundamental scores.",
+        ),
+        (
+            "get_fundamental_thesis_history",
+            fundamental_discovery_tool.get_fundamental_thesis_history,
+            "Historical fundamental-discovery projections joined to their exact immutable classifications, with evaluations, blockers, policy versions and change evidence.",
+        ),
+        (
+            "screen_fundamental_theses",
+            fundamental_discovery_tool.screen_fundamental_theses,
+            "Screen one pinned fundamental-discovery projection date by thesis, classification status, eligibility, blocker or statement basis.",
+        ),
+        (
+            "get_fundamental_lane_overview",
+            fundamental_discovery_tool.get_fundamental_lane_overview,
+            "Aggregate the pinned fundamental-discovery cross-section by seven-family thesis vocabulary, status, eligibility and blockers.",
+        ),
+        (
+            "get_pipeline_run",
+            governance_tool.get_pipeline_run,
+            "Inspect pipeline run status, timing, errors, metadata, stage-attempt count, artifact count and data-quality issue count without triggering pipeline work.",
+        ),
+        (
+            "get_data_quality_status",
+            governance_tool.get_data_quality_status,
+            "Read persisted data-quality rule outcomes by run, stage, severity and cutoff, including failure counts, messages and evidence links.",
+        ),
+        (
+            "get_artifact_lineage",
+            governance_tool.get_artifact_lineage,
+            "Read artifacts only from their exact completed producer attempts, including content hashes, row counts, lifecycle status and producer completion evidence.",
+        ),
+        (
+            "get_data_freshness",
+            governance_tool.get_data_freshness,
+            "Summarize latest knowable dates and explicit CURRENT, STALE or MISSING status for rank, pattern, weekly-stage and fundamental-discovery surfaces.",
+        ),
+        (
+            "get_candidate_status",
+            lifecycle_tool.get_candidate_status,
+            "Latest point-in-time canonical candidate episode and snapshot for one listing; this is read-only shadow lifecycle context, not execution state.",
+        ),
+        (
+            "get_candidate_history",
+            lifecycle_tool.get_candidate_history,
+            "Historically reconstruct canonical candidate episodes with their snapshots and transitions for a symbol or candidate id.",
+        ),
+        (
+            "get_investigator_evidence",
+            lifecycle_tool.get_investigator_evidence,
+            "Point-in-time Investigator evidence observations attached to canonical opportunity episodes, retaining verdict, positive, negative and missing evidence.",
+        ),
+        (
+            "get_opportunity_episode",
+            lifecycle_tool.get_opportunity_episode,
+            "Aggregate one canonical opportunity episode with snapshots, transitions, structural, Investigator, rank and fundamental observations without mutation.",
         ),
     ]
 
@@ -287,9 +367,23 @@ def run_self_test(context: McpContext, *, historical_as_of: str) -> int:
                     ),
                 ),
                 (
+                    f"get_pattern_detail ({label})",
+                    lambda a=as_of: patterns_tool.get_pattern_detail(context, symbol, as_of=a),
+                ),
+                (
+                    f"get_pattern_history ({label})",
+                    lambda a=as_of: patterns_tool.get_pattern_history(context, symbol, as_of=a, limit=5),
+                ),
+                (
                     f"screen_universe ({label})",
                     lambda a=as_of: screen_tool.screen_universe(
                         context, as_of=a, limit=5
+                    ),
+                ),
+                (
+                    f"screen_universe full_universe ({label})",
+                    lambda a=as_of: screen_tool.screen_universe(
+                        context, scope="full_universe", as_of=a, limit=5
                     ),
                 ),
                 (
@@ -299,10 +393,66 @@ def run_self_test(context: McpContext, *, historical_as_of: str) -> int:
                     ),
                 ),
                 (
+                    f"get_sector_constituents ({label})",
+                    lambda a=as_of: sectors_tool.get_sector_constituents(context, "Capital Goods", as_of=a, limit=5),
+                ),
+                (
+                    f"get_sector_leadership ({label})",
+                    lambda a=as_of: sector_leadership_tool.get_sector_leadership(context, as_of=a, limit=5),
+                ),
+                (
                     f"get_fundamentals ({label})",
                     lambda a=as_of: fundamentals_tool.get_fundamentals(
                         context, symbol, as_of=a
                     ),
+                ),
+                (
+                    f"get_fundamental_thesis ({label})",
+                    lambda a=as_of: fundamental_discovery_tool.get_fundamental_thesis(context, symbol, as_of=a),
+                ),
+                (
+                    f"get_fundamental_thesis_history ({label})",
+                    lambda a=as_of: fundamental_discovery_tool.get_fundamental_thesis_history(context, symbol, as_of=a, limit=5),
+                ),
+                (
+                    f"screen_fundamental_theses ({label})",
+                    lambda a=as_of: fundamental_discovery_tool.screen_fundamental_theses(context, as_of=a, limit=5),
+                ),
+                (
+                    f"get_fundamental_lane_overview ({label})",
+                    lambda a=as_of: fundamental_discovery_tool.get_fundamental_lane_overview(context, as_of=a),
+                ),
+                (
+                    f"get_pipeline_run ({label})",
+                    lambda a=as_of: governance_tool.get_pipeline_run(context, as_of=a, limit=5),
+                ),
+                (
+                    f"get_data_quality_status ({label})",
+                    lambda a=as_of: governance_tool.get_data_quality_status(context, as_of=a, limit=5),
+                ),
+                (
+                    f"get_artifact_lineage ({label})",
+                    lambda a=as_of: governance_tool.get_artifact_lineage(context, as_of=a, limit=5),
+                ),
+                (
+                    f"get_data_freshness ({label})",
+                    lambda a=as_of: governance_tool.get_data_freshness(context, as_of=a),
+                ),
+                (
+                    f"get_candidate_status ({label})",
+                    lambda a=as_of: lifecycle_tool.get_candidate_status(context, symbol, as_of=a),
+                ),
+                (
+                    f"get_candidate_history ({label})",
+                    lambda a=as_of: lifecycle_tool.get_candidate_history(context, symbol=symbol, as_of=a, limit=5),
+                ),
+                (
+                    f"get_investigator_evidence ({label})",
+                    lambda a=as_of: lifecycle_tool.get_investigator_evidence(context, symbol=symbol, as_of=a, limit=5),
+                ),
+                (
+                    f"get_opportunity_episode ({label})",
+                    lambda a=as_of: lifecycle_tool.get_opportunity_episode(context, "self-test-missing", as_of=a, limit=5),
                 ),
             ]
         )

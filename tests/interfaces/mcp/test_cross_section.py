@@ -23,11 +23,13 @@ from ai_trading_system.interfaces.mcp.tools.sectors import (
 
 def test_profile_returns_all_blocks(ctx: McpContext) -> None:
     data = get_symbol_profile(ctx, "AAA")["data"]
-    assert set(data) == {"identity", "quote", "stage", "rank", "fundamentals"}
+    assert set(data) == {"identity", "quote", "stage", "rank", "pattern", "fundamentals", "fundamental_thesis"}
     assert data["identity"]["symbol_id"] == "AAA"
     assert data["quote"]["date"] == "2026-01-09"
     assert data["stage"]["stage_label"] == "transition_1_to_2"
     assert data["rank"]["position"]["rank_position"] == 8
+    assert data["pattern"][0]["pattern_family"] == "cup_handle"
+    assert data["fundamental_thesis"]["classification"]["primary_thesis"] == "QUALITY_COMPOUNDER"
 
 
 def test_profile_quote_uses_the_adjusted_basis(ctx: McpContext) -> None:
@@ -51,7 +53,7 @@ def test_profile_is_exchange_aware(ctx: McpContext) -> None:
 
 def test_every_block_carries_its_own_date_and_source(ctx: McpContext) -> None:
     blocks = get_symbol_profile(ctx, "AAA")["meta"]["blocks"]
-    assert set(blocks) == {"identity", "quote", "stage", "rank", "fundamentals"}
+    assert set(blocks) == {"identity", "quote", "stage", "rank", "pattern", "fundamentals", "fundamental_thesis"}
     for name, meta in blocks.items():
         assert set(meta) == {"as_of_status", "as_of_effective", "source", "notes"}, name
     assert blocks["quote"]["as_of_effective"] == "2026-01-09"
@@ -89,7 +91,7 @@ def test_profile_before_everything_is_empty(ctx: McpContext) -> None:
     assert response["meta"]["as_of_status"] == AS_OF_NO_DATA
     assert all(
         response["data"][block] is None
-        for block in ("quote", "stage", "rank", "fundamentals")
+        for block in ("quote", "stage", "rank", "pattern", "fundamentals", "fundamental_thesis")
     )
 
 
