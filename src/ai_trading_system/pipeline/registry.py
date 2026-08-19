@@ -375,6 +375,17 @@ _INITIALIZED_DB_PATHS: set[str] = set()
 
 CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
     "pipeline_run": frozenset({"run_id", "status"}),
+    "rank_universe_history": frozenset(
+        {
+            "symbol_id",
+            "exchange",
+            "trade_date",
+            "universe_id",
+            "rank_model_version",
+            "pipeline_run_id",
+            "source_attempt",
+        }
+    ),
     "dq_rule": frozenset({"rule_id", "enabled", "active"}),
     "opportunity_registry_schema": frozenset({"schema_version"}),
     "weekly_stock_stage_history": frozenset({"observation_id", "source_artifact_hash"}),
@@ -480,6 +491,19 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
             "sector_stage_velocity_current_week",
             "sector_gate_taxonomy",
             "sector_gate_cohort",
+        }
+    ),
+    "candidate_fundamental_observation": frozenset(
+        {
+            "observation_id",
+            "candidate_id",
+            "symbol_id",
+            "exchange",
+            "primary_thesis",
+            "source_data_hash",
+            "rule_version",
+            "source_run_id",
+            "idempotency_key",
         }
     ),
 }

@@ -362,6 +362,10 @@ execution, requires `--apply`, verifies the copied control-plane checksum from
 `SHA256SUMS.txt`, and confirms that the live pre-migration file still matches
 the backup. The pipeline CLI exposes `--apply-control-plane-migrations` only as
 an explicit bootstrap override; it is not the routine operator migration path.
+The required-table catalog includes `candidate_fundamental_observation` from
+migration 044 and `rank_universe_history` from migration 045. This keeps schema
+readiness ahead of expensive pipeline work and prevents a late persistence
+failure after ranking has already been computed.
 
 ## Phase 4A read-only access
 

@@ -526,12 +526,16 @@ backup byte-for-byte:
 ```bash
 PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.migrate_control_plane \
   --backup-dir "$DATA_ROOT/backups/<timestamp>" \
-  --from-migration 033 --to-migration 043 --apply
+  --from-migration 033 --to-migration 045 --apply
 ```
 
 `--apply-control-plane-migrations` is an explicit startup override for
 controlled bootstrap contexts. Routine operator runs should use the separate,
 backup-gated command above so migrations and pipeline execution remain distinct.
+The verify-only startup contract includes the migration-044 fundamental
+observation table and migration-045 full-universe rank-history table. Either
+missing migration therefore fails before ingest rather than during downstream
+persistence.
 
 Run Phase 3B comparison without changing registry, execution, or published payloads:
 

@@ -62,7 +62,7 @@ def test_explicit_range_migration_is_backup_gated_and_verified(
         db_path=db_path,
         backup_dir=backup_dir,
         first="033",
-        last="043",
+        last="045",
         apply=True,
     )
 
@@ -79,8 +79,22 @@ def test_explicit_range_migration_is_backup_gated_and_verified(
         "041_admission_rule_evaluations.sql",
         "042_investigator_performance_evaluation.sql",
         "043_investigator_attribution_policy_validation.sql",
+        "044_fundamental_discovery.sql",
+        "045_rank_universe_history.sql",
     ]
     RegistryStore(tmp_path, db_path=db_path, allow_migrations=False).verify_schema_current()
+
+
+def test_schema_verification_requires_rank_universe_history(tmp_path: Path) -> None:
+    db_path = tmp_path / "control_plane.duckdb"
+    store = RegistryStore(tmp_path, db_path=db_path, initialize=False)
+    store.apply_migration_range(first="001", last="044")
+
+    with pytest.raises(
+        ControlPlaneMigrationRequiredError,
+        match="rank_universe_history",
+    ):
+        RegistryStore(tmp_path, db_path=db_path, allow_migrations=False)
 
 
 def test_explicit_range_migration_rejects_stale_backup(
