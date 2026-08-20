@@ -57,7 +57,12 @@ def clamp_limit(
 def coerce_date(value: Any) -> date | None:
     """Best-effort conversion of a stored timestamp/date/string to ``date``."""
 
-    if value is None:
+    # ``pandas.NaT`` is datetime-like, so it must be rejected before the
+    # ``datetime``/``date`` branches below.  Otherwise ``NaT.date()`` remains
+    # ``NaT`` and later point-in-time comparisons raise ``TypeError``.
+    if value is None or value is pd.NaT:
+        return None
+    if isinstance(value, (datetime, date, pd.Timestamp)) and pd.isna(value):
         return None
     if isinstance(value, datetime):
         return value.date()

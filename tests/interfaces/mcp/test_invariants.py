@@ -25,6 +25,7 @@ from ai_trading_system.interfaces.mcp.envelope import (
     FutureDataError,
     assert_not_future,
     clamp_limit,
+    coerce_date,
     envelope,
     json_safe,
 )
@@ -312,6 +313,12 @@ def test_json_safe_handles_store_scalars() -> None:
     assert json_safe(np.bool_(True)) is True
     assert json_safe({"a": np.int64(1)}) == {"a": 1}
     assert json_safe([np.float64(2.0)]) == [2.0]
+
+
+def test_coerce_date_treats_pandas_nat_as_missing() -> None:
+    import pandas as pd
+
+    assert coerce_date(pd.NaT) is None
 
 
 def test_exchange_normalization() -> None:

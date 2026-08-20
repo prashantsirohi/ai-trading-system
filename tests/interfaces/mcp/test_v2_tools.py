@@ -81,6 +81,31 @@ def test_fundamental_future_created_or_available_rows_are_excluded(ctx: McpConte
     assert response["data"]["classification"]["source_data_hash"] == "hash-new"
 
 
+def test_fundamental_cross_sections_accept_nullable_source_dates(
+    ctx: McpContext, connection_guard
+) -> None:
+    with connection_guard.paused():
+        with duckdb.connect(str(ctx.fundamentals_db)) as conn:
+            conn.execute(
+                """INSERT INTO fundamental_thesis_classification VALUES (
+                    'nullable','BBB','NSE',CAST('2026-01-07' AS DATE),'hash-nullable',
+                    'standalone',NULL,NULL,NULL,'[]','INELIGIBLE','[]','{}',
+                    'taxonomy-v1','rules-v1','nullable',CAST('2026-01-07' AS TIMESTAMP))"""
+            )
+            conn.execute(
+                """INSERT INTO fundamental_thesis_projection VALUES (
+                    'nullable-p','BBB','NSE',CAST('2026-01-07' AS DATE),'hash-nullable',
+                    NULL,'[]',NULL,FALSE,'[\"MISSING_SOURCE_EVIDENCE\"]','{}',
+                    'taxonomy-v1','rules-v1','admission-v1','nullable',
+                    CAST('2026-01-07' AS TIMESTAMP))"""
+            )
+
+    screened = screen_fundamental_theses(ctx, as_of="2026-01-07")
+    assert {row["symbol_id"] for row in screened["data"]} == {"AAA", "BBB"}
+    overview = get_fundamental_lane_overview(ctx, as_of="2026-01-07")
+    assert overview["data"]["symbols_observed"] == 2
+
+
 def test_missing_fundamental_tables_fail_closed_without_creating_schema(
     tmp_path, monkeypatch, connection_guard
 ) -> None:
