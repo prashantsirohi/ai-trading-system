@@ -12,6 +12,8 @@ from ai_trading_system.domains.fundamentals.screener_client import (
     ScreenerRateLimitError,
     _company_url,
     _detect_rendered_basis,
+    _extract_screen_query,
+    _extract_screen_symbols,
     _has_rendered_financial_periods,
     _section_dates,
     _validate_company_response,
@@ -147,3 +149,64 @@ def test_company_response_marks_429_retryable_and_preserves_retry_after() -> Non
 def test_company_response_rejects_missing_http_response() -> None:
     with pytest.raises(RuntimeError, match="no HTTP response"):
         _validate_company_response(None, "https://example.test/company/AAA/")
+
+
+class _ScreenLocator:
+    def __init__(self, values: list[str]):
+        self.values = values
+
+    @property
+    def first(self):
+        return self
+
+    def count(self) -> int:
+        return len(self.values)
+
+    def input_value(self) -> str:
+        return self.values[0]
+
+    def nth(self, index: int):
+        return _ScreenLink(self.values[index])
+
+
+class _ScreenLink:
+    def __init__(self, href: str):
+        self.href = href
+
+    def get_attribute(self, name: str) -> str | None:
+        return self.href if name == "href" else None
+
+
+class _ScreenPage:
+    def locator(self, selector: str):
+        if selector == "#query-builder textarea":
+            return _ScreenLocator(["Net block + Capital work in progress > preceding year"])
+        if selector == "a[href*='/company/']":
+            return _ScreenLocator([
+                "/company/FCL/", "/company/E2E/consolidated/", "/company/FCL/",
+            ])
+        return _ScreenLocator([])
+
+
+def test_screen_query_and_symbols_are_frozen_from_rendered_page() -> None:
+    page = _ScreenPage()
+    assert _extract_screen_query(page) == "Net block + Capital work in progress > preceding year"
+    assert _extract_screen_symbols(page) == ("E2E", "FCL")
+
+
+def test_screen_download_rejects_url_outside_governed_screen() -> None:
+    client = ScreenerClient(username="configured", password="configured")
+
+    with pytest.raises(ValueError, match="requested screen_id"):
+        client.download_screen_export(
+            317873,
+            destination="unused.xlsx",
+            screen_url="https://www.screener.in/screens/999/other/",
+        )
+
+    with pytest.raises(ValueError, match="HTTPS www.screener.in"):
+        client.download_screen_export(
+            317873,
+            destination="unused.xlsx",
+            screen_url="https://example.test/screens/317873/companies-with-capex/",
+        )

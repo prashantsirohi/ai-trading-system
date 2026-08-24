@@ -1,0 +1,45 @@
+{
+  "policy_version": "jcurve-screener-seed-v1",
+  "screen": {
+    "screen_id": 317873,
+    "url": "https://www.screener.in/screens/317873/companies-with-capex/",
+    "expected_query": "((Net block + Capital work in progress) > 1.5 * (Net block preceding year + Capital work in progress preceding year) AND Market Capitalization > 200 AND Return on capital employed > 12 AND Return on equity > 12)",
+    "required_query_terms": [
+      "Net block",
+      "Capital work in progress",
+      "Market Capitalization",
+      "Return on capital employed",
+      "Return on equity"
+    ]
+  },
+  "history": {
+    "required_annual_periods": 3,
+    "required_quarterly_periods": 8,
+    "basis_order": ["consolidated", "standalone"],
+    "cross_basis_splicing": "PROHIBITED",
+    "missing_cwip": "NOT_DISCLOSED"
+  },
+  "thresholds": {
+    "capital_base_2y_growth": 0.30,
+    "capital_base_4y_growth": 0.50,
+    "absolute_lane_min_2y_growth": 0.10,
+    "absolute_lane_delta_to_market_cap": 0.05,
+    "missing_cwip_net_block_2y_growth": 0.30,
+    "missing_cwip_depreciation_growth": 0.10,
+    "build_cwip_yoy_growth": 0.25,
+    "build_cwip_share": 0.08,
+    "commissioning_net_block_yoy_growth": 0.15,
+    "commissioning_depreciation_growth": 0.10,
+    "clean_transfer_cwip_decline": -0.20,
+    "ramp_sales_growth": 0.10,
+    "ramp_margin_expansion_pp": 1.0
+  },
+  "accepted_dispositions": [
+    "BUILD",
+    "COMMISSIONING",
+    "RAMP_ACTIVE",
+    "CAPEX_VISIBLE_UNCLASSIFIED"
+  ],
+  "supplemental_symbols": ["FCL"],
+  "authority": "DISCOVERY_ONLY_OFFICIAL_FILINGS_REQUIRED"
+}

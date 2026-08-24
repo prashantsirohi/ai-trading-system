@@ -71,13 +71,13 @@
 
 ## Source: Screener.in (fundamentals enrichment)
 
-- **Module:** `src/ai_trading_system/domains/fundamentals/import_screener.py`
-- **Role:** enrichment (fundamental scores and trend deltas, optional stage)
-- **Endpoint or input:** **No live API call.** The importer reads a manually-exported CSV from `--file` (`import_screener.py:72, 101-108`). The operator is expected to download the Screener export and feed it in via the CLI `python -m ai_trading_system.domains.fundamentals.import_screener --file ... --snapshot-date YYYY-MM-DD`.
-- **Auth:** None (no automated Screener login in the operational ingest path).
-- **Rate limits:** N/A — file import.
-- **Failure behavior:** Malformed CSV raises from `pd.read_csv`. The `fundamentals` pipeline stage is skipped entirely if credentials/inputs are missing (per truth map §3).
-- **Used by stage(s):** `fundamentals` (optional).
+- **Modules:** `domains/fundamentals/screener_client.py`, `screener_sync.py`, and the legacy `import_screener.py` CSV importer.
+- **Role:** separately scheduled fundamentals enrichment plus isolated J-curve screen discovery; no live request occurs during the normal pipeline.
+- **Endpoint or input:** The authenticated Playwright client opens Screener company or screen pages and uses their export action. Company Excel workbooks feed the canonical SQLite sync. Manual CSV import remains supported. J-curve V1 freezes screen 317873 and reads the existing financial store without modifying it.
+- **Auth:** `SCREENER_USERNAME` and `SCREENER_PASSWORD`; browser storage state is cached under the fundamentals cache. A provided screen export avoids a live login.
+- **Rate limits:** Company sync is explicitly throttled and handles HTTP 429/`Retry-After`; screen V1 performs one bounded export acquisition.
+- **Failure behavior:** Non-200 responses, login/query drift, malformed or empty exports, missing symbols, incomplete identity, and invalid basis history remain explicit failures or rejected seed rows. Missing CWIP is not converted to zero.
+- **Used by stage(s):** Separate `ai-trading-fundamentals-sync` and `ai-trading-jcurve seed-screener` commands; the optional pipeline `fundamentals` stage consumes local readmodels only.
 
 ## Source: NSE corporate actions / market_intel (catalysts)
 

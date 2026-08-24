@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-08-18
+- **Last verified:** 2026-08-19
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -26,7 +26,7 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 | Candidate tracker | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate tracker domain | Candidate episodes, transitions, snapshots, fundamental reviews, alerts, and current lifecycle state. |
 | Master data | `$DATA_ROOT/masterdata.db` | Ingest/master-data services | Shared instrument and symbol identity data. |
 | Fundamentals | `$DATA_ROOT/fundamentals/` and `$DATA_ROOT/fundamentals.duckdb` | Fundamentals domain | Imported source snapshots/readmodels plus sync receipts, immutable thesis classifications, and daily fundamental projections. |
-| Research screener | `$DATA_ROOT/research_screener/control_plane.duckdb` | Persistent screener domain | Single-writer, append-oriented provenance, identity, immutable screen inputs/decisions/DQ, versioned research-document/evidence history, and qualitative claim/review policy history. It has no pipeline or execution consumer. |
+| Research screener | `$DATA_ROOT/research_screener/control_plane.duckdb` | Persistent screener domain | Single-writer, append-oriented provenance, identity, immutable screen inputs/decisions/DQ, research-document/evidence history, qualitative claims, and J-curve episodes/stage observations. It has no pipeline or execution consumer. |
 
 The Screener SQLite store under `$DATA_ROOT/fundamentals/` records the detected
 statement basis on financial facts and derived market valuations. Financial
@@ -101,6 +101,22 @@ Annual-report research output is separately immutable under
 hash. `research_document` and `research_evidence` payloads retain the research
 run, company, source artifact, cutoff, page, confidence, and review state.
 `source_artifact` stores both valid reports and failed/truncated exchange bytes.
+
+J-curve imports freeze `market_intel` raw payloads and checksum-valid
+attachments under `jcurve_runs/<run_id>/`; the upstream DuckDB is always opened
+read-only. `jcurve_research_run` owns import/evaluation lineage,
+`jcurve_agent_request` records model/provider/prompt/page/usage/cost/retry
+evidence, and stage history is append-only in `jcurve_stage_observation`.
+Migration 010 separately stores immutable Screener seed runs and per-symbol
+accounting decisions in `jcurve_seed_run` and `jcurve_seed_candidate`. The raw
+screen export is content-hashed under the same J-curve run tree; every decision
+freezes its selected statement basis, source-value hash, thresholds, reasons,
+identity status, and source artifact. The fundamentals SQLite store is opened
+read-only and is never modified by seed discovery.
+Migration 012 stores each four-screen V2 run, its individual screen/query/source
+receipts, and every deduplicated candidate. Queue disposition and rank are
+immutable outputs; `PRIMARY_RESEARCH` can be exposed as a bounded bootstrap
+cohort, but remains discovery metadata until official claims are accepted.
 
 With `DATA_DOMAIN=research`, `get_domain_paths()` re-roots domain-owned data under `$DATA_ROOT/research/`:
 

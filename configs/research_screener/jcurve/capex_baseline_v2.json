@@ -1,0 +1,1892 @@
+{
+  "cohort_version": "jcurve-capex-baseline-v2",
+  "identity_checked_as_of": "2026-08-23",
+  "purpose": "100-company J-curve calibration cohort: 25 known anchors and 75 unlabeled stratified challenges. Membership is not a positive label.",
+  "required_company_count": 100,
+  "selection_policy": {
+    "policy_version": "jcurve-baseline-selection-v2",
+    "source_universe_run_id": "screen-full_universe-2026-08-12-c80cca794995a401",
+    "required_market_cap_status": "ELIGIBLE",
+    "required_local_history": true,
+    "anchor_count": 25,
+    "challenge_count_per_stratum": 15,
+    "strata": [
+      "screen1_only_build",
+      "screen2_only_older_capex",
+      "screen3_led_commissioning",
+      "screen4_led_ramp",
+      "multi_screen_commissioning_ramp"
+    ],
+    "sampling": "DETERMINISTIC_INDUSTRY_ROUND_ROBIN_SHA256"
+  },
+  "members": [
+    {
+      "legal_name": "Welspun Corp Limited",
+      "isin": "INE191B01025",
+      "nse_symbol": "WELCORP",
+      "bse_code": "532144",
+      "aliases": [
+        "Welspun Corp"
+      ],
+      "selection_tags": [
+        "pipes",
+        "industrial-capex"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Himadri Speciality Chemical Limited",
+      "isin": "INE019C01026",
+      "nse_symbol": "HSCL",
+      "bse_code": "500184",
+      "aliases": [
+        "Himadri Speciality",
+        "Himadri Speciality Chemical"
+      ],
+      "selection_tags": [
+        "specialty-chemicals",
+        "battery-materials"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "DEE Development Engineers Limited",
+      "isin": "INE841L01016",
+      "nse_symbol": "DEEDEV",
+      "bse_code": "544198",
+      "aliases": [
+        "DEE Development Engineers",
+        "DEE Piping Systems"
+      ],
+      "selection_tags": [
+        "industrial-engineering",
+        "process-piping"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "APL Apollo Tubes Limited",
+      "isin": "INE702C01027",
+      "nse_symbol": "APLAPOLLO",
+      "bse_code": "533758",
+      "aliases": [
+        "APL Apollo Tubes"
+      ],
+      "selection_tags": [
+        "pipes",
+        "capacity-expansion"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "Jindal Saw Limited",
+      "isin": "INE324A01032",
+      "nse_symbol": "JINDALSAW",
+      "bse_code": "500378",
+      "aliases": [
+        "Jindal SAW"
+      ],
+      "selection_tags": [
+        "pipes",
+        "industrial-capex"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": []
+    },
+    {
+      "legal_name": "Kirloskar Oil Engines Limited",
+      "isin": "INE146L01010",
+      "nse_symbol": "KIRLOSENG",
+      "bse_code": "533293",
+      "aliases": [
+        "Kirloskar Oil Engines"
+      ],
+      "selection_tags": [
+        "industrial-engineering",
+        "engines"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901588
+      ]
+    },
+    {
+      "legal_name": "Kaynes Technology India Limited",
+      "isin": "INE918Z01012",
+      "nse_symbol": "KAYNES",
+      "bse_code": "543664",
+      "aliases": [
+        "Kaynes Technology"
+      ],
+      "selection_tags": [
+        "electronics-manufacturing",
+        "capacity-expansion"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Dixon Technologies (India) Limited",
+      "isin": "INE935N01020",
+      "nse_symbol": "DIXON",
+      "bse_code": "540699",
+      "aliases": [
+        "Dixon Technologies"
+      ],
+      "selection_tags": [
+        "electronics-manufacturing",
+        "capacity-expansion"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "PG Electroplast Limited",
+      "isin": "INE457L01029",
+      "nse_symbol": "PGEL",
+      "bse_code": "533581",
+      "aliases": [
+        "PG Electroplast"
+      ],
+      "selection_tags": [
+        "electronics-manufacturing",
+        "capacity-expansion"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Syrma SGS Technology Limited",
+      "isin": "INE0DYJ01015",
+      "nse_symbol": "SYRMA",
+      "bse_code": "543573",
+      "aliases": [
+        "Syrma SGS Technology"
+      ],
+      "selection_tags": [
+        "electronics-manufacturing",
+        "capacity-expansion"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Waaree Energies Limited",
+      "isin": "INE377N01017",
+      "nse_symbol": "WAAREEENER",
+      "bse_code": "544277",
+      "aliases": [
+        "Waaree Energies"
+      ],
+      "selection_tags": [
+        "solar-manufacturing",
+        "capacity-expansion"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Premier Energies Limited",
+      "isin": "INE0BS701011",
+      "nse_symbol": "PREMIERENE",
+      "bse_code": "544238",
+      "aliases": [
+        "Premier Energies"
+      ],
+      "selection_tags": [
+        "solar-manufacturing",
+        "capacity-expansion"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "E2E Networks Limited",
+      "isin": "INE255Z01027",
+      "nse_symbol": "E2E",
+      "bse_code": "544783",
+      "aliases": [
+        "E2E Networks"
+      ],
+      "selection_tags": [
+        "data-centres",
+        "compute-infrastructure"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Polycab India Limited",
+      "isin": "INE455K01017",
+      "nse_symbol": "POLYCAB",
+      "bse_code": "542652",
+      "aliases": [
+        "Polycab India"
+      ],
+      "selection_tags": [
+        "cables",
+        "manufacturing-capex"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "KEI Industries Limited",
+      "isin": "INE878B01027",
+      "nse_symbol": "KEI",
+      "bse_code": "517569",
+      "aliases": [
+        "KEI Industries"
+      ],
+      "selection_tags": [
+        "cables",
+        "manufacturing-capex"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "K.P.R. Mill Limited",
+      "isin": "INE930H01031",
+      "nse_symbol": "KPRMILL",
+      "bse_code": "532889",
+      "aliases": [
+        "KPR Mill",
+        "K.P.R. Mill"
+      ],
+      "selection_tags": [
+        "textiles",
+        "manufacturing-capex"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": []
+    },
+    {
+      "legal_name": "Anant Raj Limited",
+      "isin": "INE242C01024",
+      "nse_symbol": "ANANTRAJ",
+      "bse_code": "515055",
+      "aliases": [
+        "Anant Raj"
+      ],
+      "selection_tags": [
+        "data-centres",
+        "real-estate"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "NCC Limited",
+      "isin": "INE868B01028",
+      "nse_symbol": "NCC",
+      "bse_code": "500294",
+      "aliases": [
+        "NCC"
+      ],
+      "selection_tags": [
+        "construction",
+        "project-execution"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Larsen & Toubro Limited",
+      "isin": "INE018A01030",
+      "nse_symbol": "LT",
+      "bse_code": "500510",
+      "aliases": [
+        "Larsen & Toubro",
+        "L&T"
+      ],
+      "selection_tags": [
+        "engineering-construction",
+        "project-execution"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Adani Green Energy Limited",
+      "isin": "INE364U01010",
+      "nse_symbol": "ADANIGREEN",
+      "bse_code": "541450",
+      "aliases": [
+        "Adani Green Energy"
+      ],
+      "selection_tags": [
+        "renewable-power",
+        "project-capex"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "NTPC Limited",
+      "isin": "INE733E01010",
+      "nse_symbol": "NTPC",
+      "bse_code": "532555",
+      "aliases": [
+        "NTPC"
+      ],
+      "selection_tags": [
+        "power-generation",
+        "project-capex"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901589
+      ]
+    },
+    {
+      "legal_name": "JSW Energy Limited",
+      "isin": "INE121E01018",
+      "nse_symbol": "JSWENERGY",
+      "bse_code": "533148",
+      "aliases": [
+        "JSW Energy"
+      ],
+      "selection_tags": [
+        "power-generation",
+        "energy-transition"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "Tata Power Company Limited",
+      "isin": "INE245A01021",
+      "nse_symbol": "TATAPOWER",
+      "bse_code": "500400",
+      "aliases": [
+        "Tata Power",
+        "The Tata Power Company"
+      ],
+      "selection_tags": [
+        "power-generation",
+        "energy-transition"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": []
+    },
+    {
+      "legal_name": "Hindalco Industries Limited",
+      "isin": "INE038A01020",
+      "nse_symbol": "HINDALCO",
+      "bse_code": "500440",
+      "aliases": [
+        "Hindalco Industries"
+      ],
+      "selection_tags": [
+        "metals",
+        "industrial-capex"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Grasim Industries Limited",
+      "isin": "INE047A01021",
+      "nse_symbol": "GRASIM",
+      "bse_code": "500300",
+      "aliases": [
+        "Grasim Industries"
+      ],
+      "selection_tags": [
+        "diversified-manufacturing",
+        "greenfield-capex"
+      ],
+      "case_role": "known_anchor",
+      "label_state": "UNLABELED",
+      "selection_source": "CURATED_CAPEX_BASELINE_V1",
+      "matched_screen_ids": [
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Mangalam Worldwide Limited",
+      "isin": "INE0JYY01029",
+      "nse_symbol": "MWL",
+      "bse_code": "544764",
+      "aliases": [],
+      "selection_tags": [
+        "metals-and-minerals-trading",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Petronet LNG Limited",
+      "isin": "INE347G01014",
+      "nse_symbol": "PETRONET",
+      "bse_code": "532522",
+      "aliases": [],
+      "selection_tags": [
+        "gas",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Swaraj Engines Limited",
+      "isin": "INE277A01016",
+      "nse_symbol": "SWARAJENG",
+      "bse_code": "500407",
+      "aliases": [],
+      "selection_tags": [
+        "industrial-products",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Asian Energy Services Limited",
+      "isin": "INE276G01015",
+      "nse_symbol": "ASIANENE",
+      "bse_code": "530355",
+      "aliases": [],
+      "selection_tags": [
+        "oil",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Mahindra Lifespace Developers Limited",
+      "isin": "INE813A01018",
+      "nse_symbol": "MAHLIFE",
+      "bse_code": "532313",
+      "aliases": [],
+      "selection_tags": [
+        "realty",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Rashtriya Chemicals and Fertilizers Limited",
+      "isin": "INE027A01015",
+      "nse_symbol": "RCF",
+      "bse_code": "524230",
+      "aliases": [],
+      "selection_tags": [
+        "fertilizers-and-agrochemicals",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Eveready Industries India Limited",
+      "isin": "INE128A01029",
+      "nse_symbol": "EVEREADY",
+      "bse_code": "531508",
+      "aliases": [],
+      "selection_tags": [
+        "household-products",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "India Tourism Development Corporation Limited",
+      "isin": "INE353K01014",
+      "nse_symbol": "ITDC",
+      "bse_code": "532189",
+      "aliases": [],
+      "selection_tags": [
+        "leisure-services",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Venus Remedies Limited",
+      "isin": "INE411B01019",
+      "nse_symbol": "VENUSREM",
+      "bse_code": "526953",
+      "aliases": [],
+      "selection_tags": [
+        "pharmaceuticals-and-biotechnology",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Gujarat Pipavav Port Limited",
+      "isin": "INE517F01014",
+      "nse_symbol": "GPPL",
+      "bse_code": "533248",
+      "aliases": [],
+      "selection_tags": [
+        "transport-infrastructure",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Godfrey Phillips India Limited",
+      "isin": "INE260B01028",
+      "nse_symbol": "GODFRYPHLP",
+      "bse_code": "500163",
+      "aliases": [],
+      "selection_tags": [
+        "cigarettes-and-tobacco-products",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Panama Petrochem Limited",
+      "isin": "INE305C01029",
+      "nse_symbol": "PANAMAPET",
+      "bse_code": "524820",
+      "aliases": [],
+      "selection_tags": [
+        "petroleum-products",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Zensar Technologies Limited",
+      "isin": "INE520A01027",
+      "nse_symbol": "ZENSARTECH",
+      "bse_code": "504067",
+      "aliases": [],
+      "selection_tags": [
+        "it---software",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Escorts Kubota Limited",
+      "isin": "INE042A01014",
+      "nse_symbol": "ESCORTS",
+      "bse_code": "500495",
+      "aliases": [],
+      "selection_tags": [
+        "agricultural,-commercial-and-construction-vehicles",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Northern Arc Capital Limited",
+      "isin": "INE850M01015",
+      "nse_symbol": "NORTHARC",
+      "bse_code": "544260",
+      "aliases": [],
+      "selection_tags": [
+        "finance",
+        "screen1-only-build"
+      ],
+      "case_role": "screen1_only_build",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581
+      ]
+    },
+    {
+      "legal_name": "Mahanagar Gas Limited",
+      "isin": "INE002S01010",
+      "nse_symbol": "MGL",
+      "bse_code": "539957",
+      "aliases": [],
+      "selection_tags": [
+        "gas",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "Indus Towers Limited",
+      "isin": "INE121J01017",
+      "nse_symbol": "INDUSTOWER",
+      "bse_code": "534816",
+      "aliases": [],
+      "selection_tags": [
+        "telecom---services",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "TCPL Packaging Limited",
+      "isin": "INE822C01015",
+      "nse_symbol": "TCPLPACK",
+      "bse_code": "523301",
+      "aliases": [],
+      "selection_tags": [
+        "industrial-products",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "Jindal Drilling And Industries Limited",
+      "isin": "INE742C01031",
+      "nse_symbol": "JINDRILL",
+      "bse_code": "511034",
+      "aliases": [],
+      "selection_tags": [
+        "oil",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "Hubtown Limited",
+      "isin": "INE703H01016",
+      "nse_symbol": "HUBTOWN",
+      "bse_code": "532799",
+      "aliases": [],
+      "selection_tags": [
+        "realty",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "Dhanuka Agritech Limited",
+      "isin": "INE435G01025",
+      "nse_symbol": "DHANUKA",
+      "bse_code": "507717",
+      "aliases": [],
+      "selection_tags": [
+        "fertilizers-and-agrochemicals",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "One Mobikwik Systems Limited",
+      "isin": "INE0HLU01028",
+      "nse_symbol": "MOBIKWIK",
+      "bse_code": "544305",
+      "aliases": [],
+      "selection_tags": [
+        "financial-technology-(fintech)",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "Navneet Education Limited",
+      "isin": "INE060A01024",
+      "nse_symbol": "NAVNETEDUL",
+      "bse_code": "508989",
+      "aliases": [],
+      "selection_tags": [
+        "household-products",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "Samhi Hotels Limited",
+      "isin": "INE08U801020",
+      "nse_symbol": "SAMHI",
+      "bse_code": "543984",
+      "aliases": [],
+      "selection_tags": [
+        "leisure-services",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "Anthem Biosciences Limited",
+      "isin": "INE0CZ201020",
+      "nse_symbol": "ANTHEM",
+      "bse_code": "544449",
+      "aliases": [],
+      "selection_tags": [
+        "pharmaceuticals-and-biotechnology",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "ICICI Prudential Life Insurance Company Limited",
+      "isin": "INE726G01019",
+      "nse_symbol": "ICICIPRULI",
+      "bse_code": "540133",
+      "aliases": [],
+      "selection_tags": [
+        "insurance",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "C.E. Info Systems Limited",
+      "isin": "INE0BV301023",
+      "nse_symbol": "MAPMYINDIA",
+      "bse_code": "543425",
+      "aliases": [],
+      "selection_tags": [
+        "it---software",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "HDB Financial Services Limited",
+      "isin": "INE756I01012",
+      "nse_symbol": "HDBFS",
+      "bse_code": "544429",
+      "aliases": [],
+      "selection_tags": [
+        "finance",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "SKM Egg Products Export (India) Limited",
+      "isin": "INE411D01023",
+      "nse_symbol": "SKMEGGPROD",
+      "bse_code": "532143",
+      "aliases": [],
+      "selection_tags": [
+        "food-products",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "Moschip Technologies Limited",
+      "isin": "INE935B01025",
+      "nse_symbol": "MOSCHIP",
+      "bse_code": "532407",
+      "aliases": [],
+      "selection_tags": [
+        "it---hardware",
+        "screen2-only-older-capex"
+      ],
+      "case_role": "screen2_only_older_capex",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588
+      ]
+    },
+    {
+      "legal_name": "SG Mart Limited",
+      "isin": "INE385F01024",
+      "nse_symbol": "SGMART",
+      "bse_code": "512329",
+      "aliases": [],
+      "selection_tags": [
+        "metals-and-minerals-trading",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "Adani Total Gas Limited",
+      "isin": "INE399L01023",
+      "nse_symbol": "ATGL",
+      "bse_code": "542066",
+      "aliases": [],
+      "selection_tags": [
+        "gas",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "Pace Digitek Limited",
+      "isin": "INE0S3G01027",
+      "nse_symbol": "PACEDIGITK",
+      "bse_code": "544550",
+      "aliases": [],
+      "selection_tags": [
+        "telecom---services",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "SKF India (Industrial) Limited",
+      "isin": "INE2J8701016",
+      "nse_symbol": "SKFINDUS",
+      "bse_code": "544572",
+      "aliases": [],
+      "selection_tags": [
+        "industrial-products",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "Arkade Developers Limited",
+      "isin": "INE0QRL01017",
+      "nse_symbol": "ARKADE",
+      "bse_code": "544261",
+      "aliases": [],
+      "selection_tags": [
+        "realty",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "India Pesticides Limited",
+      "isin": "INE0D6701023",
+      "nse_symbol": "IPL",
+      "bse_code": "543311",
+      "aliases": [],
+      "selection_tags": [
+        "fertilizers-and-agrochemicals",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "Le Travenues Technology Limited",
+      "isin": "INE0HV901016",
+      "nse_symbol": "IXIGO",
+      "bse_code": "544192",
+      "aliases": [],
+      "selection_tags": [
+        "leisure-services",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "Supriya Lifescience Limited",
+      "isin": "INE07RO01027",
+      "nse_symbol": "SUPRIYA",
+      "bse_code": "543434",
+      "aliases": [],
+      "selection_tags": [
+        "pharmaceuticals-and-biotechnology",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "Medi Assist Healthcare Services Limited",
+      "isin": "INE456Z01021",
+      "nse_symbol": "MEDIASSIST",
+      "bse_code": "544088",
+      "aliases": [],
+      "selection_tags": [
+        "insurance",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "Aurionpro Solutions Limited",
+      "isin": "INE132H01018",
+      "nse_symbol": "AURIONPRO",
+      "bse_code": "532668",
+      "aliases": [],
+      "selection_tags": [
+        "it---software",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "JSW Holdings Limited",
+      "isin": "INE824G01012",
+      "nse_symbol": "JSWHL",
+      "bse_code": "532642",
+      "aliases": [],
+      "selection_tags": [
+        "finance",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "Heritage Foods Limited",
+      "isin": "INE978A01027",
+      "nse_symbol": "HERITGFOOD",
+      "bse_code": "519552",
+      "aliases": [],
+      "selection_tags": [
+        "food-products",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "KRBL Limited",
+      "isin": "INE001B01026",
+      "nse_symbol": "KRBL",
+      "bse_code": "530813",
+      "aliases": [],
+      "selection_tags": [
+        "agricultural-food-and-other-products",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "Tips Music Limited",
+      "isin": "INE716B01029",
+      "nse_symbol": "TIPSMUSIC",
+      "bse_code": "532375",
+      "aliases": [],
+      "selection_tags": [
+        "entertainment",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "Delhivery Limited",
+      "isin": "INE148O01028",
+      "nse_symbol": "DELHIVERY",
+      "bse_code": "543529",
+      "aliases": [],
+      "selection_tags": [
+        "transport-services",
+        "screen3-led-commissioning"
+      ],
+      "case_role": "screen3_led_commissioning",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589
+      ]
+    },
+    {
+      "legal_name": "Confidence Petroleum India Limited",
+      "isin": "INE552D01024",
+      "nse_symbol": "CONFIPET",
+      "bse_code": "526829",
+      "aliases": [],
+      "selection_tags": [
+        "gas",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Ador Welding Limited",
+      "isin": "INE045A01017",
+      "nse_symbol": "ADOR",
+      "bse_code": "517041",
+      "aliases": [],
+      "selection_tags": [
+        "industrial-products",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Antelopus Selan Energy Limited",
+      "isin": "INE818A01017",
+      "nse_symbol": "ANTELOPUS",
+      "bse_code": "530075",
+      "aliases": [],
+      "selection_tags": [
+        "oil",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Laxmi Dental Limited",
+      "isin": "INE0WO601020",
+      "nse_symbol": "LAXMIDENTL",
+      "bse_code": "544339",
+      "aliases": [],
+      "selection_tags": [
+        "healthcare-equipment-and-supplies",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Sri Lotus Developers and Realty Limited",
+      "isin": "INE0V9Q01010",
+      "nse_symbol": "LOTUSDEV",
+      "bse_code": "544469",
+      "aliases": [],
+      "selection_tags": [
+        "realty",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Seshaasai Technologies Limited",
+      "isin": "INE04VU01023",
+      "nse_symbol": "STYL",
+      "bse_code": "544533",
+      "aliases": [],
+      "selection_tags": [
+        "financial-technology-(fintech)",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Jubilant Foodworks Limited",
+      "isin": "INE797F01020",
+      "nse_symbol": "JUBLFOOD",
+      "bse_code": "533155",
+      "aliases": [],
+      "selection_tags": [
+        "leisure-services",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Innova Captab Limited",
+      "isin": "INE0DUT01020",
+      "nse_symbol": "INNOVACAP",
+      "bse_code": "544067",
+      "aliases": [],
+      "selection_tags": [
+        "pharmaceuticals-and-biotechnology",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "JSW Infrastructure Limited",
+      "isin": "INE880J01026",
+      "nse_symbol": "JSWINFRA",
+      "bse_code": "543994",
+      "aliases": [],
+      "selection_tags": [
+        "transport-infrastructure",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Gandhar Oil Refinery (India) Limited",
+      "isin": "INE717W01049",
+      "nse_symbol": "GANDHAR",
+      "bse_code": "544029",
+      "aliases": [],
+      "selection_tags": [
+        "petroleum-products",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Tanla Platforms Limited",
+      "isin": "INE483C01032",
+      "nse_symbol": "TANLA",
+      "bse_code": "532790",
+      "aliases": [],
+      "selection_tags": [
+        "it---software",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Action Construction Equipment Limited",
+      "isin": "INE731H01025",
+      "nse_symbol": "ACE",
+      "bse_code": "532762",
+      "aliases": [],
+      "selection_tags": [
+        "agricultural,-commercial-and-construction-vehicles",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Mufin Green Finance Limited",
+      "isin": "INE08KJ01020",
+      "nse_symbol": "MUFIN",
+      "bse_code": "542774",
+      "aliases": [],
+      "selection_tags": [
+        "finance",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Manorama Industries Limited",
+      "isin": "INE00VM01036",
+      "nse_symbol": "MANORAMA",
+      "bse_code": "541974",
+      "aliases": [],
+      "selection_tags": [
+        "food-products",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "GNG Electronics Limited",
+      "isin": "INE18JU01028",
+      "nse_symbol": "EBGNG",
+      "bse_code": "544455",
+      "aliases": [],
+      "selection_tags": [
+        "it---hardware",
+        "screen4-led-ramp"
+      ],
+      "case_role": "screen4_led_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Lloyds Enterprises Limited",
+      "isin": "INE080I01025",
+      "nse_symbol": "LLOYDSENT",
+      "bse_code": "512463",
+      "aliases": [],
+      "selection_tags": [
+        "metals-and-minerals-trading",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Aegis Logistics Limited",
+      "isin": "INE208C01025",
+      "nse_symbol": "AEGISLOG",
+      "bse_code": "500003",
+      "aliases": [],
+      "selection_tags": [
+        "gas",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "HFCL Limited",
+      "isin": "INE548A01028",
+      "nse_symbol": "HFCL",
+      "bse_code": "500183",
+      "aliases": [],
+      "selection_tags": [
+        "telecom---services",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "JTL INDUSTRIES LIMITED",
+      "isin": "INE391J01032",
+      "nse_symbol": "JTLIND",
+      "bse_code": "534600",
+      "aliases": [],
+      "selection_tags": [
+        "industrial-products",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Oil India Limited",
+      "isin": "INE274J01014",
+      "nse_symbol": "OIL",
+      "bse_code": "533106",
+      "aliases": [],
+      "selection_tags": [
+        "oil",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Fischer Medical Ventures Limited",
+      "isin": "INE771F01041",
+      "nse_symbol": "FISCHER",
+      "bse_code": "524743",
+      "aliases": [],
+      "selection_tags": [
+        "healthcare-equipment-and-supplies",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Ajmera Realty & Infra India Limited",
+      "isin": "INE298G01035",
+      "nse_symbol": "AJMERA",
+      "bse_code": "513349",
+      "aliases": [],
+      "selection_tags": [
+        "realty",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Paradeep Phosphates Limited",
+      "isin": "INE088F01024",
+      "nse_symbol": "PARADEEP",
+      "bse_code": "543530",
+      "aliases": [],
+      "selection_tags": [
+        "fertilizers-and-agrochemicals",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Network People Services Technologies Limited",
+      "isin": "INE0FFK01017",
+      "nse_symbol": "NPST",
+      "bse_code": "544396",
+      "aliases": [],
+      "selection_tags": [
+        "financial-technology-(fintech)",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Devyani International Limited",
+      "isin": "INE872J01023",
+      "nse_symbol": "DEVYANI",
+      "bse_code": "543330",
+      "aliases": [],
+      "selection_tags": [
+        "leisure-services",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Rubicon Research Limited",
+      "isin": "INE506V01022",
+      "nse_symbol": "RUBICON",
+      "bse_code": "544578",
+      "aliases": [],
+      "selection_tags": [
+        "pharmaceuticals-and-biotechnology",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Silver Touch Technologies Limited",
+      "isin": "INE625X01026",
+      "nse_symbol": "SILVERTUC",
+      "bse_code": "543525",
+      "aliases": [],
+      "selection_tags": [
+        "it---software",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "BEML Limited",
+      "isin": "INE258A01024",
+      "nse_symbol": "BEML",
+      "bse_code": "500048",
+      "aliases": [],
+      "selection_tags": [
+        "agricultural,-commercial-and-construction-vehicles",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Home First Finance Company India Limited",
+      "isin": "INE481N01025",
+      "nse_symbol": "HOMEFIRST",
+      "bse_code": "543259",
+      "aliases": [],
+      "selection_tags": [
+        "finance",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901588,
+        3901589,
+        3901592
+      ]
+    },
+    {
+      "legal_name": "Zydus Wellness Limited",
+      "isin": "INE768C01028",
+      "nse_symbol": "ZYDUSWELL",
+      "bse_code": "531335",
+      "aliases": [],
+      "selection_tags": [
+        "food-products",
+        "multi-screen-commissioning-ramp"
+      ],
+      "case_role": "multi_screen_commissioning_ramp",
+      "label_state": "UNLABELED",
+      "selection_source": "SCREENER_STRATIFIED_CHALLENGE",
+      "matched_screen_ids": [
+        3901581,
+        3901588,
+        3901589,
+        3901592
+      ]
+    }
+  ]
+}
+

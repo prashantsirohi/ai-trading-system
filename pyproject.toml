@@ -93,6 +93,7 @@ ai-trading-phase4-api = "ai_trading_system.interfaces.cli.serve_phase4_api:main"
 ai-trading-journal = "ai_trading_system.domains.trade_journal.cli:main"
 ai-trading-research-screener = "ai_trading_system.domains.research_screener.cli:main"
 ai-trading-annual-report-discovery = "ai_trading_system.domains.research_screener.annual_report_service:main"
+ai-trading-jcurve = "ai_trading_system.domains.research_screener.jcurve.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

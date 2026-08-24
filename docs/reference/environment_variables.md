@@ -2,7 +2,7 @@
 
 - **Purpose:** All env vars actually read by the code, with source module and default.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-08-19
 - **Source of truth:** Grep of `os.environ`, `os.getenv`, `getenv(`, and pydantic `Settings` in `src/`. Cited modules per row.
 
 
@@ -56,13 +56,13 @@ defaults are used.
 | `ALERT_TELEGRAM_MIN_SEVERITY` | optional | `pipeline/alerts.py` | — | e.g. `warning` |
 | `RISK_PROFILE` | optional | execute stage | — | profile name |
 | `LLM_BRAIN_CONFIG` | optional | `events/event_llm_router.py` | `config/llm_brain.yaml` | override path |
-| `OPENROUTER_KEY` / `OPENROUTER_API_KEY` | LLM features | `event_llm_router.py` | — | secret |
+| `OPENROUTER_KEY` / `OPENROUTER_API_KEY` | LLM features | `event_llm_router.py`, `domains/research_screener/jcurve/cli.py` | — | secret; required only for J-curve `evaluate`, never for import/report |
 | `DATA_DOMAIN` | optional | `platform/db/paths.py` | `operational` | `operational` or `research` |
 | `ENV` | optional | `pipeline/daily_pipeline.py` | — | label only |
 | `MPLCONFIGDIR` | optional | `platform/logging/` | auto-set | matplotlib cache |
 | `EXECUTION_API_KEY` | optional on loopback; required for non-loopback binds | [`ui/execution_api/routes/_deps.py:31`](../../src/ai_trading_system/ui/execution_api/routes/_deps.py) | internal local proxy handshake | **secret for deployments**. The CLI supplies an internal development handshake only when bound to loopback; non-loopback startup fails closed if blank. Client header: `x-api-key`. |
-| `SCREENER_USERNAME` | fundamentals import | [`domains/fundamentals/screener_client.py:30`](../../src/ai_trading_system/domains/fundamentals/screener_client.py) | — | Overridable by constructor argument. |
-| `SCREENER_PASSWORD` | fundamentals import | same, `:31` | — | secret |
+| `SCREENER_USERNAME` | fundamentals and J-curve screen export | [`domains/fundamentals/screener_client.py`](../../src/ai_trading_system/domains/fundamentals/screener_client.py) | — | Used only by explicit authenticated download commands; overridable by constructor argument. |
+| `SCREENER_PASSWORD` | fundamentals and J-curve screen export | same | — | secret; not required when `seed-screener --screen-export` is supplied |
 
 ## Phase 4A read-only API
 

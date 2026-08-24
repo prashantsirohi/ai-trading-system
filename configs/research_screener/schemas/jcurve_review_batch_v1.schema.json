@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jcurve-review-batch-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reviews"],
+  "properties": {
+    "reviews": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim_index", "decision", "supported_excerpt", "supported_page", "issue_codes"],
+        "properties": {
+          "claim_index": {"type": "integer", "minimum": 0},
+          "decision": {"enum": ["ACCEPT", "REJECT", "AMBIGUOUS"]},
+          "supported_excerpt": {"type": ["string", "null"]},
+          "supported_page": {"type": ["integer", "null"], "minimum": 1},
+          "issue_codes": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

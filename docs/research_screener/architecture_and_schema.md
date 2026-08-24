@@ -2,10 +2,10 @@
 
 - **Purpose:** Architecture, persistence, migration, rollback, and CLI contract for the Phase 0 canary and controlled Phase 1 universe discovery.
 - **Audience:** Developers, data architects, and operators.
-- **Last verified:** 2026-08-14
+- **Last verified:** 2026-08-21
 - **Source of truth:** `src/ai_trading_system/domains/research_screener/` and `configs/research_screener/`.
 
-The canary is a separate research domain under `$DATA_ROOT/research_screener/`. It does not add a pipeline stage, execution dependency, public API, MCP surface, or schedule.
+The canary is a separate research domain under `$DATA_ROOT/research_screener/`. It does not add a pipeline stage, execution dependency, public API, MCP surface, or schedule. The capex J-curve extension preserves the same boundary and adds no operational consumer.
 
 After a passing canary gate, `full_universe` performs the first controlled
 expansion without changing that isolation boundary. It constructs the union of
@@ -142,7 +142,9 @@ documents and page-attributed evidence. Migration
 and verification reviews, model usage, and deterministic policy decisions. The
 [qualitative claim contract](qualitative_claim_contract.md) pins the low-cost
 model/batch envelope and keeps high-impact or disputed claims under human
-review. No agent runner is active in this milestone. The schema includes Phase
+review. No annual-report agent runner is active in that milestone. The separate
+J-curve runner uses its own announcement-compatible schemas and does not change
+the annual-report claim contract. The schema includes Phase
 0 provenance, identity, versioned
 screen/run/universe/factor/archetype/decision entities, repair/DQ queues, run
 comparisons, and extension-ready qualitative research tables. A file lock
@@ -150,6 +152,79 @@ enforces one writer. All material results for a successful run commit in one
 transaction; a failure rolls back members/scores/decisions and records only a
 terminal failed run. A retry receives a new immutable run ID and records the
 failed predecessor.
+
+Migration `009_jcurve_research.sql` adds immutable J-curve import/evaluation
+runs, frozen announcement projections, model-call audit rows, announcement
+claims and reviews, company-owned capex episodes, evidence links, and
+append-only stage observations. `market_intel.duckdb` remains separately owned
+and is opened read-only; accepted payloads and checksum-valid attachments are
+copied into `$DATA_ROOT/research_screener/jcurve_runs/<run_id>/`. The adapter
+requires both publication and ingestion timestamps not to exceed the historical
+cutoff and resolves identity through effective-dated screener masters.
+
+Migration `010_jcurve_screener_seed.sql` adds immutable screen/accounting seed
+runs without changing the announcement contract. V1 freezes authenticated
+Screener screen 317873 and evaluates only its exported members, the versioned
+25-company baseline, and policy supplemental FCL. It does not scan or download
+the entire listed universe. The accounting adapter opens
+`screener_financials.db` read-only, chooses exactly one basis, and requires
+three annual periods plus eight aligned sales/operating-profit/depreciation
+quarters before consolidated can outrank complete standalone history. Missing
+CWIP is retained as `NOT_DISCLOSED`; a separately versioned net-block and
+depreciation fallback can still identify commissioning without inserting zero.
+Seed dispositions are discovery routing and cannot establish an official
+capex claim, commissioning date, or J-curve stage by themselves.
+
+The model router caps a request at eight selected pages and 18,000 extracted
+characters. Clean text routes to `deepseek/deepseek-chat`; selected complex or
+weak-text pages route to `google/gemini-2.5-flash-lite`, with
+`qwen/qwen2.5-vl-72b-instruct` available as the governed vision fallback.
+Verification is assembled separately and uses a different model family. All
+responses use strict JSON schemas. Model IDs are policy inputs, while actual
+provider and cost are response metadata and never hard-coded as durable prices.
+Evaluation defaults to 25 resolved companies, permits an explicit maximum of
+250, and stops before a new request when its request or reported-cost budget is
+exhausted. Bootstrap does not infer that the upstream `market_intel` store is
+historically complete. It records `HISTORICAL_SOURCE_COVERAGE_UNPROVEN` unless
+authoritative completed NSE and BSE receipts prove the requested interval.
+
+New shadow collections may opt into
+`market-intel-high-value-filter-v1`. The upstream store then owns immutable
+source-window receipts plus attachment-routing decisions. The screener adapter
+joins those decisions by `raw_event_id` only when the policy is explicitly
+named, accepts `KEEP` and `FETCH_ATTACHMENT`, and remains read-only. It also
+freezes overlapping receipt metadata into the import manifest. Coverage is
+considered proven only when the union of contiguous complete NSE API and BSE
+receipts covers the entire requested interval; otherwise the import records
+`UPSTREAM_FILTER_COVERAGE_INCOMPLETE`. A proven chunked historical backfill
+clears both coverage degradations.
+
+Current shadow collection can additionally use
+`market-intel-security-master-v1`, whose independent NSE/BSE sync receipts and
+normalized listing observations classify active corporate-equity securities as
+`NSE_ONLY`, `BSE_ONLY`, or `DUAL` by exact valid ISIN. That upstream master is
+collection-routing and provenance evidence only. Enriched raw announcements
+carry ISIN, canonical symbol, listing membership, and original exchange
+security ID. The read-only J-curve adapter still resolves those announcements
+against effective-dated `security_master` and `listing_master` rows in the
+screener store and freezes the resolved IDs into the immutable import pack.
+Before model or attachment promotion, `market_intel` can export a deterministic
+review set from exact completed source receipts. The review set stratifies by
+source, filter decision, and listing membership, unions all exact-ISIN baseline
+cohort announcements, and remains unlabeled until human review. Its labels
+measure the upstream metadata gate only; they do not assert a J-curve claim or
+stage.
+
+The default bootstrap cohort is the immutable
+`jcurve-capex-baseline-v1` configuration. Its 25 members include WELCORP, HSCL,
+and DEEDEV and cover multiple capex disclosure and document-layout patterns.
+Before import, every configured member must resolve to one company and security
+through exact ISIN, NSE symbol, and BSE code at the run cutoff. The frozen run
+pack records the cohort policy hash, resolved IDs, observed-company count, and
+members with no eligible announcement evidence. Membership does not encode an
+expected claim, stage, success, or failure label. `--all-companies` disables
+this default only when broad historical import is intentional. A cohort whose
+identity-check date is later than the requested cutoff is rejected as look-ahead.
 
 Run IDs are content-addressed from the screen version, normalized member
 inputs/decisions, and raw artifact hashes. Rerunning identical frozen inputs
@@ -170,6 +245,7 @@ The schema is new and does not migrate an operational store. Normal initializati
 $DATA_ROOT/research_screener/control_plane.duckdb
 $DATA_ROOT/research_screener/control_plane.duckdb.lock
 $DATA_ROOT/research_screener/runs/<run_id>/
+$DATA_ROOT/research_screener/jcurve_runs/<run_id>/
 ```
 
 For a clean rollback before adoption, take a checksum-preserving backup and move the entire `$DATA_ROOT/research_screener/` directory out of `DATA_ROOT`. Do not delete or rewrite individual completed runs. No rollback is required in `control_plane.duckdb`, `ohlcv.duckdb`, `execution.duckdb`, master data, fundamentals, or schedules because this milestone never writes them.
@@ -194,6 +270,34 @@ PYTHONPATH=src ./.venv/bin/python -m \
   ai_trading_system.domains.research_screener.annual_report_service \
   --as-of-date YYYY-MM-DD --parent-run-id <completed-filing-run-id> \
   --batch-size 25 --workers 4
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.jcurve.cli seed-screener \
+  --as-of-date YYYY-MM-DD --screen-id 317873
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.jcurve.cli discover-v2 \
+  --as-of-date YYYY-MM-DD
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.jcurve.cli bootstrap \
+  --as-of-date YYYY-MM-DD --lookback-years 5 \
+  --seed-run-id <completed-jcurve-seed-run-id>
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.jcurve.cli ingest \
+  --as-of-date YYYY-MM-DD --overlap-days 7 \
+  --upstream-filter-policy market-intel-high-value-filter-v1
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.jcurve.cli evaluate \
+  --parent-run-id <completed-jcurve-import-run-id> \
+  --as-of-date YYYY-MM-DD --materiality-inputs /path/to/materiality.json
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.jcurve.cli calibrate \
+  --evaluation-run-id <completed-evaluation-run-id> \
+  --labels /path/to/reviewed-25-company-labels.json
 ```
 
 Annual-report discovery is intentionally separate from screening. It freezes

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import pandas as pd
 
@@ -37,6 +38,15 @@ class ScreenerFetchResult:
     export_path: Path
     requested_basis: str
     detected_basis: str
+
+
+@dataclass(frozen=True)
+class ScreenerScreenDownloadResult:
+    path: Path
+    screen_id: int
+    screen_url: str
+    query_text: str
+    symbols: tuple[str, ...]
 
 
 class ScreenerHTTPError(RuntimeError):
@@ -128,57 +138,133 @@ class ScreenerClient:
             raise RuntimeError("playwright is required for live Screener downloads") from exc
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = (
-                browser.new_context(storage_state=str(self.storage_state_path))
-                if self.storage_state_path.exists()
-                else browser.new_context()
-            )
-            page = context.new_page()
-            page.goto("https://www.screener.in/dash/")
-            if page.url.rstrip("/") != "https://www.screener.in/dash":
-                page.goto("https://www.screener.in/login/?next=/dash/")
-                page.fill("input[name='username']", self.username)
-                page.fill("input[name='password']", self.password)
-                page.click("button[type='submit']")
-                page.wait_for_url("https://www.screener.in/dash/")
-                context.storage_state(path=str(self.storage_state_path))
-            company_url = _company_url(ticker, requested_basis)
-            response = page.goto(company_url, wait_until="domcontentloaded")
-            _validate_company_response(response, company_url)
-            if "Page not found" in page.title() or "404" in page.title():
-                raise ValueError(f"Company ticker '{ticker}' not found on Screener.in")
+            browser, context, page = self._authenticated_page(p)
             try:
-                detected_basis = _detect_rendered_basis(page, explicit_basis=requested_basis)
-            except RuntimeError:
-                if requested_basis != "consolidated" or _has_rendered_financial_periods(page):
-                    raise
-                standalone_url = _company_url(ticker, "standalone")
-                response = page.goto(standalone_url, wait_until="domcontentloaded")
-                _validate_company_response(response, standalone_url)
+                company_url = _company_url(ticker, requested_basis)
+                response = page.goto(company_url, wait_until="domcontentloaded")
+                _validate_company_response(response, company_url)
                 if "Page not found" in page.title() or "404" in page.title():
                     raise ValueError(f"Company ticker '{ticker}' not found on Screener.in")
                 try:
-                    detected_basis = _detect_rendered_basis(page)
+                    detected_basis = _detect_rendered_basis(page, explicit_basis=requested_basis)
                 except RuntimeError:
-                    if not _has_rendered_financial_periods(page):
-                        raise RuntimeError(
-                            "Unable to detect Screener statement basis: consolidated page has no toggle or "
-                            "financial periods, and the canonical standalone page is also empty"
-                        ) from None
-                    detected_basis = "standalone"
-            output_path = self.excel_path(ticker, statement_basis=detected_basis)
-            button_selector = (
-                "button:has-text('EXPORT TO EXCEL'), "
-                "button:has-text('Export to Excel'), "
-                "button:has-text('Export to excel')"
-            )
-            page.wait_for_selector(button_selector, timeout=10000)
-            with page.expect_download(timeout=DEFAULT_DOWNLOAD_TIMEOUT_MS) as download_info:
-                page.click(button_selector)
-            download_info.value.save_as(str(output_path))
-            browser.close()
+                    if requested_basis != "consolidated" or _has_rendered_financial_periods(page):
+                        raise
+                    standalone_url = _company_url(ticker, "standalone")
+                    response = page.goto(standalone_url, wait_until="domcontentloaded")
+                    _validate_company_response(response, standalone_url)
+                    if "Page not found" in page.title() or "404" in page.title():
+                        raise ValueError(f"Company ticker '{ticker}' not found on Screener.in")
+                    try:
+                        detected_basis = _detect_rendered_basis(page)
+                    except RuntimeError:
+                        if not _has_rendered_financial_periods(page):
+                            raise RuntimeError(
+                                "Unable to detect Screener statement basis: consolidated page has no toggle or "
+                                "financial periods, and the canonical standalone page is also empty"
+                            ) from None
+                        detected_basis = "standalone"
+                output_path = self.excel_path(ticker, statement_basis=detected_basis)
+                button_selector = (
+                    "button:has-text('EXPORT TO EXCEL'), "
+                    "button:has-text('Export to Excel'), "
+                    "button:has-text('Export to excel')"
+                )
+                page.wait_for_selector(button_selector, timeout=10000)
+                with page.expect_download(timeout=DEFAULT_DOWNLOAD_TIMEOUT_MS) as download_info:
+                    page.click(button_selector)
+                download_info.value.save_as(str(output_path))
+            finally:
+                browser.close()
         return ScreenerDownloadResult(output_path, requested_basis, detected_basis)
+
+    def download_screen_export(
+        self,
+        screen_id: int,
+        *,
+        destination: str | Path,
+        screen_url: str | None = None,
+        expected_query_terms: tuple[str, ...] = (),
+    ) -> ScreenerScreenDownloadResult:
+        """Download one authenticated Screener screen export and freeze its rendered query."""
+
+        if int(screen_id) <= 0:
+            raise ValueError("screen_id must be positive")
+        if not self.username or not self.password:
+            raise RuntimeError("SCREENER_USERNAME and SCREENER_PASSWORD are required for live downloads")
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            raise RuntimeError("playwright is required for live Screener downloads") from exc
+
+        target = Path(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        screen_url = screen_url or f"https://www.screener.in/screens/{int(screen_id)}/"
+        parsed_url = urlparse(screen_url)
+        expected_path = f"/screens/{int(screen_id)}/"
+        if (
+            parsed_url.scheme != "https"
+            or parsed_url.hostname != "www.screener.in"
+            or not parsed_url.path.startswith(expected_path)
+        ):
+            raise ValueError(
+                "screen_url must be an HTTPS www.screener.in URL for the requested screen_id"
+            )
+        with sync_playwright() as p:
+            browser, _context, page = self._authenticated_page(p)
+            try:
+                response = page.goto(screen_url, wait_until="domcontentloaded")
+                _validate_company_response(response, screen_url)
+                if "Page not found" in page.title() or "404" in page.title():
+                    raise ValueError(f"Screener screen '{screen_id}' not found")
+                query_text = _extract_screen_query(page)
+                normalized_query = " ".join(query_text.casefold().split())
+                missing_terms = [
+                    term for term in expected_query_terms
+                    if " ".join(term.casefold().split()) not in normalized_query
+                ]
+                if missing_terms:
+                    raise RuntimeError(
+                        f"Screener screen query is missing required terms: {missing_terms}"
+                    )
+                symbols = _extract_screen_symbols(page)
+                selector = (
+                    "a:has-text('Export'), button:has-text('Export'), "
+                    "a:has-text('EXPORT'), button:has-text('EXPORT')"
+                )
+                page.wait_for_selector(selector, timeout=10000)
+                with page.expect_download(timeout=DEFAULT_DOWNLOAD_TIMEOUT_MS) as download_info:
+                    page.locator(selector).first.click()
+                download_info.value.save_as(str(target))
+            finally:
+                browser.close()
+        if not target.is_file() or target.stat().st_size == 0:
+            raise RuntimeError("Screener screen export is empty")
+        return ScreenerScreenDownloadResult(
+            path=target,
+            screen_id=int(screen_id),
+            screen_url=screen_url,
+            query_text=query_text,
+            symbols=symbols,
+        )
+
+    def _authenticated_page(self, playwright: Any) -> tuple[Any, Any, Any]:
+        browser = playwright.chromium.launch(headless=True)
+        context = (
+            browser.new_context(storage_state=str(self.storage_state_path))
+            if self.storage_state_path.exists()
+            else browser.new_context()
+        )
+        page = context.new_page()
+        page.goto("https://www.screener.in/dash/")
+        if page.url.rstrip("/") != "https://www.screener.in/dash":
+            page.goto("https://www.screener.in/login/?next=/dash/")
+            page.fill("input[name='username']", self.username)
+            page.fill("input[name='password']", self.password)
+            page.click("button[type='submit']")
+            page.wait_for_url("https://www.screener.in/dash/")
+            context.storage_state(path=str(self.storage_state_path))
+        return browser, context, page
 
     def parse_excel(self, file_path: str | Path) -> dict[str, Any]:
         path = Path(file_path)
@@ -309,6 +395,39 @@ def _has_rendered_financial_periods(page: Any) -> bool:
     return page.locator(selectors).count() > 0
 
 
+def _extract_screen_query(page: Any) -> str:
+    selectors = (
+        "#query-builder textarea",
+        "textarea[name='query']",
+        "form textarea",
+    )
+    for selector in selectors:
+        locator = page.locator(selector)
+        if locator.count() <= 0:
+            continue
+        value = locator.first.input_value().strip()
+        if value:
+            return value
+    raise RuntimeError("Unable to freeze the rendered Screener screen query")
+
+
+def _extract_screen_symbols(page: Any) -> tuple[str, ...]:
+    symbols: set[str] = set()
+    links = page.locator("a[href*='/company/']")
+    for index in range(links.count()):
+        href = str(links.nth(index).get_attribute("href") or "")
+        parts = [part for part in href.split("/") if part]
+        try:
+            company_index = parts.index("company")
+        except ValueError:
+            continue
+        if company_index + 1 < len(parts):
+            symbol = parts[company_index + 1].strip().upper()
+            if symbol:
+                symbols.add(symbol)
+    return tuple(sorted(symbols))
+
+
 def _company_url(ticker: str, statement_basis: str) -> str:
     basis = normalize_statement_basis(statement_basis)
     suffix = "consolidated/" if basis == "consolidated" else ""
@@ -347,6 +466,7 @@ __all__ = [
     "ScreenerClient",
     "ScreenerDownloadResult",
     "ScreenerFetchResult",
+    "ScreenerScreenDownloadResult",
     "ScreenerHTTPError",
     "ScreenerRateLimitError",
 ]

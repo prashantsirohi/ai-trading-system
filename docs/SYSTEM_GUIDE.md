@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-08-18
+- **Last verified:** 2026-08-21
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -337,7 +337,7 @@ Canonical operational paths are resolved beneath `$DATA_ROOT`:
 | `$DATA_ROOT/candidate_tracker.duckdb` | Candidate episodes, snapshots, reviews, alerts, and current lifecycle state. |
 | `$DATA_ROOT/masterdata.db` | Shared instrument/master data. |
 | `$DATA_ROOT/fundamentals/` | Fundamental snapshots and stores. |
-| `$DATA_ROOT/research_screener/` | Isolated persistent screener control plane, immutable canary/universe/filing packs, and annual-report research checkpoints/packs; no daily-pipeline or execution consumer. |
+| `$DATA_ROOT/research_screener/` | Isolated persistent screener control plane and immutable canary/universe/filing, annual-report, and J-curve research packs; no daily-pipeline or execution consumer. |
 | `$DATA_ROOT/raw/` | Provider-native raw inputs. |
 | `$DATA_ROOT/feature_store/<symbol_id>/` | Per-symbol feature Parquet snapshots. |
 | `$DATA_ROOT/stage_store/` | Stage-owned durable materializations. |
@@ -359,6 +359,74 @@ attachment PDFs registered in `issuer_filing_repairs.json`. Those repairs are
 same-scope and missing-period-only; they validate legal-name/CIN page markers,
 preserve the raw PDF and page evidence, reconcile configured overlaps, and fail
 closed on hash, identity, scope, publication-date, or value mismatch.
+
+The screener's capex J-curve lifecycle imports official announcement evidence
+from the separately operated `market_intel.duckdb` through a strictly read-only
+adapter. It freezes payloads and validated attachments, resolves point-in-time
+company/security/listing identity, and evaluates only bounded relevant pages.
+Historical bootstrap defaults to the versioned 25-company
+`jcurve-capex-baseline-v1` cohort. It includes Welspun Corp, Himadri Speciality
+Chemical, and DEE Development Engineers and spans industrial, chemical,
+electronics, energy, infrastructure, and manufacturing capex cases. Every
+member must resolve by exact ISIN plus NSE and BSE identifiers; cohort
+membership is a sampling decision, never a positive J-curve label.
+`jcurve-agent-policy-v1` uses strict OpenRouter JSON schemas and independent
+different-family extraction and verification; provider, request, prompt, page,
+token, cost, retry, and response hashes are persisted. Deterministic policies
+own materiality and stage assignment. High-materiality and reported demand-path
+claims require explicit human verification before J1. This research module does
+not add a pipeline stage or write ranking, candidate, opportunity, execution,
+or broker state.
+
+The optional upstream policy `market-intel-high-value-filter-v1` is a shadow
+metadata gate owned by `market_intel`. It records bounded NSE/BSE coverage
+receipts and auditable `KEEP`, `FETCH_ATTACHMENT`, or `DROP_METADATA_ONLY`
+decisions. J-curve bootstrap and incremental import use it only when
+`--upstream-filter-policy market-intel-high-value-filter-v1` is explicit;
+omitting the flag preserves the legacy import. Incomplete source coverage is
+frozen as degraded evidence and never interpreted as an empty successful day.
+Before attachment or model promotion, the upstream `export-review` command can
+freeze a deterministic source-and-listing-membership-stratified sample plus all
+exact-ISIN J-curve baseline matches. Human `HIGH_VALUE`/`NOT_HIGH_VALUE` labels
+measure the metadata gate only and do not assert J-curve claims or stages.
+The separately versioned `market-intel-security-master-v1` synchronizes official
+active NSE and BSE listing identities, joins them only by exact valid ISIN, and
+enriches upstream announcements with membership and exchange identifiers.
+`market_intel.tracked_entity` remains a watchlist. The J-curve adapter does not
+treat this current upstream view as research authority: it continues to resolve
+and freeze effective-dated `research_screener` company, security, and listing
+rows at the requested cutoff.
+
+The shadow-only `seed-screener` command precedes that import when accounting
+discovery is desired. It reuses the authenticated Screener Playwright session
+to freeze screen 317873. The complete export—not first-page rendered links—is
+authoritative for membership; NSE codes are preferred and BSE-only rows retain
+their BSE code and ISIN for exact security-master resolution. It then evaluates the screen members plus the
+versioned 25-company baseline and policy supplemental symbol FCL. A separate
+`jcurve-screener-seed-v1` policy selects one complete statement basis per
+symbol, requiring three annual periods and eight aligned quarters before
+preferring consolidated; it never splices bases and preserves missing CWIP as
+`NOT_DISCLOSED`. Relative two/four-year growth, absolute materiality, and a
+net-block/depreciation fallback feed deterministic BUILD, COMMISSIONING,
+RAMP_ACTIVE, or CAPEX_VISIBLE_UNCLASSIFIED discovery states. These states are
+candidate routing only: official filings remain required research evidence.
+Screen members absent from the local fundamentals history are retained as
+non-accepted `HISTORY_UNAVAILABLE` rows, with run-level coverage counts, rather
+than aborting or being silently dropped.
+Completed accepted identities can be passed to `bootstrap --seed-run-id`.
+
+The V2 calibration contract expands the cohort to 100 explicit companies: 25
+curated anchors plus five deterministic 15-company challenge strata. Challenge
+membership remains `UNLABELED`; it is not a capex truth label. The four-screen
+`discover-v2` command freezes screens 3901581/3901588/3901589/3901592 with
+exact-query drift checks, intersects their deduplicated ISIN/NSE/BSE union with
+the latest completed official eligible universe at or before the cutoff,
+requires a commissioning or ramp match plus one corroborating screen, and
+always evaluates the baseline. Only deterministic `RAMP_ACTIVE` and
+`COMMISSIONING` cases enter the primary official-research queue, capped at 250;
+builds, manual triage, overflow, data gaps, and all exclusions remain in the
+immutable audit pack. `bootstrap --discovery-run-id` imports official
+announcement history for that bounded primary queue.
 
 ## Operator quick start
 
@@ -495,6 +563,49 @@ provenance/company-type/cutoff output deterministically, and requires human
 review for guidance, targets, governance, ownership, high materiality,
 conflicts, or agent disagreement. This milestone defines persistence and policy
 only; it does not yet run agents or promote discovery anchors.
+
+Request an immutable J-curve announcement import, then evaluate it
+after supplying point-in-time materiality denominators. The bootstrap freezes
+only history already present in `market_intel`. Complete contiguous NSE and BSE
+collection receipts can prove the requested interval; missing or gapped
+receipts record `HISTORICAL_SOURCE_COVERAGE_UNPROVEN` and
+`UPSTREAM_FILTER_COVERAGE_INCOMPLETE`. Bootstrap uses
+`configs/research_screener/jcurve/capex_baseline_v1.json`
+by default; use `--all-companies` only for an explicitly broad research import.
+Evaluation requires an
+OpenRouter key and makes external model calls; import and report are local:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.jcurve.cli seed-screener \
+  --as-of-date YYYY-MM-DD --screen-id 317873
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.jcurve.cli discover-v2 \
+  --as-of-date YYYY-MM-DD
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.jcurve.cli bootstrap \
+  --as-of-date YYYY-MM-DD --lookback-years 5 \
+  --seed-run-id <completed-jcurve-seed-run-id> \
+  --upstream-filter-policy market-intel-high-value-filter-v1
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.jcurve.cli bootstrap \
+  --as-of-date YYYY-MM-DD --lookback-years 5 \
+  --discovery-run-id <completed-jcurve-discovery-run-id> \
+  --upstream-filter-policy market-intel-high-value-filter-v1
+
+PYTHONPATH=src ./.venv/bin/python -m \
+  ai_trading_system.domains.research_screener.jcurve.cli evaluate \
+  --parent-run-id <completed-jcurve-import-run-id> \
+  --as-of-date YYYY-MM-DD --materiality-inputs /path/to/materiality.json
+```
+
+Incremental import uses a seven-day overlap by default. Optional human
+verification input is an audited JSON array containing exactly `claim_id`,
+`reviewer`, `decision`, and `note`; only `ACCEPT` is currently supported.
+Evaluation defaults to 25 resolved companies and rejects limits above 250.
 
 Preview an evidence-bound demerger repair with
 `python -m ai_trading_system.domains.ingest.demerger_repair --evidence-file

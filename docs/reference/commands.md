@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-08-15
+- **Last verified:** 2026-08-21
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -440,6 +440,7 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-symbol-report` | Symbol research report |
 | `ai-trading-research-screener` | Isolated persistent screener (`regression_replay`, `live_canary`, `full_universe`, or `filing_discovery`) |
 | `ai-trading-annual-report-discovery` | Immutable official annual-report evidence discovery for a completed filing-grade cohort |
+| `ai-trading-jcurve` | Isolated market-intel import, bounded OpenRouter evaluation, and immutable J-curve reporting |
 
 For any mutating repair, migration, backfill, promotion, or live execution command, inspect `--help`, confirm the target data domain, and take the required backup first.
 
@@ -490,6 +491,78 @@ PYTHONPATH=src ./.venv/bin/python -m \
 Its text matches are LOW-confidence page anchors requiring human review.
 Missing topics remain `NOT_DISCLOSED`; the command does not score, rank,
 recommend, schedule, publish, or execute.
+
+The J-curve command is separate from the pipeline. `seed-screener` freezes the
+authenticated screen 317873 export and classifies a bounded union of screen
+members, the versioned baseline, and policy supplemental symbols. It reads the
+Screener fundamentals database without mutation. Missing local history is
+reported as non-accepted `HISTORY_UNAVAILABLE` coverage rather than failing the
+whole seed. `discover-v2` freezes the four governed lifecycle screens, applies
+the official-universe and consensus gates, classifies the focused set plus the
+100-case baseline, and writes a maximum 250-name ramp/commissioning primary
+queue while retaining every exclusion. `bootstrap` imports up to ten
+years of official `market_intel` announcements for the versioned 25-company
+capex baseline by default; `ingest` derives its start from
+the latest completed import and applies a configurable 1–90 day overlap.
+`evaluate` requires `OPENROUTER_API_KEY` or `OPENROUTER_KEY`, a completed import
+run, and optionally point-in-time materiality inputs and audited human
+verifications. It defaults to 25 resolved companies; `--company-limit` accepts
+1 through 250. `calibrate` requires exactly 25 labeled companies unless
+`--allow-nonstandard-cohort` is explicitly supplied. `report` reads an existing
+immutable result and performs no model call:
+
+```bash
+ai-trading-jcurve seed-screener --as-of-date YYYY-MM-DD --screen-id 317873
+ai-trading-jcurve seed-screener --as-of-date YYYY-MM-DD --screen-id 317873 \
+  --screen-export /path/to/screener-screen.csv
+ai-trading-jcurve profile-baseline --as-of-date YYYY-MM-DD \
+  --cohort-config configs/research_screener/jcurve/capex_baseline_v2.json
+ai-trading-jcurve discover-v2 --as-of-date YYYY-MM-DD
+ai-trading-jcurve discover-v2 --as-of-date YYYY-MM-DD \
+  --screen-export 3901581=/path/to/screen1.xlsx \
+  --screen-export 3901588=/path/to/screen2.xlsx \
+  --screen-export 3901589=/path/to/screen3.xlsx \
+  --screen-export 3901592=/path/to/screen4.xlsx
+ai-trading-jcurve bootstrap --as-of-date YYYY-MM-DD --lookback-years 5
+ai-trading-jcurve bootstrap --as-of-date YYYY-MM-DD --lookback-years 5 \
+  --seed-run-id <completed-seed-run-id>
+ai-trading-jcurve bootstrap --as-of-date YYYY-MM-DD --lookback-years 5 \
+  --discovery-run-id <completed-discovery-run-id>
+ai-trading-jcurve bootstrap --as-of-date YYYY-MM-DD --lookback-years 5 \
+  --upstream-filter-policy market-intel-high-value-filter-v1
+ai-trading-jcurve bootstrap --as-of-date YYYY-MM-DD --lookback-years 5 \
+  --cohort-config /path/to/versioned-cohort.json
+ai-trading-jcurve bootstrap --as-of-date YYYY-MM-DD --lookback-years 5 \
+  --all-companies
+ai-trading-jcurve ingest --as-of-date YYYY-MM-DD --overlap-days 7
+ai-trading-jcurve ingest --as-of-date YYYY-MM-DD --overlap-days 7 \
+  --upstream-filter-policy market-intel-high-value-filter-v1
+ai-trading-jcurve evaluate --parent-run-id <run-id> --as-of-date YYYY-MM-DD \
+  --materiality-inputs /path/to/materiality.json \
+  --human-verifications /path/to/reviews.json
+ai-trading-jcurve report --run-id <evaluation-run-id>
+ai-trading-jcurve calibrate --evaluation-run-id <evaluation-run-id> \
+  --labels /path/to/reviewed-labels.json
+```
+
+Global test/diagnostic overrides are `--store-path` and `--output-root`.
+Import accepts `--market-intel-db`; all market-intel access remains read-only.
+Bootstrap defaults to
+`configs/research_screener/jcurve/capex_baseline_v1.json`; `--cohort-config`
+supplies another contract-compatible cohort, while `--all-companies` disables
+cohort filtering. `--seed-run-id` instead uses accepted, resolved candidates
+from a completed seed run. Those three modes are mutually exclusive.
+Seed acquisition uses cached Screener authentication and requires
+`SCREENER_USERNAME`/`SCREENER_PASSWORD` unless `--screen-export` is supplied.
+The provided export must include an NSE symbol column or one Screener company
+hyperlink per row. `--supplemental-cohort` defaults to the 25-company baseline.
+Bootstrap freezes only upstream rows already present and reports historical
+coverage as unproven unless contiguous completed NSE and BSE receipts cover the
+requested interval.
+The optional `--upstream-filter-policy` is shadow-only and currently accepts
+only `market-intel-high-value-filter-v1`. It requires the corresponding
+upstream receipt and decision tables, imports only `KEEP` and
+`FETCH_ATTACHMENT` rows, and records incomplete NSE/BSE coverage as degraded.
 
 Preview the evidence-bound STLTECH demerger repair before applying it:
 

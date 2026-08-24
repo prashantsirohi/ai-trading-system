@@ -1,0 +1,64 @@
+{
+  "policy_version": "jcurve-screener-discovery-v2",
+  "screens": [
+    {
+      "screen_id": 3901581,
+      "url": "https://www.screener.in/screens/3901581/jcurve-screen1/",
+      "lane": "RECENT_CAPEX_BUILD",
+      "expected_query": "Market Capitalization > 200 AND ((Net block + Capital work in progress) > 1.30 * (Net block preceding year + Capital work in progress preceding year) OR (Capital work in progress > 1.25 * Capital work in progress preceding year AND Capital work in progress > 0.08 * Net block))",
+      "required_query_terms": ["Market Capitalization", "Net block", "Capital work in progress", "1.30", "1.25", "0.08"]
+    },
+    {
+      "screen_id": 3901588,
+      "url": "https://www.screener.in/screens/3901588/jcurve-screen2/",
+      "lane": "OLDER_CAPEX",
+      "expected_query": "Market Capitalization > 200 AND Net block > 1.50 * Net block 3Years back",
+      "required_query_terms": ["Market Capitalization", "Net block", "1.50", "3Years back"]
+    },
+    {
+      "screen_id": 3901589,
+      "url": "https://www.screener.in/screens/3901589/jcurve-screen3/",
+      "lane": "COMMISSIONING",
+      "expected_query": "Market Capitalization > 200 AND Net block > 1.15 * Net block preceding year AND Depreciation last year > 1.10 * Depreciation preceding year",
+      "required_query_terms": ["Market Capitalization", "Net block", "Depreciation", "1.15", "1.10"]
+    },
+    {
+      "screen_id": 3901592,
+      "url": "https://www.screener.in/screens/3901592/jcurve-screen4/",
+      "lane": "RAMP",
+      "expected_query": "Market Capitalization > 200 AND Net block > 1.30 * Net block 3Years back AND Sales latest quarter > 1.10 * Sales preceding year quarter AND Operating profit latest quarter > 1.15 * Operating profit preceding year quarter",
+      "required_query_terms": ["Market Capitalization", "Net block", "Sales latest quarter", "Operating profit latest quarter", "1.30", "1.10", "1.15"]
+    }
+  ],
+  "identity_key_order": ["ISIN", "NSE", "BSE"],
+  "calibration_cohort": "configs/research_screener/jcurve/capex_baseline_v2.json",
+  "universe_gate": {
+    "source": "LATEST_COMPLETED_RESEARCH_SCREENER_FULL_UNIVERSE_AT_OR_BEFORE_CUTOFF",
+    "required_identity_status": "RESOLVED",
+    "required_market_cap_status": "ELIGIBLE",
+    "market_cap_min_cr": 1000,
+    "market_cap_max_cr": 100000
+  },
+  "focus_gate": {
+    "minimum_screen_matches": 2,
+    "required_any_lanes": ["COMMISSIONING", "RAMP"],
+    "baseline_members_always_evaluated": true,
+    "missing_history_disposition": "HISTORY_UNAVAILABLE"
+  },
+  "routing": {
+    "RAMP_ACTIVE": "PRIMARY_RESEARCH",
+    "COMMISSIONING": "PRIMARY_RESEARCH",
+    "BUILD": "WATCHLIST",
+    "CAPEX_VISIBLE_UNCLASSIFIED": "MANUAL_TRIAGE",
+    "NOT_SELECTED": "DROP",
+    "HISTORY_UNAVAILABLE": "DATA_GAP"
+  },
+  "primary_queue": {
+    "limit": 250,
+    "eligible_dispositions": ["RAMP_ACTIVE", "COMMISSIONING"],
+    "disposition_order": ["RAMP_ACTIVE", "COMMISSIONING"],
+    "tie_break_order": ["SCREEN_MATCH_COUNT_DESC", "RAMP_SCREEN_MATCH_DESC", "COMMISSIONING_SCREEN_MATCH_DESC", "ISIN_ASC"],
+    "overflow_disposition": "WATCHLIST_OVERFLOW"
+  },
+  "authority": "DISCOVERY_ONLY_OFFICIAL_FILINGS_REQUIRED"
+}

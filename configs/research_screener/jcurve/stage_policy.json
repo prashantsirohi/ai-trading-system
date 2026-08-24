@@ -1,0 +1,19 @@
+{
+  "policy_version": "jcurve-capex-stage-v1",
+  "candidate_stage": "CANDIDATE",
+  "first_qualified_stage": "J1",
+  "required_trigger_claims": [
+    "CAPEX_ANNOUNCED",
+    "CAPEX_UNDER_CONSTRUCTION",
+    "CAPEX_COMPLETED",
+    "PLANT_COMMISSIONED"
+  ],
+  "demand_path_claims": [
+    "COMMERCIAL_PRODUCTION_STARTED",
+    "CUSTOMER_QUALIFIED",
+    "COMMERCIAL_SUPPLY_STARTED",
+    "DEMAND_PATH_REPORTED"
+  ],
+  "accepted_claim_statuses": ["AGENT_VERIFIED", "HUMAN_VERIFIED"],
+  "high_materiality_requires_human_review": true
+}

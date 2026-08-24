@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-08-18
+- **Last verified:** 2026-08-19
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -18,6 +18,24 @@ stage attempt. A registered file is authoritative for default downstream
 resolution only after its registry lifecycle reaches `promoted` and the exact
 producing stage attempt is `completed`. Failed or interrupted attempts remain
 diagnostic evidence even when their files are intact.
+
+Research-screener J-curve artifacts are outside the pipeline artifact registry.
+Each Screener seed writes `result.json`, `manifest.json`, `candidates.csv`, and
+the content-hashed screen CSV/XLSX under
+`$DATA_ROOT/research_screener/jcurve_runs/<seed-run-id>/`.
+The result and manifest expose fundamentals-history coverage; uncovered screen
+members remain auditable `HISTORY_UNAVAILABLE` candidates in `candidates.csv`.
+Each V2 discovery writes the four frozen exports plus `result.json`,
+`manifest.json`, the complete `candidates.csv`, and the capped
+`primary_queue.csv` under its content-addressed J-curve run directory.
+Non-primary routes and official-universe exclusions remain in the complete
+candidate artifact.
+Each import writes `$DATA_ROOT/research_screener/jcurve_runs/<run_id>/manifest.json`,
+`announcements.csv`, and checksum-addressed files beneath `source/`. Each
+evaluation writes `result.json` containing its policy/input snapshot and the
+claims, reviews, episodes, and stage observations committed atomically to the
+isolated screener store. The database history is authoritative; packs are
+immutable replay and audit evidence and have no operational consumer.
 
 ## Stage artifacts
 

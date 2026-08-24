@@ -1,0 +1,11 @@
+{
+  "policy_version": "jcurve-capex-materiality-v1",
+  "thresholds": {
+    "capex_to_ttm_revenue": 0.10,
+    "incremental_capacity_to_old_capacity": 0.20,
+    "capex_to_net_block": 0.20,
+    "incremental_revenue_to_ttm_revenue": 0.10
+  },
+  "missing_inputs": "FAIL_CLOSED",
+  "management_guidance_can_override": false
+}

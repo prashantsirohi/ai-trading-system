@@ -1,0 +1,33 @@
+{
+  "cohort_version": "jcurve-capex-baseline-v1",
+  "identity_checked_as_of": "2026-08-21",
+  "purpose": "Curated 25-company calibration baseline for announcement-level capex and J1 research. Membership is not a positive label.",
+  "required_company_count": 25,
+  "members": [
+    {"legal_name": "Welspun Corp Limited", "isin": "INE191B01025", "nse_symbol": "WELCORP", "bse_code": "532144", "aliases": ["Welspun Corp"], "selection_tags": ["pipes", "industrial-capex"]},
+    {"legal_name": "Himadri Speciality Chemical Limited", "isin": "INE019C01026", "nse_symbol": "HSCL", "bse_code": "500184", "aliases": ["Himadri Speciality", "Himadri Speciality Chemical"], "selection_tags": ["specialty-chemicals", "battery-materials"]},
+    {"legal_name": "DEE Development Engineers Limited", "isin": "INE841L01016", "nse_symbol": "DEEDEV", "bse_code": "544198", "aliases": ["DEE Development Engineers", "DEE Piping Systems"], "selection_tags": ["industrial-engineering", "process-piping"]},
+    {"legal_name": "APL Apollo Tubes Limited", "isin": "INE702C01027", "nse_symbol": "APLAPOLLO", "bse_code": "533758", "aliases": ["APL Apollo Tubes"], "selection_tags": ["pipes", "capacity-expansion"]},
+    {"legal_name": "Jindal Saw Limited", "isin": "INE324A01032", "nse_symbol": "JINDALSAW", "bse_code": "500378", "aliases": ["Jindal SAW"], "selection_tags": ["pipes", "industrial-capex"]},
+    {"legal_name": "Kirloskar Oil Engines Limited", "isin": "INE146L01010", "nse_symbol": "KIRLOSENG", "bse_code": "533293", "aliases": ["Kirloskar Oil Engines"], "selection_tags": ["industrial-engineering", "engines"]},
+    {"legal_name": "Kaynes Technology India Limited", "isin": "INE918Z01012", "nse_symbol": "KAYNES", "bse_code": "543664", "aliases": ["Kaynes Technology"], "selection_tags": ["electronics-manufacturing", "capacity-expansion"]},
+    {"legal_name": "Dixon Technologies (India) Limited", "isin": "INE935N01020", "nse_symbol": "DIXON", "bse_code": "540699", "aliases": ["Dixon Technologies"], "selection_tags": ["electronics-manufacturing", "capacity-expansion"]},
+    {"legal_name": "PG Electroplast Limited", "isin": "INE457L01029", "nse_symbol": "PGEL", "bse_code": "533581", "aliases": ["PG Electroplast"], "selection_tags": ["electronics-manufacturing", "capacity-expansion"]},
+    {"legal_name": "Syrma SGS Technology Limited", "isin": "INE0DYJ01015", "nse_symbol": "SYRMA", "bse_code": "543573", "aliases": ["Syrma SGS Technology"], "selection_tags": ["electronics-manufacturing", "capacity-expansion"]},
+    {"legal_name": "Waaree Energies Limited", "isin": "INE377N01017", "nse_symbol": "WAAREEENER", "bse_code": "544277", "aliases": ["Waaree Energies"], "selection_tags": ["solar-manufacturing", "capacity-expansion"]},
+    {"legal_name": "Premier Energies Limited", "isin": "INE0BS701011", "nse_symbol": "PREMIERENE", "bse_code": "544238", "aliases": ["Premier Energies"], "selection_tags": ["solar-manufacturing", "capacity-expansion"]},
+    {"legal_name": "E2E Networks Limited", "isin": "INE255Z01027", "nse_symbol": "E2E", "bse_code": "544783", "aliases": ["E2E Networks"], "selection_tags": ["data-centres", "compute-infrastructure"]},
+    {"legal_name": "Polycab India Limited", "isin": "INE455K01017", "nse_symbol": "POLYCAB", "bse_code": "542652", "aliases": ["Polycab India"], "selection_tags": ["cables", "manufacturing-capex"]},
+    {"legal_name": "KEI Industries Limited", "isin": "INE878B01027", "nse_symbol": "KEI", "bse_code": "517569", "aliases": ["KEI Industries"], "selection_tags": ["cables", "manufacturing-capex"]},
+    {"legal_name": "K.P.R. Mill Limited", "isin": "INE930H01031", "nse_symbol": "KPRMILL", "bse_code": "532889", "aliases": ["KPR Mill", "K.P.R. Mill"], "selection_tags": ["textiles", "manufacturing-capex"]},
+    {"legal_name": "Anant Raj Limited", "isin": "INE242C01024", "nse_symbol": "ANANTRAJ", "bse_code": "515055", "aliases": ["Anant Raj"], "selection_tags": ["data-centres", "real-estate"]},
+    {"legal_name": "NCC Limited", "isin": "INE868B01028", "nse_symbol": "NCC", "bse_code": "500294", "aliases": ["NCC"], "selection_tags": ["construction", "project-execution"]},
+    {"legal_name": "Larsen & Toubro Limited", "isin": "INE018A01030", "nse_symbol": "LT", "bse_code": "500510", "aliases": ["Larsen & Toubro", "L&T"], "selection_tags": ["engineering-construction", "project-execution"]},
+    {"legal_name": "Adani Green Energy Limited", "isin": "INE364U01010", "nse_symbol": "ADANIGREEN", "bse_code": "541450", "aliases": ["Adani Green Energy"], "selection_tags": ["renewable-power", "project-capex"]},
+    {"legal_name": "NTPC Limited", "isin": "INE733E01010", "nse_symbol": "NTPC", "bse_code": "532555", "aliases": ["NTPC"], "selection_tags": ["power-generation", "project-capex"]},
+    {"legal_name": "JSW Energy Limited", "isin": "INE121E01018", "nse_symbol": "JSWENERGY", "bse_code": "533148", "aliases": ["JSW Energy"], "selection_tags": ["power-generation", "energy-transition"]},
+    {"legal_name": "Tata Power Company Limited", "isin": "INE245A01021", "nse_symbol": "TATAPOWER", "bse_code": "500400", "aliases": ["Tata Power", "The Tata Power Company"], "selection_tags": ["power-generation", "energy-transition"]},
+    {"legal_name": "Hindalco Industries Limited", "isin": "INE038A01020", "nse_symbol": "HINDALCO", "bse_code": "500440", "aliases": ["Hindalco Industries"], "selection_tags": ["metals", "industrial-capex"]},
+    {"legal_name": "Grasim Industries Limited", "isin": "INE047A01021", "nse_symbol": "GRASIM", "bse_code": "500300", "aliases": ["Grasim Industries"], "selection_tags": ["diversified-manufacturing", "greenfield-capex"]}
+  ]
+}

@@ -2,7 +2,7 @@
 
 - **Purpose:** Configuration sources, CLI flags, and mode selectors. For env vars see [`environment_variables.md`](environment_variables.md). For commands see [`commands.md`](commands.md).
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-15
+- **Last verified:** 2026-08-21
 - **Source of truth:** `argparse` parsers in `pipeline/orchestrator.py` and `pipeline/daily_pipeline.py`; env loading in `platform/`; config files under `config/`.
 
 ---
@@ -29,6 +29,41 @@ Runtime behavior is controlled by:
 | `src/ai_trading_system/platform/config/rank_factor_weights.json` | Composite scoring factor weights |
 | `src/ai_trading_system/platform/config/events_filters.json` | Event materiality filters |
 | `src/ai_trading_system/platform/config/research_recipes.toml` | Research workflow recipes |
+| `configs/research_screener/jcurve/model_policy.json` | Immutable OpenRouter routing, bounds, models, prompts, and verifier-family policy |
+| `configs/research_screener/jcurve/materiality_policy.json` | Point-in-time capex materiality thresholds and fail-closed missing-input behavior |
+| `configs/research_screener/jcurve/stage_policy.json` | Accepted evidence statuses and deterministic CANDIDATE/J1 gates |
+| `configs/research_screener/jcurve/capex_baseline_v1.json` | Exact-identifier 25-company bootstrap and calibration cohort; membership carries no outcome label |
+| `configs/research_screener/jcurve/screener_seed_policy_v1.json` | Screen 317873 query contract, bounded supplemental universe, statement-basis completeness, missing-CWIP policy, and deterministic accounting lifecycle thresholds |
+| `configs/research_screener/jcurve/capex_baseline_v2.json` | Explicit 100-company calibration cohort with 25 anchors and 75 unlabeled stratified challenges |
+| `configs/research_screener/jcurve/screener_discovery_policy_v2.json` | Four-screen union, official-universe intersection, commissioning/ramp focus, and bounded primary queue |
+
+`ai-trading-jcurve bootstrap` accepts `--lookback-years` from 1 through 10.
+It defaults to `capex_baseline_v1.json`, validates every member against the
+point-in-time security master, and freezes the resolved cohort in the run pack.
+The requested cutoff cannot precede the cohort's `identity_checked_as_of` date.
+`--cohort-config` selects another contract-compatible version; `--all-companies`
+disables cohort filtering, and the two flags cannot be combined.
+Incremental `ingest` accepts `--overlap-days` from 1 through 90. `evaluate`
+accepts optional JSON files through `--materiality-inputs` and
+`--human-verifications`; human rows must contain exactly `claim_id`, `reviewer`,
+`decision`, and `note`, and the only current decision is `ACCEPT`.
+Evaluation defaults to `--company-limit 25` and accepts at most 250. The model
+policy also caps requests and halts before starting another request once the
+configured reported-cost ceiling has been reached.
+
+`ai-trading-jcurve seed-screener` defaults to the 25-company baseline as its
+supplemental cohort and adds policy-owned FCL. `--supplemental-cohort` may name
+another versioned member file. The resulting seed never scans the full local
+fundamentals universe implicitly.
+
+`ai-trading-jcurve discover-v2` defaults to
+`screener_discovery_policy_v2.json`, `screener_seed_policy_v1.json`, and
+`capex_baseline_v2.json`. Live mode uses the authenticated Screener client and
+fails on exact query drift. Offline mode requires four repeated
+`--screen-export SCREEN_ID=PATH` values. `--universe-run-id` can pin a completed
+full-universe parent; otherwise the latest completed parent at or before the
+cutoff is selected. The governed primary queue contains only `RAMP_ACTIVE` and
+`COMMISSIONING` cases and is capped at 250.
 
 ## Stage and mode selection
 
