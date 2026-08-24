@@ -16,6 +16,7 @@ import pytest
 
 from ai_trading_system.domains.ranking.patterns.contracts import PatternScanConfig
 from ai_trading_system.domains.ranking.patterns.detectors import (
+    _build_signal,
     _score_signal_rows,
     detect_3wt_signals,
     detect_ascending_triangle_signals,
@@ -206,6 +207,80 @@ class TestVCP:
             frame, smoothed=smoothed, extrema=extrema, config=config, recent_only=False
         )
         assert stats.candidate_count == 0, "Equal ranges should produce no VCP candidates"
+
+    def test_strong_volume_contraction_is_a_positive_quality_input(self, monkeypatch):
+        frame = self._make_contracting_frame()
+        frame.loc[80:92, "volume_ratio_20"] = 10.0
+        frame.loc[93:106, "volume_ratio_20"] = 1.0
+        frame.loc[107:119, "volume_ratio_20"] = 0.1
+        observed_volume_contractions: list[float] = []
+
+        def capture_quality(
+            price_contraction_pct: float,
+            volume_contraction_pct: float,
+            stage2_score: float,
+        ) -> float:
+            observed_volume_contractions.append(volume_contraction_pct)
+            return 50.0
+
+        monkeypatch.setattr(
+            "ai_trading_system.domains.ranking.patterns.detectors._vcp_setup_quality",
+            capture_quality,
+        )
+        config = PatternScanConfig(
+            vcp_window_bars=40,
+            vcp_price_contraction_factor=0.85,
+            vcp_vol_contraction_factor=0.85,
+            vcp_min_first_range_pct=0.05,
+            recent_signal_max_age_bars=50,
+        )
+        smoothed, extrema = _smoothed_and_extrema(frame, config)
+
+        _, stats = detect_vcp_signals(
+            frame, smoothed=smoothed, extrema=extrema, config=config, recent_only=False
+        )
+
+        assert stats.candidate_count >= 1
+        assert observed_volume_contractions
+        assert all(value > 0.0 for value in observed_volume_contractions)
+
+    def test_signal_builder_clamps_setup_quality_to_contract_range(self):
+        frame = _base_frame(np.array([100.0, 101.0, 102.0]))
+        config = PatternScanConfig()
+
+        low = _build_signal(
+            frame=frame,
+            pattern_family="vcp",
+            pattern_state="watchlist",
+            signal_idx=2,
+            pattern_start_idx=0,
+            pattern_end_idx=1,
+            breakout_level=103.0,
+            invalidation_price=99.0,
+            setup_quality=-10.0,
+            pivot_labels=("start", "end"),
+            pivot_indices=(0, 1),
+            pivot_prices=(100.0, 101.0),
+            config=config,
+        )
+        high = _build_signal(
+            frame=frame,
+            pattern_family="vcp",
+            pattern_state="confirmed",
+            signal_idx=2,
+            pattern_start_idx=0,
+            pattern_end_idx=1,
+            breakout_level=103.0,
+            invalidation_price=99.0,
+            setup_quality=110.0,
+            pivot_labels=("start", "end"),
+            pivot_indices=(0, 1),
+            pivot_prices=(100.0, 101.0),
+            config=config,
+        )
+
+        assert low.setup_quality == 0.0
+        assert high.setup_quality == 100.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

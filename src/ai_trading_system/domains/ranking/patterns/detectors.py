@@ -317,7 +317,7 @@ def _build_signal(
         breakout_level=float(_rounded(breakout_level) or breakout_level),
         watchlist_trigger_level=float(_rounded(watchlist_trigger_level) or watchlist_trigger_level),
         invalidation_price=float(_rounded(safe_invalidation) or safe_invalidation),
-        setup_quality=float(round(setup_quality, 6)),
+        setup_quality=float(round(np.clip(setup_quality, 0.0, 100.0), 6)),
         pivot_labels=pivot_labels,
         pivot_dates=tuple(timestamps.iloc[idx].date().isoformat() for idx in pivot_indices),
         pivot_prices=tuple(float(_rounded(price) or price) for price in pivot_prices),
@@ -1440,7 +1440,7 @@ def detect_vcp_signals(
 
         s2_score = float(frame["stage2_score"].iloc[end]) if has_stage2 and len(frame) > end else 0
         setup_quality = _vcp_setup_quality(
-            ranges[0] - ranges[1], 1 - vols[0] / max(vols[1], 1e-9), s2_score
+            ranges[0] - ranges[1], 1 - vols[1] / max(vols[0], 1e-9), s2_score
         )
 
         breakout_idx, breakout_confirmation = _find_breakout_confirmation(
