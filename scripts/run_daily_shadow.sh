@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Daily shadow routine: run the full production pipeline with the three R1a
-# shadow flags, then verify the shadow session (report-only). One operator
-# command for Day-2+ operation of the pattern_lane_scan shadow.
+# Daily shadow routine: run the full production pipeline with the pattern,
+# routing, opportunity-registry, and fundamental-discovery shadow flags, then
+# verify the shadow session (report-only). One operator command for Day-2+
+# operation of the shadow lanes.
 #
 #   Gate is NON-BLOCKING: a shadow day that does not count never fails this
 #   script. The PRODUCTION pipeline's exit code IS blocking — it is returned
@@ -75,11 +76,13 @@ trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
 echo "[daily-shadow] run_id=$RUN_ID  run_date=$RUN_DATE  workers=$WORKERS  ($RESUME_NOTE)"
 
-# 4. Full production pipeline + three shadow flags. Default --stages, so the
+# 4. Full production pipeline + shadow flags. Default --stages, so the
 #    orchestrator auto-injects weekly_stage, pattern_lane_scan, scan_router and
-#    opportunities around the normal rank/investigator/execute/publish routine.
+#    fundamental_discovery before opportunities around the normal
+#    rank/investigator/execute/publish routine.
 "$PY" -m ai_trading_system.pipeline.orchestrator \
   --run-id "$RUN_ID" --run-date "$RUN_DATE" \
+  --fundamental-discovery-mode shadow \
   --opportunity-registry-mode shadow \
   --opportunity-scan-routing-mode shadow \
   --pattern-lane-scan-mode shadow \
