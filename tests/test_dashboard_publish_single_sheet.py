@@ -534,6 +534,36 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             }
         ]
     )
+    fundamental_thesis = pd.DataFrame(
+        [
+            {
+                "as_of": "2026-04-09",
+                "symbol_id": "FUND",
+                "exchange": "NSE",
+                "primary_thesis": "QUALITY_COMPOUNDER",
+                "secondary_theses_json": '["EARNINGS_ACCELERATION"]',
+                "classification_status": "QUALIFIED",
+                "admission_eligible": True,
+                "statement_basis": "consolidated",
+                "source_report_date": "2025-12-31",
+                "source_available_at": "2026-02-14",
+                "evidence_json": '{"structural_stage":"stage_2_advancing","composite_score":88.5,"pattern_score":61,"breakout_score":73,"investigator_score":79,"valuation_history_bucket":"BELOW_OWN_MEDIAN","quarterly_result_bucket":"ACCELERATING"}',
+            },
+            {
+                "as_of": "2026-04-09",
+                "symbol_id": "BLOCKED",
+                "exchange": "NSE",
+                "primary_thesis": "UNDERVALUED_QUALITY",
+                "secondary_theses_json": "[]",
+                "classification_status": "QUALIFIED",
+                "admission_eligible": False,
+                "statement_basis": "standalone",
+                "source_report_date": "2025-12-31",
+                "source_available_at": "2026-02-14",
+                "evidence_json": '{"structural_stage":"stage_4_declining","composite_score":95}',
+            },
+        ]
+    )
 
     payload = {
         "summary": {"run_date": "2026-04-09", "data_trust_status": "trusted"},
@@ -588,6 +618,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             investigator_trap_df=investigator_traps,
             investigator_final_gate_df=investigator_final_gate,
             investigator_performance_summary_df=investigator_performance,
+            fundamental_thesis_df=fundamental_thesis,
             sector_rotation_df=sector_rotation_df,
             industry_rotation_df=industry_rotation_df,
             investigator_payload=investigator_payload,
@@ -625,13 +656,15 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert result["industry_rotation_sheet_name"] == "industry rotation"
     assert result["breadth_sheet_name"] == "01_Daily_Report"
     assert result["investigator_sheet_name"] == "investigator"
+    assert result["fundamental_lane_sheet_name"] == "fundamental"
+    assert result["fundamental_lane_rows_written"] == 2
     assert result["final_3q_gate_sheet_name"] == "Final 3Q Gate"
     assert result["investigator_data_sheet_name"] == "_DATA_INVESTIGATOR"
     assert result["stage1_current_sheet_name"] == "Stage1 Current"
     assert result["stage1_trade_date"] == "2026-04-09"
     assert {"DATA", "FILTER", "Publish_Log", "02_Watchlist_Current", "05_Market_Breadth", "2026-04-08"}.issubset(set(manager.spreadsheet.deleted))
 
-    visible_titles = {"01_Daily_Report", "Diagnostics", "Model_Feedback", "04_Sector_Leadership", "industry rotation", "investigator", "Final 3Q Gate", "Investigator Performance"}
+    visible_titles = {"01_Daily_Report", "Diagnostics", "Model_Feedback", "04_Sector_Leadership", "industry rotation", "investigator", "fundamental", "Final 3Q Gate", "Investigator Performance"}
     visible_updates = {
         title: [update for update in manager.sheets[title].updates if update[0] == "A1"]
         for title in visible_titles
@@ -643,6 +676,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     sector_grid = visible_updates["04_Sector_Leadership"][0][1]
     industry_grid = visible_updates["industry rotation"][0][1]
     investigator_grid = visible_updates["investigator"][0][1]
+    fundamental_grid = visible_updates["fundamental"][0][1]
     final_gate_grid = visible_updates["Final 3Q Gate"][0][1]
     performance_grid = visible_updates["Investigator Performance"][0][1]
     for stage1_title in ("Stage1 Current", "Stage1 Changes", "Stage1 Action Queue", "Stage1 Exits"):
@@ -705,6 +739,32 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert investigator_grid[1][9] == "0.0%"
     assert investigator_grid[2][0] == "MED"
     assert investigator_grid[2][11] == "Rising"
+    assert fundamental_grid[0] == [
+        "Symbol",
+        "Exchange",
+        "Primary Thesis",
+        "Secondary Theses",
+        "Structural Stage",
+        "Composite Score",
+        "Pattern Score",
+        "Breakout Score",
+        "Investigator Score",
+        "Valuation",
+        "Quarterly Result",
+        "Statement Basis",
+        "Source Report Date",
+        "Source Available",
+        "As Of",
+    ]
+    assert fundamental_grid[1][:6] == [
+        "FUND",
+        "NSE",
+        "QUALITY_COMPOUNDER",
+        "EARNINGS_ACCELERATION",
+        "stage_2_advancing",
+        88.5,
+    ]
+    assert "BLOCKED" not in {row[0] for row in fundamental_grid[1:]}
     assert final_gate_grid[0] == [
         "symbol_id",
         "trade_date",

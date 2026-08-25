@@ -268,6 +268,58 @@ def test_publish_stage_registers_compact_operator_sheet_channels(tmp_path: Path)
     assert "google_sheets_investigator" not in handlers
 
 
+def test_publish_stage_attaches_fundamental_discovery_lane(tmp_path: Path) -> None:
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "operational" / "ohlcv.duckdb",
+        run_id="pipeline-2026-04-10-fundamental-lane",
+        run_date="2026-04-10",
+        stage_name="publish",
+        attempt_number=1,
+        registry=RegistryStore(tmp_path),
+        params={"data_domain": "operational"},
+    )
+    discovery_dir = (
+        tmp_path
+        / "data"
+        / "pipeline_runs"
+        / context.run_id
+        / "fundamental_discovery"
+        / "attempt_1"
+    )
+    discovery_dir.mkdir(parents=True, exist_ok=True)
+    universe_path = discovery_dir / "fundamental_thesis_universe.csv"
+    summary_path = discovery_dir / "fundamental_thesis_summary.json"
+    pd.DataFrame(
+        [{"symbol_id": "AAA", "admission_eligible": True}]
+    ).to_csv(universe_path, index=False)
+    summary_path.write_text(
+        json.dumps({"status": "completed", "admission_eligible_rows": 1}),
+        encoding="utf-8",
+    )
+    context.artifacts = {
+        "fundamental_discovery": {
+            "fundamental_thesis_universe": StageArtifact.from_file(
+                "fundamental_thesis_universe", universe_path, row_count=1
+            ),
+            "fundamental_thesis_summary": StageArtifact.from_file(
+                "fundamental_thesis_summary", summary_path
+            ),
+        }
+    }
+
+    datasets: dict[str, object] = {}
+    PublishStage()._attach_fundamental_discovery_datasets(context, datasets)
+
+    assert datasets["fundamental_thesis_universe"].to_dict(orient="records") == [
+        {"symbol_id": "AAA", "admission_eligible": True}
+    ]
+    assert datasets["fundamental_thesis_summary"] == {
+        "status": "completed",
+        "admission_eligible_rows": 1,
+    }
+
+
 def test_orchestrator_accepts_bypass_dedupe_channels_flag() -> None:
     args = build_parser().parse_args(
         [

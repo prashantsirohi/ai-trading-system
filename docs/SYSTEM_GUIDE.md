@@ -295,7 +295,7 @@ remain keyed by the mastered symbol.
 | `execute` | Apply trust, policy, portfolio, and risk gates before paper or authorized live dispatch. | Actions, orders, fills, positions | [execute](stages/execute.md) |
 | `insight` | Build the structured analyst brief from upstream evidence. | `market_insight.json` | [insight](stages/insight.md) |
 | `narrative` | Render the configured market narrative at the cadence set by `--insight-report-type` (`daily` default, or `weekly`). | `market_report.json` | [narrative](stages/narrative.md) |
-| `publish` | Deliver already-materialized outputs to configured channels, including the top 25 ranked rows in the Google Sheets daily report. | Delivery records and publish summary | [publish](stages/publish.md) |
+| `publish` | Deliver already-materialized outputs to configured channels, including the top 25 ranked rows plus Investigator and admission-eligible fundamental-lane tabs in the Google Sheets operator workbook. | Delivery records and publish summary | [publish](stages/publish.md) |
 | `perf_tracker` | Mature forward-return cohorts in the research domain. | Research performance rows | [performance tracker](stages/perf_tracker.md) |
 
 ### Feature substages

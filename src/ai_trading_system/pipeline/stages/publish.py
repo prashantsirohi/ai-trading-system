@@ -157,6 +157,7 @@ class PublishStage:
         self._attach_event_datasets(context, datasets)
         self._attach_insight_datasets(context, datasets)
         self._attach_investigator_datasets(context, datasets)
+        self._attach_fundamental_discovery_datasets(context, datasets)
         self._attach_decision_bundle(context, datasets)
         ranked_df = datasets.get("ranked_signals", pd.DataFrame())
 
@@ -423,6 +424,7 @@ class PublishStage:
             ].copy()
         else:
             datasets["investigator_high_conviction"] = pd.DataFrame()
+
         from ai_trading_system.ui.execution_api.services.readmodels.stage1_operator import (
             get_stage1_context_by_symbol,
             get_stage1_current,
@@ -445,6 +447,23 @@ class PublishStage:
             ),
             "context_by_symbol": get_stage1_context_by_symbol(context.project_root),
         }
+
+    def _attach_fundamental_discovery_datasets(
+        self,
+        context: StageContext,
+        datasets: Dict[str, Any],
+    ) -> None:
+        universe = context.artifact_for(
+            "fundamental_discovery", "fundamental_thesis_universe"
+        )
+        datasets["fundamental_thesis_universe"] = (
+            self._read_artifact(universe) if universe is not None else pd.DataFrame()
+        )
+        datasets["fundamental_thesis_summary"] = self._read_json_artifact_safe(
+            context.artifact_for(
+                "fundamental_discovery", "fundamental_thesis_summary"
+            )
+        )
 
     def _read_json_artifact_safe(self, artifact: StageArtifact | None) -> Dict[str, Any]:
         if artifact is None:
@@ -710,6 +729,7 @@ class PublishStage:
             investigator_trap_df=datasets.get("investigator_trap_log"),
             investigator_final_gate_df=datasets.get("investigator_final_3q_gate"),
             investigator_performance_summary_df=datasets.get("investigator_performance_summary"),
+            fundamental_thesis_df=datasets.get("fundamental_thesis_universe"),
             sector_rotation_df=datasets.get("sector_rotation"),
             industry_rotation_df=datasets.get("industry_rotation"),
             investigator_payload=datasets.get("investigator_payload"),

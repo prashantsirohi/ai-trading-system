@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
 
@@ -29,6 +30,7 @@ INDUSTRY_ROTATION_SHEET = "industry rotation"
 MARKET_BREADTH_SHEET = "05_Market_Breadth"
 INVESTIGATOR_SHEET = "06_Investigator"
 INVESTIGATOR_ACTION_QUEUE_SHEET = "investigator"
+FUNDAMENTAL_LANE_SHEET = "fundamental"
 FINAL_3Q_GATE_SHEET = "Final 3Q Gate"
 INVESTIGATOR_PERFORMANCE_SHEET = "Investigator Performance"
 STAGE1_CURRENT_SHEET = "Stage1 Current"
@@ -54,6 +56,7 @@ OPERATOR_TAB_ORDER = [
     SECTOR_LEADERSHIP_SHEET,
     INDUSTRY_ROTATION_SHEET,
     INVESTIGATOR_ACTION_QUEUE_SHEET,
+    FUNDAMENTAL_LANE_SHEET,
     STAGE1_ACTION_QUEUE_SHEET,
     STAGE1_CURRENT_SHEET,
     STAGE1_CHANGES_SHEET,
@@ -1561,6 +1564,96 @@ def _first_present_series(source: pd.DataFrame, columns: list[str]) -> pd.Series
     return out
 
 
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if value is None or (not isinstance(value, (list, dict)) and pd.isna(value)):
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_list_text(value: Any) -> str:
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    if value is None or (not isinstance(value, (list, dict)) and pd.isna(value)):
+        return ""
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return str(value)
+    if isinstance(parsed, list):
+        return ", ".join(str(item) for item in parsed)
+    return str(value)
+
+
+def _fundamental_lane_frame(frame: pd.DataFrame | None) -> pd.DataFrame:
+    columns = [
+        "Symbol",
+        "Exchange",
+        "Primary Thesis",
+        "Secondary Theses",
+        "Structural Stage",
+        "Composite Score",
+        "Pattern Score",
+        "Breakout Score",
+        "Investigator Score",
+        "Valuation",
+        "Quarterly Result",
+        "Statement Basis",
+        "Source Report Date",
+        "Source Available",
+        "As Of",
+    ]
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    source = frame.copy()
+    eligible = source.get("admission_eligible", pd.Series(False, index=source.index))
+    eligible = eligible.fillna(False).astype(str).str.lower().isin({"true", "1", "yes"})
+    source = source.loc[eligible].copy()
+    if source.empty:
+        return pd.DataFrame(columns=columns)
+
+    evidence = source.get("evidence_json", pd.Series("{}", index=source.index)).map(
+        _json_object
+    )
+
+    def evidence_value(key: str) -> pd.Series:
+        return evidence.map(lambda item: item.get(key))
+
+    out = pd.DataFrame(
+        {
+            "Symbol": _first_present_series(source, ["symbol_id", "symbol"]),
+            "Exchange": _first_present_series(source, ["exchange"]),
+            "Primary Thesis": _first_present_series(source, ["primary_thesis"]),
+            "Secondary Theses": source.get(
+                "secondary_theses_json", pd.Series("", index=source.index)
+            ).map(_json_list_text),
+            "Structural Stage": evidence_value("structural_stage"),
+            "Composite Score": pd.to_numeric(evidence_value("composite_score"), errors="coerce"),
+            "Pattern Score": pd.to_numeric(evidence_value("pattern_score"), errors="coerce"),
+            "Breakout Score": pd.to_numeric(evidence_value("breakout_score"), errors="coerce"),
+            "Investigator Score": pd.to_numeric(evidence_value("investigator_score"), errors="coerce"),
+            "Valuation": evidence_value("valuation_history_bucket"),
+            "Quarterly Result": evidence_value("quarterly_result_bucket"),
+            "Statement Basis": _first_present_series(source, ["statement_basis"]),
+            "Source Report Date": _first_present_series(source, ["source_report_date"]),
+            "Source Available": _first_present_series(source, ["source_available_at"]),
+            "As Of": _first_present_series(source, ["as_of"]),
+        }
+    )
+    return out.sort_values(
+        ["Composite Score", "Symbol"],
+        ascending=[False, True],
+        na_position="last",
+        kind="stable",
+    ).reset_index(drop=True)
+
+
 def _investigator_action_queue_frame(
     *,
     payload: dict[str, Any] | None,
@@ -2017,6 +2110,7 @@ def publish_dashboard_payload(
     investigator_trap_df: pd.DataFrame | None = None,
     investigator_final_gate_df: pd.DataFrame | None = None,
     investigator_performance_summary_df: pd.DataFrame | None = None,
+    fundamental_thesis_df: pd.DataFrame | None = None,
     sector_rotation_df: pd.DataFrame | None = None,
     industry_rotation_df: pd.DataFrame | None = None,
     investigator_payload: dict[str, Any] | None = None,
@@ -2061,6 +2155,7 @@ def publish_dashboard_payload(
     investigator_traps = _investigator_trap_frame(investigator_trap_df)
     investigator_final_gate = _investigator_final_gate_frame(investigator_final_gate_df)
     investigator_performance = _investigator_performance_frame(investigator_performance_summary_df)
+    fundamental_lane = _fundamental_lane_frame(fundamental_thesis_df)
     events_index = _frame(payload.get("events_index", []))
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
     bundle = decision_bundle or build_publish_decision_bundle(
@@ -2181,6 +2276,14 @@ def publish_dashboard_payload(
         frame=active_investigator_list,
         max_cols=INVESTIGATOR_ACTIVE_MAX_COLS,
     )
+    _fundamental_lane_worksheet, fundamental_lane_rows = _write_table_sheet(
+        manager=manager,
+        sheet_name=FUNDAMENTAL_LANE_SHEET,
+        frame=fundamental_lane,
+        max_cols=len(fundamental_lane.columns),
+        frozen_cols=2,
+        enable_filter=True,
+    )
     stage1_current = _stage1_current_frame(stage1_operator_bundle, run_id)
     stage1_changes = _stage1_changes_frame(stage1_operator_bundle, run_id)
     stage1_action_queue = _stage1_action_queue_frame(stage1_operator_bundle, run_id)
@@ -2282,6 +2385,8 @@ def publish_dashboard_payload(
         "breadth_sheet_name": DAILY_REPORT_SHEET,
         "investigator_sheet_name": INVESTIGATOR_ACTION_QUEUE_SHEET,
         "investigator_rows_written": int(investigator_queue_rows),
+        "fundamental_lane_sheet_name": FUNDAMENTAL_LANE_SHEET,
+        "fundamental_lane_rows_written": int(fundamental_lane_rows),
         "final_3q_gate_sheet_name": FINAL_3Q_GATE_SHEET,
         "final_3q_gate_rows_written": int(final_gate_rows),
         "investigator_performance_sheet_name": INVESTIGATOR_PERFORMANCE_SHEET,
