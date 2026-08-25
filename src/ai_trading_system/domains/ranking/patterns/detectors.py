@@ -1373,7 +1373,7 @@ def _vcp_setup_quality(
     pc_bonus = min(price_contraction_pct * 80.0, 15.0)
     vc_bonus = min(vol_contraction_pct * 60.0, 10.0)
     s2_bonus = 15.0 if stage2_score >= 85 else (10.0 if stage2_score >= 70 else 5.0)
-    return (base + pc_bonus + vc_bonus + s2_bonus).clip(0, 100)
+    return float(np.clip(base + pc_bonus + vc_bonus + s2_bonus, 0.0, 100.0))
 
 
 def detect_vcp_signals(

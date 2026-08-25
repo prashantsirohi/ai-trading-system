@@ -18,6 +18,7 @@ from ai_trading_system.domains.ranking.patterns.contracts import PatternScanConf
 from ai_trading_system.domains.ranking.patterns.detectors import (
     _build_signal,
     _score_signal_rows,
+    _vcp_setup_quality,
     detect_3wt_signals,
     detect_ascending_triangle_signals,
     detect_ascending_base_signals,
@@ -186,6 +187,12 @@ class TestVCP:
             frame, smoothed=smoothed, extrema=extrema, config=config, recent_only=False
         )
         assert stats.candidate_count >= 1, "VCP with contracting ranges should produce candidates"
+
+    def test_setup_quality_clips_native_float_inputs(self):
+        quality = _vcp_setup_quality(0.10, 0.50, 85.0)
+
+        assert quality == 83.0
+        assert isinstance(quality, float)
 
     def test_non_contracting_skipped(self):
         """Flat equal ranges across three thirds → no VCP candidate."""
