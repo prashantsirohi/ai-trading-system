@@ -48,7 +48,7 @@ LIFECYCLE_RULE_VERSION = "lifecycle-policy-v1.1"
 PROGRESS_RULE_VERSION = "opportunity-progress-v1"
 RETENTION_RULE_VERSION = "opportunity-retention-v1.1"
 LEGACY_STAGE_CONFIDENCE_VERSION = "weekly-stage-legacy-v1"
-INVESTIGATOR_ATTRIBUTION_POLICY_VERSION = "investigator-attribution-policy-v2"
+INVESTIGATOR_ATTRIBUTION_POLICY_VERSION = "investigator-attribution-policy-v3"
 INVESTIGATOR_PRIMARY_LANE = "WEEKLY_MOMENTUM"
 INVESTIGATOR_ACTIVE_REVIEW_SCORE = 65.0
 INVESTIGATOR_CONDITIONAL_LANES: tuple[str, ...] = ("DAILY_GAINER",)
@@ -59,11 +59,20 @@ INVESTIGATOR_ATTRIBUTION_ONLY_DIMENSIONS: tuple[str, ...] = (
     "setup_quality",
     "breakout",
 )
-INVESTIGATOR_SECTOR_INDEX_POLICY_VERSION = "investigator-sector-index-taxonomy-v1"
+INVESTIGATOR_SECTOR_INDEX_POLICY_VERSION = "investigator-sector-index-taxonomy-v1.1"
 INVESTIGATOR_SECTOR_INDEX_ALIASES: dict[str, str] = {
     "pharmaceuticals & biotechnology": "pharma",
+    "healthcare": "pharma",
     "it - services": "it",
-    "minerals & mining": "metals/mining",
+    "minerals & mining": "metals",
+    "mining": "metals",
+    "industrial": "infrastructure",
+    "industrial products": "infrastructure",
+    "industrial manufacturing": "infrastructure",
+    "electrical equipment": "infrastructure",
+    "transport services": "infrastructure",
+    "logistics": "infrastructure",
+    "power": "energy",
 }
 
 

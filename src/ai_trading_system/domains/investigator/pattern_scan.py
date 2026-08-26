@@ -82,7 +82,9 @@ def build_investigator_pattern_scan(
     states = out.apply(_classify_s1_state, axis=1, result_type="expand")
     out.loc[:, "s1_promotion_state"] = states["s1_promotion_state"]
     out.loc[:, "promotion_reason"] = states["promotion_reason"]
-    return out.reset_index(drop=True)
+    out = out.reset_index(drop=True)
+    out.attrs["scanned_symbols"] = symbols
+    return out
 
 
 def best_pattern_by_symbol(patterns: pd.DataFrame) -> pd.DataFrame:

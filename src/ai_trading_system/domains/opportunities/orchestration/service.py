@@ -346,7 +346,13 @@ class OpportunityShadowOrchestrator:
             if item is not None
         )
         bundles, routing_rejections = _attach_routing(
-            _reconcile(results, raw_rank, raw_stock, as_of),
+            _reconcile(
+                results,
+                raw_rank,
+                raw_investigator,
+                raw_stock,
+                as_of,
+            ),
             raw_routing,
             as_of,
             descriptor=_descriptor_optional(
@@ -464,6 +470,20 @@ class OpportunityShadowOrchestrator:
             raw_sector,
             raw_lifecycle,
             bundles,
+        )
+        counters.update(
+            {
+                "breakout_scan_receipt_status": _artifact_receipt_status(
+                    artifacts.breakout_scan, raw_breakout
+                ),
+                "pattern_scan_receipt_status": _artifact_receipt_status(
+                    artifacts.pattern_scan, raw_pattern
+                ),
+                "supplemental_pattern_scan_receipt_status": _artifact_receipt_status(
+                    artifacts.supplemental_pattern_scan,
+                    raw_supplemental_pattern,
+                ),
+            }
         )
         sector_gate_taxonomy_counts: dict[str, int] = {}
         authoritative_context = {
@@ -1624,6 +1644,7 @@ def _sector_gate_artifact_fields(
 def _reconcile(
     results: Iterable[Any],
     raw_rank: list[dict[str, Any]],
+    raw_investigator: list[dict[str, Any]],
     raw_stock: list[dict[str, Any]],
     as_of: datetime,
 ) -> tuple[OpportunitySourceBundle, ...]:
@@ -1635,7 +1656,7 @@ def _reconcile(
         ): str(row.get("sector_name") or row.get("sector") or "unknown")
         for row in raw_rank
     }
-    for row in raw_stock:
+    for row in (*raw_investigator, *raw_stock):
         sector_name = str(row.get("sector_name") or row.get("sector") or "").strip()
         if sector_name.lower() in {"", "nan", "none", "<na>"}:
             continue
@@ -2480,6 +2501,15 @@ def _initial_counts(*args: Any) -> dict[str, Any]:
         "active_positions_with_complete_evidence": 0,
         "active_positions_fully_monitored": 0,
     }
+
+
+def _artifact_receipt_status(
+    artifact: StageArtifact | None,
+    rows: list[dict[str, Any]],
+) -> str:
+    if artifact is None:
+        return "MISSING"
+    return "SUCCESS_ROWS" if rows else "SUCCESS_ZERO_ROWS"
 
 
 def _primary_sampling_evidence(

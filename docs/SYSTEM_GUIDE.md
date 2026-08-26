@@ -139,8 +139,22 @@ would block a new-long admission; it remains non-executable. Sampling capture,
 source fidelity, 20-session coverage, discovery-session count, 20-session
 maturation, and three-window stability are fail-closed readiness inputs.
 Sector-index aliases are separately frozen under
-`investigator-sector-index-taxonomy-v1`; aliases resolve only to an existing
-primary mapping, while unresolved Consumer comparison remains fail-closed.
+`investigator-sector-index-taxonomy-v1.1`; aliases resolve only to an existing
+primary mapping. The successor corrects the Minerals/Mining target and governs
+the observed healthcare, industrial, infrastructure-adjacent, logistics, and
+power variants. Unresolved Consumer, chemicals, textiles, and other ambiguous
+comparisons remain fail-closed.
+
+Phase 3.5D introduces immutable successor
+`investigator-attribution-policy-v3`. New discovery evaluations derive
+lifecycle eligibility from the candidate-scoped, ordered transition history at
+the three-session horizon instead of freezing eligibility at discovery time. A
+discovery that never enters canonical pending follow-through closes as
+`INELIGIBLE_LIFECYCLE_SEQUENCE`; legacy v1/v2 events retain their original
+evaluation semantics. Investigator sector name and relative-strength context
+now fall back to the authoritative full-score fields, and completed no-pattern
+scans retain explicit `NONE` receipts through opportunity assembly. Opportunity
+summaries distinguish missing scan artifacts from successful zero-row scans.
 
 ADR-0007 R0 is a separate research-only calibration harness for the proposed
 four-lane pattern evidence classifier. `ai-trading-pattern-r0-calibrate` reads

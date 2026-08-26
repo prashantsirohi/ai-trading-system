@@ -138,6 +138,8 @@ def test_shadow_service_writes_and_replay_is_idempotent(tmp_path):
     )
     assert episode.rule_evaluations_json == admission["rule_evaluations"]
     assert second.summary["registry_duplicates"] == 1
+    assert first.summary["breakout_scan_receipt_status"] == "SUCCESS_ROWS"
+    assert first.summary["pattern_scan_receipt_status"] == "SUCCESS_ROWS"
     assert len(service.registry.list_open_episodes()) == 1
     with registry._connect(read_only=True) as conn:  # noqa: SLF001
         snapshot = conn.execute(
@@ -155,6 +157,75 @@ def test_shadow_service_writes_and_replay_is_idempotent(tmp_path):
     assert context["context_as_of"] == "2026-07-14T00:00:00+00:00"
     assert context["pattern_events"][0]["family"] == "VCP"
     assert context["breakout_events"][0]["tier"] == "A"
+
+
+def test_shadow_service_uses_investigator_sector_and_fractional_percentile(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+    artifacts = replace(
+        _artifacts(tmp_path),
+        ranked_signals=_artifact(
+            tmp_path,
+            "ranked_signals_without_sector",
+            "symbol_id,exchange,composite_score\nABC,NSE,95\n",
+        ),
+        investigator_scores=_artifact(
+            tmp_path,
+            "investigator_scores_with_sector",
+            "symbol_id,exchange,sector_name,final_score,verdict,trigger_reason,move_tag,RS_rank_pct_sector,pattern_evaluation_state,pattern_classification_state\n"
+            "ABC,NSE,Pharma,90,HIGH_CONVICTION,WEEKLY_GAINER,WEEKLY_MOMENTUM,0.53,NONE,NONE\n",
+        ),
+        breakout_scan=None,
+        pattern_scan=None,
+        sector_dashboard=None,
+    )
+
+    service.run(
+        run_id="investigator-sector-run",
+        stage_attempt=1,
+        artifact_set=artifacts,
+        as_of=NOW,
+        mode=OpportunityRegistryMode.SHADOW,
+        config=OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW),
+    )
+
+    with registry._connect(read_only=True) as conn:  # noqa: SLF001
+        snapshot = conn.execute(
+            """
+            SELECT sector_relative_strength_bucket, investigator_context_json
+            FROM candidate_snapshot
+            """
+        ).fetchone()
+    assert snapshot[0] == "MID"
+    context = json.loads(snapshot[1])
+    assert context["evaluation_states"]["pattern_attempted"] == "NONE"
+    assert context["evaluation_states"]["pattern"] == "NONE"
+
+
+def test_shadow_service_distinguishes_successful_zero_row_scan(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+    artifacts = replace(
+        _momentum_artifacts(tmp_path),
+        breakout_scan=_artifact(
+            tmp_path,
+            "empty_breakout_scan",
+            "symbol_id,exchange,breakout_state,qualified\n",
+        ),
+    )
+
+    result = service.run(
+        run_id="zero-breakout-run",
+        stage_attempt=1,
+        artifact_set=artifacts,
+        as_of=NOW,
+        mode=OpportunityRegistryMode.SHADOW,
+        config=OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW),
+    )
+
+    assert result.summary["breakout_rows_read"] == 0
+    assert result.summary["breakout_scan_receipt_status"] == "SUCCESS_ZERO_ROWS"
+    assert result.summary["pattern_scan_receipt_status"] == "MISSING"
 
 
 def test_fundamental_episode_is_parallel_and_persists_observation(tmp_path):

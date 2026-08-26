@@ -195,6 +195,9 @@ def _investigator_context(bundle: OpportunitySourceBundle) -> InvestigatorContex
         if bundle.sector_stage is not None
         else "UNKNOWN"
     )
+    sector_rs_bucket = _sector_rs_bucket(sector_rs)
+    if sector_rs_bucket == "UNKNOWN":
+        sector_rs_bucket = _sector_rs_bucket(base.sector_relative_strength_bucket)
     values = {
         "stage_label": stage_label,
         "stage_confidence": stage_confidence,
@@ -221,7 +224,7 @@ def _investigator_context(bundle: OpportunitySourceBundle) -> InvestigatorContex
         "breadth_velocity_bucket": _known(bundle.breadth_velocity_bucket),
         "breadth_velocity_quantile": _known(bundle.breadth_velocity_quantile),
         "regime_score_chg_5d": bundle.regime_score_chg_5d,
-        "sector_relative_strength_bucket": _sector_rs_bucket(sector_rs),
+        "sector_relative_strength_bucket": sector_rs_bucket,
         "sector_leadership": _known(
             bundle.sector_stage.sector_rotation_state
             if bundle.sector_stage is not None
@@ -248,13 +251,18 @@ def _investigator_context(bundle: OpportunitySourceBundle) -> InvestigatorContex
         if values[name] is None or str(values[name]).upper() == "UNKNOWN"
     )
     evaluation_states = dict(base.evaluation_states)
+    pattern_classification_state = (
+        _context_state(pattern_family)
+        if patterns
+        else evaluation_states.get("pattern", _context_state(pattern_family))
+    )
     evaluation_states.update(
         {
             "stage": _context_state(stage_label),
             "pattern_attempted": (
                 "KNOWN" if patterns else evaluation_states.get("pattern_attempted", "UNKNOWN")
             ),
-            "pattern": _context_state(pattern_family),
+            "pattern": pattern_classification_state,
             "setup_quality": _context_state(values["setup_quality_bucket"]),
             "breakout": _context_state(breakout_type),
             "regime": _context_state(values["confirmed_regime"]),
@@ -352,6 +360,8 @@ def _tier_rank(value: Any) -> int:
 def _sector_rs_bucket(value: Any) -> str:
     parsed = _number(value)
     if parsed >= 0:
+        if parsed <= 1:
+            parsed *= 100
         return "HIGH" if parsed >= 75 else "MID" if parsed >= 25 else "LOW"
     text = _known(value)
     if text in {"HIGH", "LEADING", "STRONG", "IMPROVING"}:

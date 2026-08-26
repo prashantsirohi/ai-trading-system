@@ -78,6 +78,7 @@ def test_investigator_pattern_scan_normalizes_caps_and_disables_stage2_and_cache
     assert bool(result.iloc[0]["source_investigator"]) is True
     assert bool(result.iloc[0]["source_ranked"]) is False
     assert result.iloc[0]["investigator_status"] == "ACTIVE_RESEARCH"
+    assert result.attrs["scanned_symbols"] == ["AAA", "BBB"]
 
 
 def test_investigator_pattern_scan_empty_active_watchlist_returns_empty(tmp_path: Path) -> None:

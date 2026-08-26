@@ -241,6 +241,13 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     assert (output_dir / "investigator_payload.json").exists()
     early = pd.read_csv(output_dir / "investigator_early_accumulation.csv")
     scores = pd.read_csv(output_dir / "investigator_scores.csv")
+    assert {
+        "pattern_evaluation_state",
+        "pattern_classification_state",
+    }.issubset(scores.columns)
+    assert set(scores["pattern_evaluation_state"]).issubset(
+        {"KNOWN", "NONE", "NOT_EVALUATED", "NOT_ELIGIBLE"}
+    )
     assert early.iloc[0]["symbol"] == "EARLY"
     assert early.iloc[0]["sector"] == "Industrials"
     assert early.iloc[0]["early_purity_bucket"] == "true_early"

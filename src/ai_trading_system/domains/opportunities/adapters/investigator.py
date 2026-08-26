@@ -202,10 +202,17 @@ def adapt_investigator_rows(
                     row,
                     "sector_relative_strength_bucket",
                     "sector_rs_bucket",
+                    "RS_rank_pct_sector",
+                    "sector_rs_value",
                 )
             ),
             sector_leadership=_text(
-                first(row, "sector_leadership", "sector_quadrant")
+                first(
+                    row,
+                    "sector_leadership",
+                    "sector_quadrant",
+                    "Quadrant_sector",
+                )
             ),
             price=price,
             volume=as_float(first(row, "volume", "latest_volume")),
@@ -286,7 +293,15 @@ def adapt_investigator_rows(
                 ),
                 "sector": _evaluation_state(
                     first(row, "sector_evaluation_state"),
-                    _text(first(row, "sector_relative_strength_bucket", "sector_rs_bucket")),
+                    _text(
+                        first(
+                            row,
+                            "sector_relative_strength_bucket",
+                            "sector_rs_bucket",
+                            "RS_rank_pct_sector",
+                            "sector_rs_value",
+                        )
+                    ),
                 ),
                 "lineage": "KNOWN" if source.artifact_hash and source.run_id else "UNKNOWN",
             },

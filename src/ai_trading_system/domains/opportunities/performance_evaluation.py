@@ -298,7 +298,7 @@ def _transition_history(
     rows = _records(
         conn.execute(
             """
-            SELECT candidate_id, to_state, transition_reason,
+            SELECT candidate_id, from_state, to_state, transition_reason,
                    CAST(transitioned_at AS DATE) AS session_date, transitioned_at
             FROM candidate_transition
             ORDER BY candidate_id, transitioned_at, transition_id
@@ -449,31 +449,54 @@ def _lifecycle_outcome(
     target_close: float,
     transitions: list[dict[str, Any]],
 ) -> str | None:
-    if not bool(event.get("lifecycle_evaluable", True)):
-        return None
     event_type = str(event["event_type"])
-    states = [
-        str(row.get("to_state") or "").lower()
+    relevant = [
+        row
         for row in transitions
         if _date(row["session_date"]) <= target_date
         and _date(row["session_date"]) >= _date(event["session_date"])
     ]
+    states = [str(row.get("to_state") or "").lower() for row in relevant]
     reasons = [
         str(row.get("transition_reason") or "").lower()
-        for row in transitions
-        if _date(row["session_date"]) <= target_date
-        and _date(row["session_date"]) >= _date(event["session_date"])
+        for row in relevant
     ]
     if event_type == "CANDIDATE_DISCOVERED" and horizon == 3:
-        if any(state == "confirmed" for state in states):
+        if str(event.get("policy_version") or "") != INVESTIGATOR_ATTRIBUTION_POLICY_VERSION:
+            if not bool(event.get("lifecycle_evaluable", True)):
+                return None
+            lifecycle_rows = relevant
+        else:
+            pending_index = next(
+                (
+                    index
+                    for index, row in enumerate(relevant)
+                    if str(row.get("from_state") or "").lower()
+                    == "pending_followthrough"
+                    or str(row.get("to_state") or "").lower()
+                    == "pending_followthrough"
+                ),
+                None,
+            )
+            if pending_index is None:
+                return "INELIGIBLE_LIFECYCLE_SEQUENCE"
+            lifecycle_rows = relevant[pending_index:]
+        lifecycle_states = [
+            str(row.get("to_state") or "").lower() for row in lifecycle_rows
+        ]
+        lifecycle_reasons = [
+            str(row.get("transition_reason") or "").lower()
+            for row in lifecycle_rows
+        ]
+        if any(state == "confirmed" for state in lifecycle_states):
             return "CONFIRMED"
         if any(
             marker in reason
-            for reason in reasons
+            for reason in lifecycle_reasons
             for marker in ("stagnation", "timeout", "expired", "no_longer_eligible")
         ):
             return "EXPIRED"
-        if any(state in FAILED_STATES for state in states):
+        if any(state in FAILED_STATES for state in lifecycle_states):
             return "FAILED"
         return "STILL_DEVELOPING"
     if event_type == "ENTRY_CONFIRMED" and horizon == 10:
@@ -554,6 +577,9 @@ def _append_evaluation_transitions(conn: duckdb.DuckDBPyConnection) -> None:
                         "FAILED": "CANONICAL_FAILURE_OBSERVED",
                         "EXPIRED": "CANONICAL_EXPIRY_OBSERVED",
                         "STILL_DEVELOPING": "NO_TERMINAL_TRANSITION_AT_3D",
+                        "INELIGIBLE_LIFECYCLE_SEQUENCE": (
+                            "CANONICAL_PENDING_FOLLOWTHROUGH_SEQUENCE_ABSENT"
+                        ),
                     }.get(outcome, "EVALUATION_OUTCOME_OBSERVED"),
                 )
         elif event_type == "ENTRY_CONFIRMED":
@@ -669,12 +695,50 @@ def _append_coverage_receipts(conn: duckdb.DuckDBPyConnection) -> None:
     snapshots = _records(
         conn.execute(
             """
-            SELECT CAST(as_of AS DATE) AS as_of_date, run_id, review_eligible,
-                   investigator_evaluation_states_json,
+            WITH observed_attempts AS (
+                SELECT CAST(as_of AS DATE) AS as_of_date, run_id, stage_attempt,
+                       MAX(observed_at) AS latest_observed_at
+                FROM candidate_snapshot
+                WHERE investigator_context_json IS NOT NULL
+                GROUP BY CAST(as_of AS DATE), run_id, stage_attempt
+            ),
+            selected_attempt AS (
+                SELECT as_of_date, run_id, stage_attempt
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY as_of_date
+                        ORDER BY latest_observed_at DESC, stage_attempt DESC,
+                                 run_id DESC
+                    ) AS attempt_rank
+                    FROM observed_attempts
+                )
+                WHERE attempt_rank = 1
+            ),
+            daily_latest AS (
+                SELECT CAST(as_of AS DATE) AS as_of_date, candidate_id, setup_id,
+                       snapshots.run_id, snapshots.stage_attempt, review_eligible,
+                       investigator_evaluation_states_json,
+                       investigator_missing_fields_json, as_of, observed_at,
+                       snapshot_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY CAST(as_of AS DATE), candidate_id, setup_id
+                           ORDER BY as_of DESC, observed_at DESC,
+                                    snapshots.stage_attempt DESC,
+                                    snapshot_id DESC
+                       ) AS recency_rank
+                FROM candidate_snapshot AS snapshots
+                INNER JOIN selected_attempt AS selected
+                  ON selected.as_of_date = CAST(snapshots.as_of AS DATE)
+                 AND selected.run_id = snapshots.run_id
+                 AND selected.stage_attempt = snapshots.stage_attempt
+                WHERE investigator_context_json IS NOT NULL
+            )
+            SELECT as_of_date, candidate_id, setup_id, run_id, stage_attempt,
+                   review_eligible, investigator_evaluation_states_json,
                    investigator_missing_fields_json
-            FROM candidate_snapshot
-            WHERE investigator_context_json IS NOT NULL
-            ORDER BY as_of_date, as_of, snapshot_id
+            FROM daily_latest
+            WHERE recency_rank = 1
+            ORDER BY as_of_date, run_id, stage_attempt, candidate_id, setup_id
             """
         )
     )
@@ -694,6 +758,11 @@ def _append_coverage_receipts(conn: duckdb.DuckDBPyConnection) -> None:
             for row in rows
         ]
         eligible = [row for row in decoded if bool(row.get("review_eligible"))]
+        pattern_evaluable = [
+            row
+            for row in decoded
+            if row["states"].get("pattern_attempted") != "NOT_ELIGIBLE"
+        ]
         definitions = {
             "stage_attribution": (
                 decoded,
@@ -705,7 +774,7 @@ def _append_coverage_receipts(conn: duckdb.DuckDBPyConnection) -> None:
                 in {"KNOWN", "NONE", "NOT_ELIGIBLE", "ERROR"},
             ),
             "pattern_known_or_none": (
-                decoded,
+                pattern_evaluable,
                 lambda row: row["states"].get("pattern") in {"KNOWN", "NONE"},
             ),
             "setup_quality": (

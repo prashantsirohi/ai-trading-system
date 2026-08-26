@@ -267,6 +267,36 @@ class InvestigatorService:
         )
         active = _merge_best_patterns(active, best_patterns)
         scores = _merge_best_patterns(scores, best_patterns)
+        scanned_pattern_symbols = {
+            *rank_scanned_symbols,
+            *(
+                str(symbol).strip().upper()
+                for symbol in investigator_patterns.attrs.get("scanned_symbols", [])
+                if str(symbol).strip()
+            ),
+        }
+        active_pattern_symbols = _symbol_values(
+            active.get("symbol_id", pd.Series(dtype=object))
+            if active is not None
+            else []
+        )
+        detected_pattern_symbols = _symbol_values(
+            best_patterns.get("symbol_id", pd.Series(dtype=object))
+            if best_patterns is not None
+            else []
+        )
+        active = _attach_pattern_evaluation_states(
+            active,
+            eligible_symbols=active_pattern_symbols,
+            scanned_symbols=scanned_pattern_symbols,
+            detected_symbols=detected_pattern_symbols,
+        )
+        scores = _attach_pattern_evaluation_states(
+            scores,
+            eligible_symbols=active_pattern_symbols,
+            scanned_symbols=scanned_pattern_symbols,
+            detected_symbols=detected_pattern_symbols,
+        )
         lifecycle_config = Stage1LifecycleConfig.from_params(context.params)
         stage1_state, stage1_transitions, stage1_lifecycle_summary = (
             build_stage1_lifecycle(
@@ -1005,6 +1035,22 @@ def _without_symbols(frame: pd.DataFrame, symbols: set[str]) -> pd.DataFrame:
     return frame.loc[~values.isin(symbols)].copy().reset_index(drop=True)
 
 
+def _symbol_values(values: object) -> set[str]:
+    if isinstance(values, pd.Series):
+        items = values.tolist()
+    else:
+        try:
+            items = list(values)  # type: ignore[arg-type]
+        except TypeError:
+            items = []
+    return {
+        str(value).strip().upper()
+        for value in items
+        if str(value or "").strip()
+        and str(value).strip().lower() not in {"nan", "none", "<na>"}
+    }
+
+
 def _combine_pattern_sources(*frames: pd.DataFrame | None) -> pd.DataFrame:
     available = [
         frame.copy()
@@ -1020,6 +1066,33 @@ def _combine_pattern_sources(*frames: pd.DataFrame | None) -> pd.DataFrame:
         )
         out = out.loc[out["symbol_id"].ne("")].copy()
     return out.reset_index(drop=True)
+
+
+def _attach_pattern_evaluation_states(
+    frame: pd.DataFrame,
+    *,
+    eligible_symbols: set[str],
+    scanned_symbols: set[str],
+    detected_symbols: set[str],
+) -> pd.DataFrame:
+    """Persist the distinction between no pattern and no evaluation."""
+
+    if frame is None or frame.empty or "symbol_id" not in frame.columns:
+        return frame
+    out = frame.copy()
+    symbols = out["symbol_id"].fillna("").astype(str).str.strip().str.upper()
+    out.loc[:, "pattern_evaluation_state"] = "NOT_ELIGIBLE"
+    out.loc[:, "pattern_classification_state"] = "NOT_ELIGIBLE"
+    eligible = symbols.isin(eligible_symbols)
+    scanned = symbols.isin(scanned_symbols)
+    detected = symbols.isin(detected_symbols)
+    out.loc[eligible, "pattern_evaluation_state"] = "NOT_EVALUATED"
+    out.loc[eligible, "pattern_classification_state"] = "NOT_EVALUATED"
+    out.loc[scanned, "pattern_evaluation_state"] = "NONE"
+    out.loc[scanned, "pattern_classification_state"] = "NONE"
+    out.loc[detected, "pattern_evaluation_state"] = "KNOWN"
+    out.loc[detected, "pattern_classification_state"] = "KNOWN"
+    return out
 
 
 def _stage_pattern_summary(

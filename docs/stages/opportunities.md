@@ -2,7 +2,7 @@
 
 - **Purpose:** Operate the optional canonical opportunity-registry shadow stage.
 - **Audience:** Operators and engineers debugging opportunity reconciliation.
-- **Last verified:** 2026-08-15
+- **Last verified:** 2026-08-26
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
@@ -17,7 +17,7 @@ The optional `opportunities` stage follows `investigator` in `PIPELINE_ORDER`. I
 
 ## Input data
 
-Required input is registered `rank/ranked_signals`. Optional inputs are full Investigator scores and Stage-1 state plus rank breakout, pattern, stock-scan, sector-dashboard, weekly-stage, and routing artifacts. In shadow routing mode full `investigator_scores` remains authoritative; routed scores are diagnostic-only. Rank and routed pattern evidence are unioned. Weekly sector structure and rank sector RS/quadrant are complementary and neither replaces the other. Missing optional inputs become audit warnings. The stage reads the weekly stage snapshot store only to enrich the registered stock-stage row with source-week and creation metadata.
+Required input is registered `rank/ranked_signals`. Optional inputs are full Investigator scores and Stage-1 state plus rank breakout, pattern, stock-scan, sector-dashboard, weekly-stage, and routing artifacts. In shadow routing mode full `investigator_scores` remains authoritative; routed scores are diagnostic-only. Rank and routed pattern evidence are unioned. Investigator sector names fill missing rank-sector names, and Investigator `sector_rs_value` or sector-percentile fields fill missing weekly sector-relative-strength context. Weekly sector structure remains preferred when available. Completed pattern scans persist `KNOWN` or `NONE`; intentionally excluded and capacity-limited rows remain distinguishable from scanner errors or unexplained absence. Missing optional inputs become audit warnings. The stage reads the weekly stage snapshot store only to enrich the registered stock-stage row with source-week and creation metadata.
 
 ## Output artifacts
 
@@ -40,7 +40,14 @@ The stage loads registered sources, adapts and reconciles by exchange/symbol, ch
 
 ## DQ
 
-Semantic identity conflicts, cross-episode inconsistencies, invalid timestamps, invalid stage locks, and incompatible setup matching are explicit conflicts or rejections. Missing optional evidence and unavailable sector structure are warnings and never become negative evidence.
+Semantic identity conflicts, cross-episode inconsistencies, invalid timestamps, invalid stage locks, and incompatible setup matching are explicit conflicts or rejections. Missing optional evidence and unavailable sector structure are warnings and never become negative evidence. Scan receipts distinguish `MISSING`, `SUCCESS_ZERO_ROWS`, and `SUCCESS_ROWS`; zero rows therefore do not imply a producer failure. Daily v3 coverage uses the latest snapshot per candidate/setup so retries cannot inflate the denominator, and pattern known-or-none is measured only among pattern-evaluable rows while `UNKNOWN` and `NOT_EVALUATED` remain failures. Under `investigator-attribution-policy-v3`, a matured discovery without an ordered pending-follow-through transition closes as `INELIGIBLE_LIFECYCLE_SEQUENCE`. Legacy v1/v2 events retain their original frozen eligibility behavior.
+
+Sector-relative performance uses `investigator-sector-index-taxonomy-v1.1`.
+Governed healthcare, mining, industrial, electrical-equipment, logistics, and
+power variants resolve only to existing primary Pharma, Metals,
+Infrastructure, or Energy indices. Ambiguous Consumer, chemicals, textiles,
+and broad-service sectors remain unmapped rather than falling back to the
+market benchmark.
 
 ## Failure modes
 

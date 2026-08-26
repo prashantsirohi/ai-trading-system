@@ -12,6 +12,7 @@ from ai_trading_system.domains.opportunities.contracts import StageConfidenceBan
 from ai_trading_system.domains.opportunities.orchestration.contracts import SourceDescriptor
 from ai_trading_system.domains.opportunities.orchestration.service import (
     _merge_sector_snapshots,
+    _reconcile,
 )
 
 
@@ -82,6 +83,81 @@ def test_investigator_freezes_weekly_primary_lane_and_complete_context():
     assert context.distance_from_sma50_pct == 10
     assert context.source_lineage[0]["stage_attempt"] == 1
     assert context.evaluation_states["pattern"] == "KNOWN"
+
+
+def test_investigator_accepts_rank_sector_percentile_and_quadrant():
+    result = adapt_investigator_rows(
+        [
+            {
+                "symbol_id": "ABC",
+                "final_score": "67",
+                "trigger_reason": "WEEKLY_GAINER",
+                "move_tag": "WEEKLY_MOMENTUM",
+                "RS_rank_pct_sector": "0.53",
+                "Quadrant_sector": "Improving",
+            },
+            {
+                "symbol_id": "XYZ",
+                "final_score": "68",
+                "trigger_reason": "WEEKLY_GAINER",
+                "move_tag": "WEEKLY_MOMENTUM",
+                "sector_rs_value": "0.84",
+            },
+        ],
+        source=SOURCE,
+        as_of=NOW,
+    )
+
+    context = result.records[0].value.investigator_context
+    assert context.sector_relative_strength_bucket == "0.53"
+    assert context.sector_leadership == "IMPROVING"
+    assert context.evaluation_states["sector"] == "KNOWN"
+    fallback_context = result.records[1].value.investigator_context
+    assert fallback_context.sector_relative_strength_bucket == "0.84"
+    assert fallback_context.evaluation_states["sector"] == "KNOWN"
+
+
+def test_reconcile_fills_missing_rank_sector_from_investigator():
+    rank_rows = [{"symbol_id": "ABC", "exchange": "NSE", "composite_score": 88}]
+    investigator_rows = [{
+        "symbol_id": "ABC",
+        "exchange": "NSE",
+        "sector_name": "Pharma",
+        "final_score": 67,
+    }]
+    rank_result = adapt_ranking_rows(rank_rows, source=SOURCE, as_of=NOW)
+    investigator_result = adapt_investigator_rows(
+        investigator_rows,
+        source=SOURCE,
+        as_of=NOW,
+    )
+
+    bundle = _reconcile(
+        (rank_result, investigator_result),
+        rank_rows,
+        investigator_rows,
+        [],
+        NOW,
+    )[0]
+
+    assert bundle.sector_name == "Pharma"
+
+
+def test_investigator_preserves_completed_no_pattern_classification():
+    result = adapt_investigator_rows(
+        [{
+            "symbol_id": "ABC",
+            "final_score": "67",
+            "pattern_evaluation_state": "NONE",
+            "pattern_classification_state": "NONE",
+        }],
+        source=SOURCE,
+        as_of=NOW,
+    )
+
+    context = result.records[0].value.investigator_context
+    assert context.evaluation_states["pattern_attempted"] == "NONE"
+    assert context.evaluation_states["pattern"] == "NONE"
 
 
 def test_stock_stage_separates_provisional_and_locked():

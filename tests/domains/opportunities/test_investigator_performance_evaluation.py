@@ -10,6 +10,10 @@ import pytest
 from ai_trading_system.domains.opportunities.performance_evaluation import (
     mature_performance_events,
 )
+from ai_trading_system.domains.opportunities.orchestration.contracts import (
+    INVESTIGATOR_SECTOR_INDEX_ALIASES,
+    INVESTIGATOR_SECTOR_INDEX_POLICY_VERSION,
+)
 from ai_trading_system.pipeline.registry import RegistryStore
 
 
@@ -100,6 +104,7 @@ def _insert_event(
     event_type: str,
     event_date: date,
     anchor: float,
+    policy_version: str = "investigator-attribution-policy-v3",
 ) -> None:
     conn.execute(
         """
@@ -109,11 +114,11 @@ def _insert_event(
             anchor_price_basis, source_snapshot_id, source_transition_id,
             attribution_mode, primary_eligible, context_as_of, context_json,
             source_run_id, source_artifact_hash, data_quality_status,
-            semantic_payload_hash, idempotency_key
+            semantic_payload_hash, idempotency_key, policy_version
         ) VALUES (?, 'candidate-1', 'setup-1', 'AAA', 'NSE', 'Finance',
                   'overlap-1', ?, ?, ?, ?, 'DECISION_SESSION_CLOSE',
                   'snapshot-1', NULL, 'OBSERVED_AT_DECISION', TRUE, ?, '{}',
-                  'run-1', 'hash-1', 'PENDING', ?, ?)
+                  'run-1', 'hash-1', 'PENDING', ?, ?, ?)
         """,
         [
             event_id,
@@ -124,6 +129,7 @@ def _insert_event(
             datetime.combine(event_date, datetime.min.time()),
             f"semantic-{event_id}",
             f"idempotency-{event_id}",
+            policy_version,
         ],
     )
 
@@ -168,6 +174,13 @@ def test_matures_discovery_and_confirmed_entry_metrics(tmp_path: Path) -> None:
             UPDATE investigator_performance_event
             SET invalidation_price = 103.0
             WHERE event_id = 'event-entry'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE investigator_performance_event
+            SET lifecycle_evaluable = FALSE
+            WHERE event_id = 'event-discovery'
             """
         )
 
@@ -241,12 +254,12 @@ def test_matures_discovery_and_confirmed_entry_metrics(tmp_path: Path) -> None:
     assert executable[1] == 103.0
     assert executable[2] == pytest.approx(103.0515)
     assert executable[3] == "investigator-shadow-fill-v1"
-    assert executable[4] == "investigator-attribution-policy-v1"
+    assert executable[4] == "investigator-attribution-policy-v3"
     assert stop_day == 1
     assert {"PENDING_3D", "CONFIRMED", "EXECUTABLE", "SUSTAINED_10D"}.issubset(
         evaluation_states
     )
-    assert evaluation_policy_versions == {"investigator-attribution-policy-v1"}
+    assert evaluation_policy_versions == {"investigator-attribution-policy-v3"}
     assert outputs["investigator_discovery_scorecard"]
     assert outputs["investigator_entry_scorecard"]
     assert outputs["investigator_executable_scorecard"]
@@ -294,6 +307,8 @@ def test_daily_coverage_receipt_preserves_unknown_failure_modes(
         "lineage": "KNOWN",
     }
     unknown_states = {key: "UNKNOWN" for key in known_states}
+    unknown_states["pattern_attempted"] = "NOT_ELIGIBLE"
+    unknown_states["pattern"] = "NOT_ELIGIBLE"
     with registry._writer() as conn:  # noqa: SLF001
         for index, states in enumerate((known_states, unknown_states)):
             row = {
@@ -326,11 +341,78 @@ def test_daily_coverage_receipt_preserves_unknown_failure_modes(
         for row in outputs["investigator_coverage_receipt"]
         if row["metric_name"] == "setup_quality"
     )
+    pattern = next(
+        row
+        for row in outputs["investigator_coverage_receipt"]
+        if row["metric_name"] == "pattern_known_or_none"
+    )
     assert stage["coverage_pct"] == 50
     assert stage["status"] == "FAIL"
     assert stage["unexplained_unknown_count"] == 1
     assert setup["coverage_pct"] == 100
     assert setup["status"] == "PASS"
+    assert pattern["denominator"] == 1
+    assert pattern["coverage_pct"] == 100
+    assert pattern["status"] == "PASS"
+
+
+def test_daily_coverage_uses_latest_candidate_snapshot_only(tmp_path: Path) -> None:
+    ohlcv = tmp_path / "ohlcv.duckdb"
+    _seed_market(ohlcv)
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    base = {
+        "candidate_id": "candidate-retry",
+        "setup_id": "setup-retry",
+        "as_of": datetime(2026, 1, 2),
+        "run_id": "shadow-run",
+        "stage_name": "opportunities",
+        "source_artifact_type": "investigator_scores",
+        "source_artifact_path": "/tmp/scores.csv",
+        "source_artifact_hash": "hash",
+        "lifecycle_state": "investigating",
+        "followthrough_status": "unknown",
+        "days_in_state": 0,
+        "days_without_progress": 0,
+        "active_position": False,
+        "latest_action": "watch",
+        "eligibility": "unknown",
+        "contract_version": "opportunity-contract-v1",
+        "serialization_version": "opportunity-serialization-v1",
+        "snapshot_json": "{}",
+        "review_eligible": False,
+        "investigator_context_json": "{}",
+        "investigator_missing_fields_json": "[]",
+    }
+    known = {
+        "stage": "KNOWN", "pattern_attempted": "NONE", "pattern": "NONE",
+        "setup_quality": "UNKNOWN", "breakout": "NONE", "regime": "KNOWN",
+        "breadth": "KNOWN", "sector": "KNOWN", "lineage": "KNOWN",
+    }
+    with registry._writer() as conn:  # noqa: SLF001
+        for attempt, states in ((1, {key: "UNKNOWN" for key in known}), (2, known)):
+            row = {
+                **base,
+                "snapshot_id": f"retry-snapshot-{attempt}",
+                "observed_at": datetime(2026, 1, 2, attempt),
+                "stage_attempt": attempt,
+                "semantic_payload_hash": f"retry-semantic-{attempt}",
+                "idempotency_key": f"retry-idempotency-{attempt}",
+                "investigator_evaluation_states_json": json.dumps(states),
+            }
+            conn.execute(
+                f"INSERT INTO candidate_snapshot ({', '.join(row)}) "
+                f"VALUES ({', '.join('?' for _ in row)})",
+                list(row.values()),
+            )
+
+    outputs = mature_performance_events(registry, ohlcv_db_path=ohlcv)
+    stage = next(
+        row
+        for row in outputs["investigator_coverage_receipt"]
+        if row["metric_name"] == "stage_attribution"
+    )
+    assert stage["denominator"] == 1
+    assert stage["coverage_pct"] == 100
 
 
 def test_missing_sector_mapping_is_partial_not_fallback(tmp_path: Path) -> None:
@@ -418,6 +500,14 @@ def test_governed_sector_alias_resolves_primary_index_mapping(tmp_path: Path) ->
     assert not row[2] or "sector_index_mapping_missing" not in row[2]
 
 
+def test_sector_taxonomy_successor_uses_only_governed_primary_targets() -> None:
+    assert INVESTIGATOR_SECTOR_INDEX_POLICY_VERSION.endswith("v1.1")
+    assert INVESTIGATOR_SECTOR_INDEX_ALIASES["minerals & mining"] == "metals"
+    assert INVESTIGATOR_SECTOR_INDEX_ALIASES["industrial products"] == "infrastructure"
+    assert INVESTIGATOR_SECTOR_INDEX_ALIASES["power"] == "energy"
+    assert "consumer" not in INVESTIGATOR_SECTOR_INDEX_ALIASES
+
+
 def test_missing_pending_3d_sequence_does_not_force_transition_label(
     tmp_path: Path,
 ) -> None:
@@ -431,6 +521,7 @@ def test_missing_pending_3d_sequence_does_not_force_transition_label(
             event_type="CANDIDATE_DISCOVERED",
             event_date=sessions[0],
             anchor=100.0,
+            policy_version="investigator-attribution-policy-v2",
         )
         conn.execute(
             """
@@ -454,6 +545,52 @@ def test_missing_pending_3d_sequence_does_not_force_transition_label(
         ).fetchone()[0]
     assert outcome is None
     assert outputs["investigator_transition_matrix"] == []
+
+
+def test_v3_missing_pending_sequence_closes_as_ineligible(tmp_path: Path) -> None:
+    ohlcv = tmp_path / "ohlcv.duckdb"
+    sessions = _seed_market(ohlcv)
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    with registry._writer() as conn:  # noqa: SLF001
+        _insert_event(
+            conn,
+            event_id="event-v3-no-pending-sequence",
+            event_type="CANDIDATE_DISCOVERED",
+            event_date=sessions[0],
+            anchor=100.0,
+        )
+        conn.execute(
+            """
+            UPDATE investigator_performance_event
+            SET lifecycle_evaluable = FALSE
+            WHERE event_id = 'event-v3-no-pending-sequence'
+            """
+        )
+
+    outputs = mature_performance_events(registry, ohlcv_db_path=ohlcv)
+
+    with registry._connect(read_only=True) as conn:  # noqa: SLF001
+        outcome = conn.execute(
+            """
+            SELECT lifecycle_outcome
+            FROM investigator_performance_horizon
+            WHERE event_id = 'event-v3-no-pending-sequence'
+              AND horizon_sessions = 3
+            """
+        ).fetchone()[0]
+        states = {
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT to_state
+                FROM investigator_evaluation_transition
+                WHERE candidate_id = 'candidate-1'
+                """
+            ).fetchall()
+        }
+    assert outcome == "INELIGIBLE_LIFECYCLE_SEQUENCE"
+    assert states == {"PENDING_3D", "INELIGIBLE_LIFECYCLE_SEQUENCE"}
+    assert outputs["investigator_transition_matrix"]
 
 
 def test_projects_discovery_to_legacy_without_repainting_context(
