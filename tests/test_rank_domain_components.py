@@ -987,3 +987,40 @@ def test_dataframe_fingerprint_handles_duplicate_column_labels() -> None:
 
     assert fingerprint == service.dataframe_fingerprint(frame.copy())
     assert fingerprint != service.dataframe_fingerprint(changed)
+
+
+def test_filter_ranked_scores_enforces_eligibility_only_when_requested() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol_id": "BLOCKED",
+                "composite_score": 99.0,
+                "composite_score_adjusted": 99.0,
+                "eligible_rank": False,
+            },
+            {
+                "symbol_id": "ELIGIBLE",
+                "composite_score": 90.0,
+                "composite_score_adjusted": 90.0,
+                "eligible_rank": True,
+            },
+        ]
+    )
+
+    universe = filter_ranked_scores(
+        frame, min_score=0.0, top_n=None, eligible_only=False
+    )
+    shortlist = filter_ranked_scores(
+        frame, min_score=0.0, top_n=1, eligible_only=True
+    )
+
+    assert universe["symbol_id"].tolist() == ["BLOCKED", "ELIGIBLE"]
+    assert shortlist["symbol_id"].tolist() == ["ELIGIBLE"]
+
+    with pytest.raises(ValueError, match="eligible_rank is required"):
+        filter_ranked_scores(
+            frame.drop(columns="eligible_rank"),
+            min_score=0.0,
+            top_n=1,
+            eligible_only=True,
+        )

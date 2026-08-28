@@ -6,7 +6,11 @@ import pandas as pd
 import duckdb
 from pathlib import Path
 
-from ai_trading_system.domains.ranking.market_stage import get_market_stage
+from ai_trading_system.domains.ranking.eligibility import apply_rank_eligibility
+from ai_trading_system.domains.ranking.market_stage import (
+    get_market_stage,
+    resolve_rank_weekly_stage_context,
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -29,7 +33,7 @@ def _make_snapshot_db(tmp_path: Path, rows: list[dict]) -> str:
         )
     """)
     if rows:
-        df = pd.DataFrame(rows)
+        df = pd.DataFrame(rows)  # noqa: F841 - DuckDB replacement scan input
         conn.execute("INSERT INTO weekly_stage_snapshot SELECT * FROM df")
     conn.close()
     return db_path
@@ -132,6 +136,133 @@ def test_fresh_governed_stage_replaces_stale_legacy_s4(tmp_path):
     assert result["source_as_of"] == "2026-08-27"
     assert result["source_age_days"] == 1
     assert result["freshness_status"] == "FRESH"
+
+
+def test_rank_context_governed_s2_overrides_conflicting_legacy_s4(tmp_path):
+    db = _make_snapshot_db(
+        tmp_path,
+        [
+            {
+                "symbol": "MOREPENLAB", "week_end_date": "2026-08-28",
+                "stage_label": "S4", "stage_confidence": 0.9,
+                "stage_transition": "NONE", "ma10w": 100, "ma30w": 110,
+                "ma40w": 108, "ma30w_slope_4w": -0.01,
+                "weekly_rs_score": 30.0, "weekly_volume_ratio": 0.8,
+                "support_level": 90.0, "resistance_level": 105.0,
+                "created_at": "2026-08-28 00:00:00", "run_id": "legacy",
+            }
+        ],
+    )
+    governed = pd.DataFrame(
+        [
+            {
+                "exchange": "NSE", "symbol_id": "MOREPENLAB",
+                "effective_stage": "stage_2_advancing",
+                "as_of": "2026-08-27T00:00:00",
+                "source_artifact_hash": "governed-hash",
+                "observation_json": (
+                    '{"stage_confidence_score": 100, "stage_transition": "none", '
+                    '"weeks_in_locked_stage": 1}'
+                ),
+            }
+        ]
+    )
+
+    context, metadata = resolve_rank_weekly_stage_context(
+        db, asof="2026-08-28", governed_stages=governed,
+        min_classified_symbols=1,
+    )
+
+    assert metadata["source"] == "control_plane.duckdb:weekly_stock_stage_history"
+    assert metadata["source_as_of"] == "2026-08-27"
+    assert metadata["source_age_days"] == 1
+    assert context.iloc[0]["stage_label"] == "S2"
+    assert context.iloc[0]["stage_confidence"] == pytest.approx(1.0)
+    assert context.iloc[0]["bars_in_stage"] == 1
+
+    from ai_trading_system.domains.ranking.ranker import StockRanker
+
+    ranker = StockRanker.__new__(StockRanker)
+    attached = ranker._attach_weekly_stage_context(
+        pd.DataFrame(
+            [{"symbol_id": "MOREPENLAB", "exchange": "NSE", "close": 106.19}]
+        ),
+        "2026-08-28",
+        weekly_stage_context=context,
+    )
+    bonused = ranker._apply_stage2_age_bonuses(attached)
+    eligible = apply_rank_eligibility(
+        bonused, weekly_stage_gate_enabled=True
+    )
+
+    assert bonused.iloc[0]["weekly_stage_label"] == "S2"
+    assert bonused.iloc[0]["stage2_freshness_bonus"] == pytest.approx(4.0)
+    assert bool(eligible.iloc[0]["eligible_rank"])
+    assert eligible.iloc[0]["rejection_reasons"] == []
+
+
+def test_rank_context_excludes_future_governed_row_and_uses_fresh_legacy(tmp_path):
+    db = _make_snapshot_db(
+        tmp_path,
+        [
+            {
+                "symbol": "MOREPENLAB", "week_end_date": "2026-08-28",
+                "stage_label": "S4", "stage_confidence": 0.9,
+                "stage_transition": "NONE", "ma10w": 100, "ma30w": 110,
+                "ma40w": 108, "ma30w_slope_4w": -0.01,
+                "weekly_rs_score": 30.0, "weekly_volume_ratio": 0.8,
+                "support_level": 90.0, "resistance_level": 105.0,
+                "created_at": "2026-08-28 00:00:00", "run_id": "legacy",
+            }
+        ],
+    )
+    future = pd.DataFrame(
+        [
+            {
+                "exchange": "NSE", "symbol_id": "MOREPENLAB",
+                "effective_stage": "stage_2_advancing",
+                "as_of": "2026-08-29T00:00:00",
+                "observation_json": '{"stage_confidence_score": 100}',
+            }
+        ]
+    )
+
+    context, metadata = resolve_rank_weekly_stage_context(
+        db, asof="2026-08-28", governed_stages=future,
+        min_classified_symbols=1,
+    )
+
+    assert metadata["source"] == "ohlcv.duckdb:weekly_stage_snapshot"
+    assert metadata["fallback_reason"] == "governed_source_future_or_invalid"
+    assert context.iloc[0]["stage_label"] == "S4"
+    assert context.iloc[0]["weekly_stage_as_of"] == pd.Timestamp("2026-08-28").date()
+
+
+def test_rank_context_does_not_reuse_stale_legacy_row(tmp_path):
+    db = _make_snapshot_db(
+        tmp_path,
+        [
+            {
+                "symbol": "MOREPENLAB", "week_end_date": "2026-05-01",
+                "stage_label": "S4", "stage_confidence": 0.9,
+                "stage_transition": "NONE", "ma10w": 100, "ma30w": 110,
+                "ma40w": 108, "ma30w_slope_4w": -0.01,
+                "weekly_rs_score": 30.0, "weekly_volume_ratio": 0.8,
+                "support_level": 90.0, "resistance_level": 105.0,
+                "created_at": "2026-05-01 00:00:00", "run_id": "legacy",
+            }
+        ],
+    )
+
+    context, metadata = resolve_rank_weekly_stage_context(
+        db, asof="2026-08-28", governed_stages=pd.DataFrame(),
+        min_classified_symbols=1, max_source_age_days=10,
+    )
+
+    assert context.empty
+    assert metadata["source"] is None
+    assert metadata["freshness_status"] == "STALE"
+    assert "legacy_source_stale" in metadata["fallback_reason"]
 
 
 def test_stale_legacy_stage_cannot_route_market_as_s4(tmp_path):

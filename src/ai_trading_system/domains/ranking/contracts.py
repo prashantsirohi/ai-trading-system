@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-RANK_INPUT_CONTRACT_VERSION = "point_in_time_multi_exchange_v3"
+RANK_INPUT_CONTRACT_VERSION = "point_in_time_multi_exchange_v4"
 
 
 @dataclass(frozen=True)
@@ -152,6 +152,11 @@ RANKED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "weekly_stage_transition",
     "bars_in_stage",
     "stage_entry_date",
+    "weekly_stage_source",
+    "weekly_stage_as_of",
+    "weekly_stage_age_days",
+    "weekly_stage_source_hash",
+    "weekly_stage_fallback_reason",
     "rs_vs_nifty_5",
     "rs_vs_nifty_10",
     "rs_vs_nifty_20",

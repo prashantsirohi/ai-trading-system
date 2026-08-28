@@ -104,6 +104,8 @@ class StockRanker:
         previous_ranked: pd.DataFrame | None = None,
         apply_penalty_adjustment: bool = False,
         weekly_stage_gate: bool = False,
+        weekly_stage_context: pd.DataFrame | None = None,
+        eligible_only: bool = False,
         regime: str | None = None,
     ) -> pd.DataFrame:
         """
@@ -155,7 +157,12 @@ class StockRanker:
         scores = self._compute_above_200dma(scores, date, inputs)
         scores = compute_factor_scores(scores, weights=weights)
         scores = self._compute_stage2(scores, date, exchanges, inputs)
-        scores = self._attach_weekly_stage_context(scores, date, inputs)
+        scores = self._attach_weekly_stage_context(
+            scores,
+            date,
+            inputs,
+            weekly_stage_context=weekly_stage_context,
+        )
         if weekly_stage_gate:
             scores = self._apply_weekly_stage_gate(scores, date, inputs)
         scores.loc[:, "rank_mode"] = rank_mode
@@ -204,7 +211,12 @@ class StockRanker:
         if apply_penalty_adjustment:
             scores.loc[:, "composite_score"] = scores["composite_score_adjusted"]
         # scores = self._apply_1yr_penalty(scores, weights)
-        scores = filter_ranked_scores(scores, min_score=min_score, top_n=top_n)
+        scores = filter_ranked_scores(
+            scores,
+            min_score=min_score,
+            top_n=top_n,
+            eligible_only=eligible_only,
+        )
         scores = self._attach_phase1_symbol_features(scores, date, exchanges, inputs)
         return select_rank_output_columns(scores)
 
@@ -525,15 +537,20 @@ class StockRanker:
         data: pd.DataFrame,
         date: str,
         inputs: RankInputSnapshot | None = None,
+        *,
+        weekly_stage_context: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         """Join latest weekly stage snapshot onto rank candidates."""
         if data.empty:
             return data
-        try:
-            snap = inputs.weekly_stage(self.ohlcv_db_path) if inputs is not None else read_latest_snapshot(self.ohlcv_db_path, asof=date)
-        except Exception as exc:
-            logger.warning("Could not load weekly stage snapshot: %s", exc)
-            return data
+        if weekly_stage_context is not None:
+            snap = weekly_stage_context.copy()
+        else:
+            try:
+                snap = inputs.weekly_stage(self.ohlcv_db_path) if inputs is not None else read_latest_snapshot(self.ohlcv_db_path, asof=date)
+            except Exception as exc:
+                logger.warning("Could not load weekly stage snapshot: %s", exc)
+                return data
 
         if snap.empty:
             return data
@@ -547,6 +564,12 @@ class StockRanker:
                 "stage_transition",
                 "bars_in_stage",
                 "stage_entry_date",
+                "exchange",
+                "weekly_stage_source",
+                "weekly_stage_as_of",
+                "weekly_stage_age_days",
+                "weekly_stage_source_hash",
+                "weekly_stage_fallback_reason",
             ]
             if column in snap.columns
         ]
@@ -558,6 +581,9 @@ class StockRanker:
                 "stage_transition": "weekly_stage_transition",
             }
         )
+        join_columns = ["symbol_id"]
+        if "exchange" in snap.columns and "exchange" in data.columns:
+            join_columns.append("exchange")
         output = data.drop(
             columns=[
                 "weekly_stage_label",
@@ -565,10 +591,15 @@ class StockRanker:
                 "weekly_stage_transition",
                 "bars_in_stage",
                 "stage_entry_date",
+                "weekly_stage_source",
+                "weekly_stage_as_of",
+                "weekly_stage_age_days",
+                "weekly_stage_source_hash",
+                "weekly_stage_fallback_reason",
             ],
             errors="ignore",
         )
-        return output.merge(snap, on="symbol_id", how="left")
+        return output.merge(snap, on=join_columns, how="left")
 
     def _apply_weekly_stage_gate(
         self,

@@ -597,29 +597,35 @@ class RankOrchestrationService:
         # Resolve the market regime from breadth snapshot (or override), then
         # merge the resulting StrategyConfig into effective_params so all
         # downstream lambdas use it — without mutating context.params.
-        from ai_trading_system.domains.ranking.market_stage import get_market_stage
+        from ai_trading_system.domains.ranking.market_stage import (
+            get_market_stage,
+            resolve_rank_weekly_stage_context,
+        )
         from ai_trading_system.domains.ranking.strategy_router import route as _route_stage
         from ai_trading_system.domains.opportunities.coverage import read_stock_stage_as_of
 
         effective_params = dict(context.params)
+        governed_stages = None
+        if context.registry is not None:
+            try:
+                governed_stages = read_stock_stage_as_of(
+                    context.registry,
+                    as_of=context.run_date,
+                    exchange="NSE",
+                )
+            except Exception as exc:
+                warnings.append(f"governed weekly-stage source unavailable: {exc}")
         stage_override = effective_params.get("market_stage_override")
         if stage_override:
             stage_info = {"market_stage": stage_override, "method": "override"}
         else:
-            governed_stages = None
-            if context.registry is not None:
-                try:
-                    governed_stages = read_stock_stage_as_of(
-                        context.registry,
-                        as_of=context.run_date,
-                        exchange="NSE",
-                    )
-                except Exception as exc:
-                    warnings.append(f"governed market-stage source unavailable: {exc}")
             stage_info = get_market_stage(
                 str(context.db_path),
                 asof=context.run_date,
                 governed_stages=governed_stages,
+                min_classified_symbols=int(
+                    effective_params.get("market_stage_min_classified_symbols", 200)
+                ),
                 max_source_age_days=int(effective_params.get("market_stage_max_age_days", 10)),
             )
             if (
@@ -631,6 +637,27 @@ class RankOrchestrationService:
                     f"status={stage_info.get('freshness_status')} "
                     f"reason={stage_info.get('fallback_reason')}"
                 )
+        weekly_stage_context, weekly_stage_context_info = resolve_rank_weekly_stage_context(
+            str(context.db_path),
+            asof=context.run_date,
+            governed_stages=governed_stages,
+            min_classified_symbols=int(
+                effective_params.get("market_stage_min_classified_symbols", 200)
+            ),
+            max_source_age_days=int(
+                effective_params.get("market_stage_max_age_days", 10)
+            ),
+        )
+        if weekly_stage_context_info.get("source") is None:
+            warnings.append(
+                "weekly-stage rank context unavailable: "
+                f"reason={weekly_stage_context_info.get('fallback_reason')}"
+            )
+        elif weekly_stage_context_info.get("fallback_reason"):
+            warnings.append(
+                "weekly-stage rank context using compatibility fallback: "
+                f"reason={weekly_stage_context_info.get('fallback_reason')}"
+            )
         cfg = _route_stage(stage_info["market_stage"])
         logger.info(
             "market_stage=%s (method=%s) → rank_mode=%s weekly_stage_gate=%s multiplier=%.1f",
@@ -731,6 +758,8 @@ class RankOrchestrationService:
                 "market_stage": stage_info["market_stage"],
                 "market_regime": regime_snapshot.to_dict() if regime_snapshot is not None else None,
                 "regime_profile": regime_profile.to_dict() if regime_profile is not None else None,
+                "weekly_stage_context": weekly_stage_context_info,
+                "eligible_only": True,
             },
             task_status=task_status,
             previous_attempt=previous_attempt,
@@ -745,6 +774,8 @@ class RankOrchestrationService:
                     effective_params.get("rank_apply_penalty_adjustment", False)
                 ),
                 weekly_stage_gate=bool(effective_params.get("weekly_stage_gate", False)),
+                weekly_stage_context=weekly_stage_context,
+                eligible_only=True,
                 # Phase 5: regime-aware factor weights. Pass the
                 # confirmed regime so the ranker overlays per-regime
                 # weights (risk_off → quality bias, strong_bull →
@@ -805,6 +836,8 @@ class RankOrchestrationService:
                 "exchanges": rank_exchanges,
                 "market_stage": stage_info["market_stage"],
                 "market_regime": regime_snapshot.to_dict() if regime_snapshot is not None else None,
+                "weekly_stage_context": weekly_stage_context_info,
+                "eligible_only": False,
             },
             task_status=task_status,
             previous_attempt=previous_attempt,
@@ -819,6 +852,8 @@ class RankOrchestrationService:
                     effective_params.get("rank_apply_penalty_adjustment", False)
                 ),
                 weekly_stage_gate=bool(effective_params.get("weekly_stage_gate", False)),
+                weekly_stage_context=weekly_stage_context,
+                eligible_only=False,
                 regime=regime_snapshot.regime if regime_snapshot is not None else None,
             ),
             optional=False,
@@ -1752,6 +1787,7 @@ class RankOrchestrationService:
                 regime_phase_result.to_dict() if regime_phase_result is not None else None
             ),
             "market_stage_info": stage_info,
+            "weekly_stage_context": weekly_stage_context_info,
             "regime_profile": regime_profile.to_dict() if regime_profile is not None else None,
             "active_factor_weights": active_factor_weights,
             "effective_min_score": float(effective_params.get("min_score", 0.0)),

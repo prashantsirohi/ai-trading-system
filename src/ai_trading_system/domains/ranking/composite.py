@@ -216,10 +216,15 @@ def filter_ranked_scores(
     *,
     min_score: float,
     top_n: int | None,
+    eligible_only: bool = False,
 ) -> pd.DataFrame:
     """Apply output ordering and score cutoffs while preserving existing semantics."""
     score_column = "composite_score_adjusted" if "composite_score_adjusted" in frame.columns else "composite_score"
     ranked = frame.sort_values(score_column, ascending=False)
+    if eligible_only and "eligible_rank" not in ranked.columns:
+        raise ValueError("eligible_rank is required for eligible-only shortlist selection")
+    if eligible_only:
+        ranked = ranked.loc[ranked["eligible_rank"].fillna(False).astype(bool)].copy()
     ranked = ranked[pd.to_numeric(ranked[score_column], errors="coerce").fillna(0.0) >= min_score]
     if top_n:
         ranked = ranked.head(top_n)

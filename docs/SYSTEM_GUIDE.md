@@ -56,7 +56,13 @@ Rank market-stage routing reads the latest correction-aware NSE stock-stage
 breadth from governed `weekly_stock_stage_history` as of the decision date. The
 legacy mutable `ohlcv.weekly_stage_snapshot` is compatibility fallback only and
 cannot route the market when its newest source row is more than ten calendar
-days old. A fresh S4 classification still disables breakout detection. When
+days old. The same source choice now owns each NSE security's weekly-stage
+label, confidence, age bonus, and weekly gate inside ranking; row-level source,
+as-of, age, hash, and fallback lineage are retained in rank artifacts. A fresh
+S4 classification still disables breakout detection. `ranked_universe` keeps
+ineligible rows for audit, while `ranked_signals` applies `eligible_rank` before
+score thresholding and `top_n`, so a hard eligibility failure cannot enter the
+actionable shortlist. When
 breakouts are active, the detector receives the complete per-exchange
 `ranked_universe` for relative-strength and sector-percentile context; its
 output remains separate from the actionable `ranked_signals` shortlist.

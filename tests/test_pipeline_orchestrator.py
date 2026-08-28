@@ -833,10 +833,12 @@ def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_can
             "sector_rs_value": 0.80,
             "stage2_score": float(80 - (i % 10)),
             "stage2_label": "strong_stage2" if i <= 5 else "stage2",
+            "eligible_rank": True,
         }
         for i in range(1, 31)
     ]
     universe_rows[-1]["exchange"] = "BSE"
+    universe_rows[0]["eligible_rank"] = False
     universe = pd.DataFrame(universe_rows)
     rank_calls: list[dict] = []
     breakout_contexts: list[pd.DataFrame] = []
@@ -858,6 +860,8 @@ def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_can
         def rank_all(self, **kwargs):
             rank_calls.append(dict(kwargs))
             output = universe.copy()
+            if bool(kwargs.get("eligible_only", False)):
+                output = output.loc[output["eligible_rank"]].copy()
             min_score = float(kwargs.get("min_score", 0.0) or 0.0)
             top_n = kwargs.get("top_n")
             if min_score:
@@ -927,6 +931,8 @@ def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_can
 
     assert len(ranked_shortlist) == 20
     assert len(ranked_universe) == 30
+    assert "SYM01" not in set(ranked_shortlist["symbol_id"])
+    assert "SYM01" in set(ranked_universe["symbol_id"])
     assert len(stock_scan) == 30
     assert set(pattern_scan["exchange"].astype(str)) == {"NSE", "BSE"}
     assert "stage2_label" in stock_scan.columns
@@ -937,6 +943,8 @@ def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_can
     assert result.metadata["ranked_rows"] == 20
     assert result.metadata["ranked_universe_rows"] == 30
     assert len(rank_calls) == 2
+    assert rank_calls[0]["eligible_only"] is True
+    assert rank_calls[1]["eligible_only"] is False
     assert all(call["exchanges"] == ["NSE", "BSE"] for call in rank_calls)
     assert [len(frame) for frame in breakout_contexts] == [29, 1]
     assert set(pd.concat(breakout_contexts)["symbol_id"]) == set(universe["symbol_id"])

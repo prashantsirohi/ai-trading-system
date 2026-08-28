@@ -84,6 +84,10 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
    calendar days old. Use `ohlcv.duckdb::weekly_stage_snapshot` only as a
    compatibility fallback under the same coverage/freshness contract; otherwise
    return the explicit MIXED fallback with source and freshness diagnostics.
+   Reuse that governed-first contract for the per-symbol weekly-stage context:
+   normalize canonical stages into `S1`–`S4`, retain row-level source/as-of/hash
+   lineage, and never let a future or stale row drive freshness bonuses or the
+   weekly gate. BSE rows receive no synthetic NSE stage join.
    Merge the resulting `StrategyConfig` (rank mode, breakout activation, weekly
    stage gate, execution regime) into `effective_params`.
 3. Build one `RankInputSnapshot` with an inclusive run-date cutoff and route the
@@ -92,13 +96,17 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
    within that decision. The current default decision-history version is
    `point_in_time_v2`, and the rank-core task fingerprint includes this input
    contract so retries cannot reuse pre-fix output.
-   The current `point_in_time_multi_exchange_v3` input contract partitions ADX,
-   SMA, highs, returns, volume, and Stage 2 inputs by `(symbol_id, exchange)`.
+   The current `point_in_time_multi_exchange_v4` input contract partitions ADX,
+   SMA, highs, returns, volume, Stage 2, and governed weekly-stage inputs by
+   `(symbol_id, exchange)` and fingerprints the resolved weekly-stage context.
    NSE market regime and sector context remain the common India-market context;
    unavailable BSE delivery or fundamental fields degrade through existing
    missing-feature confidence rules rather than being synthesized.
 4. Run resumable tasks in order — each is fingerprinted, persisted in `task_status.json`, and skipped on retry if the fingerprint matches (`service.py:495`–end of `run_default`):
-   - `rank_core` → combined NSE+BSE `ranked_signals.csv`
+   - `rank_core` → combined NSE+BSE `ranked_signals.csv`; filter
+     `eligible_rank == true` before the adjusted-score cutoff and `top_n`
+   - `rank_universe` → full scored `ranked_universe.csv`, including ineligible
+     rows and rejection reasons for audit
    - volume shockers → `volume_shockers.csv`
    - `breakout_scan` (one scan per ranked exchange using `ranked_universe` as
      scoring context; a true S4 market records

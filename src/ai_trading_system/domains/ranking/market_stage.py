@@ -15,6 +15,8 @@ Usage
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import date as date_type
 from typing import Optional
@@ -54,6 +56,271 @@ _CANONICAL_STAGE_FAMILY = {
     "S3": "S3",
     "S4": "S4",
 }
+
+WEEKLY_STAGE_MIN_CLASSIFIED_SYMBOLS = 200
+WEEKLY_STAGE_MAX_SOURCE_AGE_DAYS = 10
+
+
+def _normalized_confidence(value: object) -> float | None:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(confidence):
+        return None
+    return max(0.0, min(1.0, confidence / 100.0 if confidence > 1.0 else confidence))
+
+
+def _observation_payload(value: object) -> dict:
+    if isinstance(value, dict):
+        return dict(value)
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        decoded = json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _rank_transition(value: object) -> str:
+    transition = str(value or "").strip()
+    if not transition or transition.lower() == "none":
+        return "NONE"
+    if transition.lower() in {
+        "s1_to_s2",
+        "stage_1_to_stage_2",
+        "stage_1_basing_to_stage_2_advancing",
+        "transition_1_to_2",
+    }:
+        return "S1_TO_S2"
+    return transition.upper()
+
+
+def _context_hash(frame: pd.DataFrame) -> str | None:
+    if frame.empty:
+        return None
+    columns = [
+        column
+        for column in (
+            "exchange",
+            "symbol",
+            "stage_label",
+            "stage_confidence",
+            "stage_transition",
+            "bars_in_stage",
+            "weekly_stage_as_of",
+            "weekly_stage_source_hash",
+        )
+        if column in frame.columns
+    ]
+    rows = frame[columns].sort_values([column for column in ("exchange", "symbol") if column in columns])
+    payload = rows.where(pd.notna(rows), None).to_dict(orient="records")
+    return hashlib.sha256(
+        json.dumps(payload, default=str, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def resolve_rank_weekly_stage_context(
+    ohlcv_db_path: str,
+    *,
+    asof: str,
+    governed_stages: pd.DataFrame | None,
+    min_classified_symbols: int = WEEKLY_STAGE_MIN_CLASSIFIED_SYMBOLS,
+    max_source_age_days: int = WEEKLY_STAGE_MAX_SOURCE_AGE_DAYS,
+) -> tuple[pd.DataFrame, dict]:
+    """Resolve the per-symbol rank stage source under the market-router contract.
+
+    Fresh, sufficiently covered canonical control-plane rows win. The mutable
+    OHLCV snapshot is an explicit compatibility fallback only. Returned rows
+    use the legacy rank column vocabulary so the score and gate logic remain
+    unchanged while source lineage stays visible on every security.
+    """
+    cutoff = _cutoff_date(asof, date_type.today())
+    governed_reason = "governed_source_missing"
+    governed_stale_excluded = 0
+
+    if governed_stages is not None and not governed_stages.empty:
+        governed = governed_stages.copy()
+        if "as_of" in governed.columns:
+            governed.loc[:, "_source_as_of"] = pd.to_datetime(
+                governed["as_of"], errors="coerce"
+            ).dt.date
+            governed = governed.loc[
+                governed["_source_as_of"].notna()
+                & governed["_source_as_of"].le(cutoff)
+            ].copy()
+        else:
+            governed = governed.iloc[0:0].copy()
+        if not governed.empty:
+            entity_columns = [
+                column for column in ("exchange", "symbol_id") if column in governed.columns
+            ]
+            governed = governed.sort_values("_source_as_of").drop_duplicates(
+                entity_columns or ["_source_as_of"], keep="last"
+            )
+            governed.loc[:, "_source_age_days"] = governed["_source_as_of"].map(
+                lambda value: (cutoff - value).days
+            )
+            fresh = governed.loc[
+                governed["_source_age_days"].le(max_source_age_days)
+            ].copy()
+            governed_stale_excluded = len(governed) - len(fresh)
+            normalized_rows: list[dict] = []
+            for row in fresh.to_dict(orient="records"):
+                payload = _observation_payload(row.get("observation_json"))
+                effective_stage = row.get("effective_stage") or payload.get("effective_stage")
+                stage_label = _CANONICAL_STAGE_FAMILY.get(str(effective_stage))
+                symbol = str(row.get("symbol_id") or payload.get("symbol_id") or "").strip().upper()
+                if not symbol or stage_label is None:
+                    continue
+                source_as_of = row["_source_as_of"]
+                normalized_rows.append(
+                    {
+                        "exchange": str(row.get("exchange") or payload.get("exchange") or "NSE").strip().upper(),
+                        "symbol": symbol,
+                        "stage_label": stage_label,
+                        "stage_confidence": _normalized_confidence(
+                            row.get("stage_confidence_score")
+                            or payload.get("stage_confidence_score")
+                        ),
+                        "stage_transition": _rank_transition(
+                            row.get("stage_transition") or payload.get("stage_transition")
+                        ),
+                        "bars_in_stage": row.get("weeks_in_locked_stage")
+                        if row.get("weeks_in_locked_stage") is not None
+                        else payload.get("weeks_in_locked_stage"),
+                        "stage_entry_date": row.get("stage_entry_date")
+                        or payload.get("stage_entry_date"),
+                        "weekly_stage_source": "control_plane.duckdb:weekly_stock_stage_history",
+                        "weekly_stage_as_of": source_as_of,
+                        "weekly_stage_age_days": (cutoff - source_as_of).days,
+                        "weekly_stage_source_hash": row.get("source_artifact_hash")
+                        or payload.get("source_artifact_hash"),
+                        "weekly_stage_fallback_reason": None,
+                    }
+                )
+            normalized = pd.DataFrame(normalized_rows)
+            if len(normalized) >= min_classified_symbols:
+                source_as_of = max(normalized["weekly_stage_as_of"])
+                metadata = {
+                    "source": "control_plane.duckdb:weekly_stock_stage_history",
+                    "source_as_of": str(source_as_of),
+                    "source_age_days": (cutoff - source_as_of).days,
+                    "freshness_status": "FRESH",
+                    "fallback_reason": None,
+                    "classified_symbols": int(len(normalized)),
+                    "stale_symbols_excluded": int(governed_stale_excluded),
+                    "context_hash": _context_hash(normalized),
+                    "policy": "rank-weekly-stage-source-v1",
+                }
+                return normalized, metadata
+            governed_reason = "governed_coverage_insufficient"
+        else:
+            governed_reason = "governed_source_future_or_invalid"
+        if governed_stale_excluded and governed_reason == "governed_coverage_insufficient":
+            governed_reason = "governed_source_stale_or_coverage_insufficient"
+
+    legacy_reason = "legacy_source_missing"
+    try:
+        conn = duckdb.connect(ohlcv_db_path, read_only=True)
+        try:
+            exists = bool(
+                conn.execute(
+                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'weekly_stage_snapshot'"
+                ).fetchone()[0]
+            )
+            if not exists:
+                legacy = pd.DataFrame()
+            else:
+                legacy = conn.execute(
+                    """
+                    SELECT * FROM weekly_stage_snapshot
+                    WHERE week_end_date <= CAST(? AS DATE)
+                      AND stage_label != 'UNDEFINED'
+                    QUALIFY ROW_NUMBER() OVER (
+                        PARTITION BY symbol ORDER BY week_end_date DESC
+                    ) = 1
+                    """,
+                    [asof],
+                ).fetchdf()
+        finally:
+            conn.close()
+    except Exception:
+        legacy = pd.DataFrame()
+        legacy_reason = "legacy_source_error"
+
+    if not legacy.empty:
+        legacy.loc[:, "_source_as_of"] = pd.to_datetime(
+            legacy["week_end_date"], errors="coerce"
+        ).dt.date
+        legacy = legacy.loc[
+            legacy["_source_as_of"].notna()
+            & legacy["_source_as_of"].le(cutoff)
+        ].copy()
+        legacy.loc[:, "_source_age_days"] = legacy["_source_as_of"].map(
+            lambda value: (cutoff - value).days
+        )
+        fresh_legacy = legacy.loc[
+            legacy["_source_age_days"].le(max_source_age_days)
+        ].copy()
+        if len(fresh_legacy) >= min_classified_symbols:
+            normalized = pd.DataFrame(
+                {
+                    "exchange": "NSE",
+                    "symbol": fresh_legacy["symbol"].astype(str).str.strip().str.upper(),
+                    "stage_label": fresh_legacy["stage_label"].map(
+                        lambda value: _CANONICAL_STAGE_FAMILY.get(str(value))
+                    ),
+                    "stage_confidence": fresh_legacy["stage_confidence"].map(_normalized_confidence),
+                    "stage_transition": fresh_legacy["stage_transition"].map(_rank_transition),
+                    "bars_in_stage": fresh_legacy.get("bars_in_stage"),
+                    "stage_entry_date": fresh_legacy.get("stage_entry_date"),
+                    "weekly_stage_source": "ohlcv.duckdb:weekly_stage_snapshot",
+                    "weekly_stage_as_of": fresh_legacy["_source_as_of"],
+                    "weekly_stage_age_days": fresh_legacy["_source_age_days"],
+                    "weekly_stage_source_hash": None,
+                    "weekly_stage_fallback_reason": governed_reason,
+                }
+            ).dropna(subset=["symbol", "stage_label"])
+            source_as_of = max(normalized["weekly_stage_as_of"])
+            metadata = {
+                "source": "ohlcv.duckdb:weekly_stage_snapshot",
+                "source_as_of": str(source_as_of),
+                "source_age_days": (cutoff - source_as_of).days,
+                "freshness_status": "FRESH",
+                "fallback_reason": governed_reason,
+                "classified_symbols": int(len(normalized)),
+                "stale_symbols_excluded": int(len(legacy) - len(fresh_legacy)),
+                "context_hash": _context_hash(normalized),
+                "policy": "rank-weekly-stage-source-v1",
+            }
+            return normalized, metadata
+        legacy_reason = (
+            "legacy_source_stale"
+            if fresh_legacy.empty and not legacy.empty
+            else "legacy_coverage_insufficient"
+        )
+
+    empty = pd.DataFrame(
+        columns=[
+            "exchange", "symbol", "stage_label", "stage_confidence",
+            "stage_transition", "bars_in_stage", "stage_entry_date",
+            "weekly_stage_source", "weekly_stage_as_of", "weekly_stage_age_days",
+            "weekly_stage_source_hash", "weekly_stage_fallback_reason",
+        ]
+    )
+    return empty, {
+        "source": None,
+        "source_as_of": None,
+        "source_age_days": None,
+        "freshness_status": "MISSING" if "stale" not in legacy_reason else "STALE",
+        "fallback_reason": f"{governed_reason};{legacy_reason}",
+        "classified_symbols": 0,
+        "stale_symbols_excluded": int(governed_stale_excluded),
+        "context_hash": None,
+        "policy": "rank-weekly-stage-source-v1",
+    }
 
 
 def _classify_breadth(
@@ -111,8 +378,8 @@ def get_market_stage(
     breadth_s2_bull_threshold: float = 0.40,
     breadth_s4_bear_threshold: float = 0.40,
     breadth_s3_threshold: float = 0.30,
-    min_classified_symbols: int = 200,
-    max_source_age_days: int = 10,
+    min_classified_symbols: int = WEEKLY_STAGE_MIN_CLASSIFIED_SYMBOLS,
+    max_source_age_days: int = WEEKLY_STAGE_MAX_SOURCE_AGE_DAYS,
 ) -> dict:
     """Classify the broad market stage from the weekly breadth snapshot.
 

@@ -191,14 +191,19 @@ universe row freezes selection policy, effective score/top-N, regime date,
 calculated age, freshness status, and policy version. A same-date/model rerun
 upserts the same identity and cannot widen downstream operational inputs.
 
-The rank market-stage router is a read-only consumer of canonical
-`weekly_stock_stage_history`. It resolves correction-aware NSE observations at
-the rank decision cutoff and records the selected source date and age in rank
-metadata. The mutable `ohlcv.weekly_stage_snapshot` remains a compatibility
-source only; rows older than ten calendar days cannot drive routing. This read
-does not change ownership or pipeline order: `weekly_stage` still appends the
-current run's observations after rank, so rank normally consumes the latest
-trusted history available from an earlier completed shadow run. Breakout
+The rank market-stage router and per-symbol rank stage adapter are read-only
+consumers of canonical `weekly_stock_stage_history`. They resolve
+correction-aware NSE observations at the rank decision cutoff and record the
+selected source date, age, content hash, and fallback status in rank metadata;
+the per-symbol lineage is also projected into the rank artifacts. The mutable
+`ohlcv.weekly_stage_snapshot` remains a compatibility source only; rows older
+than ten calendar days cannot drive routing, freshness bonuses, or the weekly
+gate. This read does not change ownership or pipeline order: `weekly_stage`
+still appends the current run's observations after rank, so rank normally
+consumes the latest trusted history available from an earlier completed shadow
+run. `ranked_universe` retains failed eligibility rows as audit evidence, while
+`ranked_signals` filters them before adjusted-score thresholding and `top_n`.
+Breakout
 scoring uses the in-memory full `ranked_universe`; it does not read
 `rank_universe_history` back from the control plane.
 
