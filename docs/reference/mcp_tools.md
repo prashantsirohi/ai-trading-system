@@ -2,7 +2,7 @@
 
 - **Purpose:** Catalog of the read-only MCP tool surface: parameters, response shape, point-in-time support, and the store each tool reads.
 - **Audience:** Operators, developers, and AI agents consuming the server.
-- **Last verified:** 2026-08-18
+- **Last verified:** 2026-08-28
 - **Source of truth:** `src/ai_trading_system/interfaces/mcp/server.py`, `.../tools/*.py`, `.../readers/*.py`, `.../schema_catalog.py`.
 
 ---
@@ -64,6 +64,10 @@ unbounded latest-data request.
 | `get_pattern_detail` | Operational patterns on the newest model-pinned session. | `EXACT` | `control_plane.duckdb:pattern_history` |
 | `get_pattern_history` | Operational pattern lifecycle history. | `EXACT` | `control_plane.duckdb:pattern_history` |
 | `screen_universe` | Cross-sectional filter over the shortlist or full analytical universe. | `EXACT` | `rank_history` or `rank_universe_history` + governed stage/pattern/thesis observations |
+| `summarize_universe` | Complete pre-cap aggregates for a filtered shortlist or full universe. | `EXACT` | composed from `screen_universe` evidence |
+| `explain_symbol` | Full-universe rank, shortlist selection/exclusion, stage, pattern, thesis, candidate, and evidence-quality explanation. | `EXACT` | composed |
+| `compare_symbols` | Consistent bounded comparison of up to ten listings. | `EXACT` | composed |
+| `get_market_snapshot` | Universe/shortlist summaries, regime, fundamental lane, sector leadership, freshness, run, and DQ orientation. | `EXACT`; sector leadership remains latest-only | composed |
 | `get_sector_overview` | Stage distribution per sector. | `EXACT` | governed stage observations |
 | `get_sector_constituents` | Symbols in a sector with stage, rank and market cap. | `EXACT` | governed stage observations; current master enrichment only for latest requests |
 | `get_sector_leadership` | Latest RS, momentum, quadrant, earnings, and valuation evidence. | `AS_OF_UNSUPPORTED` | promoted rank artifacts + `fundamentals.duckdb` |
@@ -84,6 +88,35 @@ unbounded latest-data request.
 Row limits are clamped server-side. Most tools default to 250 rows and cap at
 2000; `screen_universe` defaults to 50 and caps at 500. `meta.truncated` is set
 whenever a cap clipped the result.
+
+`screen_universe.meta.summary` is calculated before this row cap. Agents that
+need distributions rather than individual securities should call
+`summarize_universe`, which returns the complete matched-set aggregates without
+transferring the capped rows.
+
+## Agent orientation and explanations
+
+The composed v2.1 tools are evidence-only and do not create new scores or
+recommend trades:
+
+- `get_market_snapshot` is the preferred first call for broad market
+  orientation. Each block retains its own response metadata. On historical
+  requests, latest-only sector leadership remains empty with
+  `AS_OF_UNSUPPORTED`; present evidence is never substituted.
+- `explain_symbol` checks the full analytical rank cross-section separately
+  from the actionable shortlist. It reports recorded rejection reasons and
+  derives explicit `BELOW_EFFECTIVE_TOP_N` or `BELOW_EFFECTIVE_MIN_SCORE`
+  evidence when the persisted policy fields establish those facts.
+- `compare_symbols` accepts at most ten symbols, applies one exchange and
+  cutoff, and returns the same compact fields for every listing.
+- `summarize_universe` accepts the screening filters but returns distributions,
+  score statistics, eligibility counts, rejection/blocker counts, and missing
+  evidence counts instead of security rows.
+
+Use `describe_schema("symbol_explanation")`,
+`describe_schema("symbol_comparison")`,
+`describe_schema("universe_summary")`, or
+`describe_schema("market_snapshot")` for the composed response contracts.
 
 ## Price basis
 

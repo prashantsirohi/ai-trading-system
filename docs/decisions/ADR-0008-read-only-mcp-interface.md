@@ -2,7 +2,7 @@
 
 - **Purpose:** Record why the trading system exposes its read surfaces through a strictly read-only MCP server, and fix the four invariants that make an agent's answers trustworthy.
 - **Audience:** Operator (decision owner), developers, future agents.
-- **Last verified:** 2026-08-18
+- **Last verified:** 2026-08-28
 - **Source of truth:** `src/ai_trading_system/interfaces/mcp/` (`server.py`, `context.py`, `envelope.py`, `schema_catalog.py`, `tools/`, `readers/`), `tests/interfaces/mcp/conftest.py`, `tests/lint/test_layer_boundaries.py`.
 - **Status:** Accepted — implemented 2026-08-12. Read-only by construction; no pipeline, execution, or broker path is reachable from it.
 
@@ -36,7 +36,7 @@ Add a new interface — not new analytics and not new storage — at
 exposing read-only tools over OHLCV, technical features, stage, sector, rank,
 patterns, fundamentals, the shadow fundamental-discovery lane, pipeline
 governance, and canonical opportunity lifecycle, plus a `describe_schema`
-column dictionary. V2 contains 27 tools; no HTTP endpoint was added.
+column dictionary. V2.1 contains 31 tools; no HTTP endpoint was added.
 
 Four invariants are binding.
 
@@ -153,6 +153,15 @@ episode aggregate.
 Optional positions, exposure, and order-history tools remain rejected pending
 a separate ADR and explicit operator approval; v2 does not read
 `execution.duckdb`.
+
+V2.1 adds four composed, evidence-only tools without adding a store or changing
+any operational policy. `summarize_universe` aggregates the already-filtered
+complete cross-section before row truncation. `explain_symbol` compares a
+listing's full-universe rank with its same-date shortlist row and reports only
+recorded or mechanically established policy evidence. `compare_symbols` is
+bounded to ten listings. `get_market_snapshot` retains per-block metadata and
+does not fill its latest-only sector-leadership block on historical requests.
+All four remain behind invariants I1–I4 and cannot recommend or execute trades.
 
 ## Alternatives considered
 

@@ -26,11 +26,16 @@ from ai_trading_system.interfaces.mcp.schema_catalog import (
     describe_schema,
 )
 from ai_trading_system.interfaces.mcp.tools import fundamentals as fundamentals_tool
-from ai_trading_system.interfaces.mcp.tools import fundamental_discovery as fundamental_discovery_tool
+from ai_trading_system.interfaces.mcp.tools import (
+    fundamental_discovery as fundamental_discovery_tool,
+)
 from ai_trading_system.interfaces.mcp.tools import patterns as patterns_tool
 from ai_trading_system.interfaces.mcp.tools import governance as governance_tool
 from ai_trading_system.interfaces.mcp.tools import lifecycle as lifecycle_tool
-from ai_trading_system.interfaces.mcp.tools import sector_leadership as sector_leadership_tool
+from ai_trading_system.interfaces.mcp.tools import insights as insights_tool
+from ai_trading_system.interfaces.mcp.tools import (
+    sector_leadership as sector_leadership_tool,
+)
 from ai_trading_system.interfaces.mcp.tools import prices as prices_tool
 from ai_trading_system.interfaces.mcp.tools import profile as profile_tool
 from ai_trading_system.interfaces.mcp.tools import rank as rank_tool
@@ -75,10 +80,11 @@ def _tool_specs() -> list[tuple[str, Callable[..., Any], str]]:
         (
             "describe_schema",
             _describe_schema_tool,
-            "Column dictionary for a surface (ohlcv, technicals, stage, rank, "
-            "pattern, sector, fundamentals, fundamental_discovery): type, meaning, units, owning store, and "
-            "the stage-vocabulary mapping. Call this before interpreting "
-            "unfamiliar columns. Omit 'surface' for an index of all surfaces.",
+            "Column dictionary for every raw and composed MCP surface, "
+            "including rank screening, explanations, market snapshots, "
+            "governance, and lifecycle. It publishes field meanings, stores, "
+            "point-in-time support, vocabularies, and tool ownership. Omit "
+            "'surface' for the complete index.",
         ),
         (
             "resolve_symbol",
@@ -92,7 +98,8 @@ def _tool_specs() -> list[tuple[str, Callable[..., Any], str]]:
             "get_symbol_profile",
             profile_tool.get_symbol_profile,
             "One-call overview of a symbol: identity, latest quote, weekly "
-            "stage, rank position with factor breakdown, and fundamentals. "
+            "stage, shortlist rank, operational patterns, generic fundamentals, "
+            "and the separate fundamental-discovery thesis. "
             "Every block carries its own date and source; a block with no data "
             "at 'as_of' is left empty rather than filled from another date.",
         ),
@@ -128,8 +135,7 @@ def _tool_specs() -> list[tuple[str, Callable[..., Any], str]]:
         (
             "get_rank_history",
             rank_tool.get_rank_history,
-            "Rank position and composite score over time for one symbol, "
-            "oldest first.",
+            "Rank position and composite score over time for one symbol, oldest first.",
         ),
         (
             "get_pattern_detail",
@@ -144,9 +150,43 @@ def _tool_specs() -> list[tuple[str, Callable[..., Any], str]]:
         (
             "screen_universe",
             screen_tool.screen_universe,
-            "Filter the ranked universe cross-section: by stage (either "
-            "vocabulary), stage family, sector, minimum composite score and "
-            "maximum rank position. Use this instead of pulling every symbol.",
+            "Filter either the actionable shortlist (default) or complete "
+            "analytical rank cross-section with scope='full_universe'. Filters "
+            "cover stage/freshness, sector, score/rank, pattern, RS/trend, "
+            "liquidity, delivery, fundamental tier/red flags, thesis, "
+            "eligibility, and blockers. The response is capped at 500 while "
+            "meta.summary and matched_count cover the complete match set.",
+        ),
+        (
+            "summarize_universe",
+            insights_tool.summarize_universe,
+            "Aggregate a filtered shortlist or full analytical universe "
+            "without returning hundreds of rows. Returns score statistics and "
+            "stage, sector, pattern, thesis, rejection, blocker, eligibility, "
+            "and missing-evidence counts computed before response truncation.",
+        ),
+        (
+            "explain_symbol",
+            insights_tool.explain_symbol,
+            "Explain one listing's full-universe rank, shortlist inclusion or "
+            "recorded exclusion reasons, stage, operational pattern, "
+            "fundamental thesis/blockers, candidate state, alignment, and "
+            "freshness. Evidence-only: it never recommends or executes a trade.",
+        ),
+        (
+            "compare_symbols",
+            insights_tool.compare_symbols,
+            "Compare up to ten listings under one cutoff using consistent rank, "
+            "selection, stage, pattern, fundamental-thesis, candidate, and "
+            "missing-evidence fields. Evidence-only and bounded server-side.",
+        ),
+        (
+            "get_market_snapshot",
+            insights_tool.get_market_snapshot,
+            "Bounded market orientation combining full-universe and shortlist "
+            "summaries, regime metadata, fundamental-lane distribution, sector "
+            "leadership, freshness, latest pipeline run, and its DQ evidence. "
+            "Historical latest-only blocks remain empty and explicitly marked.",
         ),
         (
             "get_sector_overview",
@@ -157,8 +197,7 @@ def _tool_specs() -> list[tuple[str, Callable[..., Any], str]]:
         (
             "get_sector_constituents",
             sectors_tool.get_sector_constituents,
-            "Symbols in a sector with their stage, rank position and market "
-            "cap.",
+            "Symbols in a sector with their stage, rank position and market cap.",
         ),
         (
             "get_sector_leadership",
@@ -236,7 +275,9 @@ def _tool_specs() -> list[tuple[str, Callable[..., Any], str]]:
     ]
 
 
-def _describe_schema_tool(ctx: McpContext, surface: str | None = None) -> dict[str, Any]:
+def _describe_schema_tool(
+    ctx: McpContext, surface: str | None = None
+) -> dict[str, Any]:
     """Context-taking wrapper so every tool shares one call signature."""
 
     return describe_schema(surface)
@@ -368,11 +409,15 @@ def run_self_test(context: McpContext, *, historical_as_of: str) -> int:
                 ),
                 (
                     f"get_pattern_detail ({label})",
-                    lambda a=as_of: patterns_tool.get_pattern_detail(context, symbol, as_of=a),
+                    lambda a=as_of: patterns_tool.get_pattern_detail(
+                        context, symbol, as_of=a
+                    ),
                 ),
                 (
                     f"get_pattern_history ({label})",
-                    lambda a=as_of: patterns_tool.get_pattern_history(context, symbol, as_of=a, limit=5),
+                    lambda a=as_of: patterns_tool.get_pattern_history(
+                        context, symbol, as_of=a, limit=5
+                    ),
                 ),
                 (
                     f"screen_universe ({label})",
@@ -387,6 +432,28 @@ def run_self_test(context: McpContext, *, historical_as_of: str) -> int:
                     ),
                 ),
                 (
+                    f"summarize_universe ({label})",
+                    lambda a=as_of: insights_tool.summarize_universe(context, as_of=a),
+                ),
+                (
+                    f"explain_symbol ({label})",
+                    lambda a=as_of: insights_tool.explain_symbol(
+                        context, symbol, as_of=a
+                    ),
+                ),
+                (
+                    f"compare_symbols ({label})",
+                    lambda a=as_of: insights_tool.compare_symbols(
+                        context, [symbol], as_of=a
+                    ),
+                ),
+                (
+                    f"get_market_snapshot ({label})",
+                    lambda a=as_of: insights_tool.get_market_snapshot(
+                        context, as_of=a, sector_limit=5
+                    ),
+                ),
+                (
                     f"get_sector_overview ({label})",
                     lambda a=as_of: sectors_tool.get_sector_overview(
                         context, as_of=a, limit=5
@@ -394,11 +461,15 @@ def run_self_test(context: McpContext, *, historical_as_of: str) -> int:
                 ),
                 (
                     f"get_sector_constituents ({label})",
-                    lambda a=as_of: sectors_tool.get_sector_constituents(context, "Capital Goods", as_of=a, limit=5),
+                    lambda a=as_of: sectors_tool.get_sector_constituents(
+                        context, "Capital Goods", as_of=a, limit=5
+                    ),
                 ),
                 (
                     f"get_sector_leadership ({label})",
-                    lambda a=as_of: sector_leadership_tool.get_sector_leadership(context, as_of=a, limit=5),
+                    lambda a=as_of: sector_leadership_tool.get_sector_leadership(
+                        context, as_of=a, limit=5
+                    ),
                 ),
                 (
                     f"get_fundamentals ({label})",
@@ -408,51 +479,81 @@ def run_self_test(context: McpContext, *, historical_as_of: str) -> int:
                 ),
                 (
                     f"get_fundamental_thesis ({label})",
-                    lambda a=as_of: fundamental_discovery_tool.get_fundamental_thesis(context, symbol, as_of=a),
+                    lambda a=as_of: fundamental_discovery_tool.get_fundamental_thesis(
+                        context, symbol, as_of=a
+                    ),
                 ),
                 (
                     f"get_fundamental_thesis_history ({label})",
-                    lambda a=as_of: fundamental_discovery_tool.get_fundamental_thesis_history(context, symbol, as_of=a, limit=5),
+                    lambda a=as_of: (
+                        fundamental_discovery_tool.get_fundamental_thesis_history(
+                            context, symbol, as_of=a, limit=5
+                        )
+                    ),
                 ),
                 (
                     f"screen_fundamental_theses ({label})",
-                    lambda a=as_of: fundamental_discovery_tool.screen_fundamental_theses(context, as_of=a, limit=5),
+                    lambda a=as_of: (
+                        fundamental_discovery_tool.screen_fundamental_theses(
+                            context, as_of=a, limit=5
+                        )
+                    ),
                 ),
                 (
                     f"get_fundamental_lane_overview ({label})",
-                    lambda a=as_of: fundamental_discovery_tool.get_fundamental_lane_overview(context, as_of=a),
+                    lambda a=as_of: (
+                        fundamental_discovery_tool.get_fundamental_lane_overview(
+                            context, as_of=a
+                        )
+                    ),
                 ),
                 (
                     f"get_pipeline_run ({label})",
-                    lambda a=as_of: governance_tool.get_pipeline_run(context, as_of=a, limit=5),
+                    lambda a=as_of: governance_tool.get_pipeline_run(
+                        context, as_of=a, limit=5
+                    ),
                 ),
                 (
                     f"get_data_quality_status ({label})",
-                    lambda a=as_of: governance_tool.get_data_quality_status(context, as_of=a, limit=5),
+                    lambda a=as_of: governance_tool.get_data_quality_status(
+                        context, as_of=a, limit=5
+                    ),
                 ),
                 (
                     f"get_artifact_lineage ({label})",
-                    lambda a=as_of: governance_tool.get_artifact_lineage(context, as_of=a, limit=5),
+                    lambda a=as_of: governance_tool.get_artifact_lineage(
+                        context, as_of=a, limit=5
+                    ),
                 ),
                 (
                     f"get_data_freshness ({label})",
-                    lambda a=as_of: governance_tool.get_data_freshness(context, as_of=a),
+                    lambda a=as_of: governance_tool.get_data_freshness(
+                        context, as_of=a
+                    ),
                 ),
                 (
                     f"get_candidate_status ({label})",
-                    lambda a=as_of: lifecycle_tool.get_candidate_status(context, symbol, as_of=a),
+                    lambda a=as_of: lifecycle_tool.get_candidate_status(
+                        context, symbol, as_of=a
+                    ),
                 ),
                 (
                     f"get_candidate_history ({label})",
-                    lambda a=as_of: lifecycle_tool.get_candidate_history(context, symbol=symbol, as_of=a, limit=5),
+                    lambda a=as_of: lifecycle_tool.get_candidate_history(
+                        context, symbol=symbol, as_of=a, limit=5
+                    ),
                 ),
                 (
                     f"get_investigator_evidence ({label})",
-                    lambda a=as_of: lifecycle_tool.get_investigator_evidence(context, symbol=symbol, as_of=a, limit=5),
+                    lambda a=as_of: lifecycle_tool.get_investigator_evidence(
+                        context, symbol=symbol, as_of=a, limit=5
+                    ),
                 ),
                 (
                     f"get_opportunity_episode ({label})",
-                    lambda a=as_of: lifecycle_tool.get_opportunity_episode(context, "self-test-missing", as_of=a, limit=5),
+                    lambda a=as_of: lifecycle_tool.get_opportunity_episode(
+                        context, "self-test-missing", as_of=a, limit=5
+                    ),
                 ),
             ]
         )

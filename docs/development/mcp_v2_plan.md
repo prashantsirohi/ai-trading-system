@@ -2,9 +2,9 @@
 
 - **Purpose:** Define the planned expansion of the read-only MCP from research evidence into pattern intelligence, full-universe screening, operational provenance, and lifecycle context.
 - **Audience:** Operator and developers implementing MCP v2.
-- **Last verified:** 2026-08-18
+- **Last verified:** 2026-08-28
 - **Source of truth:** This is a planned-behavior document. Current behavior remains defined by [`reference/mcp_tools.md`](../reference/mcp_tools.md), [`decisions/ADR-0008-read-only-mcp-interface.md`](../decisions/ADR-0008-read-only-mcp-interface.md), and current code under `src/ai_trading_system/interfaces/mcp/`.
-- **Status:** Implemented through lifecycle context on 2026-08-18. Optional portfolio/execution reads remain deferred pending a separate ADR and operator approval.
+- **Status:** Implemented through lifecycle context on 2026-08-18 and bounded v2.1 agent explanations/orientation on 2026-08-28. Optional portfolio/execution reads remain deferred pending a separate ADR and operator approval.
 
 ---
 

@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-08-21
+- **Last verified:** 2026-08-28
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -34,6 +34,15 @@ requested date; a surface that cannot answer historically returns no rows
 rather than substituting the present. See
 [ADR-0008](decisions/ADR-0008-read-only-mcp-interface.md) and the
 [MCP tool catalog](reference/mcp_tools.md).
+
+MCP v2.1 adds bounded evidence composition without adding analytics or storage:
+`summarize_universe` aggregates the complete filtered match set before the
+screen response cap; `explain_symbol` distinguishes full-universe evidence from
+same-date shortlist selection and reports recorded exclusion evidence;
+`compare_symbols` applies one cutoff to at most ten listings; and
+`get_market_snapshot` composes universe, shortlist, regime, fundamental-lane,
+sector, freshness, pipeline-run, and DQ orientation. These surfaces are
+evidence-only and cannot recommend, publish, execute, or mutate state.
 
 The full analytical rank cross-section is persisted append-oriented in
 `rank_universe_history` before regime `top_n` truncation. The existing

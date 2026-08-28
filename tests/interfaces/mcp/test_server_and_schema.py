@@ -84,13 +84,25 @@ def test_technicals_columns_are_documented(ctx: McpContext) -> None:
 def test_stage_columns_are_documented(ctx: McpContext) -> None:
     """Every field the stage tool emits should be explainable."""
 
-    produced = set(get_stage_history(ctx, "AAA", granularity="weekly_legacy")["data"][0])
+    produced = set(
+        get_stage_history(ctx, "AAA", granularity="weekly_legacy")["data"][0]
+    )
     documented = _documented("stage")
     # Provenance columns are self-describing and intentionally not catalogued.
-    ignorable = {"run_id", "stage_transition", "support_level", "resistance_level",
-                 "ma10w", "ma40w", "weekly_volume_ratio", "source_week_start",
-                 "source_week_end", "sector_id", "sector_name",
-                 "classifier_version"}
+    ignorable = {
+        "run_id",
+        "stage_transition",
+        "support_level",
+        "resistance_level",
+        "ma10w",
+        "ma40w",
+        "weekly_volume_ratio",
+        "source_week_start",
+        "source_week_end",
+        "sector_id",
+        "sector_name",
+        "classifier_version",
+    }
     assert not (produced - documented - ignorable)
 
 
@@ -105,16 +117,29 @@ def test_rank_columns_are_documented(ctx: McpContext) -> None:
 def test_sector_columns_are_documented(ctx: McpContext) -> None:
     produced = set(get_sector_overview(ctx)["data"][0])
     documented = _documented("sector")
-    derived = {"unknown_count", "unknown_pct", "stage_1_pct", "stage_3_pct",
-               "stage_4_pct", "stage_2_share_pct"}
+    derived = {
+        "unknown_count",
+        "unknown_pct",
+        "stage_1_pct",
+        "stage_3_pct",
+        "stage_4_pct",
+        "stage_2_share_pct",
+    }
     assert not (produced - documented - derived)
 
 
 def test_fundamental_score_columns_are_documented(ctx: McpContext) -> None:
     scores = get_fundamentals(ctx, "AAA")["data"]["scores"]
     documented = _documented("fundamentals")
-    identity = {"snapshot_date", "symbol", "name", "industry_group", "industry",
-                "red_flags", "screener_snapshot_date"}
+    identity = {
+        "snapshot_date",
+        "symbol",
+        "name",
+        "industry_group",
+        "industry",
+        "red_flags",
+        "screener_snapshot_date",
+    }
     assert not (set(scores) - documented - identity)
 
 
@@ -127,7 +152,7 @@ def test_tool_names_are_unique_and_described() -> None:
     specs = server._tool_specs()
     names = [name for name, _, _ in specs]
     assert len(names) == len(set(names))
-    assert len(names) == 27
+    assert len(names) == 31
     for name, function, description in specs:
         assert callable(function), name
         assert len(description) > 40, name
@@ -145,6 +170,10 @@ def test_every_expected_tool_is_registered() -> None:
         "get_rank_detail",
         "get_rank_history",
         "screen_universe",
+        "summarize_universe",
+        "explain_symbol",
+        "compare_symbols",
+        "get_market_snapshot",
         "get_sector_overview",
         "get_sector_constituents",
         "get_fundamentals",
@@ -187,7 +216,7 @@ def test_list_tools_needs_no_store(capsys: pytest.CaptureFixture[str]) -> None:
     assert server.main(["--list-tools"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["server"] == "ai-trading-system"
-    assert len(payload["tools"]) == 27
+    assert len(payload["tools"]) == 31
     assert set(payload["surfaces"]) == set(SURFACE_NAMES)
 
 
@@ -245,9 +274,7 @@ def test_registered_schemas_do_not_expose_the_context(ctx: McpContext) -> None:
     """A leaked ctx parameter would be unfillable by a model."""
 
     for tool in _list_tools(server.build_server(ctx)):
-        schema = getattr(tool, "input_schema", None) or getattr(
-            tool, "inputSchema", {}
-        )
+        schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", {})
         properties = set((schema or {}).get("properties", {}))
         assert "ctx" not in properties and "context" not in properties, tool.name
 
@@ -296,9 +323,7 @@ def test_real_stdio_client_discovers_and_calls_v2_tool(data_root) -> None:
         environment = dict(os.environ)
         environment["DATA_ROOT"] = str(data_root)
         environment["DATA_DOMAIN"] = "operational"
-        environment["PYTHONPATH"] = str(server.__file__).split(
-            "/ai_trading_system/"
-        )[0]
+        environment["PYTHONPATH"] = str(server.__file__).split("/ai_trading_system/")[0]
         parameters = StdioServerParameters(
             command=sys.executable,
             args=[
@@ -313,9 +338,8 @@ def test_real_stdio_client_discovers_and_calls_v2_tool(data_root) -> None:
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
                 tools = await session.list_tools()
-                assert "get_fundamental_thesis" in {
-                    tool.name for tool in tools.tools
-                }
+                assert "get_fundamental_thesis" in {tool.name for tool in tools.tools}
+                assert "explain_symbol" in {tool.name for tool in tools.tools}
                 result = await session.call_tool(
                     "get_pattern_detail",
                     {"symbol": "AAA", "as_of": "2026-01-07"},
@@ -332,5 +356,10 @@ def test_real_stdio_client_discovers_and_calls_v2_tool(data_root) -> None:
                     {"scope": "full_universe", "limit": 5},
                 )
                 assert not full.is_error
+                explanation = await session.call_tool(
+                    "explain_symbol",
+                    {"symbol": "AAA", "as_of": "2026-01-07"},
+                )
+                assert not explanation.is_error
 
     asyncio.run(exercise())

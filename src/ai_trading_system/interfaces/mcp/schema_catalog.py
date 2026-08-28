@@ -81,14 +81,20 @@ TECHNICALS_SURFACE: dict[str, Any] = {
             units="INR",
         ),
         _column("rsi_14", "float", "14-period Relative Strength Index.", units="0-100"),
-        _column("adx_14", "float", "14-period Average Directional Index; trend strength."),
+        _column(
+            "adx_14", "float", "14-period Average Directional Index; trend strength."
+        ),
         _column("plus_di_14", "float", "Positive directional indicator."),
         _column("minus_di_14", "float", "Negative directional indicator."),
         _column("sma_20", "float", "20-session simple moving average.", units="INR"),
         _column("sma_50", "float", "50-session simple moving average.", units="INR"),
         _column("sma_200", "float", "200-session simple moving average.", units="INR"),
-        _column("ema_12", "float", "12-session exponential moving average.", units="INR"),
-        _column("ema_26", "float", "26-session exponential moving average.", units="INR"),
+        _column(
+            "ema_12", "float", "12-session exponential moving average.", units="INR"
+        ),
+        _column(
+            "ema_26", "float", "26-session exponential moving average.", units="INR"
+        ),
         _column("macd_line", "float", "EMA(12) − EMA(26)."),
         _column("macd_signal_9", "float", "9-period EMA of the MACD line."),
         _column("macd_histogram", "float", "MACD line minus signal."),
@@ -106,9 +112,24 @@ TECHNICALS_SURFACE: dict[str, Any] = {
         _column("beta_to_nifty_60", "float", "60-session beta against NIFTY."),
         _column("max_drawdown_63", "float", "Worst peak-to-trough over 63 sessions."),
         _column("atr_pct", "float", "ATR as a share of price.", units="percent"),
-        _column("avg_value_traded_20", "float", "20-session average traded value.", units="INR"),
-        _column("liquidity_score", "float", "Cross-sectional turnover percentile.", units="0-1"),
-        _column("delivery_pct_20d_avg", "float", "20-session mean delivery percentage.", units="percent"),
+        _column(
+            "avg_value_traded_20",
+            "float",
+            "20-session average traded value.",
+            units="INR",
+        ),
+        _column(
+            "liquidity_score",
+            "float",
+            "Cross-sectional turnover percentile.",
+            units="0-1",
+        ),
+        _column(
+            "delivery_pct_20d_avg",
+            "float",
+            "20-session mean delivery percentage.",
+            units="percent",
+        ),
         _column("delivery_trend_score", "float", "Direction of the delivery trend."),
     ],
 }
@@ -206,11 +227,21 @@ RANK_SURFACE: dict[str, Any] = {
             units="0-100",
         ),
         _column("rs_score", "float", "Relative strength factor score.", units="0-100"),
-        _column("volume_score", "float", "Volume intensity factor score.", units="0-100"),
-        _column("trend_score", "float", "Trend persistence factor score.", units="0-100"),
-        _column("proximity_score", "float", "Proximity-to-52w-high score.", units="0-100"),
-        _column("sector_score", "float", "Sector strength factor score.", units="0-100"),
-        _column("rank_model_version", "str", "Rank model version this row was scored under."),
+        _column(
+            "volume_score", "float", "Volume intensity factor score.", units="0-100"
+        ),
+        _column(
+            "trend_score", "float", "Trend persistence factor score.", units="0-100"
+        ),
+        _column(
+            "proximity_score", "float", "Proximity-to-52w-high score.", units="0-100"
+        ),
+        _column(
+            "sector_score", "float", "Sector strength factor score.", units="0-100"
+        ),
+        _column(
+            "rank_model_version", "str", "Rank model version this row was scored under."
+        ),
         _column("rank_formula_name", "str", "Scoring formula, e.g. weighted_sum."),
         _column("rank_config_hash", "str", "Configuration hash pinning the weights."),
         _column("pipeline_run_id", "str", "Producing pipeline run."),
@@ -234,11 +265,22 @@ PATTERN_SURFACE: dict[str, Any] = {
         _column("pattern_state", "str", "Lifecycle state of the setup."),
         _column("pattern_score", "float", "Pattern quality score.", units="0-100"),
         _column("setup_quality", "str", "Categorical setup quality."),
-        _column("pattern_promotion_state", "str", "Promotion state under pattern policy."),
-        _column("pivot_price", "float", "Pattern pivot or breakout level.", units="INR"),
-        _column("distance_to_pivot_pct", "float", "Close distance from pivot.", units="percent"),
+        _column(
+            "pattern_promotion_state", "str", "Promotion state under pattern policy."
+        ),
+        _column(
+            "pivot_price", "float", "Pattern pivot or breakout level.", units="INR"
+        ),
+        _column(
+            "distance_to_pivot_pct",
+            "float",
+            "Close distance from pivot.",
+            units="percent",
+        ),
         _column("breakout_status", "str", "Observed breakout state."),
-        _column("breakout_attempt_flag", "bool", "Whether a breakout attempt was observed."),
+        _column(
+            "breakout_attempt_flag", "bool", "Whether a breakout attempt was observed."
+        ),
         _column("pattern_model_version", "str", "Pattern detector/model version."),
         _column("pattern_config_hash", "str", "Configuration content hash."),
         _column("pipeline_run_id", "str", "Producing pipeline run."),
@@ -302,12 +344,36 @@ FUNDAMENTALS_SURFACE: dict[str, Any] = {
         _column("report_date", "date", "Fiscal period end."),
         _column("available_at", "date", "When the figure became knowable."),
         _column("statement_basis", "str", "standalone or consolidated."),
-        _column("fundamental_score", "float", "Weighted composite of the sub-scores.", units="0-100"),
-        _column("quality_score", "float", "ROCE, ROE, margins, Piotroski.", units="0-100"),
-        _column("growth_score", "float", "Sales and profit growth over 3y/5y.", units="0-100"),
-        _column("balance_sheet_score", "float", "Debt, CFO and FCF health.", units="0-100"),
-        _column("valuation_score", "float", "Sector-relative inverted valuation percentiles.", units="0-100"),
-        _column("ownership_score", "float", "Pledge, promoter, DII and FII holding.", units="0-100"),
+        _column(
+            "fundamental_score",
+            "float",
+            "Weighted composite of the sub-scores.",
+            units="0-100",
+        ),
+        _column(
+            "quality_score", "float", "ROCE, ROE, margins, Piotroski.", units="0-100"
+        ),
+        _column(
+            "growth_score",
+            "float",
+            "Sales and profit growth over 3y/5y.",
+            units="0-100",
+        ),
+        _column(
+            "balance_sheet_score", "float", "Debt, CFO and FCF health.", units="0-100"
+        ),
+        _column(
+            "valuation_score",
+            "float",
+            "Sector-relative inverted valuation percentiles.",
+            units="0-100",
+        ),
+        _column(
+            "ownership_score",
+            "float",
+            "Pledge, promoter, DII and FII holding.",
+            units="0-100",
+        ),
         _column("fundamental_tier", "str", "A, B, C or Reject."),
         _column("hard_red_flag", "bool", "A disqualifying condition was hit."),
         _column("pe", "float", "Price to trailing earnings.", units="ratio"),
@@ -315,9 +381,18 @@ FUNDAMENTALS_SURFACE: dict[str, Any] = {
         _column("roe", "float", "Return on equity.", units="percent"),
         _column("debt_to_equity", "float", "Leverage.", units="ratio"),
         _column("promoter_holding", "float", "Promoter stake.", units="percent"),
-        _column("pledged_pct", "float", "Pledged share of promoter holding.", units="percent"),
-        _column("sales_yoy_growth", "float", "Year-on-year sales growth.", units="percent"),
-        _column("profit_yoy_growth", "float", "Year-on-year profit growth.", units="percent"),
+        _column(
+            "pledged_pct",
+            "float",
+            "Pledged share of promoter holding.",
+            units="percent",
+        ),
+        _column(
+            "sales_yoy_growth", "float", "Year-on-year sales growth.", units="percent"
+        ),
+        _column(
+            "profit_yoy_growth", "float", "Year-on-year profit growth.", units="percent"
+        ),
     ],
 }
 
@@ -341,16 +416,42 @@ FUNDAMENTAL_DISCOVERY_SURFACE: dict[str, Any] = {
         "admission_policy_version": "Daily structural/context eligibility policy; independent from accounting classification.",
     },
     "columns": [
-        _column("classification", "object", "Immutable accounting/source classification block."),
-        _column("projection", "object", "Daily structural stage, eligibility, blockers and context."),
-        _column("evaluations", "array|null", "Evaluate-all records for all seven thesis families."),
-        _column("change", "object|null", "Previous thesis/source hash when a prior classification exists."),
-        _column("primary_thesis", "str|null", "Highest-precedence passing thesis family."),
-        _column("secondary_theses", "array", "Other passing families in precedence order."),
-        _column("classification_status", "str", "Qualification or fail-closed evidence status."),
+        _column(
+            "classification",
+            "object",
+            "Immutable accounting/source classification block.",
+        ),
+        _column(
+            "projection",
+            "object",
+            "Daily structural stage, eligibility, blockers and context.",
+        ),
+        _column(
+            "evaluations",
+            "array|null",
+            "Evaluate-all records for all seven thesis families.",
+        ),
+        _column(
+            "change",
+            "object|null",
+            "Previous thesis/source hash when a prior classification exists.",
+        ),
+        _column(
+            "primary_thesis", "str|null", "Highest-precedence passing thesis family."
+        ),
+        _column(
+            "secondary_theses", "array", "Other passing families in precedence order."
+        ),
+        _column(
+            "classification_status",
+            "str",
+            "Qualification or fail-closed evidence status.",
+        ),
         _column("statement_basis", "str", "standalone or consolidated; never blended."),
         _column("source_report_date", "date|null", "Newest fiscal source date."),
-        _column("source_available_at", "date|null", "When source evidence became knowable."),
+        _column(
+            "source_available_at", "date|null", "When source evidence became knowable."
+        ),
         _column("source_data_hash", "str", "Immutable source-evidence hash."),
         _column("taxonomy_version", "str", "Thesis vocabulary/precedence version."),
         _column("rule_version", "str", "Classification rule-content version."),
@@ -370,7 +471,9 @@ SECTOR_LEADERSHIP_SURFACE: dict[str, Any] = {
     "tables": ["sector_earnings_leadership", "valuation_cycle_features"],
     "grain": "one row per sector in the latest available snapshots",
     "as_of_support": "AS_OF_UNSUPPORTED",
-    "notes": ["RS, momentum and quadrant artifacts are latest-only; historical requests return no rows."],
+    "notes": [
+        "RS, momentum and quadrant artifacts are latest-only; historical requests return no rows."
+    ],
     "columns": [
         _column("sector_name", "str", "Sector identity."),
         _column("relative_strength", "object", "Latest relative-strength evidence."),
@@ -388,7 +491,9 @@ GOVERNANCE_SURFACE: dict[str, Any] = {
     "tables": ["pipeline_run", "pipeline_stage_run", "pipeline_artifact", "dq_result"],
     "grain": "run, stage attempt, artifact, DQ result, or freshness surface",
     "as_of_support": "EXACT",
-    "notes": ["Artifact authority requires the exact producer attempt to be completed; these tools never promote, retry, repair or migrate."],
+    "notes": [
+        "Artifact authority requires the exact producer attempt to be completed; these tools never promote, retry, repair or migrate."
+    ],
     "columns": [
         _column("run_id", "str", "Logical pipeline run identity."),
         _column("run_date", "date", "Pipeline decision date."),
@@ -408,18 +513,200 @@ LIFECYCLE_SURFACE: dict[str, Any] = {
     "surface": "lifecycle",
     "tool": "get_candidate_status / get_candidate_history / get_investigator_evidence / get_opportunity_episode",
     "store": "control_plane.duckdb",
-    "tables": ["candidate_episode", "candidate_snapshot", "candidate_transition", "candidate_evidence_observation", "candidate_fundamental_observation"],
+    "tables": [
+        "candidate_episode",
+        "candidate_snapshot",
+        "candidate_transition",
+        "candidate_evidence_observation",
+        "candidate_fundamental_observation",
+    ],
     "grain": "canonical opportunity episode and append-only observations",
     "as_of_support": "EXACT",
-    "notes": ["Candidate lifecycle, Investigator evidence and fundamental observations remain distinct blocks; none are execution state."],
+    "notes": [
+        "Candidate lifecycle, Investigator evidence and fundamental observations remain distinct blocks; none are execution state."
+    ],
     "columns": [
-        _column("episode", "object", "Canonical candidate episode identity and lifecycle bounds."),
-        _column("latest_snapshot", "object|null", "Newest knowable candidate snapshot."),
+        _column(
+            "episode",
+            "object",
+            "Canonical candidate episode identity and lifecycle bounds.",
+        ),
+        _column(
+            "latest_snapshot", "object|null", "Newest knowable candidate snapshot."
+        ),
         _column("snapshots", "array", "Point-in-time lifecycle snapshots."),
         _column("transitions", "array", "Append-only lifecycle transitions."),
-        _column("evidence_observations", "array", "Investigator and other evidence observations."),
+        _column(
+            "evidence_observations",
+            "array",
+            "Investigator and other evidence observations.",
+        ),
         _column("rank_observations", "array", "Opportunity/rank observations."),
-        _column("fundamental_observations", "array", "Append-only candidate fundamental thesis observations."),
+        _column(
+            "fundamental_observations",
+            "array",
+            "Append-only candidate fundamental thesis observations.",
+        ),
+    ],
+}
+
+UNIVERSE_SUMMARY_SURFACE: dict[str, Any] = {
+    "surface": "universe_summary",
+    "tool": "summarize_universe",
+    "store": "composed read over control_plane.duckdb + fundamentals.duckdb",
+    "tables": [
+        "rank_history",
+        "rank_universe_history",
+        "weekly_stock_stage_history",
+        "pattern_history",
+        "fundamental_thesis_projection",
+    ],
+    "grain": "one aggregate for one pinned, filtered rank cross-section",
+    "as_of_support": "EXACT",
+    "notes": [
+        "Counts are computed from the complete matched set before screen_universe applies its 500-row response cap.",
+        "The default scope is full_universe; shortlist remains a separate explicit scope.",
+    ],
+    "columns": [
+        _column("matched_count", "int", "Rows matching every supplied filter."),
+        _column("composite_score", "object", "Minimum, maximum, and average score."),
+        _column("stage_family_counts", "object", "Counts by structural stage family."),
+        _column("sector_counts", "object", "Counts by sector."),
+        _column(
+            "pattern_family_counts", "object", "Counts by operational pattern family."
+        ),
+        _column(
+            "fundamental_thesis_counts", "object", "Counts by primary thesis family."
+        ),
+        _column(
+            "rejection_reason_counts",
+            "object",
+            "Counts of recorded rank rejection evidence.",
+        ),
+        _column(
+            "fundamental_blocker_counts",
+            "object",
+            "Counts of fundamental admission blockers.",
+        ),
+        _column(
+            "evidence_missing_counts",
+            "object",
+            "Missing stage, pattern, and thesis counts.",
+        ),
+        _column(
+            "market_regime", "str|null", "Regime used by the rank selection policy."
+        ),
+        _column(
+            "regime_freshness_status",
+            "str|null",
+            "ALIGNED, STALE, or INCOMPLETE regime evidence.",
+        ),
+    ],
+}
+
+SYMBOL_EXPLANATION_SURFACE: dict[str, Any] = {
+    "surface": "symbol_explanation",
+    "tool": "explain_symbol",
+    "store": "composed MCP evidence",
+    "tables": [
+        "rank_universe_history",
+        "rank_history",
+        "weekly_stock_stage_history",
+        "pattern_history",
+        "fundamental_thesis_projection",
+        "candidate_episode",
+    ],
+    "grain": "one evidence explanation per (symbol_id, exchange, cutoff)",
+    "as_of_support": "EXACT",
+    "notes": [
+        "Evidence-only: selection reasons are recorded policy evidence, not a trade recommendation.",
+        "A missing block remains explicit and is never filled from a future or unrelated source.",
+    ],
+    "columns": [
+        _column("decision_date", "date|null", "Pinned rank decision date."),
+        _column(
+            "selection",
+            "object",
+            "Full-universe and shortlist membership plus recorded reasons.",
+        ),
+        _column("full_universe_rank", "object|null", "Full analytical rank evidence."),
+        _column("shortlist_rank", "object|null", "Actionable shortlist rank evidence."),
+        _column("stage", "object|null", "Governed structural stage evidence."),
+        _column("pattern", "array|null", "Operational pattern observations."),
+        _column(
+            "fundamental_thesis",
+            "object|null",
+            "Classification, projection, evaluations, and blockers.",
+        ),
+        _column("candidate", "object|null", "Canonical shadow candidate state."),
+        _column(
+            "evidence_quality",
+            "object",
+            "Alignment, missing blocks, and stale surfaces.",
+        ),
+    ],
+}
+
+SYMBOL_COMPARISON_SURFACE: dict[str, Any] = {
+    "surface": "symbol_comparison",
+    "tool": "compare_symbols",
+    "store": "composed MCP evidence",
+    "tables": [
+        "rank_universe_history",
+        "weekly_stock_stage_history",
+        "pattern_history",
+        "fundamental_thesis_projection",
+    ],
+    "grain": "one compact row per requested listing, maximum ten",
+    "as_of_support": "EXACT",
+    "notes": [
+        "Every row uses the same requested cutoff and exchange; output is evidence-only."
+    ],
+    "columns": [
+        _column("symbol_id", "str", "Canonical ticker."),
+        _column("decision_date", "date|null", "Pinned rank decision date."),
+        _column("rank_position", "int|null", "Full-universe rank position."),
+        _column("composite_score", "float|null", "Full-universe composite score."),
+        _column(
+            "in_shortlist", "bool", "Whether selected into the same-date shortlist."
+        ),
+        _column("selection_reasons", "array", "Recorded exclusion/selection evidence."),
+        _column("stage_label", "str|null", "Canonical structural stage."),
+        _column("pattern_family", "str|null", "Highest-scored operational pattern."),
+        _column("primary_thesis", "str|null", "Primary fundamental thesis."),
+        _column("fundamental_blockers", "array|null", "Admission blockers."),
+        _column("candidate_status", "str|null", "Canonical shadow episode status."),
+        _column("missing_blocks", "array", "Evidence blocks absent at the cutoff."),
+    ],
+}
+
+MARKET_SNAPSHOT_SURFACE: dict[str, Any] = {
+    "surface": "market_snapshot",
+    "tool": "get_market_snapshot",
+    "store": "composed MCP evidence",
+    "tables": [
+        "rank_universe_history",
+        "rank_history",
+        "dq_result",
+        "pipeline_run",
+        "fundamental_thesis_projection",
+    ],
+    "grain": "one bounded market-orientation response per exchange and cutoff",
+    "as_of_support": "EXACT with latest-only sector-leadership block",
+    "notes": [
+        "Historical requests do not substitute current sector leadership; that block reports AS_OF_UNSUPPORTED.",
+        "This is an orientation surface, not a recommendation or execution interface.",
+    ],
+    "columns": [
+        _column("universe", "object", "Complete analytical-universe summary."),
+        _column("shortlist", "object", "Actionable-shortlist summary."),
+        _column("fundamental_lane", "object", "Thesis and eligibility distribution."),
+        _column(
+            "sector_leadership", "array", "Latest-only sector leadership evidence."
+        ),
+        _column("freshness", "array", "Freshness by MCP surface."),
+        _column("latest_pipeline_run", "object|null", "Newest knowable pipeline run."),
+        _column("data_quality", "object", "DQ evidence attached to that run."),
     ],
 }
 
@@ -435,6 +722,10 @@ SURFACES: dict[str, dict[str, Any]] = {
     "fundamental_discovery": FUNDAMENTAL_DISCOVERY_SURFACE,
     "governance": GOVERNANCE_SURFACE,
     "lifecycle": LIFECYCLE_SURFACE,
+    "universe_summary": UNIVERSE_SUMMARY_SURFACE,
+    "symbol_explanation": SYMBOL_EXPLANATION_SURFACE,
+    "symbol_comparison": SYMBOL_COMPARISON_SURFACE,
+    "market_snapshot": MARKET_SNAPSHOT_SURFACE,
 }
 
 SURFACE_NAMES = tuple(SURFACES)

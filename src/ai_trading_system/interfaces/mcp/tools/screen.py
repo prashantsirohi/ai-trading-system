@@ -8,6 +8,7 @@ symbol and filtering client-side.
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date
 from typing import Any
 
@@ -47,6 +48,58 @@ SORT_FIELDS = (
 SCOPES = ("shortlist", "full_universe")
 
 _GOVERNED_TABLE = "weekly_stock_stage_history"
+
+
+def _count_values(
+    rows: list[dict[str, Any]], key: str, *, multiple: bool = False
+) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for row in rows:
+        raw = row.get(key)
+        values = raw if multiple and isinstance(raw, list) else [raw]
+        for value in values:
+            if value is not None and str(value).strip():
+                counts[str(value)] += 1
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def summarize_screen_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate an uncapped, already-filtered screen without losing evidence."""
+
+    scores = [
+        float(row["composite_score"])
+        for row in rows
+        if row.get("composite_score") is not None
+    ]
+    return {
+        "matched_count": len(rows),
+        "composite_score": {
+            "minimum": min(scores) if scores else None,
+            "maximum": max(scores) if scores else None,
+            "average": round(sum(scores) / len(scores), 4) if scores else None,
+        },
+        "stage_family_counts": _count_values(rows, "stage_family"),
+        "sector_counts": _count_values(rows, "sector_name"),
+        "pattern_family_counts": _count_values(rows, "pattern_family"),
+        "fundamental_thesis_counts": _count_values(rows, "primary_thesis"),
+        "rejection_reason_counts": _count_values(
+            rows, "rejection_reasons", multiple=True
+        ),
+        "fundamental_blocker_counts": _count_values(
+            rows, "fundamental_blockers", multiple=True
+        ),
+        "evidence_missing_counts": {
+            "stage": sum(row.get("stage_label") is None for row in rows),
+            "pattern": sum(row.get("pattern_family") is None for row in rows),
+            "fundamental_thesis": sum(
+                row.get("primary_thesis") is None for row in rows
+            ),
+        },
+        "rank_eligible_count": sum(row.get("rank_eligible") is True for row in rows),
+        "fundamental_admission_eligible_count": sum(
+            row.get("fundamental_admission_eligible") is True for row in rows
+        ),
+    }
 
 
 def _governed_stage_at(
@@ -111,7 +164,11 @@ def _fundamental_scores_at(
 
 
 def _cross_section_size(
-    conn: Any, table: str, *, exchange: str, universe_id: str,
+    conn: Any,
+    table: str,
+    *,
+    exchange: str,
+    universe_id: str,
     cutoff: date | None,
 ) -> int | None:
     if not decisions.table_exists(conn, table):
@@ -126,8 +183,11 @@ def _cross_section_size(
             "AND exchange=? AND universe_id=? "
             "AND rank_model_version=? AND rank_config_hash=?",
             [
-                effective.isoformat(), exchange, universe_id,
-                version.model_version, version.config_hash,
+                effective.isoformat(),
+                exchange,
+                universe_id,
+                version.model_version,
+                version.config_hash,
             ],
         ).fetchone()[0]
     )
@@ -160,6 +220,7 @@ def screen_universe(
     primary_thesis: str | None = None,
     admission_eligible: bool | None = None,
     fundamental_blocker: str | None = None,
+    include_fundamental_thesis: bool = False,
     as_of: str | date | None = None,
     sort_by: str = "rank_position",
     limit: int | None = None,
@@ -204,9 +265,7 @@ def screen_universe(
 
     with ctx.control_plane() as conn:
         if decisions.table_exists(conn, rank_table):
-            effective = decisions.latest_trade_date(
-                conn, rank_table, as_of=cutoff
-            )
+            effective = decisions.latest_trade_date(conn, rank_table, as_of=cutoff)
             try:
                 records = decisions.latest_rows(
                     conn,
@@ -225,30 +284,46 @@ def screen_universe(
         if decisions.table_exists(conn, decisions.PATTERN_TABLE):
             try:
                 for pattern in decisions.latest_rows(
-                    conn, decisions.PATTERN_TABLE, exchange=exchange_code,
-                    as_of=cutoff, limit=MAX_LIMIT * 20,
+                    conn,
+                    decisions.PATTERN_TABLE,
+                    exchange=exchange_code,
+                    as_of=cutoff,
+                    limit=MAX_LIMIT * 20,
                 ):
                     symbol_key = str(pattern.get("symbol_id") or "").upper()
                     current = patterns.get(symbol_key)
-                    if current is None or float(pattern.get("pattern_score") or 0) > float(current.get("pattern_score") or 0):
+                    if current is None or float(
+                        pattern.get("pattern_score") or 0
+                    ) > float(current.get("pattern_score") or 0):
                         patterns[symbol_key] = pattern
             except decisions.DecisionVersionUnavailable as exc:
                 notes.append(f"Pattern cross-section unavailable: {exc}")
         stages = _governed_stage_at(conn, exchange_code, cutoff)
         try:
             shortlist_size = _cross_section_size(
-                conn, decisions.RANK_TABLE, exchange=exchange_code,
-                universe_id=universe_id, cutoff=cutoff,
+                conn,
+                decisions.RANK_TABLE,
+                exchange=exchange_code,
+                universe_id=universe_id,
+                cutoff=cutoff,
             )
             full_universe_size = _cross_section_size(
-                conn, decisions.RANK_UNIVERSE_TABLE, exchange=exchange_code,
-                universe_id=universe_id, cutoff=cutoff,
+                conn,
+                decisions.RANK_UNIVERSE_TABLE,
+                exchange=exchange_code,
+                universe_id=universe_id,
+                cutoff=cutoff,
             )
         except decisions.DecisionVersionUnavailable as exc:
             notes.append(f"Universe sizes could not be version-pinned: {exc}")
 
     fundamental_map: dict[str, dict[str, Any]] = {}
-    if primary_thesis or admission_eligible is not None or fundamental_blocker:
+    if (
+        include_fundamental_thesis
+        or primary_thesis
+        or admission_eligible is not None
+        or fundamental_blocker
+    ):
         fundamental_map = fundamental_discovery_tool.load_fundamental_screen_map(
             ctx,
             exchange=exchange_code,
@@ -292,7 +367,8 @@ def screen_universe(
             "bars_in_stage": stage.get("bars_in_stage"),
             "stage_age_days": (
                 (trade_date - coerce_date(stage.get("stage_as_of"))).days
-                if trade_date and coerce_date(stage.get("stage_as_of")) else None
+                if trade_date and coerce_date(stage.get("stage_as_of"))
+                else None
             ),
             "rs_score": json_safe(record.get("rs_score")),
             "trend_score": json_safe(record.get("trend_score")),
@@ -305,9 +381,17 @@ def screen_universe(
             "pattern_state": json_safe(pattern.get("pattern_state")),
             "pattern_score": json_safe(pattern.get("pattern_score")),
             "distance_to_pivot_pct": json_safe(pattern.get("distance_to_pivot_pct")),
-            "primary_thesis": fundamental["classification"]["primary_thesis"] if fundamental else None,
-            "fundamental_admission_eligible": fundamental["projection"]["admission_eligible"] if fundamental else None,
-            "fundamental_blockers": fundamental["projection"]["blockers"] if fundamental else None,
+            "primary_thesis": fundamental["classification"]["primary_thesis"]
+            if fundamental
+            else None,
+            "fundamental_admission_eligible": fundamental["projection"][
+                "admission_eligible"
+            ]
+            if fundamental
+            else None,
+            "fundamental_blockers": fundamental["projection"]["blockers"]
+            if fundamental
+            else None,
             "fundamental_tier": json_safe(fundamental_score.get("fundamental_tier")),
             "hard_red_flag": json_safe(fundamental_score.get("hard_red_flag")),
             "fundamental_red_flags": json_safe(fundamental_score.get("red_flags")),
@@ -332,7 +416,8 @@ def screen_universe(
         if stage2_only and row["stage_family"] != "stage_2":
             continue
         if max_bars_in_stage is not None and (
-            row["bars_in_stage"] is None or row["bars_in_stage"] > int(max_bars_in_stage)
+            row["bars_in_stage"] is None
+            or row["bars_in_stage"] > int(max_bars_in_stage)
         ):
             continue
         if max_stage_age_days is not None and (
@@ -340,23 +425,55 @@ def screen_universe(
             or row["stage_age_days"] > int(max_stage_age_days)
         ):
             continue
-        if pattern_family and str(row["pattern_family"] or "").lower() != pattern_family.lower():
+        if (
+            pattern_family
+            and str(row["pattern_family"] or "").lower() != pattern_family.lower()
+        ):
             continue
-        if pattern_state and str(row["pattern_state"] or "").lower() != pattern_state.lower():
+        if (
+            pattern_state
+            and str(row["pattern_state"] or "").lower() != pattern_state.lower()
+        ):
             continue
-        if min_pattern_score is not None and (row["pattern_score"] is None or row["pattern_score"] < float(min_pattern_score)):
+        if min_pattern_score is not None and (
+            row["pattern_score"] is None
+            or row["pattern_score"] < float(min_pattern_score)
+        ):
             continue
-        if max_pivot_distance is not None and (row["distance_to_pivot_pct"] is None or row["distance_to_pivot_pct"] > float(max_pivot_distance)):
+        if max_pivot_distance is not None and (
+            row["distance_to_pivot_pct"] is None
+            or row["distance_to_pivot_pct"] > float(max_pivot_distance)
+        ):
             continue
-        if any(threshold is not None and (row[field] is None or row[field] < float(threshold)) for field, threshold in (("rs_score", min_rs_score), ("trend_score", min_trend_score), ("liquidity_score", min_liquidity_score), ("delivery_pct_20d_avg", min_delivery_pct))):
+        if any(
+            threshold is not None
+            and (row[field] is None or row[field] < float(threshold))
+            for field, threshold in (
+                ("rs_score", min_rs_score),
+                ("trend_score", min_trend_score),
+                ("liquidity_score", min_liquidity_score),
+                ("delivery_pct_20d_avg", min_delivery_pct),
+            )
+        ):
             continue
-        if primary_thesis and str(row["primary_thesis"] or "").upper() != primary_thesis.upper():
+        if (
+            primary_thesis
+            and str(row["primary_thesis"] or "").upper() != primary_thesis.upper()
+        ):
             continue
-        if admission_eligible is not None and row["fundamental_admission_eligible"] is not admission_eligible:
+        if (
+            admission_eligible is not None
+            and row["fundamental_admission_eligible"] is not admission_eligible
+        ):
             continue
-        if fundamental_blocker and fundamental_blocker.upper() not in {str(value).upper() for value in (row["fundamental_blockers"] or [])}:
+        if fundamental_blocker and fundamental_blocker.upper() not in {
+            str(value).upper() for value in (row["fundamental_blockers"] or [])
+        }:
             continue
-        if fundamental_tier and str(row["fundamental_tier"] or "").upper() != fundamental_tier.upper():
+        if (
+            fundamental_tier
+            and str(row["fundamental_tier"] or "").upper() != fundamental_tier.upper()
+        ):
             continue
         if hard_red_flag is not None and row["hard_red_flag"] is not hard_red_flag:
             continue
@@ -378,6 +495,7 @@ def screen_universe(
         )
 
     matched = len(rows)
+    summary = summarize_screen_rows(rows)
     truncated = matched > row_limit
     if truncated:
         rows = rows[:row_limit]
@@ -425,13 +543,21 @@ def screen_universe(
             "sector": sector,
             "min_composite_score": min_composite_score,
             "max_rank_position": max_rank_position,
+            "stage2_only": stage2_only,
+            "max_bars_in_stage": max_bars_in_stage,
+            "max_stage_age_days": max_stage_age_days,
             "pattern_family": pattern_family,
             "pattern_state": pattern_state,
             "min_pattern_score": min_pattern_score,
             "max_pivot_distance": max_pivot_distance,
+            "min_rs_score": min_rs_score,
+            "min_trend_score": min_trend_score,
+            "min_liquidity_score": min_liquidity_score,
+            "min_delivery_pct": min_delivery_pct,
             "primary_thesis": primary_thesis,
             "admission_eligible": admission_eligible,
             "fundamental_blocker": fundamental_blocker,
+            "include_fundamental_thesis": include_fundamental_thesis,
             "fundamental_tier": fundamental_tier,
             "hard_red_flag": hard_red_flag,
         },
@@ -441,16 +567,37 @@ def screen_universe(
         universe_size=len(records),
         full_universe_size=full_universe_size,
         shortlist_size=shortlist_size,
-        selection_policy=json_safe(records[0].get("selection_policy")) if records else None,
-        effective_min_score=json_safe(records[0].get("effective_min_score")) if records else None,
-        effective_top_n=json_safe(records[0].get("effective_top_n")) if records else None,
+        selection_policy=json_safe(records[0].get("selection_policy"))
+        if records
+        else None,
+        effective_min_score=json_safe(records[0].get("effective_min_score"))
+        if records
+        else None,
+        effective_top_n=json_safe(records[0].get("effective_top_n"))
+        if records
+        else None,
         market_regime=json_safe(records[0].get("market_regime")) if records else None,
         regime_as_of=json_safe(records[0].get("regime_as_of")) if records else None,
-        regime_age_days=json_safe(records[0].get("regime_age_days")) if records else None,
-        regime_freshness_status=json_safe(records[0].get("regime_freshness_status")) if records else None,
-        regime_freshness_policy_version=json_safe(records[0].get("regime_freshness_policy_version")) if records else None,
+        regime_age_days=json_safe(records[0].get("regime_age_days"))
+        if records
+        else None,
+        regime_freshness_status=json_safe(records[0].get("regime_freshness_status"))
+        if records
+        else None,
+        regime_freshness_policy_version=json_safe(
+            records[0].get("regime_freshness_policy_version")
+        )
+        if records
+        else None,
+        summary=summary,
         data_domain=ctx.paths.domain,
     )
 
 
-__all__ = ["DEFAULT_UNIVERSE_ID", "SCOPES", "SORT_FIELDS", "screen_universe"]
+__all__ = [
+    "DEFAULT_UNIVERSE_ID",
+    "SCOPES",
+    "SORT_FIELDS",
+    "screen_universe",
+    "summarize_screen_rows",
+]
