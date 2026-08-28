@@ -227,6 +227,7 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
 
     output_dir = tmp_path / "data" / "pipeline_runs" / run_id / "investigator" / "attempt_1"
     assert (output_dir / "daily_gainer_log.csv").exists()
+    assert (output_dir / "investigator_intake_receipt.csv").exists()
     assert (output_dir / "investigator_scores.csv").exists()
     assert (output_dir / "repeat_tracker.csv").exists()
     assert (output_dir / "active_watchlist.csv").exists()
@@ -241,6 +242,10 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     assert (output_dir / "investigator_payload.json").exists()
     early = pd.read_csv(output_dir / "investigator_early_accumulation.csv")
     scores = pd.read_csv(output_dir / "investigator_scores.csv")
+    intake_receipts = pd.read_csv(output_dir / "investigator_intake_receipt.csv")
+    assert intake_receipts["symbol_id"].is_unique
+    assert set(intake_receipts["decision_state"]) <= {"TRACKED", "EXCLUDED"}
+    assert intake_receipts["reason_codes"].fillna("").ne("").all()
     assert {
         "pattern_evaluation_state",
         "pattern_classification_state",
@@ -257,6 +262,8 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     assert early_score["candidate_sources"] == "EARLY_ACCUMULATION"
     assert bool(early_score["new_candidate_today"]) is True
     assert result.metadata["total_intake_count"] == 3
+    assert result.metadata["intake_receipt_rows"] == len(intake_receipts)
+    assert result.metadata["intake_receipt_tracked_rows"] == 3
     assert result.metadata["investigator_early_accumulation_count"] == 1
     assert result.metadata["candidate_union_rows"] == 4
     assert result.metadata["early_accumulation_only_rows"] == 1
@@ -301,6 +308,7 @@ def test_investigator_stage_writes_artifacts_and_tables(tmp_path: Path) -> None:
     assert payload_summary["stage_label_counts"]["STAGE_2_CONFIRMED"] >= 1
     assert {artifact.artifact_type for artifact in result.artifacts} >= {
         "daily_gainer_log",
+        "investigator_intake_receipt",
         "investigator_scores",
         "investigator_performance_summary",
         "investigator_performance_summary_json",

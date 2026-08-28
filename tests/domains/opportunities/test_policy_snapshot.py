@@ -10,6 +10,7 @@ from ai_trading_system.domains.opportunities.orchestration import retention as r
 from ai_trading_system.domains.opportunities.orchestration import matching as matching_module
 from ai_trading_system.domains.opportunities.orchestration.contracts import (
     ADMISSION_RULE_VERSION,
+    INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
     LIFECYCLE_RULE_VERSION,
     RETENTION_RULE_VERSION,
     SETUP_FAMILY_RULE_VERSION,
@@ -49,6 +50,11 @@ def test_snapshot_is_deterministic() -> None:
         ("stage_discovery_confidence_threshold", 60.0, "scan-routing-policy-v2"),
         ("minimum_sector_constituents", 8, "sector-stage-aggregation-v1"),
         ("minimum_sector_stage_coverage_ratio", 0.5, "sector-stage-aggregation-v1"),
+        (
+            "investigator_weekly_return_pct",
+            6.0,
+            INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+        ),
     ],
 )
 def test_any_runtime_threshold_changes_owning_label_and_composite(param, value, label) -> None:

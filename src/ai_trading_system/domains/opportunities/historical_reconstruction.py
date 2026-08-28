@@ -16,7 +16,7 @@ from ai_trading_system.domains.opportunities.orchestration.assembler import (
 )
 from ai_trading_system.domains.opportunities.orchestration.contracts import (
     INVESTIGATOR_ACTIVE_REVIEW_SCORE,
-    INVESTIGATOR_PRIMARY_LANE,
+    INVESTIGATOR_PRIMARY_TRIGGER,
 )
 from ai_trading_system.domains.opportunities.registry import (
     DuckDBOpportunityRegistryStore,
@@ -303,7 +303,7 @@ def _reconstructed_context(
     if move_tag == "UNKNOWN" and trigger_reason == "WEEKLY_GAINER":
         move_tag = "WEEKLY_MOMENTUM"
     review_eligible = bool(
-        move_tag == INVESTIGATOR_PRIMARY_LANE
+        trigger_reason == INVESTIGATOR_PRIMARY_TRIGGER
         and final_score is not None
         and final_score >= INVESTIGATOR_ACTIVE_REVIEW_SCORE
     )

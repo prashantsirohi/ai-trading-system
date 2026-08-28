@@ -46,14 +46,14 @@ def test_investigator_keeps_unavailable_components_null():
     assert snapshot.market_alignment is None
 
 
-def test_investigator_freezes_weekly_primary_lane_and_complete_context():
+def test_weekly_trigger_remains_primary_when_contextual_move_tag_differs():
     result = adapt_investigator_rows(
         [{
             "symbol_id": "ABC",
             "final_score": "67",
             "verdict": "MEDIUM_CONVICTION",
             "trigger_reason": "WEEKLY_GAINER",
-            "move_tag": "WEEKLY_MOMENTUM",
+            "move_tag": "SECTOR_ROTATION",
             "pattern_family": "VCP",
             "pattern_state": "CONFIRMED",
             "pattern_score": "78",
@@ -75,6 +75,8 @@ def test_investigator_freezes_weekly_primary_lane_and_complete_context():
         as_of=NOW,
     )
     context = result.records[0].value.investigator_context
+    assert context.move_tag == "SECTOR_ROTATION"
+    assert context.trigger_reason == "WEEKLY_GAINER"
     assert context.review_lane == "PRIMARY"
     assert context.review_eligible is True
     assert context.attribution_score == 67

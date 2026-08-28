@@ -28,6 +28,12 @@ from ai_trading_system.domains.fundamentals.discovery import (
     ALLOWED_ADMISSION_STAGES,
     FUNDAMENTAL_THESIS_RULE_CONTENT,
 )
+from ai_trading_system.domains.investigator.intake import (
+    DEFAULT_WEEKLY_RETURN_PCT,
+    WEEKLY_GAINER_COMPARISON_EPSILON,
+    WEEKLY_GAINER_RECENT_DAILY_SPIKE_POLICY,
+    WEEKLY_GAINER_THRESHOLD_COMPARISON,
+)
 from ai_trading_system.domains.opportunities.coverage import SECTOR_AGGREGATION_RULES
 from ai_trading_system.domains.opportunities.orchestration import contracts as admission_policy
 from ai_trading_system.domains.opportunities.orchestration.contracts import (
@@ -37,6 +43,7 @@ from ai_trading_system.domains.opportunities.orchestration.contracts import (
     INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
     INVESTIGATOR_CONDITIONAL_LANES,
     INVESTIGATOR_PRIMARY_LANE,
+    INVESTIGATOR_PRIMARY_TRIGGER,
     INVESTIGATOR_RESEARCH_ONLY_LANES,
     INVESTIGATOR_SECTOR_INDEX_ALIASES,
     INVESTIGATOR_SECTOR_INDEX_POLICY_VERSION,
@@ -109,6 +116,8 @@ def policy_content(
     shadow: OpportunityShadowConfig,
     routing: ScanRoutingConfig,
     coverage: StageCoverageConfig,
+    *,
+    investigator_weekly_return_pct: float = DEFAULT_WEEKLY_RETURN_PCT,
 ) -> dict[str, dict[str, Any]]:
     """Return every policy label's semantic content from the live objects.
 
@@ -179,7 +188,34 @@ def policy_content(
         },
         INVESTIGATOR_ATTRIBUTION_POLICY_VERSION: {
             "primary_lane": INVESTIGATOR_PRIMARY_LANE,
+            "primary_trigger": INVESTIGATOR_PRIMARY_TRIGGER,
+            "primary_eligibility_source": "trigger_reason",
+            "contextual_move_tag_can_suppress_primary": False,
             "active_review_score_min": INVESTIGATOR_ACTIVE_REVIEW_SCORE,
+            "weekly_return_5d_threshold_pct": investigator_weekly_return_pct,
+            "weekly_return_threshold_comparison": (
+                WEEKLY_GAINER_THRESHOLD_COMPARISON
+            ),
+            "weekly_return_comparison_epsilon": (
+                WEEKLY_GAINER_COMPARISON_EPSILON
+            ),
+            "recent_daily_spike_policy": WEEKLY_GAINER_RECENT_DAILY_SPIKE_POLICY,
+            "same_day_daily_gainer_precedence": True,
+            "intake_receipt_cardinality": "one_per_evaluated_symbol",
+            "intake_receipt_missing_policy": "explicit_reason_codes",
+            "weekly_carry_forward_stages": [
+                "STAGE_1_BASE",
+                "STAGE_2_EARLY",
+                "STAGE_2_CONFIRMED",
+            ],
+            "weekly_carry_forward_terminators": [
+                "NOISE_TRAP",
+                "HARD_TRAP",
+                "PATTERN_INVALIDATED_OR_EXPIRED",
+                "STAGE_3_DISTRIBUTION",
+                "STAGE_4_DECLINE",
+                "LIFECYCLE_ARCHIVE_OR_DROP",
+            ],
             "conditional_lanes": list(INVESTIGATOR_CONDITIONAL_LANES),
             "research_only_lanes": list(INVESTIGATOR_RESEARCH_ONLY_LANES),
             "attribution_only_dimensions": list(
@@ -219,8 +255,15 @@ def build_policy_snapshot(
     shadow: OpportunityShadowConfig,
     routing: ScanRoutingConfig,
     coverage: StageCoverageConfig,
+    *,
+    investigator_weekly_return_pct: float = DEFAULT_WEEKLY_RETURN_PCT,
 ) -> PolicySnapshot:
-    content = policy_content(shadow, routing, coverage)
+    content = policy_content(
+        shadow,
+        routing,
+        coverage,
+        investigator_weekly_return_pct=investigator_weekly_return_pct,
+    )
     label_hashes = {label: _digest(values) for label, values in content.items()}
     composite = _digest(label_hashes)
     return PolicySnapshot(composite, label_hashes, content)
@@ -232,6 +275,9 @@ def compute_policy_snapshot(params: Mapping[str, Any]) -> PolicySnapshot:
         OpportunityShadowConfig.from_mapping(params),
         ScanRoutingConfig.from_mapping(params),
         StageCoverageConfig.from_mapping(params),
+        investigator_weekly_return_pct=float(
+            params.get("investigator_weekly_return_pct", DEFAULT_WEEKLY_RETURN_PCT)
+        ),
     )
 
 

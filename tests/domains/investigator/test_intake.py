@@ -102,7 +102,7 @@ def test_exact_daily_threshold_qualifies_as_daily_gainer(tmp_path: Path) -> None
     assert intake.iloc[0]["trigger_reason"] == "DAILY_GAINER"
 
 
-def test_weekly_gainer_without_daily_spike_qualifies(tmp_path: Path) -> None:
+def test_weekly_gainer_above_five_percent_qualifies(tmp_path: Path) -> None:
     db_path = tmp_path / "ohlcv.duckdb"
     _create_catalog(db_path)
     as_of = _insert_symbol(db_path, "WWW", [100, 101.5, 103, 104.5, 106, 108.5], latest_volume=1000)
@@ -110,8 +110,80 @@ def test_weekly_gainer_without_daily_spike_qualifies(tmp_path: Path) -> None:
     intake = load_investigator_intake(ohlcv_db_path=db_path, ranked_signals=_ranked("WWW"), as_of=as_of)
 
     assert intake.iloc[0]["trigger_reason"] == "WEEKLY_GAINER"
-    assert intake.iloc[0]["return_5d"] >= 8.0
+    assert intake.iloc[0]["return_5d"] > 5.0
     assert intake.iloc[0]["max_daily_gain_5d"] < 5.0
+
+
+def test_weekly_gainer_with_recent_daily_spike_remains_tracked(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    _create_catalog(db_path)
+    as_of = _insert_symbol(
+        db_path,
+        "INDSWFTLAB",
+        [100.0, 99.0, 112.0, 111.0, 110.0, 108.0],
+        latest_volume=1000,
+    )
+
+    intake = load_investigator_intake(
+        ohlcv_db_path=db_path,
+        ranked_signals=_ranked("INDSWFTLAB"),
+        as_of=as_of,
+    )
+
+    assert intake.iloc[0]["symbol_id"] == "INDSWFTLAB"
+    assert intake.iloc[0]["return_5d"] > 5.0
+    assert intake.iloc[0]["max_daily_gain_5d"] > 5.0
+    assert intake.iloc[0]["trigger_reason"] == "WEEKLY_GAINER"
+
+
+def test_exact_five_percent_weekly_return_does_not_qualify(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    _create_catalog(db_path)
+    as_of = _insert_symbol(
+        db_path,
+        "FIVE",
+        [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+        latest_volume=1000,
+    )
+
+    intake, receipts = load_investigator_intake(
+        ohlcv_db_path=db_path,
+        ranked_signals=_ranked("FIVE"),
+        as_of=as_of,
+        include_stealth=False,
+        include_receipts=True,
+    )
+
+    assert intake.empty
+    assert receipts.iloc[0]["decision_state"] == "EXCLUDED"
+    assert "WEEKLY_RETURN_NOT_ABOVE_THRESHOLD" in receipts.iloc[0][
+        "reason_codes"
+    ]
+
+
+def test_intake_receipt_records_weekly_inclusion_reason(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    _create_catalog(db_path)
+    as_of = _insert_symbol(
+        db_path,
+        "WEEKLY",
+        [100.0, 99.0, 112.0, 111.0, 110.0, 108.0],
+        latest_volume=1000,
+    )
+
+    intake, receipts = load_investigator_intake(
+        ohlcv_db_path=db_path,
+        ranked_signals=_ranked("WEEKLY"),
+        as_of=as_of,
+        include_receipts=True,
+    )
+
+    assert intake.iloc[0]["trigger_reason"] == "WEEKLY_GAINER"
+    assert bool(receipts.iloc[0]["tracked"]) is True
+    assert receipts.iloc[0]["selected_trigger_reason"] == "WEEKLY_GAINER"
+    assert receipts.iloc[0]["reason_codes"] == "TRACKED_WEEKLY_GAINER"
 
 
 def test_stealth_accumulation_qualifies(tmp_path: Path) -> None:

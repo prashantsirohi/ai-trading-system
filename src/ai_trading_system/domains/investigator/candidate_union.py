@@ -139,7 +139,7 @@ def build_candidate_union(
 
 
 def eligible_previous_watchlist(frame: pd.DataFrame | None) -> pd.DataFrame:
-    """Return active Stage-1 rows that are safe to carry into a new run."""
+    """Return active Stage-1 or weekly-tracking rows safe to carry forward."""
 
     out = _normalise(frame)
     if out.empty:
@@ -152,14 +152,18 @@ def eligible_previous_watchlist(frame: pd.DataFrame | None) -> pd.DataFrame:
     drop_reason = _text(out, "drop_reason")
     sources = _text(out, "candidate_sources").str.upper()
     primary = _text(out, "primary_candidate_source").str.upper()
+    trigger = _text(out, "trigger_reason").str.upper()
 
-    safe = (
+    base_safe = (
         (status.eq("") | status.isin(ACTIVE_STATUSES))
         & ~verdict.eq("NOISE_TRAP")
         & ~_boolish(out, "hard_trap_flag")
         & drop_reason.eq("")
-        & ~s1_state.isin({"FAILED_S1", "S2_CONFIRMED"})
         & ~pattern_lifecycle.isin({"invalidated", "expired"})
+    )
+    stage1_safe = (
+        base_safe
+        & ~s1_state.isin({"FAILED_S1", "S2_CONFIRMED"})
         & ~stage.isin({"STAGE_2_CONFIRMED", "STAGE_3_DISTRIBUTION", "STAGE_4_DECLINE"})
     )
     has_stage_evidence = stage.ne("") | s1_state.ne("") | sources.ne("") | primary.ne("")
@@ -170,7 +174,17 @@ def eligible_previous_watchlist(frame: pd.DataFrame | None) -> pd.DataFrame:
         | primary.isin({"STAGE1_SCAN", "EARLY_ACCUMULATION"})
         | ~has_stage_evidence
     )
-    return _collapse(out.loc[safe & stage1].copy())
+    weekly_source = (
+        trigger.eq("WEEKLY_GAINER")
+        | sources.str.contains(r"(?:^|\|)WEEKLY_GAINER(?:\||$)", regex=True)
+        | primary.eq("WEEKLY_GAINER")
+    )
+    weekly_safe = (
+        base_safe
+        & weekly_source
+        & ~stage.isin({"STAGE_3_DISTRIBUTION", "STAGE_4_DECLINE"})
+    )
+    return _collapse(out.loc[(stage1_safe & stage1) | weekly_safe].copy())
 
 
 def is_trigger_observation(candidate_sources: object) -> bool:

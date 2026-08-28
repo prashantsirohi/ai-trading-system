@@ -18,7 +18,7 @@ from ai_trading_system.domains.opportunities.orchestration.contracts import (
     AdapterResult,
     AdapterWarning,
     INVESTIGATOR_ACTIVE_REVIEW_SCORE,
-    INVESTIGATOR_PRIMARY_LANE,
+    INVESTIGATOR_PRIMARY_TRIGGER,
     RejectedSourceRow,
     SourceDescriptor,
 )
@@ -145,7 +145,7 @@ def adapt_investigator_rows(
         if move_tag == "UNKNOWN" and trigger_reason == "WEEKLY_GAINER":
             move_tag = "WEEKLY_MOMENTUM"
         review_eligible = (
-            move_tag == INVESTIGATOR_PRIMARY_LANE
+            trigger_reason == INVESTIGATOR_PRIMARY_TRIGGER
             and score >= INVESTIGATOR_ACTIVE_REVIEW_SCORE
         )
         price = as_float(first(row, "close", "price", "latest_close"))

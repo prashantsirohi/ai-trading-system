@@ -2,7 +2,7 @@
 
 - **Purpose:** Convert post-rank gainer, accumulation, trap, repeat, and pattern evidence into an operator-facing investigation queue.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-08-02
+- **Last verified:** 2026-08-28
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/investigator.py`
   - `src/ai_trading_system/domains/investigator/service.py`
@@ -103,6 +103,7 @@ $DATA_ROOT/pipeline_runs/<run_id>/investigator/attempt_<n>/
 | Artifact type | File | Purpose |
 |---|---|---|
 | `daily_gainer_log` | `daily_gainer_log.csv` | Latest daily, weekly, and stealth trigger intake. |
+| `investigator_intake_receipt` | `investigator_intake_receipt.csv` | One tracked/excluded decision per evaluated NSE symbol with lane flags and stable reason codes. |
 | `investigator_scores` | `investigator_scores.csv` | Domain conviction components, final score, verdict, trap flags, plus normalized stage/pattern/breakout context. |
 | `repeat_tracker` | `repeat_tracker.csv` | Rolling recurrence, price progression, rank change, repeat quality. |
 | `active_watchlist` | `active_watchlist.csv` | Non-archived lifecycle queue with status and pattern enrichment. |
@@ -142,6 +143,9 @@ The stage persists selected artifact rows to the control-plane registry database
 | daily attribution coverage | `investigator_attribution_coverage_receipt` |
 
 Rows are scoped by `run_id` and `attempt_number`. On rerun of the same attempt, existing rows for that scope are deleted and reinserted.
+`investigator_intake_receipt.csv` remains an immutable artifact rather than a
+mutable registry table; its producing run, attempt, row count, and content hash
+are registered through the normal artifact registry.
 `investigator_cohort_performance` is keyed by `trade_date`, `symbol_id`, and
 `exchange`; it is now a compatibility projection. Initial context is insert-only
 and maturation may update only outcome columns. The canonical opportunity
@@ -184,6 +188,22 @@ Forward sector-relative evaluation uses governed
 Minerals/Mining names. An alias is usable only when its target has an existing
 primary `sector_to_index` row; Consumer remains unmapped by policy.
 
+Phase 3.5E registers immutable successor
+`investigator-attribution-policy-v4`. Every symbol whose five-session return
+is strictly greater than the configured 5% threshold is tracked as a weekly
+gainer regardless of an earlier daily spike inside that window. A qualifying
+same-session, volume-backed daily spike retains `DAILY_GAINER` label
+precedence, but the prior-spike suppression is removed. The weekly threshold,
+strict comparison, prior-spike policy, and same-day precedence are included in
+the policy fingerprint. `trigger_reason=WEEKLY_GAINER`, rather than contextual
+`move_tag`, owns primary-lane identity, so sector and event classifications
+cannot suppress an otherwise eligible weekly observation. Every evaluated
+symbol receives an immutable intake receipt with tracked state, selected lane,
+lane eligibility flags, and stable exclusion reasons. Active weekly rows may
+carry forward through `STAGE_2_CONFIRMED`; traps, invalid or expired patterns,
+Stage 3/4 structure, and normal lifecycle archive/drop decisions terminate the
+carry. This does not enable execution or change the primary review score of 65.
+
 ## Process flow
 
 ```mermaid
@@ -211,7 +231,7 @@ flowchart TD
 1. Load the required `ranked_signals` artifact.
 2. Load optional rank artifacts: `breakout_scan`, `stock_scan`, and `sector_dashboard`.
 3. Build investigator intake from `_catalog` and `_delivery` as of `investigator_as_of` or the latest NSE trading date.
-4. Merge gainer intake with breakout, ranked, and stock-scan context by `symbol_id`.
+4. Emit one intake receipt per evaluated symbol, then merge tracked gainer intake with breakout, ranked, and stock-scan context by `symbol_id`.
 5. Mark whether each candidate is present in the ranked-signals universe.
 6. Score price structure, volume/delivery, fundamentals, sector support, move quality, and buyer fingerprint.
 7. Add a rank overlay and compute `final_score` plus the domain `verdict`.
@@ -248,7 +268,7 @@ Rows are attached to rank context and filtered by market cap when `market_cap_cr
 | Trigger | Default condition |
 |---|---|
 | `DAILY_GAINER` | `daily_return_pct >= 5.0` and `volume_ratio_20 >= 2.0`. |
-| `WEEKLY_GAINER` | `return_5d >= 8.0`, current daily return below the daily-gainer threshold, and no daily spike in the last 5 rows. |
+| `WEEKLY_GAINER` | `return_5d > 5.0`. A qualifying volume-backed current-day spike retains `DAILY_GAINER` label precedence; an earlier spike no longer suppresses weekly tracking. |
 | `STEALTH_ACCUMULATION` | Daily return below threshold, `return_5d >= 3.0`, `return_20d >= 8.0`, and at least 3 green days in the latest 5 rows. |
 
 Trigger priority for sorting is daily gainer, then weekly gainer, then stealth accumulation.
@@ -608,7 +628,7 @@ If `investigator_payload.json` is missing, the read model rebuilds a compatible 
 | `investigator_as_of` | latest NSE trade date | Overrides intake date. |
 | `investigator_min_return_pct` | `5.0` | Daily gainer return threshold. |
 | `investigator_min_volume_ratio` | `2.0` | Daily gainer volume-ratio threshold. |
-| `investigator_weekly_return_pct` | `8.0` | Weekly gainer 5-day return threshold. |
+| `investigator_weekly_return_pct` | `5.0` | Strict lower bound for weekly-gainer five-session return; the observed return must be greater than this value. |
 | `investigator_stealth_5d_pct` | `3.0` | Stealth 5-day return threshold. |
 | `investigator_stealth_20d_pct` | `8.0` | Stealth 20-day return threshold. |
 | `investigator_min_green_days_5d` | `3` | Minimum green days for stealth accumulation. |

@@ -28,6 +28,7 @@ from ai_trading_system.domains.investigator.fundamentals import (
     score_fundamentals,
 )
 from ai_trading_system.domains.investigator.intake import (
+    DEFAULT_WEEKLY_RETURN_PCT,
     load_investigator_intake,
     load_investigator_snapshot,
 )
@@ -84,7 +85,7 @@ class InvestigatorService:
         sector_dashboard = _read_optional(
             context.artifact_for("rank", "sector_dashboard")
         )
-        gainers = load_investigator_intake(
+        gainers, intake_receipts = load_investigator_intake(
             ohlcv_db_path=context.db_path,
             ranked_signals=rank_context,
             as_of=context.params.get("investigator_as_of") or None,
@@ -95,7 +96,9 @@ class InvestigatorService:
                 context.params.get("investigator_min_volume_ratio", 2.0)
             ),
             weekly_return_pct=float(
-                context.params.get("investigator_weekly_return_pct", 8.0)
+                context.params.get(
+                    "investigator_weekly_return_pct", DEFAULT_WEEKLY_RETURN_PCT
+                )
             ),
             stealth_5d_pct=float(
                 context.params.get("investigator_stealth_5d_pct", 3.0)
@@ -109,6 +112,7 @@ class InvestigatorService:
             min_market_cap_cr=float(
                 context.params.get("investigator_min_market_cap_cr", 500.0)
             ),
+            include_receipts=True,
         )
         previous_watchlist = self._load_previous_watchlist(context)
         previous_stage1_state = self._load_previous_stage1_state(context)
@@ -120,6 +124,7 @@ class InvestigatorService:
             stock_scan=stock_scan,
             breakout_scan=breakout,
         )
+        intake_diagnostics.update(_intake_receipt_diagnostics(intake_receipts))
         market_snapshot = load_investigator_snapshot(
             ohlcv_db_path=context.db_path,
             ranked_signals=rank_context,
@@ -204,6 +209,7 @@ class InvestigatorService:
             artifacts = self._write_artifacts(
                 context=context,
                 daily_gainer_log=gainers,
+                investigator_intake_receipt=intake_receipts,
                 investigator_scores=empty,
                 repeat_tracker=empty,
                 active_watchlist=empty,
@@ -410,6 +416,7 @@ class InvestigatorService:
         artifacts = self._write_artifacts(
             context=context,
             daily_gainer_log=gainers,
+            investigator_intake_receipt=intake_receipts,
             investigator_scores=scores,
             repeat_tracker=repeat,
             active_watchlist=active,
@@ -1153,6 +1160,34 @@ def _edge_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     return (
         frame[available].where(frame[available].notna(), None).to_dict(orient="records")
     )
+
+
+def _intake_receipt_diagnostics(receipts: pd.DataFrame) -> dict[str, Any]:
+    if receipts.empty:
+        return {
+            "intake_receipt_rows": 0,
+            "intake_receipt_tracked_rows": 0,
+            "intake_receipt_excluded_rows": 0,
+            "intake_exclusion_reason_counts": {},
+        }
+    tracked = receipts.get("tracked", pd.Series(False, index=receipts.index))
+    tracked = tracked.fillna(False).astype(bool)
+    excluded_reasons = (
+        receipts.loc[~tracked, "reason_codes"]
+        .fillna("")
+        .astype(str)
+        .str.split("|")
+        .explode()
+    )
+    counts = excluded_reasons.loc[excluded_reasons.ne("")].value_counts()
+    return {
+        "intake_receipt_rows": int(len(receipts)),
+        "intake_receipt_tracked_rows": int(tracked.sum()),
+        "intake_receipt_excluded_rows": int((~tracked).sum()),
+        "intake_exclusion_reason_counts": {
+            str(reason): int(count) for reason, count in counts.items()
+        },
+    }
 
 
 def _attach_stage1_lifecycle(scores: pd.DataFrame, state: pd.DataFrame) -> pd.DataFrame:

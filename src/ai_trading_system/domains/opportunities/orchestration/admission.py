@@ -112,10 +112,12 @@ def _investigator_primary_onset(
     passed = bool(context and context.review_eligible)
     return passed, {
         "move_tag": context.move_tag if context else None,
+        "trigger_reason": context.trigger_reason if context else None,
         "final_score": context.final_score if context else None,
         "review_eligible": context.review_eligible if context else False,
     }, {
         "move_tag": "WEEKLY_MOMENTUM",
+        "trigger_reason": "WEEKLY_GAINER",
         "final_score_min": 65.0,
         "attribution_dimensions_can_block": False,
     }

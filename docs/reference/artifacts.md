@@ -290,7 +290,12 @@ Phase 3C-3 additionally writes `active_position_coverage.csv`,
 The coverage summary separates routed, complete-data, complete-evidence, fully
 monitored, and missing-coverage counts plus alert emit/dedupe/resolve counts.
 
-When routing is enabled, Investigator additionally writes `routed_investigator_scores.csv`, `routed_pattern_scan.csv`, `position_risk_monitor.csv`, and `routed_routing_conflicts.csv`. Existing Investigator artifacts and publish consumers are unchanged.
+Investigator writes `investigator_intake_receipt.csv` with one deterministic
+tracked/excluded decision per evaluated NSE symbol, including lane eligibility
+flags and stable reason codes. When routing is enabled, Investigator additionally
+writes `routed_investigator_scores.csv`, `routed_pattern_scan.csv`,
+`position_risk_monitor.csv`, and `routed_routing_conflicts.csv`. Existing publish
+consumers are unchanged.
 
 The Phase 3 opportunity stage also publishes Phase 3.5B evidence:
 `investigator_executable_scorecard.csv`,

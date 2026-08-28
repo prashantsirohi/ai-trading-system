@@ -10,6 +10,12 @@ import pandas as pd
 from ai_trading_system.domains.investigator.utils import as_symbol, symbol_column
 
 
+DEFAULT_WEEKLY_RETURN_PCT = 5.0
+WEEKLY_GAINER_THRESHOLD_COMPARISON = "strictly_greater"
+WEEKLY_GAINER_COMPARISON_EPSILON = 1e-9
+WEEKLY_GAINER_RECENT_DAILY_SPIKE_POLICY = "track"
+
+
 def latest_trading_date(ohlcv_db_path: Path) -> str | None:
     with duckdb.connect(str(ohlcv_db_path), read_only=True) as conn:
         row = conn.execute(
@@ -53,7 +59,7 @@ def load_investigator_intake(
     min_return_pct: float = 5.0,
     min_volume_ratio: float = 2.0,
     min_market_cap_cr: float = 500.0,
-    weekly_return_pct: float = 8.0,
+    weekly_return_pct: float = DEFAULT_WEEKLY_RETURN_PCT,
     stealth_5d_pct: float = 3.0,
     stealth_20d_pct: float = 8.0,
     min_green_days_5d: int = 3,
@@ -61,12 +67,14 @@ def load_investigator_intake(
     include_stealth: bool = True,
     symbols: list[str] | None = None,
     require_trigger: bool = True,
-) -> pd.DataFrame:
+    include_receipts: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """Return latest NSE investigator triggers, enriched with rank fields when present."""
 
     resolved_as_of = as_of or latest_trading_date(ohlcv_db_path)
     if not resolved_as_of:
-        return _empty()
+        empty = _empty()
+        return (empty, _empty_receipts()) if include_receipts else empty
     with duckdb.connect(str(ohlcv_db_path), read_only=True) as conn:
         has_delivery = bool(
             conn.execute(
@@ -196,7 +204,8 @@ def load_investigator_intake(
             params,
         ).fetchdf()
     if rows.empty:
-        return _empty()
+        empty = _empty()
+        return (empty, _empty_receipts()) if include_receipts else empty
     rows.loc[:, "symbol_id"] = rows["symbol_id"].map(as_symbol)
     rows = _attach_rank(rows, ranked_signals)
     if symbols is not None:
@@ -209,15 +218,15 @@ def load_investigator_intake(
     daily_return = pd.to_numeric(rows["daily_return_pct"], errors="coerce")
     return_5d = pd.to_numeric(rows["return_5d"], errors="coerce")
     return_20d = pd.to_numeric(rows["return_20d"], errors="coerce")
-    max_daily_gain_5d = pd.to_numeric(rows["max_daily_gain_5d"], errors="coerce")
     green_days_5d = pd.to_numeric(rows["green_days_5d"], errors="coerce")
     volume_ratio_20 = pd.to_numeric(rows["volume_ratio_20"], errors="coerce")
     daily_spike = (daily_return >= float(min_return_pct)) & (volume_ratio_20 >= float(min_volume_ratio))
     weekly_gainer = (
         bool(include_weekly)
-        & (return_5d >= float(weekly_return_pct))
-        & (daily_return < float(min_return_pct))
-        & (max_daily_gain_5d < float(min_return_pct))
+        & (
+            return_5d
+            > float(weekly_return_pct) + WEEKLY_GAINER_COMPARISON_EPSILON
+        )
     )
     stealth_accumulation = (
         bool(include_stealth)
@@ -228,14 +237,34 @@ def load_investigator_intake(
     )
     trigger_mask = daily_spike | weekly_gainer | stealth_accumulation
     mask = (trigger_mask if require_trigger else pd.Series(True, index=rows.index)) & market_cap_ok
+    selected_trigger = pd.Series("", index=rows.index, dtype=object)
+    selected_trigger.loc[stealth_accumulation] = "STEALTH_ACCUMULATION"
+    selected_trigger.loc[weekly_gainer] = "WEEKLY_GAINER"
+    selected_trigger.loc[daily_spike] = "DAILY_GAINER"
+    receipts = _build_intake_receipts(
+        rows=rows,
+        daily_spike=daily_spike,
+        weekly_gainer=weekly_gainer,
+        stealth_accumulation=stealth_accumulation,
+        market_cap_ok=market_cap_ok,
+        selected_trigger=selected_trigger,
+        min_return_pct=float(min_return_pct),
+        min_volume_ratio=float(min_volume_ratio),
+        weekly_return_pct=float(weekly_return_pct),
+        stealth_5d_pct=float(stealth_5d_pct),
+        stealth_20d_pct=float(stealth_20d_pct),
+        min_green_days_5d=int(min_green_days_5d),
+    )
     out = rows.loc[mask].copy()
-    out.loc[:, "trigger_reason"] = pd.NA if not require_trigger else "STEALTH_ACCUMULATION"
-    if require_trigger:
-        out.loc[daily_spike.loc[out.index], "trigger_reason"] = "DAILY_GAINER"
-        out.loc[weekly_gainer.loc[out.index] & ~daily_spike.loc[out.index], "trigger_reason"] = "WEEKLY_GAINER"
+    if out.empty:
+        empty = _empty()
+        return (empty, receipts) if include_receipts else empty
+    out.loc[:, "trigger_reason"] = (
+        selected_trigger.loc[out.index] if require_trigger else pd.NA
+    )
     priority = {"DAILY_GAINER": 0, "WEEKLY_GAINER": 1, "STEALTH_ACCUMULATION": 2}
     out.loc[:, "_trigger_priority"] = out["trigger_reason"].map(priority).fillna(99)
-    return (
+    result = (
         out.sort_values(
             ["_trigger_priority", "daily_return_pct", "return_5d", "symbol_id"],
             ascending=[True, False, False, True],
@@ -244,6 +273,7 @@ def load_investigator_intake(
         .drop(columns=["_trigger_priority"])
         .reset_index(drop=True)
     )
+    return (result, receipts) if include_receipts else result
 
 
 def load_investigator_snapshot(
@@ -344,3 +374,131 @@ def _empty() -> pd.DataFrame:
             "trigger_reason",
         ]
     )
+
+
+def _empty_receipts() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "symbol_id",
+            "trade_date",
+            "daily_return_pct",
+            "return_5d",
+            "return_20d",
+            "max_daily_gain_5d",
+            "green_days_5d",
+            "volume_ratio_20",
+            "market_cap_cr",
+            "daily_gainer_eligible",
+            "weekly_gainer_eligible",
+            "stealth_accumulation_eligible",
+            "tracked",
+            "selected_trigger_reason",
+            "decision_state",
+            "reason_codes",
+        ]
+    )
+
+
+def _build_intake_receipts(
+    *,
+    rows: pd.DataFrame,
+    daily_spike: pd.Series,
+    weekly_gainer: pd.Series,
+    stealth_accumulation: pd.Series,
+    market_cap_ok: pd.Series,
+    selected_trigger: pd.Series,
+    min_return_pct: float,
+    min_volume_ratio: float,
+    weekly_return_pct: float,
+    stealth_5d_pct: float,
+    stealth_20d_pct: float,
+    min_green_days_5d: int,
+) -> pd.DataFrame:
+    """Return one deterministic inclusion/exclusion receipt per evaluated symbol."""
+
+    tracked = (daily_spike | weekly_gainer | stealth_accumulation) & market_cap_ok
+    receipts = pd.DataFrame(index=rows.index)
+    for column in (
+        "symbol_id",
+        "trade_date",
+        "daily_return_pct",
+        "return_5d",
+        "return_20d",
+        "max_daily_gain_5d",
+        "green_days_5d",
+        "volume_ratio_20",
+        "market_cap_cr",
+    ):
+        receipts.loc[:, column] = (
+            rows[column] if column in rows.columns else pd.NA
+        )
+    receipts.loc[:, "daily_gainer_eligible"] = daily_spike.astype(bool)
+    receipts.loc[:, "weekly_gainer_eligible"] = weekly_gainer.astype(bool)
+    receipts.loc[:, "stealth_accumulation_eligible"] = (
+        stealth_accumulation.astype(bool)
+    )
+    receipts.loc[:, "tracked"] = tracked.astype(bool)
+    receipts.loc[:, "selected_trigger_reason"] = selected_trigger.where(tracked, "")
+    receipts.loc[:, "decision_state"] = tracked.map(
+        {True: "TRACKED", False: "EXCLUDED"}
+    )
+    receipts.loc[:, "reason_codes"] = [
+        _intake_reason_codes(
+            row=rows.loc[index],
+            tracked=bool(tracked.loc[index]),
+            market_cap_ok=bool(market_cap_ok.loc[index]),
+            selected_trigger=str(selected_trigger.loc[index]),
+            min_return_pct=min_return_pct,
+            min_volume_ratio=min_volume_ratio,
+            weekly_return_pct=weekly_return_pct,
+            stealth_5d_pct=stealth_5d_pct,
+            stealth_20d_pct=stealth_20d_pct,
+            min_green_days_5d=min_green_days_5d,
+        )
+        for index in rows.index
+    ]
+    return receipts.sort_values("symbol_id", kind="stable").reset_index(drop=True)
+
+
+def _intake_reason_codes(
+    *,
+    row: pd.Series,
+    tracked: bool,
+    market_cap_ok: bool,
+    selected_trigger: str,
+    min_return_pct: float,
+    min_volume_ratio: float,
+    weekly_return_pct: float,
+    stealth_5d_pct: float,
+    stealth_20d_pct: float,
+    min_green_days_5d: int,
+) -> str:
+    if tracked:
+        return f"TRACKED_{selected_trigger}"
+    reasons: list[str] = []
+    if not market_cap_ok:
+        reasons.append("MARKET_CAP_BELOW_THRESHOLD")
+    daily_return = pd.to_numeric(pd.Series([row.get("daily_return_pct")]), errors="coerce").iloc[0]
+    volume_ratio = pd.to_numeric(pd.Series([row.get("volume_ratio_20")]), errors="coerce").iloc[0]
+    return_5d = pd.to_numeric(pd.Series([row.get("return_5d")]), errors="coerce").iloc[0]
+    return_20d = pd.to_numeric(pd.Series([row.get("return_20d")]), errors="coerce").iloc[0]
+    green_days = pd.to_numeric(pd.Series([row.get("green_days_5d")]), errors="coerce").iloc[0]
+    if pd.isna(daily_return):
+        reasons.append("DAILY_RETURN_MISSING")
+    elif daily_return < min_return_pct:
+        reasons.append("DAILY_RETURN_BELOW_THRESHOLD")
+    if pd.isna(volume_ratio):
+        reasons.append("DAILY_VOLUME_RATIO_MISSING")
+    elif volume_ratio < min_volume_ratio:
+        reasons.append("DAILY_VOLUME_RATIO_BELOW_THRESHOLD")
+    if pd.isna(return_5d):
+        reasons.append("WEEKLY_RETURN_MISSING")
+    elif return_5d <= weekly_return_pct + WEEKLY_GAINER_COMPARISON_EPSILON:
+        reasons.append("WEEKLY_RETURN_NOT_ABOVE_THRESHOLD")
+    if pd.isna(return_5d) or return_5d < stealth_5d_pct:
+        reasons.append("STEALTH_5D_RETURN_BELOW_THRESHOLD")
+    if pd.isna(return_20d) or return_20d < stealth_20d_pct:
+        reasons.append("STEALTH_20D_RETURN_BELOW_THRESHOLD")
+    if pd.isna(green_days) or green_days < min_green_days_5d:
+        reasons.append("STEALTH_GREEN_DAYS_BELOW_THRESHOLD")
+    return "|".join(dict.fromkeys(reasons)) or "NO_TRIGGER_MATCHED"

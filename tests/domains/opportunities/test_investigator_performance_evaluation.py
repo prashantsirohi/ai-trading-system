@@ -104,7 +104,7 @@ def _insert_event(
     event_type: str,
     event_date: date,
     anchor: float,
-    policy_version: str = "investigator-attribution-policy-v3",
+    policy_version: str = "investigator-attribution-policy-v4",
 ) -> None:
     conn.execute(
         """
@@ -254,12 +254,12 @@ def test_matures_discovery_and_confirmed_entry_metrics(tmp_path: Path) -> None:
     assert executable[1] == 103.0
     assert executable[2] == pytest.approx(103.0515)
     assert executable[3] == "investigator-shadow-fill-v1"
-    assert executable[4] == "investigator-attribution-policy-v3"
+    assert executable[4] == "investigator-attribution-policy-v4"
     assert stop_day == 1
     assert {"PENDING_3D", "CONFIRMED", "EXECUTABLE", "SUSTAINED_10D"}.issubset(
         evaluation_states
     )
-    assert evaluation_policy_versions == {"investigator-attribution-policy-v3"}
+    assert evaluation_policy_versions == {"investigator-attribution-policy-v4"}
     assert outputs["investigator_discovery_scorecard"]
     assert outputs["investigator_entry_scorecard"]
     assert outputs["investigator_executable_scorecard"]

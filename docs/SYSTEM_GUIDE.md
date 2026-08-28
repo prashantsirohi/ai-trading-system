@@ -189,6 +189,19 @@ now fall back to the authoritative full-score fields, and completed no-pattern
 scans retain explicit `NONE` receipts through opportunity assembly. Opportunity
 summaries distinguish missing scan artifacts from successful zero-row scans.
 
+Phase 3.5E introduces immutable successor
+`investigator-attribution-policy-v4`. Investigator now tracks every symbol
+with a five-session return strictly above 5%, including names whose weekly move
+contains an earlier 5% or larger daily spike. A qualifying volume-backed spike
+on the current session keeps `DAILY_GAINER` label precedence; otherwise the
+symbol is retained as `WEEKLY_GAINER`. The threshold and overlap semantics are
+policy-fingerprinted. Weekly trigger source, rather than an overwriteable
+contextual move tag, owns primary eligibility. Every evaluated symbol receives
+an immutable inclusion/exclusion receipt with stable reason codes, and active
+weekly observations may carry through Stage 2 until a trap, pattern, structure,
+or lifecycle termination. The primary review score remains 65, and the lane
+remains shadow-only and non-executable.
+
 ADR-0007 R0 is a separate research-only calibration harness for the proposed
 four-lane pattern evidence classifier. `ai-trading-pattern-r0-calibrate` reads
 `_catalog` and `weekly_stage_snapshot` point-in-time through read-only DuckDB

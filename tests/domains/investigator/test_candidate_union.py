@@ -115,6 +115,32 @@ def test_previous_watchlist_filters_closed_failed_and_hard_trap_rows() -> None:
     assert eligible["symbol_id"].tolist() == ["KEEP"]
 
 
+def test_previous_watchlist_carries_active_stage2_weekly_candidate() -> None:
+    previous = pd.DataFrame(
+        [
+            {
+                "symbol_id": "WEEKLY",
+                "status": "WATCHLIST",
+                "stage_label": "STAGE_2_CONFIRMED",
+                "s1_promotion_state": "S2_CONFIRMED",
+                "trigger_reason": "WEEKLY_GAINER",
+                "candidate_sources": "WEEKLY_GAINER|STOCK_SCAN_CONTEXT",
+            },
+            {
+                "symbol_id": "DAILY",
+                "status": "WATCHLIST",
+                "stage_label": "STAGE_2_CONFIRMED",
+                "trigger_reason": "DAILY_GAINER",
+                "candidate_sources": "DAILY_GAINER|STOCK_SCAN_CONTEXT",
+            },
+        ]
+    )
+
+    eligible = eligible_previous_watchlist(previous)
+
+    assert eligible["symbol_id"].tolist() == ["WEEKLY"]
+
+
 def test_previous_watchlist_only_refresh_does_not_increment_repeat_appearance() -> None:
     history = pd.DataFrame(
         [
