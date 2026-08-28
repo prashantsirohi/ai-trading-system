@@ -2,7 +2,7 @@
 
 - **Purpose:** Observability stage. Appends today's rank cohort to `rank_cohort_performance` and recomputes forward 5/10/20/60-day returns for rows whose horizons just matured. **Non-blocking** — failures never fail the pipeline.
 - **Audience:** Operator, developer, research.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-08-28
 - **Source of truth:**
   - [`src/ai_trading_system/pipeline/stages/perf_tracker.py`](../../src/ai_trading_system/pipeline/stages/perf_tracker.py)
   - [`src/ai_trading_system/research/perf_tracker/backfill.py`](../../src/ai_trading_system/research/perf_tracker/backfill.py)
@@ -94,6 +94,9 @@ Fully idempotent — DELETE+INSERT keyed on `(run_date, symbol_id, exchange)`. S
 - **Weekly digest** — `research/perf_tracker/digest.py::build_digest` queries `rank_cohort_performance` for cohort returns, bucket attribution, factor IC (rolling 30/90-day), and drift flags (IC drop >30% vs 6-month baseline). Output: `data/research/perf_digests/digest_<YYYY-WW>.md`. Currently out-of-pipeline; wire into weekly runbook if desired.
 - **Research / ML training** — `rank_cohort_performance` is the labelled dataset for factor IC analysis and any future supervised model predicting forward returns from rank-stage factors.
 - **API** — `ui/execution_api/routes/perf_tracker.py` reads this table. See [`docs/reference/api_reference.md`](../reference/api_reference.md).
+- **MCP** — the read-only performance tools open `research.duckdb` directly
+  with `read_only=True` and read only `rank_cohort_performance_trusted`. They do
+  not call `open_research_db()` because its schema-ensure path is writable.
 
 ## Commands
 

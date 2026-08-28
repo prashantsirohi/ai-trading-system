@@ -327,12 +327,12 @@ def list_episodes(
 
 
 @router.get("/episodes/{episode_id}")
-def episode_detail(episode_id: str) -> JSONResponse:
+def episode_detail(episode_id: str, account_ref: str) -> JSONResponse:
     store = _service().store
     with store.reader() as conn:
         episodes = rows_as_dicts(conn.execute(
-            """SELECT * FROM trade_episode WHERE episode_id=?
-               ORDER BY generated_at DESC LIMIT 1""", [episode_id]
+            """SELECT * FROM trade_episode WHERE episode_id=? AND account_ref=?
+               ORDER BY generated_at DESC LIMIT 1""", [episode_id, account_ref]
         ))
         if not episodes:
             raise HTTPException(status_code=404, detail="Episode not found")
@@ -349,8 +349,8 @@ def episode_detail(episode_id: str) -> JSONResponse:
 
 
 @router.get("/episodes/{episode_id}/chart-markers")
-def episode_chart_markers(episode_id: str) -> JSONResponse:
-    detail = episode_detail(episode_id)
+def episode_chart_markers(episode_id: str, account_ref: str) -> JSONResponse:
+    detail = episode_detail(episode_id, account_ref)
     payload = json.loads(detail.body)
     markers = [{
         "fill_id": row["fill_id"], "time": row["executed_at"], "side": row["side"],
@@ -361,8 +361,8 @@ def episode_chart_markers(episode_id: str) -> JSONResponse:
 
 
 @router.get("/episodes/{episode_id}/chart")
-def episode_chart(episode_id: str) -> JSONResponse:
-    detail = json.loads(episode_detail(episode_id).body)
+def episode_chart(episode_id: str, account_ref: str) -> JSONResponse:
+    detail = json.loads(episode_detail(episode_id, account_ref).body)
     episode = detail["episode"]
     fills = detail["fills"]
     symbols = {str(row["symbol"]) for row in fills}
@@ -550,11 +550,11 @@ def list_reconciliations(
 
 
 @router.get("/reconciliations/{reconciliation_id}")
-def reconciliation_detail(reconciliation_id: str) -> JSONResponse:
+def reconciliation_detail(reconciliation_id: str, account_ref: str) -> JSONResponse:
     with _service().store.reader() as conn:
         reconciliations = rows_as_dicts(conn.execute(
-            "SELECT * FROM portfolio_reconciliation WHERE reconciliation_id=?",
-            [reconciliation_id],
+            "SELECT * FROM portfolio_reconciliation WHERE reconciliation_id=? AND account_ref=?",
+            [reconciliation_id, account_ref],
         ))
         if not reconciliations:
             raise HTTPException(status_code=404, detail="Reconciliation not found")

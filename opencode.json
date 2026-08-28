@@ -18,6 +18,22 @@
       },
       "enabled": true,
       "timeout": 10000
+    },
+    "ai-trading-journal": {
+      "type": "local",
+      "command": [
+        "/Users/prashant/my-ai-project/trading_system/ai-trading-system/.venv/bin/python",
+        "-m",
+        "ai_trading_system.interfaces.journal_mcp.server",
+        "--profile",
+        "operator"
+      ],
+      "cwd": "/Users/prashant/my-ai-project/trading_system/ai-trading-system",
+      "environment": {
+        "PYTHONPATH": "/Users/prashant/my-ai-project/trading_system/ai-trading-system/src"
+      },
+      "enabled": true,
+      "timeout": 10000
     }
   }
 }

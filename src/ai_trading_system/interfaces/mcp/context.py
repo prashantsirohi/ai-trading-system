@@ -145,6 +145,15 @@ class McpContext:
         return self.paths.root_dir / "fundamentals.duckdb"
 
     @property
+    def research_db(self) -> Path:
+        # The perf tracker deliberately stores its labelled outcomes in the
+        # operational root even though the file is named research.duckdb.
+        operational = get_domain_paths(
+            project_root=self.project_root, data_domain="operational"
+        )
+        return operational.root_dir / "research.duckdb"
+
+    @property
     def screener_db(self) -> Path:
         return self.paths.fundamentals_dir / "screener_financials.db"
 
@@ -206,6 +215,13 @@ class McpContext:
     @contextmanager
     def fundamentals(self) -> Iterator[duckdb.DuckDBPyConnection]:
         with self.duckdb(self.fundamentals_db) as conn:
+            yield conn
+
+    @contextmanager
+    def research_performance(self) -> Iterator[duckdb.DuckDBPyConnection]:
+        """Open the operational rank-performance store without ensuring schema."""
+
+        with self.duckdb(self.research_db) as conn:
             yield conn
 
     @contextmanager

@@ -2,7 +2,7 @@
 
 - **Purpose:** Safely initialize, preview, import and inspect the local journal.
 - **Audience:** Local operator.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-08-28
 - **Source of truth:** `ai_trading_system.domains.trade_journal.cli` and the execution API journal router.
 
 ---
@@ -44,3 +44,25 @@ Use the workspace task controls for reconstruction, reconciliation, and analysis
 Portfolio drawdown is `holdings_only`: it compounds close-to-close price P&L on positions held at the preceding session close. It is not account NAV and cannot represent intraday execution timing, cash, charges, dividends, taxes, or transfers. Stop heat is available only for open episodes with a reviewed intended stop.
 
 For characterization, point `TRADE_JOURNAL_SAMPLE_TRADEBOOK` and `TRADE_JOURNAL_SAMPLE_HOLDINGS` at local files and run the opt-in test. It creates only a temporary DuckDB fixture. Never point a test at `$DATA_ROOT/trade_journal.duckdb`.
+
+## Read-only agent access
+
+After backing up the journal, apply schema `002` with the migration command at
+the top of this runbook. The repo-root `.mcp.json` and `opencode.json` register
+`ai-trading-journal-mcp`. A single-account journal is pinned automatically. For
+multiple accounts, place the selected account in the local, uncommitted `.env`:
+
+```bash
+AI_TRADING_JOURNAL_MCP_ACCOUNT_REF=ACCOUNT
+```
+
+Restart the agent session after changing MCP configuration or `.env`. Verify
+tool discovery without opening the live store:
+
+```bash
+ai-trading-journal-mcp --list-tools
+```
+
+The server is read-only and exposes no import, reconstruction, analysis,
+annotation-write, approval, broker, or execution operation. See
+[Journal MCP tools](../reference/journal_mcp_tools.md).

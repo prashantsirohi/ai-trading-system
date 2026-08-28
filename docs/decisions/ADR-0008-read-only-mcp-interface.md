@@ -36,7 +36,7 @@ Add a new interface — not new analytics and not new storage — at
 exposing read-only tools over OHLCV, technical features, stage, sector, rank,
 patterns, fundamentals, the shadow fundamental-discovery lane, pipeline
 governance, and canonical opportunity lifecycle, plus a `describe_schema`
-column dictionary. V2.1 contains 31 tools; no HTTP endpoint was added.
+column dictionary. V2.2 contains 38 tools; no HTTP endpoint was added.
 
 Four invariants are binding.
 
@@ -162,6 +162,15 @@ recorded or mechanically established policy evidence. `compare_symbols` is
 bounded to ten listings. `get_market_snapshot` retains per-block metadata and
 does not fill its latest-only sector-leadership block on historical requests.
 All four remain behind invariants I1–I4 and cannot recommend or execute trades.
+
+V2.2 adds seven performance tools. Realized market winners are mechanically
+computed from adjusted OHLCV and labelled as hindsight. Ranked winners,
+summaries, and symbol histories read only trusted persisted cohort rows whose
+selected 5/10/20/60-session outcome matured and was recorded by the cutoff.
+Strategy run, result, and trade tools read the existing optimizer tables from
+the control plane. The MCP opens `research.duckdb` directly read-only and never
+uses `open_research_db()`, whose schema-ensure path is writable. These tools
+cannot run a backtest or promote a rule pack.
 
 ## Alternatives considered
 

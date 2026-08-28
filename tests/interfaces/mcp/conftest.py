@@ -464,6 +464,98 @@ def _build_control_plane_db(path: Path) -> None:
                 """,
                 [f"gov-{index}", f"obs-{index}", as_of],
             )
+
+        conn.execute(
+            """CREATE TABLE strategy_optimization_run (
+                optimization_run_id VARCHAR,recipe_name VARCHAR,strategy_id VARCHAR,
+                baseline_rule_pack_id VARCHAR,from_date DATE,to_date DATE,seed INTEGER,
+                max_trials INTEGER,status VARCHAR,champion_rule_pack_id VARCHAR,
+                recipe_json VARCHAR,error VARCHAR,started_at TIMESTAMP,completed_at TIMESTAMP
+            )"""
+        )
+        conn.execute(
+            """INSERT INTO strategy_optimization_run VALUES (
+                'opt-1','baseline-recipe','rank-strategy','rp-base',CAST('2025-01-01' AS DATE),
+                CAST('2025-12-31' AS DATE),42,10,'completed','rp-champion','{}',NULL,
+                CAST('2026-01-08' AS TIMESTAMP),CAST('2026-01-09' AS TIMESTAMP))"""
+        )
+        conn.execute(
+            """CREATE TABLE strategy_iteration_result (
+                optimization_run_id VARCHAR,iteration INTEGER,rule_pack_id VARCHAR,
+                fold_index INTEGER,fold_role VARCHAR,fitness DOUBLE,cagr DOUBLE,sharpe DOUBLE,
+                sortino DOUBLE,max_drawdown_pct DOUBLE,win_rate DOUBLE,profit_factor DOUBLE,
+                trade_count INTEGER,trades_per_year DOUBLE,total_return_pct DOUBLE,
+                nifty_return_pct DOUBLE,accepted BOOLEAN,rejection_reason VARCHAR,
+                created_at TIMESTAMP,benchmark_return_pct DOUBLE,benchmark_symbol VARCHAR
+            )"""
+        )
+        conn.executemany(
+            "INSERT INTO strategy_iteration_result VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                ("opt-1", 3, "rp-champion", -1, "aggregate", 0.8, 22.0, 1.4, 1.8,
+                 -12.0, 58.0, 1.7, 24, 24.0, 30.0, 15.0, True, None,
+                 "2026-01-09", 15.0, "NIFTY50"),
+                ("opt-1", 3, "rp-champion", 0, "val", 0.75, 20.0, 1.3, 1.6,
+                 -13.0, 56.0, 1.6, 12, 24.0, 14.0, 7.0, True, None,
+                 "2026-01-09", 7.0, "NIFTY50"),
+                ("opt-1", -1, "rp-base", -1, "aggregate", 0.4, 10.0, 0.7, 0.8,
+                 -20.0, 48.0, 1.1, 20, 20.0, 12.0, 15.0, True, None,
+                 "2026-01-09", 15.0, "NIFTY50"),
+            ],
+        )
+        conn.execute(
+            """CREATE TABLE strategy_backtest_trade (
+                optimization_run_id VARCHAR,iteration INTEGER,fold_index INTEGER,
+                rule_pack_id VARCHAR,symbol_id VARCHAR,exchange VARCHAR,entry_date DATE,
+                entry_price DOUBLE,entry_reason VARCHAR,exit_date DATE,exit_price DOUBLE,
+                exit_reason VARCHAR,bars_held INTEGER,pnl DOUBLE,pnl_pct DOUBLE,sector VARCHAR,
+                rank_at_entry INTEGER,score_at_entry DOUBLE
+            )"""
+        )
+        conn.executemany(
+            "INSERT INTO strategy_backtest_trade VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                ("opt-1", 3, 0, "rp-champion", "AAA", "NSE", "2025-02-01", 100.0,
+                 "rank", "2025-03-01", 120.0, "target", 20, 2000.0, 20.0,
+                 "Capital Goods", 8, 75.0),
+                ("opt-1", 3, 0, "rp-champion", "BBB", "NSE", "2025-04-01", 50.0,
+                 "rank", "2025-04-20", 45.0, "stop", 14, -500.0, -10.0,
+                 "Metals", 18, 65.0),
+            ],
+        )
+    finally:
+        conn.close()
+
+
+def _build_research_db(path: Path) -> None:
+    conn = duckdb.connect(str(path))
+    try:
+        conn.execute(
+            """CREATE TABLE rank_cohort_performance_trusted (
+                run_date DATE,symbol_id VARCHAR,exchange VARCHAR,rank_position INTEGER,
+                composite_score DOUBLE,composite_score_adjusted DOUBLE,rank_mode VARCHAR,
+                watchlist_bucket VARCHAR,config_id VARCHAR,
+                fwd_5d_return DOUBLE,fwd_10d_return DOUBLE,fwd_20d_return DOUBLE,fwd_60d_return DOUBLE,
+                fwd_5d_matured_at DATE,fwd_10d_matured_at DATE,
+                fwd_20d_matured_at DATE,fwd_60d_matured_at DATE,
+                sector_name VARCHAR,source_type VARCHAR,source_run_id VARCHAR,
+                inserted_at TIMESTAMP
+            )"""
+        )
+        conn.executemany(
+            "INSERT INTO rank_cohort_performance_trusted VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                ("2026-01-05", "AAA", "NSE", 8, 75.0, 75.0, "operational", "top-10", "cfg",
+                 3.0, 6.0, 12.0, 20.0, "2026-01-07", "2026-01-08", "2026-01-09",
+                 "2026-03-01", "Capital Goods", "operational_artifact", "run-1", "2026-01-09"),
+                ("2026-01-06", "AAA", "NSE", 6, 78.0, 78.0, "operational", "top-10", "cfg",
+                 2.0, 5.0, 8.0, None, "2026-01-08", "2026-01-09", "2026-01-10",
+                 None, "Capital Goods", "operational_artifact", "run-2", "2026-01-10"),
+                ("2026-01-05", "BBB", "NSE", 25, 55.0, 55.0, "operational", "rank-11-50", "cfg",
+                 -2.0, -3.0, -5.0, -8.0, "2026-01-07", "2026-01-08", "2026-01-09",
+                 "2026-03-01", "Metals", "operational_artifact", "run-1", "2026-01-09"),
+            ],
+        )
     finally:
         conn.close()
 
@@ -800,6 +892,7 @@ def data_root(connection_guard: ConnectionGuard, tmp_path: Path) -> Path:
     with connection_guard.paused():
         _build_ohlcv_db(root / "ohlcv.duckdb")
         _build_control_plane_db(root / "control_plane.duckdb")
+        _build_research_db(root / "research.duckdb")
         _build_master_db(root / "masterdata.db")
         _build_screener_db(root / "fundamentals" / "screener_financials.db")
         _build_fundamentals_db(root / "fundamentals.duckdb")

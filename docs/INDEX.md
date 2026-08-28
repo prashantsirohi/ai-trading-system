@@ -2,7 +2,7 @@
 
 - **Purpose:** Complete map of all documentation under `docs/`.
 - **Audience:** Anyone navigating the docs.
-- **Last verified:** 2026-08-18
+- **Last verified:** 2026-08-28
 - **Source of truth:** This file is the source of truth for the doc inventory; `SYSTEM_GUIDE.md` is the source of truth for system orientation.
 
 > Each document records its own verification date. See [`development/legacy_cleanup_plan.md`](development/legacy_cleanup_plan.md) for the cleanup history.
@@ -99,6 +99,7 @@
 - [package_migration](development/package_migration.md)
 - [legacy_cleanup_plan](development/legacy_cleanup_plan.md)
 - [mcp_v2_plan](development/mcp_v2_plan.md) — v2 delivery plan and implemented boundaries; current behavior is catalogued in `reference/mcp_tools.md`
+- [journal_mcp_tools](reference/journal_mcp_tools.md) — private account-scoped journal MCP contract
 - [adding_new_stage](development/adding_new_stage.md)
 - [adding_new_factor](development/adding_new_factor.md)
 - [adding_new_publisher](development/adding_new_publisher.md)
@@ -114,6 +115,7 @@
 - [ADR-0006 entry model and stage policy freeze](decisions/ADR-0006-entry-model-and-stage-policy-freeze.md)
 - [ADR-0007 multi-lane pattern evidence scan (proposed)](decisions/ADR-0007-two-lane-pattern-scan.md)
 - [ADR-0008 read-only MCP interface](decisions/ADR-0008-read-only-mcp-interface.md)
+- [ADR-0009 private trade journal MCP](decisions/ADR-0009-private-trade-journal-mcp.md)
 
 ## Evidence
 - [R1a shadow A/B safety proof (2026-07-17 @ 7d5f03a)](evidence/adr-0007/r1a-safety-proof/2026-07-17-7d5f03a/README.md)

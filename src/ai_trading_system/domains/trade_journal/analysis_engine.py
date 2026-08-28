@@ -312,13 +312,14 @@ class JournalAnalysisEngine:
                 conn.executemany(
                     "INSERT INTO portfolio_risk_snapshot VALUES (?,?,?,?,?,?,?,?)", risk_rows
                 )
-            as_of = valuation["series"][-1]["date"] if valuation["series"] else date.today()
-            conn.execute(
-                "INSERT INTO portfolio_evaluation VALUES (?,?,?,?,?,?,?,?,?)",
-                [stable_id("peval", run_id), run_id, account, as_of, "holdings_only",
-                 _json(portfolio_metrics), portfolio_metrics["trust_status"],
-                 self.config.logic_version, now],
-            )
+            if valuation["series"]:
+                as_of = valuation["series"][-1]["date"]
+                conn.execute(
+                    "INSERT INTO portfolio_evaluation VALUES (?,?,?,?,?,?,?,?,?)",
+                    [stable_id("peval", run_id), run_id, account, as_of, "holdings_only",
+                     _json(portfolio_metrics), portfolio_metrics["trust_status"],
+                     self.config.logic_version, now],
+                )
             self._persist_policy_breaches(
                 conn, run_id=run_id, valuation=valuation, metrics=portfolio_metrics, now=now
             )

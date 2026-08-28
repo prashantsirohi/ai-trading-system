@@ -18,7 +18,7 @@ The main surfaces are:
 - The Python pipeline and domain packages under `src/ai_trading_system/`.
 - The FastAPI operator backend under `src/ai_trading_system/ui/execution_api/`.
 - The React operator console under `web/execution-console-v2/ai-trading-dashboard-starter/`.
-- The strictly read-only MCP server under `src/ai_trading_system/interfaces/mcp/`.
+- The strictly read-only market MCP under `src/ai_trading_system/interfaces/mcp/` and private journal MCP under `src/ai_trading_system/interfaces/journal_mcp/`.
 - External runtime storage resolved from `.env`, normally through `DATA_ROOT`.
 
 The MCP server (`ai-trading-mcp`) exposes OHLCV, technical features, weekly
@@ -44,6 +44,15 @@ same-date shortlist selection and reports recorded exclusion evidence;
 sector, freshness, pipeline-run, and DQ orientation. These surfaces are
 evidence-only and cannot recommend, publish, execute, or mutate state.
 
+MCP v2.2 adds read-only performance evidence. `get_market_winners` computes a
+bounded adjusted close-to-close hindsight return over a named calendar window;
+it is explicitly separate from strategy results. Ranked-cohort tools read only
+trusted, matured 5/10/20/60-session outcomes from
+`research.duckdb:rank_cohort_performance_trusted`, including recording-time
+cutoffs. Strategy-backtest tools read completed run, fold, and simulated-trade
+evidence from the control plane. They do not run a backtest, promote a rule
+pack, or treat pending outcomes as losses.
+
 The full analytical rank cross-section is persisted append-oriented in
 `rank_universe_history` before regime `top_n` truncation. The existing
 `rank_history` and `ranked_signals` remain the actionable shortlist and remain
@@ -67,7 +76,7 @@ breakouts are active, the detector receives the complete per-exchange
 `ranked_universe` for relative-strength and sector-percentile context; its
 output remains separate from the actionable `ranked_signals` shortlist.
 
-The on-demand [Actual Trading Journal](architecture/trade_journal.md) is a separate bounded domain. It owns `$DATA_ROOT/trade_journal.duckdb`, is not a daily-pipeline stage, never writes `execution.duckdb`, and reads trusted operational market data only for point-in-time enrichment. Its authenticated mutation routes live under the execution API; Phase 4 `/api/v1` remains GET-only. Loopback development uses a server-side Vite/API handshake when no operator key is configured, while non-loopback execution-API startup requires an explicit key. See the [operator runbook](runbooks/trade_journal.md).
+The on-demand [Actual Trading Journal](architecture/trade_journal.md) is a separate bounded domain. It owns `$DATA_ROOT/trade_journal.duckdb`, is not a daily-pipeline stage, never writes `execution.duckdb`, and reads trusted operational market data only for point-in-time enrichment. Its authenticated mutation routes live under the execution API; Phase 4 `/api/v1` remains GET-only. Loopback development uses a server-side Vite/API handshake when no operator key is configured, while non-loopback execution-API startup requires an explicit key. The separate `ai-trading-journal-mcp` process exposes an account-pinned, allowlisted read surface without importing the journal domain or weakening the general market MCP boundary. It distinguishes economic `portfolio_as_of` from recording-time `known_at`, never enumerates accounts, and exposes no mutation tool. See [ADR-0009](decisions/ADR-0009-private-trade-journal-mcp.md), the [journal MCP catalog](reference/journal_mcp_tools.md), and the [operator runbook](runbooks/trade_journal.md).
 
 The canonical, persistence-free vocabulary for future opportunity management is
 owned by `src/ai_trading_system/domains/opportunities/`. It keeps ranking
@@ -860,6 +869,17 @@ Claude Code discovers the server from the repo-root `.mcp.json`. `--self-test`
 calls every tool once at latest and once historically and exits non-zero on any
 failure, including a point-in-time leak. The server never writes, never starts a
 pipeline, and never touches broker state. See [MCP tools](reference/mcp_tools.md).
+
+The repo registrations also expose the private journal server after journal
+schema migration `002`. It pins a sole account automatically; a multi-account
+journal requires `AI_TRADING_JOURNAL_MCP_ACCOUNT_REF` in the operator
+environment.
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.journal_mcp.server --list-tools
+```
+
+See [Journal MCP tools](reference/journal_mcp_tools.md).
 
 Run safe diagnostics:
 

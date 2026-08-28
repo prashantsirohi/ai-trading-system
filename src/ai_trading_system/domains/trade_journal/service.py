@@ -644,7 +644,13 @@ class TradeJournalService:
         now = utc_now()
         config = JournalAnalyticsConfig()
         with self.store.reader() as conn:
-            snap = rows_as_dicts(conn.execute("SELECT * FROM portfolio_snapshot WHERE snapshot_id=?", [snapshot_id]))[0]
+            snapshots = rows_as_dicts(conn.execute(
+                "SELECT * FROM portfolio_snapshot WHERE snapshot_id=? AND account_ref=?",
+                [snapshot_id, account],
+            ))
+            if not snapshots:
+                raise ValueError("snapshot not found for account")
+            snap = snapshots[0]
             positions = rows_as_dicts(conn.execute("SELECT * FROM portfolio_snapshot_position WHERE snapshot_id=? ORDER BY instrument", [snapshot_id]))
             ledger_rows = conn.execute(
                 """SELECT instrument_id,SUM(CASE WHEN side='buy' THEN quantity ELSE -quantity END) quantity

@@ -2,7 +2,7 @@
 
 - **Purpose:** All env vars actually read by the code, with source module and default.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-19
+- **Last verified:** 2026-08-28
 - **Source of truth:** Grep of `os.environ`, `os.getenv`, `getenv(`, and pydantic `Settings` in `src/`. Cited modules per row.
 
 
@@ -30,6 +30,7 @@ defaults are used.
 
 | Name | Required | Used by | Default | Notes |
 |---|---|---|---|---|
+| `AI_TRADING_JOURNAL_MCP_ACCOUNT_REF` | multi-account journal MCP | `interfaces/journal_mcp/context.py` | sole stored account | Pins the private journal MCP to one account. Never place the value in committed MCP configuration. |
 | `TRADE_JOURNAL_SAMPLE_TRADEBOOK` | no | opt-in journal characterization test | — | Local path only; never committed. |
 | `TRADE_JOURNAL_SAMPLE_HOLDINGS` | no | opt-in journal characterization test | — | Local path only; never committed. |
 | `DHAN_API_KEY` | live trading | `domains/ingest/providers/dhan.py` | — | secret |

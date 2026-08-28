@@ -13,6 +13,18 @@
       "env": {
         "PYTHONPATH": "src"
       }
+    },
+    "ai-trading-journal": {
+      "command": "./.venv/bin/python",
+      "args": [
+        "-m",
+        "ai_trading_system.interfaces.journal_mcp.server",
+        "--profile",
+        "operator"
+      ],
+      "env": {
+        "PYTHONPATH": "src"
+      }
     }
   }
 }

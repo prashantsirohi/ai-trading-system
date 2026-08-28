@@ -70,6 +70,10 @@ def test_context_connections_pass_the_guard(ctx: McpContext) -> None:
         assert conn.execute("SELECT COUNT(*) FROM rank_history").fetchone()[0] > 0
     with ctx.fundamentals() as conn:
         assert conn.execute("SELECT COUNT(*) FROM fundamental_scores").fetchone()[0] > 0
+    with ctx.research_performance() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM rank_cohort_performance_trusted"
+        ).fetchone()[0] > 0
     with ctx.sqlite(ctx.master_db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] > 0
     with ctx.sqlite(ctx.screener_db) as conn:

@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-08-21
+- **Last verified:** 2026-08-28
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -369,7 +369,7 @@ policy/source signature match. Use `--checkpoint-dir` to relocate them or
 `--no-resume` to recompute all dates. `Ctrl-C` preserves completed-date
 checkpoints and exits with status 130.
 
-## Read-only MCP server
+## Read-only MCP servers
 
 `ai-trading-mcp` (or `python -m ai_trading_system.interfaces.mcp.server`) serves
 the read surfaces over stdio for an AI agent. It is strictly read-only: every
@@ -397,6 +397,18 @@ same local stdio server, so no HTTP/SSE endpoint is required.
 See [MCP tools](mcp_tools.md) for the tool catalog and
 [ADR-0008](../decisions/ADR-0008-read-only-mcp-interface.md) for the invariants.
 
+`ai-trading-journal-mcp` serves private journal evidence in a separate,
+account-scoped stdio process. It requires journal schema `002` and an explicit
+external `DATA_ROOT`. A single journal account is selected automatically;
+multi-account stores require `AI_TRADING_JOURNAL_MCP_ACCOUNT_REF`.
+
+```bash
+ai-trading-journal-mcp --list-tools
+```
+
+See [Journal MCP tools](journal_mcp_tools.md) and
+[ADR-0009](../decisions/ADR-0009-private-trade-journal-mcp.md).
+
 ## Installed console scripts
 
 After `pip install -e .`, these aliases are defined by `pyproject.toml`:
@@ -421,6 +433,7 @@ After `pip install -e .`, these aliases are defined by `pyproject.toml`:
 | `ai-trading-pattern-r0-calibrate` | Read-only four-lane pattern R0 calibration and replay verifier |
 | `ai-trading-phase4-api` | Strictly read-only Phase 4A API |
 | `ai-trading-mcp` | Strictly read-only MCP (stdio) server for AI agents |
+| `ai-trading-journal-mcp` | Private account-scoped read-only journal MCP (stdio) server |
 | `ai-trading-annotate-phase3c1-governance` | Copied-store Phase 3B governance annotation |
 | `ai-trading-research-recipe` | Research recipe runner |
 | `ai-trading-optimize` | Optimization runner |

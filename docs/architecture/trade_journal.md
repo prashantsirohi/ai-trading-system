@@ -2,7 +2,7 @@
 
 - **Purpose:** Define the implemented broker-import, reconstruction, reconciliation, and analytical journal boundary.
 - **Audience:** Operators, developers, and reviewers.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-08-28
 - **Source of truth:** `src/ai_trading_system/domains/trade_journal/`, its packaged migrations, and `ui/execution_api/routes/trade_journal.py`.
 
 ---
@@ -11,7 +11,12 @@
 
 The on-demand `trade_journal` bounded domain is not a daily-pipeline stage. It owns `$DATA_ROOT/trade_journal.duckdb`; it neither shares nor updates `execution.duckdb`. Market enrichment opens operational OHLCV read-only. Broker-state mutation and external publishing are outside this domain.
 
-The database is resolved only through `trade_journal_db_path()`. Runtime access verifies schema version `001` and fails closed when the database is absent or behind. `ai-trading-journal migrate --apply` backs up an existing regular file before applying packaged SQL. All writers use a store-adjacent inter-process lock and explicit DuckDB transactions.
+The database is resolved only through `trade_journal_db_path()`. Runtime access verifies schema version `002` and fails closed when the database is absent or behind. `ai-trading-journal migrate --apply` backs up an existing regular file before applying packaged SQL. Migration `002` makes the latest-analysis view select completed runs before version ranking. All writers use a store-adjacent inter-process lock and explicit DuckDB transactions.
+
+The private journal MCP is a separate interface under `interfaces/journal_mcp/`.
+It opens this store read-only, pins one account for the process lifetime, and
+does not import this bounded domain. Its exact tool and privacy contract is in
+[Journal MCP tools](../reference/journal_mcp_tools.md).
 
 ## Import and identity contract
 

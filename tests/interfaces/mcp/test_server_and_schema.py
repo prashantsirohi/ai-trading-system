@@ -152,7 +152,7 @@ def test_tool_names_are_unique_and_described() -> None:
     specs = server._tool_specs()
     names = [name for name, _, _ in specs]
     assert len(names) == len(set(names))
-    assert len(names) == 31
+    assert len(names) == 38
     for name, function, description in specs:
         assert callable(function), name
         assert len(description) > 40, name
@@ -192,6 +192,13 @@ def test_every_expected_tool_is_registered() -> None:
         "get_candidate_history",
         "get_investigator_evidence",
         "get_opportunity_episode",
+        "get_market_winners",
+        "get_ranked_winners",
+        "get_rank_performance_summary",
+        "get_symbol_backtest_history",
+        "get_backtest_runs",
+        "get_backtest_result",
+        "get_backtest_trades",
     }
 
 
@@ -216,7 +223,7 @@ def test_list_tools_needs_no_store(capsys: pytest.CaptureFixture[str]) -> None:
     assert server.main(["--list-tools"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["server"] == "ai-trading-system"
-    assert len(payload["tools"]) == 31
+    assert len(payload["tools"]) == 38
     assert set(payload["surfaces"]) == set(SURFACE_NAMES)
 
 
@@ -361,5 +368,15 @@ def test_real_stdio_client_discovers_and_calls_v2_tool(data_root) -> None:
                     {"symbol": "AAA", "as_of": "2026-01-07"},
                 )
                 assert not explanation.is_error
+                winners = await session.call_tool(
+                    "get_ranked_winners",
+                    {"period": "month", "horizon_days": 20, "as_of": "2026-01-09"},
+                )
+                assert not winners.is_error
+                backtest = await session.call_tool(
+                    "get_backtest_result",
+                    {"optimization_run_id": "opt-1"},
+                )
+                assert not backtest.is_error
 
     asyncio.run(exercise())

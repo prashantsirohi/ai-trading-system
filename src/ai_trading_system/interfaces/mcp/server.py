@@ -30,6 +30,7 @@ from ai_trading_system.interfaces.mcp.tools import (
     fundamental_discovery as fundamental_discovery_tool,
 )
 from ai_trading_system.interfaces.mcp.tools import patterns as patterns_tool
+from ai_trading_system.interfaces.mcp.tools import performance as performance_tool
 from ai_trading_system.interfaces.mcp.tools import governance as governance_tool
 from ai_trading_system.interfaces.mcp.tools import lifecycle as lifecycle_tool
 from ai_trading_system.interfaces.mcp.tools import insights as insights_tool
@@ -136,6 +137,41 @@ def _tool_specs() -> list[tuple[str, Callable[..., Any], str]]:
             "get_rank_history",
             rank_tool.get_rank_history,
             "Rank position and composite score over time for one symbol, oldest first.",
+        ),
+        (
+            "get_market_winners",
+            performance_tool.get_market_winners,
+            "Top realized adjusted-price performers over the last week, month, quarter, year-to-date, or year. Hindsight market evidence, never a strategy recommendation.",
+        ),
+        (
+            "get_ranked_winners",
+            performance_tool.get_ranked_winners,
+            "Matured positive outcomes among trusted historical ranked cohorts at the persisted 5, 10, 20, or 60 trading-day horizon.",
+        ),
+        (
+            "get_rank_performance_summary",
+            performance_tool.get_rank_performance_summary,
+            "Aggregate trusted rank-cohort win rate, return distribution, sample size, and date coverage for a bounded period and matured horizon.",
+        ),
+        (
+            "get_symbol_backtest_history",
+            performance_tool.get_symbol_backtest_history,
+            "Historical matured forward outcomes for one listing whenever it appeared in a persisted trusted ranked cohort.",
+        ),
+        (
+            "get_backtest_runs",
+            performance_tool.get_backtest_runs,
+            "List persisted strategy optimization and backtest runs with date range, status, champion provenance, and trial counts.",
+        ),
+        (
+            "get_backtest_result",
+            performance_tool.get_backtest_result,
+            "Read the champion, baseline, or selected iteration metrics and fold evidence for one persisted strategy backtest run.",
+        ),
+        (
+            "get_backtest_trades",
+            performance_tool.get_backtest_trades,
+            "Read bounded persisted trades for a completed strategy backtest iteration, optionally restricted to winners or losers.",
         ),
         (
             "get_pattern_detail",
@@ -405,6 +441,48 @@ def run_self_test(context: McpContext, *, historical_as_of: str) -> int:
                     f"get_rank_history ({label})",
                     lambda a=as_of: rank_tool.get_rank_history(
                         context, symbol, as_of=a, limit=5
+                    ),
+                ),
+                (
+                    f"get_market_winners ({label})",
+                    lambda a=as_of: performance_tool.get_market_winners(
+                        context, period="month", as_of=a, limit=5
+                    ),
+                ),
+                (
+                    f"get_ranked_winners ({label})",
+                    lambda a=as_of: performance_tool.get_ranked_winners(
+                        context, period="month", horizon_days=20, as_of=a, limit=5
+                    ),
+                ),
+                (
+                    f"get_rank_performance_summary ({label})",
+                    lambda a=as_of: performance_tool.get_rank_performance_summary(
+                        context, period="month", horizon_days=20, as_of=a
+                    ),
+                ),
+                (
+                    f"get_symbol_backtest_history ({label})",
+                    lambda a=as_of: performance_tool.get_symbol_backtest_history(
+                        context, symbol, horizon_days=20, as_of=a, limit=5
+                    ),
+                ),
+                (
+                    f"get_backtest_runs ({label})",
+                    lambda a=as_of: performance_tool.get_backtest_runs(
+                        context, as_of=a, limit=5
+                    ),
+                ),
+                (
+                    f"get_backtest_result ({label})",
+                    lambda a=as_of: performance_tool.get_backtest_result(
+                        context, "self-test-missing", as_of=a
+                    ),
+                ),
+                (
+                    f"get_backtest_trades ({label})",
+                    lambda a=as_of: performance_tool.get_backtest_trades(
+                        context, "self-test-missing", as_of=a, limit=5
                     ),
                 ),
                 (

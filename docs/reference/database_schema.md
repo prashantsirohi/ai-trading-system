@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical reference for every DuckDB table the system reads or writes — file location, owning stage, columns, indexes.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-19
+- **Last verified:** 2026-08-28
 - **Source of truth:** `src/ai_trading_system/pipeline/migrations/*.sql`, `src/ai_trading_system/domains/research_screener/migrations/*.sql`, `src/ai_trading_system/research/perf_tracker/schema.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/ingest/repository.py`.
 
 ---
@@ -15,7 +15,7 @@
 | `data/control_plane.duckdb` | Pipeline orchestrator (writes governance) + several read paths | `src/ai_trading_system/pipeline/migrations/*.sql` (applied by `pipeline/registry.py`) | Run lifecycle, DQ, artifacts, model registry, opportunity history, append-only fundamental observations, alerts, recovery, and policy versions. |
 | `$DATA_ROOT/fundamentals.duckdb` | Fundamentals and fundamental-discovery stages | `domains/fundamentals/analytical_store.py` and `domains/fundamentals/discovery.py` | Mirrored facts/readmodels, append-only sync receipts, immutable source-hash/policy thesis classifications, and daily projections. |
 | `data/execution.duckdb` | Execute stage (`domains/execution/service.py`) | `domains/execution/store.py::ExecutionStore._init_db` | Orders, fills, trade journal, stops, drawdown snapshots. **Created by `ExecutionStore`** — default path is `<project_root>/data/execution.duckdb` (`store.py:29`). |
-| `$DATA_ROOT/trade_journal.duckdb` | Actual Trading Journal bounded domain | `domains/trade_journal/migrations/001_initial.sql` | Versioned import/DQ, identity/governance, ledger/lot/episode, checkpoint/reconciliation, valuation/risk, evaluation and append-only annotation tables. Financial columns use `DECIMAL(38,8)`. |
+| `$DATA_ROOT/trade_journal.duckdb` | Actual Trading Journal bounded domain | `domains/trade_journal/migrations/001_initial.sql`, `002_latest_completed_analysis.sql` | Versioned import/DQ, identity/governance, ledger/lot/episode, checkpoint/reconciliation, valuation/risk, evaluation and append-only annotation tables. Financial columns use `DECIMAL(38,8)`; latest views select completed versions. |
 | `data/research.duckdb` | Perf tracker stage + research perf-tracker API endpoints | `research/perf_tracker/schema.py::RANK_COHORT_DDL` | `rank_cohort_performance`. Path resolved via `research_db_path()` -> `paths.root_dir / "research.duckdb"` (`schema.py:55-60`). |
 | `data/research_ohlcv.duckdb` | Research-domain OHLCV (selected when `DATA_DOMAIN=research`) | `domains/ingest/repository.py` (same DDL as operational) | Isolation per `platform/db/paths.py:111`: ohlcv file name is `research_ohlcv.duckdb` for the research domain. |
 | `$DATA_ROOT/research_screener/control_plane.duckdb` | Isolated research-screener domain | `domains/research_screener/migrations/*.sql` | Screener runs, provenance, identity, filing/annual-report evidence, qualitative claims, and J-curve import/evaluation/episode history; no operational consumer. |

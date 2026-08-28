@@ -9,7 +9,11 @@
 
 The server exposes the trading system's read surfaces over stdio so an agent can
 answer questions without searching the repository for where data lives. Start
-the server with `ai-trading-mcp`; see [commands](commands.md#read-only-mcp-server).
+the server with `ai-trading-mcp`; see [commands](commands.md#read-only-mcp-servers).
+
+Private actual-portfolio evidence is intentionally excluded. It is available
+only through the separately registered, account-scoped
+[`ai-trading-journal-mcp`](journal_mcp_tools.md).
 
 ## Response envelope
 
@@ -61,6 +65,13 @@ unbounded latest-data request.
 | `get_stage_history` | Weinstein stage observations from a chosen store. | `EXACT` | see [stage stores](#stage-stores) |
 | `get_rank_detail` | Newest ranked row with the factor breakdown. | `EXACT` | `control_plane.duckdb:rank_history` |
 | `get_rank_history` | Rank position over time. | `EXACT` | `control_plane.duckdb:rank_history` |
+| `get_market_winners` | Realized adjusted-price winners over week/month/quarter/YTD/year windows. | `EXACT` | `ohlcv.duckdb:_catalog_feature_source` |
+| `get_ranked_winners` | Positive matured outcomes among trusted ranked cohorts. | `EXACT` | `research.duckdb:rank_cohort_performance_trusted` |
+| `get_rank_performance_summary` | Trusted matured cohort win rate and return distribution. | `EXACT` | `research.duckdb:rank_cohort_performance_trusted` |
+| `get_symbol_backtest_history` | Matured ranked-cohort outcomes for one listing. | `EXACT` | `research.duckdb:rank_cohort_performance_trusted` |
+| `get_backtest_runs` | Persisted optimization/backtest run catalog. | `EXACT` | `control_plane.duckdb:strategy_optimization_run` |
+| `get_backtest_result` | Selected iteration and fold metrics for one persisted run. | `EXACT` | strategy run/result tables |
+| `get_backtest_trades` | Persisted simulated trades for one completed iteration. | `EXACT` | `strategy_backtest_trade` |
 | `get_pattern_detail` | Operational patterns on the newest model-pinned session. | `EXACT` | `control_plane.duckdb:pattern_history` |
 | `get_pattern_history` | Operational pattern lifecycle history. | `EXACT` | `control_plane.duckdb:pattern_history` |
 | `screen_universe` | Cross-sectional filter over the shortlist or full analytical universe. | `EXACT` | `rank_history` or `rank_universe_history` + governed stage/pattern/thesis observations |
@@ -93,6 +104,26 @@ whenever a cap clipped the result.
 need distributions rather than individual securities should call
 `summarize_universe`, which returns the complete matched-set aggregates without
 transferring the capped rows.
+
+## Performance evidence
+
+The three performance concepts are intentionally separate:
+
+- `get_market_winners` ranks realized adjusted price changes. It is hindsight
+  market evidence, not evidence that any strategy selected or traded a symbol.
+- Rank-performance tools use only
+  `rank_cohort_performance_trusted`. Horizons are persisted trading-session
+  outcomes at 5, 10, 20, or 60 sessions. Pending outcomes and anomaly rows are
+  excluded; historical queries also require `inserted_at <= as_of`.
+- Strategy-backtest tools read persisted completed optimizer runs, their
+  aggregate/walk-forward folds, and simulated trades. They retain benchmark,
+  rule-pack, iteration, and fold provenance and never trigger an optimization
+  or promotion.
+
+Named periods are calendar windows ending on the latest eligible session at or
+before `as_of`: week=7 days, month=30, quarter=90, year=365, while YTD starts on
+January 1. Rows report actual observed dates, so recently listed securities may
+cover less than the nominal window.
 
 ## Agent orientation and explanations
 

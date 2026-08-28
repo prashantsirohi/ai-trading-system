@@ -2,7 +2,7 @@
 
 - **Purpose:** Complete catalog of FastAPI endpoints exposed by the execution console backend.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-08-28
 - **Source of truth:** `src/ai_trading_system/ui/execution_api/app.py`, `src/ai_trading_system/ui/execution_api/routes/*.py`, `src/ai_trading_system/ui/execution_api/schemas/requests.py`, `src/ai_trading_system/ui/execution_api/routes/_deps.py`.
 
 ---
@@ -11,7 +11,7 @@
 
 ## Actual Trading Journal routes
 
-Authenticated `/api/trade-journal` routes are owned by the execution API; Phase 4 `/api/v1` remains GET-only. Multipart tradebook and holdings preview/commit routes cap uploads at 25 MiB. Commit resubmits the file and must bind to `expected_sha256`; previews are pure and no upload cache is retained. Read routes expose imports, DQ issues, accounts/as-of dates, positions, reconciliation evidence, episodes/details/candles/fill markers, portfolio series/exposures, trade and portfolio evaluations, behaviour cohorts, governance requests, and task status. Collection cursors are opaque and stable; limits default to 50 and cap at 250. Reconstruction, reconciliation, point-in-time analysis, append-only annotations, adjustment/opening proposals and approvals, and corporate-action proposals and approvals are explicit POST operations. Decimal values are JSON strings and exchange dates remain distinct from UTC timestamps.
+Authenticated `/api/trade-journal` routes are owned by the execution API; Phase 4 `/api/v1` remains GET-only. Multipart tradebook and holdings preview/commit routes cap uploads at 25 MiB. Commit resubmits the file and must bind to `expected_sha256`; previews are pure and no upload cache is retained. Read routes expose imports, DQ issues, accounts/as-of dates, positions, reconciliation evidence, episodes/details/candles/fill markers, portfolio series/exposures, trade and portfolio evaluations, behaviour cohorts, governance requests, and task status. Episode detail/chart and reconciliation-detail routes require `account_ref` and verify ownership in their primary lookup. Collection cursors are opaque and stable; limits default to 50 and cap at 250. Reconstruction, reconciliation, point-in-time analysis, append-only annotations, adjustment/opening proposals and approvals, and corporate-action proposals and approvals are explicit POST operations. Decimal values are JSON strings and exchange dates remain distinct from UTC timestamps.
 
 All routes require `X-API-Key`. Pagination limits default to 50 where exposed and cap at 250. DuckDB decimals are JSON strings, UTC timestamps carry `Z`, exchange dates remain date-only strings, and portfolio responses state a scope label. See [journal architecture](../architecture/trade_journal.md).
 

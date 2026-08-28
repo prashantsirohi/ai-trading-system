@@ -710,6 +710,89 @@ MARKET_SNAPSHOT_SURFACE: dict[str, Any] = {
     ],
 }
 
+MARKET_WINNERS_SURFACE: dict[str, Any] = {
+    "surface": "market_winners",
+    "tool": "get_market_winners",
+    "store": "ohlcv.duckdb",
+    "tables": ["_catalog_feature_source"],
+    "grain": "one listing's realized adjusted-price return per requested window",
+    "as_of_support": "EXACT",
+    "notes": [
+        "This is hindsight market performance, not a strategy backtest or recommendation.",
+        "The row reports its actual first and last observed sessions; recently listed securities may cover less than the nominal calendar window.",
+    ],
+    "columns": [
+        _column("symbol_id", "str", "Canonical ticker."),
+        _column("exchange", "str", "Listing exchange."),
+        _column("start_date", "date", "First observed session in the window."),
+        _column("end_date", "date", "Last observed session in the window."),
+        _column("start_close", "float", "Adjusted close on the first observed session.", units="INR"),
+        _column("end_close", "float", "Adjusted close on the last observed session.", units="INR"),
+        _column("observed_sessions", "int", "Distinct sessions contributing to the return."),
+        _column("return_pct", "float", "Realized adjusted close-to-close return.", units="percent"),
+    ],
+}
+
+RANK_PERFORMANCE_SURFACE: dict[str, Any] = {
+    "surface": "rank_performance",
+    "tool": "get_ranked_winners / get_rank_performance_summary / get_symbol_backtest_history",
+    "store": "research.duckdb",
+    "tables": ["rank_cohort_performance_trusted"],
+    "grain": "one matured ranked-cohort observation or bounded aggregate",
+    "as_of_support": "EXACT",
+    "notes": [
+        "Only 5, 10, 20, and 60 trading-day persisted horizons are supported.",
+        "Pending horizons and persisted anomaly rows are excluded; inserted_at is also cut off for historical requests.",
+    ],
+    "columns": [
+        _column("run_date", "date", "Date the symbol entered the ranked cohort."),
+        _column("symbol_id", "str", "Ranked ticker."),
+        _column("exchange", "str", "Listing exchange."),
+        _column("rank_position", "int", "Rank position at cohort formation."),
+        _column("composite_score", "float", "Composite score at cohort formation."),
+        _column("watchlist_bucket", "str|null", "Persisted publication bucket."),
+        _column("sector_name", "str|null", "Persisted sector at cohort formation."),
+        _column("return_pct", "float", "Matured forward return for the chosen horizon.", units="percent"),
+        _column("matured_at", "date", "Session when the forward horizon matured."),
+        _column("occurrence_count", "int", "Cohort occurrences for a deduplicated listing."),
+        _column("average_return_pct", "float", "Average return across those occurrences.", units="percent"),
+        _column("source_type", "str", "Operational artifact or historical research source."),
+        _column("source_run_id", "str|null", "Persisted producing run identifier."),
+        _column("inserted_at", "timestamp", "Recording time used for point-in-time cutoff."),
+    ],
+}
+
+STRATEGY_BACKTEST_SURFACE: dict[str, Any] = {
+    "surface": "strategy_backtest",
+    "tool": "get_backtest_runs / get_backtest_result / get_backtest_trades",
+    "store": "control_plane.duckdb",
+    "tables": ["strategy_optimization_run", "strategy_iteration_result", "strategy_backtest_trade"],
+    "grain": "one run, iteration/fold metric, or persisted simulated trade",
+    "as_of_support": "EXACT",
+    "notes": [
+        "Backtest evidence is simulated and does not represent broker executions.",
+        "Result metrics retain benchmark and fold provenance; trade results retain the selected iteration.",
+    ],
+    "columns": [
+        _column("optimization_run_id", "str", "Persisted optimization/backtest run identifier."),
+        _column("strategy_id", "str", "Strategy evaluated by the run."),
+        _column("iteration", "int", "Selected trial; -1 is baseline."),
+        _column("fold_index", "int", "Walk-forward fold; -1 is aggregate."),
+        _column("fitness", "float|null", "Persisted optimizer objective."),
+        _column("cagr", "float|null", "Compound annual growth rate.", units="percent"),
+        _column("sharpe", "float|null", "Persisted Sharpe ratio."),
+        _column("sortino", "float|null", "Persisted Sortino ratio."),
+        _column("max_drawdown_pct", "float|null", "Maximum drawdown.", units="percent"),
+        _column("win_rate", "float|null", "Winning-trade rate.", units="percent"),
+        _column("profit_factor", "float|null", "Gross profit divided by gross loss."),
+        _column("total_return_pct", "float|null", "Simulated total return.", units="percent"),
+        _column("benchmark_return_pct", "float|null", "Persisted benchmark return.", units="percent"),
+        _column("entry_date", "date", "Simulated trade entry date."),
+        _column("exit_date", "date|null", "Simulated trade exit date."),
+        _column("pnl_pct", "float|null", "Simulated trade return.", units="percent"),
+    ],
+}
+
 SURFACES: dict[str, dict[str, Any]] = {
     "ohlcv": OHLCV_SURFACE,
     "technicals": TECHNICALS_SURFACE,
@@ -726,6 +809,9 @@ SURFACES: dict[str, dict[str, Any]] = {
     "symbol_explanation": SYMBOL_EXPLANATION_SURFACE,
     "symbol_comparison": SYMBOL_COMPARISON_SURFACE,
     "market_snapshot": MARKET_SNAPSHOT_SURFACE,
+    "market_winners": MARKET_WINNERS_SURFACE,
+    "rank_performance": RANK_PERFORMANCE_SURFACE,
+    "strategy_backtest": STRATEGY_BACKTEST_SURFACE,
 }
 
 SURFACE_NAMES = tuple(SURFACES)

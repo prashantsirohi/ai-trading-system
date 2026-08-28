@@ -444,3 +444,49 @@ def test_operator_file_characterization(tmp_path: Path) -> None:
     with store.reader() as conn:
         assert conn.execute("SELECT count(*) FROM journal_order").fetchone()[0] == 827
         assert conn.execute("SELECT max(fill_count) FROM journal_order").fetchone()[0] == 79
+
+
+def test_latest_analysis_view_keeps_last_completed_run(tmp_path: Path) -> None:
+    store = TradeJournalStore(tmp_path, db_path=tmp_path / "journal.duckdb")
+    result = store.migrate(apply=True)
+    assert result["schema_version"] == "002"
+    with store.writer() as conn:
+        conn.execute(
+            "INSERT INTO journal_analysis_run VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ["complete", "account-a", "reconstruction", "COMPLETED", "v1", "h1",
+             None, datetime(2025, 1, 1), datetime(2025, 1, 2), None],
+        )
+        conn.execute(
+            "INSERT INTO journal_analysis_run VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ["running", "account-a", "reconstruction", "RUNNING", "v1", "h2",
+             None, datetime(2025, 1, 3), None, None],
+        )
+        conn.execute(
+            "INSERT INTO portfolio_reconstruction VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ["complete", "account-a", "instrument-a", datetime(2025, 1, 1),
+             Decimal("1"), Decimal("100"), Decimal("100"), "TRUSTED", "{}",
+             datetime(2025, 1, 2)],
+        )
+    with store.reader() as conn:
+        assert conn.execute(
+            "SELECT analysis_run_id FROM journal_latest_analysis"
+        ).fetchone() == ("complete",)
+        assert conn.execute(
+            "SELECT quantity FROM journal_current_positions"
+        ).fetchone() == (Decimal("1.00000000"),)
+
+
+def test_reconciliation_rejects_snapshot_from_another_account(tmp_path: Path) -> None:
+    store = TradeJournalStore(tmp_path, db_path=tmp_path / "journal.duckdb")
+    store.migrate(apply=True)
+    with store.writer() as conn:
+        conn.execute(
+            "INSERT INTO portfolio_snapshot VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ["snapshot-b", "import-b", "account-b", date(2025, 1, 1), None, "eod",
+             "reconciliation_only", "TRUSTED", None, None, None, True, None,
+             datetime(2025, 1, 2)],
+        )
+    with pytest.raises(ValueError, match="snapshot not found for account"):
+        TradeJournalService(store).reconcile(
+            account="account-a", snapshot_id="snapshot-b"
+        )

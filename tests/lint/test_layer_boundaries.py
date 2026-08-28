@@ -42,6 +42,7 @@ FORBIDDEN_ROOTS: frozenset[str] = frozenset(
 MCP_TRANSPORT_FREE_LAYERS: tuple[Path, ...] = (
     SRC_PKG / "interfaces" / "mcp" / "tools",
     SRC_PKG / "interfaces" / "mcp" / "readers",
+    SRC_PKG / "interfaces" / "journal_mcp" / "tools.py",
 )
 
 # The read-only MCP interface must never reach execution, broker, or pipeline
@@ -57,6 +58,8 @@ MCP_FORBIDDEN_IMPORTS: tuple[str, ...] = (
 def _iter_python_files(root: Path) -> list[Path]:
     if not root.exists():
         return []
+    if root.is_file():
+        return [root]
     return sorted(p for p in root.rglob("*.py") if "__pycache__" not in p.parts)
 
 
@@ -150,15 +153,19 @@ def test_mcp_tools_and_readers_are_transport_agnostic() -> None:
 def test_mcp_interface_never_imports_execution_or_orchestration() -> None:
     """The read-only interface must not reach code that opens writable stores."""
 
-    mcp_layer = SRC_PKG / "interfaces" / "mcp"
+    mcp_layers = (
+        SRC_PKG / "interfaces" / "mcp",
+        SRC_PKG / "interfaces" / "journal_mcp",
+    )
     findings: list[str] = []
-    for py_file in _iter_python_files(mcp_layer):
-        for lineno, module in _imported_modules(py_file):
-            for forbidden in MCP_FORBIDDEN_IMPORTS:
-                if module == forbidden or module.startswith(f"{forbidden}."):
-                    findings.append(
-                        f"{py_file.relative_to(REPO_ROOT)}:{lineno}: {module}"
-                    )
+    for mcp_layer in mcp_layers:
+        for py_file in _iter_python_files(mcp_layer):
+            for lineno, module in _imported_modules(py_file):
+                for forbidden in MCP_FORBIDDEN_IMPORTS:
+                    if module == forbidden or module.startswith(f"{forbidden}."):
+                        findings.append(
+                            f"{py_file.relative_to(REPO_ROOT)}:{lineno}: {module}"
+                        )
 
     assert not findings, (
         "The read-only MCP interface imported execution, trade-journal, "

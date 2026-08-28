@@ -14,7 +14,7 @@ import duckdb
 
 from ai_trading_system.platform.db.paths import trade_journal_db_path
 
-SCHEMA_VERSION = "001"
+SCHEMA_VERSION = "002"
 _FALLBACK_LOCK = threading.RLock()
 
 
@@ -92,12 +92,19 @@ class TradeJournalStore:
             stamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
             backup = self.db_path.with_name(f"{self.db_path.name}.backup-{stamp}")
             shutil.copy2(self.db_path, backup)
-        migration = resources.files("ai_trading_system.domains.trade_journal.migrations").joinpath("001_initial.sql")
+        migrations = resources.files(
+            "ai_trading_system.domains.trade_journal.migrations"
+        )
         with self.writer_lock():
             conn = self._connect()
             try:
                 conn.execute("BEGIN TRANSACTION")
-                conn.execute(migration.read_text(encoding="utf-8"))
+                for migration_name in (
+                    "001_initial.sql",
+                    "002_latest_completed_analysis.sql",
+                ):
+                    migration = migrations.joinpath(migration_name)
+                    conn.execute(migration.read_text(encoding="utf-8"))
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
