@@ -15,6 +15,10 @@ from .models import AnnouncementRecord
 OFFICIAL_SOURCES = ("nse_rss", "bse_corp", "nse_api")
 CAPEX_CATEGORIES = ("capex_expansion", "major_order_win", "guidance", "results")
 HIGH_VALUE_FILTER_V1 = "market-intel-high-value-filter-v1"
+JCURVE_FILTER_SIGNALS = (
+    "CAPEX", "CAPACITY", "NEW_FACILITY", "COMMERCIALISATION",
+    "PROJECT_FINANCE", "DEMAND_PATH", "ORDER_AWARD", "PROJECT_ADVERSE",
+)
 
 
 class MarketIntelAnnouncementAdapter:
@@ -43,12 +47,17 @@ class MarketIntelAnnouncementAdapter:
         filter_clause = ""
         if filter_policy_version:
             self._require_filter_contract(filter_policy_version)
-            filter_clause = """
+            signal_clause = " OR ".join(
+                f"afd.matched_signals_json LIKE '%\"{signal}\"%'"
+                for signal in JCURVE_FILTER_SIGNALS
+            )
+            filter_clause = f"""
               AND EXISTS (
                   SELECT 1 FROM announcement_filter_decision afd
                   WHERE afd.raw_event_id = r.raw_event_id
                     AND afd.policy_version = ?
                     AND afd.decision IN ('KEEP', 'FETCH_ATTACHMENT')
+                    AND ({signal_clause})
               )
             """
         sql = f"""
@@ -85,9 +94,16 @@ class MarketIntelAnnouncementAdapter:
 
     def coverage_receipts(
         self, *, published_from: date, as_of_date: date, filter_policy_version: str,
+        required_sources: tuple[str, ...] = ("nse_api", "bse_corp"),
     ) -> dict:
         """Return conservative upstream coverage evidence for the requested window."""
         self._require_filter_contract(filter_policy_version)
+        supported_sources = {"nse_api", "bse_corp"}
+        required_source_set = set(required_sources)
+        if not required_source_set or not required_source_set <= supported_sources:
+            raise ValueError(
+                f"invalid required coverage sources: {sorted(required_source_set)}"
+            )
         lower = datetime.combine(published_from, time.min)
         upper = datetime.combine(as_of_date, time.max)
         source = duckdb.connect(str(self.market_intel_db), read_only=True)
@@ -126,13 +142,14 @@ class MarketIntelAnnouncementAdapter:
             source for source, source_intervals in intervals.items()
             if self._intervals_cover(source_intervals, lower=lower, upper=upper)
         }
-        required_sources = {"nse_api", "bse_corp"}
         return {
             "policy_version": filter_policy_version,
             "requested_from": lower, "requested_to": upper,
-            "coverage_proven": required_sources <= covered_sources,
+            "coverage_scope": "COHORT_PRIMARY_LISTING_V1",
+            "required_sources": sorted(required_source_set),
+            "coverage_proven": required_source_set <= covered_sources,
             "covered_sources": sorted(covered_sources),
-            "missing_sources": sorted(required_sources - covered_sources),
+            "missing_sources": sorted(required_source_set - covered_sources),
             "receipts": receipts,
         }
 
@@ -222,21 +239,32 @@ class MarketIntelAnnouncementAdapter:
     def _resolve_identity(
         conn, *, source: str, symbol: str, isin: str, company_name: str, as_of: date
     ) -> list[tuple[str, str, str]]:
+        exchange = "BSE" if source == "bse_corp" else "NSE"
         if isin:
             rows = conn.execute(
                 """SELECT DISTINCT s.company_id, s.security_id, l.listing_id
                    FROM security_master s JOIN listing_master l ON l.security_id = s.security_id
-                   WHERE s.isin = ? AND s.valid_from <= ? AND (s.valid_to IS NULL OR s.valid_to >= ?)
+                   WHERE s.isin = ? AND l.exchange = ?
+                     AND s.valid_from <= ? AND (s.valid_to IS NULL OR s.valid_to >= ?)
                      AND l.valid_from <= ? AND (l.valid_to IS NULL OR l.valid_to >= ?)""",
-                [isin, as_of, as_of, as_of, as_of],
+                [isin, exchange, as_of, as_of, as_of, as_of],
             ).fetchall()
             if rows:
                 return rows
-        exchange = "BSE" if source == "bse_corp" else "NSE"
+            rows = conn.execute(
+                """SELECT DISTINCT s.company_id, s.security_id, l.listing_id
+                   FROM security_master s JOIN listing_master l ON l.security_id = s.security_id
+                   WHERE s.isin = ? AND l.exchange = ?
+                     AND s.valid_to IS NULL AND l.valid_to IS NULL
+                   ORDER BY s.company_id, s.security_id, l.listing_id""",
+                [isin, exchange],
+            ).fetchall()
+            if rows:
+                return rows
         value = symbol.strip().upper()
         if not value:
             return []
-        return conn.execute(
+        rows = conn.execute(
             """SELECT DISTINCT s.company_id, s.security_id, l.listing_id
                FROM listing_master l JOIN security_master s ON s.security_id = l.security_id
                WHERE l.exchange = ? AND l.valid_from <= ? AND (l.valid_to IS NULL OR l.valid_to >= ?)
@@ -244,6 +272,17 @@ class MarketIntelAnnouncementAdapter:
                       OR upper(coalesce(l.exchange_security_id, '')) = ?)
                ORDER BY s.company_id, s.security_id, l.listing_id""",
             [exchange, as_of, as_of, value, value, value],
+        ).fetchall()
+        if rows:
+            return rows
+        return conn.execute(
+            """SELECT DISTINCT s.company_id, s.security_id, l.listing_id
+               FROM listing_master l JOIN security_master s ON s.security_id = l.security_id
+               WHERE l.exchange = ? AND l.valid_to IS NULL AND s.valid_to IS NULL
+                 AND (upper(coalesce(l.symbol, '')) = ? OR upper(coalesce(l.bse_code, '')) = ?
+                      OR upper(coalesce(l.exchange_security_id, '')) = ?)
+               ORDER BY s.company_id, s.security_id, l.listing_id""",
+            [exchange, value, value, value],
         ).fetchall()
 
     @staticmethod

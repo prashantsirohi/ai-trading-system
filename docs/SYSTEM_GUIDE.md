@@ -423,6 +423,9 @@ decisions. J-curve bootstrap and incremental import use it only when
 `--upstream-filter-policy market-intel-high-value-filter-v1` is explicit;
 omitting the flag preserves the legacy import. Incomplete source coverage is
 frozen as degraded evidence and never interpreted as an empty successful day.
+The J-curve projection admits only matched capex, capacity, facility,
+commissioning, project-finance, demand-path, order-award, and project-adverse
+signals; generic transactions and financing remain upstream-only.
 Before attachment or model promotion, the upstream `export-review` command can
 freeze a deterministic source-and-listing-membership-stratified sample plus all
 exact-ISIN J-curve baseline matches. Human `HIGH_VALUE`/`NOT_HIGH_VALUE` labels
@@ -430,10 +433,12 @@ measure the metadata gate only and do not assert J-curve claims or stages.
 The separately versioned `market-intel-security-master-v1` synchronizes official
 active NSE and BSE listing identities, joins them only by exact valid ISIN, and
 enriches upstream announcements with membership and exchange identifiers.
-`market_intel.tracked_entity` remains a watchlist. The J-curve adapter does not
-treat this current upstream view as research authority: it continues to resolve
-and freeze effective-dated `research_screener` company, security, and listing
-rows at the requested cutoff.
+`market_intel.tracked_entity` remains a watchlist. The J-curve adapter resolves
+and freezes `research_screener` company, security, and listing IDs. It first
+uses point-in-time validity; because the current security-master snapshot
+declares latest-only temporal trust, an older filing may fall back to one
+current listing on the same source exchange, preferring exact ISIN before an
+exchange identifier.
 
 The shadow-only `seed-screener` command precedes that import when accounting
 discovery is desired. It reuses the authenticated Screener Playwright session
@@ -604,9 +609,12 @@ only; it does not yet run agents or promote discovery anchors.
 
 Request an immutable J-curve announcement import, then evaluate it
 after supplying point-in-time materiality denominators. The bootstrap freezes
-only history already present in `market_intel`. Complete contiguous NSE and BSE
-collection receipts can prove the requested interval; missing or gapped
-receipts record `HISTORICAL_SOURCE_COVERAGE_UNPROVEN` and
+only history already present in `market_intel`. Complete contiguous receipts
+for the frozen cohort's required primary listing sources can prove the requested
+interval: NSE-listed members require NSE API coverage, while BSE is additionally
+required only for members without an NSE listing. Unrestricted imports still
+require both exchanges. Missing or gapped receipts record
+`HISTORICAL_SOURCE_COVERAGE_UNPROVEN` and
 `UPSTREAM_FILTER_COVERAGE_INCOMPLETE`. Bootstrap uses
 `configs/research_screener/jcurve/capex_baseline_v1.json`
 by default; use `--all-companies` only for an explicitly broad research import.

@@ -11,6 +11,7 @@ import pytest
 from ai_trading_system.domains.research_screener.jcurve import service as jcurve_service
 from ai_trading_system.domains.research_screener.jcurve.cohort import BaselineCohort
 from ai_trading_system.domains.research_screener.jcurve.market_intel_adapter import (
+    JCURVE_FILTER_SIGNALS,
     MarketIntelAnnouncementAdapter,
 )
 from ai_trading_system.domains.research_screener.jcurve.model_router import (
@@ -88,6 +89,63 @@ def test_import_manifest_serializes_upstream_coverage_timestamps(
     assert manifest["upstream_coverage"]["receipts"][0]["requested_to"] == (
         "2026-08-23 23:59:59"
     )
+
+
+def test_import_coverage_sources_follow_frozen_primary_listings() -> None:
+    dual_and_nse = type("Cohort", (), {"members": (
+        {"company_id": "dual", "nse_symbol": "DUAL", "bse_code": "500001"},
+        {"company_id": "nse", "nse_symbol": "NSEONLY", "bse_code": None},
+    )})()
+    with_bse_only = type("Cohort", (), {"members": (
+        {"company_id": "nse", "nse_symbol": "NSEONLY", "bse_code": None},
+        {"company_id": "bse", "nse_symbol": None, "bse_code": "500002"},
+    )})()
+
+    assert JCurveImportService._required_coverage_sources(dual_and_nse) == ("nse_api",)
+    assert JCurveImportService._required_coverage_sources(with_bse_only) == (
+        "nse_api", "bse_corp",
+    )
+    assert JCurveImportService._required_coverage_sources(None) == (
+        "nse_api", "bse_corp",
+    )
+
+
+def test_coverage_receipts_accept_nse_only_cohort_scope(tmp_path: Path) -> None:
+    market_db = tmp_path / "market.duckdb"
+    conn = duckdb.connect(str(market_db))
+    conn.execute("""CREATE TABLE announcement_collection_run (
+        collection_run_id VARCHAR, source VARCHAR, requested_from TIMESTAMP,
+        requested_to TIMESTAMP, status VARCHAR, pages_complete BOOLEAN,
+        item_count BIGINT, failure_count BIGINT, policy_version VARCHAR,
+        policy_hash VARCHAR)""")
+    conn.execute("""CREATE TABLE announcement_filter_decision (
+        raw_event_id BIGINT, policy_version VARCHAR)""")
+    conn.execute(
+        "INSERT INTO announcement_collection_run VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ["nse-complete", "nse_api", datetime(2024, 8, 23),
+         datetime(2026, 8, 23, 23, 59, 59, 999999), "COMPLETED", True,
+         100, 0, "market-intel-high-value-filter-v1", "hash"],
+    )
+    conn.close()
+
+    coverage = MarketIntelAnnouncementAdapter(
+        market_intel_db=market_db, screener_db=tmp_path / "unused.duckdb",
+    ).coverage_receipts(
+        published_from=date(2024, 8, 23), as_of_date=date(2026, 8, 23),
+        filter_policy_version="market-intel-high-value-filter-v1",
+        required_sources=("nse_api",),
+    )
+
+    assert coverage["coverage_proven"] is True
+    assert coverage["required_sources"] == ["nse_api"]
+    assert coverage["missing_sources"] == []
+
+
+def test_jcurve_projection_excludes_generic_high_value_signals() -> None:
+    assert "CAPEX" in JCURVE_FILTER_SIGNALS
+    assert "COMMERCIALISATION" in JCURVE_FILTER_SIGNALS
+    assert "CORPORATE_TRANSACTION" not in JCURVE_FILTER_SIGNALS
+    assert "MATERIAL_FINANCING" not in JCURVE_FILTER_SIGNALS
 
 def _claim(claim_type: str, *, numeric=None, unit=None, status="HUMAN_VERIFIED"):
     return {
@@ -284,6 +342,25 @@ def test_market_intel_adapter_enforces_publication_and_ingestion_cutoff(tmp_path
     assert rows[0].company_id == "company:1"
 
 
+def test_market_intel_adapter_uses_exchange_specific_latest_identity_fallback(tmp_path):
+    path = tmp_path / "screener.duckdb"
+    conn = duckdb.connect(str(path))
+    conn.execute("CREATE TABLE security_master (security_id VARCHAR, company_id VARCHAR, isin VARCHAR, valid_from DATE, valid_to DATE)")
+    conn.execute("CREATE TABLE listing_master (listing_id VARCHAR, security_id VARCHAR, exchange VARCHAR, symbol VARCHAR, bse_code VARCHAR, exchange_security_id VARCHAR, valid_from DATE, valid_to DATE)")
+    conn.execute("INSERT INTO security_master VALUES ('security:1', 'company:1', 'INE001B01026', DATE '2026-08-22', NULL)")
+    conn.execute("""INSERT INTO listing_master VALUES
+        ('listing:nse', 'security:1', 'NSE', 'ABC', NULL, NULL, DATE '2026-08-22', NULL),
+        ('listing:bse', 'security:1', 'BSE', NULL, '500001', NULL, DATE '2026-08-22', NULL)""")
+
+    matches = MarketIntelAnnouncementAdapter._resolve_identity(
+        conn, source="nse_api", symbol="ABC", isin="INE001B01026",
+        company_name="ABC Ltd", as_of=date(2025, 1, 1),
+    )
+    conn.close()
+
+    assert matches == [("company:1", "security:1", "listing:nse")]
+
+
 def test_market_intel_adapter_can_opt_into_high_value_filter_v1(tmp_path):
     mi_path = tmp_path / "market.duckdb"
     mi = duckdb.connect(str(mi_path))
@@ -295,7 +372,8 @@ def test_market_intel_adapter_can_opt_into_high_value_filter_v1(tmp_path):
     mi.execute("CREATE TABLE resolved_event (raw_event_id BIGINT, primary_category VARCHAR, is_official BOOLEAN)")
     mi.execute("CREATE TABLE filing_document (raw_event_id BIGINT, local_path VARCHAR, content_hash VARCHAR, pdf_status VARCHAR)")
     mi.execute("""CREATE TABLE announcement_filter_decision (
-        raw_event_id BIGINT, policy_version VARCHAR, decision VARCHAR)""")
+        raw_event_id BIGINT, policy_version VARCHAR, decision VARCHAR,
+        matched_signals_json VARCHAR)""")
     mi.execute("""CREATE TABLE announcement_collection_run (
         collection_run_id VARCHAR, source VARCHAR, requested_from TIMESTAMP,
         requested_to TIMESTAMP, status VARCHAR, pages_complete BOOLEAN,
@@ -306,7 +384,9 @@ def test_market_intel_adapter_can_opt_into_high_value_filter_v1(tmp_path):
     mi.execute("INSERT INTO raw_event VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [1, "h1", *base, "{}", "https://nse/1", None])
     mi.execute("INSERT INTO raw_event VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [2, "h2", *base, "{}", "https://nse/2", None])
     mi.execute("INSERT INTO resolved_event VALUES (1, 'clarification', TRUE), (2, 'capex_expansion', TRUE)")
-    mi.execute("INSERT INTO announcement_filter_decision VALUES (1, 'market-intel-high-value-filter-v1', 'KEEP'), (2, 'market-intel-high-value-filter-v1', 'DROP_METADATA_ONLY')")
+    mi.execute("""INSERT INTO announcement_filter_decision VALUES
+        (1, 'market-intel-high-value-filter-v1', 'KEEP', '[\"CAPEX\"]'),
+        (2, 'market-intel-high-value-filter-v1', 'DROP_METADATA_ONLY', '[]')""")
     mi.close()
 
     screener_path = tmp_path / "screener.duckdb"

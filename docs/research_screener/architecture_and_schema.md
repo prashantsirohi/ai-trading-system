@@ -186,18 +186,26 @@ Evaluation defaults to 25 resolved companies, permits an explicit maximum of
 250, and stops before a new request when its request or reported-cost budget is
 exhausted. Bootstrap does not infer that the upstream `market_intel` store is
 historically complete. It records `HISTORICAL_SOURCE_COVERAGE_UNPROVEN` unless
-authoritative completed NSE and BSE receipts prove the requested interval.
+authoritative completed receipts prove the requested interval for the frozen
+cohort's required primary listing sources.
 
 New shadow collections may opt into
 `market-intel-high-value-filter-v1`. The upstream store then owns immutable
 source-window receipts plus attachment-routing decisions. The screener adapter
 joins those decisions by `raw_event_id` only when the policy is explicitly
-named, accepts `KEEP` and `FETCH_ATTACHMENT`, and remains read-only. It also
-freezes overlapping receipt metadata into the import manifest. Coverage is
-considered proven only when the union of contiguous complete NSE API and BSE
-receipts covers the entire requested interval; otherwise the import records
-`UPSTREAM_FILTER_COVERAGE_INCOMPLETE`. A proven chunked historical backfill
-clears both coverage degradations.
+named, accepts `KEEP` and `FETCH_ATTACHMENT` only when their matched signals
+are capex, capacity, facility, commissioning, project-finance, demand-path,
+order-award, or project-adverse evidence, and remains read-only. Generic
+transactions and financing remain available in `market_intel` but do not enter
+the J-curve corpus. The adapter also freezes overlapping receipt metadata into
+the import manifest. Coverage is
+considered proven only when the union of contiguous complete receipts covers
+the entire requested interval for the frozen cohort's required primary listing
+sources. NSE-listed members require NSE API coverage; BSE is additionally
+required only for a member without an NSE listing. An unrestricted import with
+no frozen cohort continues to require both NSE and BSE. Otherwise the import
+records `UPSTREAM_FILTER_COVERAGE_INCOMPLETE`. A proven chunked historical
+backfill clears both coverage degradations.
 
 Current shadow collection can additionally use
 `market-intel-security-master-v1`, whose independent NSE/BSE sync receipts and
@@ -205,9 +213,12 @@ normalized listing observations classify active corporate-equity securities as
 `NSE_ONLY`, `BSE_ONLY`, or `DUAL` by exact valid ISIN. That upstream master is
 collection-routing and provenance evidence only. Enriched raw announcements
 carry ISIN, canonical symbol, listing membership, and original exchange
-security ID. The read-only J-curve adapter still resolves those announcements
+security ID. The read-only J-curve adapter first resolves those announcements
 against effective-dated `security_master` and `listing_master` rows in the
-screener store and freezes the resolved IDs into the immutable import pack.
+screener store. Because the present master declares latest-only temporal trust,
+an older filing may fall back to one current listing on the same source
+exchange, preferring exact ISIN before an exchange identifier. The adapter
+freezes the resolved IDs into the immutable import pack.
 Before model or attachment promotion, `market_intel` can export a deterministic
 review set from exact completed source receipts. The review set stratifies by
 source, filter decision, and listing membership, unions all exact-ISIN baseline

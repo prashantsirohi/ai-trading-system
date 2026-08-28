@@ -19,12 +19,13 @@ from .policy import CapexStagePolicy, MaterialityInputs
 from .store import JCurveStore
 
 
-IMPORT_POLICY_VERSION = "jcurve-market-intel-import-v1"
+IMPORT_POLICY_VERSION = "jcurve-market-intel-import-v3"
 IMPORT_POLICY_HASH = content_hash({
     "version": IMPORT_POLICY_VERSION,
     "sources": ["nse_rss", "bse_corp", "nse_api"],
     "availability": "published_at_and_ingested_at_not_after_cutoff",
-    "identity": "research_screener_point_in_time",
+    "identity": "point_in_time_then_latest_only_exact_isin_or_exchange_listing",
+    "coverage_scope": "nse_primary_bse_only_fallback_from_frozen_cohort",
 })
 
 
@@ -53,6 +54,7 @@ class JCurveImportService:
         coverage = adapter.coverage_receipts(
             published_from=published_from, as_of_date=as_of_date,
             filter_policy_version=upstream_filter_policy,
+            required_sources=self._required_coverage_sources(resolved_cohort),
         ) if upstream_filter_policy else None
         if resolved_cohort:
             company_set = set(resolved_cohort.company_ids)
@@ -195,6 +197,24 @@ class JCurveImportService:
         if latest is None:
             return as_of_date - timedelta(days=overlap_days)
         return max(date(1970, 1, 1), latest.date() - timedelta(days=overlap_days))
+
+    @staticmethod
+    def _required_coverage_sources(cohort) -> tuple[str, ...]:
+        if cohort is None:
+            return ("nse_api", "bse_corp")
+        required: set[str] = set()
+        for member in cohort.members:
+            if str(member.get("nse_symbol") or "").strip():
+                required.add("nse_api")
+            elif str(member.get("bse_code") or "").strip():
+                required.add("bse_corp")
+            else:
+                raise ValueError(
+                    f"cohort member lacks an exchange listing: {member.get('company_id')}"
+                )
+        if not required:
+            raise ValueError("resolved cohort has no exchange coverage requirements")
+        return tuple(source for source in ("nse_api", "bse_corp") if source in required)
 
     @staticmethod
     def _artifact(
