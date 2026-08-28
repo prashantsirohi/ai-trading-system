@@ -191,6 +191,17 @@ universe row freezes selection policy, effective score/top-N, regime date,
 calculated age, freshness status, and policy version. A same-date/model rerun
 upserts the same identity and cannot widen downstream operational inputs.
 
+The rank market-stage router is a read-only consumer of canonical
+`weekly_stock_stage_history`. It resolves correction-aware NSE observations at
+the rank decision cutoff and records the selected source date and age in rank
+metadata. The mutable `ohlcv.weekly_stage_snapshot` remains a compatibility
+source only; rows older than ten calendar days cannot drive routing. This read
+does not change ownership or pipeline order: `weekly_stage` still appends the
+current run's observations after rank, so rank normally consumes the latest
+trusted history available from an earlier completed shadow run. Breakout
+scoring uses the in-memory full `ranked_universe`; it does not read
+`rank_universe_history` back from the control plane.
+
 ## Phase 3C-1 structural governance
 
 Migration `034_opportunity_phase3c1_governance.sql` leaves all Phase 3B rows,

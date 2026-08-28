@@ -839,6 +839,7 @@ def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_can
     universe_rows[-1]["exchange"] = "BSE"
     universe = pd.DataFrame(universe_rows)
     rank_calls: list[dict] = []
+    breakout_contexts: list[pd.DataFrame] = []
     pattern_exchanges: list[str] = []
 
     import ai_trading_system.analytics.data_trust as data_trust_module
@@ -867,7 +868,11 @@ def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_can
 
     monkeypatch.setattr(data_trust_module, "load_data_trust_summary", lambda *args, **kwargs: {"status": "healthy"})
     monkeypatch.setattr(ranker_module, "StockRanker", _FakeRanker)
-    monkeypatch.setattr(breakout_module, "scan_breakouts", lambda **kwargs: pd.DataFrame())
+    def fake_breakout_scan(**kwargs):
+        breakout_contexts.append(kwargs["ranked_df"].copy())
+        return pd.DataFrame()
+
+    monkeypatch.setattr(breakout_module, "scan_breakouts", fake_breakout_scan)
     monkeypatch.setattr(stock_scan_module, "load_sector_rs", lambda: pd.DataFrame({"Sector": ["Tech"], "RS": [0.8]}))
     monkeypatch.setattr(stock_scan_module, "load_stock_vs_sector", lambda: pd.DataFrame({"Symbol": ["SYM01"], "category": ["BUY"]}))
     monkeypatch.setattr(stock_scan_module, "load_sector_mapping", lambda: pd.DataFrame({"Symbol": ["SYM01"], "Sector": ["Tech"]}))
@@ -933,6 +938,8 @@ def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_can
     assert result.metadata["ranked_universe_rows"] == 30
     assert len(rank_calls) == 2
     assert all(call["exchanges"] == ["NSE", "BSE"] for call in rank_calls)
+    assert [len(frame) for frame in breakout_contexts] == [29, 1]
+    assert set(pd.concat(breakout_contexts)["symbol_id"]) == set(universe["symbol_id"])
     assert pattern_exchanges == ["NSE", "BSE"]
 
 

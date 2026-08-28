@@ -2,7 +2,7 @@
 
 - **Purpose:** Build the canonical ranked-signal artifact set (composite ranking, breakout scan, pattern scan, sector dashboard, dashboard payload) consumed by every downstream stage.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-08-10
+- **Last verified:** 2026-08-28
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/rank.py`
   - `src/ai_trading_system/domains/ranking/service.py` (`RankOrchestrationService`)
@@ -65,9 +65,9 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
 - `domains/ranking/ranker.py` (`StockRanker`) — composite scoring driver.
 - `domains/ranking/factors.py` — factor implementations: `apply_relative_strength`, `apply_momentum_acceleration`, `apply_volume_intensity`, `apply_trend_persistence`, `apply_proximity_highs`, `apply_delivery`, `apply_sector_strength`, `compute_penalty_score`, `add_signal_freshness`.
 - `domains/ranking/composite.py` — `compute_factor_correlations`, `compute_factor_turnover`.
-- `domains/ranking/breakout.py::scan_breakouts` — Tier A/B breakout detection, gated by market-stage allowlist.
+- `domains/ranking/breakout.py::scan_breakouts` — Tier A/B breakout detection, gated by market-stage allowlist and enriched from the full per-exchange rank universe.
 - `domains/ranking/volume_shocker.py::detect_volume_shockers` — volume z-score outliers.
-- `domains/ranking/market_stage.py::get_market_stage` + `strategy_router.py::route` — selects rank mode, breakout activation, and stage gate based on breadth-derived market regime (`service.py:465`–`494`).
+- `domains/ranking/market_stage.py::get_market_stage` + `strategy_router.py::route` — selects rank mode, breakout activation, and stage gate from fresh governed stock-stage breadth. The legacy OHLCV snapshot is a freshness-checked compatibility fallback.
 - `domains/ranking/stage_classifier.py` / `stage_eligibility.py` / `stage_store.py` — weekly Stage 2 classification used as a gate when `weekly_stage_gate` is on.
 - `domains/ranking/screener.py` — supplementary screener pipeline (consumed via stock scan / watchlist).
 - `domains/ranking/input_loader.py` — feature/return loaders shared by the ranker and factor functions.
@@ -78,7 +78,14 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
 ## Process flow
 
 1. Resolve effective params, load data-trust summary; abort if `trust_summary.status == "blocked"` and `allow_untrusted_rank` is not set (`service.py:441`).
-2. Resolve market stage and merge `StrategyConfig` (rank_mode, breakout activation, weekly stage gate, execution regime) into `effective_params` (`service.py:465`–`494`).
+2. Resolve correction-aware NSE stage breadth point-in-time from
+   `control_plane.duckdb::weekly_stock_stage_history`. Prefer that governed
+   source when it has at least 200 classified symbols and is no more than ten
+   calendar days old. Use `ohlcv.duckdb::weekly_stage_snapshot` only as a
+   compatibility fallback under the same coverage/freshness contract; otherwise
+   return the explicit MIXED fallback with source and freshness diagnostics.
+   Merge the resulting `StrategyConfig` (rank mode, breakout activation, weekly
+   stage gate, execution regime) into `effective_params`.
 3. Build one `RankInputSnapshot` with an inclusive run-date cutoff and route the
    market, return, volume, ADX, SMA, highs, delivery, sector, Stage 2, weekly-stage,
    and persisted Phase 1 reads through it. Repeated reads such as SMA are cached
@@ -93,7 +100,9 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
 4. Run resumable tasks in order — each is fingerprinted, persisted in `task_status.json`, and skipped on retry if the fingerprint matches (`service.py:495`–end of `run_default`):
    - `rank_core` → combined NSE+BSE `ranked_signals.csv`
    - volume shockers → `volume_shockers.csv`
-   - `breakout_scan` (one scan per ranked exchange; no-op DataFrame when market stage disables breakouts)
+   - `breakout_scan` (one scan per ranked exchange using `ranked_universe` as
+     scoring context; a true S4 market records
+     `skipped: disabled_by_market_stage:S4` and emits an empty artifact)
    - `pattern_scan` (one seed/scan lifecycle per ranked exchange, with ranked-symbol fallback)
    - `stock_scan` (integrated view via `build_integrated_stock_scan_view`)
    - `sector_dashboard`
@@ -117,6 +126,10 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
 - **Trust-window gate.** `trust_summary.status == "blocked"` aborts with `RuntimeError("Ranking blocked because active data quarantine remains for the current trust window.")` (`service.py:441`). `degraded` emits a warning containing the latest fallback ratio.
 - **Pattern-seed fallback.** If `build_pattern_seed_universe` raises or yields zero symbols, the stage falls back to the ranked universe and records `fallback_used=True` in `pattern_seed_metadata` (`service.py:691`).
 - **Breakout availability.** If the breakout task ends in `failed | timed_out | degraded`, a warning is appended; the stage continues with an empty breakout frame (`service.py:646`).
+- **Market-stage freshness.** Governed and legacy structural breadth retain
+  decision cutoff, actual source date, calendar age, source identity, freshness,
+  and fallback reason in `market_stage_info`. Stale legacy breadth cannot keep
+  breakout routing disabled indefinitely.
 - **Factor correlation / turnover.** Computed but not enforced as gates — they appear in `rank_summary.json` for observability.
 - DQ rules in `pipeline/migrations/` (`dq_rule`, `dq_result`) drive the row-count / score-distribution checks declared in the truth map. Specific rule names should be confirmed against the migrations before being cited here.
 
@@ -128,6 +141,9 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
   daily default is `[NSE, BSE]`; direct callers without that parameter retain
   the legacy NSE-only default.
 - Pattern subsystem failure → fallback path engages; `pattern_seed_metadata.fallback_reason` records the cause.
+- Governed stage history missing or stale and legacy breadth also unusable →
+  explicit MIXED fallback plus a degraded-output warning; no stale S4 decision
+  is reused.
 - ML overlay exception → `ml_status="degraded"`, overlay omitted, run continues (`service.py:1192`).
 - Optional task failure (`breakout_scan`, `pattern_scan`, `sector_dashboard`, watchlist sub-tasks) is recorded in `task_status.json` with status `failed | timed_out | degraded`, surfaced via warnings, and does not fail the stage.
 

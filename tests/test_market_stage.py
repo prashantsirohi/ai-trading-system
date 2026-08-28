@@ -96,6 +96,66 @@ def test_s4_bear_market(tmp_path):
     assert result["s4_pct"] > 0.40
 
 
+def test_fresh_governed_stage_replaces_stale_legacy_s4(tmp_path):
+    legacy_rows = [
+        {"symbol": f"LEGACY_{i}", "week_end_date": "2026-05-01",
+         "stage_label": "S4", "stage_confidence": 0.9,
+         "stage_transition": "NONE", "ma10w": 100, "ma30w": 110,
+         "ma40w": 108, "ma30w_slope_4w": -0.01,
+         "weekly_rs_score": 30.0, "weekly_volume_ratio": 0.8,
+         "support_level": 90.0, "resistance_level": 105.0,
+         "created_at": "2026-05-01 00:00:00", "run_id": "legacy"}
+        for i in range(300)
+    ]
+    db = _make_snapshot_db(tmp_path, legacy_rows)
+    governed = pd.DataFrame(
+        [
+            {
+                "exchange": "NSE",
+                "symbol_id": f"CURRENT_{i}",
+                "effective_stage": "stage_2_advancing" if i < 220 else "stage_4_declining",
+                "as_of": "2026-08-27T00:00:00",
+            }
+            for i in range(300)
+        ]
+    )
+
+    result = get_market_stage(
+        db,
+        asof="2026-08-28",
+        governed_stages=governed,
+        min_classified_symbols=200,
+    )
+
+    assert result["market_stage"] == "S2"
+    assert result["method"] == "governed_breadth"
+    assert result["source_as_of"] == "2026-08-27"
+    assert result["source_age_days"] == 1
+    assert result["freshness_status"] == "FRESH"
+
+
+def test_stale_legacy_stage_cannot_route_market_as_s4(tmp_path):
+    rows = [
+        {"symbol": f"SYM{i}", "week_end_date": "2026-05-01",
+         "stage_label": "S4", "stage_confidence": 0.9,
+         "stage_transition": "NONE", "ma10w": 100, "ma30w": 110,
+         "ma40w": 108, "ma30w_slope_4w": -0.01,
+         "weekly_rs_score": 30.0, "weekly_volume_ratio": 0.8,
+         "support_level": 90.0, "resistance_level": 105.0,
+         "created_at": "2026-05-01 00:00:00", "run_id": "legacy"}
+        for i in range(300)
+    ]
+    db = _make_snapshot_db(tmp_path, rows)
+
+    result = get_market_stage(db, asof="2026-08-28", min_classified_symbols=200)
+
+    assert result["market_stage"] == "MIXED"
+    assert result["method"] == "fallback_default"
+    assert result["fallback_reason"] == "legacy_source_stale"
+    assert result["freshness_status"] == "STALE"
+    assert result["source_as_of"] == "2026-05-01"
+
+
 def test_s2_bull_market(tmp_path):
     """45% S2 symbols → market_stage=S2."""
     n = 500

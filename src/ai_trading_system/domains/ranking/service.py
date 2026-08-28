@@ -599,14 +599,38 @@ class RankOrchestrationService:
         # downstream lambdas use it — without mutating context.params.
         from ai_trading_system.domains.ranking.market_stage import get_market_stage
         from ai_trading_system.domains.ranking.strategy_router import route as _route_stage
+        from ai_trading_system.domains.opportunities.coverage import read_stock_stage_as_of
 
         effective_params = dict(context.params)
         stage_override = effective_params.get("market_stage_override")
-        stage_info = (
-            {"market_stage": stage_override, "method": "override"}
-            if stage_override
-            else get_market_stage(str(context.db_path), asof=context.run_date)
-        )
+        if stage_override:
+            stage_info = {"market_stage": stage_override, "method": "override"}
+        else:
+            governed_stages = None
+            if context.registry is not None:
+                try:
+                    governed_stages = read_stock_stage_as_of(
+                        context.registry,
+                        as_of=context.run_date,
+                        exchange="NSE",
+                    )
+                except Exception as exc:
+                    warnings.append(f"governed market-stage source unavailable: {exc}")
+            stage_info = get_market_stage(
+                str(context.db_path),
+                asof=context.run_date,
+                governed_stages=governed_stages,
+                max_source_age_days=int(effective_params.get("market_stage_max_age_days", 10)),
+            )
+            if (
+                stage_info.get("freshness_status") != "FRESH"
+                or stage_info.get("fallback_reason")
+            ):
+                warnings.append(
+                    "market-stage source degraded: "
+                    f"status={stage_info.get('freshness_status')} "
+                    f"reason={stage_info.get('fallback_reason')}"
+                )
         cfg = _route_stage(stage_info["market_stage"])
         logger.info(
             "market_stage=%s (method=%s) → rank_mode=%s weekly_stage_gate=%s multiplier=%.1f",
@@ -867,9 +891,11 @@ class RankOrchestrationService:
             def breakout_builder() -> pd.DataFrame:
                 frames: list[pd.DataFrame] = []
                 for exchange in rank_exchanges:
-                    exchange_ranked = ranked
-                    if not ranked.empty and "exchange" in ranked.columns:
-                        exchange_ranked = ranked.loc[ranked["exchange"].astype(str) == exchange].copy()
+                    exchange_ranked = ranked_universe
+                    if not ranked_universe.empty and "exchange" in ranked_universe.columns:
+                        exchange_ranked = ranked_universe.loc[
+                            ranked_universe["exchange"].astype(str) == exchange
+                        ].copy()
                     frame = scan_breakouts(
                         ohlcv_db_path=str(context.db_path),
                         feature_store_dir=str(paths.feature_store_dir),
@@ -921,7 +947,7 @@ class RankOrchestrationService:
                 "exchanges": rank_exchanges,
                 "market_bias_allowlist": list(breakout_market_bias_allowlist),
                 "breakout_min_breadth_score": float(effective_params.get("breakout_min_breadth_score", 45.0)),
-                "ranked_fingerprint": self.dataframe_fingerprint(ranked),
+                "ranked_universe_fingerprint": self.dataframe_fingerprint(ranked_universe),
                 "market_stage": _bt_market_stage,
             },
             task_status=task_status,
@@ -929,6 +955,11 @@ class RankOrchestrationService:
             previous_statuses=previous_statuses,
             builder=breakout_builder,
             optional=True,
+            skip_reason=(
+                None
+                if _breakout_active
+                else f"disabled_by_market_stage:{_bt_market_stage}"
+            ),
         )
         outputs["breakout_scan"] = breakout_df
         if breakout_status["status"] in {"failed", "timed_out", "degraded"}:

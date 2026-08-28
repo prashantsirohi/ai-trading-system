@@ -52,6 +52,15 @@ also records `rank_regime_freshness_v1` DQ evidence using the observed regime
 date and calculated calendar age; MCP reports stale or inconsistent evidence
 without reinterpreting policy.
 
+Rank market-stage routing reads the latest correction-aware NSE stock-stage
+breadth from governed `weekly_stock_stage_history` as of the decision date. The
+legacy mutable `ohlcv.weekly_stage_snapshot` is compatibility fallback only and
+cannot route the market when its newest source row is more than ten calendar
+days old. A fresh S4 classification still disables breakout detection. When
+breakouts are active, the detector receives the complete per-exchange
+`ranked_universe` for relative-strength and sector-percentile context; its
+output remains separate from the actionable `ranked_signals` shortlist.
+
 The on-demand [Actual Trading Journal](architecture/trade_journal.md) is a separate bounded domain. It owns `$DATA_ROOT/trade_journal.duckdb`, is not a daily-pipeline stage, never writes `execution.duckdb`, and reads trusted operational market data only for point-in-time enrichment. Its authenticated mutation routes live under the execution API; Phase 4 `/api/v1` remains GET-only. Loopback development uses a server-side Vite/API handshake when no operator key is configured, while non-loopback execution-API startup requires an explicit key. See the [operator runbook](runbooks/trade_journal.md).
 
 The canonical, persistence-free vocabulary for future opportunity management is
