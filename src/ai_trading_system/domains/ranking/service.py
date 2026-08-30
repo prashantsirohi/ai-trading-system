@@ -211,7 +211,14 @@ def _join_on_symbol_id(
     right_frame.loc[:, "_join_symbol_id"] = right_frame["symbol_id"].astype(str)
     left_indexed = left_frame.set_index("_join_symbol_id", drop=True)
     right_indexed = right_frame.set_index("_join_symbol_id", drop=True).drop(columns=["symbol_id"])
-    joined = left_indexed.join(right_indexed, how=how, rsuffix=rsuffix)
+    overlapping = left_indexed.columns.intersection(right_indexed.columns).tolist()
+    effective_suffix = rsuffix or "__right"
+    joined = left_indexed.join(right_indexed, how=how, rsuffix=effective_suffix)
+    if not rsuffix:
+        for column in overlapping:
+            right_column = f"{column}{effective_suffix}"
+            joined.loc[:, column] = joined[column].combine_first(joined[right_column])
+        joined = joined.drop(columns=[f"{column}{effective_suffix}" for column in overlapping])
     joined = joined.reset_index().copy()
     joined.loc[:, "symbol_id"] = joined["symbol_id"].fillna(joined["_join_symbol_id"])
     return joined.drop(columns=["_join_symbol_id"]).reset_index(drop=True).copy()

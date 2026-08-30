@@ -815,6 +815,56 @@ def test_build_integrated_stock_scan_view_preserves_discoveries_and_best_context
     assert "FILTERED" not in set(merged["symbol_id"])
 
 
+def test_build_integrated_stock_scan_view_coalesces_overlapping_enrichment_columns() -> None:
+    ranked = pd.DataFrame(
+        [
+            {
+                "symbol_id": "RANKED",
+                "exchange": "NSE",
+                "sector_rs_value": 0.91,
+                "adx_14": 28.0,
+                "setup_quality": 84.0,
+            }
+        ]
+    )
+    breakout = pd.DataFrame(
+        [
+            {
+                "symbol_id": "RANKED",
+                "exchange": "NSE",
+                "breakout_state": "qualified",
+                "breakout_score": 9.0,
+                "sector_rs_value": 0.72,
+                "adx_14": 24.0,
+                "setup_quality": 80.0,
+            },
+            {
+                "symbol_id": "DISCOVERED",
+                "exchange": "NSE",
+                "breakout_state": "watchlist",
+                "breakout_score": 7.0,
+                "sector_rs_value": 0.66,
+                "adx_14": 22.0,
+                "setup_quality": 76.0,
+            },
+        ]
+    )
+
+    merged = build_integrated_stock_scan_view(
+        ranked_df=ranked,
+        pattern_df=pd.DataFrame(),
+        breakout_df=breakout,
+    )
+    lookup = merged.set_index("symbol_id")
+
+    assert float(lookup.loc["RANKED", "sector_rs_value"]) == 0.91
+    assert float(lookup.loc["RANKED", "adx_14"]) == 28.0
+    assert float(lookup.loc["RANKED", "setup_quality"]) == 84.0
+    assert float(lookup.loc["DISCOVERED", "sector_rs_value"]) == 0.66
+    assert float(lookup.loc["DISCOVERED", "adx_14"]) == 22.0
+    assert float(lookup.loc["DISCOVERED", "setup_quality"]) == 76.0
+
+
 def test_rank_stage_writes_full_ranked_universe_while_shortlisting_execution_candidates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
