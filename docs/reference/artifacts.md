@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-08-19
+- **Last verified:** 2026-08-30
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -127,6 +127,8 @@ Writes under `data/pipeline_runs/<run_id>/opportunities/attempt_<n>/`:
 - `position_recovery_proposals.csv`
 - `position_recovery_actions.csv`
 - `position_monitor_reconciliation.csv`
+- `technical_evidence_labels.csv` — one row per exchange/symbol/session with independent fundamental, Investigator weekly-gainer, near-high, SMA20, entry-confirmation, and SMA20-break label states plus the shared observation ID
+- `technical_evidence_cohorts.csv` — deduplicated matured 5/10/20/60-session next-open return summaries for fundamental-only, technical-only, and intersection cohorts
 
 Authority:
 

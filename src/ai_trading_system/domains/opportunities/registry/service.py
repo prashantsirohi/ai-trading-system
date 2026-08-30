@@ -19,6 +19,7 @@ from .models import (
     SourceLineage,
     StageObservation,
     TransitionObservation,
+    TechnicalEvidenceObservation,
 )
 from .store import DuckDBOpportunityRegistryStore
 
@@ -32,7 +33,9 @@ class OpportunityRegistryService:
     def open_candidate_episode(self, request: OpenEpisodeRequest):
         return self.store.open_episode(request)
 
-    def open_candidate_episode_with_snapshot(self, request: OpenEpisodeRequest, observation: SnapshotObservation):
+    def open_candidate_episode_with_snapshot(
+        self, request: OpenEpisodeRequest, observation: SnapshotObservation
+    ):
         return self.store.open_episode_with_initial_snapshot(request, observation)
 
     def find_open_candidate_episode(self, **identity):
@@ -62,12 +65,31 @@ class OpportunityRegistryService:
     def record_outcome_attribution(self, observation: AttributionObservation):
         return self.store.append_attribution(observation)
 
+    def append_technical_evidence(self, observation: TechnicalEvidenceObservation):
+        return self.store.append_technical_evidence(observation)
+
+    def latest_technical_evidence(self, **identity):
+        return self.store.latest_technical_evidence(**identity)
+
+    def latest_technical_evidence_by_symbol(self, **filters):
+        return self.store.latest_technical_evidence_by_symbol(**filters)
+
     def close_candidate_episode(
-        self, candidate_id: str, *, status: EpisodeStatus, closed_at: datetime,
-        closing_reason: str, lineage: SourceLineage,
+        self,
+        candidate_id: str,
+        *,
+        status: EpisodeStatus,
+        closed_at: datetime,
+        closing_reason: str,
+        lineage: SourceLineage,
     ):
-        return self.store.close_episode(candidate_id, status=status, closed_at=closed_at,
-                                        closing_reason=closing_reason, lineage=lineage)
+        return self.store.close_episode(
+            candidate_id,
+            status=status,
+            closed_at=closed_at,
+            closing_reason=closing_reason,
+            lineage=lineage,
+        )
 
     def get_candidate_current_state(self, candidate_id: str):
         return self.store.current_state(candidate_id)
@@ -102,14 +124,25 @@ class OpportunityRegistryService:
     def append_stage_observations_batch(self, observations: Iterable[StageObservation]):
         return self.store.append_stage_observations_batch(observations)
 
-    def append_evidence_observations_batch(self, observations: Iterable[EvidenceObservation]):
+    def append_evidence_observations_batch(
+        self, observations: Iterable[EvidenceObservation]
+    ):
         return self.store.append_evidence_observations_batch(observations)
 
-    def append_opportunity_observations_batch(self, observations: Iterable[OpportunityObservation]):
+    def append_opportunity_observations_batch(
+        self, observations: Iterable[OpportunityObservation]
+    ):
         return self.store.append_opportunity_observations_batch(observations)
 
-    def append_progress_observations_batch(self, observations: Iterable[ProgressObservation]):
+    def append_progress_observations_batch(
+        self, observations: Iterable[ProgressObservation]
+    ):
         return self.store.append_progress_observations_batch(observations)
+
+    def append_technical_evidence_batch(
+        self, observations: Iterable[TechnicalEvidenceObservation]
+    ):
+        return self.store.append_technical_evidence_batch(observations)
 
     def apply_orchestration_bundle(self, bundle: OrchestrationBundle):
         return self.store.append_orchestration_bundle(bundle)
@@ -118,7 +151,11 @@ class OpportunityRegistryService:
         return self.store.list_episode_relations(candidate_id)
 
     def append_snapshot_bundle(
-        self, *, snapshot: SnapshotObservation, stock_stage: StageObservation, sector_stage: StageObservation
+        self,
+        *,
+        snapshot: SnapshotObservation,
+        stock_stage: StageObservation,
+        sector_stage: StageObservation,
     ):
         return self.store.append_snapshot_bundle(
             snapshot=snapshot, stock_stage=stock_stage, sector_stage=sector_stage
@@ -127,4 +164,6 @@ class OpportunityRegistryService:
     def append_transition_with_snapshot(
         self, *, snapshot: SnapshotObservation, transition: TransitionObservation
     ):
-        return self.store.append_transition_with_snapshot(snapshot=snapshot, transition=transition)
+        return self.store.append_transition_with_snapshot(
+            snapshot=snapshot, transition=transition
+        )

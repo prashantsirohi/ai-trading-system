@@ -454,6 +454,7 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
             "investigator_evaluation_states_json",
             "investigator_source_lineage_json",
             "review_eligible",
+            "technical_evidence_observation_id",
         }
     ),
     "investigator_performance_event": frozenset(
@@ -502,6 +503,20 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
             "primary_thesis",
             "source_data_hash",
             "rule_version",
+            "source_run_id",
+            "idempotency_key",
+        }
+    ),
+    "symbol_technical_evidence_observation": frozenset(
+        {
+            "technical_evidence_observation_id",
+            "symbol_id",
+            "exchange",
+            "observed_session",
+            "entry_confirmed_state",
+            "sma20_break_state",
+            "price_basis",
+            "policy_version",
             "source_run_id",
             "idempotency_key",
         }

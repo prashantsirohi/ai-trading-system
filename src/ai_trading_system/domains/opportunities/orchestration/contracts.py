@@ -61,6 +61,8 @@ INVESTIGATOR_ATTRIBUTION_ONLY_DIMENSIONS: tuple[str, ...] = (
     "breakout",
 )
 INVESTIGATOR_SECTOR_INDEX_POLICY_VERSION = "investigator-sector-index-taxonomy-v1.1"
+TECHNICAL_EVIDENCE_POLICY_VERSION = "near-high-20dma-shadow-v1"
+TECHNICAL_EVIDENCE_NEAR_HIGH_RATIO = 0.90
 INVESTIGATOR_SECTOR_INDEX_ALIASES: dict[str, str] = {
     "pharmaceuticals & biotechnology": "pharma",
     "healthcare": "pharma",
@@ -92,6 +94,51 @@ SECTOR_GATE_RULES: dict[str, Any] = {
 class OpportunityRegistryMode(str, Enum):
     OFF = "off"
     SHADOW = "shadow"
+
+
+class TechnicalEvidenceState(str, Enum):
+    MET = "MET"
+    NOT_MET = "NOT_MET"
+    UNKNOWN = "UNKNOWN"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+@dataclass(frozen=True, slots=True)
+class SymbolTechnicalEvidence:
+    """Neutral point-in-time labels shared by independent setup families."""
+
+    symbol_id: str
+    exchange: str
+    as_of: datetime
+    observed_session: date
+    price: float | None
+    sma20: float | None
+    high_52w: float | None
+    distance_from_52w_high_pct: float | None
+    weekly_gainer: TechnicalEvidenceState
+    near_52w_high_10: TechnicalEvidenceState
+    above_sma20: TechnicalEvidenceState
+    entry_confirmed: TechnicalEvidenceState
+    sma20_break: TechnicalEvidenceState
+    missing_reasons: tuple[str, ...] = ()
+    price_basis: str = "INVESTIGATOR_CONTEXT"
+    source_run_id: str = "UNKNOWN"
+    source_artifact_hashes: tuple[str, ...] = ()
+    policy_version: str = TECHNICAL_EVIDENCE_POLICY_VERSION
+
+    def __post_init__(self) -> None:
+        if not self.symbol_id.strip():
+            raise ValueError("symbol_id must be non-empty")
+        if not self.exchange.strip():
+            raise ValueError("exchange must be non-empty")
+        if self.as_of.tzinfo is None or self.as_of.utcoffset() is None:
+            raise ValueError("as_of must be timezone-aware")
+        if not self.price_basis.strip():
+            raise ValueError("price_basis must be non-empty")
+        for name in ("price", "sma20", "high_52w"):
+            value = getattr(self, name)
+            if value is not None and float(value) <= 0:
+                raise ValueError(f"{name} must be positive when present")
 
 
 class AdmissionReason(str, Enum):
@@ -260,6 +307,8 @@ class OpportunitySourceBundle:
     missing_data_fields: tuple[str, ...] = ()
     sector_gate: "SectorGateEvidence | None" = None
     investigator_context: InvestigatorContext | None = None
+    technical_evidence: SymbolTechnicalEvidence | None = None
+    technical_evidence_observation_id: str | None = None
     fundamental_thesis: FundamentalThesisSnapshot | None = None
     raw_market_regime: str = "unknown"
     regime_confidence: float | None = None

@@ -75,9 +75,12 @@ from ai_trading_system.domains.opportunities.registry import (
     SourceLineage,
     StageObservation,
     StageScope,
+    TechnicalEvidenceObservation,
     TransitionObservation,
     make_candidate_id,
+    make_record_identity,
     make_setup_id,
+    stable_digest,
 )
 from ai_trading_system.pipeline.contracts import StageArtifact
 from ai_trading_system.pipeline.registry import RegistryStore
@@ -104,10 +107,15 @@ from .contracts import (
     SectorGateEvidence,
     SetupMatchOutcome,
     SourceDescriptor,
+    TechnicalEvidenceState,
 )
 from .matching import match_open_episode
 from .retention import advance_session_counters, evaluate_retention
 from .transitions import evaluate_transition
+from .technical_evidence import (
+    TechnicalMarketMetrics,
+    classify_symbol_technical_evidence,
+)
 
 
 class OpportunityShadowSourceError(RuntimeError):
@@ -177,9 +185,7 @@ class OpportunityShadowOrchestrator:
         raw_supplemental_pattern = _read_csv(artifacts.supplemental_pattern_scan)
         raw_stock = _read_csv(artifacts.stock_scan)
         raw_sector = _read_csv(artifacts.sector_dashboard)
-        raw_supplemental_sector = _read_csv(
-            artifacts.supplemental_sector_dashboard
-        )
+        raw_supplemental_sector = _read_csv(artifacts.supplemental_sector_dashboard)
         raw_lifecycle = _read_csv(artifacts.lifecycle_state)
         raw_routing = _read_csv(artifacts.scan_routing)
         raw_market_context = _read_json(artifacts.market_context)
@@ -374,6 +380,9 @@ class OpportunityShadowOrchestrator:
                 stage_attempt,
             ),
         )
+        technical_source_bundles = {
+            (bundle.exchange, bundle.symbol_id): bundle for bundle in bundles
+        }
         bundles = _attach_fundamental_thesis_bundles(
             bundles,
             raw_fundamental,
@@ -400,6 +409,11 @@ class OpportunityShadowOrchestrator:
         )
         bundles = _attach_session_prices(
             bundles, ohlcv_db_path=ohlcv_db_path, session_date=observed_session
+        )
+        technical_market_metrics = _load_symbol_technical_metrics(
+            ohlcv_db_path=ohlcv_db_path,
+            keys=set(technical_source_bundles),
+            observed_session=observed_session,
         )
         adapter_seconds = time.perf_counter() - adapter_started
 
@@ -439,6 +453,8 @@ class OpportunityShadowOrchestrator:
                 "investigator_primary_sampling",
                 "investigator_source_fidelity",
                 "candidate_fundamental_observations",
+                "technical_evidence_labels",
+                "technical_evidence_cohorts",
             )
         }
         for result in results:
@@ -461,6 +477,21 @@ class OpportunityShadowOrchestrator:
 
         state_by_id = {state.candidate_id: state for state in open_states}
         persistence_started = time.perf_counter()
+        bundles, technical_rows, technical_created, technical_duplicates = (
+            _prepare_symbol_technical_evidence(
+                bundles=bundles,
+                source_bundles=technical_source_bundles,
+                market_metrics=technical_market_metrics,
+                ohlcv_db_path=ohlcv_db_path,
+                registry=self.registry,
+                observed_session=observed_session,
+                run_id=run_id,
+                stage_attempt=stage_attempt,
+                policy_snapshot_id=policy_snapshot_id,
+                dry_run=config.dry_run,
+            )
+        )
+        rows["technical_evidence_labels"].extend(technical_rows)
         counters = _initial_counts(
             raw_rank,
             raw_investigator,
@@ -470,6 +501,13 @@ class OpportunityShadowOrchestrator:
             raw_sector,
             raw_lifecycle,
             bundles,
+        )
+        counters.update(
+            {
+                "technical_evidence_rows": len(technical_rows),
+                "technical_evidence_observations_created": technical_created,
+                "technical_evidence_observation_duplicates": technical_duplicates,
+            }
         )
         counters.update(
             {
@@ -621,13 +659,10 @@ class OpportunityShadowOrchestrator:
                 continue
             elif recovery:
                 match_outcome = SetupMatchOutcome.NEW_EPISODE
-            elif (
-                admission.admitted
-                and admission.reason in {
-                    AdmissionReason.INVESTIGATOR_PRIMARY_ONSET,
-                    AdmissionReason.FUNDAMENTAL_THESIS,
-                }
-            ):
+            elif admission.admitted and admission.reason in {
+                AdmissionReason.INVESTIGATOR_PRIMARY_ONSET,
+                AdmissionReason.FUNDAMENTAL_THESIS,
+            }:
                 exact_family = (
                     "fundamental_thesis"
                     if admission.reason is AdmissionReason.FUNDAMENTAL_THESIS
@@ -1019,6 +1054,7 @@ class OpportunityShadowOrchestrator:
                             )
                         ),
                         "transition_blockers": list(transition.blockers),
+                        **_technical_evidence_artifact_fields(bundle),
                         **_sector_gate_artifact_fields(bundle.sector_gate),
                     }
                 )
@@ -1073,6 +1109,10 @@ class OpportunityShadowOrchestrator:
             )
             for name, output_rows in performance_outputs.items():
                 rows[name].extend(output_rows)
+        if not config.dry_run:
+            rows["technical_evidence_cohorts"].extend(
+                _technical_evidence_cohorts(self.registry_store.registry)
+            )
         sampling_rows, fidelity_rows = _primary_sampling_evidence(
             authoritative_context=authoritative_context,
             captured_context=captured_context,
@@ -1163,9 +1203,7 @@ class OpportunityShadowOrchestrator:
                 ),
                 "primary_qualifying_observations": sampling_rows[0]["denominator"],
                 "primary_observations_captured": sampling_rows[0]["numerator"],
-                "investigator_source_fidelity_pct": fidelity_rows[0][
-                    "fidelity_pct"
-                ],
+                "investigator_source_fidelity_pct": fidelity_rows[0]["fidelity_pct"],
             }
         )
         return OpportunityShadowRunResult(
@@ -1225,6 +1263,9 @@ def _write_bundle(
             snapshot,
             bundle.as_of,
             lineage,
+            technical_evidence_observation_id=(
+                bundle.technical_evidence_observation_id
+            ),
             last_progress_at=last_progress_at,
             last_retention_counted_session=last_retention_counted_session,
         )
@@ -2102,15 +2143,27 @@ def _persist_fundamental_observation(
             ) ON CONFLICT(idempotency_key) DO NOTHING
             """,
             [
-                observation_id, candidate_id, setup_id, thesis.symbol_id, thesis.exchange,
-                bundle.as_of, thesis.primary_thesis.value,
+                observation_id,
+                candidate_id,
+                setup_id,
+                thesis.symbol_id,
+                thesis.exchange,
+                bundle.as_of,
+                thesis.primary_thesis.value,
                 json.dumps(row["secondary_theses"], sort_keys=True),
                 json.dumps(evaluations, sort_keys=True, default=str),
                 json.dumps(row["evidence"], sort_keys=True, default=str),
-                json.dumps(row["blockers"], sort_keys=True), thesis.source_data_hash,
-                thesis.statement_basis, thesis.source_report_date, thesis.source_available_at,
-                thesis.taxonomy_version, thesis.rule_version, thesis.admission_version,
-                policy_snapshot_id, run_id, idempotency_key,
+                json.dumps(row["blockers"], sort_keys=True),
+                thesis.source_data_hash,
+                thesis.statement_basis,
+                thesis.source_report_date,
+                thesis.source_available_at,
+                thesis.taxonomy_version,
+                thesis.rule_version,
+                thesis.admission_version,
+                policy_snapshot_id,
+                run_id,
+                idempotency_key,
             ],
         )
     return row
@@ -2205,7 +2258,10 @@ def _attach_fundamental_thesis_bundles(
     by_key = {(item.exchange, item.symbol_id): item for item in bundles}
     fundamental_bundles: list[OpportunitySourceBundle] = []
     for row in rows:
-        if str(row.get("admission_eligible") or "").strip().lower() not in {"true", "1"}:
+        if str(row.get("admission_eligible") or "").strip().lower() not in {
+            "true",
+            "1",
+        }:
             continue
         symbol = str(row.get("symbol_id") or "").upper().strip()
         exchange = str(row.get("exchange") or "NSE").upper().strip()
@@ -2255,7 +2311,9 @@ def _attach_fundamental_thesis_bundles(
             taxonomy_version=str(
                 row.get("taxonomy_version") or FUNDAMENTAL_DISCOVERY_TAXONOMY_VERSION
             ),
-            rule_version=str(row.get("rule_version") or FUNDAMENTAL_THESIS_RULE_VERSION),
+            rule_version=str(
+                row.get("rule_version") or FUNDAMENTAL_THESIS_RULE_VERSION
+            ),
             admission_version=str(
                 row.get("admission_version") or FUNDAMENTAL_THESIS_ADMISSION_VERSION
             ),
@@ -2264,17 +2322,396 @@ def _attach_fundamental_thesis_bundles(
             (exchange, symbol),
             OpportunitySourceBundle(symbol_id=symbol, exchange=exchange, as_of=as_of),
         )
-        sources = tuple({item.artifact_hash: item for item in (*base.source_lineage, descriptor)}.values())
+        sources = tuple(
+            {
+                item.artifact_hash: item for item in (*base.source_lineage, descriptor)
+            }.values()
+        )
         fundamental_bundles.append(
             replace(
                 base,
                 investigator_context=None,
                 fundamental_thesis=thesis,
                 source_lineage=sources,
-                source_row_identities=(*base.source_row_identities, f"fundamental:{exchange}:{symbol}:{thesis.source_data_hash}"),
+                source_row_identities=(
+                    *base.source_row_identities,
+                    f"fundamental:{exchange}:{symbol}:{thesis.source_data_hash}",
+                ),
             )
         )
     return (*bundles, *fundamental_bundles)
+
+
+def _load_symbol_technical_metrics(
+    *,
+    ohlcv_db_path: Path | None,
+    keys: set[tuple[str, str]],
+    observed_session: date,
+) -> dict[tuple[str, str], TechnicalMarketMetrics]:
+    """Read adjusted-close metrics point-in-time without changing OHLCV state."""
+
+    if ohlcv_db_path is None or not keys:
+        return {}
+    symbols = sorted({symbol for _, symbol in keys})
+    exchanges = sorted({exchange for exchange, _ in keys})
+    symbol_placeholders = ", ".join("?" for _ in symbols)
+    exchange_placeholders = ", ".join("?" for _ in exchanges)
+    try:
+        with duckdb.connect(str(ohlcv_db_path), read_only=True) as conn:
+            rows = conn.execute(
+                f"""
+                WITH ordered AS (
+                    SELECT
+                        UPPER(exchange) AS exchange,
+                        UPPER(symbol_id) AS symbol_id,
+                        CAST(timestamp AS DATE) AS trade_date,
+                        adjusted_close,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY UPPER(exchange), UPPER(symbol_id)
+                            ORDER BY timestamp DESC
+                        ) AS rn
+                    FROM _catalog
+                    WHERE UPPER(symbol_id) IN ({symbol_placeholders})
+                      AND UPPER(exchange) IN ({exchange_placeholders})
+                      AND CAST(timestamp AS DATE) <= ?
+                      AND COALESCE(is_benchmark, FALSE) = FALSE
+                )
+                SELECT
+                    exchange,
+                    symbol_id,
+                    MAX(
+                        CASE
+                            WHEN rn = 1 AND trade_date = ? THEN adjusted_close
+                        END
+                    ) AS price,
+                    CASE
+                        WHEN COUNT(adjusted_close) FILTER (WHERE rn <= 20) = 20
+                            THEN AVG(adjusted_close) FILTER (WHERE rn <= 20)
+                    END AS sma20,
+                    CASE
+                        WHEN COUNT(adjusted_close) FILTER (WHERE rn <= 252) = 252
+                            THEN MAX(adjusted_close) FILTER (WHERE rn <= 252)
+                    END AS high_52w,
+                    COUNT(adjusted_close) FILTER (WHERE rn <= 252) AS observations
+                FROM ordered
+                GROUP BY exchange, symbol_id
+                """,  # noqa: S608 - placeholders only; table and columns are fixed
+                [*symbols, *exchanges, observed_session, observed_session],
+            ).fetchall()
+    except (duckdb.Error, OSError):
+        return {}
+    metrics: dict[tuple[str, str], TechnicalMarketMetrics] = {}
+    for exchange, symbol_id, price, sma20, high_52w, observations in rows:
+        key = (str(exchange), str(symbol_id))
+        if key not in keys:
+            continue
+        missing = []
+        if price is None:
+            missing.append("decision_session_adjusted_close_unavailable")
+        if sma20 is None:
+            missing.append("insufficient_sma20_history")
+        if high_52w is None:
+            missing.append("insufficient_52w_history")
+        metrics[key] = TechnicalMarketMetrics(
+            price=_optional_float(price),
+            sma20=_optional_float(sma20),
+            high_52w=_optional_float(high_52w),
+            observed_sessions=int(observations or 0),
+            missing_reasons=tuple(missing),
+        )
+    return metrics
+
+
+def _prepare_symbol_technical_evidence(
+    *,
+    bundles: tuple[OpportunitySourceBundle, ...],
+    source_bundles: dict[tuple[str, str], OpportunitySourceBundle],
+    market_metrics: dict[tuple[str, str], TechnicalMarketMetrics],
+    ohlcv_db_path: Path | None,
+    registry: OpportunityRegistryService,
+    observed_session: date,
+    run_id: str,
+    stage_attempt: int,
+    policy_snapshot_id: str | None,
+    dry_run: bool,
+) -> tuple[
+    tuple[OpportunitySourceBundle, ...],
+    list[dict[str, Any]],
+    int,
+    int,
+]:
+    """Create one neutral observation and share it across every setup family."""
+
+    grouped: dict[tuple[str, str], list[OpportunitySourceBundle]] = defaultdict(list)
+    for bundle in bundles:
+        grouped[(bundle.exchange, bundle.symbol_id)].append(bundle)
+    previous = registry.latest_technical_evidence_by_symbol(
+        before_session=observed_session
+    )
+    observations: list[TechnicalEvidenceObservation] = []
+    evidence_by_key: dict[tuple[str, str], Any] = {}
+    observation_id_by_key: dict[tuple[str, str], str] = {}
+    artifact_rows: list[dict[str, Any]] = []
+
+    for key in sorted(grouped):
+        exchange, symbol_id = key
+        source_bundle = source_bundles.get(key, grouped[key][0])
+        context = source_bundle.investigator_context
+        evidence = classify_symbol_technical_evidence(
+            symbol_id=symbol_id,
+            exchange=exchange,
+            as_of=source_bundle.as_of,
+            observed_session=observed_session,
+            context=context,
+            market_metrics=market_metrics.get(key),
+            previous=previous.get(key),
+        )
+        lineage = _technical_evidence_lineage(
+            source_bundle,
+            market_metrics=market_metrics.get(key),
+            ohlcv_db_path=ohlcv_db_path,
+            run_id=run_id,
+            stage_attempt=stage_attempt,
+            policy_snapshot_id=policy_snapshot_id,
+        )
+        observation = TechnicalEvidenceObservation(
+            evidence, source_bundle.as_of, lineage
+        )
+        record_id, _, _ = make_record_identity(
+            candidate_id=f"symbol:{exchange}:{symbol_id}",
+            record_type="technical_evidence",
+            as_of=evidence.as_of,
+            run_id=lineage.run_id,
+            stage_attempt=lineage.stage_attempt,
+            source_artifact_hash=lineage.source_artifact_hash,
+            contract_version=evidence.policy_version,
+            semantic_payload=evidence,
+        )
+        observations.append(observation)
+        evidence_by_key[key] = evidence
+        observation_id_by_key[key] = record_id
+        setup_labels = []
+        if context is not None:
+            setup_labels.append("INVESTIGATOR")
+        if any(item.fundamental_thesis is not None for item in grouped[key]):
+            setup_labels.append("FUNDAMENTAL_THESIS")
+        artifact_rows.append(
+            {
+                "technical_evidence_observation_id": record_id,
+                "exchange": exchange,
+                "symbol_id": symbol_id,
+                "as_of": evidence.as_of.isoformat(),
+                "observed_session": evidence.observed_session.isoformat(),
+                "evidence_lanes": "|".join(setup_labels) or "NONE",
+                "fundamental_thesis_state": (
+                    TechnicalEvidenceState.MET.value
+                    if "FUNDAMENTAL_THESIS" in setup_labels
+                    else TechnicalEvidenceState.NOT_APPLICABLE.value
+                ),
+                "weekly_gainer_state": evidence.weekly_gainer.value,
+                "near_52w_high_10_state": evidence.near_52w_high_10.value,
+                "above_sma20_state": evidence.above_sma20.value,
+                "entry_confirmed_state": evidence.entry_confirmed.value,
+                "sma20_break_state": evidence.sma20_break.value,
+                "price": evidence.price,
+                "sma20": evidence.sma20,
+                "high_52w": evidence.high_52w,
+                "distance_from_52w_high_pct": (evidence.distance_from_52w_high_pct),
+                "missing_reasons": "|".join(evidence.missing_reasons),
+                "price_basis": evidence.price_basis,
+                "policy_version": evidence.policy_version,
+                "admission_authority": False,
+                "execution_eligibility": False,
+            }
+        )
+
+    created = duplicates = 0
+    if not dry_run and observations:
+        result = registry.append_technical_evidence_batch(observations)
+        created = result.created
+        duplicates = result.duplicates
+
+    attached = tuple(
+        replace(
+            bundle,
+            technical_evidence=evidence_by_key[(bundle.exchange, bundle.symbol_id)],
+            technical_evidence_observation_id=observation_id_by_key[
+                (bundle.exchange, bundle.symbol_id)
+            ],
+        )
+        for bundle in bundles
+    )
+    return attached, artifact_rows, created, duplicates
+
+
+def _technical_evidence_lineage(
+    bundle: OpportunitySourceBundle,
+    *,
+    market_metrics: TechnicalMarketMetrics | None,
+    ohlcv_db_path: Path | None,
+    run_id: str,
+    stage_attempt: int,
+    policy_snapshot_id: str | None,
+) -> SourceLineage:
+    investigator = next(
+        (
+            item
+            for item in bundle.source_lineage
+            if item.artifact_type == "investigator_scores"
+        ),
+        None,
+    )
+    if investigator is None and market_metrics is None:
+        return _combined_lineage(bundle, run_id, stage_attempt, policy_snapshot_id)
+    hashes = []
+    paths = []
+    if investigator is not None:
+        hashes.append(investigator.artifact_hash)
+        paths.append(investigator.artifact_path)
+    if market_metrics is not None:
+        hashes.append(stable_digest(market_metrics))
+        paths.append(str(ohlcv_db_path or "ohlcv:unavailable"))
+    source_hash = hashlib.sha256("|".join(sorted(hashes)).encode()).hexdigest()
+    return SourceLineage(
+        run_id=run_id,
+        stage_name="opportunities",
+        stage_attempt=(
+            investigator.stage_attempt
+            if investigator is not None
+            else max(
+                (item.stage_attempt for item in bundle.source_lineage),
+                default=stage_attempt,
+            )
+        ),
+        source_artifact_type="neutral_technical_evidence_inputs",
+        source_artifact_path="|".join(sorted(paths)),
+        source_artifact_hash=source_hash,
+        policy_snapshot_id=policy_snapshot_id,
+    )
+
+
+def _technical_evidence_artifact_fields(
+    bundle: OpportunitySourceBundle,
+) -> dict[str, Any]:
+    evidence = bundle.technical_evidence
+    if evidence is None:
+        return {
+            "technical_evidence_observation_id": None,
+            "technical_entry_confirmed": TechnicalEvidenceState.UNKNOWN.value,
+            "technical_above_sma20": TechnicalEvidenceState.UNKNOWN.value,
+            "technical_sma20_break": TechnicalEvidenceState.UNKNOWN.value,
+        }
+    return {
+        "technical_evidence_observation_id": (bundle.technical_evidence_observation_id),
+        "technical_entry_confirmed": evidence.entry_confirmed.value,
+        "technical_above_sma20": evidence.above_sma20.value,
+        "technical_sma20_break": evidence.sma20_break.value,
+    }
+
+
+def _technical_evidence_cohorts(registry: RegistryStore) -> list[dict[str, Any]]:
+    """Return deduplicated matured fixed-horizon returns for three label cohorts."""
+
+    with registry._reader() as conn:  # noqa: SLF001
+        rows = conn.execute(
+            """
+            WITH labeled AS (
+                SELECT
+                    CASE
+                        WHEN ep.setup_family = 'fundamental_thesis'
+                             AND te.entry_confirmed_state = 'MET'
+                            THEN 'FUNDAMENTAL_AND_TECHNICAL'
+                        WHEN ep.setup_family = 'fundamental_thesis'
+                            THEN 'FUNDAMENTAL_ONLY'
+                        WHEN te.entry_confirmed_state = 'MET'
+                            THEN 'TECHNICAL_ONLY'
+                        ELSE NULL
+                    END AS cohort_type,
+                    pe.exchange,
+                    pe.symbol_id,
+                    pe.session_date,
+                    ph.horizon_sessions,
+                    ph.next_open_entry_return_pct,
+                    pe.event_id
+                FROM investigator_performance_event pe
+                JOIN investigator_performance_horizon ph USING (event_id)
+                JOIN candidate_episode ep USING (candidate_id)
+                JOIN candidate_snapshot cs
+                  ON cs.snapshot_id = pe.source_snapshot_id
+                JOIN symbol_technical_evidence_observation te
+                  ON te.technical_evidence_observation_id =
+                     cs.technical_evidence_observation_id
+                WHERE pe.event_type = 'CANDIDATE_DISCOVERED'
+                  AND ph.data_quality_status = 'MATURED'
+                  AND ph.next_open_entry_return_pct IS NOT NULL
+                  AND ph.horizon_sessions IN (5, 10, 20, 60)
+            ), deduplicated AS (
+                SELECT * EXCLUDE (rn) FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY cohort_type, exchange, symbol_id,
+                                     session_date, horizon_sessions
+                        ORDER BY event_id
+                    ) AS rn
+                    FROM labeled
+                    WHERE cohort_type IS NOT NULL
+                ) WHERE rn = 1
+            )
+            SELECT
+                cohort_type,
+                horizon_sessions,
+                COUNT(*) AS sample_count,
+                COUNT(DISTINCT exchange || ':' || symbol_id) AS unique_symbol_count,
+                AVG(next_open_entry_return_pct) AS avg_return_pct,
+                100.0 * AVG(
+                    CASE WHEN next_open_entry_return_pct > 0 THEN 1.0 ELSE 0.0 END
+                ) AS win_rate_pct,
+                AVG(next_open_entry_return_pct)
+                    FILTER (WHERE next_open_entry_return_pct > 0) AS avg_win_pct,
+                AVG(next_open_entry_return_pct)
+                    FILTER (WHERE next_open_entry_return_pct < 0) AS avg_loss_pct
+            FROM deduplicated
+            GROUP BY cohort_type, horizon_sessions
+            ORDER BY cohort_type, horizon_sessions
+            """
+        ).fetchall()
+    output: list[dict[str, Any]] = []
+    for (
+        cohort,
+        horizon,
+        sample_count,
+        unique_symbols,
+        avg_return,
+        win_rate,
+        avg_win,
+        avg_loss,
+    ) in rows:
+        payoff = (
+            float(avg_win) / abs(float(avg_loss))
+            if avg_win is not None and avg_loss not in (None, 0.0)
+            else None
+        )
+        output.append(
+            {
+                "cohort_type": cohort,
+                "horizon_sessions": int(horizon),
+                "sample_count": int(sample_count),
+                "unique_symbol_count": int(unique_symbols),
+                "avg_return_pct": round(float(avg_return), 6),
+                "expectancy_pct": round(float(avg_return), 6),
+                "win_rate_pct": round(float(win_rate), 6),
+                "payoff_ratio": round(payoff, 6) if payoff is not None else None,
+                "sample_confidence": (
+                    "HIGH"
+                    if sample_count >= 100
+                    else "MEDIUM"
+                    if sample_count >= 30
+                    else "LOW"
+                ),
+                "return_basis": "NEXT_OPEN_ENTRY",
+                "policy_version": "near-high-20dma-shadow-v1",
+            }
+        )
+    return output
 
 
 def _optional_date(value: Any) -> date | None:
@@ -2541,7 +2978,8 @@ def _primary_sampling_evidence(
             "target_pct": 100.0,
             "status": "PASS" if sampling_pct >= 100.0 else "FAIL",
             "missing_symbols": sorted(
-                f"{exchange}:{symbol}" for exchange, symbol in set(primary) - set(captured)
+                f"{exchange}:{symbol}"
+                for exchange, symbol in set(primary) - set(captured)
             ),
             "policy_version": INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
             "policy_snapshot_id": policy_snapshot_id,
@@ -2583,11 +3021,11 @@ def _primary_sampling_evidence(
             for field in fields
         ):
             routed_divergence += 1
-    fidelity_numerator = max(denominator - len({item.rsplit(":", 1)[0] for item in mismatches}), 0)
+    fidelity_numerator = max(
+        denominator - len({item.rsplit(":", 1)[0] for item in mismatches}), 0
+    )
     fidelity_pct = (
-        round(100.0 * fidelity_numerator / denominator, 6)
-        if denominator
-        else 100.0
+        round(100.0 * fidelity_numerator / denominator, 6) if denominator else 100.0
     )
     fidelity = [
         {
@@ -2676,6 +3114,7 @@ def _reconciliation_row(
             reason in {"triggered_candidate", "pending_followthrough"}
             for reason in bundle.scan_reasons
         ),
+        **_technical_evidence_artifact_fields(bundle),
     }
 
 

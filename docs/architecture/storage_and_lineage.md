@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-08-28
+- **Last verified:** 2026-08-30
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -335,6 +335,14 @@ admission rules and the seven structured rule evaluations. They do not alter
 episode identity or duplicate the canonical primary fields: `opening_reason`
 and `setup_family` remain the primary admission reason and family.
 
+Migration 046 adds append-only `symbol_technical_evidence_observation` and a
+nullable `candidate_snapshot.technical_evidence_observation_id` reference.
+One exchange/symbol/session observation can therefore be shared by separate
+fundamental and Investigator episodes without moving technical evidence into
+either lane's admission contract. Policy `near-high-20dma-shadow-v1` is
+research-only; the table and snapshot reference have no execution, publish,
+candidate-tracker, admission, or lifecycle consumer.
+
 ## Backup and mutation safety
 
 At minimum, back up OHLCV, control-plane, execution, candidate-tracker, master-data, fundamentals, and feature-store state before migrations or repairs. Treat `pipeline_runs/` as audit evidence even where upstream stores can reproduce some artifacts.
@@ -396,7 +404,8 @@ execution, requires `--apply`, verifies the copied control-plane checksum from
 the backup. The pipeline CLI exposes `--apply-control-plane-migrations` only as
 an explicit bootstrap override; it is not the routine operator migration path.
 The required-table catalog includes `candidate_fundamental_observation` from
-migration 044 and `rank_universe_history` from migration 045. This keeps schema
+migration 044, `rank_universe_history` from migration 045, and
+`symbol_technical_evidence_observation` from migration 046. This keeps schema
 readiness ahead of expensive pipeline work and prevents a late persistence
 failure after ranking has already been computed.
 

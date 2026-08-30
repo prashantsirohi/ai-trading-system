@@ -147,12 +147,16 @@ def eligible_previous_watchlist(frame: pd.DataFrame | None) -> pd.DataFrame:
     status = _text(out, "status").str.upper()
     verdict = _text(out, "verdict").str.upper()
     stage = _text(out, "stage_label").str.upper()
+    weekly_stage = _text(out, "weekly_stage_label").str.upper()
     s1_state = _text(out, "s1_promotion_state").str.upper()
     pattern_lifecycle = _text(out, "pattern_lifecycle_state").str.lower()
     drop_reason = _text(out, "drop_reason")
     sources = _text(out, "candidate_sources").str.upper()
     primary = _text(out, "primary_candidate_source").str.upper()
     trigger = _text(out, "trigger_reason").str.upper()
+    terminal_stage = stage.isin({"STAGE_3_DISTRIBUTION", "STAGE_4_DECLINE"}) | weekly_stage.isin(
+        {"S3", "S4", "STAGE_3_DISTRIBUTION", "STAGE_4_DECLINE"}
+    )
 
     base_safe = (
         (status.eq("") | status.isin(ACTIVE_STATUSES))
@@ -164,7 +168,8 @@ def eligible_previous_watchlist(frame: pd.DataFrame | None) -> pd.DataFrame:
     stage1_safe = (
         base_safe
         & ~s1_state.isin({"FAILED_S1", "S2_CONFIRMED"})
-        & ~stage.isin({"STAGE_2_CONFIRMED", "STAGE_3_DISTRIBUTION", "STAGE_4_DECLINE"})
+        & ~stage.eq("STAGE_2_CONFIRMED")
+        & ~terminal_stage
     )
     has_stage_evidence = stage.ne("") | s1_state.ne("") | sources.ne("") | primary.ne("")
     stage1 = (
@@ -182,7 +187,7 @@ def eligible_previous_watchlist(frame: pd.DataFrame | None) -> pd.DataFrame:
     weekly_safe = (
         base_safe
         & weekly_source
-        & ~stage.isin({"STAGE_3_DISTRIBUTION", "STAGE_4_DECLINE"})
+        & ~terminal_stage
     )
     return _collapse(out.loc[(stage1_safe & stage1) | weekly_safe].copy())
 

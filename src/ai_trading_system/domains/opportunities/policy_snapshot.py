@@ -35,7 +35,9 @@ from ai_trading_system.domains.investigator.intake import (
     WEEKLY_GAINER_THRESHOLD_COMPARISON,
 )
 from ai_trading_system.domains.opportunities.coverage import SECTOR_AGGREGATION_RULES
-from ai_trading_system.domains.opportunities.orchestration import contracts as admission_policy
+from ai_trading_system.domains.opportunities.orchestration import (
+    contracts as admission_policy,
+)
 from ai_trading_system.domains.opportunities.orchestration.contracts import (
     ADMISSION_RULE_VERSION,
     INVESTIGATOR_ACTIVE_REVIEW_SCORE,
@@ -51,13 +53,17 @@ from ai_trading_system.domains.opportunities.orchestration.contracts import (
     RETENTION_RULE_VERSION,
     SECTOR_GATE_RULES,
     SETUP_FAMILY_RULE_VERSION,
+    TECHNICAL_EVIDENCE_NEAR_HIGH_RATIO,
+    TECHNICAL_EVIDENCE_POLICY_VERSION,
     OpportunityShadowConfig,
 )
 from ai_trading_system.domains.opportunities.orchestration.matching import (
     SETUP_FAMILY_PROGRESSION,
     SETUP_FAMILY_SUPERSESSION,
 )
-from ai_trading_system.domains.opportunities.orchestration import retention as retention_policy
+from ai_trading_system.domains.opportunities.orchestration import (
+    retention as retention_policy,
+)
 from ai_trading_system.domains.opportunities.routing import (
     REASON_MINIMUM_TIER,
     SCAN_TIER_PRECEDENCE,
@@ -80,7 +86,8 @@ class PolicyVersionContentMismatchError(RuntimeError):
         self.version_label = version_label
         self.changed_fields = changed_fields
         changes = "; ".join(
-            f"{field}: {old!r} -> {new!r}" for field, (old, new) in sorted(changed_fields.items())
+            f"{field}: {old!r} -> {new!r}"
+            for field, (old, new) in sorted(changed_fields.items())
         )
         super().__init__(
             f"POLICY_VERSION_CONTENT_MISMATCH: {version_label} already registered "
@@ -105,7 +112,9 @@ class PolicySnapshot:
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(to_dict(value), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return json.dumps(
+        to_dict(value), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
 
 
 def _digest(value: Any) -> str:
@@ -164,9 +173,15 @@ def policy_content(
             "counter_guard": retention_policy.RETENTION_COUNTER_GUARD,
         },
         routing.scan_policy_version: {
-            "scan_tier_precedence": {tier.value: rank for tier, rank in SCAN_TIER_PRECEDENCE.items()},
-            "reason_minimum_tier": {reason.value: tier.value for reason, tier in REASON_MINIMUM_TIER.items()},
-            "winning_reason_tie_break": [reason.value for reason in WINNING_REASON_TIE_BREAK],
+            "scan_tier_precedence": {
+                tier.value: rank for tier, rank in SCAN_TIER_PRECEDENCE.items()
+            },
+            "reason_minimum_tier": {
+                reason.value: tier.value for reason, tier in REASON_MINIMUM_TIER.items()
+            },
+            "winning_reason_tie_break": [
+                reason.value for reason in WINNING_REASON_TIE_BREAK
+            ],
             "rank_deep_scan_limit": routing.rank_deep_scan_limit,
             "stage_promoted_scan_limit": routing.stage_promoted_scan_limit,
             "stage_discovery_confidence_threshold": routing.stage_discovery_confidence_threshold,
@@ -193,12 +208,8 @@ def policy_content(
             "contextual_move_tag_can_suppress_primary": False,
             "active_review_score_min": INVESTIGATOR_ACTIVE_REVIEW_SCORE,
             "weekly_return_5d_threshold_pct": investigator_weekly_return_pct,
-            "weekly_return_threshold_comparison": (
-                WEEKLY_GAINER_THRESHOLD_COMPARISON
-            ),
-            "weekly_return_comparison_epsilon": (
-                WEEKLY_GAINER_COMPARISON_EPSILON
-            ),
+            "weekly_return_threshold_comparison": (WEEKLY_GAINER_THRESHOLD_COMPARISON),
+            "weekly_return_comparison_epsilon": (WEEKLY_GAINER_COMPARISON_EPSILON),
             "recent_daily_spike_policy": WEEKLY_GAINER_RECENT_DAILY_SPIKE_POLICY,
             "same_day_daily_gainer_precedence": True,
             "intake_receipt_cardinality": "one_per_evaluated_symbol",
@@ -248,6 +259,23 @@ def policy_content(
             "requires_daily_context": True,
             "execution_eligibility": False,
         },
+        TECHNICAL_EVIDENCE_POLICY_VERSION: {
+            "near_52w_high_min_price_to_high_ratio": (
+                TECHNICAL_EVIDENCE_NEAR_HIGH_RATIO
+            ),
+            "price_basis": "adjusted_close",
+            "sma20_sessions": 20,
+            "high_52w_sessions": 252,
+            "decision_session_price_required": True,
+            "above_sma20_comparison": "price_greater_than_or_equal",
+            "entry_confirmation": ["near_52w_high_10", "above_sma20"],
+            "hold_condition": "above_sma20",
+            "exit_trigger": "first_close_below_sma20",
+            "exit_fill": "next_session_open",
+            "admission_authority": False,
+            "lifecycle_authority": False,
+            "execution_eligibility": False,
+        },
     }
 
 
@@ -292,13 +320,16 @@ def append_policy_snapshot_event(
     """
     try:
         registry.append_run_metadata_event(
-            run_id, {"event": "policy_snapshot", "stage": stage_name, **snapshot.metadata()},
+            run_id,
+            {"event": "policy_snapshot", "stage": stage_name, **snapshot.metadata()},
         )
     except KeyError:
         return
 
 
-def _content_diff(stored: Mapping[str, Any], current: Mapping[str, Any]) -> dict[str, tuple[Any, Any]]:
+def _content_diff(
+    stored: Mapping[str, Any], current: Mapping[str, Any]
+) -> dict[str, tuple[Any, Any]]:
     changed: dict[str, tuple[Any, Any]] = {}
     for field in sorted(set(stored) | set(current)):
         if stored.get(field) != current.get(field):
@@ -332,7 +363,13 @@ def register_or_verify_policy_snapshots(
                     """INSERT INTO policy_version_registry
                            (version_label, policy_snapshot_id, content_json, first_registered_at, first_run_id)
                        VALUES (?, ?, ?, ?, ?)""",
-                    [label, label_hash, _canonical_json(snapshot.content[label]), now, run_id],
+                    [
+                        label,
+                        label_hash,
+                        _canonical_json(snapshot.content[label]),
+                        now,
+                        run_id,
+                    ],
                 )
                 registered += 1
                 continue

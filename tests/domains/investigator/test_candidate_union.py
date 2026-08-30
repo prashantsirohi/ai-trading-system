@@ -133,6 +133,14 @@ def test_previous_watchlist_carries_active_stage2_weekly_candidate() -> None:
                 "trigger_reason": "DAILY_GAINER",
                 "candidate_sources": "DAILY_GAINER|STOCK_SCAN_CONTEXT",
             },
+            {
+                "symbol_id": "WEEKLY_S4",
+                "status": "ACTIVE_RESEARCH",
+                "stage_label": "UNKNOWN",
+                "weekly_stage_label": "S4",
+                "trigger_reason": "WEEKLY_GAINER",
+                "candidate_sources": "WEEKLY_GAINER|STOCK_SCAN_CONTEXT",
+            },
         ]
     )
 

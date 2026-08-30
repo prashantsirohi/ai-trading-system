@@ -2,7 +2,7 @@
 
 - **Purpose:** Operate the optional canonical opportunity-registry shadow stage.
 - **Audience:** Operators and engineers debugging opportunity reconciliation.
-- **Last verified:** 2026-08-26
+- **Last verified:** 2026-08-30
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
@@ -23,9 +23,11 @@ Required input is registered `rank/ranked_signals`. Optional inputs are full Inv
 
 Writes are append-oriented canonical observations in `$DATA_ROOT/control_plane.duckdb` through `OpportunityRegistryService`. `--opportunity-registry-dry-run` disables those writes while retaining audit files. The stage never writes execution or candidate-tracker stores.
 
-The attempt directory contains `opportunity_shadow_summary.json` and the admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, compatibility, recovery-proposal/action, and position-monitor reconciliation CSVs listed in the [artifact reference](../reference/artifacts.md).
+The attempt directory contains `opportunity_shadow_summary.json`, `technical_evidence_labels.csv`, `technical_evidence_cohorts.csv`, and the admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, compatibility, recovery-proposal/action, and position-monitor reconciliation CSVs listed in the [artifact reference](../reference/artifacts.md).
 
 When both `--fundamental-discovery-mode shadow` and registry shadow are enabled, the stage also consumes `fundamental_thesis_universe`, emits `candidate_fundamental_observations.csv`, and persists `candidate_fundamental_observation`. `FUNDAMENTAL_THESIS` uses a separate `fundamental_thesis` setup family and a duplicate typed source bundle, so it neither replaces nor attaches to technical or Investigator-primary episodes. Compare mode never supplies this registry input.
+
+Under `near-high-20dma-shadow-v1`, the stage derives one neutral point-in-time technical observation per exchange/symbol/session. Adjusted OHLCV owns the decision-session price, 20-session SMA, and 252-session closing high; the authoritative full Investigator context independently owns the `WEEKLY_GAINER` label. The observation retains within-10%-of-52-week-high, above-SMA20, combined-entry, and first-close-below-SMA20 labels. Fundamental and Investigator episodes reference the same observation ID without sharing admission authority. A fundamental duplicate continues to clear `investigator_context`; its technical labels remain available through the neutral observation instead. Missing source values remain explicit `UNKNOWN`, while an unrelated lane is `NOT_APPLICABLE`.
 
 ## Main modules
 
@@ -36,11 +38,15 @@ When both `--fundamental-discovery-mode shadow` and registry shadow are enabled,
 
 ## Process flow
 
-The stage loads registered sources, adapts and reconciles by exchange/symbol, checks active-position episode compatibility before any attachment, matches or admits episodes, evaluates one transition, persists canonical observations, evaluates retention/closure, and writes the reconciliation view.
+The stage loads registered sources, adapts and reconciles by exchange/symbol, creates and persists the neutral symbol technical observation, checks active-position episode compatibility before any attachment, matches or admits episodes, evaluates one transition, persists canonical observations, evaluates retention/closure, and writes the reconciliation view.
 
 ## DQ
 
 Semantic identity conflicts, cross-episode inconsistencies, invalid timestamps, invalid stage locks, and incompatible setup matching are explicit conflicts or rejections. Missing optional evidence and unavailable sector structure are warnings and never become negative evidence. Scan receipts distinguish `MISSING`, `SUCCESS_ZERO_ROWS`, and `SUCCESS_ROWS`; zero rows therefore do not imply a producer failure. Daily v3 coverage uses the latest snapshot per candidate/setup so retries cannot inflate the denominator, and pattern known-or-none is measured only among pattern-evaluable rows while `UNKNOWN` and `NOT_EVALUATED` remain failures. Under `investigator-attribution-policy-v3` and its v4 successor, a matured discovery without an ordered pending-follow-through transition closes as `INELIGIBLE_LIFECYCLE_SEQUENCE`. Legacy v1/v2 events retain their original frozen eligibility behavior. V4 expands weekly tracking to every five-session return strictly above 5%, without allowing an earlier daily spike to suppress the weekly observation. Primary eligibility uses the immutable `WEEKLY_GAINER` trigger source even when contextual classification produces another move tag.
+
+Technical evidence requires positive price, SMA20, and 52-week-high values for a known combined-entry label. Exactly 90% of the 52-week high and equality with SMA20 both pass. The SMA20-break label is `NOT_APPLICABLE` without a prior session and becomes `MET` only on a known above-to-below close transition. These labels are research-only and cannot alter admission, lifecycle, execution, or publish behavior.
+
+Matured `CANDIDATE_DISCOVERED` events are joined through their source snapshot to the neutral observation and summarized in mutually exclusive `FUNDAMENTAL_ONLY`, `TECHNICAL_ONLY`, and `FUNDAMENTAL_AND_TECHNICAL` cohorts at 5/10/20/60 sessions. Samples are deduplicated by cohort, exchange, symbol, decision session, and horizon; returns use the existing deterministic next-open entry basis.
 
 Sector-relative performance uses `investigator-sector-index-taxonomy-v1.1`.
 Governed healthcare, mining, industrial, electrical-equipment, logistics, and

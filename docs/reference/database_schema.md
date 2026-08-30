@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical reference for every DuckDB table the system reads or writes — file location, owning stage, columns, indexes.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-28
+- **Last verified:** 2026-08-30
 - **Source of truth:** `src/ai_trading_system/pipeline/migrations/*.sql`, `src/ai_trading_system/domains/research_screener/migrations/*.sql`, `src/ai_trading_system/research/perf_tracker/schema.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/ingest/repository.py`.
 
 ---
@@ -862,6 +862,16 @@ Migration `044_fundamental_discovery.sql` creates append-only
 `candidate_fundamental_observation`, keyed idempotently by candidate, as-of
 date, source-data hash, and taxonomy/rule/admission policy. It is a shadow registry sidecar
 and has no execution or operational-candidate consumer.
+
+Migration `046_symbol_technical_evidence.sql` creates append-only
+`symbol_technical_evidence_observation`, keyed by exchange, symbol, observed
+session, source lineage, and `near-high-20dma-shadow-v1`. It stores adjusted-close
+price/SMA20/252-session-high inputs, independent label states, explicit missing
+reasons, immutable payload hash, and run/artifact lineage. The migration also
+adds nullable `candidate_snapshot.technical_evidence_observation_id`, allowing
+fundamental and Investigator episodes to reference the same symbol observation
+without sharing admission authority. Neither the table nor the reference is an
+execution or publish input.
 
 ## Phase 3C-5 schema boundary
 

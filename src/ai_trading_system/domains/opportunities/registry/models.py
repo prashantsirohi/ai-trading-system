@@ -25,6 +25,7 @@ from ai_trading_system.domains.opportunities.contracts import (
 if TYPE_CHECKING:
     from ai_trading_system.domains.opportunities.orchestration.contracts import (
         SectorGateEvidence,
+        SymbolTechnicalEvidence,
     )
 
 
@@ -60,6 +61,7 @@ __all__ = [
     "EpisodeSupersession",
     "EpisodeRelationRecord",
     "PerformanceEventObservation",
+    "TechnicalEvidenceObservation",
 ]
 
 
@@ -165,6 +167,7 @@ class SnapshotObservation:
     lineage: SourceLineage
     stock_stage_observation_id: str | None = None
     sector_stage_observation_id: str | None = None
+    technical_evidence_observation_id: str | None = None
     last_progress_at: datetime | None = None
     last_retention_counted_session: date | None = None
 
@@ -273,6 +276,13 @@ class PerformanceEventObservation:
     lifecycle_evaluable: bool = True
     data_quality_status: str = "PENDING"
     data_quality_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TechnicalEvidenceObservation:
+    snapshot: SymbolTechnicalEvidence
+    observed_at: datetime
+    lineage: SourceLineage
 
 
 @dataclass(frozen=True, slots=True)

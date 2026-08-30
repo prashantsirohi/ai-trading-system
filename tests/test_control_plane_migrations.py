@@ -55,14 +55,16 @@ def test_explicit_range_migration_is_backup_gated_and_verified(
     copied = backup_dir / db_path.name
     shutil.copy2(db_path, copied)
     digest = _sha256(copied)
-    (backup_dir / "SHA256SUMS.txt").write_text(f"{digest}  {db_path.name}\n", encoding="utf-8")
+    (backup_dir / "SHA256SUMS.txt").write_text(
+        f"{digest}  {db_path.name}\n", encoding="utf-8"
+    )
 
     result = run_migration(
         project_root=tmp_path,
         db_path=db_path,
         backup_dir=backup_dir,
         first="033",
-        last="045",
+        last="046",
         apply=True,
     )
 
@@ -81,8 +83,11 @@ def test_explicit_range_migration_is_backup_gated_and_verified(
         "043_investigator_attribution_policy_validation.sql",
         "044_fundamental_discovery.sql",
         "045_rank_universe_history.sql",
+        "046_symbol_technical_evidence.sql",
     ]
-    RegistryStore(tmp_path, db_path=db_path, allow_migrations=False).verify_schema_current()
+    RegistryStore(
+        tmp_path, db_path=db_path, allow_migrations=False
+    ).verify_schema_current()
 
 
 def test_schema_verification_requires_rank_universe_history(tmp_path: Path) -> None:
@@ -110,7 +115,9 @@ def test_explicit_range_migration_rejects_stale_backup(
     copied = backup_dir / db_path.name
     shutil.copy2(db_path, copied)
     digest = _sha256(copied)
-    (backup_dir / "SHA256SUMS.txt").write_text(f"{digest}  {db_path.name}\n", encoding="utf-8")
+    (backup_dir / "SHA256SUMS.txt").write_text(
+        f"{digest}  {db_path.name}\n", encoding="utf-8"
+    )
     with db_path.open("ab") as handle:
         handle.write(b"changed")
 
@@ -137,7 +144,9 @@ def test_explicit_range_migration_rejects_backup_symlink(
     backup_dir.mkdir(parents=True)
     (backup_dir / db_path.name).symlink_to(db_path)
     digest = _sha256(db_path)
-    (backup_dir / "SHA256SUMS.txt").write_text(f"{digest}  {db_path.name}\n", encoding="utf-8")
+    (backup_dir / "SHA256SUMS.txt").write_text(
+        f"{digest}  {db_path.name}\n", encoding="utf-8"
+    )
 
     with pytest.raises(RuntimeError, match="distinct regular-file copy"):
         run_migration(

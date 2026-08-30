@@ -20,6 +20,7 @@ TABLES = (
     "candidate_decision_context",
     "candidate_outcome_attribution",
     "candidate_fundamental_observation",
+    "symbol_technical_evidence_observation",
     "investigator_performance_event",
     "investigator_performance_horizon",
     "investigator_evaluation_transition",

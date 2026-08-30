@@ -27,6 +27,7 @@ from ai_trading_system.domains.opportunities.orchestration.service import (
     OpportunityArtifactSet,
     OpportunityShadowOrchestrator,
     _attach_sector_gate_evidence,
+    _technical_evidence_cohorts,
 )
 from ai_trading_system.domains.opportunities.orchestration.transitions import (
     evaluate_transition,
@@ -142,6 +143,12 @@ def test_shadow_service_writes_and_replay_is_idempotent(tmp_path):
     assert first.summary["pattern_scan_receipt_status"] == "SUCCESS_ROWS"
     assert len(service.registry.list_open_episodes()) == 1
     with registry._connect(read_only=True) as conn:  # noqa: SLF001
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM symbol_technical_evidence_observation"
+            ).fetchone()[0]
+            == 1
+        )
         snapshot = conn.execute(
             """
             SELECT stage_label, stage_confidence, pattern_family, pattern_state,
@@ -237,7 +244,16 @@ def test_fundamental_episode_is_parallel_and_persists_observation(tmp_path):
         "symbol_id,exchange,primary_thesis,secondary_theses_json,evaluations_json,evidence_json,classification_status,admission_eligible,source_data_hash,statement_basis,source_report_date,source_available_at,taxonomy_version,rule_version,admission_version\n"
         'ABC,NSE,HIGH_GROWTH_EMERGING,"[]","[]","{}",QUALIFIED,true,hash-1,consolidated,2026-03-31,2026-05-15,fundamental-discovery-taxonomy-v1,fundamental-thesis-rules-v1,fundamental-thesis-admission-v1\n',
     )
-    artifacts = replace(_artifacts(tmp_path), fundamental_thesis_universe=fundamental)
+    artifacts = replace(
+        _artifacts(tmp_path),
+        investigator_scores=_artifact(
+            tmp_path,
+            "investigator_scores_with_technical_labels",
+            "symbol_id,exchange,final_score,verdict,early_accumulation_score,pattern_score,extension_risk,failure_risk,trigger_reason,close,sma_20,high_52w\n"
+            "ABC,NSE,90,HIGH_CONVICTION,85,90,low,low,WEEKLY_GAINER,99,95,100\n",
+        ),
+        fundamental_thesis_universe=fundamental,
+    )
     config = OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW)
     result = service.run(
         run_id="fundamental-run",
@@ -248,10 +264,66 @@ def test_fundamental_episode_is_parallel_and_persists_observation(tmp_path):
         config=config,
     )
     families = {item.setup_family for item in service.registry.list_open_episodes()}
-    assert {"breakout", "fundamental_thesis"}.issubset(families)
+    assert {"investigator_primary", "fundamental_thesis"}.issubset(families)
     assert len(result.artifact_rows["candidate_fundamental_observations"]) == 1
     with registry._connect(read_only=True) as conn:  # noqa: SLF001
-        assert conn.execute("SELECT count(*) FROM candidate_fundamental_observation").fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM candidate_fundamental_observation"
+            ).fetchone()[0]
+            == 1
+        )
+        snapshots = conn.execute(
+            """
+            SELECT e.setup_family, s.investigator_price,
+                   s.technical_evidence_observation_id
+            FROM candidate_snapshot s
+            JOIN candidate_episode e USING (candidate_id)
+            ORDER BY e.setup_family
+            """
+        ).fetchall()
+        technical = conn.execute(
+            """
+            SELECT weekly_gainer_state, near_52w_high_10_state,
+                   above_sma20_state, entry_confirmed_state
+            FROM symbol_technical_evidence_observation
+            """
+        ).fetchone()
+    assert len({row[2] for row in snapshots}) == 1
+    assert dict((row[0], row[1]) for row in snapshots)["fundamental_thesis"] is None
+    assert technical == ("MET", "MET", "MET", "MET")
+    label_row = result.artifact_rows["technical_evidence_labels"][0]
+    assert label_row["evidence_lanes"] == "INVESTIGATOR|FUNDAMENTAL_THESIS"
+    assert label_row["fundamental_thesis_state"] == "MET"
+    with registry._writer() as conn:  # noqa: SLF001
+        events = conn.execute(
+            """
+            SELECT pe.event_id, ep.setup_family
+            FROM investigator_performance_event pe
+            JOIN candidate_episode ep USING (candidate_id)
+            WHERE pe.event_type = 'CANDIDATE_DISCOVERED'
+            """
+        ).fetchall()
+        for event_id, family in events:
+            conn.execute(
+                """
+                INSERT INTO investigator_performance_horizon (
+                    event_id, horizon_sessions, next_open_entry_return_pct,
+                    data_quality_status
+                ) VALUES (?, ?, ?, ?)
+                """,
+                [
+                    event_id,
+                    20,
+                    12.0 if family == "fundamental_thesis" else 8.0,
+                    "MATURED",
+                ],
+            )
+    cohorts = _technical_evidence_cohorts(registry)
+    assert {(row["cohort_type"], row["sample_count"]) for row in cohorts} == {
+        ("FUNDAMENTAL_AND_TECHNICAL", 1),
+        ("TECHNICAL_ONLY", 1),
+    }
 
 
 def test_not_admitted_reconciliation_surfaces_rule_evaluations(tmp_path):

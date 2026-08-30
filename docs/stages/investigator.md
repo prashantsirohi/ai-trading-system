@@ -2,7 +2,7 @@
 
 - **Purpose:** Convert post-rank gainer, accumulation, trap, repeat, and pattern evidence into an operator-facing investigation queue.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-08-28
+- **Last verified:** 2026-08-30
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/investigator.py`
   - `src/ai_trading_system/domains/investigator/service.py`
@@ -202,7 +202,9 @@ symbol receives an immutable intake receipt with tracked state, selected lane,
 lane eligibility flags, and stable exclusion reasons. Active weekly rows may
 carry forward through `STAGE_2_CONFIRMED`; traps, invalid or expired patterns,
 Stage 3/4 structure, and normal lifecycle archive/drop decisions terminate the
-carry. This does not enable execution or change the primary review score of 65.
+carry. The authoritative `weekly_stage_label` blocks S3/S4 carry even when the
+Investigator-derived `stage_label` is `UNKNOWN`. This does not enable execution
+or change the primary review score of 65.
 
 ## Process flow
 

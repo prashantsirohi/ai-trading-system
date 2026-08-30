@@ -15,8 +15,10 @@ from ai_trading_system.domains.opportunities.contracts import (
     TransitionReason,
 )
 from ai_trading_system.domains.opportunities.serialization import to_dict
+from ai_trading_system.domains.opportunities.serialization import from_dict
 from ai_trading_system.domains.opportunities.orchestration.contracts import (
     INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+    SymbolTechnicalEvidence,
 )
 from ai_trading_system.pipeline.registry import RegistryStore
 
@@ -59,6 +61,7 @@ from .models import (
     StageObservation,
     StageScope,
     TimelineEntry,
+    TechnicalEvidenceObservation,
     TransitionObservation,
 )
 from .schema import verify_schema
@@ -92,6 +95,18 @@ class OpportunityRegistryStore(Protocol):
     def append_performance_event(
         self, observation: PerformanceEventObservation
     ) -> AppendResult: ...
+    def append_technical_evidence(
+        self, observation: TechnicalEvidenceObservation
+    ) -> AppendResult: ...
+    def latest_technical_evidence(
+        self, *, exchange: str, symbol_id: str, before_session: Any
+    ) -> SymbolTechnicalEvidence | None: ...
+    def latest_technical_evidence_by_symbol(
+        self, *, before_session: Any
+    ) -> dict[tuple[str, str], SymbolTechnicalEvidence]: ...
+    def append_technical_evidence_batch(
+        self, observations: Iterable[TechnicalEvidenceObservation]
+    ) -> BatchAppendResult: ...
     def close_episode(
         self,
         candidate_id: str,
@@ -831,6 +846,24 @@ class DuckDBOpportunityRegistryStore:
                     raise ValueError(
                         f"linked {scope.lower()} stage observation does not belong to candidate"
                     )
+        if observation.technical_evidence_observation_id is not None:
+            technical = conn.execute(
+                """
+                SELECT exchange, symbol_id, observed_session
+                FROM symbol_technical_evidence_observation
+                WHERE technical_evidence_observation_id = ?
+                """,
+                [observation.technical_evidence_observation_id],
+            ).fetchone()
+            expected = (episode.exchange, episode.symbol_id)
+            if technical is None or technical[:2] != expected:
+                raise ValueError(
+                    "linked technical evidence observation does not belong to symbol"
+                )
+            if technical[2] > snapshot.as_of.date():
+                raise ValueError(
+                    "linked technical evidence observation cannot be post-decision"
+                )
         payload = to_dict(snapshot)
         record_id, key, semantic_hash = self._identity(
             candidate_id=snapshot.candidate_id,
@@ -917,6 +950,7 @@ class DuckDBOpportunityRegistryStore:
             "distance_from_52w_high_pct",
             "investigator_source_lineage_json",
             "investigator_evaluation_states_json",
+            "technical_evidence_observation_id",
         )
         context = snapshot.investigator_context
         values = [
@@ -998,6 +1032,7 @@ class DuckDBOpportunityRegistryStore:
             context.distance_from_52w_high_pct,
             canonical_json(context.source_lineage),
             canonical_json(context.evaluation_states),
+            observation.technical_evidence_observation_id,
         ]
         return self._insert_append(
             conn,
@@ -1010,6 +1045,146 @@ class DuckDBOpportunityRegistryStore:
             columns=columns,
             values=values,
         )
+
+    def append_technical_evidence(
+        self, observation: TechnicalEvidenceObservation
+    ) -> AppendResult:
+        with self._transaction() as conn:
+            return self._append_technical_evidence(conn, observation)
+
+    def _append_technical_evidence(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        observation: TechnicalEvidenceObservation,
+    ) -> AppendResult:
+        snapshot = observation.snapshot
+        require_aware(snapshot.as_of, "as_of")
+        require_aware(observation.observed_at, "observed_at")
+        symbol_id = normalize_symbol(snapshot.symbol_id)
+        exchange = normalize_exchange(snapshot.exchange)
+        subject_id = f"symbol:{exchange}:{symbol_id}"
+        record_id, key, semantic_hash = self._identity(
+            candidate_id=subject_id,
+            record_type="technical_evidence",
+            as_of=snapshot.as_of,
+            lineage=observation.lineage,
+            contract_version=snapshot.policy_version,
+            payload=snapshot,
+        )
+        columns = (
+            "technical_evidence_observation_id",
+            "symbol_id",
+            "exchange",
+            "as_of",
+            "observed_session",
+            "observed_at",
+            "price",
+            "sma20",
+            "high_52w",
+            "distance_from_52w_high_pct",
+            "weekly_gainer_state",
+            "near_52w_high_10_state",
+            "above_sma20_state",
+            "entry_confirmed_state",
+            "sma20_break_state",
+            "missing_reasons_json",
+            "price_basis",
+            "policy_version",
+            "source_run_id",
+            "source_stage",
+            "source_attempt",
+            "source_artifact_type",
+            "source_artifact_path",
+            "source_artifact_hash",
+            "snapshot_json",
+            "semantic_payload_hash",
+            "idempotency_key",
+        )
+        values = [
+            record_id,
+            symbol_id,
+            exchange,
+            _db_time(snapshot.as_of),
+            snapshot.observed_session,
+            _db_time(observation.observed_at),
+            snapshot.price,
+            snapshot.sma20,
+            snapshot.high_52w,
+            snapshot.distance_from_52w_high_pct,
+            snapshot.weekly_gainer.value,
+            snapshot.near_52w_high_10.value,
+            snapshot.above_sma20.value,
+            snapshot.entry_confirmed.value,
+            snapshot.sma20_break.value,
+            canonical_json(snapshot.missing_reasons),
+            snapshot.price_basis,
+            snapshot.policy_version,
+            observation.lineage.run_id,
+            observation.lineage.stage_name,
+            observation.lineage.stage_attempt,
+            observation.lineage.source_artifact_type,
+            observation.lineage.source_artifact_path,
+            observation.lineage.source_artifact_hash,
+            canonical_json(snapshot),
+            semantic_hash,
+            key,
+        ]
+        return self._insert_append(
+            conn,
+            table="symbol_technical_evidence_observation",
+            id_column="technical_evidence_observation_id",
+            record_id=record_id,
+            candidate_id=subject_id,
+            idempotency_key=key,
+            semantic_hash=semantic_hash,
+            columns=columns,
+            values=values,
+        )
+
+    def latest_technical_evidence(
+        self, *, exchange: str, symbol_id: str, before_session: Any
+    ) -> SymbolTechnicalEvidence | None:
+        with self.registry._reader() as conn:  # noqa: SLF001
+            row = conn.execute(
+                """
+                SELECT snapshot_json
+                FROM symbol_technical_evidence_observation
+                WHERE exchange = ? AND symbol_id = ? AND observed_session < ?
+                ORDER BY observed_session DESC, observed_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                [
+                    normalize_exchange(exchange),
+                    normalize_symbol(symbol_id),
+                    before_session,
+                ],
+            ).fetchone()
+        if row is None:
+            return None
+        return from_dict(SymbolTechnicalEvidence, json.loads(row[0]))
+
+    def latest_technical_evidence_by_symbol(
+        self, *, before_session: Any
+    ) -> dict[tuple[str, str], SymbolTechnicalEvidence]:
+        with self.registry._reader() as conn:  # noqa: SLF001
+            rows = conn.execute(
+                """
+                SELECT exchange, symbol_id, snapshot_json
+                FROM symbol_technical_evidence_observation
+                WHERE observed_session < ?
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY exchange, symbol_id
+                    ORDER BY observed_session DESC, observed_at DESC, created_at DESC
+                ) = 1
+                """,
+                [before_session],
+            ).fetchall()
+        return {
+            (str(exchange), str(symbol)): from_dict(
+                SymbolTechnicalEvidence, json.loads(payload)
+            )
+            for exchange, symbol, payload in rows
+        }
 
     def append_stage_observation(self, observation: StageObservation) -> AppendResult:
         with self._transaction() as conn:
@@ -1881,6 +2056,11 @@ class DuckDBOpportunityRegistryStore:
     ) -> BatchAppendResult:
         return self._batch(observations, self._append_progress)
 
+    def append_technical_evidence_batch(
+        self, observations: Iterable[TechnicalEvidenceObservation]
+    ) -> BatchAppendResult:
+        return self._batch(observations, self._append_technical_evidence)
+
     def append_orchestration_bundle(
         self, bundle: OrchestrationBundle
     ) -> OrchestrationBundleResult:
@@ -1977,13 +2157,18 @@ class DuckDBOpportunityRegistryStore:
             stock_result = self._append_stage(conn, stock_stage)
             sector_result = self._append_stage(conn, sector_stage)
             linked = SnapshotObservation(
-                snapshot.snapshot,
-                snapshot.observed_at,
-                snapshot.lineage,
-                stock_result.record_id,
-                sector_result.record_id,
-                snapshot.last_progress_at,
-                snapshot.last_retention_counted_session,
+                snapshot=snapshot.snapshot,
+                observed_at=snapshot.observed_at,
+                lineage=snapshot.lineage,
+                stock_stage_observation_id=stock_result.record_id,
+                sector_stage_observation_id=sector_result.record_id,
+                technical_evidence_observation_id=(
+                    snapshot.technical_evidence_observation_id
+                ),
+                last_progress_at=snapshot.last_progress_at,
+                last_retention_counted_session=(
+                    snapshot.last_retention_counted_session
+                ),
             )
             snapshot_result = self._append_snapshot(conn, linked)
             return snapshot_result, stock_result, sector_result
