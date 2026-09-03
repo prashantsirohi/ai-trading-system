@@ -136,6 +136,17 @@ def adapt_investigator_rows(
             first(row, "pattern_score", "base_pattern_freshness_score")
         )
         setup_quality_score = as_float(first(row, "setup_quality"))
+        if setup_quality_score is not None and not 0 <= setup_quality_score <= 100:
+            bounded_score = min(100.0, max(0.0, setup_quality_score))
+            warnings.append(
+                AdapterWarning(
+                    source.artifact_type,
+                    identity,
+                    "setup_quality_out_of_range",
+                    f"setup quality {setup_quality_score} bounded to {bounded_score}",
+                )
+            )
+            setup_quality_score = bounded_score
         breakout_type = _text(first(row, "breakout_type", "setup_family"))
         breakout_tier = _tier(
             first(row, "breakout_tier", "candidate_tier", "pattern_operational_tier")

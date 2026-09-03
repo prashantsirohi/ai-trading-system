@@ -113,6 +113,25 @@ def test_breakout_rank_tie_breaks_by_setup_quality() -> None:
     assert int(out.iloc[1]["breakout_rank"]) == 2
 
 
+def test_breakout_setup_quality_is_bounded_to_contract_range() -> None:
+    candidates = pd.DataFrame(
+        [
+            _volume_confirmation_candidate("HIGH") | {"setup_quality": 110.0},
+            _volume_confirmation_candidate("LOW") | {"setup_quality": -10.0},
+        ]
+    )
+
+    out = compute_breakout_v2_scores(
+        candidates,
+        market_bias="BULLISH",
+        breadth_score=68.0,
+        sector_rs_percentile_min=60.0,
+    ).set_index("symbol_id")
+
+    assert out.loc["HIGH", "setup_quality"] == 100.0
+    assert out.loc["LOW", "setup_quality"] == 0.0
+
+
 def test_breakout_state_filtered_by_regime_and_sector_gates() -> None:
     candidates = pd.DataFrame(
         [

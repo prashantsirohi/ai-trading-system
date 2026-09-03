@@ -46,6 +46,21 @@ def test_investigator_keeps_unavailable_components_null():
     assert snapshot.market_alignment is None
 
 
+def test_investigator_bounds_legacy_setup_quality_with_warning():
+    result = adapt_investigator_rows(
+        [{"symbol_id": "ABC", "final_score": "82", "setup_quality": "100.618"}],
+        source=SOURCE,
+        as_of=NOW,
+    )
+
+    context = result.records[0].value.investigator_context
+    assert context is not None
+    assert context.setup_quality_score == 100.0
+    assert "setup_quality_out_of_range" in {
+        warning.code for warning in result.warnings
+    }
+
+
 def test_weekly_trigger_remains_primary_when_contextual_move_tag_differs():
     result = adapt_investigator_rows(
         [{

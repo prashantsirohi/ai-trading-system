@@ -97,6 +97,22 @@ def test_context_only_rows_do_not_create_candidates() -> None:
     assert diagnostics["candidate_union_rows"] == 0
 
 
+def test_breakout_setup_quality_does_not_fill_pattern_setup_quality() -> None:
+    candidates, _ = build_candidate_union(
+        event_intake=pd.DataFrame(
+            [{"symbol_id": "AAA", "trigger_reason": "WEEKLY_GAINER"}]
+        ),
+        early_accumulation=pd.DataFrame(),
+        breakout_scan=pd.DataFrame(
+            [{"symbol_id": "AAA", "setup_quality": 100.0}]
+        ),
+    )
+
+    row = candidates.iloc[0]
+    assert "setup_quality" not in candidates.columns
+    assert row["breakout_setup_quality"] == 100.0
+
+
 def test_previous_watchlist_filters_closed_failed_and_hard_trap_rows() -> None:
     previous = pd.DataFrame(
         [

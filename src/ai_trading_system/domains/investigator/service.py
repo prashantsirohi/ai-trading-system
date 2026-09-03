@@ -1274,6 +1274,12 @@ def _merge_best_patterns(
             continue
         if column not in merged.columns:
             merged.loc[:, column] = merged[best_col]
+        elif column == "setup_quality":
+            best = merged[best_col]
+            available_best = ~best.isna() & ~best.astype(str).str.strip().str.upper().isin(
+                {"", "NONE", "NAN"}
+            )
+            merged.loc[available_best, column] = merged.loc[available_best, best_col]
         else:
             current = merged[column]
             missing = current.isna() | current.astype(str).str.strip().str.upper().isin(

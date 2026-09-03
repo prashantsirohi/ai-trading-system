@@ -47,6 +47,12 @@ def build_candidate_union(
     ranked_context = _normalise(ranked)
     stock_context = _normalise(stock_scan)
     breakout_context = _normalise(breakout_scan)
+    if "setup_quality" in breakout_context.columns:
+        # Breakout setup quality and pattern setup quality are different metrics.
+        # Preserve the former without allowing it to occupy the pattern field.
+        breakout_context = breakout_context.rename(
+            columns={"setup_quality": "breakout_setup_quality"}
+        )
 
     event_sources = _event_sources(event)
     early_symbols = _symbols(early)

@@ -16,6 +16,19 @@ from ai_trading_system.pipeline.stages.investigator import InvestigatorStage
 from ai_trading_system.ui.execution_api.services.readmodels.investigator import get_investigator_pattern_history
 
 
+def test_best_pattern_setup_quality_replaces_non_pattern_value() -> None:
+    scores = pd.DataFrame(
+        [{"symbol_id": "AAA", "setup_quality": 100.0, "final_score": 70.0}]
+    )
+    patterns = pd.DataFrame(
+        [{"symbol_id": "AAA", "setup_quality": 66.5, "pattern_family": "VCP"}]
+    )
+
+    merged = investigator_service_module._merge_best_patterns(scores, patterns)
+
+    assert merged.iloc[0]["setup_quality"] == 66.5
+
+
 def _seed_ohlcv(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = duckdb.connect(str(path))

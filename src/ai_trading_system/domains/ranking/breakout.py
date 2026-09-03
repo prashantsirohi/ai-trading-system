@@ -309,6 +309,9 @@ def compute_breakout_v2_scores(
         + _to_float_series(df, "adx_14", default=0.0).fillna(0.0).clip(0, 60) * 0.4
         + (12.0 - _to_float_series(df, "near_52w_high_pct", default=12.0).fillna(12.0).clip(0, 12)) * 1.5
     )
+    # The component formulas can sum outside the canonical score contract.
+    # Bound the producer output before ranking or downstream artifact reuse.
+    df.loc[:, "setup_quality"] = df["setup_quality"].clip(lower=0.0, upper=100.0)
 
     market_bias_ok = market_bias in allowed_biases
     breadth_ok = breadth_score >= float(min_breadth_score)
