@@ -31,6 +31,8 @@ MARKET_BREADTH_SHEET = "05_Market_Breadth"
 INVESTIGATOR_SHEET = "06_Investigator"
 INVESTIGATOR_ACTION_QUEUE_SHEET = "investigator"
 FUNDAMENTAL_LANE_SHEET = "fundamental"
+SHADOW_SETUPS_SHEET = "07_Shadow_Setups"
+SHADOW_PERFORMANCE_SHEET = "08_Shadow_Performance"
 FINAL_3Q_GATE_SHEET = "Final 3Q Gate"
 INVESTIGATOR_PERFORMANCE_SHEET = "Investigator Performance"
 STAGE1_CURRENT_SHEET = "Stage1 Current"
@@ -40,6 +42,7 @@ STAGE1_EXITS_SHEET = "Stage1 Exits"
 DATA_BREADTH_SHEET = "_DATA_BREADTH"
 DATA_SECTOR_HISTORY_SHEET = "_DATA_SECTOR_HISTORY"
 DATA_INVESTIGATOR_SHEET = "_DATA_INVESTIGATOR"
+DATA_TECHNICAL_EVIDENCE_SHEET = "_DATA_TECHNICAL_EVIDENCE"
 VISIBLE_SHEET_MAX_ROWS = 60
 DAILY_REPORT_MAX_ROWS = 140
 VISIBLE_SHEET_MAX_COLS = 14
@@ -48,6 +51,7 @@ INVESTIGATOR_ACTIVE_MAX_COLS = 21
 DATA_BREADTH_MAX_ROWS = 250
 DATA_SECTOR_HISTORY_MAX_ROWS = 500
 DATA_INVESTIGATOR_MAX_ROWS = 300
+DATA_TECHNICAL_EVIDENCE_MAX_ROWS = 2000
 OPERATOR_TAB_ORDER = [
     DAILY_REPORT_SHEET,
     DIAGNOSTICS_SHEET,
@@ -57,6 +61,8 @@ OPERATOR_TAB_ORDER = [
     INDUSTRY_ROTATION_SHEET,
     INVESTIGATOR_ACTION_QUEUE_SHEET,
     FUNDAMENTAL_LANE_SHEET,
+    SHADOW_SETUPS_SHEET,
+    SHADOW_PERFORMANCE_SHEET,
     STAGE1_ACTION_QUEUE_SHEET,
     STAGE1_CURRENT_SHEET,
     STAGE1_CHANGES_SHEET,
@@ -845,6 +851,7 @@ def _write_table_sheet(
     max_cols: int = VISIBLE_SHEET_MAX_COLS,
     frozen_cols: int = 0,
     enable_filter: bool = False,
+    column_widths: list[int] | None = None,
     extra_request_builder: Callable[[Any, list[str], int], list[dict[str, Any]]] | None = None,
 ) -> tuple[Any, int]:
     safe = frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
@@ -870,6 +877,7 @@ def _write_table_sheet(
                     max_rows=rows,
                     max_cols=cols,
                     frozen_cols=frozen_cols,
+                    column_widths=column_widths,
                 )
         if enable_filter and len(safe):
             requests.append({"setBasicFilter": {"filter": {"range": {"sheetId": int(worksheet.id), "startRowIndex": 0, "endRowIndex": len(safe) + 1, "startColumnIndex": 0, "endColumnIndex": cols}}}})
@@ -1812,6 +1820,201 @@ def _investigator_performance_frame(performance: pd.DataFrame | None) -> pd.Data
     ).head(100)
 
 
+def _technical_shadow_frame(
+    evidence: pd.DataFrame | None,
+    investigator_scores: pd.DataFrame | None,
+    rank_summary: dict[str, Any] | None,
+) -> pd.DataFrame:
+    columns = [
+        "Priority",
+        "Symbol",
+        "Exchange",
+        "Observed",
+        "Fundamental",
+        "Weekly Gainer",
+        "Near 52W High",
+        "Above SMA20",
+        "Entry Confirmed",
+        "SMA20 Break",
+        "Weekly Stage",
+        "Market Stage",
+        "Price",
+        "SMA20",
+        "52W High",
+        "Distance %",
+        "Missing Reasons",
+    ]
+    if evidence is None or evidence.empty:
+        return pd.DataFrame(columns=columns)
+
+    source = evidence.copy()
+    if (
+        isinstance(investigator_scores, pd.DataFrame)
+        and not investigator_scores.empty
+        and "symbol_id" in investigator_scores.columns
+        and "weekly_stage_label" in investigator_scores.columns
+    ):
+        stage_lookup = (
+            investigator_scores[["symbol_id", "weekly_stage_label"]]
+            .dropna(subset=["symbol_id"])
+            .drop_duplicates("symbol_id", keep="first")
+        )
+        source = source.merge(stage_lookup, on="symbol_id", how="left")
+
+    def values(column: str) -> pd.Series:
+        return source.get(column, pd.Series("", index=source.index))
+
+    fundamental = values("fundamental_thesis_state").fillna("").astype(str)
+    entry = values("entry_confirmed_state").fillna("").astype(str)
+    weekly = values("weekly_gainer_state").fillna("").astype(str)
+
+    def priority(index: Any) -> str:
+        if fundamental.loc[index] == "MET" and entry.loc[index] == "MET":
+            return "FUND + TECH"
+        if entry.loc[index] == "MET":
+            return "TECHNICAL"
+        if weekly.loc[index] == "MET":
+            return "WEEKLY GAINER"
+        if fundamental.loc[index] == "MET":
+            return "FUNDAMENTAL"
+        return ""
+
+    market_info = (rank_summary or {}).get("market_stage_info") or {}
+    market_stage = (
+        market_info.get("market_stage")
+        if isinstance(market_info, dict)
+        else None
+    ) or (rank_summary or {}).get("market_stage") or ""
+    out = pd.DataFrame(
+        {
+            "Priority": [priority(index) for index in source.index],
+            "Symbol": values("symbol_id"),
+            "Exchange": values("exchange"),
+            "Observed": values("observed_session"),
+            "Fundamental": fundamental,
+            "Weekly Gainer": weekly,
+            "Near 52W High": values("near_52w_high_10_state"),
+            "Above SMA20": values("above_sma20_state"),
+            "Entry Confirmed": entry,
+            "SMA20 Break": values("sma20_break_state"),
+            "Weekly Stage": values("weekly_stage_label"),
+            "Market Stage": market_stage,
+            "Price": pd.to_numeric(values("price"), errors="coerce"),
+            "SMA20": pd.to_numeric(values("sma20"), errors="coerce"),
+            "52W High": pd.to_numeric(values("high_52w"), errors="coerce"),
+            "Distance %": pd.to_numeric(
+                values("distance_from_52w_high_pct"), errors="coerce"
+            ),
+            "Missing Reasons": values("missing_reasons"),
+        }
+    )
+    out = out.loc[out["Priority"].ne("")].copy()
+    if out.empty:
+        return pd.DataFrame(columns=columns)
+
+    priority_order = [
+        "FUND + TECH",
+        "TECHNICAL",
+        "WEEKLY GAINER",
+        "FUNDAMENTAL",
+    ]
+    selected = []
+    for label in priority_order:
+        group = out.loc[out["Priority"].eq(label)].sort_values(
+            ["Distance %", "Symbol"],
+            ascending=[False, True],
+            na_position="last",
+            kind="stable",
+        )
+        selected.append(group.head(15))
+    return pd.concat(selected, ignore_index=True)[columns]
+
+
+def _technical_performance_frame(cohorts: pd.DataFrame | None) -> pd.DataFrame:
+    columns = [
+        "Status",
+        "Cohort",
+        "Horizon Sessions",
+        "Samples",
+        "Unique Symbols",
+        "Average Return %",
+        "Expectancy %",
+        "Win Rate %",
+        "Payoff Ratio",
+        "Sample Confidence",
+        "Return Basis",
+        "Policy Version",
+    ]
+    if cohorts is None or cohorts.empty:
+        return pd.DataFrame(
+            [{"Status": "PENDING_MATURITY", **{column: "" for column in columns[1:]}}],
+            columns=columns,
+        )
+    source = cohorts.copy()
+
+    def values(column: str) -> pd.Series:
+        return source.get(column, pd.Series("", index=source.index))
+
+    out = pd.DataFrame(
+        {
+            "Status": "MATURED",
+            "Cohort": values("cohort_type"),
+            "Horizon Sessions": pd.to_numeric(values("horizon_sessions"), errors="coerce"),
+            "Samples": pd.to_numeric(values("sample_count"), errors="coerce"),
+            "Unique Symbols": pd.to_numeric(values("unique_symbol_count"), errors="coerce"),
+            "Average Return %": pd.to_numeric(values("avg_return_pct"), errors="coerce"),
+            "Expectancy %": pd.to_numeric(values("expectancy_pct"), errors="coerce"),
+            "Win Rate %": pd.to_numeric(values("win_rate_pct"), errors="coerce"),
+            "Payoff Ratio": pd.to_numeric(values("payoff_ratio"), errors="coerce"),
+            "Sample Confidence": values("sample_confidence"),
+            "Return Basis": values("return_basis"),
+            "Policy Version": values("policy_version"),
+        }
+    )
+    return out.sort_values(
+        ["Cohort", "Horizon Sessions"], kind="stable"
+    ).reset_index(drop=True)[columns]
+
+
+def _technical_shadow_summary_frame(
+    evidence: pd.DataFrame | None,
+    cohorts: pd.DataFrame | None,
+) -> pd.DataFrame:
+    source = evidence if isinstance(evidence, pd.DataFrame) else pd.DataFrame()
+
+    def count_state(column: str, state: str = "MET") -> int:
+        if source.empty or column not in source.columns:
+            return 0
+        return int(source[column].fillna("").astype(str).eq(state).sum())
+
+    fundamental = (
+        source.get("fundamental_thesis_state", pd.Series("", index=source.index))
+        .fillna("")
+        .astype(str)
+        .eq("MET")
+    )
+    entry = (
+        source.get("entry_confirmed_state", pd.Series("", index=source.index))
+        .fillna("")
+        .astype(str)
+        .eq("MET")
+    )
+    rows = [
+        {"Metric": "Evidence rows", "Value": int(len(source))},
+        {"Metric": "Entry confirmed", "Value": int(entry.sum())},
+        {"Metric": "Entry UNKNOWN", "Value": count_state("entry_confirmed_state", "UNKNOWN")},
+        {"Metric": "Weekly gainers", "Value": count_state("weekly_gainer_state")},
+        {"Metric": "Fundamental labelled", "Value": int(fundamental.sum())},
+        {"Metric": "Fundamental + technical", "Value": int((fundamental & entry).sum())},
+        {"Metric": "SMA20 breaks", "Value": count_state("sma20_break_state")},
+        {
+            "Metric": "Performance status",
+            "Value": "MATURED" if isinstance(cohorts, pd.DataFrame) and not cohorts.empty else "PENDING_MATURITY",
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
 def _investigator_trap_frame(traps: pd.DataFrame | None) -> pd.DataFrame:
     if traps is None or traps.empty:
         return pd.DataFrame(columns=["Symbol", "Verdict", "Score", "Trap", "Delivery", "Rank"])
@@ -2111,6 +2314,8 @@ def publish_dashboard_payload(
     investigator_final_gate_df: pd.DataFrame | None = None,
     investigator_performance_summary_df: pd.DataFrame | None = None,
     fundamental_thesis_df: pd.DataFrame | None = None,
+    technical_evidence_df: pd.DataFrame | None = None,
+    technical_evidence_cohorts_df: pd.DataFrame | None = None,
     sector_rotation_df: pd.DataFrame | None = None,
     industry_rotation_df: pd.DataFrame | None = None,
     investigator_payload: dict[str, Any] | None = None,
@@ -2156,6 +2361,18 @@ def publish_dashboard_payload(
     investigator_final_gate = _investigator_final_gate_frame(investigator_final_gate_df)
     investigator_performance = _investigator_performance_frame(investigator_performance_summary_df)
     fundamental_lane = _fundamental_lane_frame(fundamental_thesis_df)
+    shadow_setups = _technical_shadow_frame(
+        technical_evidence_df,
+        investigator_scores_df,
+        rank_summary,
+    )
+    shadow_performance = _technical_performance_frame(
+        technical_evidence_cohorts_df
+    )
+    shadow_summary = _technical_shadow_summary_frame(
+        technical_evidence_df,
+        technical_evidence_cohorts_df,
+    )
     events_index = _frame(payload.get("events_index", []))
     breadth = _load_operational_breadth(Path(project_root) if project_root else Path(__file__).resolve().parents[1])
     bundle = decision_bundle or build_publish_decision_bundle(
@@ -2193,6 +2410,7 @@ def publish_dashboard_payload(
     stage1_counts, stage1_leaders = _stage1_summary_frames(stage1_operator_bundle)
     daily_sections.insert(3, ("STAGE-1 SUMMARY", stage1_counts))
     daily_sections.insert(4, ("TOP 5 EMERGING LEADERS", stage1_leaders))
+    daily_sections.insert(5, ("SHADOW TECHNICAL EVIDENCE", shadow_summary))
     _daily_worksheet, _daily_layouts, daily_rows = _write_visible_grid_sheet(
         manager=manager,
         sheet_name=sheet_name,
@@ -2284,6 +2502,42 @@ def publish_dashboard_payload(
         frozen_cols=2,
         enable_filter=True,
     )
+    _shadow_setups_worksheet, shadow_setups_rows = _write_table_sheet(
+        manager=manager,
+        sheet_name=SHADOW_SETUPS_SHEET,
+        frame=shadow_setups,
+        max_cols=len(shadow_setups.columns),
+        frozen_cols=2,
+        enable_filter=True,
+        column_widths=[
+            145,
+            130,
+            90,
+            110,
+            145,
+            130,
+            140,
+            125,
+            145,
+            130,
+            120,
+            120,
+            90,
+            90,
+            90,
+            100,
+            280,
+        ],
+    )
+    _shadow_performance_worksheet, shadow_performance_rows = _write_table_sheet(
+        manager=manager,
+        sheet_name=SHADOW_PERFORMANCE_SHEET,
+        frame=shadow_performance,
+        max_cols=len(shadow_performance.columns),
+        frozen_cols=2,
+        enable_filter=True,
+        column_widths=[150, 230, 150, 85, 140, 140, 120, 110, 110, 150, 150, 220],
+    )
     stage1_current = _stage1_current_frame(stage1_operator_bundle, run_id)
     stage1_changes = _stage1_changes_frame(stage1_operator_bundle, run_id)
     stage1_action_queue = _stage1_action_queue_frame(stage1_operator_bundle, run_id)
@@ -2342,6 +2596,17 @@ def publish_dashboard_payload(
         max_rows=DATA_INVESTIGATOR_MAX_ROWS,
         max_cols=48,
     )
+    _write_hidden_data_sheet(
+        manager=manager,
+        sheet_name=DATA_TECHNICAL_EVIDENCE_SHEET,
+        frame=(
+            technical_evidence_df
+            if isinstance(technical_evidence_df, pd.DataFrame)
+            else pd.DataFrame()
+        ),
+        max_rows=DATA_TECHNICAL_EVIDENCE_MAX_ROWS,
+        max_cols=32,
+    )
 
     breadth_cols = [
         "Date",
@@ -2387,6 +2652,11 @@ def publish_dashboard_payload(
         "investigator_rows_written": int(investigator_queue_rows),
         "fundamental_lane_sheet_name": FUNDAMENTAL_LANE_SHEET,
         "fundamental_lane_rows_written": int(fundamental_lane_rows),
+        "shadow_setups_sheet_name": SHADOW_SETUPS_SHEET,
+        "shadow_setups_rows_written": int(shadow_setups_rows),
+        "shadow_performance_sheet_name": SHADOW_PERFORMANCE_SHEET,
+        "shadow_performance_rows_written": int(shadow_performance_rows),
+        "technical_evidence_data_sheet_name": DATA_TECHNICAL_EVIDENCE_SHEET,
         "final_3q_gate_sheet_name": FINAL_3Q_GATE_SHEET,
         "final_3q_gate_rows_written": int(final_gate_rows),
         "investigator_performance_sheet_name": INVESTIGATOR_PERFORMANCE_SHEET,
@@ -2401,7 +2671,12 @@ def publish_dashboard_payload(
         "stage1_exits_sheet_name": STAGE1_EXITS_SHEET,
         "stage1_exits_rows_written": int(stage1_exits_rows),
         "stage1_trade_date": ((stage1_operator_bundle or {}).get("summary") or {}).get("as_of"),
-        "hidden_data_sheets": [DATA_BREADTH_SHEET, DATA_SECTOR_HISTORY_SHEET, DATA_INVESTIGATOR_SHEET],
+        "hidden_data_sheets": [
+            DATA_BREADTH_SHEET,
+            DATA_SECTOR_HISTORY_SHEET,
+            DATA_INVESTIGATOR_SHEET,
+            DATA_TECHNICAL_EVIDENCE_SHEET,
+        ],
         "cleanup": cleanup,
         "daily_report": daily_report.metadata,
         **quota_meta,

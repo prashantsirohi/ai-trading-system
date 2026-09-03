@@ -134,7 +134,8 @@ Authority:
 
 - audit and reconciliation evidence for the attempt
 - canonical episode history in `control_plane.duckdb` remains authoritative
-- these files are not execution or publish inputs
+- the two technical-evidence CSVs are optional presentation-only inputs to the Google Sheets shadow tabs; they are not ranking, candidate, admission, lifecycle, or execution inputs
+- all other opportunity files are not execution or publish inputs
 
 See [`docs/stages/opportunities.md`](../stages/opportunities.md).
 

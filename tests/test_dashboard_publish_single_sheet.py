@@ -304,6 +304,7 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
                 "delivery_pct": 64,
                 "volume_ratio_20": 3.2,
                 "rank_position": 3,
+                "weekly_stage_label": "S4",
             }
         ]
     )
@@ -564,6 +565,57 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             },
         ]
     )
+    technical_evidence = pd.DataFrame(
+        [
+            {
+                "technical_evidence_observation_id": "technical-aaa",
+                "exchange": "NSE",
+                "symbol_id": "AAA",
+                "observed_session": "2026-04-09",
+                "fundamental_thesis_state": "MET",
+                "weekly_gainer_state": "MET",
+                "near_52w_high_10_state": "MET",
+                "above_sma20_state": "MET",
+                "entry_confirmed_state": "MET",
+                "sma20_break_state": "NOT_APPLICABLE",
+                "price": 108.0,
+                "sma20": 104.0,
+                "high_52w": 110.0,
+                "distance_from_52w_high_pct": -1.818182,
+                "missing_reasons": "",
+            },
+            {
+                "technical_evidence_observation_id": "technical-unknown",
+                "exchange": "NSE",
+                "symbol_id": "UNKNOWN",
+                "observed_session": "2026-04-09",
+                "fundamental_thesis_state": "NOT_APPLICABLE",
+                "weekly_gainer_state": "UNKNOWN",
+                "near_52w_high_10_state": "UNKNOWN",
+                "above_sma20_state": "UNKNOWN",
+                "entry_confirmed_state": "UNKNOWN",
+                "sma20_break_state": "UNKNOWN",
+                "missing_reasons": "price_unavailable|sma20_unavailable",
+            },
+        ]
+    )
+    technical_evidence_cohorts = pd.DataFrame(
+        [
+            {
+                "cohort_type": "FUNDAMENTAL_AND_TECHNICAL",
+                "horizon_sessions": 20,
+                "sample_count": 35,
+                "unique_symbol_count": 30,
+                "avg_return_pct": 4.25,
+                "expectancy_pct": 4.25,
+                "win_rate_pct": 62.5,
+                "payoff_ratio": 1.8,
+                "sample_confidence": "MEDIUM",
+                "return_basis": "NEXT_OPEN_ENTRY",
+                "policy_version": "near-high-20dma-shadow-v1",
+            }
+        ]
+    )
 
     payload = {
         "summary": {"run_date": "2026-04-09", "data_trust_status": "trusted"},
@@ -619,6 +671,8 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
             investigator_final_gate_df=investigator_final_gate,
             investigator_performance_summary_df=investigator_performance,
             fundamental_thesis_df=fundamental_thesis,
+            technical_evidence_df=technical_evidence,
+            technical_evidence_cohorts_df=technical_evidence_cohorts,
             sector_rotation_df=sector_rotation_df,
             industry_rotation_df=industry_rotation_df,
             investigator_payload=investigator_payload,
@@ -658,13 +712,16 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert result["investigator_sheet_name"] == "investigator"
     assert result["fundamental_lane_sheet_name"] == "fundamental"
     assert result["fundamental_lane_rows_written"] == 2
+    assert result["shadow_setups_sheet_name"] == "07_Shadow_Setups"
+    assert result["shadow_performance_sheet_name"] == "08_Shadow_Performance"
+    assert result["technical_evidence_data_sheet_name"] == "_DATA_TECHNICAL_EVIDENCE"
     assert result["final_3q_gate_sheet_name"] == "Final 3Q Gate"
     assert result["investigator_data_sheet_name"] == "_DATA_INVESTIGATOR"
     assert result["stage1_current_sheet_name"] == "Stage1 Current"
     assert result["stage1_trade_date"] == "2026-04-09"
     assert {"DATA", "FILTER", "Publish_Log", "02_Watchlist_Current", "05_Market_Breadth", "2026-04-08"}.issubset(set(manager.spreadsheet.deleted))
 
-    visible_titles = {"01_Daily_Report", "Diagnostics", "Model_Feedback", "04_Sector_Leadership", "industry rotation", "investigator", "fundamental", "Final 3Q Gate", "Investigator Performance"}
+    visible_titles = {"01_Daily_Report", "Diagnostics", "Model_Feedback", "04_Sector_Leadership", "industry rotation", "investigator", "fundamental", "07_Shadow_Setups", "08_Shadow_Performance", "Final 3Q Gate", "Investigator Performance"}
     visible_updates = {
         title: [update for update in manager.sheets[title].updates if update[0] == "A1"]
         for title in visible_titles
@@ -677,6 +734,8 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     industry_grid = visible_updates["industry rotation"][0][1]
     investigator_grid = visible_updates["investigator"][0][1]
     fundamental_grid = visible_updates["fundamental"][0][1]
+    shadow_setups_grid = visible_updates["07_Shadow_Setups"][0][1]
+    shadow_performance_grid = visible_updates["08_Shadow_Performance"][0][1]
     final_gate_grid = visible_updates["Final 3Q Gate"][0][1]
     performance_grid = visible_updates["Investigator Performance"][0][1]
     for stage1_title in ("Stage1 Current", "Stage1 Changes", "Stage1 Action Queue", "Stage1 Exits"):
@@ -765,6 +824,29 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
         88.5,
     ]
     assert "BLOCKED" not in {row[0] for row in fundamental_grid[1:]}
+    assert shadow_setups_grid[0][:6] == [
+        "Priority",
+        "Symbol",
+        "Exchange",
+        "Observed",
+        "Fundamental",
+        "Weekly Gainer",
+    ]
+    assert shadow_setups_grid[1][0] == "FUND + TECH"
+    assert shadow_setups_grid[1][1] == "AAA"
+    assert shadow_setups_grid[1][10] == "S4"
+    assert shadow_performance_grid[0][:4] == [
+        "Status",
+        "Cohort",
+        "Horizon Sessions",
+        "Samples",
+    ]
+    assert shadow_performance_grid[1][:4] == [
+        "MATURED",
+        "FUNDAMENTAL_AND_TECHNICAL",
+        20,
+        35,
+    ]
     assert final_gate_grid[0] == [
         "symbol_id",
         "trade_date",
@@ -830,6 +912,8 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "MARKET BREADTH SNAPSHOT" in daily_text
     assert "STAGE-1 SUMMARY" in daily_text
     assert "TOP 5 EMERGING LEADERS" in daily_text
+    assert "SHADOW TECHNICAL EVIDENCE" in daily_text
+    assert "Entry UNKNOWN" in daily_text
     assert "% Above SMA200" in daily_text
     assert "PE 5Y Percentile" in daily_text
     assert "New High / Low" in daily_text
@@ -860,10 +944,15 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "MARKET MOVES SNAPSHOT" in model_feedback_text
 
     hidden = {name: frame for name, frame, _max_rows, _max_cols in manager.hidden_writes}
-    assert {"_DATA_BREADTH", "_DATA_SECTOR_HISTORY", "_DATA_INVESTIGATOR"}.issubset(hidden)
+    assert {"_DATA_BREADTH", "_DATA_SECTOR_HISTORY", "_DATA_INVESTIGATOR", "_DATA_TECHNICAL_EVIDENCE"}.issubset(hidden)
     assert len(hidden["_DATA_BREADTH"]) <= 250
     assert len(hidden["_DATA_SECTOR_HISTORY"]) <= 500
     assert len(hidden["_DATA_INVESTIGATOR"]) <= 300
+    assert len(hidden["_DATA_TECHNICAL_EVIDENCE"]) == 2
+    assert hidden["_DATA_TECHNICAL_EVIDENCE"].loc[
+        hidden["_DATA_TECHNICAL_EVIDENCE"]["symbol_id"].eq("UNKNOWN"),
+        "entry_confirmed_state",
+    ].iloc[0] == "UNKNOWN"
     assert "AAA" in set(hidden["_DATA_INVESTIGATOR"]["Symbol"].astype(str))
     assert "MED" in set(hidden["_DATA_INVESTIGATOR"]["Symbol"].astype(str))
     final_gate_rows = hidden["_DATA_INVESTIGATOR"].loc[hidden["_DATA_INVESTIGATOR"]["section"].eq("FINAL 3Q GATE")]

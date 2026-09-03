@@ -6,8 +6,6 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
 
-import pytest
-
 from ai_trading_system.domains.events.enrichment_service import EnrichedSignal
 from ai_trading_system.domains.events.payload_builder import (
     apply_events_overlay,
@@ -315,3 +313,43 @@ def test_delivery_manager_dedup_key_backward_compatible():
     )
     expected = hashlib.sha256("telegram:zzz".encode("utf-8")).hexdigest()
     assert mgr.build_dedupe_key("telegram", artifact) == expected
+
+
+def test_delivery_manager_dedup_key_uses_channel_specific_input_hashes():
+    from ai_trading_system.domains.publish.delivery_manager import (
+        PublisherDeliveryManager,
+    )
+    from ai_trading_system.pipeline.contracts import StageArtifact
+
+    mgr = PublisherDeliveryManager()
+    base = StageArtifact(artifact_type="x", uri="path/a", content_hash="rank")
+    with_inputs = StageArtifact(
+        artifact_type="x",
+        uri="path/a",
+        content_hash="rank",
+        metadata={
+            "channel_input_hashes": {
+                "google_sheets_dashboard": ["cohort-hash", "labels-hash"]
+            }
+        },
+    )
+    reordered = StageArtifact(
+        artifact_type="x",
+        uri="path/a",
+        content_hash="rank",
+        metadata={
+            "channel_input_hashes": {
+                "google_sheets_dashboard": ["labels-hash", "cohort-hash"]
+            }
+        },
+    )
+
+    assert mgr.build_dedupe_key(
+        "google_sheets_dashboard", base
+    ) != mgr.build_dedupe_key("google_sheets_dashboard", with_inputs)
+    assert mgr.build_dedupe_key(
+        "google_sheets_dashboard", with_inputs
+    ) == mgr.build_dedupe_key("google_sheets_dashboard", reordered)
+    assert mgr.build_dedupe_key("telegram", base) == mgr.build_dedupe_key(
+        "telegram", with_inputs
+    )

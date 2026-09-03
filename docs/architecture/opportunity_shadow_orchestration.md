@@ -17,7 +17,7 @@ execution behavior.
 
 ## Purpose and boundary
 
-The `opportunities` stage runs immediately after `investigator` only when `--opportunity-registry-mode shadow` is selected. It reads registered rank and Investigator artifacts, converts available fields into canonical contracts, evaluates candidates, writes canonical history through `OpportunityRegistryService`, and emits audit artifacts. It never changes ranking, candidate-tracker, execution, publish, broker, Sheets, Telegram, or UI inputs.
+The `opportunities` stage runs immediately after `investigator` only when `--opportunity-registry-mode shadow` is selected. It reads registered rank and Investigator artifacts, converts available fields into canonical contracts, evaluates candidates, writes canonical history through `OpportunityRegistryService`, and emits audit artifacts. It never changes ranking, candidate-tracker, execution, broker, Telegram, or decision-making UI inputs. Publish may mirror its neutral technical-evidence label and cohort artifacts into explicitly shadow-labelled Google Sheets views; this projection has no admission, lifecycle, or execution authority.
 
 Mode `off` is the default and does not add the stage to the default CLI stage list. Dry run evaluates the complete workflow and writes attempt-local audit artifacts without opportunity-registry records.
 

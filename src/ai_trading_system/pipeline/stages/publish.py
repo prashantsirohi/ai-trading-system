@@ -158,6 +158,7 @@ class PublishStage:
         self._attach_insight_datasets(context, datasets)
         self._attach_investigator_datasets(context, datasets)
         self._attach_fundamental_discovery_datasets(context, datasets)
+        self._attach_technical_evidence_datasets(context, datasets)
         self._attach_decision_bundle(context, datasets)
         ranked_df = datasets.get("ranked_signals", pd.DataFrame())
 
@@ -188,6 +189,11 @@ class PublishStage:
                 "event_hashes": list(datasets.get("event_hashes") or []),
                 "insight_hash": datasets.get("insight_hash"),
                 "fundamental_fallback_artifacts": sorted(fallback_fundamental_artifacts),
+                "channel_input_hashes": {
+                    "google_sheets_dashboard": list(
+                        datasets.get("technical_evidence_artifact_hashes") or []
+                    )
+                },
             },
             attempt_number=rank_artifact.attempt_number,
         )
@@ -465,6 +471,27 @@ class PublishStage:
             )
         )
 
+    def _attach_technical_evidence_datasets(
+        self,
+        context: StageContext,
+        datasets: Dict[str, Any],
+    ) -> None:
+        artifact_map = {
+            "technical_evidence_labels": "technical_evidence_labels",
+            "technical_evidence_cohorts": "technical_evidence_cohorts",
+        }
+        hashes: list[str] = []
+        for artifact_type, dataset_name in artifact_map.items():
+            artifact = context.artifact_for("opportunities", artifact_type)
+            datasets[dataset_name] = (
+                self._read_artifact(artifact)
+                if artifact is not None
+                else pd.DataFrame()
+            )
+            if artifact is not None and artifact.content_hash:
+                hashes.append(str(artifact.content_hash))
+        datasets["technical_evidence_artifact_hashes"] = sorted(set(hashes))
+
     def _read_json_artifact_safe(self, artifact: StageArtifact | None) -> Dict[str, Any]:
         if artifact is None:
             return {}
@@ -730,6 +757,8 @@ class PublishStage:
             investigator_final_gate_df=datasets.get("investigator_final_3q_gate"),
             investigator_performance_summary_df=datasets.get("investigator_performance_summary"),
             fundamental_thesis_df=datasets.get("fundamental_thesis_universe"),
+            technical_evidence_df=datasets.get("technical_evidence_labels"),
+            technical_evidence_cohorts_df=datasets.get("technical_evidence_cohorts"),
             sector_rotation_df=datasets.get("sector_rotation"),
             industry_rotation_df=datasets.get("industry_rotation"),
             investigator_payload=datasets.get("investigator_payload"),

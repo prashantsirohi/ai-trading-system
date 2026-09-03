@@ -2,7 +2,7 @@
 
 - **Purpose:** Deliver pipeline artifacts to external channels (Google Sheets, Telegram, QuantStats, PDF) and write a local publish summary, with per-channel blocking semantics.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-09-01
 - **Source of truth:** [`src/ai_trading_system/pipeline/stages/publish.py`](../../src/ai_trading_system/pipeline/stages/publish.py), [`src/ai_trading_system/domains/publish/delivery_manager.py`](../../src/ai_trading_system/domains/publish/delivery_manager.py), [`src/ai_trading_system/domains/publish/channels/`](../../src/ai_trading_system/domains/publish/channels/)
 
 ---
@@ -23,6 +23,7 @@ Take rank/event/insight/narrative artifacts, attach 4-bucket watchlist, build ch
 - **Optional rank artifacts:** `breakout_scan`, `pattern_scan`, `sector_dashboard`, `dashboard_payload`, `watchlist_candidates`
 - **Fundamentals fallback:** `watchlist_candidates`, `fundamental_summary`, `fundamental_scores` from `fundamentals` stage when not present in rank ([`publish.py:96-98`](../../src/ai_trading_system/pipeline/stages/publish.py))
 - **Fundamental discovery:** optional `fundamental_thesis_universe` and `fundamental_thesis_summary` from the shadow `fundamental_discovery` stage.
+- **Shadow technical evidence:** optional `technical_evidence_labels` and `technical_evidence_cohorts` from `opportunities`. They are presentation-only inputs for the Google Sheets dashboard and retain independent `MET`, `NOT_MET`, `UNKNOWN`, and `NOT_APPLICABLE` states.
 - **Events:** `market_events_snapshot`, `events_enrichment`, `events_summary`
 - **Insight/narrative:** `narrative.telegram_summary`, `insight.event_confluence`, `narrative.daily_insight_json` / `weekly_insight_json`
 - **Params:** `local_publish`, `publish_quantstats` (default `True`), `publish_weekly_pdf`, `quantstats_top_n`, `quantstats_min_overlap`, `quantstats_max_runs`, `quantstats_breadth_start_date`, `quantstats_required`, `bypass_dedupe_channels`. `smoke` is rejected ([`publish.py:74-75`](../../src/ai_trading_system/pipeline/stages/publish.py)).
@@ -44,7 +45,7 @@ External side effects (per channel role, see below):
 
 ## Main modules
 
-- [`domains/publish/delivery_manager.py::PublisherDeliveryManager`](../../src/ai_trading_system/domains/publish/delivery_manager.py) — retry (default `max_attempts=3`, exponential `base_delay_seconds * 2^i`), dedup via SHA-256 of `channel:content_hash[|events:...]`, delivery log to registry ([`delivery_manager.py:25-114`](../../src/ai_trading_system/domains/publish/delivery_manager.py))
+- [`domains/publish/delivery_manager.py::PublisherDeliveryManager`](../../src/ai_trading_system/domains/publish/delivery_manager.py) — retry (default `max_attempts=3`, exponential `base_delay_seconds * 2^i`), dedup via SHA-256 of `channel:content_hash[|events:...][|inputs:...]`, delivery log to registry. Channel-specific input hashes allow a changed shadow-evidence artifact to refresh only `google_sheets_dashboard`.
 - [`domains/publish/publish_payloads.py`](../../src/ai_trading_system/domains/publish/publish_payloads.py) — `build_publish_datasets`, `build_publish_metadata`
 - [`domains/publish/decision_bundle.py`](../../src/ai_trading_system/domains/publish/decision_bundle.py) — `build_publish_decision_bundle` (per-symbol decision rationale + telegram digest)
 - [`domains/publish/watchlist_buckets.py`](../../src/ai_trading_system/domains/publish/watchlist_buckets.py) — `assign_watchlist_buckets`, `summarize_buckets`
@@ -75,9 +76,9 @@ From [`publish.py:30-61`](../../src/ai_trading_system/pipeline/stages/publish.py
 
 1. Reject `smoke=true`.
 2. Require `rank.ranked_signals`. Build datasets via `build_publish_datasets`. Governed DuckDB rank and stage fields overlay the matching artifact rows, while artifact-only enrichment columns and full-universe `stock_scan` rows remain available to operator views.
-3. Attach event datasets (snapshot + enrichment + summary), insight datasets (telegram summary + confluence + latest insight), and decision bundle.
+3. Attach event datasets (snapshot + enrichment + summary), insight datasets (telegram summary + confluence + latest insight), shadow technical-evidence labels/cohorts, and decision bundle.
 4. Compute watchlist buckets; persist `watchlist_buckets.csv`; attach to datasets.
-5. Select channel handlers in `_build_handlers`. `local_publish=true` overrides to a single `local_summary` channel. Google Sheets writes the compact operator workbook, including the visible `investigator` action queue and a visible `fundamental` lane of admission-eligible shadow thesis candidates. The `TOP RANKED` section in `01_Daily_Report` displays the first 25 ranked rows, using the full-universe `stock_scan` to extend beyond a smaller regime-aware shortlist without changing ranking or execution policy. `quantstats_dashboard_tearsheet` is enabled by default; `weekly_pdf` requires `publish_weekly_pdf=true` and bypasses delivery dedup.
+5. Select channel handlers in `_build_handlers`. `local_publish=true` overrides to a single `local_summary` channel. Google Sheets writes the compact operator workbook, including the visible `investigator` action queue, the visible `fundamental` lane, `07_Shadow_Setups`, `08_Shadow_Performance`, and hidden `_DATA_TECHNICAL_EVIDENCE`. The shadow setup view keeps fundamental, weekly-gainer, near-high, SMA20, combined-entry, SMA20-break, weekly-stage, and market-stage fields separate. It never treats `UNKNOWN` as false and grants no admission or execution authority. `01_Daily_Report` includes a compact shadow-evidence count section. The `TOP RANKED` section displays the first 25 ranked rows, using the full-universe `stock_scan` to extend beyond a smaller regime-aware shortlist without changing ranking or execution policy. `quantstats_dashboard_tearsheet` is enabled by default; `weekly_pdf` requires `publish_weekly_pdf=true` and bypasses delivery dedup.
 6. For each channel: `delivery_manager.deliver(...)` runs idempotency check, then up to `max_attempts=3` retries with exponential backoff, records every attempt in the delivery log, and returns one of `delivered` / `duplicate` / `failed`.
 7. Build `publish_summary` metadata + fundamentals adds.
 8. If any blocking-role channel failed → raise `PublishStageError` with concatenated messages.
@@ -102,7 +103,7 @@ From [`publish.py:30-61`](../../src/ai_trading_system/pipeline/stages/publish.py
 
 - Per-channel: 3 attempts inside `PublisherDeliveryManager.deliver`, exponential backoff `1 * 2^i` seconds (configurable on the manager).
 - Per-stage: orchestrator-controlled re-runs create new `attempt_<n>` directories.
-- Dedup: a successful delivery for a given `dedupe_key` (sha256 of channel + artifact content hash + sorted event hashes) is replayed as `duplicate` and not resent. Override by adding the channel to `context.params["bypass_dedupe_channels"]` (the stage auto-adds `weekly_pdf` to that list).
+- Dedup: a successful delivery for a given `dedupe_key` (sha256 of channel + artifact content hash + sorted event hashes + any hashes registered for that channel) is replayed as `duplicate` and not resent. Opportunity technical-evidence hashes are registered only for `google_sheets_dashboard`. Override by adding the channel to `context.params["bypass_dedupe_channels"]` (the stage auto-adds `weekly_pdf` to that list).
 
 ## Downstream consumers
 

@@ -125,6 +125,14 @@ class PublisherDeliveryManager:
         if event_hashes:
             joined = "|".join(sorted(str(h) for h in event_hashes))
             seed = f"{seed}|events:{joined}"
+        channel_input_hashes = (
+            meta.get("channel_input_hashes") if isinstance(meta, dict) else None
+        )
+        if isinstance(channel_input_hashes, dict):
+            input_hashes = channel_input_hashes.get(channel)
+            if input_hashes:
+                joined = "|".join(sorted(str(item) for item in input_hashes))
+                seed = f"{seed}|inputs:{joined}"
         return hashlib.sha256(seed.encode("utf-8")).hexdigest()
 
     def _normalize_sender_payload(self, payload: Dict[str, Any] | bool | None) -> Dict[str, Any]:

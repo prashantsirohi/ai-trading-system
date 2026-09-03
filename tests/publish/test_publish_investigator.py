@@ -101,6 +101,58 @@ def test_publish_stage_loads_investigator_datasets(tmp_path: Path) -> None:
     assert datasets["investigator_threshold_recommendations"] == {"insufficient_sample": True}
 
 
+def test_publish_stage_loads_shadow_technical_evidence_datasets(tmp_path: Path) -> None:
+    labels_path = tmp_path / "technical_evidence_labels.csv"
+    cohorts_path = tmp_path / "technical_evidence_cohorts.csv"
+    pd.DataFrame(
+        [
+            {
+                "symbol_id": "AAA",
+                "exchange": "NSE",
+                "entry_confirmed_state": "UNKNOWN",
+            }
+        ]
+    ).to_csv(labels_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "cohort_type": "TECHNICAL_ONLY",
+                "horizon_sessions": 20,
+                "sample_count": 31,
+            }
+        ]
+    ).to_csv(cohorts_path, index=False)
+    labels_artifact = StageArtifact.from_file(
+        "technical_evidence_labels", labels_path, row_count=1
+    )
+    cohorts_artifact = StageArtifact.from_file(
+        "technical_evidence_cohorts", cohorts_path, row_count=1
+    )
+    context = StageContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "control_plane.duckdb",
+        run_id="shadow-2026-08-30-test",
+        run_date="2026-08-30",
+        stage_name="publish",
+        attempt_number=1,
+        artifacts={
+            "opportunities": {
+                "technical_evidence_labels": labels_artifact,
+                "technical_evidence_cohorts": cohorts_artifact,
+            }
+        },
+    )
+    datasets: dict[str, object] = {}
+
+    PublishStage()._attach_technical_evidence_datasets(context, datasets)  # noqa: SLF001
+
+    assert datasets["technical_evidence_labels"].iloc[0]["entry_confirmed_state"] == "UNKNOWN"
+    assert datasets["technical_evidence_cohorts"].iloc[0]["cohort_type"] == "TECHNICAL_ONLY"
+    assert datasets["technical_evidence_artifact_hashes"] == sorted(
+        [labels_artifact.content_hash, cohorts_artifact.content_hash]
+    )
+
+
 def test_publish_investigator_sorts_final_gate_by_verdict_then_score(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_SPREADSHEET_ID", "sheet-id")
     monkeypatch.setattr(google_sheets, "GoogleSheetsManager", _FakeGoogleSheetsManager)
