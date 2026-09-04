@@ -17,7 +17,7 @@ The optional `opportunities` stage follows `investigator` in `PIPELINE_ORDER`. I
 
 ## Input data
 
-Required input is registered `rank/ranked_signals`. Optional inputs are full Investigator scores and Stage-1 state plus rank breakout, pattern, stock-scan, sector-dashboard, weekly-stage, and routing artifacts. In shadow routing mode full `investigator_scores` remains authoritative; routed scores are diagnostic-only. Rank and routed pattern evidence are unioned. Investigator sector names fill missing rank-sector names, and Investigator `sector_rs_value` or sector-percentile fields fill missing weekly sector-relative-strength context. Weekly sector structure remains preferred when available. Completed pattern scans persist `KNOWN` or `NONE`; intentionally excluded and capacity-limited rows remain distinguishable from scanner errors or unexplained absence. Missing optional inputs become audit warnings. The stage reads the weekly stage snapshot store only to enrich the registered stock-stage row with source-week and creation metadata.
+Required input is registered `rank/ranked_signals`. Optional inputs are full Investigator scores and Stage-1 state plus rank breakout, pattern, stock-scan, sector-dashboard, weekly-stage, and routing artifacts. In shadow routing mode full `investigator_scores` remains authoritative; routed scores are diagnostic-only. Rank and routed pattern evidence are unioned. Investigator rows outside the rank shortlist receive rank context only when an explicit rank score is present; otherwise they remain evidence-only, and `final_score` is never substituted for rank score. Investigator sector names fill missing rank-sector names, and Investigator `sector_rs_value` or sector-percentile fields fill missing weekly sector-relative-strength context. Weekly sector structure remains preferred when available. Completed pattern scans persist `KNOWN` or `NONE`; intentionally excluded and capacity-limited rows remain distinguishable from scanner errors or unexplained absence. Missing optional inputs become audit warnings. The stage reads the weekly stage snapshot store only to enrich the registered stock-stage row with source-week and creation metadata.
 
 ## Output artifacts
 
@@ -43,6 +43,14 @@ The stage loads registered sources, adapts and reconciles by exchange/symbol, cr
 ## DQ
 
 Semantic identity conflicts, cross-episode inconsistencies, invalid timestamps, invalid stage locks, and incompatible setup matching are explicit conflicts or rejections. Missing optional evidence and unavailable sector structure are warnings and never become negative evidence. Scan receipts distinguish `MISSING`, `SUCCESS_ZERO_ROWS`, and `SUCCESS_ROWS`; zero rows therefore do not imply a producer failure. Daily v3 coverage uses the latest snapshot per candidate/setup so retries cannot inflate the denominator, and pattern known-or-none is measured only among pattern-evaluable rows while `UNKNOWN` and `NOT_EVALUATED` remain failures. Under `investigator-attribution-policy-v3` and its v4 successor, a matured discovery without an ordered pending-follow-through transition closes as `INELIGIBLE_LIFECYCLE_SEQUENCE`. Legacy v1/v2 events retain their original frozen eligibility behavior. V4 expands weekly tracking to every five-session return strictly above 5%, without allowing an earlier daily spike to suppress the weekly observation. Primary eligibility uses the immutable `WEEKLY_GAINER` trigger source even when contextual classification produces another move tag.
+
+`setup-family-v1.3` scopes matching and ambiguity to the incoming lane. Parallel
+fundamental-thesis and Investigator-primary episodes do not block technical
+progression; duplicate or incompatible episodes within the same lane still fail
+closed. `registry_conflicts.csv` carries a stable `reason_code`. Opportunity
+summary counters separately report Investigator rank-context fallbacks,
+evidence-only rows, and evidence-only weekly gainers. The integrity receipt
+requires zero adapter rejections.
 
 Technical evidence requires positive price, SMA20, and 52-week-high values for a known combined-entry label. Exactly 90% of the 52-week high and equality with SMA20 both pass. The SMA20-break label is `NOT_APPLICABLE` without a prior session and becomes `MET` only on a known above-to-below close transition. These labels are research-only and cannot alter ranking, admission, lifecycle, candidates, or execution. Publish may project them unchanged into operator-facing shadow tabs, without granting decision authority.
 

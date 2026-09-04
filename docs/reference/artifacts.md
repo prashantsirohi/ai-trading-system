@@ -121,7 +121,7 @@ Writes under `data/pipeline_runs/<run_id>/opportunities/attempt_<n>/`:
 - `candidate_reconciliation.csv`
 - `adapter_warnings.csv`
 - `adapter_rejections.csv`
-- `registry_conflicts.csv`
+- `registry_conflicts.csv` — conflicts with stable `reason_code`; lane-aware matching prevents parallel fundamental, Investigator-primary, and technical episodes from being mislabeled as ambiguous
 - `current_candidate_state.csv`
 - `position_episode_compatibility.csv`
 - `position_recovery_proposals.csv`

@@ -58,6 +58,7 @@ from ai_trading_system.domains.opportunities.orchestration.contracts import (
     OpportunityShadowConfig,
 )
 from ai_trading_system.domains.opportunities.orchestration.matching import (
+    SETUP_FAMILY_LANES,
     SETUP_FAMILY_PROGRESSION,
     SETUP_FAMILY_SUPERSESSION,
 )
@@ -162,6 +163,7 @@ def policy_content(
             "sector_gate_rules": dict(SECTOR_GATE_RULES),
         },
         SETUP_FAMILY_RULE_VERSION: {
+            "lanes": dict(SETUP_FAMILY_LANES),
             "progression": list(SETUP_FAMILY_PROGRESSION),
             "supersession": dict(SETUP_FAMILY_SUPERSESSION),
             "setup_progression_max_days": shadow.setup_progression_max_days,

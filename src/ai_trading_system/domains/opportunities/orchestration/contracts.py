@@ -43,7 +43,7 @@ ADMISSION_RULE_PRECEDENCE: tuple[str, ...] = (
     "rank_velocity",
     "rank_threshold",
 )
-SETUP_FAMILY_RULE_VERSION = "setup-family-v1.2"
+SETUP_FAMILY_RULE_VERSION = "setup-family-v1.3"
 LIFECYCLE_RULE_VERSION = "lifecycle-policy-v1.1"
 PROGRESS_RULE_VERSION = "opportunity-progress-v1"
 RETENTION_RULE_VERSION = "opportunity-retention-v1.1"
@@ -370,6 +370,7 @@ class EpisodeMatch:
     candidate_id: str | None
     setup_id: str | None
     warnings: tuple[str, ...] = ()
+    reason_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

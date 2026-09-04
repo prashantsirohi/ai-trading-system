@@ -212,6 +212,18 @@ not reconstruct or repaint them. Dry runs label persistence-dependent checks
 `NOT_APPLICABLE`. These checks feed the existing Investigator readiness artifact
 and have no execution, candidate-tracker, ranking, or broker consumer.
 
+Phase 3.5 P1 separates Investigator evidence ownership from rank ownership and
+introduces immutable `setup-family-v1.3` lane-aware matching. Investigator rows
+outside `ranked_signals` receive rank context only when they carry an explicit
+rank score; otherwise they remain evidence-only and cannot manufacture rank
+position, percentile, velocity, or admission. Weekly gainers below the review
+threshold therefore remain tracked evidence instead of adapter failures.
+Technical progression, `investigator_primary`, `fundamental_thesis`, manual, and
+position-recovery episodes match within their own lanes, so a parallel thesis
+cannot create a false technical ambiguity. Genuine same-lane ambiguity remains
+fail-closed with a stable conflict reason code. This policy is shadow-only and
+does not change factor weights, the score-65 review threshold, or execution.
+
 Migration 046 adds the independent `near-high-20dma-shadow-v1` evidence lane.
 The opportunities stage records one neutral exchange/symbol/session observation.
 Point-in-time adjusted OHLCV owns the decision-session price, 20-session SMA,

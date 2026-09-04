@@ -38,6 +38,13 @@ flowchart TD
 
 Adapters are pure and return records, warnings, rejected rows, and source metadata. Rank position may come from stable artifact order; percentile may come from position and row count. Rank velocity requires a prior registry rank. Investigator total score remains required, while unavailable components remain null. Missing Investigator output is not negative evidence.
 
+An Investigator row outside the registered rank shortlist is adapted as rank
+context only when `composite_score`, `opportunity_score`, or `score` is present.
+Without one of those fields it remains evidence-only: `final_score` is never
+reinterpreted as rank score, the row is not rejected for missing rank fields,
+and it cannot gain rank-based admission. Summary counters separate rank-context
+fallback rows from evidence-only rows and evidence-only weekly gainers.
+
 Weekly stock confidence is converted from `0–1` to `0–100`. A source week is locked only when explicitly locked or already completed, and a source creation/lock timestamp must exist. Same-day weeks remain provisional. Weekly sector artifacts own Weinstein structure; rank sector artifacts own RS percentile and quadrant. Reconciliation combines those fields by ownership, so positive sector rank never implies Stage 2 and missing rank context cannot erase valid weekly structure.
 
 Legacy Stage-1 lifecycle, follow-through, and tracker-health values use the Phase 1 warning-bearing compatibility mappings. Tracker health affects progress only.
@@ -46,7 +53,7 @@ Legacy Stage-1 lifecycle, follow-through, and tracker-health values use the Phas
 
 `admission-rules-v1` defaults are rank percentile 90, rank improvement of five positions with percentile 75, Investigator score 70, accumulation 75, ready pattern 80, qualified Tier A breakout 80, and S1→S2 confidence 75. Stage 3/4 blocks new long admission.
 
-Every admission evaluates all eight predicates, records their observed values, thresholds, pass status, and bundle-level source row IDs, then selects one primary reason and setup family using fingerprinted `admission-rules-v1.2` precedence. The new highest-precedence `investigator_primary_onset` predicate uses only the frozen weekly-momentum lane and score threshold. It opens the independent `investigator_primary` family and is not blocked by stage, pattern, setup-quality, or breakout context. Exact open-family matching prevents daily duplicate onset events. Other admissions retain the configured progression `early_accumulation → base_building → stage_1_to_2_transition → breakout → post_breakout_followthrough`, with a 30-day continuity limit. Episode setup identity remains immutable. When no exact or progression-compatible episode exists, a qualified breakout supersedes exactly one open `momentum_leader`: one transaction opens the breakout episode, closes the predecessor, writes `MOMENTUM_SUPERSEDED_BY_BREAKOUT`, and appends the successor observations. Multiple momentum episodes or any mixed incompatible open set remains a conflict. Closed episodes are never reopened.
+Every admission evaluates all eight predicates, records their observed values, thresholds, pass status, and bundle-level source row IDs, then selects one primary reason and setup family using fingerprinted `admission-rules-v1.3` precedence. The new highest-precedence `investigator_primary_onset` predicate uses only the frozen weekly-momentum lane and score threshold. It opens the independent `investigator_primary` family and is not blocked by stage, pattern, setup-quality, or breakout context. Exact open-family matching prevents daily duplicate onset events. Other admissions retain the configured progression `early_accumulation → base_building → stage_1_to_2_transition → breakout → post_breakout_followthrough`, with a 30-day continuity limit. Episode setup identity remains immutable. Under `setup-family-v1.3`, matching is lane-scoped: technical progression, `investigator_primary`, `fundamental_thesis`, manual, and position-recovery episodes may coexist for one symbol without creating cross-lane ambiguity. Within the technical lane, a qualified breakout supersedes exactly one open `momentum_leader`. Multiple compatible or exact episodes in the same lane and incompatible technical families remain conflicts with stable reason codes. Closed episodes are never reopened.
 
 ## Lifecycle, progress, and retention
 
@@ -66,7 +73,8 @@ Lineage combines normalized source hashes and registered paths. An exact same-ru
 
 The attempt also emits enforceable integrity receipts. Declared upstream CSV row
 counts must match rows read when a declaration is available, every reconciled
-source bundle must end in either a reconciliation or conflict row, and registry
+source adapter must produce zero rejected rows, every reconciled source bundle
+must end in either a reconciliation or conflict row, and registry
 snapshot/transition deltas must equal the append results reported by the atomic
 write. A transition audit row is emitted only after its registry transition is
 created; dry run marks the planned row `PREVIEW`. Registry freshness requires a

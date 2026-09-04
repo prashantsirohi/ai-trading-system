@@ -5,9 +5,15 @@ from __future__ import annotations
 import pytest
 
 from ai_trading_system.domains.opportunities import coverage as coverage_module
-from ai_trading_system.domains.opportunities.orchestration import contracts as orchestration_contracts
-from ai_trading_system.domains.opportunities.orchestration import retention as retention_module
-from ai_trading_system.domains.opportunities.orchestration import matching as matching_module
+from ai_trading_system.domains.opportunities.orchestration import (
+    contracts as orchestration_contracts,
+)
+from ai_trading_system.domains.opportunities.orchestration import (
+    retention as retention_module,
+)
+from ai_trading_system.domains.opportunities.orchestration import (
+    matching as matching_module,
+)
 from ai_trading_system.domains.opportunities.orchestration.contracts import (
     ADMISSION_RULE_VERSION,
     INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
@@ -57,13 +63,18 @@ def test_snapshot_is_deterministic() -> None:
         ),
     ],
 )
-def test_any_runtime_threshold_changes_owning_label_and_composite(param, value, label) -> None:
+def test_any_runtime_threshold_changes_owning_label_and_composite(
+    param, value, label
+) -> None:
     baseline = compute_policy_snapshot({})
     changed = compute_policy_snapshot({param: value})
     assert changed.policy_snapshot_id != baseline.policy_snapshot_id
     assert changed.label_hashes[label] != baseline.label_hashes[label]
     unchanged = set(baseline.label_hashes) - {label}
-    assert all(changed.label_hashes[other] == baseline.label_hashes[other] for other in unchanged)
+    assert all(
+        changed.label_hashes[other] == baseline.label_hashes[other]
+        for other in unchanged
+    )
 
 
 def test_register_then_verify_then_mismatch(registry) -> None:
@@ -95,7 +106,9 @@ def test_mismatch_rolls_back_registrations_from_same_call(registry) -> None:
     with pytest.raises(PolicyVersionContentMismatchError):
         register_or_verify_policy_snapshots(registry, snapshot, run_id="run-1")
     with registry._reader() as conn:  # noqa: SLF001
-        rows = conn.execute("SELECT version_label FROM policy_version_registry").fetchall()
+        rows = conn.execute(
+            "SELECT version_label FROM policy_version_registry"
+        ).fetchall()
     assert [row[0] for row in rows] == [LIFECYCLE_RULE_VERSION]
 
 
@@ -111,15 +124,22 @@ def test_a2_patch_label_registers_beside_legacy_lifecycle_v1(registry) -> None:
     )
     assert result["registered"] >= 1
     with registry._reader() as conn:  # noqa: SLF001
-        labels = {row[0] for row in conn.execute(
-            "SELECT version_label FROM policy_version_registry"
-        ).fetchall()}
+        labels = {
+            row[0]
+            for row in conn.execute(
+                "SELECT version_label FROM policy_version_registry"
+            ).fetchall()
+        }
     assert {"lifecycle-policy-v1", LIFECYCLE_RULE_VERSION}.issubset(labels)
 
 
 def test_code_constant_drift_is_caught_at_runtime(registry, monkeypatch) -> None:
-    register_or_verify_policy_snapshots(registry, compute_policy_snapshot({}), run_id="run-1")
-    monkeypatch.setitem(coverage_module.SECTOR_AGGREGATION_RULES, "stage_2_min_pct", 55.0)
+    register_or_verify_policy_snapshots(
+        registry, compute_policy_snapshot({}), run_id="run-1"
+    )
+    monkeypatch.setitem(
+        coverage_module.SECTOR_AGGREGATION_RULES, "stage_2_min_pct", 55.0
+    )
     drifted = compute_policy_snapshot({})
     with pytest.raises(PolicyVersionContentMismatchError) as excinfo:
         register_or_verify_policy_snapshots(registry, drifted, run_id="run-2")
@@ -128,7 +148,9 @@ def test_code_constant_drift_is_caught_at_runtime(registry, monkeypatch) -> None
     assert "stage_2_min_pct" in message
 
 
-def test_sector_gate_rule_drift_changes_lifecycle_fingerprint(registry, monkeypatch) -> None:
+def test_sector_gate_rule_drift_changes_lifecycle_fingerprint(
+    registry, monkeypatch
+) -> None:
     baseline = compute_policy_snapshot({})
     register_or_verify_policy_snapshots(registry, baseline, run_id="run-1")
     monkeypatch.setitem(
@@ -137,7 +159,10 @@ def test_sector_gate_rule_drift_changes_lifecycle_fingerprint(registry, monkeypa
         0.1,
     )
     drifted = compute_policy_snapshot({})
-    assert drifted.label_hashes[LIFECYCLE_RULE_VERSION] != baseline.label_hashes[LIFECYCLE_RULE_VERSION]
+    assert (
+        drifted.label_hashes[LIFECYCLE_RULE_VERSION]
+        != baseline.label_hashes[LIFECYCLE_RULE_VERSION]
+    )
     with pytest.raises(PolicyVersionContentMismatchError, match=LIFECYCLE_RULE_VERSION):
         register_or_verify_policy_snapshots(registry, drifted, run_id="run-2")
 
@@ -168,9 +193,10 @@ def test_retention_counting_unit_drift_changes_runtime_fingerprint(monkeypatch) 
         retention_module, "RETENTION_COUNTING_UNIT", "orchestration_run"
     )
     drifted = compute_policy_snapshot({})
-    assert drifted.label_hashes[RETENTION_RULE_VERSION] != baseline.label_hashes[
-        RETENTION_RULE_VERSION
-    ]
+    assert (
+        drifted.label_hashes[RETENTION_RULE_VERSION]
+        != baseline.label_hashes[RETENTION_RULE_VERSION]
+    )
 
 
 def test_a1_patch_label_registers_beside_legacy_setup_family_v1(registry) -> None:
@@ -193,7 +219,9 @@ def test_a1_patch_label_registers_beside_legacy_setup_family_v1(registry) -> Non
     assert {"setup-family-v1", SETUP_FAMILY_RULE_VERSION}.issubset(labels)
 
 
-def test_supersession_policy_drift_changes_setup_family_fingerprint(monkeypatch) -> None:
+def test_supersession_policy_drift_changes_setup_family_fingerprint(
+    monkeypatch,
+) -> None:
     baseline = compute_policy_snapshot({})
     monkeypatch.setitem(
         matching_module.SETUP_FAMILY_SUPERSESSION,
@@ -201,9 +229,24 @@ def test_supersession_policy_drift_changes_setup_family_fingerprint(monkeypatch)
         "base_building",
     )
     drifted = compute_policy_snapshot({})
-    assert drifted.label_hashes[SETUP_FAMILY_RULE_VERSION] != baseline.label_hashes[
-        SETUP_FAMILY_RULE_VERSION
-    ]
+    assert (
+        drifted.label_hashes[SETUP_FAMILY_RULE_VERSION]
+        != baseline.label_hashes[SETUP_FAMILY_RULE_VERSION]
+    )
+
+
+def test_setup_lane_drift_changes_setup_family_fingerprint(monkeypatch) -> None:
+    baseline = compute_policy_snapshot({})
+    monkeypatch.setitem(
+        matching_module.SETUP_FAMILY_LANES,
+        "fundamental_thesis",
+        "technical_progression",
+    )
+    drifted = compute_policy_snapshot({})
+    assert (
+        drifted.label_hashes[SETUP_FAMILY_RULE_VERSION]
+        != baseline.label_hashes[SETUP_FAMILY_RULE_VERSION]
+    )
 
 
 def test_a4_patch_label_registers_beside_legacy_admission_v1(registry) -> None:
@@ -234,6 +277,7 @@ def test_admission_precedence_drift_changes_runtime_fingerprint(monkeypatch) -> 
         tuple(reversed(orchestration_contracts.ADMISSION_RULE_PRECEDENCE)),
     )
     drifted = compute_policy_snapshot({})
-    assert drifted.label_hashes[ADMISSION_RULE_VERSION] != baseline.label_hashes[
-        ADMISSION_RULE_VERSION
-    ]
+    assert (
+        drifted.label_hashes[ADMISSION_RULE_VERSION]
+        != baseline.label_hashes[ADMISSION_RULE_VERSION]
+    )

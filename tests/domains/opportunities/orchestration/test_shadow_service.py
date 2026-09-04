@@ -271,6 +271,92 @@ def test_dashboard_payload_reconciles_its_declared_ranked_count(tmp_path):
     assert receipt["declared_row_count"] == receipt["rows_read"] == 2
 
 
+def test_investigator_row_without_rank_score_is_evidence_only_not_rejected(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+    artifacts = replace(
+        _momentum_artifacts(tmp_path),
+        investigator_scores=_artifact(
+            tmp_path,
+            "evidence_only_investigator",
+            "symbol_id,exchange,final_score,trigger_reason,move_tag,close\n"
+            "DEF,NSE,60,WEEKLY_GAINER,WEEKLY_MOMENTUM,100\n",
+        ),
+    )
+
+    result = service.run(
+        run_id="evidence-only-investigator",
+        stage_attempt=1,
+        artifact_set=artifacts,
+        as_of=NOW,
+        mode=OpportunityRegistryMode.SHADOW,
+        config=OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW),
+    )
+
+    assert result.summary["investigator_evidence_only_rows"] == 1
+    assert result.summary["investigator_evidence_only_weekly_gainers"] == 1
+    assert result.summary["investigator_rank_context_fallback_rows"] == 0
+    assert not any(
+        row["source_artifact"] == "evidence_only_investigator"
+        for row in result.artifact_rows["adapter_rejections"]
+    )
+    label = next(
+        row
+        for row in result.artifact_rows["technical_evidence_labels"]
+        if row["symbol_id"] == "DEF"
+    )
+    assert label["weekly_gainer_state"] == "MET"
+    assert not any(
+        episode.symbol_id == "DEF" for episode in service.registry.list_open_episodes()
+    )
+
+
+def test_fundamental_lane_does_not_block_later_technical_episode(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+    fundamental = _artifact(
+        tmp_path,
+        "parallel_fundamental_thesis",
+        "symbol_id,exchange,primary_thesis,secondary_theses_json,evaluations_json,evidence_json,classification_status,admission_eligible,source_data_hash,statement_basis,source_report_date,source_available_at,taxonomy_version,rule_version,admission_version\n"
+        'ABC,NSE,HIGH_GROWTH_EMERGING,"[]","[]","{}",QUALIFIED,true,hash-1,consolidated,2026-03-31,2026-05-15,fundamental-discovery-taxonomy-v1,fundamental-thesis-rules-v1,fundamental-thesis-admission-v1\n',
+    )
+    fundamental_only = replace(
+        _momentum_artifacts(tmp_path), fundamental_thesis_universe=fundamental
+    )
+    service.run(
+        run_id="fundamental-only",
+        stage_attempt=1,
+        artifact_set=fundamental_only,
+        as_of=NOW,
+        mode=OpportunityRegistryMode.SHADOW,
+        config=OpportunityShadowConfig(
+            mode=OpportunityRegistryMode.SHADOW,
+            rank_admission_percentile=101,
+            rank_velocity_floor=-999,
+        ),
+    )
+    assert {
+        episode.setup_family for episode in service.registry.list_open_episodes()
+    } == {"fundamental_thesis"}
+
+    result = service.run(
+        run_id="technical-after-fundamental",
+        stage_attempt=1,
+        artifact_set=_breakout_artifacts(tmp_path),
+        as_of=NOW + timedelta(days=1),
+        mode=OpportunityRegistryMode.SHADOW,
+        config=OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW),
+    )
+
+    assert result.summary["registry_conflicts"] == 0
+    assert {
+        episode.setup_family for episode in service.registry.list_open_episodes()
+    } == {
+        "breakout",
+        "fundamental_thesis",
+    }
+
+
 def test_rejected_transition_write_never_emits_phantom_transition(
     tmp_path, monkeypatch
 ):
@@ -299,6 +385,9 @@ def test_rejected_transition_write_never_emits_phantom_transition(
         if row["check_id"] == "TRANSITION_ARTIFACT_RECONCILIATION"
     )
     assert transition_receipt["status"] == "PASS"
+    assert result.artifact_rows["registry_conflicts"][0]["reason_code"] == (
+        "REGISTRY_WRITE_REJECTED"
+    )
 
 
 def test_registry_receipt_preserves_missing_market_sessions_without_backfill(tmp_path):

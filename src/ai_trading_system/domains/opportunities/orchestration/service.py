@@ -97,6 +97,7 @@ from .contracts import (
     ClosureReason,
     EpisodeRelationType,
     INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+    INVESTIGATOR_PRIMARY_TRIGGER,
     OpportunityRegistryMode,
     OpportunityShadowConfig,
     OpportunityShadowRunResult,
@@ -260,7 +261,7 @@ class OpportunityShadowOrchestrator:
             )
             for row in raw_rank
         }
-        investigator_rank_fallback_rows = [
+        investigator_non_rank_rows = [
             row
             for row in raw_investigator
             if (
@@ -268,6 +269,14 @@ class OpportunityShadowOrchestrator:
                 str(row.get("symbol_id") or row.get("symbol") or "").upper(),
             )
             not in rank_keys
+        ]
+        investigator_rank_fallback_rows = [
+            row for row in investigator_non_rank_rows if _has_explicit_rank_score(row)
+        ]
+        investigator_evidence_only_rows = [
+            row
+            for row in investigator_non_rank_rows
+            if not _has_explicit_rank_score(row)
         ]
         investigator_rank_result = (
             adapt_ranking_rows(
@@ -534,6 +543,15 @@ class OpportunityShadowOrchestrator:
         )
         counters.update(
             {
+                "investigator_rank_context_fallback_rows": len(
+                    investigator_rank_fallback_rows
+                ),
+                "investigator_evidence_only_rows": len(investigator_evidence_only_rows),
+                "investigator_evidence_only_weekly_gainers": sum(
+                    str(row.get("trigger_reason") or "").strip().upper()
+                    == INVESTIGATOR_PRIMARY_TRIGGER
+                    for row in investigator_evidence_only_rows
+                ),
                 "technical_evidence_rows": len(technical_rows),
                 "technical_evidence_observations_created": technical_created,
                 "technical_evidence_observation_duplicates": technical_duplicates,
@@ -669,6 +687,7 @@ class OpportunityShadowOrchestrator:
                             rows,
                             bundle,
                             "position episode compatibility failed; report-only recovery proposal created",
+                            reason_code="POSITION_EPISODE_COMPATIBILITY",
                         )
                         counters["registry_conflicts"] += 1
                         continue
@@ -708,6 +727,7 @@ class OpportunityShadowOrchestrator:
                         rows,
                         bundle,
                         f"multiple open {exact_family} episodes",
+                        reason_code="MULTIPLE_OPEN_PARALLEL_LANE_EPISODES",
                     )
                     counters["registry_conflicts"] += 1
                     continue
@@ -740,7 +760,12 @@ class OpportunityShadowOrchestrator:
                     predecessor_episode = episode
                     episode = None
                 if match.outcome is SetupMatchOutcome.CONFLICT:
-                    _conflict(rows, bundle, "; ".join(match.warnings))
+                    _conflict(
+                        rows,
+                        bundle,
+                        "; ".join(match.warnings),
+                        reason_code=match.reason_code,
+                    )
                     counters["registry_conflicts"] += 1
                     continue
             else:
@@ -1149,7 +1174,12 @@ class OpportunityShadowOrchestrator:
                 _conflict(rows, bundle, str(exc), exc)
             except ValueError as exc:
                 counters["rejected_writes"] += 1
-                _conflict(rows, bundle, f"rejected write: {exc}")
+                _conflict(
+                    rows,
+                    bundle,
+                    f"rejected write: {exc}",
+                    reason_code="REGISTRY_WRITE_REJECTED",
+                )
 
         if not config.dry_run and ohlcv_db_path is not None:
             performance_outputs = mature_performance_events(
@@ -1190,6 +1220,7 @@ class OpportunityShadowOrchestrator:
             dry_run=config.dry_run,
             policy_snapshot_id=policy_snapshot_id,
             source_failure_count=source_failures,
+            adapter_rejection_count=len(rows["adapter_rejections"]),
             bundle_count=len(bundles),
             reconciliation_count=len(rows["candidate_reconciliation"]),
             conflict_count=len(rows["registry_conflicts"]),
@@ -2895,6 +2926,13 @@ def _optional_float(value: Any) -> float | None:
     return None if parsed != parsed else parsed
 
 
+def _has_explicit_rank_score(row: dict[str, Any]) -> bool:
+    return any(
+        str(row.get(field) or "").strip()
+        for field in ("composite_score", "opportunity_score", "score")
+    )
+
+
 def _descriptor(
     artifact: StageArtifact, stage: str, artifact_type: str, run_id: str, attempt: int
 ) -> SourceDescriptor:
@@ -3335,6 +3373,7 @@ def _integrity_receipt_rows(
     dry_run: bool,
     policy_snapshot_id: str | None,
     source_failure_count: int,
+    adapter_rejection_count: int,
     bundle_count: int,
     reconciliation_count: int,
     conflict_count: int,
@@ -3346,6 +3385,7 @@ def _integrity_receipt_rows(
 ) -> list[dict[str, Any]]:
     checks = [
         ("SOURCE_ARTIFACT_ROW_COUNTS", source_failure_count, 0, False),
+        ("SOURCE_ADAPTER_REJECTIONS", adapter_rejection_count, 0, False),
         (
             "SOURCE_BUNDLE_OUTCOMES",
             reconciliation_count + conflict_count,
@@ -3651,12 +3691,16 @@ def _conflict(
     bundle: OpportunitySourceBundle,
     message: str,
     exc: OpportunityRegistryConflictError | None = None,
+    *,
+    reason_code: str | None = None,
 ) -> None:
     rows["registry_conflicts"].append(
         {
             "exchange": bundle.exchange,
             "symbol_id": bundle.symbol_id,
             "message": message,
+            "reason_code": reason_code
+            or ("REGISTRY_SEMANTIC_CONFLICT" if exc else "RECONCILIATION_CONFLICT"),
             "record_type": exc.record_type if exc else "reconciliation",
             "idempotency_key": exc.idempotency_key if exc else "",
             "existing_payload_hash": exc.existing_payload_hash if exc else "",

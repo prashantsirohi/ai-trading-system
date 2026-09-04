@@ -8,6 +8,8 @@ from ai_trading_system.domains.opportunities.orchestration.contracts import (
     SetupMatchOutcome,
 )
 from ai_trading_system.domains.opportunities.orchestration.matching import (
+    INCOMPATIBLE_TECHNICAL_FAMILY,
+    MULTIPLE_COMPATIBLE_TECHNICAL,
     match_open_episode,
 )
 
@@ -54,6 +56,19 @@ def test_two_momentum_episodes_remain_conflict():
         ),
     )
     assert result.outcome is SetupMatchOutcome.CONFLICT
+    assert result.reason_code == INCOMPATIBLE_TECHNICAL_FAMILY
+
+
+def test_multiple_progression_compatible_episodes_remain_conflict():
+    result = _match(
+        SetupFamily.BREAKOUT,
+        (
+            _episode("early", SetupFamily.EARLY_ACCUMULATION),
+            _episode("base", SetupFamily.BASE_BUILDING),
+        ),
+    )
+    assert result.outcome is SetupMatchOutcome.CONFLICT
+    assert result.reason_code == MULTIPLE_COMPATIBLE_TECHNICAL
 
 
 def test_progression_precedes_momentum_supersession():
@@ -74,13 +89,39 @@ def test_non_breakout_cannot_supersede_momentum():
         (_episode("momentum", SetupFamily.MOMENTUM_LEADER),),
     )
     assert result.outcome is SetupMatchOutcome.CONFLICT
+    assert result.reason_code == INCOMPATIBLE_TECHNICAL_FAMILY
+
+
+def test_parallel_fundamental_and_investigator_lanes_do_not_block_technical_lane():
+    parallel = (
+        _episode("fundamental", SetupFamily.FUNDAMENTAL_THESIS),
+        _episode("investigator", SetupFamily.INVESTIGATOR_PRIMARY),
+    )
+    assert (
+        _match(SetupFamily.BREAKOUT, parallel).outcome is SetupMatchOutcome.NEW_EPISODE
+    )
+
+
+def test_parallel_lane_is_ignored_while_technical_progression_is_matched():
+    result = _match(
+        SetupFamily.BREAKOUT,
+        (
+            _episode("fundamental", SetupFamily.FUNDAMENTAL_THESIS),
+            _episode("base", SetupFamily.BASE_BUILDING),
+        ),
+    )
+    assert result.outcome is SetupMatchOutcome.PROGRESSION
+    assert result.candidate_id == "base"
 
 
 def test_exact_multi_exact_and_new_episode_regressions():
     exact = _episode("exact", SetupFamily.BREAKOUT)
     assert _match(SetupFamily.BREAKOUT, (exact,)).outcome is SetupMatchOutcome.EXACT
-    assert _match(
-        SetupFamily.BREAKOUT,
-        (exact, _episode("exact-2", SetupFamily.BREAKOUT)),
-    ).outcome is SetupMatchOutcome.CONFLICT
+    assert (
+        _match(
+            SetupFamily.BREAKOUT,
+            (exact, _episode("exact-2", SetupFamily.BREAKOUT)),
+        ).outcome
+        is SetupMatchOutcome.CONFLICT
+    )
     assert _match(SetupFamily.BREAKOUT, ()).outcome is SetupMatchOutcome.NEW_EPISODE
