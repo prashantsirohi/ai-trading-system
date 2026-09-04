@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-08-30
+- **Last verified:** 2026-09-04
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -129,6 +129,9 @@ Writes under `data/pipeline_runs/<run_id>/opportunities/attempt_<n>/`:
 - `position_monitor_reconciliation.csv`
 - `technical_evidence_labels.csv` — one row per exchange/symbol/session with independent fundamental, Investigator weekly-gainer, near-high, SMA20, entry-confirmation, and SMA20-break label states plus the shared observation ID
 - `technical_evidence_cohorts.csv` — deduplicated matured 5/10/20/60-session next-open return summaries for fundamental-only, technical-only, and intersection cohorts
+- `opportunity_source_reconciliation.csv` — one row per configured CSV input with declared/read row counts, hashes, lineage, and an explicit reconciliation state
+- `opportunity_integrity_receipt.csv` — run-level exact-count checks for source rows, bundle outcomes, snapshot deltas, and transition artifact/registry deltas
+- `opportunity_registry_freshness.csv` — current-run/current-session snapshot evidence plus explicit missing canonical market sessions; it never backfills a gap
 
 Authority:
 
@@ -136,6 +139,7 @@ Authority:
 - canonical episode history in `control_plane.duckdb` remains authoritative
 - the two technical-evidence CSVs are optional presentation-only inputs to the Google Sheets shadow tabs; they are not ranking, candidate, admission, lifecycle, or execution inputs
 - all other opportunity files are not execution or publish inputs
+- integrity and freshness failures feed the existing readiness evidence only; they do not authorize or suppress orders
 
 See [`docs/stages/opportunities.md`](../stages/opportunities.md).
 

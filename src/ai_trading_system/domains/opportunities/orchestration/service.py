@@ -407,6 +407,11 @@ class OpportunityShadowOrchestrator:
             cutoff=as_of.date(),
             exchanges={bundle.exchange for bundle in bundles},
         )
+        registry_before = _registry_integrity_state(
+            self.registry_store.registry,
+            run_id=run_id,
+            observed_session=observed_session,
+        )
         bundles = _attach_session_prices(
             bundles, ohlcv_db_path=ohlcv_db_path, session_date=observed_session
         )
@@ -455,8 +460,33 @@ class OpportunityShadowOrchestrator:
                 "candidate_fundamental_observations",
                 "technical_evidence_labels",
                 "technical_evidence_cohorts",
+                "opportunity_source_reconciliation",
+                "opportunity_integrity_receipt",
+                "opportunity_registry_freshness",
             )
         }
+        rows["opportunity_source_reconciliation"].extend(
+            _source_reconciliation_rows(
+                artifacts=artifacts,
+                source_rows={
+                    "ranked_signals": raw_rank,
+                    "investigator_scores": raw_investigator,
+                    "routed_investigator_scores": raw_routed_investigator,
+                    "breakout_scan": raw_breakout,
+                    "pattern_scan": raw_pattern,
+                    "supplemental_pattern_scan": raw_supplemental_pattern,
+                    "stock_scan": raw_stock,
+                    "sector_dashboard": raw_sector,
+                    "supplemental_sector_dashboard": raw_supplemental_sector,
+                    "lifecycle_state": raw_lifecycle,
+                    "scan_routing": raw_routing,
+                    "market_context": _dashboard_payload_row_count(raw_market_context),
+                    "fundamental_thesis_universe": raw_fundamental,
+                },
+                run_id=run_id,
+                policy_snapshot_id=policy_snapshot_id,
+            )
+        )
         for result in results:
             rows["adapter_warnings"].extend(asdict(item) for item in result.warnings)
             rows["adapter_rejections"].extend(
@@ -940,18 +970,21 @@ class OpportunityShadowOrchestrator:
                 captured_context[(bundle.exchange, bundle.symbol_id)] = (
                     snapshot.investigator_context
                 )
+            transition_artifact_row = (
+                {
+                    "candidate_id": episode.candidate_id,
+                    "from_state": previous_state.value,
+                    "to_state": lifecycle_state.value,
+                    "reason": transition.transition_reason.value,
+                    "rule_version": transition.rule_version,
+                    "run_id": run_id,
+                    "observed_session": observed_session.isoformat(),
+                    **_sector_gate_artifact_fields(bundle.sector_gate),
+                }
+                if transition.allowed
+                else None
+            )
             try:
-                if transition.allowed:
-                    rows["candidate_transitions"].append(
-                        {
-                            "candidate_id": episode.candidate_id,
-                            "from_state": previous_state.value,
-                            "to_state": lifecycle_state.value,
-                            "reason": transition.transition_reason.value,
-                            "rule_version": transition.rule_version,
-                            **_sector_gate_artifact_fields(bundle.sector_gate),
-                        }
-                    )
                 retention = evaluate_retention(
                     state=lifecycle_state,
                     days_in_state=days_in_state,
@@ -1014,6 +1047,15 @@ class OpportunityShadowOrchestrator:
                         )
                     )
                     _count_append_results(counters, write_result.append_results)
+                    if transition_artifact_row is not None and _append_created(
+                        write_result.append_results, "transition_"
+                    ):
+                        rows["candidate_transitions"].append(
+                            {
+                                **transition_artifact_row,
+                                "persistence_status": "CREATED",
+                            }
+                        )
                     if bundle.fundamental_thesis is not None:
                         observation = _persist_fundamental_observation(
                             self.registry_store.registry,
@@ -1024,6 +1066,13 @@ class OpportunityShadowOrchestrator:
                             policy_snapshot_id=policy_snapshot_id,
                         )
                         rows["candidate_fundamental_observations"].append(observation)
+                elif transition_artifact_row is not None:
+                    rows["candidate_transitions"].append(
+                        {
+                            **transition_artifact_row,
+                            "persistence_status": "PREVIEW",
+                        }
+                    )
                 rows["candidate_updates"].append(
                     {
                         "candidate_id": episode.candidate_id,
@@ -1121,8 +1170,93 @@ class OpportunityShadowOrchestrator:
         )
         rows["investigator_primary_sampling"].extend(sampling_rows)
         rows["investigator_source_fidelity"].extend(fidelity_rows)
+        registry_after = _registry_integrity_state(
+            self.registry_store.registry,
+            run_id=run_id,
+            observed_session=observed_session,
+        )
+        missing_registry_sessions, continuity_status = _missing_registry_sessions(
+            registry=self.registry_store.registry,
+            ohlcv_db_path=ohlcv_db_path,
+            previous_registry_session=registry_before["previous_registry_session"],
+            observed_session=observed_session,
+            exchanges={bundle.exchange for bundle in bundles},
+        )
+        source_failures = sum(
+            row["status"] == "FAIL" for row in rows["opportunity_source_reconciliation"]
+        )
+        integrity_rows = _integrity_receipt_rows(
+            run_id=run_id,
+            dry_run=config.dry_run,
+            policy_snapshot_id=policy_snapshot_id,
+            source_failure_count=source_failures,
+            bundle_count=len(bundles),
+            reconciliation_count=len(rows["candidate_reconciliation"]),
+            conflict_count=len(rows["registry_conflicts"]),
+            complete_update_count=sum(
+                bool(row.get("snapshot_complete")) for row in rows["candidate_updates"]
+            ),
+            transition_artifact_count=len(rows["candidate_transitions"]),
+            counters=counters,
+            registry_before=registry_before,
+            registry_after=registry_after,
+        )
+        rows["opportunity_integrity_receipt"].extend(integrity_rows)
+        integrity_status = (
+            "FAIL" if any(row["status"] == "FAIL" for row in integrity_rows) else "PASS"
+        )
+        freshness_status = _freshness_status(
+            dry_run=config.dry_run,
+            observed_session=observed_session,
+            registry_after=registry_after,
+        )
+        freshness_row = {
+            "run_id": run_id,
+            "decision_date": as_of.date().isoformat(),
+            "observed_session": observed_session.isoformat(),
+            "previous_registry_session": _date_text(
+                registry_before["previous_registry_session"]
+            ),
+            "latest_registry_session": _date_text(
+                registry_after["latest_registry_session"]
+            ),
+            "current_run_snapshot_count": registry_after["run_snapshot_count"],
+            "current_run_transition_count": registry_after["run_transition_count"],
+            "current_run_session_snapshot_count": registry_after[
+                "run_current_session_snapshot_count"
+            ],
+            "current_run_session_transition_count": registry_after[
+                "run_current_session_transition_count"
+            ],
+            "current_session_snapshot_count": registry_after[
+                "current_session_snapshot_count"
+            ],
+            "current_session_transition_count": registry_after[
+                "current_session_transition_count"
+            ],
+            "missing_sessions": json.dumps(missing_registry_sessions),
+            "missing_session_count": len(missing_registry_sessions),
+            "freshness_status": freshness_status,
+            "continuity_status": continuity_status,
+            "status": (
+                "FAIL"
+                if freshness_status == "FAIL"
+                else "DEGRADED"
+                if continuity_status == "FAIL"
+                else freshness_status
+            ),
+            "policy_snapshot_id": policy_snapshot_id,
+        }
+        rows["opportunity_registry_freshness"].append(freshness_row)
         rows["investigator_readiness_inputs"].extend(
-            _runtime_readiness_inputs(sampling_rows, fidelity_rows)
+            _runtime_readiness_inputs(
+                sampling_rows,
+                fidelity_rows,
+                integrity_status=integrity_status,
+                freshness_status=freshness_status,
+                continuity_status=continuity_status,
+                policy_snapshot_id=policy_snapshot_id,
+            )
         )
         if not config.dry_run:
             for state in self.registry.query_current_states():
@@ -1140,9 +1274,27 @@ class OpportunityShadowOrchestrator:
                 "mode": mode.value,
                 "status": (
                     "degraded"
-                    if rows["registry_conflicts"] or rows["adapter_rejections"]
+                    if (
+                        rows["registry_conflicts"]
+                        or rows["adapter_rejections"]
+                        or integrity_status == "FAIL"
+                        or freshness_status == "FAIL"
+                        or continuity_status == "FAIL"
+                    )
                     else "completed"
                 ),
+                "opportunity_integrity_status": integrity_status,
+                "opportunity_registry_freshness_status": freshness_status,
+                "opportunity_registry_continuity_status": continuity_status,
+                "previous_registry_session": _date_text(
+                    registry_before["previous_registry_session"]
+                ),
+                "current_registry_session": _date_text(
+                    registry_after["latest_registry_session"]
+                ),
+                "missing_registry_sessions": missing_registry_sessions,
+                "missing_registry_session_count": len(missing_registry_sessions),
+                "source_reconciliation_failures": source_failures,
                 "unmatched_sector_mappings": sum(
                     item.sector_stage is None for item in bundles
                 ),
@@ -1206,6 +1358,10 @@ class OpportunityShadowOrchestrator:
                 "investigator_source_fidelity_pct": fidelity_rows[0]["fidelity_pct"],
             }
         )
+        counters["artifact_row_counts"] = {
+            artifact_type: len(artifact_rows)
+            for artifact_type, artifact_rows in sorted(rows.items())
+        }
         return OpportunityShadowRunResult(
             counters["status"],
             config.dry_run,
@@ -1411,6 +1567,13 @@ def _count_append_results(counters: dict[str, Any], results: Iterable[Any]) -> N
             if result.created and result.record_id.startswith(prefix):
                 counters[counter] += 1
                 break
+
+
+def _append_created(results: Iterable[Any], prefix: str) -> bool:
+    return any(
+        bool(result.created) and str(result.record_id).startswith(prefix)
+        for result in results
+    )
 
 
 def _stage_distribution(values: Iterable[str]) -> dict[str, int]:
@@ -2949,6 +3112,336 @@ def _artifact_receipt_status(
     return "SUCCESS_ROWS" if rows else "SUCCESS_ZERO_ROWS"
 
 
+def _source_reconciliation_rows(
+    *,
+    artifacts: OpportunityArtifactSet,
+    source_rows: dict[str, list[dict[str, Any]] | int],
+    run_id: str,
+    policy_snapshot_id: str | None,
+) -> list[dict[str, Any]]:
+    source_stages = {
+        "ranked_signals": "rank",
+        "investigator_scores": "investigator",
+        "routed_investigator_scores": "investigator",
+        "breakout_scan": "rank",
+        "pattern_scan": "rank",
+        "supplemental_pattern_scan": "investigator",
+        "stock_scan": "weekly_stage_or_rank",
+        "sector_dashboard": "weekly_stage_or_rank",
+        "supplemental_sector_dashboard": "rank",
+        "lifecycle_state": "investigator",
+        "scan_routing": "scan_router",
+        "market_context": "rank",
+        "fundamental_thesis_universe": "fundamental_discovery",
+    }
+    receipt_rows: list[dict[str, Any]] = []
+    for field_name, source_stage in source_stages.items():
+        artifact = getattr(artifacts, field_name)
+        source_value = source_rows[field_name]
+        rows_read = source_value if isinstance(source_value, int) else len(source_value)
+        required = field_name == "ranked_signals"
+        declared = artifact.row_count if artifact is not None else None
+        if artifact is None:
+            status = "FAIL" if required else "NOT_APPLICABLE"
+            reason = (
+                "required_artifact_missing" if required else "optional_artifact_absent"
+            )
+        elif declared is None:
+            status = "NOT_EVALUATED"
+            reason = "declared_row_count_unavailable"
+        elif int(declared) != rows_read:
+            status = "FAIL"
+            reason = "declared_row_count_mismatch"
+        else:
+            status = "PASS"
+            reason = "exact_row_count_match"
+        receipt_rows.append(
+            {
+                "run_id": run_id,
+                "source_stage": source_stage,
+                "artifact_type": (
+                    artifact.artifact_type if artifact is not None else field_name
+                ),
+                "required": required,
+                "artifact_status": "PRESENT" if artifact is not None else "MISSING",
+                "declared_row_count": declared,
+                "rows_read": rows_read,
+                "delta": rows_read - int(declared) if declared is not None else None,
+                "status": status,
+                "reason": reason,
+                "content_hash": artifact.content_hash if artifact is not None else None,
+                "producing_run_id": (
+                    artifact.metadata.get("run_id") if artifact is not None else None
+                ),
+                "producing_attempt": (
+                    artifact.attempt_number if artifact is not None else None
+                ),
+                "policy_snapshot_id": policy_snapshot_id,
+            }
+        )
+    return receipt_rows
+
+
+def _dashboard_payload_row_count(payload: dict[str, Any]) -> int:
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        return 0
+    try:
+        return int(summary.get("ranked_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _registry_integrity_state(
+    registry: RegistryStore,
+    *,
+    run_id: str,
+    observed_session: date,
+) -> dict[str, Any]:
+    with registry._reader() as conn:  # noqa: SLF001
+        run_snapshot_count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM candidate_snapshot WHERE run_id = ?", [run_id]
+            ).fetchone()[0]
+        )
+        run_transition_count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM candidate_transition WHERE run_id = ?", [run_id]
+            ).fetchone()[0]
+        )
+        session_expression = "COALESCE(te.observed_session, CAST(s.as_of AS DATE))"
+        current_session_snapshot_count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM candidate_snapshot s "
+                "LEFT JOIN symbol_technical_evidence_observation te "
+                "ON te.technical_evidence_observation_id = "
+                "s.technical_evidence_observation_id "
+                f"WHERE {session_expression} = ?",  # noqa: S608
+                [observed_session],
+            ).fetchone()[0]
+        )
+        run_current_session_snapshot_count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM candidate_snapshot s "
+                "LEFT JOIN symbol_technical_evidence_observation te "
+                "ON te.technical_evidence_observation_id = "
+                "s.technical_evidence_observation_id "
+                f"WHERE s.run_id = ? AND {session_expression} = ?",  # noqa: S608
+                [run_id, observed_session],
+            ).fetchone()[0]
+        )
+        current_session_transition_count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM candidate_transition t "
+                "JOIN candidate_snapshot s "
+                "ON s.snapshot_id = t.triggering_snapshot_id "
+                "LEFT JOIN symbol_technical_evidence_observation te "
+                "ON te.technical_evidence_observation_id = "
+                "s.technical_evidence_observation_id "
+                f"WHERE {session_expression} = ?",  # noqa: S608
+                [observed_session],
+            ).fetchone()[0]
+        )
+        run_current_session_transition_count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM candidate_transition t "
+                "JOIN candidate_snapshot s "
+                "ON s.snapshot_id = t.triggering_snapshot_id "
+                "LEFT JOIN symbol_technical_evidence_observation te "
+                "ON te.technical_evidence_observation_id = "
+                "s.technical_evidence_observation_id "
+                f"WHERE t.run_id = ? AND {session_expression} = ?",  # noqa: S608
+                [run_id, observed_session],
+            ).fetchone()[0]
+        )
+        latest_registry_session = conn.execute(
+            "SELECT MAX("
+            f"{session_expression}"  # noqa: S608
+            ") FROM candidate_snapshot s "
+            "LEFT JOIN symbol_technical_evidence_observation te "
+            "ON te.technical_evidence_observation_id = "
+            "s.technical_evidence_observation_id"
+        ).fetchone()[0]
+        previous_registry_session = conn.execute(
+            "SELECT MAX(registry_session) FROM (SELECT "
+            f"{session_expression} AS registry_session "  # noqa: S608
+            "FROM candidate_snapshot s "
+            "LEFT JOIN symbol_technical_evidence_observation te "
+            "ON te.technical_evidence_observation_id = "
+            "s.technical_evidence_observation_id) sessions "
+            "WHERE registry_session < ?",
+            [observed_session],
+        ).fetchone()[0]
+    return {
+        "run_snapshot_count": run_snapshot_count,
+        "run_transition_count": run_transition_count,
+        "current_session_snapshot_count": current_session_snapshot_count,
+        "run_current_session_snapshot_count": run_current_session_snapshot_count,
+        "current_session_transition_count": current_session_transition_count,
+        "run_current_session_transition_count": run_current_session_transition_count,
+        "latest_registry_session": latest_registry_session,
+        "previous_registry_session": previous_registry_session,
+    }
+
+
+def _missing_registry_sessions(
+    *,
+    registry: RegistryStore,
+    ohlcv_db_path: Path | None,
+    previous_registry_session: date | None,
+    observed_session: date,
+    exchanges: set[str],
+) -> tuple[list[str], str]:
+    if ohlcv_db_path is None or previous_registry_session is None:
+        return [], "NOT_EVALUATED"
+    normalized = sorted({exchange.upper() for exchange in exchanges if exchange})
+    if not normalized:
+        return [], "NOT_EVALUATED"
+    placeholders = ", ".join("?" for _ in normalized)
+    try:
+        with duckdb.connect(str(ohlcv_db_path), read_only=True) as conn:
+            market_rows = conn.execute(
+                "SELECT DISTINCT CAST(timestamp AS DATE) AS market_session "
+                "FROM _catalog "
+                f"WHERE UPPER(exchange) IN ({placeholders}) "  # noqa: S608
+                "AND CAST(timestamp AS DATE) > ? "
+                "AND CAST(timestamp AS DATE) <= ? "
+                "ORDER BY market_session",
+                [*normalized, previous_registry_session, observed_session],
+            ).fetchall()
+    except (duckdb.Error, OSError):
+        return [], "NOT_EVALUATED"
+    with registry._reader() as conn:  # noqa: SLF001
+        registry_rows = conn.execute(
+            "SELECT DISTINCT COALESCE(te.observed_session, CAST(s.as_of AS DATE)) "
+            "FROM candidate_snapshot s "
+            "LEFT JOIN symbol_technical_evidence_observation te "
+            "ON te.technical_evidence_observation_id = "
+            "s.technical_evidence_observation_id "
+            "WHERE COALESCE(te.observed_session, CAST(s.as_of AS DATE)) > ? "
+            "AND COALESCE(te.observed_session, CAST(s.as_of AS DATE)) <= ?",
+            [previous_registry_session, observed_session],
+        ).fetchall()
+    registry_sessions = {row[0] for row in registry_rows}
+    missing = [
+        row[0].isoformat() for row in market_rows if row[0] not in registry_sessions
+    ]
+    return missing, "FAIL" if missing else "PASS"
+
+
+def _integrity_receipt_rows(
+    *,
+    run_id: str,
+    dry_run: bool,
+    policy_snapshot_id: str | None,
+    source_failure_count: int,
+    bundle_count: int,
+    reconciliation_count: int,
+    conflict_count: int,
+    complete_update_count: int,
+    transition_artifact_count: int,
+    counters: dict[str, Any],
+    registry_before: dict[str, Any],
+    registry_after: dict[str, Any],
+) -> list[dict[str, Any]]:
+    checks = [
+        ("SOURCE_ARTIFACT_ROW_COUNTS", source_failure_count, 0, False),
+        (
+            "SOURCE_BUNDLE_OUTCOMES",
+            reconciliation_count + conflict_count,
+            bundle_count,
+            False,
+        ),
+    ]
+    if dry_run:
+        checks.extend(
+            [
+                ("SNAPSHOT_ARTIFACT_RECONCILIATION", None, None, True),
+                ("SNAPSHOT_REGISTRY_DELTA", None, None, True),
+                ("TRANSITION_ARTIFACT_RECONCILIATION", None, None, True),
+                ("TRANSITION_REGISTRY_DELTA", None, None, True),
+            ]
+        )
+    else:
+        checks.extend(
+            [
+                (
+                    "SNAPSHOT_ARTIFACT_RECONCILIATION",
+                    complete_update_count,
+                    counters["snapshots_created"] + counters["duplicate_snapshots"],
+                    False,
+                ),
+                (
+                    "SNAPSHOT_REGISTRY_DELTA",
+                    registry_after["run_snapshot_count"]
+                    - registry_before["run_snapshot_count"],
+                    counters["snapshots_created"],
+                    False,
+                ),
+                (
+                    "TRANSITION_ARTIFACT_RECONCILIATION",
+                    transition_artifact_count,
+                    counters["transitions_created"],
+                    False,
+                ),
+                (
+                    "TRANSITION_REGISTRY_DELTA",
+                    registry_after["run_transition_count"]
+                    - registry_before["run_transition_count"],
+                    counters["transitions_created"],
+                    False,
+                ),
+            ]
+        )
+    result: list[dict[str, Any]] = []
+    for check_id, observed, expected, not_applicable in checks:
+        result.append(
+            {
+                "run_id": run_id,
+                "check_id": check_id,
+                "category": "opportunity_integrity",
+                "status": (
+                    "NOT_APPLICABLE"
+                    if not_applicable
+                    else "PASS"
+                    if observed == expected
+                    else "FAIL"
+                ),
+                "observed": observed,
+                "expected": expected,
+                "delta": (
+                    observed - expected
+                    if isinstance(observed, int) and isinstance(expected, int)
+                    else None
+                ),
+                "production_blocking": True,
+                "policy_version": INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+                "policy_snapshot_id": policy_snapshot_id,
+            }
+        )
+    return result
+
+
+def _freshness_status(
+    *,
+    dry_run: bool,
+    observed_session: date,
+    registry_after: dict[str, Any],
+) -> str:
+    if dry_run:
+        return "NOT_APPLICABLE"
+    if (
+        registry_after["current_session_snapshot_count"] > 0
+        and registry_after["latest_registry_session"] == observed_session
+    ):
+        return "PASS"
+    return "FAIL"
+
+
+def _date_text(value: Any) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
 def _primary_sampling_evidence(
     *,
     authoritative_context: dict[tuple[str, str], Any],
@@ -3048,6 +3541,11 @@ def _primary_sampling_evidence(
 def _runtime_readiness_inputs(
     sampling_rows: list[dict[str, Any]],
     fidelity_rows: list[dict[str, Any]],
+    *,
+    integrity_status: str,
+    freshness_status: str,
+    continuity_status: str,
+    policy_snapshot_id: str | None,
 ) -> list[dict[str, Any]]:
     sampling = sampling_rows[0]
     fidelity = fidelity_rows[0]
@@ -3069,6 +3567,36 @@ def _runtime_readiness_inputs(
             "expected": ">=100.0",
             "production_blocking": True,
             "policy_version": fidelity["policy_version"],
+        },
+        {
+            "check_id": "OPPORTUNITY_INTEGRITY",
+            "category": "opportunity_integrity",
+            "status": integrity_status,
+            "observed": integrity_status,
+            "expected": "PASS",
+            "production_blocking": True,
+            "policy_version": INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+            "policy_snapshot_id": policy_snapshot_id,
+        },
+        {
+            "check_id": "OPPORTUNITY_REGISTRY_CURRENT_SESSION",
+            "category": "opportunity_integrity",
+            "status": freshness_status,
+            "observed": freshness_status,
+            "expected": "PASS",
+            "production_blocking": True,
+            "policy_version": INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+            "policy_snapshot_id": policy_snapshot_id,
+        },
+        {
+            "check_id": "OPPORTUNITY_REGISTRY_SESSION_CONTINUITY",
+            "category": "opportunity_integrity",
+            "status": continuity_status,
+            "observed": continuity_status,
+            "expected": "PASS",
+            "production_blocking": True,
+            "policy_version": INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
+            "policy_snapshot_id": policy_snapshot_id,
         },
     ]
 

@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 
+import duckdb
 import pandas as pd
 
 from ai_trading_system.domains.opportunities.contracts import (
@@ -141,6 +142,19 @@ def test_shadow_service_writes_and_replay_is_idempotent(tmp_path):
     assert second.summary["registry_duplicates"] == 1
     assert first.summary["breakout_scan_receipt_status"] == "SUCCESS_ROWS"
     assert first.summary["pattern_scan_receipt_status"] == "SUCCESS_ROWS"
+    assert first.summary["opportunity_integrity_status"] == "PASS"
+    assert first.summary["opportunity_registry_freshness_status"] == "PASS"
+    assert (
+        len(first.artifact_rows["candidate_transitions"])
+        == first.summary["transitions_created"]
+    )
+    assert all(
+        row["status"] == "PASS"
+        for row in first.artifact_rows["opportunity_integrity_receipt"]
+    )
+    first_freshness = first.artifact_rows["opportunity_registry_freshness"][0]
+    assert first_freshness["current_run_session_transition_count"] == 1
+    assert first_freshness["current_session_transition_count"] == 1
     assert len(service.registry.list_open_episodes()) == 1
     with registry._connect(read_only=True) as conn:  # noqa: SLF001
         assert (
@@ -164,6 +178,204 @@ def test_shadow_service_writes_and_replay_is_idempotent(tmp_path):
     assert context["context_as_of"] == "2026-07-14T00:00:00+00:00"
     assert context["pattern_events"][0]["family"] == "VCP"
     assert context["breakout_events"][0]["tier"] == "A"
+
+
+def test_registry_freshness_is_session_scoped_across_distinct_runs(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+    config = OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW)
+    artifacts = _artifacts(tmp_path)
+    service.run(
+        run_id="same-session-1",
+        stage_attempt=1,
+        artifact_set=artifacts,
+        as_of=NOW,
+        mode=config.mode,
+        config=config,
+    )
+
+    result = service.run(
+        run_id="same-session-2",
+        stage_attempt=1,
+        artifact_set=artifacts,
+        as_of=NOW,
+        mode=config.mode,
+        config=config,
+    )
+
+    freshness = result.artifact_rows["opportunity_registry_freshness"][0]
+    assert freshness["freshness_status"] == "PASS"
+    assert freshness["current_run_session_snapshot_count"] == 1
+    assert freshness["current_session_snapshot_count"] == 2
+
+
+def test_source_row_count_mismatch_degrades_integrity_receipt(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+    artifacts = _artifacts(tmp_path)
+    artifacts = replace(
+        artifacts,
+        ranked_signals=replace(artifacts.ranked_signals, row_count=2),
+    )
+
+    result = service.run(
+        run_id="row-count-mismatch",
+        stage_attempt=1,
+        artifact_set=artifacts,
+        as_of=NOW,
+        mode=OpportunityRegistryMode.SHADOW,
+        config=OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW),
+    )
+
+    ranked_receipt = next(
+        row
+        for row in result.artifact_rows["opportunity_source_reconciliation"]
+        if row["artifact_type"] == "ranked_signals"
+    )
+    assert ranked_receipt["status"] == "FAIL"
+    assert ranked_receipt["declared_row_count"] == 2
+    assert ranked_receipt["rows_read"] == 1
+    assert result.summary["opportunity_integrity_status"] == "FAIL"
+    assert result.status == "degraded"
+
+
+def test_dashboard_payload_reconciles_its_declared_ranked_count(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+    dashboard_path = tmp_path / "dashboard_payload.json"
+    dashboard_path.write_text(
+        json.dumps({"summary": {"ranked_count": 2}}), encoding="utf-8"
+    )
+    artifacts = replace(
+        _artifacts(tmp_path),
+        market_context=StageArtifact.from_file(
+            "dashboard_payload", dashboard_path, row_count=2, attempt_number=1
+        ),
+    )
+
+    result = service.run(
+        run_id="dashboard-row-count",
+        stage_attempt=1,
+        artifact_set=artifacts,
+        as_of=NOW,
+        mode=OpportunityRegistryMode.SHADOW,
+        config=OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW),
+    )
+
+    receipt = next(
+        row
+        for row in result.artifact_rows["opportunity_source_reconciliation"]
+        if row["artifact_type"] == "dashboard_payload"
+    )
+    assert receipt["status"] == "PASS"
+    assert receipt["declared_row_count"] == receipt["rows_read"] == 2
+
+
+def test_rejected_transition_write_never_emits_phantom_transition(
+    tmp_path, monkeypatch
+):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+
+    def reject_bundle(_bundle):
+        raise ValueError("forced registry rejection")
+
+    monkeypatch.setattr(service.registry, "apply_orchestration_bundle", reject_bundle)
+    result = service.run(
+        run_id="rejected-transition",
+        stage_attempt=1,
+        artifact_set=_artifacts(tmp_path),
+        as_of=NOW,
+        mode=OpportunityRegistryMode.SHADOW,
+        config=OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW),
+    )
+
+    assert result.summary["rejected_writes"] == 1
+    assert result.summary["transitions_created"] == 0
+    assert result.artifact_rows["candidate_transitions"] == ()
+    transition_receipt = next(
+        row
+        for row in result.artifact_rows["opportunity_integrity_receipt"]
+        if row["check_id"] == "TRANSITION_ARTIFACT_RECONCILIATION"
+    )
+    assert transition_receipt["status"] == "PASS"
+
+
+def test_registry_receipt_preserves_missing_market_sessions_without_backfill(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    market_db = tmp_path / "ohlcv.duckdb"
+    with duckdb.connect(str(market_db)) as conn:
+        conn.execute(
+            "CREATE TABLE _catalog ("
+            "exchange VARCHAR, symbol_id VARCHAR, timestamp TIMESTAMP, "
+            "adjusted_close DOUBLE, open DOUBLE, high DOUBLE, low DOUBLE, "
+            "close DOUBLE, is_benchmark BOOLEAN)"
+        )
+        conn.executemany(
+            "INSERT INTO _catalog VALUES (?, ?, ?, ?, ?, ?, ?, ?, FALSE)",
+            [
+                ("NSE", "ABC", "2026-07-14 15:30:00", 100.0, 99.0, 101.0, 98.0, 100.0),
+                ("NSE", "ABC", "2026-07-15 15:30:00", 101.0, 100.0, 102.0, 99.0, 101.0),
+                (
+                    "NSE",
+                    "ABC",
+                    "2026-07-16 15:30:00",
+                    102.0,
+                    101.0,
+                    103.0,
+                    100.0,
+                    102.0,
+                ),
+                (
+                    "NSE",
+                    "ABC",
+                    "2026-07-17 15:30:00",
+                    103.0,
+                    102.0,
+                    104.0,
+                    101.0,
+                    103.0,
+                ),
+            ],
+        )
+    service = OpportunityShadowOrchestrator(registry)
+    config = OpportunityShadowConfig(mode=OpportunityRegistryMode.SHADOW)
+    service.run(
+        run_id="session-14",
+        stage_attempt=1,
+        artifact_set=_artifacts(tmp_path),
+        as_of=NOW,
+        mode=config.mode,
+        config=config,
+        ohlcv_db_path=market_db,
+    )
+
+    result = service.run(
+        run_id="session-17",
+        stage_attempt=1,
+        artifact_set=_artifacts(tmp_path),
+        as_of=NOW + timedelta(days=3),
+        mode=config.mode,
+        config=config,
+        ohlcv_db_path=market_db,
+    )
+
+    freshness = result.artifact_rows["opportunity_registry_freshness"][0]
+    assert freshness["freshness_status"] == "PASS"
+    assert freshness["continuity_status"] == "FAIL"
+    assert json.loads(freshness["missing_sessions"]) == [
+        "2026-07-15",
+        "2026-07-16",
+    ]
+    assert result.status == "degraded"
+    with registry._reader() as conn:  # noqa: SLF001
+        sessions = conn.execute(
+            "SELECT DISTINCT CAST(as_of AS DATE) FROM candidate_snapshot ORDER BY 1"
+        ).fetchall()
+    assert sessions == [
+        (NOW.date(),),
+        ((NOW + timedelta(days=3)).date(),),
+    ]
 
 
 def test_shadow_service_uses_investigator_sector_and_fractional_percentile(tmp_path):

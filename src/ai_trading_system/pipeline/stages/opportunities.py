@@ -224,6 +224,9 @@ class OpportunityStage:
             "candidate_fundamental_observations": "candidate_fundamental_observations.csv",
             "technical_evidence_labels": "technical_evidence_labels.csv",
             "technical_evidence_cohorts": "technical_evidence_cohorts.csv",
+            "opportunity_source_reconciliation": "opportunity_source_reconciliation.csv",
+            "opportunity_integrity_receipt": "opportunity_integrity_receipt.csv",
+            "opportunity_registry_freshness": "opportunity_registry_freshness.csv",
         }
         for artifact_type, filename in filenames.items():
             rows = [dict(row) for row in result.artifact_rows.get(artifact_type, ())]

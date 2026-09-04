@@ -2,7 +2,7 @@
 
 - **Purpose:** Define the non-authoritative Phase 3A adapter, admission, lifecycle, retention, and registry-write workflow.
 - **Audience:** Engineers operating or changing canonical opportunity reconciliation.
-- **Last verified:** 2026-08-02
+- **Last verified:** 2026-09-04
 - **Source of truth:** `src/ai_trading_system/domains/opportunities/adapters/`, `src/ai_trading_system/domains/opportunities/orchestration/`, and `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
@@ -64,6 +64,19 @@ Progress uses only comparable values. Two positives mean improving, two negative
 
 Lineage combines normalized source hashes and registered paths. An exact same-run replay is reported as a registry duplicate and writes no new history. Semantic-key conflicts remain explicit audit rows. Missing optional sources, unavailable sector stage, provisional-only stage, ambiguous lifecycle values, and incomplete evidence are warnings.
 
+The attempt also emits enforceable integrity receipts. Declared upstream CSV row
+counts must match rows read when a declaration is available, every reconciled
+source bundle must end in either a reconciliation or conflict row, and registry
+snapshot/transition deltas must equal the append results reported by the atomic
+write. A transition audit row is emitted only after its registry transition is
+created; dry run marks the planned row `PREVIEW`. Registry freshness requires a
+canonical snapshot for the resolved OHLCV session and separately reports the
+current run's snapshot and transition counts. Continuity compares
+market sessions since the preceding canonical snapshot session and lists gaps
+without writing replacement history. A failed check degrades the opportunity
+task and becomes a production-blocking input to the existing readiness evidence;
+it does not block the main pipeline or affect execution.
+
 Position-recovery proposal hashes cover the recovery assessment but exclude `created_run_id`, `source_lineage`, and the hash field itself. Those fields remain stored audit provenance. This keeps an unchanged deterministic proposal replay-safe across observing runs. If only compatibility status, open-episode IDs, or conflict reasons change, the orchestrator appends a deterministic assessment revision under the same position cycle instead of rewriting the earlier proposal. Stable cycle, symbol, mode, policy, and recovery semantics remain conflict-protected, and an action always refers to the exact immutable assessment it reviewed. Rows written with the earlier full-payload hash are compared using the same canonical projection and require no data rewrite.
 
 Same-run replay equivalence is defined within one policy snapshot. Replaying a
@@ -82,7 +95,7 @@ A missing required `ranked_signals` artifact fails only the `opportunities` stag
 
 ## Artifacts and multi-day example
 
-Each attempt writes the summary plus admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, position-episode compatibility, recovery proposal/action, position-monitor reconciliation, Investigator sampling, source-fidelity, performance, coverage, and readiness CSVs under `$DATA_ROOT/pipeline_runs/<run_id>/opportunities/attempt_<n>/`. DuckDB remains authoritative.
+Each attempt writes the summary plus admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, position-episode compatibility, recovery proposal/action, position-monitor reconciliation, Investigator sampling, source-fidelity, performance, coverage, readiness, source-reconciliation, integrity-receipt, and registry-freshness CSVs under `$DATA_ROOT/pipeline_runs/<run_id>/opportunities/attempt_<n>/`. DuckDB remains authoritative.
 
 ```text
 Day 1   strong Stage-1 accumulation opens episode 1

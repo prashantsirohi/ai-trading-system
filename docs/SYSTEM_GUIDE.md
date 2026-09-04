@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-08-30
+- **Last verified:** 2026-09-04
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -201,6 +201,16 @@ an immutable inclusion/exclusion receipt with stable reason codes, and active
 weekly observations may carry through Stage 2 until a trap, pattern, structure,
 or lifecycle termination. The primary review score remains 65, and the lane
 remains shadow-only and non-executable.
+
+Phase 3.5 operational integrity now fails closed for Phase 4 readiness without
+blocking the main pipeline. Each opportunity attempt reconciles declared source
+row counts, terminal bundle outcomes, persisted snapshot/transition deltas, and
+transition artifact rows. It also emits a current-session registry freshness
+receipt and compares canonical snapshot sessions with observed OHLCV sessions.
+Missing historical sessions remain explicit continuity failures; the stage does
+not reconstruct or repaint them. Dry runs label persistence-dependent checks
+`NOT_APPLICABLE`. These checks feed the existing Investigator readiness artifact
+and have no execution, candidate-tracker, ranking, or broker consumer.
 
 Migration 046 adds the independent `near-high-20dma-shadow-v1` evidence lane.
 The opportunities stage records one neutral exchange/symbol/session observation.

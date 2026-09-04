@@ -2,7 +2,7 @@
 
 - **Purpose:** Operate the optional canonical opportunity-registry shadow stage.
 - **Audience:** Operators and engineers debugging opportunity reconciliation.
-- **Last verified:** 2026-08-30
+- **Last verified:** 2026-09-04
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
@@ -23,7 +23,7 @@ Required input is registered `rank/ranked_signals`. Optional inputs are full Inv
 
 Writes are append-oriented canonical observations in `$DATA_ROOT/control_plane.duckdb` through `OpportunityRegistryService`. `--opportunity-registry-dry-run` disables those writes while retaining audit files. The stage never writes execution or candidate-tracker stores.
 
-The attempt directory contains `opportunity_shadow_summary.json`, `technical_evidence_labels.csv`, `technical_evidence_cohorts.csv`, and the admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, compatibility, recovery-proposal/action, and position-monitor reconciliation CSVs listed in the [artifact reference](../reference/artifacts.md).
+The attempt directory contains `opportunity_shadow_summary.json`, `technical_evidence_labels.csv`, `technical_evidence_cohorts.csv`, `opportunity_source_reconciliation.csv`, `opportunity_integrity_receipt.csv`, `opportunity_registry_freshness.csv`, and the admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, compatibility, recovery-proposal/action, and position-monitor reconciliation CSVs listed in the [artifact reference](../reference/artifacts.md).
 
 When both `--fundamental-discovery-mode shadow` and registry shadow are enabled, the stage also consumes `fundamental_thesis_universe`, emits `candidate_fundamental_observations.csv`, and persists `candidate_fundamental_observation`. `FUNDAMENTAL_THESIS` uses a separate `fundamental_thesis` setup family and a duplicate typed source bundle, so it neither replaces nor attaches to technical or Investigator-primary episodes. Compare mode never supplies this registry input.
 
@@ -45,6 +45,16 @@ The stage loads registered sources, adapts and reconciles by exchange/symbol, cr
 Semantic identity conflicts, cross-episode inconsistencies, invalid timestamps, invalid stage locks, and incompatible setup matching are explicit conflicts or rejections. Missing optional evidence and unavailable sector structure are warnings and never become negative evidence. Scan receipts distinguish `MISSING`, `SUCCESS_ZERO_ROWS`, and `SUCCESS_ROWS`; zero rows therefore do not imply a producer failure. Daily v3 coverage uses the latest snapshot per candidate/setup so retries cannot inflate the denominator, and pattern known-or-none is measured only among pattern-evaluable rows while `UNKNOWN` and `NOT_EVALUATED` remain failures. Under `investigator-attribution-policy-v3` and its v4 successor, a matured discovery without an ordered pending-follow-through transition closes as `INELIGIBLE_LIFECYCLE_SEQUENCE`. Legacy v1/v2 events retain their original frozen eligibility behavior. V4 expands weekly tracking to every five-session return strictly above 5%, without allowing an earlier daily spike to suppress the weekly observation. Primary eligibility uses the immutable `WEEKLY_GAINER` trigger source even when contextual classification produces another move tag.
 
 Technical evidence requires positive price, SMA20, and 52-week-high values for a known combined-entry label. Exactly 90% of the 52-week high and equality with SMA20 both pass. The SMA20-break label is `NOT_APPLICABLE` without a prior session and becomes `MET` only on a known above-to-below close transition. These labels are research-only and cannot alter ranking, admission, lifecycle, candidates, or execution. Publish may project them unchanged into operator-facing shadow tabs, without granting decision authority.
+
+P0 integrity receipts compare declared source rows with rows read, bundle outcomes
+with bundles assembled, and created snapshot/transition counts with actual
+run-scoped DuckDB deltas. Transition CSV rows are post-persistence facts in shadow
+mode and `PREVIEW` plans in dry run. The registry freshness receipt requires a
+canonical snapshot for the resolved market session, reports current-run and
+current-session snapshot/transition counts separately, and lists intervening OHLCV
+sessions with no canonical snapshots. Gaps are never backfilled. Any mismatch or
+continuity gap degrades this optional stage and fails its readiness inputs while
+remaining isolated from execution.
 
 Matured `CANDIDATE_DISCOVERED` events are joined through their source snapshot to the neutral observation and summarized in mutually exclusive `FUNDAMENTAL_ONLY`, `TECHNICAL_ONLY`, and `FUNDAMENTAL_AND_TECHNICAL` cohorts at 5/10/20/60 sessions. Samples are deduplicated by cohort, exchange, symbol, decision session, and horizon; returns use the existing deterministic next-open entry basis.
 
