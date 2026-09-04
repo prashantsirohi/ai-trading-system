@@ -8,9 +8,12 @@ import pandas as pd
 
 from ai_trading_system.pipeline.contracts import StageArtifact, StageContext
 from ai_trading_system.pipeline.stages.pattern_lane_scan import PatternLaneScanStage
+from ai_trading_system.research.pattern_lane_calibration.shadow import (
+    build_pattern_lane_assessments,
+)
 
 _ARTIFACT_TYPES = {
-    "pattern_lane_scan", "pattern_lane_summary", "pattern_lane_runtime",
+    "pattern_lane_scan", "pattern_lane_assessments", "pattern_lane_summary", "pattern_lane_runtime",
     "pattern_lane_source_diagnostics", "pattern_lane_parity_report",
     "pattern_lane_manifest", "pattern_lane_shadow_report",
 }
@@ -54,7 +57,7 @@ def test_mode_off_skips_without_artifacts_or_writes(tmp_path, monkeypatch) -> No
     assert result.artifacts == []
 
 
-def test_mode_shadow_writes_all_seven_artifacts_without_side_effects(tmp_path, monkeypatch) -> None:
+def test_mode_shadow_writes_all_eight_artifacts_without_side_effects(tmp_path, monkeypatch) -> None:
     context = _context(tmp_path, monkeypatch, mode="shadow")
 
     result = PatternLaneScanStage().run(context)
@@ -65,13 +68,31 @@ def test_mode_shadow_writes_all_seven_artifacts_without_side_effects(tmp_path, m
         assert Path(artifact.uri).exists()
     assert result.metadata["operational_side_effects"] is False
     assert result.metadata["status"] == "completed"
+    assessments_path = next(
+        Path(a.uri)
+        for a in result.artifacts
+        if a.artifact_type == "pattern_lane_assessments"
+    )
+    assessments = pd.read_csv(assessments_path)
+    assert len(assessments) == 3
+    assert assessments[["exchange", "symbol_id"]].duplicated().sum() == 0
+    assert set(assessments["pattern_evaluation_state"]) <= {
+        "KNOWN",
+        "NONE",
+        "NOT_ELIGIBLE",
+        "ERROR",
+    }
+    assert assessments["evidence_hash"].astype(str).str.len().eq(64).all()
 
     manifest_path = next(Path(a.uri) for a in result.artifacts if a.artifact_type == "pattern_lane_manifest")
     manifest = json.loads(manifest_path.read_text())
     assert manifest["operational_side_effects"] is False
     assert manifest["weekly_stage_policy_version"] == "weekly-stage-v2"
     assert set(manifest["dataset_hashes"]) >= {
-        "pattern_lane_scan.csv", "pattern_lane_summary.json", "pattern_lane_shadow_report.html",
+        "pattern_lane_scan.csv",
+        "pattern_lane_assessments.csv",
+        "pattern_lane_summary.json",
+        "pattern_lane_shadow_report.html",
     }
 
     report_html = next(Path(a.uri).read_text() for a in result.artifacts if a.artifact_type == "pattern_lane_shadow_report")
@@ -103,3 +124,74 @@ def test_mode_shadow_records_legacy_parity_when_pattern_scan_present(tmp_path, m
     assert parity["legacy_pattern_scan"]["content_hash"] == legacy.content_hash
     assert parity["legacy_pattern_scan"]["present"] is True
     assert parity["operational_side_effects"] is False
+
+
+def test_pattern_assessments_distinguish_known_none_and_not_eligible() -> None:
+    classified = pd.DataFrame(
+        [
+            {
+                "exchange": "NSE",
+                "symbol_id": "AAA",
+                "as_of_date": "2026-09-04",
+                "scan_lane_as_of": "stage2_continuation",
+                "lane_assignment_reason_codes": '["STAGE2_SCORE_THRESHOLD_PASS"]',
+                "lane_policy_version": "pattern-lane-r0-policy-v1",
+                "weekly_stage_is_fresh": True,
+            },
+            {
+                "exchange": "NSE",
+                "symbol_id": "BBB",
+                "as_of_date": "2026-09-04",
+                "scan_lane_as_of": "stage1_base",
+                "lane_assignment_reason_codes": '["FRESH_WEEKLY_STAGE1"]',
+                "lane_policy_version": "pattern-lane-r0-policy-v1",
+                "weekly_stage_is_fresh": True,
+            },
+            {
+                "exchange": "NSE",
+                "symbol_id": "CCC",
+                "as_of_date": "2026-09-04",
+                "scan_lane_as_of": "no_lane",
+                "lane_assignment_reason_codes": '["INSUFFICIENT_HISTORY"]',
+                "lane_policy_version": "pattern-lane-r0-policy-v1",
+                "weekly_stage_is_fresh": False,
+            },
+        ]
+    )
+    signals = pd.DataFrame(
+        [
+            {
+                "exchange": "NSE",
+                "symbol_id": "AAA",
+                "signal_id": "lower-priority",
+                "pattern_family": "flag",
+                "pattern_state": "watchlist",
+                "pattern_score": 80,
+                "pattern_priority_score": 50,
+                "r1a_evidence_class": "negative_evidence",
+                "evidence_origin": "carry_forward",
+            },
+            {
+                "exchange": "NSE",
+                "symbol_id": "AAA",
+                "signal_id": "primary",
+                "pattern_family": "vcp",
+                "pattern_state": "confirmed",
+                "pattern_score": 90,
+                "pattern_priority_score": 100,
+                "r1a_evidence_class": "evidence_supported_smaller_sample",
+                "evidence_origin": "fresh",
+            },
+        ]
+    )
+
+    assessments = build_pattern_lane_assessments(classified, signals).set_index(
+        "symbol_id"
+    )
+
+    assert assessments.loc["AAA", "pattern_evaluation_state"] == "KNOWN"
+    assert assessments.loc["AAA", "primary_signal_id"] == "primary"
+    assert assessments.loc["AAA", "signal_count"] == 2
+    assert assessments.loc["BBB", "pattern_evaluation_state"] == "NONE"
+    assert assessments.loc["CCC", "pattern_evaluation_state"] == "NOT_ELIGIBLE"
+    assert assessments["evidence_hash"].astype(str).str.len().eq(64).all()

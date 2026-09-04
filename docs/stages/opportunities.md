@@ -17,13 +17,13 @@ The optional `opportunities` stage follows `investigator` in `PIPELINE_ORDER`. I
 
 ## Input data
 
-Required input is registered `rank/ranked_signals`. Optional inputs are full Investigator scores and Stage-1 state plus rank breakout, pattern, stock-scan, sector-dashboard, weekly-stage, and routing artifacts. In shadow routing mode full `investigator_scores` remains authoritative; routed scores are diagnostic-only. Rank and routed pattern evidence are unioned. Investigator rows outside the rank shortlist receive rank context only when an explicit rank score is present; otherwise they remain evidence-only, and `final_score` is never substituted for rank score. Investigator sector names fill missing rank-sector names, and Investigator `sector_rs_value` or sector-percentile fields fill missing weekly sector-relative-strength context. Weekly sector structure remains preferred when available. Completed pattern scans persist `KNOWN` or `NONE`; intentionally excluded and capacity-limited rows remain distinguishable from scanner errors or unexplained absence. Missing optional inputs become audit warnings. The stage reads the weekly stage snapshot store only to enrich the registered stock-stage row with source-week and creation metadata.
+Required input is registered `rank/ranked_signals`. Optional inputs are full Investigator scores and intake receipts, Stage-1 state, the normalized pattern-lane assessment artifact, plus rank breakout, pattern, stock-scan, sector-dashboard, weekly-stage, and routing artifacts. In shadow routing mode full `investigator_scores` remains authoritative; routed scores are diagnostic-only. Rank and routed pattern evidence are unioned. Investigator rows outside the rank shortlist receive rank context only when an explicit rank score is present; otherwise they remain evidence-only, and `final_score` is never substituted for rank score. Investigator sector names fill missing rank-sector names, and Investigator `sector_rs_value` or sector-percentile fields fill missing weekly sector-relative-strength context. Weekly sector structure remains preferred when available. Completed pattern scans persist `KNOWN` or `NONE`; intentionally excluded and capacity-limited rows remain distinguishable from scanner errors or unexplained absence. Missing optional inputs become audit warnings. The stage reads the weekly stage snapshot store only to enrich the registered stock-stage row with source-week and creation metadata.
 
 ## Output artifacts
 
 Writes are append-oriented canonical observations in `$DATA_ROOT/control_plane.duckdb` through `OpportunityRegistryService`. `--opportunity-registry-dry-run` disables those writes while retaining audit files. The stage never writes execution or candidate-tracker stores.
 
-The attempt directory contains `opportunity_shadow_summary.json`, `technical_evidence_labels.csv`, `technical_evidence_cohorts.csv`, `opportunity_source_reconciliation.csv`, `opportunity_integrity_receipt.csv`, `opportunity_registry_freshness.csv`, and the admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, compatibility, recovery-proposal/action, and position-monitor reconciliation CSVs listed in the [artifact reference](../reference/artifacts.md).
+The attempt directory contains `opportunity_shadow_summary.json`, `opportunity_convergence_view.csv`, `technical_evidence_labels.csv`, `technical_evidence_cohorts.csv`, `opportunity_source_reconciliation.csv`, `opportunity_integrity_receipt.csv`, `opportunity_registry_freshness.csv`, and the admission, update, transition, closure, reconciliation, warning, rejection, conflict, current-state, compatibility, recovery-proposal/action, and position-monitor reconciliation CSVs listed in the [artifact reference](../reference/artifacts.md).
 
 When both `--fundamental-discovery-mode shadow` and registry shadow are enabled, the stage also consumes `fundamental_thesis_universe`, emits `candidate_fundamental_observations.csv`, and persists `candidate_fundamental_observation`. `FUNDAMENTAL_THESIS` uses a separate `fundamental_thesis` setup family and a duplicate typed source bundle, so it neither replaces nor attaches to technical or Investigator-primary episodes. Compare mode never supplies this registry input.
 
@@ -51,6 +51,21 @@ closed. `registry_conflicts.csv` carries a stable `reason_code`. Opportunity
 summary counters separately report Investigator rank-context fallbacks,
 evidence-only rows, and evidence-only weekly gainers. The integrity receipt
 requires zero adapter rejections.
+
+P1.5 emits `opportunity_convergence_view.csv` under immutable
+`opportunity-convergence-v1.1`. It contains one row per exchange, symbol,
+observed session, and policy snapshot across the union of available lane
+sources. Investigator membership means a fresh tracked weekly gainer with
+`final_score >= 65`; fundamental membership means fresh admission eligibility;
+pattern membership means fresh normalized pattern evidence. The row preserves
+each lane's source-specific state, freshness, artifact and evidence hashes, and
+explicit `KNOWN`, `NONE`, `NOT_ELIGIBLE`, `NOT_EVALUATED`, `ERROR`, or
+`UNKNOWN` evaluation state. Membership maps deterministically to one of
+`I_ONLY`, `F_ONLY`, `P_ONLY`, `I_F`, `I_P`, `F_P`, `I_F_P`, or `NONE`.
+Future-dated, duplicate, malformed, and unexplained evidence cannot enter a
+cohort. Cardinality, key uniqueness, source availability, state completeness,
+hash coverage, active freshness, cohort exclusivity, unknowns, and source
+errors are appended to the existing Investigator readiness artifact.
 
 Technical evidence requires positive price, SMA20, and 52-week-high values for a known combined-entry label. Exactly 90% of the 52-week high and equality with SMA20 both pass. The SMA20-break label is `NOT_APPLICABLE` without a prior session and becomes `MET` only on a known above-to-below close transition. These labels are research-only and cannot alter ranking, admission, lifecycle, candidates, or execution. Publish may project them unchanged into operator-facing shadow tabs, without granting decision authority.
 

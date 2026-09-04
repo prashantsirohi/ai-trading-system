@@ -127,6 +127,7 @@ Writes under `data/pipeline_runs/<run_id>/opportunities/attempt_<n>/`:
 - `position_recovery_proposals.csv`
 - `position_recovery_actions.csv`
 - `position_monitor_reconciliation.csv`
+- `opportunity_convergence_view.csv` — one row per exchange/symbol/session/policy snapshot with source-owned Investigator, fundamental, and pattern states; lane freshness and evidence hashes; explicit missing/error states; and one mutually exclusive I/F/P cohort
 - `technical_evidence_labels.csv` — one row per exchange/symbol/session with independent fundamental, Investigator weekly-gainer, near-high, SMA20, entry-confirmation, and SMA20-break label states plus the shared observation ID
 - `technical_evidence_cohorts.csv` — deduplicated matured 5/10/20/60-session next-open return summaries for fundamental-only, technical-only, and intersection cohorts
 - `opportunity_source_reconciliation.csv` — one row per configured CSV input with declared/read row counts, hashes, lineage, and an explicit reconciliation state
@@ -138,6 +139,7 @@ Authority:
 - audit and reconciliation evidence for the attempt
 - canonical episode history in `control_plane.duckdb` remains authoritative
 - the two technical-evidence CSVs are optional presentation-only inputs to the Google Sheets shadow tabs; they are not ranking, candidate, admission, lifecycle, or execution inputs
+- the convergence view is a registered read-only operator artifact and readiness input; it is not an execution, admission, lifecycle, or candidate input
 - all other opportunity files are not execution or publish inputs
 - integrity and freshness failures feed the existing readiness evidence only; they do not authorize or suppress orders
 

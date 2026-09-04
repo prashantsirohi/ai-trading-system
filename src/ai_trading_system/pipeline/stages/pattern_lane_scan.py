@@ -1,9 +1,10 @@
 """Optional R1a shadow-only lane-aware pattern scan stage.
 
 Runs the lane-aware scanner in production on a strictly observational basis
-(ADR-0007 R1a). It writes only new evidence artifacts that no decision
-consumer reads: ranking, candidates, opportunities, execution and lifecycle
-remain authoritative and untouched. The stage is non-blocking — the
+(ADR-0007 R1a). It writes only new evidence artifacts. The opportunity stage
+may read its normalized assessment artifact for a read-only convergence view;
+ranking, admission, candidates, execution and lifecycle remain authoritative
+and untouched. The stage is non-blocking — the
 orchestrator downgrades a failure to a degraded alert and the run continues.
 
 Mirrors the shadow trio (weekly_stage / scan_router / opportunities): self-gate
@@ -42,6 +43,7 @@ from ai_trading_system.research.pattern_lane_calibration.policy import default_r
 from ai_trading_system.research.pattern_lane_calibration.shadow import (
     attach_evidence,
     build_parity_report,
+    build_pattern_lane_assessments,
     build_runtime_report,
     build_shadow_summary,
     build_source_diagnostics,
@@ -142,9 +144,11 @@ class PatternLaneScanStage:
         legacy_artifact = context.artifact_for("rank", "pattern_scan")
         parity = build_parity_report(signals, legacy_artifact)
         scan_frame = attach_evidence(signals, classified)
+        assessment_frame = build_pattern_lane_assessments(classified, scan_frame)
         summary = build_shadow_summary(
             classified, scan_frame, diagnostics=diagnostics, parity=parity, status="completed",
         )
+        summary["assessment_rows"] = len(assessment_frame)
         runtime = build_runtime_report(
             timings, symbols_scanned=symbols_scanned,
             invocations=invocations, classified=classified,
@@ -154,7 +158,8 @@ class PatternLaneScanStage:
         artifacts: list[StageArtifact] = []
         artifact_started = time.perf_counter_ns()
         artifact_names = [
-            "pattern_lane_scan.csv", "pattern_lane_summary.json",
+            "pattern_lane_scan.csv", "pattern_lane_assessments.csv",
+            "pattern_lane_summary.json",
             "pattern_lane_runtime.json", "pattern_lane_source_diagnostics.csv",
             "pattern_lane_parity_report.json", "pattern_lane_manifest.json",
             "pattern_lane_shadow_report.html",
@@ -162,6 +167,9 @@ class PatternLaneScanStage:
 
         csv_frames = {
             "pattern_lane_scan": ("pattern_lane_scan.csv", scan_frame),
+            "pattern_lane_assessments": (
+                "pattern_lane_assessments.csv", assessment_frame,
+            ),
             "pattern_lane_source_diagnostics": (
                 "pattern_lane_source_diagnostics.csv", source_diagnostics_frame(diagnostics),
             ),

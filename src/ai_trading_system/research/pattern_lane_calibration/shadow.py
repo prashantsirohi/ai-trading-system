@@ -9,13 +9,16 @@ artifacts. It reuses the public building blocks in
 :mod:`~ai_trading_system.research.pattern_lane_calibration.harness` and never
 performs any operational write.
 
-Nothing here reads or mutates rank, candidate, opportunity, execution or
-lifecycle state; the scan is non-actionable by construction.
+Nothing here reads or mutates rank, candidate, opportunity-registry, execution,
+or lifecycle state; the scan is non-actionable by construction. Its normalized
+assessment artifact may be projected into a later read-only convergence view.
 """
 
 from __future__ import annotations
 
+import hashlib
 import html
+import json
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -33,7 +36,7 @@ from .stage_source import GOVERNED_BACKFILL, GOVERNED_LIVE, SNAPSHOT_FALLBACK
 
 SHADOW_BANNER = (
     "SHADOW — NON-ACTIONABLE — DOES NOT AFFECT RANKING, CANDIDATES, "
-    "OPPORTUNITIES OR EXECUTION"
+    "ADMISSION, LIFECYCLE OR EXECUTION"
 )
 
 # Evidence-class taxonomy (labels only — deliberately no buy/watchlist/score
@@ -155,6 +158,204 @@ def attach_evidence(signals: pd.DataFrame, classified: pd.DataFrame) -> pd.DataF
     if "evidence_origin" not in output.columns:
         output.loc[:, "evidence_origin"] = None
     return output
+
+
+def build_pattern_lane_assessments(
+    classified: pd.DataFrame, signals: pd.DataFrame
+) -> pd.DataFrame:
+    """Return one immutable evaluation row per classified exchange/symbol.
+
+    Signal-only output cannot distinguish an evaluated symbol with no pattern
+    from a symbol excluded before detector dispatch.  This companion artifact
+    makes that distinction explicit without granting pattern evidence any
+    admission, lifecycle, ranking, or execution authority.
+    """
+
+    columns = [
+        "exchange",
+        "symbol_id",
+        "session_date",
+        "pattern_evaluation_state",
+        "pattern_state",
+        "pattern_member",
+        "scan_lane",
+        "signal_count",
+        "signal_ids_json",
+        "pattern_families_json",
+        "evidence_classes_json",
+        "evidence_origin",
+        "primary_signal_id",
+        "primary_pattern_family",
+        "primary_pattern_state",
+        "primary_evidence_class",
+        "pattern_score",
+        "setup_quality",
+        "weekly_stage_is_fresh",
+        "weekly_stage_age_trading_days",
+        "lane_freshness",
+        "reason_codes_json",
+        "source_policy_version",
+        "evidence_hash",
+    ]
+    if classified is None or classified.empty:
+        return pd.DataFrame(columns=columns)
+
+    signal_groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    if signals is not None and not signals.empty:
+        for (exchange, symbol), group in signals.groupby(
+            ["exchange", "symbol_id"], dropna=False
+        ):
+            signal_groups[(str(exchange).upper(), str(symbol).upper())] = [
+                dict(row) for row in group.to_dict(orient="records")
+            ]
+
+    rows: list[dict[str, Any]] = []
+    normalized = classified.copy()
+    normalized.loc[:, "exchange"] = normalized.get(
+        "exchange", pd.Series(["NSE"] * len(normalized), index=normalized.index)
+    ).astype(str).str.upper()
+    normalized.loc[:, "symbol_id"] = (
+        normalized["symbol_id"].astype(str).str.upper()
+    )
+    for (exchange, symbol), group in normalized.groupby(
+        ["exchange", "symbol_id"], dropna=False, sort=True
+    ):
+        context_rows = group.to_dict(orient="records")
+        context = context_rows[0]
+        key = (str(exchange), str(symbol))
+        source_signals = signal_groups.get(key, [])
+        lane = str(context.get("scan_lane_as_of") or "no_lane")
+        reason_codes = _json_list(context.get("lane_assignment_reason_codes"))
+        if len(context_rows) > 1:
+            evaluation_state = "ERROR"
+            pattern_state = "DUPLICATE_CLASSIFICATION_ROWS"
+            reason_codes = [*reason_codes, "DUPLICATE_CLASSIFICATION_ROWS"]
+            source_signals = []
+        elif lane == "no_lane":
+            evaluation_state = "NOT_ELIGIBLE"
+            pattern_state = "NOT_ELIGIBLE"
+        elif source_signals:
+            evaluation_state = "KNOWN"
+            pattern_state = "SIGNAL_PRESENT"
+        else:
+            evaluation_state = "NONE"
+            pattern_state = "NONE"
+
+        ordered_signals = sorted(source_signals, key=_pattern_priority_key)
+        primary = ordered_signals[0] if ordered_signals else {}
+        origins = sorted(
+            {
+                str(item.get("evidence_origin") or "unknown")
+                for item in ordered_signals
+            }
+        )
+        evidence_origin = (
+            "fresh"
+            if "fresh" in origins
+            else "carry_forward"
+            if "carry_forward" in origins
+            else "none"
+        )
+        session_date = str(
+            context.get("as_of_date")
+            or primary.get("as_of_date")
+            or ""
+        )[:10]
+        stage_fresh = _truthy(context.get("weekly_stage_is_fresh"))
+        lane_freshness = "FRESH" if session_date else "UNKNOWN"
+        row = {
+            "exchange": key[0],
+            "symbol_id": key[1],
+            "session_date": session_date,
+            "pattern_evaluation_state": evaluation_state,
+            "pattern_state": pattern_state,
+            "pattern_member": bool(ordered_signals),
+            "scan_lane": lane,
+            "signal_count": len(ordered_signals),
+            "signal_ids_json": json.dumps(
+                sorted(str(item.get("signal_id") or "") for item in ordered_signals),
+                separators=(",", ":"),
+            ),
+            "pattern_families_json": json.dumps(
+                sorted(
+                    {
+                        str(item.get("pattern_family") or "UNKNOWN")
+                        for item in ordered_signals
+                    }
+                ),
+                separators=(",", ":"),
+            ),
+            "evidence_classes_json": json.dumps(
+                sorted(
+                    {
+                        str(item.get("r1a_evidence_class") or "UNKNOWN")
+                        for item in ordered_signals
+                    }
+                ),
+                separators=(",", ":"),
+            ),
+            "evidence_origin": evidence_origin,
+            "primary_signal_id": primary.get("signal_id"),
+            "primary_pattern_family": primary.get("pattern_family"),
+            "primary_pattern_state": primary.get("pattern_state"),
+            "primary_evidence_class": primary.get("r1a_evidence_class"),
+            "pattern_score": primary.get("pattern_score"),
+            "setup_quality": primary.get("setup_quality"),
+            "weekly_stage_is_fresh": stage_fresh,
+            "weekly_stage_age_trading_days": context.get(
+                "weekly_stage_age_trading_days"
+            ),
+            "lane_freshness": lane_freshness,
+            "reason_codes_json": json.dumps(
+                reason_codes, separators=(",", ":")
+            ),
+            "source_policy_version": context.get("lane_policy_version"),
+        }
+        row["evidence_hash"] = _assessment_hash(row)
+        rows.append(row)
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _pattern_priority_key(row: dict[str, Any]) -> tuple[float, float, str]:
+    def number(value: Any) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return float("-inf")
+        return float("-inf") if parsed != parsed else parsed
+
+    return (
+        -number(row.get("pattern_priority_score")),
+        -number(row.get("pattern_score")),
+        str(row.get("signal_id") or ""),
+    )
+
+
+def _assessment_hash(row: dict[str, Any]) -> str:
+    payload = json.dumps(
+        row,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _json_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    try:
+        decoded = json.loads(str(value or "[]"))
+    except json.JSONDecodeError:
+        return ["INVALID_REASON_CODES"]
+    return [str(item) for item in decoded] if isinstance(decoded, list) else []
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"true", "1", "yes"}
 
 
 def build_source_diagnostics(

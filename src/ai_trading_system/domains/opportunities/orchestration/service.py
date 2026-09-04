@@ -91,6 +91,7 @@ from .admission import (
     satisfied_rules_json,
 )
 from .assembler import assemble_candidate_snapshot
+from .convergence import build_convergence_view
 from .contracts import (
     AdmissionReason,
     AdapterWarning,
@@ -127,10 +128,12 @@ class OpportunityShadowSourceError(RuntimeError):
 class OpportunityArtifactSet:
     ranked_signals: StageArtifact
     investigator_scores: StageArtifact | None = None
+    investigator_intake_receipt: StageArtifact | None = None
     routed_investigator_scores: StageArtifact | None = None
     breakout_scan: StageArtifact | None = None
     pattern_scan: StageArtifact | None = None
     supplemental_pattern_scan: StageArtifact | None = None
+    pattern_lane_assessments: StageArtifact | None = None
     stock_scan: StageArtifact | None = None
     sector_dashboard: StageArtifact | None = None
     supplemental_sector_dashboard: StageArtifact | None = None
@@ -180,10 +183,12 @@ class OpportunityShadowOrchestrator:
                 "ranked_signals is required and contains no usable rows"
             )
         raw_investigator = _read_csv(artifacts.investigator_scores)
+        raw_investigator_receipts = _read_csv(artifacts.investigator_intake_receipt)
         raw_routed_investigator = _read_csv(artifacts.routed_investigator_scores)
         raw_breakout = _read_csv(artifacts.breakout_scan)
         raw_pattern = _read_csv(artifacts.pattern_scan)
         raw_supplemental_pattern = _read_csv(artifacts.supplemental_pattern_scan)
+        raw_pattern_assessments = _read_csv(artifacts.pattern_lane_assessments)
         raw_stock = _read_csv(artifacts.stock_scan)
         raw_sector = _read_csv(artifacts.sector_dashboard)
         raw_supplemental_sector = _read_csv(artifacts.supplemental_sector_dashboard)
@@ -466,6 +471,7 @@ class OpportunityShadowOrchestrator:
                 "investigator_calendar_windows",
                 "investigator_primary_sampling",
                 "investigator_source_fidelity",
+                "opportunity_convergence_view",
                 "candidate_fundamental_observations",
                 "technical_evidence_labels",
                 "technical_evidence_cohorts",
@@ -480,10 +486,12 @@ class OpportunityShadowOrchestrator:
                 source_rows={
                     "ranked_signals": raw_rank,
                     "investigator_scores": raw_investigator,
+                    "investigator_intake_receipt": raw_investigator_receipts,
                     "routed_investigator_scores": raw_routed_investigator,
                     "breakout_scan": raw_breakout,
                     "pattern_scan": raw_pattern,
                     "supplemental_pattern_scan": raw_supplemental_pattern,
+                    "pattern_lane_assessments": raw_pattern_assessments,
                     "stock_scan": raw_stock,
                     "sector_dashboard": raw_sector,
                     "supplemental_sector_dashboard": raw_supplemental_sector,
@@ -496,6 +504,36 @@ class OpportunityShadowOrchestrator:
                 policy_snapshot_id=policy_snapshot_id,
             )
         )
+        convergence_rows, convergence_readiness = build_convergence_view(
+            session_date=observed_session,
+            policy_snapshot_id=policy_snapshot_id,
+            universe_keys=set(technical_source_bundles),
+            investigator_rows=raw_investigator,
+            investigator_receipts=raw_investigator_receipts,
+            fundamental_rows=raw_fundamental,
+            pattern_rows=raw_pattern_assessments,
+            investigator_artifact_hash=(
+                artifacts.investigator_scores.content_hash
+                if artifacts.investigator_scores is not None
+                else None
+            ),
+            investigator_receipt_artifact_hash=(
+                artifacts.investigator_intake_receipt.content_hash
+                if artifacts.investigator_intake_receipt is not None
+                else None
+            ),
+            fundamental_artifact_hash=(
+                artifacts.fundamental_thesis_universe.content_hash
+                if artifacts.fundamental_thesis_universe is not None
+                else None
+            ),
+            pattern_artifact_hash=(
+                artifacts.pattern_lane_assessments.content_hash
+                if artifacts.pattern_lane_assessments is not None
+                else None
+            ),
+        )
+        rows["opportunity_convergence_view"].extend(convergence_rows)
         for result in results:
             rows["adapter_warnings"].extend(asdict(item) for item in result.warnings)
             rows["adapter_rejections"].extend(
@@ -1289,6 +1327,7 @@ class OpportunityShadowOrchestrator:
                 policy_snapshot_id=policy_snapshot_id,
             )
         )
+        rows["investigator_readiness_inputs"].extend(convergence_readiness)
         if not config.dry_run:
             for state in self.registry.query_current_states():
                 rows["current_candidate_state"].append(asdict(state))
@@ -1311,6 +1350,10 @@ class OpportunityShadowOrchestrator:
                         or integrity_status == "FAIL"
                         or freshness_status == "FAIL"
                         or continuity_status == "FAIL"
+                        or any(
+                            row["status"] == "FAIL"
+                            for row in convergence_readiness
+                        )
                     )
                     else "completed"
                 ),
@@ -1326,6 +1369,28 @@ class OpportunityShadowOrchestrator:
                 "missing_registry_sessions": missing_registry_sessions,
                 "missing_registry_session_count": len(missing_registry_sessions),
                 "source_reconciliation_failures": source_failures,
+                "opportunity_convergence_rows": len(convergence_rows),
+                "opportunity_convergence_status": (
+                    "FAIL"
+                    if any(
+                        row["status"] == "FAIL"
+                        for row in convergence_readiness
+                    )
+                    else "PENDING"
+                    if any(
+                        row["status"] == "PENDING"
+                        for row in convergence_readiness
+                    )
+                    else "PASS"
+                ),
+                "opportunity_convergence_cohorts": _stage_distribution(
+                    row["convergence_cohort"] for row in convergence_rows
+                ),
+                "opportunity_convergence_unknown_states": sum(
+                    row[f"{lane}_evaluation_state"] == "UNKNOWN"
+                    for row in convergence_rows
+                    for lane in ("investigator", "fundamental", "pattern")
+                ),
                 "unmatched_sector_mappings": sum(
                     item.sector_stage is None for item in bundles
                 ),
@@ -3160,10 +3225,12 @@ def _source_reconciliation_rows(
     source_stages = {
         "ranked_signals": "rank",
         "investigator_scores": "investigator",
+        "investigator_intake_receipt": "investigator",
         "routed_investigator_scores": "investigator",
         "breakout_scan": "rank",
         "pattern_scan": "rank",
         "supplemental_pattern_scan": "investigator",
+        "pattern_lane_assessments": "pattern_lane_scan",
         "stock_scan": "weekly_stage_or_rank",
         "sector_dashboard": "weekly_stage_or_rank",
         "supplemental_sector_dashboard": "rank",

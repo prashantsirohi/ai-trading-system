@@ -2,7 +2,7 @@
 
 - **Purpose:** Define the ADR-0007 R1a shadow-only, non-actionable lane-aware pattern scan stage.
 - **Audience:** Operators and engineers running or reviewing the R1a shadow period.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-09-04
 - **Source of truth:** `pipeline/stages/pattern_lane_scan.py` and `research/pattern_lane_calibration/shadow.py`.
 
 ---
@@ -12,9 +12,10 @@ Start with the [System Guide](../SYSTEM_GUIDE.md).
 ## Purpose
 
 Run the ADR-0007 lane-aware scanner inside the production pipeline on a strictly
-observational basis. The stage writes only new evidence artifacts that no
-decision consumer reads: ranking, candidates, opportunities, execution, and
-lifecycle remain authoritative and untouched. It mirrors the shadow trio
+observational basis. The stage writes only new evidence artifacts. The
+opportunity stage may read the normalized assessment artifact for the P1.5
+read-only convergence projection; ranking, admission, candidates, execution,
+and lifecycle remain authoritative and untouched. It mirrors the shadow trio
 (`weekly_stage` / `scan_router` / `opportunities`): self-gate on mode,
 register or verify the policy snapshot before any stage-owned write, time every
 phase, and register downloadable artifacts.
@@ -37,11 +38,12 @@ completed run.
 
 ## Output artifacts
 
-Seven artifacts per attempt:
+Eight artifacts per attempt:
 
 | Artifact | Content |
 |---|---|
 | `pattern_lane_scan.csv` | Lane-classified signal rows with attached evidence. |
+| `pattern_lane_assessments.csv` | Exactly one row per classified exchange/symbol with `KNOWN`, `NONE`, `NOT_ELIGIBLE`, or `ERROR`, deterministic primary-signal selection, freshness, reason codes, and evidence hash. |
 | `pattern_lane_summary.json` | Shadow summary: symbols scanned, diagnostics, parity, status. |
 | `pattern_lane_runtime.json` | Per-phase timings, invocation counts, lane distribution. |
 | `pattern_lane_source_diagnostics.csv` | Weekly-stage source freshness and admission diagnostics. |
@@ -97,10 +99,12 @@ hash lets the orchestrator skip the stage unless `--force-rerun` is passed.
 
 ## Downstream consumers
 
-None in the operational path — that is the R1a contract. The registered
-artifacts are read only by the shadow session gate
+The registered signal artifacts are read by the shadow session gate
 (`ai-trading-shadow-session-gate`) and the read-only cross-shadow
-reconciliation (`ai-trading-cross-shadow`).
+reconciliation (`ai-trading-cross-shadow`). The optional opportunity stage may
+read `pattern_lane_assessments.csv` only to project pattern state into
+`opportunity_convergence_view.csv`; it cannot use the artifact for admission,
+lifecycle, ranking, candidates, or execution.
 
 ## Commands
 

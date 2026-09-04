@@ -62,6 +62,12 @@ from ai_trading_system.domains.opportunities.orchestration.matching import (
     SETUP_FAMILY_PROGRESSION,
     SETUP_FAMILY_SUPERSESSION,
 )
+from ai_trading_system.domains.opportunities.orchestration.convergence import (
+    CONVERGENCE_COHORTS,
+    CONVERGENCE_POLICY_VERSION,
+    LaneEvaluationState,
+    LaneFreshness,
+)
 from ai_trading_system.domains.opportunities.orchestration import (
     retention as retention_policy,
 )
@@ -274,6 +280,31 @@ def policy_content(
             "hold_condition": "above_sma20",
             "exit_trigger": "first_close_below_sma20",
             "exit_fill": "next_session_open",
+            "admission_authority": False,
+            "lifecycle_authority": False,
+            "execution_eligibility": False,
+        },
+        CONVERGENCE_POLICY_VERSION: {
+            "cardinality": "one_per_exchange_symbol_session_policy_snapshot",
+            "lane_sources": {
+                "investigator": [
+                    "investigator_scores",
+                    "investigator_intake_receipt",
+                ],
+                "fundamental": ["fundamental_thesis_universe"],
+                "pattern": ["pattern_lane_assessments"],
+            },
+            "evaluation_states": [state.value for state in LaneEvaluationState],
+            "freshness_states": [state.value for state in LaneFreshness],
+            "cohorts": list(CONVERGENCE_COHORTS),
+            "investigator_membership": (
+                "tracked_weekly_gainer_and_final_score_at_least_65"
+            ),
+            "fundamental_membership": "admission_eligible",
+            "pattern_membership": "pattern_evidence_present",
+            "active_membership_requires_current_session_evidence": True,
+            "active_freshness_population": "policy_eligible_before_freshness_filter",
+            "future_evidence_policy": "error_excluded_from_cohort",
             "admission_authority": False,
             "lifecycle_authority": False,
             "execution_eligibility": False,

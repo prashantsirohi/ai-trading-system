@@ -25,11 +25,14 @@ Mode `off` is the default and does not add the stage to the default CLI stage li
 flowchart TD
     R["Rank, breakout, pattern, stock and sector artifacts"] --> A["Pure canonical adapters"]
     I["Investigator and Stage-1 lifecycle artifacts"] --> A
+    P["Normalized pattern-lane assessments"] --> V["Read-only I/F/P convergence projection"]
+    A --> V
     A --> C["Per-exchange symbol reconciliation"]
     C --> M["Admission and open-episode matching"]
     M --> L["Snapshot, transition, progress and retention evaluation"]
     L --> D["OpportunityRegistryService"]
     L --> F["Shadow audit artifacts"]
+    V --> F
     D --> CP["control_plane.duckdb canonical history"]
     CP -. "not consumed in Phase 3A or 3B" .-> X["Execution"]
 ```
@@ -44,6 +47,16 @@ Without one of those fields it remains evidence-only: `final_score` is never
 reinterpreted as rank score, the row is not rejected for missing rank fields,
 and it cannot gain rank-based admission. Summary counters separate rank-context
 fallback rows from evidence-only rows and evidence-only weekly gainers.
+
+The P1.5 convergence projection consumes Investigator intake receipts,
+fundamental-thesis classifications, and normalized pattern-lane assessments.
+It writes one immutable artifact row per exchange/symbol/session/policy
+snapshot. Each lane retains its own state, freshness, artifact hash, evidence
+hash, and explicit evaluation state. Only fresh source-backed membership enters
+the mutually exclusive I/F/P cohort label; future, duplicate, malformed, and
+unexplained evidence is excluded and fails the existing readiness evidence.
+The projection has no admission, lifecycle, ranking, candidate, or execution
+authority.
 
 Weekly stock confidence is converted from `0–1` to `0–100`. A source week is locked only when explicitly locked or already completed, and a source creation/lock timestamp must exist. Same-day weeks remain provisional. Weekly sector artifacts own Weinstein structure; rank sector artifacts own RS percentile and quadrant. Reconciliation combines those fields by ownership, so positive sector rank never implies Stage 2 and missing rank context cannot erase valid weekly structure.
 

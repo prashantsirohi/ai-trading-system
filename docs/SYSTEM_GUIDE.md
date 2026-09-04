@@ -224,6 +224,16 @@ cannot create a false technical ambiguity. Genuine same-lane ambiguity remains
 fail-closed with a stable conflict reason code. This policy is shadow-only and
 does not change factor weights, the score-65 review threshold, or execution.
 
+Phase 3.5 P1.5 adds the immutable `opportunity-convergence-v1.1` operator
+projection. A registered opportunity attempt emits one row per
+exchange/symbol/session/policy snapshot across the Investigator, fundamental,
+and normalized pattern-assessment sources. Source-specific states, freshness,
+artifact/evidence hashes, and explicit missing/error states remain separate;
+fresh membership maps to exactly one I/F/P combination cohort. Contract and
+coverage checks append to the existing Investigator readiness evidence. The
+projection is shadow-only and cannot alter ranking, admission, lifecycle,
+candidates, execution, or broker state.
+
 Migration 046 adds the independent `near-high-20dma-shadow-v1` evidence lane.
 The opportunities stage records one neutral exchange/symbol/session observation.
 Point-in-time adjusted OHLCV owns the decision-session price, 20-session SMA,
@@ -374,10 +384,10 @@ remain keyed by the mastered symbol.
 | `features` | Compute technical, sector, valuation, earnings, and derived feature snapshots. | Feature Parquet and snapshot metadata | [features](stages/features.md) |
 | `rank` | Score the universe and materialize ranking, breakout, pattern, stock, sector, and Stage 1 evidence. | Rank artifact family | [rank](stages/rank.md) |
 | `weekly_stage` | Classify full-universe stock and sector structure and run light Stage 1 discovery. | Universal stage history and coverage artifacts | [weekly stage](stages/weekly_stage.md) |
-| `pattern_lane_scan` | Optionally run the ADR-0007 R1a lane-aware pattern scan in shadow only; non-actionable and non-blocking. | Seven `pattern_lane_*` evidence artifacts with no operational consumer | [pattern lane scan](stages/pattern_lane_scan.md) |
+| `pattern_lane_scan` | Optionally run the ADR-0007 R1a lane-aware pattern scan in shadow only; non-actionable and non-blocking. | Eight `pattern_lane_*` evidence artifacts; normalized assessments may feed only the read-only opportunity convergence view | [pattern lane scan](stages/pattern_lane_scan.md) |
 | `scan_router` | Resolve rank, stage, candidate, active-position, and recent-exit coverage. | Routing and comparison artifacts | [scan router](stages/scan_router.md) |
 | `investigator` | Build a non-executable operator investigation queue from post-rank evidence. | Investigator artifacts and control-plane history | [investigator](stages/investigator.md) |
-| `opportunities` | Optionally reconcile canonical candidate episodes and Investigator attribution onsets in non-authoritative shadow mode. | Opportunity registry, immutable performance events, and audit artifacts | [opportunities](stages/opportunities.md) |
+| `opportunities` | Optionally reconcile canonical candidate episodes and Investigator attribution onsets in non-authoritative shadow mode. | Opportunity registry, immutable performance events, unified I/F/P convergence view, and audit artifacts | [opportunities](stages/opportunities.md) |
 | `fundamentals` | Optionally import and score fundamental evidence. | Fundamental scores and watchlists | [fundamentals](stages/fundamentals.md) |
 | `fundamental_discovery` | Reuse or classify local accounting theses, then project current stage, valuation, pattern, Investigator, sector, and regime context. | Five shadow artifacts; optional parallel fundamental registry episodes | [fundamental discovery](stages/fundamental_discovery.md) |
 | `candidates` | Deterministically select the operator/execution shortlist. | `final_candidates.csv` | [candidates](stages/candidates.md) |

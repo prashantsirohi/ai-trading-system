@@ -357,6 +357,63 @@ def test_fundamental_lane_does_not_block_later_technical_episode(tmp_path):
     }
 
 
+def test_shadow_service_emits_unified_convergence_view_and_readiness(tmp_path):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control_plane.duckdb")
+    service = OpportunityShadowOrchestrator(registry)
+    fundamental = _artifact(
+        tmp_path,
+        "convergence_fundamental",
+        "as_of,symbol_id,exchange,primary_thesis,classification_status,admission_eligible,source_data_hash\n"
+        "2026-07-14,ABC,NSE,QUALITY_COMPOUNDER,QUALIFIED,true,fundamental-row-hash\n",
+    )
+    artifacts = replace(
+        _artifacts(tmp_path),
+        investigator_scores=_artifact(
+            tmp_path,
+            "convergence_investigator",
+            "symbol_id,exchange,trade_date,final_score,verdict,trigger_reason,move_tag\n"
+            "ABC,NSE,2026-07-14,72,HIGH_CONVICTION,WEEKLY_GAINER,WEEKLY_MOMENTUM\n",
+        ),
+        investigator_intake_receipt=_artifact(
+            tmp_path,
+            "convergence_investigator_receipt",
+            "symbol_id,exchange,trade_date,tracked,selected_trigger_reason,decision_state,reason_codes\n"
+            "ABC,NSE,2026-07-14,true,WEEKLY_GAINER,TRACKED,TRACKED_WEEKLY_GAINER\n",
+        ),
+        fundamental_thesis_universe=fundamental,
+        pattern_lane_assessments=_artifact(
+            tmp_path,
+            "convergence_pattern_assessments",
+            "exchange,symbol_id,session_date,pattern_evaluation_state,pattern_member,primary_pattern_family,primary_pattern_state,lane_freshness,evidence_hash,signal_count\n"
+            "NSE,ABC,2026-07-14,KNOWN,true,vcp,confirmed,FRESH,pattern-row-hash,1\n",
+        ),
+    )
+
+    result = service.run(
+        run_id="convergence-run",
+        stage_attempt=1,
+        artifact_set=artifacts,
+        as_of=NOW,
+        mode=OpportunityRegistryMode.SHADOW,
+        config=OpportunityShadowConfig(
+            mode=OpportunityRegistryMode.SHADOW,
+            dry_run=True,
+        ),
+    )
+
+    convergence = result.artifact_rows["opportunity_convergence_view"]
+    assert len(convergence) == 1
+    assert convergence[0]["convergence_cohort"] == "I_F_P"
+    checks = [
+        row
+        for row in result.artifact_rows["investigator_readiness_inputs"]
+        if row["category"] == "opportunity_convergence"
+    ]
+    assert len(checks) == 9
+    assert all(row["status"] == "PASS" for row in checks)
+    assert result.summary["opportunity_convergence_cohorts"] == {"I_F_P": 1}
+
+
 def test_rejected_transition_write_never_emits_phantom_transition(
     tmp_path, monkeypatch
 ):
