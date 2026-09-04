@@ -128,6 +128,15 @@ Writes under `data/pipeline_runs/<run_id>/opportunities/attempt_<n>/`:
 - `position_recovery_actions.csv`
 - `position_monitor_reconciliation.csv`
 - `opportunity_convergence_view.csv` — one row per exchange/symbol/session/policy snapshot with source-owned Investigator, fundamental, and pattern states; lane freshness and evidence hashes; explicit missing/error states; and one mutually exclusive I/F/P cohort
+- `opportunity_convergence_observations.csv` — durable interpreted snapshots projected from the current and prior immutable convergence observations
+- `opportunity_convergence_anchors.csv` — independent discovery-close, discovery-next-open shadow-fill, canonical confirmation-close, and canonical executable-fill anchors
+- `opportunity_convergence_horizons.csv` — explicit pending or matured 3/5/10/20-session returns, excursions, touch timing, and benchmark/sector-relative outcomes
+- `opportunity_convergence_primary_cohorts.csv` — mutually exclusive active I/F/P combination performance
+- `opportunity_convergence_diagnostic_cohorts.csv` — intentionally overlapping Investigator-any, fundamental-any, and pattern-any performance
+- `opportunity_convergence_research_cohorts.csv` — sub-30 active cohorts, never policy authority; `NONE` rows retain observations but do not create horizons
+- `opportunity_convergence_calendar_windows.csv` — ten-session non-overlapping all-active and weekly-momentum window results
+- `opportunity_convergence_missing_data_reasons.csv` — pending and missing benchmark/sector reason distributions
+- `opportunity_convergence_performance_readiness.csv` — P2 persistence, anchor, horizon, sample, maturation, and window-stability gates
 - `technical_evidence_labels.csv` — one row per exchange/symbol/session with independent fundamental, Investigator weekly-gainer, near-high, SMA20, entry-confirmation, and SMA20-break label states plus the shared observation ID
 - `technical_evidence_cohorts.csv` — deduplicated matured 5/10/20/60-session next-open return summaries for fundamental-only, technical-only, and intersection cohorts
 - `opportunity_source_reconciliation.csv` — one row per configured CSV input with declared/read row counts, hashes, lineage, and an explicit reconciliation state

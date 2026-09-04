@@ -18,7 +18,7 @@ from .contracts import (
 )
 
 
-CONVERGENCE_POLICY_VERSION = "opportunity-convergence-v1.1"
+CONVERGENCE_POLICY_VERSION = "opportunity-convergence-v1.2"
 CONVERGENCE_COHORTS: tuple[str, ...] = (
     "I_ONLY",
     "F_ONLY",
@@ -138,6 +138,16 @@ def build_convergence_view(
         _add_lane(row, "investigator", i_assessment)
         _add_lane(row, "fundamental", f_assessment)
         _add_lane(row, "pattern", p_assessment)
+        sector_name, sector_state, sector_reasons = _sector_context(
+            i_assessment,
+            f_assessment,
+            p_assessment,
+        )
+        row["sector_name"] = sector_name
+        row["sector_evaluation_state"] = sector_state
+        row["sector_reason_codes_json"] = json.dumps(
+            sector_reasons, separators=(",", ":")
+        )
         row["evidence_hash"] = stable_digest(
             {
                 "exchange": exchange,
@@ -148,6 +158,8 @@ def build_convergence_view(
                 "investigator_evidence_hash": i_assessment.evidence_hash,
                 "fundamental_evidence_hash": f_assessment.evidence_hash,
                 "pattern_evidence_hash": p_assessment.evidence_hash,
+                "sector_name": sector_name,
+                "sector_evaluation_state": sector_state,
             }
         )
         rows.append(row)
@@ -238,6 +250,10 @@ def convergence_readiness_inputs(
         value == LaneEvaluationState.UNKNOWN.value for value in state_cells
     )
     error_count = sum(value == LaneEvaluationState.ERROR.value for value in state_cells)
+    error_count += sum(
+        row.get("sector_evaluation_state") == LaneEvaluationState.ERROR.value
+        for row in rows
+    )
     source_count = sum(bool(value) for value in source_presence.values())
 
     checks = (
@@ -365,6 +381,9 @@ def _investigator_assessment(
                 "move_tag",
                 "final_score",
                 "verdict",
+                "sector",
+                "sector_name",
+                "invalidation_price",
             ),
         }
     )
@@ -428,6 +447,8 @@ def _investigator_assessment(
             "trigger_reason": trigger,
             "final_score": score,
             "primary_review_eligible": primary_eligible,
+            "sector_name": _first_text(row, "sector_name", "sector"),
+            "invalidation_price": _float(row.get("invalidation_price")),
         },
     )
 
@@ -461,6 +482,8 @@ def _fundamental_assessment(
                 "taxonomy_version",
                 "rule_version",
                 "admission_version",
+                "sector",
+                "sector_name",
             ),
         }
     )
@@ -502,6 +525,7 @@ def _fundamental_assessment(
             "admission_eligible": eligible,
             "primary_thesis": primary or None,
             "classification_status": classification,
+            "sector_name": _first_text(row, "sector_name", "sector"),
         },
     )
 
@@ -586,8 +610,30 @@ def _pattern_assessment(
             "primary_pattern_family": row.get("primary_pattern_family"),
             "primary_evidence_class": row.get("primary_evidence_class"),
             "evidence_origin": row.get("evidence_origin"),
+            "sector_name": _first_text(row, "sector_name", "sector"),
         },
     )
+
+
+def _sector_context(
+    *assessments: LaneAssessment,
+) -> tuple[str | None, str, tuple[str, ...]]:
+    values = {
+        str(assessment.details.get("sector_name") or "").strip()
+        for assessment in assessments
+        if assessment.details
+        and str(assessment.details.get("sector_name") or "").strip()
+    }
+    normalized = {" ".join(value.lower().split()) for value in values}
+    if not values:
+        return (
+            None,
+            LaneEvaluationState.NOT_EVALUATED.value,
+            ("SECTOR_CONTEXT_NOT_AVAILABLE",),
+        )
+    if len(normalized) > 1:
+        return None, LaneEvaluationState.ERROR.value, ("CONFLICTING_SECTOR_CONTEXT",)
+    return sorted(values)[0], LaneEvaluationState.KNOWN.value, ()
 
 
 def _add_lane(row: dict[str, Any], prefix: str, assessment: LaneAssessment) -> None:
@@ -707,6 +753,14 @@ def _float(value: Any) -> float | None:
 
 def _select(row: Mapping[str, Any], *fields: str) -> dict[str, Any]:
     return {field: row.get(field) for field in fields}
+
+
+def _first_text(row: Mapping[str, Any], *fields: str) -> str | None:
+    for field in fields:
+        value = str(row.get(field) or "").strip()
+        if value:
+            return value
+    return None
 
 
 def _reason_codes(value: Any) -> tuple[str, ...]:

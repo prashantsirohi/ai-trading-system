@@ -521,6 +521,36 @@ CONTROL_PLANE_CURRENT_SCHEMA: dict[str, frozenset[str]] = {
             "idempotency_key",
         }
     ),
+    "opportunity_convergence_observation": frozenset(
+        {
+            "observation_id",
+            "exchange",
+            "symbol_id",
+            "session_date",
+            "policy_snapshot_id",
+            "convergence_cohort",
+            "evidence_hash",
+            "idempotency_key",
+        }
+    ),
+    "opportunity_convergence_anchor": frozenset(
+        {
+            "anchor_id",
+            "observation_id",
+            "anchor_type",
+            "anchor_session_date",
+            "anchor_price_basis",
+            "idempotency_key",
+        }
+    ),
+    "opportunity_convergence_horizon": frozenset(
+        {
+            "anchor_id",
+            "horizon_sessions",
+            "observed_sessions",
+            "data_quality_status",
+        }
+    ),
 }
 
 

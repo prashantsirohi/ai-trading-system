@@ -33,6 +33,8 @@ flowchart TD
     L --> D["OpportunityRegistryService"]
     L --> F["Shadow audit artifacts"]
     V --> F
+    V --> O["Immutable convergence observations and 3/5/10/20-session outcomes"]
+    O --> F
     D --> CP["control_plane.duckdb canonical history"]
     CP -. "not consumed in Phase 3A or 3B" .-> X["Execution"]
 ```
@@ -57,6 +59,18 @@ the mutually exclusive I/F/P cohort label; future, duplicate, malformed, and
 unexplained evidence is excluded and fails the existing readiness evidence.
 The projection has no admission, lifecycle, ranking, candidate, or execution
 authority.
+
+P2 persists that projection under `opportunity-convergence-v1.2` and evaluates
+it under `opportunity-convergence-performance-v1`. Each observation is immutable
+at exchange/symbol/session/policy-snapshot grain. Discovery close and the
+versioned discovery-next-open shadow fill are independent anchors; canonical
+confirmation and executable anchors are linked only through immutable
+Investigator performance events. Missing future sessions remain `PENDING`, with
+partial return shown only as diagnostic progress. A matured outcome is not
+repainted by a later run. Primary I/F/P combinations are mutually exclusive;
+lane marginals are explicitly overlapping diagnostics and sub-30 active samples
+remain research-only. `NONE` rows retain evidence history but do not create
+performance horizons.
 
 Weekly stock confidence is converted from `0–1` to `0–100`. A source week is locked only when explicitly locked or already completed, and a source creation/lock timestamp must exist. Same-day weeks remain provisional. Weekly sector artifacts own Weinstein structure; rank sector artifacts own RS percentile and quadrant. Reconciliation combines those fields by ownership, so positive sector rank never implies Stage 2 and missing rank context cannot erase valid weekly structure.
 

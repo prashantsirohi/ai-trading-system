@@ -58,6 +58,9 @@ from ai_trading_system.domains.opportunities.position_monitoring import (
 from ai_trading_system.domains.opportunities.performance_evaluation import (
     mature_performance_events,
 )
+from ai_trading_system.domains.opportunities.convergence_performance import (
+    evaluate_convergence_performance,
+)
 from ai_trading_system.domains.opportunities.registry import (
     DuckDBOpportunityRegistryStore,
     EpisodeClosure,
@@ -472,6 +475,15 @@ class OpportunityShadowOrchestrator:
                 "investigator_primary_sampling",
                 "investigator_source_fidelity",
                 "opportunity_convergence_view",
+                "opportunity_convergence_observations",
+                "opportunity_convergence_anchors",
+                "opportunity_convergence_horizons",
+                "opportunity_convergence_primary_cohorts",
+                "opportunity_convergence_diagnostic_cohorts",
+                "opportunity_convergence_research_cohorts",
+                "opportunity_convergence_calendar_windows",
+                "opportunity_convergence_missing_data_reasons",
+                "opportunity_convergence_performance_readiness",
                 "candidate_fundamental_observations",
                 "technical_evidence_labels",
                 "technical_evidence_cohorts",
@@ -1230,6 +1242,17 @@ class OpportunityShadowOrchestrator:
             rows["technical_evidence_cohorts"].extend(
                 _technical_evidence_cohorts(self.registry_store.registry)
             )
+        convergence_performance = evaluate_convergence_performance(
+            self.registry_store.registry,
+            convergence_rows=convergence_rows,
+            run_id=run_id,
+            stage_attempt=stage_attempt,
+            observed_at=as_of,
+            ohlcv_db_path=ohlcv_db_path,
+            persist=not config.dry_run and policy_snapshot_id is not None,
+        )
+        for name, output_rows in convergence_performance.items():
+            rows[name].extend(output_rows)
         sampling_rows, fidelity_rows = _primary_sampling_evidence(
             authoritative_context=authoritative_context,
             captured_context=captured_context,
@@ -1328,6 +1351,9 @@ class OpportunityShadowOrchestrator:
             )
         )
         rows["investigator_readiness_inputs"].extend(convergence_readiness)
+        rows["investigator_readiness_inputs"].extend(
+            rows["opportunity_convergence_performance_readiness"]
+        )
         if not config.dry_run:
             for state in self.registry.query_current_states():
                 rows["current_candidate_state"].append(asdict(state))
@@ -1350,10 +1376,7 @@ class OpportunityShadowOrchestrator:
                         or integrity_status == "FAIL"
                         or freshness_status == "FAIL"
                         or continuity_status == "FAIL"
-                        or any(
-                            row["status"] == "FAIL"
-                            for row in convergence_readiness
-                        )
+                        or any(row["status"] == "FAIL" for row in convergence_readiness)
                     )
                     else "completed"
                 ),
@@ -1372,15 +1395,9 @@ class OpportunityShadowOrchestrator:
                 "opportunity_convergence_rows": len(convergence_rows),
                 "opportunity_convergence_status": (
                     "FAIL"
-                    if any(
-                        row["status"] == "FAIL"
-                        for row in convergence_readiness
-                    )
+                    if any(row["status"] == "FAIL" for row in convergence_readiness)
                     else "PENDING"
-                    if any(
-                        row["status"] == "PENDING"
-                        for row in convergence_readiness
-                    )
+                    if any(row["status"] == "PENDING" for row in convergence_readiness)
                     else "PASS"
                 ),
                 "opportunity_convergence_cohorts": _stage_distribution(
@@ -1390,6 +1407,24 @@ class OpportunityShadowOrchestrator:
                     row[f"{lane}_evaluation_state"] == "UNKNOWN"
                     for row in convergence_rows
                     for lane in ("investigator", "fundamental", "pattern")
+                ),
+                "opportunity_convergence_matured_20d": sum(
+                    int(row.get("horizon_sessions") or 0) == 20
+                    and row.get("return_pct") is not None
+                    for row in rows["opportunity_convergence_horizons"]
+                ),
+                "opportunity_convergence_performance_status": (
+                    "FAIL"
+                    if any(
+                        row["status"] == "FAIL"
+                        for row in rows["opportunity_convergence_performance_readiness"]
+                    )
+                    else "PENDING"
+                    if any(
+                        row["status"] == "PENDING"
+                        for row in rows["opportunity_convergence_performance_readiness"]
+                    )
+                    else "PASS"
                 ),
                 "unmatched_sector_mappings": sum(
                     item.sector_stage is None for item in bundles

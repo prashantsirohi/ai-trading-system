@@ -234,6 +234,18 @@ coverage checks append to the existing Investigator readiness evidence. The
 projection is shadow-only and cannot alter ranking, admission, lifecycle,
 candidates, execution, or broker state.
 
+Phase 3.5 P2 registers successor `opportunity-convergence-v1.2` plus
+`opportunity-convergence-performance-v1`. It persists the unified lane snapshot
+once, then records independent discovery-close, discovery-next-open shadow-fill,
+canonical confirmation-close, and canonical executable-fill anchors when each
+becomes available. Outcomes mature at 3/5/10/20 market sessions; incomplete
+horizons retain a partial diagnostic return but remain `PENDING` and never enter
+cohort performance as zero or failure. Mutually exclusive I/F/P cohorts,
+overlapping lane diagnostics, insufficient-sample research views, and
+ten-session non-overlapping windows feed the existing readiness evidence. This
+layer remains shadow-only and has no admission, lifecycle, ranking, candidate,
+execution, or broker authority.
+
 Migration 046 adds the independent `near-high-20dma-shadow-v1` evidence lane.
 The opportunities stage records one neutral exchange/symbol/session observation.
 Point-in-time adjusted OHLCV owns the decision-session price, 20-session SMA,

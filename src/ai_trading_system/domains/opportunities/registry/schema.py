@@ -25,6 +25,9 @@ TABLES = (
     "investigator_performance_horizon",
     "investigator_evaluation_transition",
     "investigator_attribution_coverage_receipt",
+    "opportunity_convergence_observation",
+    "opportunity_convergence_anchor",
+    "opportunity_convergence_horizon",
 )
 VIEWS = ("candidate_current_state",)
 

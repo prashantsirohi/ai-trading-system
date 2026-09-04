@@ -90,9 +90,7 @@ class OpportunityStage:
                 else None
             ),
             pattern_lane_assessments=(
-                context.artifact_for(
-                    "pattern_lane_scan", "pattern_lane_assessments"
-                )
+                context.artifact_for("pattern_lane_scan", "pattern_lane_assessments")
                 if str(context.params.get("pattern_lane_scan_mode", "off")).lower()
                 == "shadow"
                 else None
@@ -233,6 +231,15 @@ class OpportunityStage:
             "investigator_primary_sampling": "investigator_primary_sampling.csv",
             "investigator_source_fidelity": "investigator_source_fidelity.csv",
             "opportunity_convergence_view": "opportunity_convergence_view.csv",
+            "opportunity_convergence_observations": "opportunity_convergence_observations.csv",
+            "opportunity_convergence_anchors": "opportunity_convergence_anchors.csv",
+            "opportunity_convergence_horizons": "opportunity_convergence_horizons.csv",
+            "opportunity_convergence_primary_cohorts": "opportunity_convergence_primary_cohorts.csv",
+            "opportunity_convergence_diagnostic_cohorts": "opportunity_convergence_diagnostic_cohorts.csv",
+            "opportunity_convergence_research_cohorts": "opportunity_convergence_research_cohorts.csv",
+            "opportunity_convergence_calendar_windows": "opportunity_convergence_calendar_windows.csv",
+            "opportunity_convergence_missing_data_reasons": "opportunity_convergence_missing_data_reasons.csv",
+            "opportunity_convergence_performance_readiness": "opportunity_convergence_performance_readiness.csv",
             "candidate_fundamental_observations": "candidate_fundamental_observations.csv",
             "technical_evidence_labels": "technical_evidence_labels.csv",
             "technical_evidence_cohorts": "technical_evidence_cohorts.csv",

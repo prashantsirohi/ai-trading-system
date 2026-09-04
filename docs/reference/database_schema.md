@@ -873,6 +873,16 @@ fundamental and Investigator episodes to reference the same symbol observation
 without sharing admission authority. Neither the table nor the reference is an
 execution or publish input.
 
+Migration `047_opportunity_convergence_performance.sql` creates append-only
+`opportunity_convergence_observation` and `opportunity_convergence_anchor`
+tables plus the derived `opportunity_convergence_horizon` table. Observation
+identity is exchange/symbol/session/policy snapshot, and a same-identity payload
+change fails closed. Independent discovery, next-open shadow-fill, canonical
+confirmation, and canonical executable anchors retain content hashes. Horizon
+rows explicitly track observed sessions and pending versus matured
+3/5/10/20-session outcomes; terminal outcomes are not repainted. These tables
+feed only shadow performance artifacts and readiness evidence.
+
 ## Phase 3C-5 schema boundary
 
 Phase 3C-5 introduces no DuckDB migration or canonical table. It reads an

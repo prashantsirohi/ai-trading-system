@@ -64,7 +64,7 @@ def test_explicit_range_migration_is_backup_gated_and_verified(
         db_path=db_path,
         backup_dir=backup_dir,
         first="033",
-        last="046",
+        last="047",
         apply=True,
     )
 
@@ -84,6 +84,7 @@ def test_explicit_range_migration_is_backup_gated_and_verified(
         "044_fundamental_discovery.sql",
         "045_rank_universe_history.sql",
         "046_symbol_technical_evidence.sql",
+        "047_opportunity_convergence_performance.sql",
     ]
     RegistryStore(
         tmp_path, db_path=db_path, allow_migrations=False

@@ -18,6 +18,12 @@ from typing import Any, Mapping
 from ai_trading_system.domains.opportunities.contracts import (
     STAGE_CONFIDENCE_FORMULA_VERSION,
 )
+from ai_trading_system.domains.opportunities.convergence_performance import (
+    CONVERGENCE_ANCHOR_TYPES,
+    CONVERGENCE_PERFORMANCE_HORIZONS,
+    CONVERGENCE_PERFORMANCE_POLICY_VERSION,
+    CONVERGENCE_WINDOW_SESSIONS,
+)
 from ai_trading_system.domains.fundamentals.contracts import (
     FUNDAMENTAL_DISCOVERY_TAXONOMY_VERSION,
     FUNDAMENTAL_THESIS_ADMISSION_VERSION,
@@ -305,6 +311,27 @@ def policy_content(
             "active_membership_requires_current_session_evidence": True,
             "active_freshness_population": "policy_eligible_before_freshness_filter",
             "future_evidence_policy": "error_excluded_from_cohort",
+            "admission_authority": False,
+            "lifecycle_authority": False,
+            "execution_eligibility": False,
+        },
+        CONVERGENCE_PERFORMANCE_POLICY_VERSION: {
+            "observation_identity": (
+                "exchange_symbol_session_convergence_policy_snapshot"
+            ),
+            "anchor_types": list(CONVERGENCE_ANCHOR_TYPES),
+            "horizons": list(CONVERGENCE_PERFORMANCE_HORIZONS),
+            "benchmark_symbol": "NIFTY_50",
+            "shadow_fill_policy": "investigator-shadow-fill-v1",
+            "calendar_window_sessions": CONVERGENCE_WINDOW_SESSIONS,
+            "confidence_bands": {
+                "exploratory": [0, 29],
+                "provisional": [30, 59],
+                "moderate": [60, 119],
+                "policy_eligible_min": 120,
+            },
+            "matured_outcomes_are_immutable": True,
+            "pending_outcomes_are_not_failures": True,
             "admission_authority": False,
             "lifecycle_authority": False,
             "execution_eligibility": False,

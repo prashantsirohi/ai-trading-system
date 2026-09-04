@@ -66,6 +66,7 @@ def test_builds_one_fresh_all_lane_row_with_exclusive_cohort() -> None:
                 "trigger_reason": "WEEKLY_GAINER",
                 "move_tag": "WEEKLY_MOMENTUM",
                 "final_score": 72,
+                "sector_name": "Technology",
             }
         ],
         receipts=[
@@ -86,6 +87,7 @@ def test_builds_one_fresh_all_lane_row_with_exclusive_cohort() -> None:
                 "classification_status": "QUALIFIED",
                 "admission_eligible": True,
                 "source_data_hash": "fundamental-row-hash",
+                "sector_name": "Technology",
             }
         ],
         pattern_rows=[
@@ -100,6 +102,7 @@ def test_builds_one_fresh_all_lane_row_with_exclusive_cohort() -> None:
                 "lane_freshness": "FRESH",
                 "evidence_hash": "pattern-row-hash",
                 "signal_count": 1,
+                "sector_name": "Technology",
             }
         ],
     )
@@ -111,7 +114,48 @@ def test_builds_one_fresh_all_lane_row_with_exclusive_cohort() -> None:
     assert row["fundamental_member"] is True
     assert row["pattern_member"] is True
     assert row["policy_snapshot_id"] == "policy-hash"
+    assert row["sector_name"] == "Technology"
+    assert row["sector_evaluation_state"] == "KNOWN"
     assert all(item["status"] == "PASS" for item in readiness)
+
+
+def test_conflicting_sector_context_is_explicit_and_fails_readiness() -> None:
+    rows, readiness = _build(
+        fundamental_rows=[
+            {
+                "exchange": "NSE",
+                "symbol_id": "ABC",
+                "as_of": "2026-09-04",
+                "primary_thesis": "QUALITY_COMPOUNDER",
+                "classification_status": "QUALIFIED",
+                "admission_eligible": True,
+                "sector_name": "Technology",
+            }
+        ],
+        pattern_rows=[
+            {
+                "exchange": "NSE",
+                "symbol_id": "ABC",
+                "session_date": "2026-09-04",
+                "pattern_evaluation_state": "KNOWN",
+                "pattern_member": True,
+                "lane_freshness": "FRESH",
+                "evidence_hash": "pattern-row-hash",
+                "sector_name": "Healthcare",
+            }
+        ],
+        investigator_hash=None,
+        receipt_hash=None,
+    )
+
+    assert rows[0]["sector_name"] is None
+    assert rows[0]["sector_evaluation_state"] == "ERROR"
+    errors = next(
+        row
+        for row in readiness
+        if row["check_id"] == "OPPORTUNITY_CONVERGENCE_SOURCE_ERRORS"
+    )
+    assert errors["status"] == "FAIL"
 
 
 def test_subthreshold_weekly_gainer_is_known_but_not_primary_member() -> None:

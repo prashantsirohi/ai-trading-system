@@ -17,6 +17,9 @@ from ai_trading_system.domains.opportunities.orchestration import (
 from ai_trading_system.domains.opportunities.orchestration.convergence import (
     CONVERGENCE_POLICY_VERSION,
 )
+from ai_trading_system.domains.opportunities.convergence_performance import (
+    CONVERGENCE_PERFORMANCE_POLICY_VERSION,
+)
 from ai_trading_system.domains.opportunities.orchestration.contracts import (
     ADMISSION_RULE_VERSION,
     INVESTIGATOR_ATTRIBUTION_POLICY_VERSION,
@@ -45,6 +48,11 @@ def test_snapshot_is_deterministic() -> None:
     assert len(first.label_hashes) >= 7
     assert CONVERGENCE_POLICY_VERSION in first.label_hashes
     assert first.content[CONVERGENCE_POLICY_VERSION]["execution_eligibility"] is False
+    assert CONVERGENCE_PERFORMANCE_POLICY_VERSION in first.label_hashes
+    assert (
+        first.content[CONVERGENCE_PERFORMANCE_POLICY_VERSION]["execution_eligibility"]
+        is False
+    )
 
 
 @pytest.mark.parametrize(

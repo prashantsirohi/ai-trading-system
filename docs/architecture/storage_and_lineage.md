@@ -20,7 +20,7 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 | Store | Canonical path | Primary owner | Purpose |
 |---|---|---|---|
 | OHLCV | `$DATA_ROOT/ohlcv.duckdb` | Ingest, trust, features | Price/volume, delivery, provenance, quarantine, source freshness, and feature metadata. |
-| Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, actionable shortlist decision history, additive full-universe rank history, canonical opportunity-registry history, immutable Investigator performance events, append-only fundamental thesis observations, Phase 3B universal stage/routing history, and recovery governance. |
+| Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, actionable shortlist decision history, additive full-universe rank history, canonical opportunity-registry history, immutable Investigator and unified convergence performance evidence, append-only fundamental thesis observations, Phase 3B universal stage/routing history, and recovery governance. |
 | Execution ledger | `$DATA_ROOT/execution.duckdb` | `ExecutionStore` | Normalized decisions, orders, fills, positions, stops, and broker/paper execution state supported by the active code. |
 | Actual Trading Journal | `$DATA_ROOT/trade_journal.duckdb` | `TradeJournalStore`; read-only `JournalMcpContext` | Append-oriented broker import provenance, identity evidence, fills/orders, actual-position reconstruction, snapshots/reconciliations, episodes, analysis and annotations. It is isolated from the execution ledger and daily pipeline; the private MCP opens it read-only and account-pinned. |
 | Rank performance tracker | `$DATA_ROOT/research.duckdb` | `research.perf_tracker`; read-only `McpContext.research_performance()` | Trusted and quarantined historical ranked-cohort outcomes. MCP reads the trusted view without invoking schema creation. |
@@ -183,6 +183,15 @@ back to a failed attempt merely because its file is newer.
 CSV and JSON artifacts are immutable-attempt evidence and publish/debug inputs. Durable current or historical decision facts live in control-plane tables owned by their read/write models. The current pipeline's mutable candidate lifecycle facts remain in `candidate_tracker.duckdb`; canonical episode history written through the opportunity-registry API lives in `control_plane.duckdb`. The optional Phase 3A/3B shadow stages write canonical and universal structural history, but no synchronization or execution dependency exists between the stores. Orders and fills live in `execution.duckdb` and are read without mutation for Phase 3B/3C monitoring. Migration 036 adds lifecycle-aware alert incidents and deterministic position-recovery proposals/actions only to the control plane; it does not alter execution tables or broker state.
 
 Write modes that distinguish live updates, replay/backfill, and current-state rebuild must preserve their domain's current-state contract. Do not reconstruct or replace current state merely because an older artifact exists.
+
+Migration 047 adds append-only `opportunity_convergence_observation` and
+`opportunity_convergence_anchor` tables plus the derived
+`opportunity_convergence_horizon` outcome table. The observation identity is
+exchange/symbol/session/policy snapshot; a same-identity payload change fails
+closed. Anchors are appended only when their market or canonical-event evidence
+exists. Terminal horizon outcomes are retained unchanged, while pending rows may
+advance as later market sessions become available. These tables are read-only
+performance/readiness inputs and have no execution consumer.
 
 `rank_universe_history` persists the already-computed `ranked_universe` frame
 before regime `top_n` truncation. Its identity is `(symbol_id, exchange,
