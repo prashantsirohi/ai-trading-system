@@ -422,7 +422,10 @@ def build_performance_summary(
     for group_column in PERFORMANCE_GROUP_COLUMNS:
         if group_column not in working.columns:
             continue
-        labels = working[group_column].fillna("UNKNOWN").astype(str)
+        # Newer DuckDB clients preserve nullable BOOLEAN columns in fetched
+        # DataFrames.  Convert to pandas' string dtype before filling missing
+        # group labels so boolean extension arrays are not asked to hold text.
+        labels = working[group_column].astype("string").fillna("UNKNOWN").astype(str)
         for label, group in working.assign(_group_label=labels).groupby(
             "_group_label", dropna=False
         ):
