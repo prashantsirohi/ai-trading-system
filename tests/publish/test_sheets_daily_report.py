@@ -6,7 +6,9 @@ from ai_trading_system.domains.publish.sheets_daily_report import (
     MarketContext,
     blocked_by_flags,
     build_confirmed_breakouts,
+    build_daily_summary,
     build_daily_report_sections,
+    build_market_decision_banner,
     build_top_ranked,
     classify_stage,
     compute_new_entry,
@@ -99,6 +101,16 @@ def test_status_downgrades_non_qualified_rows_in_weak_regime() -> None:
     assert determine_status(_row(qualified=False, breakout_state="watchlist"), context) == "BLOCKED_BY_REGIME"
 
 
+def test_allowed_exposure_preserves_three_decimal_precision() -> None:
+    context = _context(allowed_exposure=0.245)
+
+    banner = build_market_decision_banner(context)
+    summary = build_daily_summary(context)
+
+    assert banner.iloc[0]["Value 2"] == 0.245
+    assert summary.loc[summary["Metric"].eq("Allowed Exposure"), "Value"].iloc[0] == 0.245
+
+
 def test_status_taxonomy_and_blocked_by_flags() -> None:
     assert determine_status(_row(qualified=True, breakout_state="qualified"), _context()) == "TRADE_READY"
     assert determine_status(_row(qualified=True, breakout_state="qualified"), _context(trust_status="blocked")) == "BLOCKED_BY_TRUST"
@@ -167,6 +179,49 @@ def test_daily_report_builds_fallback_and_new_watchlist_row() -> None:
     assert "ranked_signals:" not in main_text
     assert "Missing optional columns" not in main_text
     assert "factor rs increase_candidate" not in main_text
+
+
+def test_daily_summary_preserves_zero_and_uses_only_current_regime_breadth() -> None:
+    result = build_daily_report_sections(
+        payload={
+            "summary": {"run_date": "2026-09-04", "data_trust_status": "degraded"},
+            "data_trust": {
+                "latest_validated_date": "2026-09-04",
+                "active_quarantined_symbols": 12,
+                "fallback_ratio_latest": 0.0,
+            },
+            "market_regime": {
+                "date": "2026-09-04",
+                "pct_above_50dma": 0.61,
+                "pct_above_200dma": 0.57,
+            },
+        },
+        run_date="2026-09-04",
+    )
+
+    summary = dict(result.sections)["DAILY SUMMARY"].set_index("Metric")["Value"]
+    assert summary["Active Quarantine Count"] == 12
+    assert summary["Fallback Ratio Latest"] == 0.0
+    assert summary["Breadth > 50DMA"] == 61.0
+    assert summary["Breadth > 200DMA"] == 57.0
+
+
+def test_daily_summary_does_not_publish_stale_regime_breadth() -> None:
+    result = build_daily_report_sections(
+        payload={
+            "summary": {"run_date": "2026-09-04"},
+            "market_regime": {
+                "date": "2026-05-13",
+                "pct_above_50dma": 0.73,
+                "pct_above_200dma": 0.39,
+            },
+        },
+        run_date="2026-09-04",
+    )
+
+    summary = dict(result.sections)["DAILY SUMMARY"].set_index("Metric")["Value"]
+    assert summary["Breadth > 50DMA"] == ""
+    assert summary["Breadth > 200DMA"] == ""
 
 
 def test_top_ranked_section_keeps_ranked_names_without_pattern_setup() -> None:

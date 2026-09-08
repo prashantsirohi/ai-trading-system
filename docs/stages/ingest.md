@@ -66,7 +66,13 @@ The pipeline-run governance tables (`pipeline_artifact`, `dq_result`, etc.) live
 8. `run_delivery_collection` (`service.py:541`) determines the delivery date range from the last `_delivery` row (or `delivery_backfill_days`, default 30) and calls `DeliveryCollector.fetch_range`, then optionally `compute_delivery_features` (`service.py:594-595`).
 9. `is_downstream_skip_eligible` (`service.py:146`) marks the stage as no-op-safe when `rows_written == 0`, no `updated_symbols`, no unresolved dates, and freshness is `fresh`.
 10. `build_downstream_input_fingerprint` (`service.py:161`) emits a SHA-256 of the catalog summary + trust summary + validation counts; features and downstream stages key off this fingerprint.
-11. `run_stale_quarantine_sweep` (`service.py:89`) calls `trust.sweep_stale_quarantine` to promote long-stuck quarantined symbols to `permanently_unavailable`; failures are logged-only.
+11. Unresolved provider gaps are `active` only for recent critical-universe
+    symbols within `stale_missing_symbol_grace_days`. Gaps for symbols already
+    stale beyond that grace remain `observed`, preserving the evidence without
+    repeatedly degrading current trust. Quarantine writes replace the existing
+    `(symbol_id, exchange, trade_date, reason)` lifecycle row, so retries do not
+    accumulate duplicate observations.
+12. `run_stale_quarantine_sweep` (`service.py:89`) calls `trust.sweep_stale_quarantine` to promote long-stuck quarantined symbols to `permanently_unavailable`; failures are logged-only.
 
 ## DQ / trust gates
 

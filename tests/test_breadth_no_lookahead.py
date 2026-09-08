@@ -5,7 +5,12 @@ from pathlib import Path
 
 import duckdb
 
-from ai_trading_system.analytics.regime.breadth import compute_market_regime_snapshot
+import pytest
+
+from ai_trading_system.analytics.regime.breadth import (
+    MarketRegimeFreshnessError,
+    compute_market_regime_snapshot,
+)
 
 
 def _seed_breadth_db(path: Path, *, future_crash: bool) -> None:
@@ -59,6 +64,31 @@ def test_breadth_snapshot_does_not_use_future_rows(tmp_path: Path) -> None:
     assert clean_snapshot.pct_above_200dma == crashed_snapshot.pct_above_200dma
     assert clean_snapshot.top1000_above_200dma == crashed_snapshot.top1000_above_200dma
     assert clean_snapshot.regime == crashed_snapshot.regime
+
+
+def test_breadth_snapshot_rejects_stale_latest_source_row(tmp_path: Path) -> None:
+    db = tmp_path / "stale.duckdb"
+    _seed_breadth_db(db, future_crash=False)
+    latest_source_date = date(2025, 1, 1) + timedelta(days=229)
+    as_of = latest_source_date + timedelta(days=31)
+
+    with pytest.raises(MarketRegimeFreshnessError, match="source_age_days=31"):
+        compute_market_regime_snapshot(db, as_of=as_of.isoformat())
+
+
+def test_breadth_snapshot_accepts_source_within_configured_age(tmp_path: Path) -> None:
+    db = tmp_path / "within_age.duckdb"
+    _seed_breadth_db(db, future_crash=False)
+    latest_source_date = date(2025, 1, 1) + timedelta(days=229)
+    as_of = latest_source_date + timedelta(days=31)
+
+    snapshot = compute_market_regime_snapshot(
+        db,
+        as_of=as_of.isoformat(),
+        max_source_age_days=31,
+    )
+
+    assert snapshot.date == latest_source_date.isoformat()
 
 
 def test_breadth_snapshot_prefers_adjusted_close(tmp_path: Path) -> None:

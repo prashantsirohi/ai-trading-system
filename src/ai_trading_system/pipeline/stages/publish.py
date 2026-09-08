@@ -125,6 +125,8 @@ class PublishStage:
         rank_artifact = context.require_artifact("rank", "ranked_signals")
         fallback_fundamental_artifacts = self._ensure_fundamental_artifact_fallback(context)
         def _context_artifact_for(artifact_type: str) -> StageArtifact | None:
+            if artifact_type == "watchlist_candidates":
+                return context.artifact_for("rank", artifact_type)
             if artifact_type in {
                 "candidate_tracker_current",
                 "candidate_tracker_alerts",
@@ -153,6 +155,15 @@ class PublishStage:
             fundamental_artifact_types=FUNDAMENTAL_ARTIFACT_TYPES,
             project_root=context.project_root,
             run_date=context.run_date,
+        )
+        fundamental_watchlist_artifact = (
+            context.artifact_for("fundamentals", "watchlist_candidates")
+            or fallback_fundamental_artifacts.get("watchlist_candidates")
+        )
+        datasets["fundamental_watchlist_candidates"] = (
+            self._read_artifact(fundamental_watchlist_artifact)
+            if fundamental_watchlist_artifact is not None
+            else pd.DataFrame()
         )
         self._attach_event_datasets(context, datasets)
         self._attach_insight_datasets(context, datasets)
@@ -280,7 +291,7 @@ class PublishStage:
         datasets: Dict[str, Any],
         metadata: Dict[str, Any],
     ) -> None:
-        watchlist = datasets.get("watchlist_candidates")
+        watchlist = datasets.get("fundamental_watchlist_candidates")
         if isinstance(watchlist, pd.DataFrame) and not watchlist.empty:
             bucket = watchlist.get("watchlist_bucket", pd.Series("", index=watchlist.index)).astype(str)
             add_rows = watchlist.loc[bucket.eq("ADD_TO_WATCHLIST")].head(10)
@@ -864,7 +875,7 @@ class PublishStage:
     ) -> Dict[str, Any]:
         from ai_trading_system.domains.publish.channels.google_sheets import publish_fundamental_watchlist
 
-        if not publish_fundamental_watchlist(datasets["watchlist_candidates"]):
+        if not publish_fundamental_watchlist(datasets["fundamental_watchlist_candidates"]):
             raise RuntimeError("fundamental watchlist publish returned False")
         return {"report_id": "fundamental_watchlist_sheet"}
 

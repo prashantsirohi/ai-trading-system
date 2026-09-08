@@ -28,6 +28,7 @@ from ai_trading_system.domains.ranking.payloads import (
 from ai_trading_system.domains.ranking.contracts import RANK_INPUT_CONTRACT_VERSION
 from ai_trading_system.domains.features.phase1 import PHASE1_SYMBOL_COLUMNS
 from ai_trading_system.analytics.regime import (
+    MarketRegimeFreshnessError,
     MarketRegimeSnapshot,
     RegimeProfile,
     build_market_direction,
@@ -695,6 +696,7 @@ class RankOrchestrationService:
             previous_regime_seed = resolve_previous_regime(
                 context.registry, exclude_run_id=context.run_id
             )
+            regime_stale_days = effective_params.get("rank_regime_stale_days", 30)
             regime_snapshot = compute_market_regime_snapshot(
                 context.db_path,
                 as_of=context.run_date,
@@ -702,6 +704,9 @@ class RankOrchestrationService:
                 rules_path=effective_params.get("regime_rules_path"),
                 exchange=str(effective_params.get("exchange", "NSE")),
                 previous_regime=previous_regime_seed,
+                max_source_age_days=(
+                    30 if regime_stale_days is None else int(regime_stale_days)
+                ),
             )
             try:
                 regime_phase_result = compute_regime_phase(
@@ -744,6 +749,8 @@ class RankOrchestrationService:
                     regime_profile.min_score,
                     regime_profile.rank_top_n,
                 )
+        except MarketRegimeFreshnessError:
+            raise
         except Exception as exc:
             warnings.append(f"regime overlay unavailable: {exc}")
 
@@ -1716,7 +1723,14 @@ class RankOrchestrationService:
             optional=False,
         )
         if isinstance(dashboard_payload, dict):
-            attach_phase1_market_breadth_to_payload(dashboard_payload, phase1_breadth)
+            attach_phase1_market_breadth_to_payload(
+                dashboard_payload,
+                phase1_breadth,
+                as_of=context.run_date,
+                max_source_age_days=int(
+                    effective_params.get("phase1_breadth_stale_days", 0) or 0
+                ),
+            )
             if regime_snapshot is not None:
                 disagreement = regime_disagreement(
                     regime_snapshot.regime, regime_snapshot.raw_regime

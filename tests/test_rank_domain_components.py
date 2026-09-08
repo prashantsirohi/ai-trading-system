@@ -952,6 +952,48 @@ def test_phase1_market_breadth_payload_fields_are_attached() -> None:
     assert out["summary"]["advance_decline_ratio"] == pytest.approx(1.7)
 
 
+def test_stale_phase1_market_breadth_is_not_promoted_to_current_summary() -> None:
+    payload = {"summary": {"run_id": "r1"}}
+    breadth = {
+        "timestamp": "2026-07-13",
+        "breadth_score": 91.55,
+        "breadth_velocity_bucket": "positive",
+        "pct_above_200dma": 0.9155,
+    }
+
+    out = attach_phase1_market_breadth_to_payload(
+        payload,
+        breadth,
+        as_of="2026-09-04",
+    )
+
+    assert out["phase1_market_breadth"]["freshness_status"] == "stale"
+    assert out["phase1_market_breadth"]["source_age_days"] == 53
+    assert out["summary"]["phase1_market_breadth_freshness_status"] == "stale"
+    assert "breadth_score" not in out["summary"]
+    assert "pct_above_200dma" not in out["summary"]
+
+
+def test_current_phase1_market_breadth_is_promoted_to_current_summary() -> None:
+    payload = {"summary": {"run_id": "r1"}}
+    breadth = {
+        "timestamp": "2026-09-04T16:00:00",
+        "breadth_score": 57.0,
+        "breadth_velocity_bucket": "negative",
+        "pct_above_200dma": 0.57,
+    }
+
+    out = attach_phase1_market_breadth_to_payload(
+        payload,
+        breadth,
+        as_of="2026-09-04",
+    )
+
+    assert out["summary"]["phase1_market_breadth_freshness_status"] == "fresh"
+    assert out["summary"]["breadth_score"] == pytest.approx(57.0)
+    assert out["summary"]["pct_above_200dma"] == pytest.approx(0.57)
+
+
 def test_phase1_feature_warnings_report_low_coverage_and_staleness() -> None:
     frame = pd.DataFrame(
         [

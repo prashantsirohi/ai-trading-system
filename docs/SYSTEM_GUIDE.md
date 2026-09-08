@@ -61,6 +61,14 @@ also records `rank_regime_freshness_v1` DQ evidence using the observed regime
 date and calculated calendar age; MCP reports stale or inconsistent evidence
 without reinterpreting policy.
 
+Operational ranking now enforces the same market-regime age boundary before
+using a snapshot: the newest source row must be within
+`rank_regime_stale_days` calendar days of the decision date (default 30),
+including after any research compatibility fallback. A stale snapshot fails
+rank before it can select a regime profile or publish exposure guidance; the
+decision-history DQ row remains audit evidence rather than the enforcement
+mechanism.
+
 Rank market-stage routing reads the latest correction-aware NSE stock-stage
 breadth from governed `weekly_stock_stage_history` as of the decision date. The
 legacy mutable `ohlcv.weekly_stage_snapshot` is compatibility fallback only and
@@ -291,6 +299,12 @@ equality hashes. See the [rank contract](stages/rank.md#offline-r0-pattern-lane-
   a stale fallback file cannot override that order. Provider fallback and
   quarantine behavior are defined in [data sources](reference/data_sources.md)
   and [trust and DQ](architecture/data_trust_and_dq.md).
+  Recent unresolved gaps remain active only while a symbol is inside the
+  critical universe and within the configured stale-symbol grace period.
+  Longer-running symbol gaps remain recorded as `observed` evidence without
+  degrading the current trust summary. Quarantine is maintained as one current
+  lifecycle row per symbol, exchange, trade date, and reason; ingest retries
+  replace that state instead of appending duplicates.
 - Synthetic smoke data is disabled. Canary runs use a reduced real symbol universe.
 - Critical trust or DQ failures block downstream execution.
 - Historical OHLCV repair and research-to-operational backfill project candidate
@@ -306,6 +320,11 @@ equality hashes. See the [rank contract](stages/rank.md#offline-r0-pattern-lane-
   stage, benchmark, and persisted feature inputs cannot read observations after
   the requested run date. One immutable `RankInputSnapshot` owns that cutoff and
   caches repeated factor reads for the decision.
+- The operational `UNIV_TOP1000` benchmark lives in the operational OHLCV
+  `_index_catalog`. Rank rejects a benchmark snapshot older than
+  `rank_regime_stale_days` (30 calendar days by default), including a stale
+  research compatibility fallback, so old breadth cannot drive a current
+  market decision.
 - Default artifact resolution promotes only outputs whose exact producing stage
   attempt completed. Failed-attempt files remain immutable forensic evidence but
   cannot feed retries, execution, or publishing. Registered artifacts advance
@@ -807,6 +826,23 @@ PYTHONPATH=src ./.venv/bin/python -m \
 The daily pipeline enables incremental BSE ingestion by default. Direct
 `daily_update_runner` CLI use does the same unless `--no-bse` is supplied;
 research-domain and Dhan-primary modes do not invoke the official BSE path.
+
+Build or increment the point-in-time `UNIV_TOP1000` benchmark in the selected
+domain with the universe-index tool. For the operational domain, first make a
+verified backup of `ohlcv.duckdb`; this command mutates the benchmark,
+membership, and diagnostics tables. A mid-month incremental invocation resolves
+the actual first trading day of the month and reuses or creates that month's
+membership rather than treating the requested start date as a rebalance:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m tools.build_universe_index \
+  --data-domain operational \
+  --from-date YYYY-MM-DD --to-date YYYY-MM-DD
+```
+
+The operational builder requires at least 100 distinct NSE symbols per session
+by default, excluding isolated holiday/weekend rows from the market calendar.
+Use `--min-session-symbols` only for intentionally smaller copied-data tests.
 
 For a newly inserted BSE-only master row, use the unified onboarding command
 instead of running the individual repair stages by hand. Preview is fully

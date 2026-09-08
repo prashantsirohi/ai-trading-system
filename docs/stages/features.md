@@ -83,6 +83,11 @@ Hard-floor failures block downstream stages. Computational substage failures sto
 ## Failure modes
 
 - Missing/unreadable `ingest_summary` expands technical work to the full catalog.
+- Phase-1 equity selection accepts legacy null `instrument_type` values when
+  the row is not benchmark/index-like. This preserves pre-column-migration
+  history needed for 200/252-session calculations. Its breadth refresh replaces
+  the complete exchange partition because the calculation is a full-history
+  materialization; truncated output cannot leave newer stale rows behind.
 - A symbol requested for the wrong exchange produces no feature rows; the
   multi-exchange runner preserves `(symbol_id, exchange)` and writes only the
   partition that has trusted OHLCV input.

@@ -818,9 +818,31 @@ def test_daily_update_runner_applies_stale_grace_to_unresolved_dates(
 
     assert result["symbols_updated"] == 0
     assert captured["trade_dates"] == ["2026-04-02", "2026-04-03", "2026-04-06"]
-    assert result["unresolved_dates"] == ["2026-04-02", "2026-04-03", "2026-04-06"]
+    assert result["unresolved_dates"] == []
+    assert result["unresolved_dates_all"] == ["2026-04-02", "2026-04-03", "2026-04-06"]
+    assert result["unresolved_symbol_date_count"] == 0
+    assert result["observed_row_count"] == 3
     assert result["stale_missing_symbol_count"] == 1
     assert result["stale_missing_symbols"] == ["AAA"]
+
+    conn = duckdb.connect(str(tmp_path / "ohlcv.duckdb"), read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT trade_date, status
+            FROM _catalog_quarantine
+            WHERE symbol_id = ?
+            ORDER BY trade_date
+            """,
+            ["AAA"],
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [
+        (pd.Timestamp("2026-04-02").date(), "observed"),
+        (pd.Timestamp("2026-04-03").date(), "observed"),
+        (pd.Timestamp("2026-04-06").date(), "observed"),
+    ]
 
 
 def test_daily_update_runner_counts_trading_gap_not_calendar_gap(

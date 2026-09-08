@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-08-30
+- **Last verified:** 2026-09-04
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -19,7 +19,7 @@ Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset
 
 | Store | Canonical path | Primary owner | Purpose |
 |---|---|---|---|
-| OHLCV | `$DATA_ROOT/ohlcv.duckdb` | Ingest, trust, features | Price/volume, delivery, provenance, quarantine, source freshness, and feature metadata. |
+| OHLCV | `$DATA_ROOT/ohlcv.duckdb` | Ingest, trust, features | Price/volume, delivery, provenance, quarantine, source freshness, feature metadata, and the derived operational `UNIV_TOP1000` index/membership/diagnostics tables. |
 | Control plane | `$DATA_ROOT/control_plane.duckdb` | Orchestrator and `RegistryStore` | Runs, attempts, artifacts, DQ, actionable shortlist decision history, additive full-universe rank history, canonical opportunity-registry history, immutable Investigator and unified convergence performance evidence, append-only fundamental thesis observations, Phase 3B universal stage/routing history, and recovery governance. |
 | Execution ledger | `$DATA_ROOT/execution.duckdb` | `ExecutionStore` | Normalized decisions, orders, fills, positions, stops, and broker/paper execution state supported by the active code. |
 | Actual Trading Journal | `$DATA_ROOT/trade_journal.duckdb` | `TradeJournalStore`; read-only `JournalMcpContext` | Append-oriented broker import provenance, identity evidence, fills/orders, actual-position reconstruction, snapshots/reconciliations, episodes, analysis and annotations. It is isolated from the execution ledger and daily pipeline; the private MCP opens it read-only and account-pinned. |

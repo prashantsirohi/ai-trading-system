@@ -30,9 +30,16 @@ def _publish_context(tmp_path: Path, *, with_fundamentals: bool) -> StageContext
     rank_dir.mkdir(parents=True, exist_ok=True)
     ranked_path = rank_dir / "ranked_signals.csv"
     pd.DataFrame([{"symbol_id": "AAA", "composite_score": 90}]).to_csv(ranked_path, index=False)
+    rank_watchlist_path = rank_dir / "watchlist_candidates.csv"
+    pd.DataFrame(
+        [{"symbol_id": "RANK_ONLY", "watchlist_score": 91.0}]
+    ).to_csv(rank_watchlist_path, index=False)
     artifacts = {
         "rank": {
             "ranked_signals": StageArtifact.from_file("ranked_signals", ranked_path, row_count=1),
+            "watchlist_candidates": StageArtifact.from_file(
+                "watchlist_candidates", rank_watchlist_path, row_count=1
+            ),
         }
     }
     if with_fundamentals:
@@ -120,10 +127,20 @@ def test_publish_succeeds_without_fundamentals_artifact(tmp_path: Path) -> None:
 
 
 def test_publish_includes_fundamentals_watchlist_when_present(tmp_path: Path) -> None:
-    metadata = PublishStage(delivery_manager=_FakeDeliveryManager())._run_default(
-        _publish_context(tmp_path, with_fundamentals=True)
-    )
+    captured: dict[str, pd.DataFrame] = {}
 
+    def _capture(_context, _artifact, datasets):
+        captured["rank"] = datasets["watchlist_candidates"].copy()
+        captured["fundamental"] = datasets["fundamental_watchlist_candidates"].copy()
+        return {"report_id": "captured"}
+
+    metadata = PublishStage(
+        channel_handlers={"local_summary": _capture},
+        delivery_manager=_FakeDeliveryManager(),
+    )._run_default(_publish_context(tmp_path, with_fundamentals=True))
+
+    assert captured["rank"]["symbol_id"].tolist() == ["RANK_ONLY"]
+    assert captured["fundamental"]["symbol"].tolist() == ["AAA"]
     assert metadata["fundamentals_top_add_to_watchlist"] == []
     assert metadata["fundamentals_top_tracking_watchlist"] == ["AAA"]
     assert metadata["fundamental_summary_uri"].endswith("fundamental_summary.json")

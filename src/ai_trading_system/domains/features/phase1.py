@@ -168,10 +168,12 @@ def _create_phase1_catalog_view(conn: duckdb.DuckDBPyConnection) -> None:
 
 def _equity_predicate(conn: duckdb.DuckDBPyConnection) -> str:
     columns = _catalog_columns(conn)
-    if "instrument_type" in columns:
-        return "LOWER(COALESCE(instrument_type, '')) IN ('equity', 'eq')"
     quoted = ", ".join("'" + symbol.replace("'", "''") + "'" for symbol in sorted(INDEX_LIKE_SYMBOLS))
-    predicate = f"UPPER(symbol_id) NOT IN ({quoted})"
+    legacy_equity = f"(TRIM(COALESCE(instrument_type, '')) = '' AND UPPER(symbol_id) NOT IN ({quoted}))"
+    if "instrument_type" in columns:
+        predicate = f"(LOWER(COALESCE(instrument_type, '')) IN ('equity', 'eq') OR {legacy_equity})"
+    else:
+        predicate = f"UPPER(symbol_id) NOT IN ({quoted})"
     if "is_benchmark" in columns:
         predicate += " AND COALESCE(is_benchmark, FALSE) = FALSE"
     return predicate
@@ -514,11 +516,9 @@ def _replace_breadth_features(conn: duckdb.DuckDBPyConnection, frame: pd.DataFra
         return 0
     frame = frame.copy()
     frame.loc[:, "date"] = pd.to_datetime(frame["timestamp"]).dt.date
-    min_date = frame["date"].min()
-    max_date = frame["date"].max()
     conn.execute(
-        "DELETE FROM feat_phase1_market_breadth WHERE exchange = ? AND date BETWEEN ? AND ?",
-        [str(frame["exchange"].iloc[0]), min_date, max_date],
+        "DELETE FROM feat_phase1_market_breadth WHERE exchange = ?",
+        [str(frame["exchange"].iloc[0])],
     )
     conn.execute("INSERT INTO feat_phase1_market_breadth BY NAME SELECT * FROM frame")
     return int(len(frame))

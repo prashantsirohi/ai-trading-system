@@ -2,7 +2,7 @@
 
 - **Purpose:** Build the canonical ranked-signal artifact set (composite ranking, breakout scan, pattern scan, sector dashboard, dashboard payload) consumed by every downstream stage.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-08-28
+- **Last verified:** 2026-09-04
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/rank.py`
   - `src/ai_trading_system/domains/ranking/service.py` (`RankOrchestrationService`)
@@ -102,6 +102,16 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
    NSE market regime and sector context remain the common India-market context;
    unavailable BSE delivery or fundamental fields degrade through existing
    missing-feature confidence rules rather than being synthesized.
+   The market-regime snapshot must be no more than
+   `rank_regime_stale_days` calendar days old (default 30). This applies after
+   any research compatibility fallback. A stale snapshot raises
+   `MarketRegimeFreshnessError` and fails rank before it can determine the
+   regime profile, market direction, or exposure guidance.
+   Persisted Phase 1 breadth is attached with its source date, calendar age,
+   and freshness status. By default (`phase1_breadth_stale_days=0`), only a row
+   dated exactly to the rank run may populate current dashboard summary
+   metrics; older rows remain in the diagnostic payload but are not promoted
+   as current values.
 4. Run resumable tasks in order — each is fingerprinted, persisted in `task_status.json`, and skipped on retry if the fingerprint matches (`service.py:495`–end of `run_default`):
    - `rank_core` → combined NSE+BSE `ranked_signals.csv`; filter
      `eligible_rank == true` before the adjusted-score cutoff and `top_n`
@@ -138,6 +148,12 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
   decision cutoff, actual source date, calendar age, source identity, freshness,
   and fallback reason in `market_stage_info`. Stale legacy breadth cannot keep
   breakout routing disabled indefinitely.
+- **Market-regime freshness.** The newest regime source row must be within
+  `rank_regime_stale_days` calendar days of the decision date (default 30).
+  Stale operational or research-fallback data fails rank; the warning-only
+  decision-history receipt remains audit evidence and is not the enforcement
+  boundary. `regime_age_days` records how long the classified regime has
+  persisted; it is not source age and does not make a same-date snapshot stale.
 - **Factor correlation / turnover.** Computed but not enforced as gates — they appear in `rank_summary.json` for observability.
 - DQ rules in `pipeline/migrations/` (`dq_rule`, `dq_result`) drive the row-count / score-distribution checks declared in the truth map. Specific rule names should be confirmed against the migrations before being cited here.
 
@@ -152,6 +168,9 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
 - Governed stage history missing or stale and legacy breadth also unusable →
   explicit MIXED fallback plus a degraded-output warning; no stale S4 decision
   is reused.
+- Market-regime data older than `rank_regime_stale_days` → rank fails closed
+  with `MarketRegimeFreshnessError`; no dashboard or exposure banner is
+  produced from that snapshot.
 - ML overlay exception → `ml_status="degraded"`, overlay omitted, run continues (`service.py:1192`).
 - Optional task failure (`breakout_scan`, `pattern_scan`, `sector_dashboard`, watchlist sub-tasks) is recorded in `task_status.json` with status `failed | timed_out | degraded`, surfaced via warnings, and does not fail the stage.
 

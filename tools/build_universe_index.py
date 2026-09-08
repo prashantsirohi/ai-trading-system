@@ -1,7 +1,7 @@
 """Build the UNIV_TOP1000 universe index series.
 
 Offline CLI that:
-1. Walks the research-domain trading-day calendar.
+1. Walks the selected data-domain trading-day calendar.
 2. Recomputes top-1000 membership on the 1st trading day of each month
    (point-in-time from `_catalog` turnover).
 3. Computes equal-weight daily-return composite per bar.
@@ -12,7 +12,8 @@ Usage
 -----
     python -m tools.build_universe_index \\
         --from-date 2018-01-01 --to-date 2025-12-31 \\
-        --project-root . [--rebuild] [--top-n 1000] [--min-used-ratio 0.70] \\
+        --project-root . [--data-domain operational] [--rebuild] \\
+        [--top-n 1000] [--min-used-ratio 0.70] \\
         [--allow-gaps]
 
 Gap intolerance
@@ -28,7 +29,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import duckdb
@@ -46,6 +47,7 @@ from ai_trading_system.domains.features.universe_index import (
     ensure_index_catalog_tables,
     first_trading_day_of_month,
     latest_index_level,
+    latest_membership_on_or_before,
     trading_days_between,
     upsert_index_bar,
     upsert_membership,
@@ -89,10 +91,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--from-date", required=True, help="ISO date (inclusive)")
     parser.add_argument("--to-date", required=True, help="ISO date (inclusive)")
     parser.add_argument("--project-root", default=".")
+    parser.add_argument(
+        "--data-domain",
+        choices=("operational", "research"),
+        default="research",
+        help="Resolved data domain to update (default: research).",
+    )
     parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
     parser.add_argument("--min-recent-days", type=int, default=DEFAULT_MIN_RECENT_DAYS)
     parser.add_argument("--min-used-ratio", type=float, default=DEFAULT_MIN_USED_RATIO)
+    parser.add_argument(
+        "--min-session-symbols",
+        type=int,
+        default=100,
+        help="Minimum distinct symbols required for a market-wide trading session.",
+    )
     parser.add_argument("--exchange", default="NSE")
     parser.add_argument(
         "--rebuild",
@@ -113,9 +127,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     project_root = Path(args.project_root).resolve()
-    paths = ensure_domain_layout(project_root=project_root, data_domain="research")
+    paths = ensure_domain_layout(
+        project_root=project_root,
+        data_domain=args.data_domain,
+    )
     if not paths.ohlcv_db_path.exists():
-        logger.error("research OHLCV DB not found at %s", paths.ohlcv_db_path)
+        logger.error("%s OHLCV DB not found at %s", args.data_domain, paths.ohlcv_db_path)
         return 2
 
     ensure_index_catalog_tables(paths.ohlcv_db_path)
@@ -127,15 +144,19 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("rebuild requested — deleting existing UNIV_TOP1000 rows")
         _delete_existing(paths.ohlcv_db_path)
 
-    trading_days = trading_days_between(
-        paths.ohlcv_db_path, start, end, exchange=args.exchange
+    calendar_trading_days = trading_days_between(
+        paths.ohlcv_db_path,
+        start.replace(day=1),
+        end,
+        exchange=args.exchange,
+        min_session_symbols=args.min_session_symbols,
     )
+    trading_days = [d for d in calendar_trading_days if d >= start]
     if not trading_days:
         logger.error("no trading days in _catalog within [%s, %s]", start, end)
         return 2
 
-    first_per_month = first_trading_day_of_month(trading_days)
-    rebalance_dates = set(first_per_month.values())
+    first_per_month = first_trading_day_of_month(calendar_trading_days)
 
     skip_dates = _existing_dates(paths.ohlcv_db_path) if not args.rebuild else set()
 
@@ -171,27 +192,40 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 3
 
-        if d in rebalance_dates and d not in membership_cache.get(ym, ()):
-            members_df, sparse = compute_membership_for_rebalance(
+        if ym not in membership_cache:
+            expected_rebalance = first_per_month[ym]
+            persisted_rebalance, persisted_members = latest_membership_on_or_before(
                 paths.ohlcv_db_path,
-                rebalance_date=d,
-                top_n=args.top_n,
-                lookback_days=args.lookback_days,
-                min_recent_days=args.min_recent_days,
-                exchange=args.exchange,
+                d,
             )
-            n_members_written += upsert_membership(
-                paths.ohlcv_db_path,
-                rebalance_date=d,
-                members_df=members_df,
-                sparse_history=sparse,
-            )
-            membership_cache[ym] = list(members_df["symbol_id"]) if not members_df.empty else []
-            membership_rebalance_date[ym] = d
-            logger.info(
-                "rebalance %s: %d members (sparse=%s)",
-                d, len(membership_cache[ym]), sparse,
-            )
+            if persisted_rebalance == expected_rebalance:
+                membership_cache[ym] = persisted_members
+                membership_rebalance_date[ym] = persisted_rebalance
+            else:
+                members_df, sparse = compute_membership_for_rebalance(
+                    paths.ohlcv_db_path,
+                    rebalance_date=expected_rebalance,
+                    top_n=args.top_n,
+                    lookback_days=args.lookback_days,
+                    min_recent_days=args.min_recent_days,
+                    exchange=args.exchange,
+                )
+                n_members_written += upsert_membership(
+                    paths.ohlcv_db_path,
+                    rebalance_date=expected_rebalance,
+                    members_df=members_df,
+                    sparse_history=sparse,
+                )
+                membership_cache[ym] = (
+                    list(members_df["symbol_id"]) if not members_df.empty else []
+                )
+                membership_rebalance_date[ym] = expected_rebalance
+                logger.info(
+                    "rebalance %s: %d members (sparse=%s)",
+                    expected_rebalance,
+                    len(membership_cache[ym]),
+                    sparse,
+                )
 
         if d in skip_dates:
             # Bar already persisted — keep level chain consistent.
@@ -209,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         if ym not in membership_cache:
-            # No rebalance yet (first month of history). Hold level until one fires.
+            # No persisted or newly computed membership is available yet.
             logger.warning("no membership yet at %s — holding level=%.4f", d, prev_level)
             diag = IndexBarDiagnostics(
                 index_code=UNIVERSE_INDEX_CODE,

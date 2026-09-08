@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any
 
 import pandas as pd
 
@@ -283,7 +283,7 @@ def build_market_decision_banner(context: MarketContext) -> pd.DataFrame:
                 "Metric 1": "Today Action",
                 "Value 1": action,
                 "Metric 2": "Allowed Exposure",
-                "Value 2": _blank_number(context.allowed_exposure),
+                "Value 2": _exposure_number(context.allowed_exposure),
                 "Metric 3": "Regime Phase",
                 "Value 3": context.regime_phase,
                 "Metric 4": "Breadth Velocity",
@@ -335,7 +335,7 @@ def build_daily_summary(context: MarketContext) -> pd.DataFrame:
         ("Market State", context.market_state),
         ("Breadth Velocity", context.breadth_velocity),
         ("Direction Bias", context.direction_bias),
-        ("Allowed Exposure", _blank_number(context.allowed_exposure)),
+        ("Allowed Exposure", _exposure_number(context.allowed_exposure)),
         ("Regime Phase", context.regime_phase),
         ("Qualified Breakouts", context.qualified_breakouts),
         ("Pattern Setups", context.pattern_setups),
@@ -709,7 +709,27 @@ def _market_context(
     trust = payload.get("data_trust") if isinstance(payload.get("data_trust"), dict) else {}
     direction = payload.get("market_direction") if isinstance(payload.get("market_direction"), dict) else {}
     regime = payload.get("market_regime_phase") if isinstance(payload.get("market_regime_phase"), dict) else {}
+    market_regime = payload.get("market_regime") if isinstance(payload.get("market_regime"), dict) else {}
     trust_summary = rank_summary.get("trust_summary") if isinstance(rank_summary.get("trust_summary"), dict) else {}
+    regime_matches_run_date = str(market_regime.get("date") or "")[:10] == str(
+        run_date or summary.get("run_date") or rank_summary.get("run_date") or ""
+    )[:10]
+    regime_breadth_50 = (
+        _as_percent(market_regime.get("pct_above_50dma"))
+        if regime_matches_run_date
+        else ""
+    )
+    regime_breadth_200 = (
+        _as_percent(market_regime.get("pct_above_200dma"))
+        if regime_matches_run_date
+        else ""
+    )
+    summary_breadth_50 = _first_from_sources(
+        (summary, direction), ["breadth_50dma", "breadth_above_50dma"]
+    )
+    summary_breadth_200 = _first_from_sources(
+        (summary, direction), ["breadth_200dma", "breadth_above_200dma"]
+    )
     qualified = _qualified_count(breakout_df)
     return MarketContext(
         run_date=str(run_date or summary.get("run_date") or rank_summary.get("run_date") or ""),
@@ -717,14 +737,29 @@ def _market_context(
         market_state=str(summary.get("market_state") or direction.get("market_state") or direction.get("state") or ""),
         direction_bias=str(summary.get("direction_bias") or direction.get("direction_bias") or direction.get("bias") or ""),
         action=str(summary.get("action") or direction.get("action") or ""),
-        allowed_exposure=_num(summary.get("allowed_exposure") or direction.get("allowed_exposure"), None),
+        allowed_exposure=_num(
+            _first_from_sources((summary, direction), ["allowed_exposure"]), None
+        ),
         regime_phase=str(summary.get("market_regime_phase") or regime.get("phase_label") or regime.get("regime_phase") or summary.get("market_stage") or ""),
-        breadth_50dma=summary.get("breadth_50dma") or summary.get("breadth_above_50dma") or direction.get("breadth_50dma") or "",
-        breadth_200dma=summary.get("breadth_200dma") or summary.get("breadth_above_200dma") or direction.get("breadth_200dma") or "",
+        breadth_50dma=(
+            regime_breadth_50
+            if _is_missing(summary_breadth_50)
+            else summary_breadth_50
+        ),
+        breadth_200dma=(
+            regime_breadth_200
+            if _is_missing(summary_breadth_200)
+            else summary_breadth_200
+        ),
         breadth_velocity=str(summary.get("breadth_velocity") or direction.get("breadth_velocity") or (regime.get("driven_by") or {}).get("breadth_velocity_bucket") or ""),
         latest_validated_date=trust.get("latest_validated_date") or trust_summary.get("latest_validated_date") or "",
-        active_quarantine_count=trust.get("active_quarantine_count") or trust_summary.get("active_quarantine_count") or trust_summary.get("active_quarantined_dates") or "",
-        fallback_ratio_latest=trust.get("fallback_ratio_latest") or trust_summary.get("fallback_ratio_latest") or "",
+        active_quarantine_count=_first_from_sources(
+            (trust, trust_summary),
+            ["active_quarantine_count", "active_quarantined_symbols"],
+        ),
+        fallback_ratio_latest=_first_from_sources(
+            (trust, trust_summary), ["fallback_ratio_latest"]
+        ),
         qualified_breakouts=qualified,
         pattern_setups=int(len(pattern_df)) if not pattern_df.empty else int(summary.get("pattern_setups_count") or summary.get("pattern_setups") or 0),
         watchlist_candidates=int(len(watchlist_df)) if not watchlist_df.empty else int(summary.get("watchlist_candidates") or len(ranked_df.head(15))),
@@ -1097,6 +1132,23 @@ def _first(row: dict[str, Any], names: list[str]) -> Any:
     return ""
 
 
+def _first_from_sources(
+    sources: tuple[dict[str, Any], ...], names: list[str]
+) -> Any:
+    for source in sources:
+        value = _first(source, names)
+        if not _is_missing(value):
+            return value
+    return ""
+
+
+def _as_percent(value: Any) -> Any:
+    number = _num(value, None)
+    if number is None:
+        return ""
+    return round(number * 100.0 if abs(number) <= 1.0 else number, 2)
+
+
 def _frame(value: Any) -> pd.DataFrame:
     return value.copy() if isinstance(value, pd.DataFrame) else pd.DataFrame()
 
@@ -1121,6 +1173,14 @@ def _blank_number(value: Any) -> Any:
     if number is None:
         return ""
     return int(number) if float(number).is_integer() else round(float(number), 2)
+
+
+def _exposure_number(value: Any) -> Any:
+    """Preserve allocation precision while keeping the cell numeric."""
+    number = _num(value, None)
+    if number is None:
+        return ""
+    return int(number) if float(number).is_integer() else round(float(number), 3)
 
 
 def _is_missing(value: Any) -> bool:

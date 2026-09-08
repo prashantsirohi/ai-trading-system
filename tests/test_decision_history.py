@@ -90,6 +90,37 @@ def test_rank_decision_history_defaults_to_point_in_time_contract(tmp_path: Path
     assert version == RANK_INPUT_CONTRACT_VERSION
 
 
+def test_regime_duration_is_not_misclassified_as_source_staleness(tmp_path: Path) -> None:
+    repo, registry = _repo(tmp_path)
+    context = _context(registry, run_date="2026-09-04")
+
+    summary = repo.persist_rank_outputs(
+        context,
+        {
+            "ranked_signals": pd.DataFrame(
+                [{"symbol_id": "ABC", "exchange": "NSE", "composite_score": 80.0}]
+            ),
+            "ranked_universe": pd.DataFrame(
+                [{"symbol_id": "ABC", "exchange": "NSE", "composite_score": 80.0}]
+            ),
+        },
+        stage_metadata={
+            "market_regime": {
+                "date": "2026-09-04",
+                "regime": "cautious_bull",
+                "regime_age_days": 52,
+            }
+        },
+    )
+
+    freshness = summary["regime_freshness_dq"]
+    assert freshness["status"] == "passed"
+    assert freshness["freshness_status"] == "ALIGNED"
+    assert freshness["calculated_age_days"] == 0
+    assert freshness["stored_source_age_days"] is None
+    assert freshness["regime_duration_days"] == 52
+
+
 def _state(date: str, state: str = "BASE_BUILDING") -> pd.DataFrame:
     return pd.DataFrame([{
         "symbol_id": "ABC", "exchange": "NSE", "trade_date": date,

@@ -4,19 +4,20 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import duckdb
-import pytest
+
+from tools import build_universe_index
 
 from ai_trading_system.domains.features.universe_index import (
-    UNIVERSE_INDEX_BASE_LEVEL,
     UNIVERSE_INDEX_CODE,
     compute_index_bar,
     compute_membership_for_rebalance,
     ensure_index_catalog_tables,
     first_trading_day_of_month,
+    latest_membership_on_or_before,
     trading_days_between,
-    upsert_index_bar,
     upsert_membership,
 )
 
@@ -205,11 +206,122 @@ def test_ensure_tables_and_upsert_roundtrip(tmp_path):
     assert count == 1
 
 
+def test_ensure_tables_supports_legacy_index_metadata_schema(tmp_path):
+    db = tmp_path / "ohlcv.duckdb"
+    con = duckdb.connect(str(db))
+    con.execute(
+        """
+        CREATE TABLE _index_metadata (
+            index_code VARCHAR PRIMARY KEY,
+            display_name VARCHAR NOT NULL,
+            family VARCHAR,
+            is_sectoral BOOLEAN,
+            benchmark_for VARCHAR,
+            source VARCHAR,
+            active BOOLEAN,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    con.close()
+
+    ensure_index_catalog_tables(db)
+
+    con = duckdb.connect(str(db), read_only=True)
+    row = con.execute(
+        """
+        SELECT index_code, source, active
+        FROM _index_metadata
+        WHERE index_code = ?
+        """,
+        [UNIVERSE_INDEX_CODE],
+    ).fetchone()
+    con.close()
+    assert row == (UNIVERSE_INDEX_CODE, "derived", True)
+
+
 def test_first_trading_day_of_month():
     days = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 2, 1), date(2024, 2, 5)]
     out = first_trading_day_of_month(days)
     assert out[(2024, 1)] == date(2024, 1, 2)
     assert out[(2024, 2)] == date(2024, 2, 1)
+
+
+def test_latest_membership_supports_midmonth_incremental_resume(tmp_path):
+    db = tmp_path / "ohlcv.duckdb"
+    ensure_index_catalog_tables(db)
+    members = duckdb.sql(
+        """
+        SELECT * FROM (VALUES
+            ('AAA', 1, 1000.0, 200),
+            ('BBB', 2, 900.0, 200)
+        ) AS t(symbol_id, rank_by_turnover, median_turnover, recent_days)
+        """
+    ).fetchdf()
+    upsert_membership(
+        db,
+        rebalance_date=date(2026, 9, 1),
+        members_df=members,
+        sparse_history=False,
+    )
+
+    rebalance_date, symbols = latest_membership_on_or_before(
+        db,
+        date(2026, 9, 4),
+    )
+
+    assert rebalance_date == date(2026, 9, 1)
+    assert symbols == ["AAA", "BBB"]
+
+
+def test_operational_midmonth_build_uses_actual_month_rebalance(monkeypatch, tmp_path):
+    db = tmp_path / "ohlcv.duckdb"
+    _build_synthetic_catalog(
+        db,
+        symbols_with_drift=[("AAA", 0.002), ("BBB", 0.001)],
+        days=300,
+    )
+    selected_domain: list[str] = []
+
+    def fake_paths(*, project_root, data_domain):
+        selected_domain.append(data_domain)
+        return SimpleNamespace(ohlcv_db_path=db)
+
+    monkeypatch.setattr(build_universe_index, "ensure_domain_layout", fake_paths)
+
+    result = build_universe_index.main(
+        [
+            "--from-date",
+            "2024-10-15",
+            "--to-date",
+            "2024-10-15",
+            "--project-root",
+            str(tmp_path),
+            "--data-domain",
+            "operational",
+            "--top-n",
+            "2",
+            "--min-recent-days",
+            "10",
+            "--min-session-symbols",
+            "1",
+        ]
+    )
+
+    con = duckdb.connect(str(db), read_only=True)
+    membership_date = con.execute(
+        "SELECT DISTINCT rebalance_date FROM _universe_membership"
+    ).fetchone()[0]
+    index_date = con.execute(
+        "SELECT date FROM _index_catalog WHERE index_code = ?",
+        [UNIVERSE_INDEX_CODE],
+    ).fetchone()[0]
+    con.close()
+    assert result == 0
+    assert selected_domain == ["operational"]
+    assert membership_date == date(2024, 10, 1)
+    assert index_date == date(2024, 10, 15)
 
 
 def test_trading_days_between(tmp_path):
@@ -218,3 +330,27 @@ def test_trading_days_between(tmp_path):
     days = trading_days_between(db, date(2024, 1, 1), date(2024, 1, 10))
     assert len(days) == 10
     assert days == sorted(days)
+
+
+def test_trading_days_between_excludes_isolated_sparse_rows(tmp_path):
+    db = tmp_path / "ohlcv.duckdb"
+    _build_synthetic_catalog(
+        db,
+        symbols_with_drift=[("A", 0.0), ("B", 0.0)],
+        days=3,
+    )
+    con = duckdb.connect(str(db))
+    con.execute(
+        "DELETE FROM _catalog WHERE symbol_id = 'B' AND CAST(timestamp AS DATE) = ?",
+        [date(2024, 1, 2)],
+    )
+    con.close()
+
+    days = trading_days_between(
+        db,
+        date(2024, 1, 1),
+        date(2024, 1, 3),
+        min_session_symbols=2,
+    )
+
+    assert days == [date(2024, 1, 1), date(2024, 1, 3)]

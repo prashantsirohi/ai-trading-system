@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import date, datetime, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -467,7 +467,7 @@ def sweep_stale_quarantine(
 
         flipped = 0
         for symbol in symbols:
-            res = conn.execute(
+            conn.execute(
                 """
                 UPDATE _catalog_quarantine
                 SET status = 'permanently_unavailable',
@@ -795,7 +795,7 @@ def quarantine_symbol_dates(
             WHERE _catalog_quarantine.symbol_id = quarantine_rows.symbol_id
               AND _catalog_quarantine.exchange = quarantine_rows.exchange
               AND _catalog_quarantine.trade_date = CAST(quarantine_rows.trade_date AS DATE)
-              AND _catalog_quarantine.status = 'active'
+              AND _catalog_quarantine.reason IS NOT DISTINCT FROM quarantine_rows.reason
             """
         )
         conn.execute(
@@ -816,6 +816,66 @@ def quarantine_symbol_dates(
             """
         )
         return int(len(frame))
+    finally:
+        if should_close:
+            conn.close()
+
+
+def deduplicate_quarantine_rows(
+    db_path_or_conn: duckdb.DuckDBPyConnection | str | Path,
+) -> dict[str, int]:
+    """Retain one lifecycle-state row per symbol/exchange/date/reason key.
+
+    Active state wins first so cleanup cannot hide a current trust problem.
+    Terminal lifecycle states then win over observed evidence. Within the same
+    state, the most recently recorded row is retained.
+    """
+    conn, should_close = _connect(db_path_or_conn)
+    try:
+        ensure_data_trust_schema(conn)
+        before = int(conn.execute("SELECT COUNT(*) FROM _catalog_quarantine").fetchone()[0] or 0)
+        conn.execute(
+            """
+            CREATE OR REPLACE TEMP TABLE quarantine_deduplicated AS
+            SELECT * EXCLUDE (row_priority)
+            FROM (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY symbol_id, exchange, trade_date, reason
+                        ORDER BY
+                            CASE status
+                                WHEN 'active' THEN 4
+                                WHEN 'permanently_unavailable' THEN 3
+                                WHEN 'resolved' THEN 2
+                                WHEN 'observed' THEN 1
+                                ELSE 0
+                            END DESC,
+                            COALESCE(resolved_at, created_at) DESC NULLS LAST,
+                            created_at DESC NULLS LAST,
+                            source_run_id DESC NULLS LAST
+                    ) AS row_priority
+                FROM _catalog_quarantine
+            ) ranked
+            WHERE row_priority = 1
+            """
+        )
+        after = int(conn.execute("SELECT COUNT(*) FROM quarantine_deduplicated").fetchone()[0] or 0)
+        if after == before:
+            return {"rows_before": before, "rows_after": after, "rows_removed": 0}
+
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute("DELETE FROM _catalog_quarantine")
+            conn.execute("INSERT INTO _catalog_quarantine SELECT * FROM quarantine_deduplicated")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        return {
+            "rows_before": before,
+            "rows_after": after,
+            "rows_removed": before - after,
+        }
     finally:
         if should_close:
             conn.close()

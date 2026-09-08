@@ -133,8 +133,12 @@ class DecisionHistoryRepository:
             (pd.Timestamp(context.run_date).date() - regime_date).days
             if regime_date is not None else None
         )
-        stored_regime_age = regime.get("regime_age_days")
-        age_consistent = stored_regime_age is None or calculated_regime_age == int(stored_regime_age)
+        stored_source_age = regime.get("source_age_days")
+        regime_duration_days = regime.get("regime_age_days")
+        age_consistent = (
+            stored_source_age is None
+            or calculated_regime_age == int(stored_source_age)
+        )
         stale_days = int(params.get("rank_regime_stale_days", 30) or 30)
         if regime_date is None:
             regime_freshness = "INCOMPLETE"
@@ -217,7 +221,9 @@ class DecisionHistoryRepository:
             summary["rank_universe_history_rows_upserted"] = _upsert(conn, "rank_universe_history", rank_universe, ["symbol_id", "exchange", "trade_date", "universe_id", "rank_model_version"])
             dq_message = (
                 f"regime_as_of={regime_date}; calculated_age_days={calculated_regime_age}; "
-                f"stored_age_days={stored_regime_age}; freshness={regime_freshness}; "
+                f"stored_source_age_days={stored_source_age}; "
+                f"regime_duration_days={regime_duration_days}; "
+                f"freshness={regime_freshness}; "
                 f"policy=rank-regime-freshness-v1"
             )
             dq_status = "passed" if regime_freshness == "ALIGNED" else "failed"
@@ -242,7 +248,8 @@ class DecisionHistoryRepository:
                 "freshness_status": regime_freshness,
                 "regime_as_of": str(regime_date) if regime_date else None,
                 "calculated_age_days": calculated_regime_age,
-                "stored_age_days": stored_regime_age,
+                "stored_source_age_days": stored_source_age,
+                "regime_duration_days": regime_duration_days,
                 "policy_version": "rank-regime-freshness-v1",
             }
             summary["stage_history_rows_upserted"] = _upsert(conn, "stage_history", stage_source, ["symbol_id", "exchange", "trade_date", "stage_model_version"])

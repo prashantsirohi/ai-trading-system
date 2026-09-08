@@ -76,21 +76,27 @@ def trading_days_between(
     end: date,
     *,
     exchange: str = "NSE",
+    min_session_symbols: int = 1,
 ) -> list[date]:
     """Distinct trading dates in ``_catalog`` within ``[start, end]`` for the
-    given exchange. Ordered ascending."""
+    given exchange. Sparse isolated rows below ``min_session_symbols`` are
+    excluded from the market-wide session calendar. Ordered ascending."""
+    if min_session_symbols < 1:
+        raise ValueError("min_session_symbols must be at least 1")
     con = duckdb.connect(str(ohlcv_db_path), read_only=True)
     try:
         rows = con.execute(
             """
-            SELECT DISTINCT CAST(timestamp AS DATE) AS d
+            SELECT CAST(timestamp AS DATE) AS d
               FROM _catalog
              WHERE exchange = ?
                AND timestamp IS NOT NULL
                AND CAST(timestamp AS DATE) BETWEEN ? AND ?
+             GROUP BY d
+            HAVING COUNT(DISTINCT symbol_id) >= ?
              ORDER BY d
             """,
-            [exchange, start, end],
+            [exchange, start, end, min_session_symbols],
         ).fetchall()
     finally:
         con.close()
@@ -105,6 +111,38 @@ def first_trading_day_of_month(trading_days: list[date]) -> dict[tuple[int, int]
         if key not in out:
             out[key] = d
     return out
+
+
+def latest_membership_on_or_before(
+    ohlcv_db_path: Path | str,
+    bar_date: date,
+) -> tuple[date | None, list[str]]:
+    """Load the most recent persisted membership usable for ``bar_date``."""
+    con = duckdb.connect(str(ohlcv_db_path), read_only=True)
+    try:
+        rebalance_row = con.execute(
+            """
+            SELECT MAX(rebalance_date)
+            FROM _universe_membership
+            WHERE rebalance_date <= ?
+            """,
+            [bar_date],
+        ).fetchone()
+        rebalance_date = rebalance_row[0] if rebalance_row else None
+        if rebalance_date is None:
+            return None, []
+        rows = con.execute(
+            """
+            SELECT symbol_id
+            FROM _universe_membership
+            WHERE rebalance_date = ?
+            ORDER BY rank_by_turnover, symbol_id
+            """,
+            [rebalance_date],
+        ).fetchall()
+    finally:
+        con.close()
+    return rebalance_date, [str(row[0]) for row in rows]
 
 
 def eligible_symbols_for_lookback(
@@ -371,25 +409,55 @@ def ensure_index_catalog_tables(ohlcv_db_path: Path | str) -> None:
             )
             """
         )
-        con.execute(
-            """
-            INSERT INTO _index_metadata
-                (index_code, display_name, family, is_sectoral, benchmark_for,
-                 source, is_benchmark, active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (index_code) DO NOTHING
-            """,
-            [
-                UNIVERSE_INDEX_CODE,
-                "Top 1000 Liquid Equal-Weight (PIT)",
-                "UNIVERSE",
-                False,
-                "optimizer,sector_rs,research_loader",
-                "derived",
-                True,
-                True,
-            ],
-        )
+        metadata_columns = {
+            str(row[0])
+            for row in con.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = '_index_metadata'
+                """
+            ).fetchall()
+        }
+        if "is_benchmark" in metadata_columns:
+            con.execute(
+                """
+                INSERT INTO _index_metadata
+                    (index_code, display_name, family, is_sectoral, benchmark_for,
+                     source, is_benchmark, active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (index_code) DO NOTHING
+                """,
+                [
+                    UNIVERSE_INDEX_CODE,
+                    "Top 1000 Liquid Equal-Weight (PIT)",
+                    "UNIVERSE",
+                    False,
+                    "optimizer,sector_rs,research_loader",
+                    "derived",
+                    True,
+                    True,
+                ],
+            )
+        else:
+            con.execute(
+                """
+                INSERT INTO _index_metadata
+                    (index_code, display_name, family, is_sectoral, benchmark_for,
+                     source, active)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (index_code) DO NOTHING
+                """,
+                [
+                    UNIVERSE_INDEX_CODE,
+                    "Top 1000 Liquid Equal-Weight (PIT)",
+                    "UNIVERSE",
+                    False,
+                    "optimizer,sector_rs,research_loader",
+                    "derived",
+                    True,
+                ],
+            )
     finally:
         con.close()
 

@@ -106,8 +106,11 @@ def attach_market_regime_phase_to_payload(
 def attach_phase1_market_breadth_to_payload(
     payload: Dict[str, object],
     breadth: pd.DataFrame | dict | None,
+    *,
+    as_of: str | None = None,
+    max_source_age_days: int = 0,
 ) -> Dict[str, object]:
-    """Attach persisted Phase 1 market breadth fields to dashboard summary."""
+    """Attach Phase 1 breadth without promoting stale rows into current summary metrics."""
     if breadth is None:
         return payload
     if isinstance(breadth, pd.DataFrame):
@@ -119,8 +122,43 @@ def attach_phase1_market_breadth_to_payload(
     else:
         return payload
 
-    payload["phase1_market_breadth"] = row
     summary = payload.setdefault("summary", {})
+    if as_of is not None:
+        if max_source_age_days < 0:
+            raise ValueError("max_source_age_days must be non-negative")
+        source_value = row.get("timestamp")
+        if source_value is None or pd.isna(source_value):
+            source_value = row.get("date")
+        source_date = pd.to_datetime(source_value, errors="coerce")
+        report_date = pd.to_datetime(as_of, errors="coerce")
+        if isinstance(source_date, pd.Timestamp) and source_date.tzinfo is not None:
+            source_date = source_date.tz_localize(None)
+        if isinstance(report_date, pd.Timestamp) and report_date.tzinfo is not None:
+            report_date = report_date.tz_localize(None)
+        source_age_days: int | None = None
+        freshness_status = "invalid"
+        if pd.notna(source_date) and pd.notna(report_date):
+            source_age_days = int((report_date.normalize() - source_date.normalize()).days)
+            if 0 <= source_age_days <= max_source_age_days:
+                freshness_status = "fresh"
+            elif source_age_days < 0:
+                freshness_status = "future"
+            else:
+                freshness_status = "stale"
+        row["source_age_days"] = source_age_days
+        row["freshness_status"] = freshness_status
+        payload["phase1_market_breadth"] = row
+        if isinstance(summary, dict):
+            summary["phase1_market_breadth_source_date"] = (
+                source_date.strftime("%Y-%m-%d") if pd.notna(source_date) else None
+            )
+            summary["phase1_market_breadth_source_age_days"] = source_age_days
+            summary["phase1_market_breadth_freshness_status"] = freshness_status
+        if freshness_status != "fresh":
+            return payload
+    else:
+        payload["phase1_market_breadth"] = row
+
     if isinstance(summary, dict):
         for key in [
             "breadth_score",

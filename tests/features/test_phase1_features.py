@@ -139,6 +139,37 @@ def test_phase1_excludes_index_like_symbols_when_is_benchmark_missing(tmp_path: 
         conn.close()
 
 
+def test_phase1_accepts_legacy_null_instrument_type_as_equity(tmp_path: Path) -> None:
+    db_path = tmp_path / "ohlcv.duckdb"
+    conn = duckdb.connect(str(db_path))
+    _seed_catalog(conn)
+    dates = pd.bdate_range("2025-01-01", periods=205)
+    _insert_price_rows(conn, "AAA", dates, start=100, step=0.1)
+    _insert_price_rows(conn, "NIFTY_500", dates, start=1000, step=1, instrument_type="index")
+    conn.execute(
+        "UPDATE _catalog SET instrument_type = NULL WHERE symbol_id = ? AND timestamp < ?",
+        ["AAA", dates[-1].to_pydatetime()],
+    )
+    try:
+        conn.close()
+        refresh_phase1_features(
+            ohlcv_db_path=db_path,
+            as_of=str(dates[-1].date()),
+            exchange="NSE",
+        )
+        conn = duckdb.connect(str(db_path))
+        breadth = conn.execute(
+            "SELECT * FROM feat_phase1_market_breadth ORDER BY timestamp"
+        ).fetchdf()
+    finally:
+        conn.close()
+
+    latest = breadth.iloc[-1]
+    assert latest["timestamp"] == dates[-1]
+    assert latest["eligible_200dma_count"] == 1
+    assert latest["universe_count"] == 1
+
+
 def test_phase1_delivery_trend_supports_timestamp_and_date_columns(tmp_path: Path) -> None:
     for column_name in ("timestamp", "date"):
         db_path = tmp_path / f"{column_name}.duckdb"

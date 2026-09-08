@@ -27,11 +27,22 @@ Stored in `_catalog_quarantine` (`domains/ingest/trust.py:255-272`). The status 
 
 | Quarantine status | Lifecycle | Source |
 |---|---|---|
-| `active` | Newly inserted; counted in trust-summary degradation/blocking ratios. | `trust.py:776, 803-815` (insert path), `:798` (active key for delete). |
-| `resolved` | Flipped when a later ingest replaces the row with validated data. | `trust.py:850-857` (`UPDATE ... SET status = 'resolved'`). |
-| `permanently_unavailable` | Stale-sweep promotion after `stale_days` (`sweep_stale_quarantine`). | `trust.py:472-486` (`UPDATE ... SET status = 'permanently_unavailable'`). |
+| `active` | Recent unresolved gaps for symbols still inside the critical universe; counted in trust-summary degradation/blocking ratios. | `daily_update_runner.py` active classification and `trust.py` insert path. |
+| `observed` | Retained evidence for non-trading dates, noncritical symbols, or symbols missing beyond the configured stale-symbol grace period; excluded from active trust counts. | `daily_update_runner.py` housekeeping and unresolved-gap classification. |
+| `resolved` | Flipped when a later ingest replaces the row with validated data. | `trust.py` quarantine-resolution update. |
+| `permanently_unavailable` | Stale-sweep promotion after `stale_days` (`sweep_stale_quarantine`). | `trust.py` stale-quarantine sweep. |
 
-Earlier docs mentioned an `observed` state; that token does not appear in the current quarantine code path. Treat any older reference to `observed` as stale.
+The stale-symbol grace check is also applied when new unresolved rows are
+classified. This prevents each ingest from recreating an `active` quarantine
+for a long-missing symbol immediately after housekeeping moved its older rows
+to `observed`.
+
+`_catalog_quarantine` is a lifecycle-state table with one current row per
+`(symbol_id, exchange, trade_date, reason)`. Repeated ingest attempts replace
+that key instead of appending duplicate `observed` evidence. The repair helper
+`deduplicate_quarantine_rows` retains `active` first, then
+`permanently_unavailable`, `resolved`, and `observed`; within a state it keeps
+the most recently recorded row.
 
 ## Where trust blocks the pipeline
 

@@ -1038,12 +1038,18 @@ def _run_nse_yfinance_daily_update(
     symbol_lookup = {str(row["symbol_id"]): row for row in symbols}
     unresolved_symbol_dates_active: list[tuple[str, str]] = []
     unresolved_symbol_dates_observed: list[tuple[str, str]] = []
+    stale_gap_symbol_set = {
+        str(symbol_id).strip().upper()
+        for symbol_id in stale_gap_symbols
+        if str(symbol_id).strip()
+    }
     for symbol_id, trade_date in unresolved_symbol_dates:
         normalized_symbol = str(symbol_id).strip().upper()
         if (
             trade_date in unresolved_recent_set
             and symbol_id in active_eligible_symbols
             and normalized_symbol in critical_symbols
+            and normalized_symbol not in stale_gap_symbol_set
         ):
             unresolved_symbol_dates_active.append((symbol_id, trade_date))
         else:

@@ -960,23 +960,43 @@ def _last_5y(frame: pd.DataFrame, date_col: str = "Date") -> pd.DataFrame:
 
 
 def _market_breadth_snapshot_frame(breadth: pd.DataFrame) -> pd.DataFrame:
-    columns = ["Metric", "Min", "Current", "Max", "Percentile", "Low", "Mid", "High", "Marker"]
+    columns = [
+        "Metric",
+        "Source Date",
+        "Age (Days)",
+        "Min",
+        "Current",
+        "Max",
+        "Range Position %",
+        "Low",
+        "Mid",
+        "High",
+        "Marker",
+    ]
     if breadth is None or breadth.empty:
         return pd.DataFrame(columns=columns)
     recent = _last_5y(breadth)
     specs = [
-        ("% Above SMA200", ["PctAbove200"]),
-        ("PE 5Y Percentile", ["PEPctile5YSMA20", "PEPctile5Y"]),
-        ("New High / Low", ["HighLowRatioSMA10", "HighLowRatio", "NetNewHighs", "NetNewHighsPct"]),
+        ("% Above SMA200 (broad NSE)", ["PctAbove200"]),
+        ("PE 5Y Percentile (20D avg)", ["PEPctile5YSMA20", "PEPctile5Y"]),
+        ("New High / Low Ratio (10D avg)", ["HighLowRatioSMA10", "HighLowRatio", "NetNewHighs", "NetNewHighsPct"]),
     ]
+    latest_date = pd.to_datetime(recent.get("Date"), errors="coerce").max()
     rows: list[dict[str, Any]] = []
     for metric, candidates in specs:
         column = next((name for name in candidates if name in recent.columns), None)
         if column is None:
             continue
-        series = pd.to_numeric(recent[column], errors="coerce").dropna()
+        numeric = pd.to_numeric(recent[column], errors="coerce")
+        series = numeric.dropna()
         if series.empty:
             continue
+        current_index = series.index[-1]
+        source_date = pd.to_datetime(recent.loc[current_index, "Date"], errors="coerce")
+        source_date_text = "" if pd.isna(source_date) else source_date.date().isoformat()
+        source_age_days = ""
+        if not pd.isna(latest_date) and not pd.isna(source_date):
+            source_age_days = int((latest_date.normalize() - source_date.normalize()).days)
         current = float(series.iloc[-1])
         min_value = float(series.min())
         max_value = float(series.max())
@@ -986,10 +1006,12 @@ def _market_breadth_snapshot_frame(breadth: pd.DataFrame) -> pd.DataFrame:
         rows.append(
             {
                 "Metric": metric,
+                "Source Date": source_date_text,
+                "Age (Days)": source_age_days,
                 "Min": round(min_value, 2),
                 "Current": round(current, 2),
                 "Max": round(max_value, 2),
-                "Percentile": round(pct, 1),
+                "Range Position %": round(pct, 1),
                 "Low": "*" if marker == "Low" else "",
                 "Mid": "*" if marker == "Mid" else "",
                 "High": "*" if marker == "High" else "",

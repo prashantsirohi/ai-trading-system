@@ -90,6 +90,10 @@ class MarketRegimeSnapshot:
         return asdict(self)
 
 
+class MarketRegimeFreshnessError(RuntimeError):
+    """Raised when the newest usable regime snapshot is too old to govern a run."""
+
+
 # ── Rule-schema validation ─────────────────────────────────────────────────
 #
 # Every key inside a regime rule block must reference a real metric on the
@@ -352,6 +356,7 @@ def compute_market_regime_snapshot(
     index_code: str | None = None,
     exchange: str = "NSE",
     previous_regime: str | None = None,
+    max_source_age_days: int | None = 30,
 ) -> MarketRegimeSnapshot:
     """Compute the confirmed breadth regime as of ``as_of``.
 
@@ -402,6 +407,21 @@ def compute_market_regime_snapshot(
     if not snapshots:
         raise RuntimeError(f"No regime breadth data available at or before {as_of}")
     latest = snapshots[-1]
+    if max_source_age_days is not None:
+        allowed_age = int(max_source_age_days)
+        if allowed_age < 0:
+            raise ValueError("max_source_age_days must be non-negative or None")
+        as_of_date = date.fromisoformat(str(as_of)[:10])
+        snapshot_date = date.fromisoformat(str(latest.date)[:10])
+        source_age_days = (as_of_date - snapshot_date).days
+        if source_age_days > allowed_age:
+            raise MarketRegimeFreshnessError(
+                "Market regime snapshot is stale: "
+                f"as_of={as_of_date.isoformat()}; "
+                f"snapshot_date={snapshot_date.isoformat()}; "
+                f"source_age_days={source_age_days}; "
+                f"max_source_age_days={allowed_age}"
+            )
     return replace(latest, confirmation_days=confirmation_days)
 
 

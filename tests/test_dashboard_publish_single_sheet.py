@@ -914,9 +914,12 @@ def test_publish_dashboard_payload_writes_single_dated_sheet_with_unfiltered_bre
     assert "TOP 5 EMERGING LEADERS" in daily_text
     assert "SHADOW TECHNICAL EVIDENCE" in daily_text
     assert "Entry UNKNOWN" in daily_text
-    assert "% Above SMA200" in daily_text
-    assert "PE 5Y Percentile" in daily_text
-    assert "New High / Low" in daily_text
+    assert "% Above SMA200 (broad NSE)" in daily_text
+    assert "PE 5Y Percentile (20D avg)" in daily_text
+    assert "New High / Low Ratio (10D avg)" in daily_text
+    assert "Source Date" in daily_text
+    assert "Age (Days)" in daily_text
+    assert "Range Position %" in daily_text
     assert "ACTIVE INVESTIGATOR LIST" not in daily_text
     assert "INVESTIGATOR ACTION QUEUE" not in daily_text
     assert "TOP RANKED" in daily_text

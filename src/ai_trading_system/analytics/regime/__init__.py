@@ -1,6 +1,7 @@
 """Regime analytics built on market breadth."""
 
 from ai_trading_system.analytics.regime.breadth import (
+    MarketRegimeFreshnessError,
     MarketRegimeSnapshot,
     classify_regime,
     confirmed_regime,
@@ -17,6 +18,7 @@ from ai_trading_system.analytics.regime.regime_phase import (
 )
 
 __all__ = [
+    "MarketRegimeFreshnessError",
     "MarketRegimeSnapshot",
     "RegimePhase",
     "RegimePhaseResult",

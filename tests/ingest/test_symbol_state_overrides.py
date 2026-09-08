@@ -10,10 +10,12 @@ import pytest
 from ai_trading_system.domains.ingest.trust import (
     SYMBOL_STATE_BLOCKING,
     clear_symbol_state,
+    deduplicate_quarantine_rows,
     ensure_data_trust_schema,
     load_blocking_symbol_overrides,
     load_critical_symbol_universe,
     mark_symbol_state,
+    quarantine_symbol_dates,
     sweep_stale_quarantine,
 )
 
@@ -131,6 +133,69 @@ def test_sweep_stale_quarantine_idempotent(db_path: str):
     counts2 = sweep_stale_quarantine(db_path, run_date="2026-05-04", stale_days=14)
     assert counts1["marked"] == 1
     assert counts2["marked"] == 0
+
+
+def test_quarantine_symbol_dates_replaces_existing_lifecycle_state(db_path: str):
+    row = {"symbol_id": "AAA", "security_id": "1", "exchange": "NSE"}
+    quarantine_symbol_dates(
+        db_path,
+        symbol_rows=[row],
+        trade_dates=["2026-05-04"],
+        reason="provider_unavailable",
+        status="observed",
+        source_run_id="run-1",
+    )
+    quarantine_symbol_dates(
+        db_path,
+        symbol_rows=[row],
+        trade_dates=["2026-05-04"],
+        reason="provider_unavailable",
+        status="observed",
+        source_run_id="run-2",
+    )
+
+    conn = duckdb.connect(db_path, read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT status, source_run_id
+            FROM _catalog_quarantine
+            WHERE symbol_id = ? AND trade_date = CAST(? AS DATE)
+            """,
+            ["AAA", "2026-05-04"],
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [("observed", "run-2")]
+
+
+def test_deduplicate_quarantine_rows_preserves_strongest_state(db_path: str):
+    _seed_quarantine(db_path, "ACTIVE", "2026-05-01", status="observed")
+    _seed_quarantine(db_path, "ACTIVE", "2026-05-01", status="active")
+    _seed_quarantine(db_path, "DONE", "2026-05-01", status="observed")
+    _seed_quarantine(db_path, "DONE", "2026-05-01", status="resolved")
+    _seed_quarantine(db_path, "GONE", "2026-05-01", status="observed")
+    _seed_quarantine(db_path, "GONE", "2026-05-01", status="permanently_unavailable")
+
+    counts = deduplicate_quarantine_rows(db_path)
+
+    assert counts == {"rows_before": 6, "rows_after": 3, "rows_removed": 3}
+    conn = duckdb.connect(db_path, read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT symbol_id, status
+            FROM _catalog_quarantine
+            ORDER BY symbol_id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [
+        ("ACTIVE", "active"),
+        ("DONE", "resolved"),
+        ("GONE", "permanently_unavailable"),
+    ]
 
 
 def test_blocking_states_constant_locked():
