@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-09-04
+- **Last verified:** 2026-09-09
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -421,3 +421,9 @@ all five performance outputs, routing conflicts, and weekly-stage/governance
 conflict outputs. Registered promoted artifacts from completed attempts take
 precedence. Safe-root discovery is a deterministic semantic run/as-of fallback,
 never an mtime ordering. Required columns and registered hashes are verified.
+
+## Position reconciliation v2
+
+The opportunities-owned `position_monitor_reconciliation.csv` has one row per exchange/symbol/position cycle, including successful attachments and recovery-required outcomes. Additive fields are `run_id`, `observed_session`, `reconciliation_schema_version=position-reconciliation-v2`, `persistence_status`, `position_monitor_present`, `market_data_complete`, `route_data_covered`, `investigator_evidence_complete`, `episode_attached`, and `candidate_id`. Existing cycle, outcome, compatibility, and recovery-proposal identifiers remain. Preview recovery uses `POSITION_RECOVERY_PREVIEW` with `episode_attached=false`.
+
+Duplicate active-position lane bundles remain visible as `position_cycle_reference` in `candidate_reconciliation.csv`, with source lane and referenced cycle/outcome; they do not duplicate position compatibility/recovery artifacts. Router-owned coverage retains its existing meaning. Historical artifacts remain immutable and lack the new fields rather than implying false or true values.

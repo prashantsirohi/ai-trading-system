@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-09-04
+- **Last verified:** 2026-09-09
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -220,6 +220,8 @@ not reconstruct or repaint them. Dry runs label persistence-dependent checks
 `NOT_APPLICABLE`. These checks feed the existing Investigator readiness artifact
 and have no execution, candidate-tracker, ranking, or broker consumer.
 
+Position reconciliation now counts distinct exchange/symbol/position cycles before repeated lane work can inflate monitoring or recovery counts. The additive `position-reconciliation-v2` artifacts and read-only Phase 4 views distinguish router/data coverage from canonical episode attachment; old artifacts retain unknown attachment status. Compatibility and recovery permissions are unchanged. See the [opportunities contract](stages/opportunities.md#position-reconciliation-grain).
+
 Phase 3.5 P1 separates Investigator evidence ownership from rank ownership and
 introduces immutable `setup-family-v1.3` lane-aware matching. Investigator rows
 outside `ranked_signals` receive rank context only when they carry an explicit
@@ -421,7 +423,7 @@ remain keyed by the mastered symbol.
 | `opportunities` | Optionally reconcile canonical candidate episodes and Investigator attribution onsets in non-authoritative shadow mode. | Opportunity registry, immutable performance events, unified I/F/P convergence view, and audit artifacts | [opportunities](stages/opportunities.md) |
 | `fundamentals` | Optionally import and score fundamental evidence. | Fundamental scores and watchlists | [fundamentals](stages/fundamentals.md) |
 | `fundamental_discovery` | Reuse or classify local accounting theses, then project current stage, valuation, pattern, Investigator, sector, and regime context. | Five shadow artifacts; optional parallel fundamental registry episodes | [fundamental discovery](stages/fundamental_discovery.md) |
-| `candidates` | Deterministically select the operator/execution shortlist. | `final_candidates.csv` | [candidates](stages/candidates.md) |
+| `candidates` | Deterministically select the operator shortlist used by candidate tracking; execution independently selects from rank. | `final_candidates.csv` | [candidates](stages/candidates.md) |
 | `candidate_tracker` | Maintain durable lifecycle episodes, reviews, alerts, and current candidate state. | Tracker DB and tracker artifacts | [candidate tracker](stages/candidate_tracker.md) |
 | `events` | Collect and enrich catalyst/event evidence. | Event packet and enriched rank data | [events](stages/events.md) |
 | `execute` | Apply trust, policy, portfolio, and risk gates before paper or authorized live dispatch. | Actions, orders, fills, positions | [execute](stages/execute.md) |
@@ -997,6 +999,11 @@ duckdb "$DATA_ROOT/ohlcv.duckdb" -cmd \
 Before a repair or migration, follow [backup and restore](runbooks/backup_and_restore.md). The exhaustive command and flag inventory is [commands](reference/commands.md); isolated production-shaped validation is in [copied-data canary](runbooks/copied_data_canary.md), and recovery starts with [troubleshooting](runbooks/troubleshooting.md).
 
 ## Where to go deeper
+
+The planned [Decision Ownership and Consolidation Plan](development/decision_ownership_and_consolidation_plan.md)
+defines four gated milestones for decision ownership, shared measurement,
+the operator workspace, and lifecycle migration. It changes no current runtime
+authority, Phase 4 readiness restriction, or execution permission.
 
 | Question | Read next |
 |---|---|

@@ -1,8 +1,35 @@
 import hashlib
+import csv
 
 from fastapi.testclient import TestClient
 
 from .conftest import HEADERS
+
+
+def test_position_route_coverage_does_not_imply_episode_attachment(operator_artifact_client):
+    client = operator_artifact_client
+    legacy = client.get("/api/v1/positions/coverage", headers=HEADERS).json()["data"][0]
+    assert legacy["route_data_covered"] is None
+    assert legacy["episode_attached"] is None
+    root = client.app.state.test_artifact_root
+    path = next(root.rglob("position_monitor_reconciliation.csv"))
+    row = {
+        "position_cycle_id": "cycle-op", "symbol_id": "ABC", "exchange": "NSE",
+        "route_data_covered": True, "episode_attached": False,
+        "investigator_evidence_complete": False,
+        "outcome": "POSITION_RECOVERY_REQUIRED", "observed_session": "2026-07-14",
+        "reconciliation_schema_version": "position-reconciliation-v2",
+    }
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row))
+        writer.writeheader()
+        writer.writerow(row)
+    current = client.get("/api/v1/positions/coverage", headers=HEADERS).json()["data"][0]
+    assert current["coverage_status"] == "FULLY_MONITORED"  # Router-owned legacy field.
+    assert current["route_data_covered"] is True
+    assert current["episode_attached"] is False
+    assert current["investigator_evidence_complete"] is False
+    assert current["reconciliation_observed_session"] == "2026-07-14"
 
 
 def test_operator_position_calibration_and_performance_projections(operator_artifact_client: TestClient) -> None:

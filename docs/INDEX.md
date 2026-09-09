@@ -2,7 +2,7 @@
 
 - **Purpose:** Complete map of all documentation under `docs/`.
 - **Audience:** Anyone navigating the docs.
-- **Last verified:** 2026-08-28
+- **Last verified:** 2026-09-09
 - **Source of truth:** This file is the source of truth for the doc inventory; `SYSTEM_GUIDE.md` is the source of truth for system orientation.
 
 > Each document records its own verification date. See [`development/legacy_cleanup_plan.md`](development/legacy_cleanup_plan.md) for the cleanup history.
@@ -93,6 +93,9 @@
 - [optimization](runbooks/optimization.md)
 
 ## Development
+- [m1_position_coverage_reconciliation](development/m1_position_coverage_reconciliation.md) — recorded 5/9/4 position reconciliation, per-cycle attachment causes, and bounded repair plan
+- [m1_decision_ownership_audit](development/m1_decision_ownership_audit.md) — verified consumers, recorded walkthroughs, proposed decision contracts, and open G1 acceptance evidence
+- [decision_ownership_and_consolidation_plan](development/decision_ownership_and_consolidation_plan.md) — planned Phase 3.5 decision ownership, measurement, operator workflow, and gated lifecycle consolidation
 - [contributing](development/contributing.md)
 - [coding_standards](development/coding_standards.md)
 - [testing_strategy](development/testing_strategy.md)

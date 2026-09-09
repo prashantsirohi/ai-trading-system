@@ -968,6 +968,8 @@ export interface components {
             policy_hashes?: {
                 [key: string]: string;
             };
+            /** Policy Snapshot Ids */
+            policy_snapshot_ids?: string[];
             /** Policy Version */
             policy_version: string;
             /** Replay Equivalent */
@@ -989,6 +991,10 @@ export interface components {
         };
         /** CalibrationSummaryResponse */
         CalibrationSummaryResponse: {
+            /** Admission Reason Coverage */
+            admission_reason_coverage?: {
+                [key: string]: number;
+            };
             /** Class Counts */
             class_counts?: {
                 [key: string]: number;
@@ -1022,6 +1028,10 @@ export interface components {
             phase4_development_ready?: boolean | null;
             /** Phase4 Production Ready */
             phase4_production_ready?: boolean | null;
+            /** Policy Snapshot Coverage */
+            policy_snapshot_coverage?: {
+                [key: string]: number;
+            };
             /** Policy Version */
             policy_version?: string | null;
             /**
@@ -1377,6 +1387,8 @@ export interface components {
             coverage_status: string;
             /** Effective Scan Tier */
             effective_scan_tier?: string | null;
+            /** Episode Attached */
+            episode_attached?: boolean | null;
             /**
              * Episode Compatibility
              * @default unknown
@@ -1421,8 +1433,14 @@ export interface components {
             position_monitor_present: boolean;
             /** Positive Action Suppressed */
             positive_action_suppressed: boolean;
+            /** Reconciliation Observed Session */
+            reconciliation_observed_session?: string | null;
+            /** Reconciliation Schema Version */
+            reconciliation_schema_version?: string | null;
             /** Recovery Status */
             recovery_status?: string | null;
+            /** Route Data Covered */
+            route_data_covered?: boolean | null;
             /** Routing Decision Id */
             routing_decision_id?: string | null;
             /** Suppression Reasons */

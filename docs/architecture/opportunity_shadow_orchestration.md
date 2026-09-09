@@ -2,7 +2,7 @@
 
 - **Purpose:** Define the non-authoritative Phase 3A adapter, admission, lifecycle, retention, and registry-write workflow.
 - **Audience:** Engineers operating or changing canonical opportunity reconciliation.
-- **Last verified:** 2026-09-04
+- **Last verified:** 2026-09-09
 - **Source of truth:** `src/ai_trading_system/domains/opportunities/adapters/`, `src/ai_trading_system/domains/opportunities/orchestration/`, and `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
@@ -182,3 +182,7 @@ coerced to zero.
 Position-only recovery records are not entry-calibration history. The resulting
 readiness checks and manifests are advisory and do not feed ranking, routing,
 Investigator, lifecycle, execution, or publish.
+
+## Cycle-scoped position reconciliation
+
+Position accounting and attachment/recovery run once per exchange/symbol/cycle. Fundamental lane copies reference the first result through candidate reconciliation; they cannot multiply recovery actions or writes to the position's episode. Source-specific convergence and neutral technical evidence remain available. Non-position lane matching and admission are unchanged. The additive `position-reconciliation-v2` artifact shape distinguishes route/data coverage from episode attachment and retains session/run/preview provenance. See [opportunities](../stages/opportunities.md#position-reconciliation-grain) for fields and aggregate semantics. This reporting/coordination correction does not relax position compatibility or authorize recovery.

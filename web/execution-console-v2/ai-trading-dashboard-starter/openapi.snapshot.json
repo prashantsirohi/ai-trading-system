@@ -1928,6 +1928,17 @@
             ],
             "title": "Effective Scan Tier"
           },
+          "episode_attached": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Episode Attached"
+          },
           "episode_compatibility": {
             "default": "unknown",
             "title": "Episode Compatibility",
@@ -2053,6 +2064,29 @@
             "title": "Positive Action Suppressed",
             "type": "boolean"
           },
+          "reconciliation_observed_session": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Observed Session"
+          },
+          "reconciliation_schema_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Schema Version"
+          },
           "recovery_status": {
             "anyOf": [
               {
@@ -2063,6 +2097,17 @@
               }
             ],
             "title": "Recovery Status"
+          },
+          "route_data_covered": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Data Covered"
           },
           "routing_decision_id": {
             "anyOf": [

@@ -2,7 +2,7 @@
 
 - **Purpose:** Describe the operator UI as it is built today — the FastAPI execution backend and the React V2 console — including auth, CORS, router layout, and frontend stack.
 - **Audience:** Operators running the console; engineers adding routes or React views.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-09-09
 - **Source of truth:** `src/ai_trading_system/ui/execution_api/app.py`, `src/ai_trading_system/ui/execution_api/routes/`, `web/execution-console-v2/ai-trading-dashboard-starter/package.json`, `pyproject.toml [project.scripts]`, `grep -rni streamlit src/`.
 
 ## FastAPI execution console — `ai-trading-execution-api`
@@ -81,3 +81,7 @@ The React app talks to FastAPI through the `/api/*` surface, sending the API key
 - [System Guide](../SYSTEM_GUIDE.md) — where the UI fits in the larger system.
 - [operational_data_flow.md](./operational_data_flow.md) — what the UI is showing.
 - [storage_and_lineage.md](./storage_and_lineage.md) — the DuckDB readmodels that back the routers (`ui/execution_api/services/readmodels/`).
+
+## Position coverage labels
+
+The Phase 4 dashboard labels router `FULLY_MONITORED` counts as **Router-covered** and displays **Episode attached** separately. The position table exposes route/data coverage, episode attachment, and reconciliation session. Missing v2 reconciliation evidence displays Unknown/Unavailable instead of inferring an attachment from router coverage. These are read-only projections; compatibility policy and recovery permissions do not change.

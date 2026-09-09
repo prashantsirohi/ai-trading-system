@@ -2,7 +2,7 @@
 
 - **Purpose:** Deterministic post-rank selection — combines composite rank, breakout/pattern evidence, sector state, and (optional) fundamentals into a single `final_candidates.csv` with explicit groups and per-row reasons.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-09-09
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/candidates.py` (`CandidatesStage`)
   - `src/ai_trading_system/domains/candidates/builder.py` (`build_final_candidates`, `ExecutionCandidateBuilder` re-exports)
@@ -12,7 +12,7 @@
 
 ## Purpose
 
-`candidates` runs after `rank` (and after `fundamentals` when enabled). It is a **pure, deterministic** stage — no LLM, no external calls, no DB writes — that filters and re-ranks the top technical pool into the operator-facing shortlist used by `execute`, `insight`, `narrative`, and `publish`.
+`candidates` runs after `rank` (and after `fundamentals` when enabled). It is a **pure, deterministic** stage — no LLM, no external calls, no DB writes — that filters and re-ranks the top technical pool into an operator-facing shortlist consumed directly by `candidate_tracker`. Execution independently builds its selection from `ranked_signals` through `domains/execution/candidate_builder.py`; `final_candidates` is not its admission boundary. Tracker outputs supply downstream operator views.
 
 ## Entrypoints
 
@@ -112,9 +112,11 @@ Under `data/pipeline_runs/<run_id>/candidates/attempt_<n>/`:
 
 ## Downstream consumers
 
-- `execute` — reads `final_candidates.csv` to materialize order intents.
-- `insight` / `narrative` — read both `final_candidates.csv` and `candidate_summary.json` for the LLM brief.
-- `publish` — uses the same artifacts for Telegram / Google Sheets / PDF deliveries.
+- `candidate_tracker` directly requires `final_candidates` and combines it with available fundamental inputs.
+- `publish` uses tracker outputs for downstream operator views; it does not directly consume `final_candidates` in the inspected current source.
+- `execute` independently consumes rank through `ExecutionCandidateBuilder`; `insight` also reads rank. Do not assume that this shortlist is the selected population of those stages.
+
+The [M1 ownership audit](../development/m1_decision_ownership_audit.md) records the verified consumer paths and the planned reconciliation of operator and execution selection. This documentation correction does not change either selection policy.
 
 ## Commands
 

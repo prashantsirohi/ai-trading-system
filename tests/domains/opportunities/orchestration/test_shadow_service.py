@@ -6,6 +6,7 @@ import json
 
 import duckdb
 import pandas as pd
+import pytest
 
 from ai_trading_system.domains.opportunities.contracts import (
     CandidateState,
@@ -34,12 +35,91 @@ from ai_trading_system.domains.opportunities.orchestration.transitions import (
     evaluate_transition,
 )
 from ai_trading_system.domains.opportunities.routing import StageCoverageConfig
+from ai_trading_system.domains.opportunities.position_monitoring import PositionRecoveryMode
 from ai_trading_system.domains.opportunities.stage_governance import MembershipTrust
 from ai_trading_system.pipeline.contracts import StageArtifact
 from ai_trading_system.pipeline.registry import RegistryStore
 
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("automatic", [False, True])
+def test_position_cycles_are_reconciled_once_across_fundamental_lanes(tmp_path, dry_run, automatic):
+    registry = RegistryStore(tmp_path, db_path=tmp_path / "control.duckdb")
+    symbols = ["AAA", "BBB", "CCC", "DDD", "EEE"]
+    ranked = _artifact(
+        tmp_path, "ranked_signals",
+        "symbol_id,exchange,composite_score,sector_name\n"
+        + "".join(f"{symbol},NSE,95,Capital Goods\n" for symbol in symbols),
+    )
+    routing = _artifact(
+        tmp_path, "scan_routing",
+        "symbol_id,exchange,scan_tier,scan_reasons,active_position,"
+        "position_cycle_opened_at,position_cycle_id,routing_decision_id,market_data_complete\n"
+        + "".join(
+            f"{symbol},NSE,position_monitor,['active_position'],true,"
+            f"2026-07-01T10:00:00+00:00,cycle-{symbol},route-{symbol},"
+            f"{'false' if symbol == 'EEE' else 'true'}\n" for symbol in symbols
+        ),
+    )
+    fundamental = _artifact(
+        tmp_path, "fundamental_thesis_universe",
+        "symbol_id,exchange,primary_thesis,secondary_theses_json,evaluations_json,"
+        "evidence_json,classification_status,admission_eligible,source_data_hash\n"
+        + "".join(
+            f'{symbol},NSE,HIGH_GROWTH_EMERGING,"[]","[]","{{}}",QUALIFIED,true,hash-{symbol}\n'
+            for symbol in [*symbols[:4], "NONPOSITION"]
+        ),
+    )
+    artifacts = OpportunityArtifactSet(
+        ranked_signals=ranked, scan_routing=routing,
+        fundamental_thesis_universe=fundamental,
+    )
+    config = OpportunityShadowConfig(
+        mode=OpportunityRegistryMode.SHADOW, dry_run=dry_run,
+        recover_position_only_episodes=automatic,
+        position_recovery_mode=PositionRecoveryMode.AUTOMATIC if automatic
+        else PositionRecoveryMode.REPORT_ONLY,
+    )
+    service = OpportunityShadowOrchestrator(registry)
+    for attempt in [1, 2]:
+        result = service.run(
+            run_id="position-lanes", stage_attempt=attempt, artifact_set=artifacts,
+            as_of=NOW, mode=config.mode, config=config,
+        )
+        assert result.summary["active_positions_total"] == 5
+        assert result.summary["position_lane_references"] == 4
+        assert result.summary["active_positions_route_data_covered"] == 4
+        attached = automatic and not dry_run and attempt == 2
+        assert result.summary["active_positions_with_compatible_episode"] == (5 if attached else 0)
+        assert result.summary["active_positions_fully_monitored"] == (4 if automatic else 0)
+        assert result.summary["recovery_proposals"] == (0 if attached else 5)
+        assert len(result.artifact_rows["position_recovery_proposals"]) == (0 if attached else 5)
+        for artifact in ["position_episode_compatibility",
+                         "position_monitor_reconciliation"]:
+            rows = result.artifact_rows[artifact]
+            assert len(rows) == len({row["position_cycle_id"] for row in rows}) == 5
+        coverage = result.artifact_rows["position_monitor_reconciliation"]
+        assert all(row["episode_attached"] == (automatic and not dry_run) for row in coverage)
+        expected_outcome = (
+            "POSITION_EPISODE_ATTACHED" if attached else
+            "POSITION_RECOVERY_PREVIEW" if automatic and dry_run else
+            "POSITION_RECOVERED" if automatic else "POSITION_RECOVERY_REQUIRED"
+        )
+        assert all(row["outcome"] == expected_outcome for row in coverage)
+        assert sum(row["route_data_covered"] for row in coverage) == 4
+        assert len(result.artifact_rows["position_recovery_actions"]) == (5 if automatic and not attached else 0)
+        assert sum(row["outcome"] == "position_cycle_reference"
+                   for row in result.artifact_rows["candidate_reconciliation"]) == 4
+        # The independent non-position fundamental lane still has its own episode.
+        if not dry_run:
+            with registry._reader() as conn:
+                assert conn.execute("SELECT COUNT(*) FROM position_recovery_proposal").fetchone()[0] == 5
+                assert conn.execute(
+                    "SELECT symbol_id, setup_family FROM candidate_episode WHERE setup_family <> 'position_state_recovery'"
+                ).fetchall() == [("NONPOSITION", "fundamental_thesis")]
 
 
 def _artifact(tmp_path, name, content):

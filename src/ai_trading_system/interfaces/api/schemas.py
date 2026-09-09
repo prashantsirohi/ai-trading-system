@@ -233,6 +233,10 @@ class PositionCoverageSummary(BaseModel):
     missing_data_fields: list[str] = Field(default_factory=list)
     episode_compatibility: str = "unknown"
     episode_match_status: str | None = None
+    route_data_covered: bool | None = None
+    episode_attached: bool | None = None
+    reconciliation_observed_session: date | None = None
+    reconciliation_schema_version: str | None = None
     opportunity_episode_id: str | None = None
     recovery_status: str | None = None
     positive_action_suppressed: bool

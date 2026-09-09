@@ -2,7 +2,7 @@
 
 - **Purpose:** Complete catalog of FastAPI endpoints exposed by the execution console backend.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-28
+- **Last verified:** 2026-09-09
 - **Source of truth:** `src/ai_trading_system/ui/execution_api/app.py`, `src/ai_trading_system/ui/execution_api/routes/*.py`, `src/ai_trading_system/ui/execution_api/schemas/requests.py`, `src/ai_trading_system/ui/execution_api/routes/_deps.py`.
 
 ---
@@ -295,3 +295,7 @@ Response bodies are typed as `dict[str, Any]` (or `FileResponse`/`StreamingRespo
 | 401 | `app.py:62` | `/api/*` request with missing or mismatched `x-api-key`. |
 | 404 | `runs.py:33`, `tasks.py:44,58`, `artifacts.py:37` | Unknown `run_id`, `task_id`, or artifact not in registry. |
 | 500 | `app.py:55-59` | `EXECUTION_API_KEY` unset on the server. |
+
+## Phase 4 position coverage dimensions
+
+The separate read-only `/api/v1/positions/coverage` collection and detail response add nullable `route_data_covered`, `episode_attached`, `reconciliation_observed_session`, and `reconciliation_schema_version`, projected from opportunity reconciliation. Legacy artifacts return null for these fields; router `coverage_status=FULLY_MONITORED` is not interpreted as proof of canonical attachment. Existing route, market-data, compatibility, and recovery fields retain their sources. No endpoint or mutation authority is added. The checked-in Phase 4 OpenAPI snapshot and generated TypeScript types include these fields.

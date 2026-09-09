@@ -628,9 +628,60 @@ class OpportunityShadowOrchestrator:
             if record.value.investigator_context is not None
         }
         captured_context: dict[tuple[str, str], Any] = {}
+        position_results: dict[tuple[str, str, str | None], dict[str, Any]] = {}
         for bundle in bundles:
+            position_result = None
             if bundle.active_position:
+                position_key = (
+                    bundle.exchange, bundle.symbol_id, bundle.position_cycle_id
+                )
+                if position_key in position_results:
+                    # Lane expansion retains its evidence upstream, but must not
+                    # repeat the position's attachment, recovery, or lifecycle write.
+                    original = position_results[position_key]
+                    counters["position_lane_references"] += 1
+                    rows["candidate_reconciliation"].append({
+                        **_reconciliation_row(
+                            bundle, "position_cycle_reference", original.get("candidate_id") or ""
+                        ),
+                        "position_cycle_id": bundle.position_cycle_id,
+                        "position_outcome": original["outcome"],
+                        "source_lane": (
+                            "fundamental_thesis" if bundle.fundamental_thesis is not None
+                            else "primary"
+                        ),
+                    })
+                    continue
+                route_present = (
+                    bundle.scan_tier == "position_monitor"
+                    and bool(bundle.routing_decision_id)
+                )
+                route_data_covered = bool(
+                    route_present and bundle.market_data_complete
+                    and bundle.position_cycle_id and bundle.position_cycle_opened_at
+                )
+                position_result = {
+                    "position_cycle_id": bundle.position_cycle_id,
+                    "symbol_id": bundle.symbol_id,
+                    "exchange": bundle.exchange,
+                    "run_id": run_id,
+                    "observed_session": observed_session.isoformat(),
+                    "reconciliation_schema_version": "position-reconciliation-v2",
+                    "persistence_status": "PREVIEW" if config.dry_run else "OBSERVED",
+                    "position_monitor_present": route_present,
+                    "market_data_complete": bundle.market_data_complete,
+                    "route_data_covered": route_data_covered,
+                    "investigator_evidence_complete": bool(
+                        bundle.evidence and not bundle.evidence.missing_evidence
+                    ),
+                    "episode_attached": False,
+                    "candidate_id": None,
+                    "outcome": "POSITION_RECONCILIATION_PENDING",
+                }
+                position_results[position_key] = position_result
+                rows["position_monitor_reconciliation"].append(position_result)
                 counters["active_positions_total"] += 1
+                counters["active_positions_route_data_covered"] += int(route_data_covered)
                 counters["active_positions_with_position_monitor"] += int(
                     bundle.scan_tier == "position_monitor"
                     and bool(bundle.routing_decision_id)
@@ -687,6 +738,7 @@ class OpportunityShadowOrchestrator:
                         "policy_version": config.position_episode_compatibility_policy_version,
                     }
                 )
+                position_result["compatibility_status"] = compatibility.status.value
                 if compatibility.status is PositionEpisodeCompatibility.COMPATIBLE:
                     episode = next(
                         item
@@ -695,7 +747,12 @@ class OpportunityShadowOrchestrator:
                     )
                     match_outcome = SetupMatchOutcome.EXACT
                     counters["compatible_episode_attachments"] += 1
-                    if bundle.market_data_complete and bundle.routing_decision_id:
+                    counters["active_positions_with_compatible_episode"] += 1
+                    position_result.update(
+                        episode_attached=True, candidate_id=episode.candidate_id,
+                        outcome="POSITION_EPISODE_ATTACHED",
+                    )
+                    if position_result["route_data_covered"]:
                         counters["active_positions_fully_monitored"] += 1
                 else:
                     if (
@@ -720,15 +777,9 @@ class OpportunityShadowOrchestrator:
                             self.registry_store.registry, proposal
                         )
                     rows["position_recovery_proposals"].append(proposal)
-                    rows["position_monitor_reconciliation"].append(
-                        {
-                            "position_cycle_id": cycle_id,
-                            "symbol_id": bundle.symbol_id,
-                            "exchange": bundle.exchange,
-                            "outcome": "POSITION_RECOVERY_REQUIRED",
-                            "compatibility_status": compatibility.status.value,
-                            "recovery_proposal_id": proposal["recovery_proposal_id"],
-                        }
+                    position_result.update(
+                        outcome="POSITION_RECOVERY_REQUIRED",
+                        recovery_proposal_id=proposal["recovery_proposal_id"],
                     )
                     counters["recovery_proposals"] += 1
                     recovery = _recovery_allowed(config)
@@ -1203,6 +1254,8 @@ class OpportunityShadowOrchestrator:
                         "recovered_from_position_state": True,
                         "created_run_id": run_id,
                     }
+                    if not config.dry_run:
+                        _persist_recovery_action(self.registry_store.registry, action)
                     rows["position_recovery_actions"].append(action)
                     counters[
                         "reviewed_recoveries"
@@ -1210,10 +1263,14 @@ class OpportunityShadowOrchestrator:
                         is PositionRecoveryMode.REVIEWED
                         else "automatic_recoveries"
                     ] += 1
-                    if bundle.market_data_complete and bundle.routing_decision_id:
+                    counters["active_positions_recovered"] += 1
+                    position_result.update(
+                        episode_attached=not config.dry_run, candidate_id=episode.candidate_id,
+                        outcome="POSITION_RECOVERY_PREVIEW" if config.dry_run
+                        else "POSITION_RECOVERED",
+                    )
+                    if position_result["route_data_covered"]:
                         counters["active_positions_fully_monitored"] += 1
-                    if not config.dry_run:
-                        _persist_recovery_action(self.registry_store.registry, action)
                 rows["candidate_reconciliation"].append(
                     _reconciliation_row(
                         bundle, match_outcome.value, episode.candidate_id
@@ -1444,6 +1501,8 @@ class OpportunityShadowOrchestrator:
                     counters["active_positions_total"]
                     - counters["active_positions_fully_monitored"]
                 ),
+                "position_reconciliation_schema_version": "position-reconciliation-v2",
+                "position_coverage_grain": "exchange_symbol_position_cycle",
                 "state_distribution": {
                     state.value: sum(
                         row.get("lifecycle_state") == state.value
@@ -3234,6 +3293,10 @@ def _initial_counts(*args: Any) -> dict[str, Any]:
         "automatic_recoveries": 0,
         "recovery_conflicts": 0,
         "active_positions_total": 0,
+        "position_lane_references": 0,
+        "active_positions_route_data_covered": 0,
+        "active_positions_with_compatible_episode": 0,
+        "active_positions_recovered": 0,
         "active_positions_with_position_monitor": 0,
         "active_positions_with_complete_market_data": 0,
         "active_positions_with_complete_evidence": 0,

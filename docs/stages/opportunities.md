@@ -2,7 +2,7 @@
 
 - **Purpose:** Operate the optional canonical opportunity-registry shadow stage.
 - **Audience:** Operators and engineers debugging opportunity reconciliation.
-- **Last verified:** 2026-09-04
+- **Last verified:** 2026-09-09
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
@@ -140,3 +140,11 @@ row counts, sizes, and hashes. Performance status is advisory and separate from
 the stage's existing completed/degraded/failed functional status. Candidate
 admission, setup matching, lifecycle, recovery, execution, and publish contracts
 are unchanged.
+
+## Position reconciliation grain
+
+`position-reconciliation-v2` reconciles each exchange/symbol/position-cycle once per attempt. Fundamental lane expansion retains its source evidence and neutral technical labels, but repeated active-position bundles emit `position_cycle_reference` in candidate reconciliation instead of repeating attachment, recovery, or lifecycle writes. Non-position lane admission is unchanged.
+
+`position_monitor_reconciliation` now contains one row for every observed cycle, including compatible attachments. It separates `position_monitor_present`, `market_data_complete`, `route_data_covered`, `investigator_evidence_complete`, and `episode_attached`, with run/session and preview provenance. Route/data coverage requires cycle identity, opened time, a position-monitor route and complete market data. Recovery previews do not claim a persisted attachment. Existing compatibility and recovery policies retain their versions and rules; v2 identifies the additive reconciliation schema, not a new trading policy.
+
+Summary counters use distinct cycles: `active_positions_route_data_covered`, `active_positions_with_compatible_episode`, and `active_positions_recovered`; `position_lane_references` counts repeated lane bundles separately. The legacy `active_positions_fully_monitored` aggregate requires route/data coverage plus a compatible attachment or allowed recovery; dry-run aggregate counts remain preview evidence. Old immutable run artifacts are not rewritten.
