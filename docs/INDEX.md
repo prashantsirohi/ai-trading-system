@@ -94,6 +94,7 @@
 
 ## Development
 - [m1_position_coverage_reconciliation](development/m1_position_coverage_reconciliation.md) — recorded 5/9/4 position reconciliation, per-cycle attachment causes, and bounded repair plan
+- [m2_measurement_contract](development/m2_measurement_contract.md)
 - [m1_decision_ownership_audit](development/m1_decision_ownership_audit.md) — verified consumers, recorded walkthroughs, proposed decision contracts, and open G1 acceptance evidence
 - [decision_ownership_and_consolidation_plan](development/decision_ownership_and_consolidation_plan.md) — planned Phase 3.5 decision ownership, measurement, operator workflow, and gated lifecycle consolidation
 - [contributing](development/contributing.md)

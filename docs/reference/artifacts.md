@@ -128,13 +128,13 @@ Writes under `data/pipeline_runs/<run_id>/opportunities/attempt_<n>/`:
 - `position_recovery_actions.csv`
 - `position_monitor_reconciliation.csv`
 - `opportunity_convergence_view.csv` — one row per exchange/symbol/session/policy snapshot with source-owned Investigator, fundamental, and pattern states; lane freshness and evidence hashes; explicit missing/error states; and one mutually exclusive I/F/P cohort
-- `opportunity_convergence_observations.csv` — durable interpreted snapshots projected from the current and prior immutable convergence observations
+- `opportunity_convergence_observations.csv` — durable interpreted snapshots from the active convergence version, including its prior sessions; legacy versions remain in storage but are excluded from successor output
 - `opportunity_convergence_anchors.csv` — independent discovery-close, discovery-next-open shadow-fill, canonical confirmation-close, and canonical executable-fill anchors
 - `opportunity_convergence_horizons.csv` — explicit pending or matured 3/5/10/20-session returns, excursions, touch timing, and benchmark/sector-relative outcomes
 - `opportunity_convergence_primary_cohorts.csv` — mutually exclusive active I/F/P combination performance
 - `opportunity_convergence_diagnostic_cohorts.csv` — intentionally overlapping Investigator-any, fundamental-any, and pattern-any performance
 - `opportunity_convergence_research_cohorts.csv` — sub-30 active cohorts, never policy authority; `NONE` rows retain observations but do not create horizons
-- `opportunity_convergence_calendar_windows.csv` — ten-session non-overlapping all-active and weekly-momentum window results
+- `opportunity_convergence_calendar_windows.csv` — ten-reference-session discovery windows with policy snapshot/exchange, expected/observed session counts, pending/invalid and missing-anchor counts, and explicit window completeness; holding periods may overlap
 - `opportunity_convergence_missing_data_reasons.csv` — pending and missing benchmark/sector reason distributions
 - `opportunity_convergence_performance_readiness.csv` — P2 persistence, anchor, horizon, sample, maturation, and window-stability gates
 - `technical_evidence_labels.csv` — one row per exchange/symbol/session with independent fundamental, Investigator weekly-gainer, near-high, SMA20, entry-confirmation, and SMA20-break label states plus the shared observation ID
@@ -427,3 +427,5 @@ never an mtime ordering. Required columns and registered hashes are verified.
 The opportunities-owned `position_monitor_reconciliation.csv` has one row per exchange/symbol/position cycle, including successful attachments and recovery-required outcomes. Additive fields are `run_id`, `observed_session`, `reconciliation_schema_version=position-reconciliation-v2`, `persistence_status`, `position_monitor_present`, `market_data_complete`, `route_data_covered`, `investigator_evidence_complete`, `episode_attached`, and `candidate_id`. Existing cycle, outcome, compatibility, and recovery-proposal identifiers remain. Preview recovery uses `POSITION_RECOVERY_PREVIEW` with `episode_attached=false`.
 
 Duplicate active-position lane bundles remain visible as `position_cycle_reference` in `candidate_reconciliation.csv`, with source lane and referenced cycle/outcome; they do not duplicate position compatibility/recovery artifacts. Router-owned coverage retains its existing meaning. Historical artifacts remain immutable and lack the new fields rather than implying false or true values.
+
+M2 convergence artifacts use `opportunity-convergence-v1.3` / `opportunity-convergence-performance-v2`. Horizon outputs add performance policy, convergence policy, and policy snapshot provenance; cohort/window/readiness outputs separate snapshot and exchange strata. Readiness records legacy-history exclusion counts. Missing prices defer anchors; incomplete windows never mark stability. See the [measurement contract](../development/m2_measurement_contract.md).

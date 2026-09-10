@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-09-04
+- **Last verified:** 2026-09-09
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -479,3 +479,5 @@ semantic as-of, and availability lineage plus primary/supporting consistency.
 Freshness uses run, manifest, session, and availability timestamps. Filesystem
 modification time is not a freshness input. Different run IDs or semantic as-of
 values yield `SOURCE_VERSION_MISMATCH` and a partial response.
+
+M2 uses the migration-047 tables without a schema migration. The v2 convergence evaluator only matures observations under `opportunity-convergence-v1.3`; earlier observations, anchors, and horizons are retained unchanged and excluded from successor sample/readiness calculations. New absent-price anchors defer rather than freeze null values. Output strata retain composite policy snapshots and exchanges. See the [M2 contract](../development/m2_measurement_contract.md) for legacy and correction boundaries.

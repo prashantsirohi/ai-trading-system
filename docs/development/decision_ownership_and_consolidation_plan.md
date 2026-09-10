@@ -116,7 +116,7 @@ Do not fabricate pre-cutover lifecycle events. Use an explicit legacy reference 
 
 ## Delivery order and evidence of completion
 
-M1 audit work is recorded below; other implementation milestones remain **NOT STARTED**. No acceptance gate has passed.
+M1 audit work and M2 correctness implementation are recorded below; M3/M4 remain **NOT STARTED**. No acceptance gate has passed.
 
 | Work item | Dependency | Completion evidence |
 |---|---|---|
@@ -150,3 +150,31 @@ R1 cycle-scoped reconciliation and R2 separate coverage/attachment reporting are
 Validation: 144 backend tests passed across opportunity orchestration, stage integration, Phase 3C-3 compatibility/monitoring, and Phase 4 API. The final API evidence-projection adjustment passed its 2 targeted tests. All 46 frontend tests, TypeScript checks, production build, OpenAPI snapshot check, documentation validation, and whitespace checks passed. Vite retained a non-blocking large-chunk warning. No live pipeline/canary or recovery was run; temporary-store tests cover five cycles with four fundamental copies, persistent and dry-run recovery, retries, and missing market data. No feature rebuild is required because feature/ranking calculations are unchanged.
 
 Copied-real-data follow-up: [bounded replay and API/browser evidence](m1_position_coverage_reconciliation.md#copied-real-data-validation--2026-09-09) passed on September 9. Two attempts reproduced five unique cycles, four lane references, 5/5 route/data coverage, and 0/5 attachments with unchanged compatibility outcomes. Retries added no durable proposals or recovery actions; the source database checksum remained unchanged. The final complete backend suite passed all 144 tests. This validates R1/R2; G1 and the remaining milestones stay open.
+
+## M2 correctness implementation — 2026-09-09
+
+[Measurement contract and acceptance record](m2_measurement_contract.md) documents
+successors `opportunity-convergence-v1.3` and `opportunity-convergence-performance-v2`.
+All five reviewed convergence defects were confirmed and repaired with regression
+coverage. The corrected path separates policy-snapshot/exchange strata; legacy
+convergence history stays stored and is excluded from successor maturation and
+samples. The legacy Investigator calculator is unchanged, with common complete
+close-anchor parity checked and its divergent cases explicitly retained as M2
+follow-up. No live migration, repair, execution, or feature rebuild occurred.
+
+Validation: the broad opportunity-domain, stage, API and wrapper suite passed
+409 tests. After tightening window boundaries to include observations lacking
+anchors, the targeted performance/service suite passed 47 tests. Retained real
+September 7 artifacts rebuilt 1,626 interpreted observations in a temporary store;
+two retries retained cardinality and, without market prices, created no anchors
+or accepted performance samples. Source hashes were verified. Evidence is in
+`/private/tmp/m2-real-artifact-2v0pj1p4/result.json` (disposable retrospective check).
+A real-market replay remains unperformed: the live OHLCV store was locked by
+another writer on both read-only checks; that process was left running.
+
+**G2 remains open.** Primary comparative question/threshold, independent-sample
+and stopping design, forward collection, broader adjustment/quarantine/calendar
+and calculator reconciliation, and the copied-market replay remain required.
+No comparative economic result or forward maturity is claimed.
+
+Final M2 verification: 61 targeted convergence/source/policy-snapshot tests passed after the last calendar regression; Ruff, whitespace checks, and documentation validation (127 current documents) passed. Earlier wrapper changes remain preserved in the uncommitted worktree.

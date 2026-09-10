@@ -60,7 +60,7 @@ evidence-only rows, and evidence-only weekly gainers. The integrity receipt
 requires zero adapter rejections.
 
 P1.5 established `opportunity_convergence_view.csv` under immutable
-`opportunity-convergence-v1.1`; P2 emits the current additive sector-lineage
+`opportunity-convergence-v1.1`; P2 introduced the additive sector-lineage
 shape under successor `opportunity-convergence-v1.2`. It contains one row per exchange, symbol,
 observed session, and policy snapshot across the union of available lane
 sources. Investigator membership means a fresh tracked weekly gainer with
@@ -89,6 +89,17 @@ non-overlapping ten-session windows. Confidence is exploratory below 30,
 provisional at 30–59, moderate at 60–119, and policy-eligible at 120 or more.
 Readiness remains pending until the discovery-session, 20-session maturation,
 120-sample, and three positive weekly-momentum window gates pass.
+
+The active M2 successors are `opportunity-convergence-v1.3` and
+`opportunity-convergence-performance-v2`. Pattern date freshness cannot be
+upgraded by a source `FRESH` label. New anchors require positive finite prices;
+no price means no anchor yet. NSE reference sessions set exact horizon targets;
+missing/invalid stock bars cannot shift them. Open-fill excursions include entry
+day (touch day 0). Complete ten-session windows and per-policy-snapshot/exchange
+strata are required for stability. Legacy observations/outcomes remain stored,
+but successor output excludes them and reports their count. BSE lacks a verified
+calendar and cannot mature in v2. Read the [M2 contract](../development/m2_measurement_contract.md)
+before interpreting counts as independent samples or comparing calculators.
 
 Technical evidence requires positive price, SMA20, and 52-week-high values for a known combined-entry label. Exactly 90% of the 52-week high and equality with SMA20 both pass. The SMA20-break label is `NOT_APPLICABLE` without a prior session and becomes `MET` only on a known above-to-below close transition. These labels are research-only and cannot alter ranking, admission, lifecycle, candidates, or execution. Publish may project them unchanged into operator-facing shadow tabs, without granting decision authority.
 

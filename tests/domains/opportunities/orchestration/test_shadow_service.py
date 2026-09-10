@@ -493,11 +493,9 @@ def test_shadow_service_emits_unified_convergence_view_and_readiness(tmp_path):
     assert all(row["status"] == "PASS" for row in checks)
     assert result.summary["opportunity_convergence_cohorts"] == {"I_F_P": 1}
     assert len(result.artifact_rows["opportunity_convergence_observations"]) == 1
-    assert {
-        row["anchor_type"]
-        for row in result.artifact_rows["opportunity_convergence_anchors"]
-    } == {"DISCOVERY_CLOSE"}
-    assert len(result.artifact_rows["opportunity_convergence_horizons"]) == 4
+    # No OHLCV supplied: retain the observation, defer its anchor until price exists.
+    assert result.artifact_rows["opportunity_convergence_anchors"] == ()
+    assert len(result.artifact_rows["opportunity_convergence_horizons"]) == 0
     assert (
         len(result.artifact_rows["opportunity_convergence_performance_readiness"]) == 7
     )

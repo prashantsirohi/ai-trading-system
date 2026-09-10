@@ -11,7 +11,6 @@ from ai_trading_system.domains.opportunities.orchestration.convergence import (
     build_convergence_view,
 )
 
-
 SESSION = date(2026, 9, 4)
 
 
@@ -370,3 +369,26 @@ def test_output_and_hashes_are_deterministic() -> None:
     second, _ = _build(**kwargs)
 
     assert first == second
+
+
+@pytest.mark.parametrize(
+    ("source_session", "expected"), [("2026-09-03", "STALE"), (None, "UNKNOWN")]
+)
+def test_pattern_producer_fresh_cannot_override_missing_or_stale_date(
+    source_session, expected
+):
+    rows, _ = _build(
+        pattern_rows=[
+            {
+                "exchange": "NSE",
+                "symbol_id": "ABC",
+                "session_date": source_session,
+                "pattern_evaluation_state": "KNOWN",
+                "pattern_member": True,
+                "lane_freshness": "FRESH",
+                "evidence_hash": "old-pattern",
+            }
+        ]
+    )
+    assert rows[0]["pattern_freshness"] == expected
+    assert rows[0]["pattern_member"] is False

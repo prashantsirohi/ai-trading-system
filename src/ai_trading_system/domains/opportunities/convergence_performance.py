@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import date, datetime, timezone
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -21,8 +22,11 @@ from ai_trading_system.domains.opportunities.performance_evaluation import (
 )
 from ai_trading_system.pipeline.registry import RegistryStore
 
+from ai_trading_system.domains.opportunities.orchestration.convergence import (
+    CONVERGENCE_POLICY_VERSION,
+)
 
-CONVERGENCE_PERFORMANCE_POLICY_VERSION = "opportunity-convergence-performance-v1"
+CONVERGENCE_PERFORMANCE_POLICY_VERSION = "opportunity-convergence-performance-v2"
 CONVERGENCE_PERFORMANCE_HORIZONS = (3, 5, 10, 20)
 CONVERGENCE_WINDOW_SESSIONS = 10
 CONVERGENCE_ANCHOR_TYPES = (
@@ -51,6 +55,13 @@ def evaluate_convergence_performance(
     """Persist and mature convergence evidence without creating trading authority."""
 
     source_rows = [dict(row) for row in convergence_rows]
+    if any(
+        row.get("convergence_policy_version") != CONVERGENCE_POLICY_VERSION
+        for row in source_rows
+    ):
+        raise ValueError(
+            "convergence v2 evaluation requires current-version observations"
+        )
     if persist and any(
         not str(row.get("policy_snapshot_id") or "").strip() for row in source_rows
     ):
@@ -66,8 +77,10 @@ def evaluate_convergence_performance(
                 conn.execute(
                     """
                     SELECT * FROM opportunity_convergence_observation
+                    WHERE convergence_policy_version = ?
                     ORDER BY session_date, exchange, symbol_id, observation_id
-                    """
+                    """,
+                    [CONVERGENCE_POLICY_VERSION],
                 )
             )
             existing_anchor_ids = {
@@ -82,6 +95,7 @@ def evaluate_convergence_performance(
                 for row in _anchor_candidates(
                     observations,
                     prices=prices,
+                    indices=indices,
                     performance_events=_performance_events(conn),
                     run_id=run_id,
                 )
@@ -91,9 +105,12 @@ def evaluate_convergence_performance(
             stored_anchors = _records(
                 conn.execute(
                     """
-                    SELECT * FROM opportunity_convergence_anchor
+                    SELECT a.* FROM opportunity_convergence_anchor a
+                    JOIN opportunity_convergence_observation o USING (observation_id)
+                    WHERE o.convergence_policy_version = ?
                     ORDER BY anchor_session_date, observation_id, anchor_type, anchor_id
-                    """
+                    """,
+                    [CONVERGENCE_POLICY_VERSION],
                 )
             )
             updates = [
@@ -112,6 +129,7 @@ def evaluate_convergence_performance(
             return _build_outputs(
                 conn,
                 current_observation_ids={row["observation_id"] for row in current},
+                indices=indices,
             )
 
     observations = current
@@ -121,6 +139,7 @@ def evaluate_convergence_performance(
     anchors = _anchor_candidates(
         observations,
         prices=prices,
+        indices=indices,
         performance_events=performance_events,
         run_id=run_id,
     )
@@ -142,6 +161,7 @@ def evaluate_convergence_performance(
         horizons,
         current_observation_ids={row["observation_id"] for row in current},
         persistence_state="PREVIEW",
+        indices=indices,
     )
 
 
@@ -246,6 +266,7 @@ def _anchor_candidates(
     prices: dict[tuple[str, str], list[dict[str, Any]]],
     performance_events: list[dict[str, Any]],
     run_id: str,
+    indices: Mapping[str, list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     origins: dict[tuple[str, str, date], set[str]] = defaultdict(set)
     later_events: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -269,27 +290,33 @@ def _anchor_candidates(
         key = (str(observation["exchange"]), str(observation["symbol_id"]))
         series = prices.get(key, [])
         session = _date(observation["session_date"])
-        index = _series_index(series, session)
-        bar = series[index] if index is not None else None
+        matching = [row for row in series if _date(row["session_date"]) == session]
+        bar = matching[0] if len(matching) == 1 else None
         close = _float(bar.get("close")) if bar else None
-        anchors.append(
-            _anchor(
-                observation,
-                anchor_type="DISCOVERY_CLOSE",
-                session=session,
-                price=close,
-                basis="DECISION_SESSION_CLOSE",
-                source_event_id=None,
-                candidate_id=None,
-                fill_policy_version=None,
-                source_run_id=run_id,
-                source_payload=bar or {"missing_session": session.isoformat()},
+        if close is not None and close > 0:
+            anchors.append(
+                _anchor(
+                    observation,
+                    anchor_type="DISCOVERY_CLOSE",
+                    session=session,
+                    price=close,
+                    basis="DECISION_SESSION_CLOSE",
+                    source_event_id=None,
+                    candidate_id=None,
+                    fill_policy_version=None,
+                    source_run_id=run_id,
+                    source_payload=bar or {"missing_session": session.isoformat()},
+                )
             )
-        )
-        if index is not None and index + 1 < len(series):
-            next_bar = series[index + 1]
+        calendar = _market_calendar(indices or {}, key[0])
+        next_session = next((day for day in calendar if day > session), None)
+        next_bars = [
+            row for row in series if _date(row["session_date"]) == next_session
+        ]
+        if session in calendar and len(next_bars) == 1:
+            next_bar = next_bars[0]
             next_open = _float(next_bar.get("open"))
-            if next_open not in {None, 0.0}:
+            if next_open is not None and next_open > 0:
                 anchors.append(
                     _anchor(
                         observation,
@@ -319,6 +346,9 @@ def _anchor_candidates(
                 ),
             ):
                 event_type = str(event.get("event_type"))
+                event_price = _float(event.get("anchor_price"))
+                if event_price is None or event_price <= 0:
+                    continue
                 anchors.append(
                     _anchor(
                         observation,
@@ -462,14 +492,46 @@ def _mature_horizon(
         "matured_at": None,
         "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
     }
-    if anchor_index is None or anchor_price in {None, 0.0}:
+    if anchor_index is None or anchor_price is None or anchor_price <= 0:
         return {
             **base,
             "data_quality_status": "INSUFFICIENT_PRICE_DATA",
             "data_quality_reason": "anchor_price_or_session_missing",
         }
-    available = series[anchor_index + 1 : anchor_index + horizon + 1]
-    observed_sessions = len(available)
+    calendar = _market_calendar(indices, str(observation["exchange"]))
+    if anchor_session not in calendar:
+        return {
+            **base,
+            "data_quality_status": "INSUFFICIENT_PRICE_DATA",
+            "data_quality_reason": "market_calendar_unavailable_or_anchor_session_missing",
+        }
+    expected = [day for day in calendar if day > anchor_session][:horizon]
+    by_session: dict[date, list[dict[str, Any]]] = defaultdict(list)
+    for row in series:
+        by_session[_date(row["session_date"])].append(row)
+    base["target_session_date"] = expected[-1] if len(expected) == horizon else None
+    required = [anchor_session, *expected]
+    if any(len(by_session[day]) != 1 for day in required):
+        return {
+            **base,
+            "observed_sessions": len(expected),
+            "data_quality_status": "INSUFFICIENT_PRICE_DATA",
+            "data_quality_reason": "missing_or_duplicate_market_session_bar",
+        }
+    available = [by_session[day][0] for day in expected]
+    use_open = anchor["anchor_type"] in {
+        "DISCOVERY_NEXT_OPEN_FILL",
+        "EXECUTABLE_SHADOW_FILL",
+    }
+    risk_bars = ([by_session[anchor_session][0]] if use_open else []) + available
+    if any(not _valid_bar(row) for row in [by_session[anchor_session][0], *available]):
+        return {
+            **base,
+            "observed_sessions": len(expected),
+            "data_quality_status": "INSUFFICIENT_PRICE_DATA",
+            "data_quality_reason": "invalid_ohlc_bar",
+        }
+    observed_sessions = len(expected)
     partial_close = _float(available[-1].get("close")) if available else None
     partial_return = _return_pct(partial_close, anchor_price)
     if observed_sessions < horizon:
@@ -490,13 +552,12 @@ def _mature_horizon(
             "data_quality_reason": "target_close_missing",
             "outcome_source_hash": _digest(available),
         }
-    highs = [_float(row.get("high")) for row in available]
-    lows = [_float(row.get("low")) for row in available]
+    highs = [_float(row.get("high")) for row in risk_bars]
+    lows = [_float(row.get("low")) for row in risk_bars]
     valid_highs = [value for value in highs if value is not None]
     valid_lows = [value for value in lows if value is not None]
     target_session = _date(target["session_date"])
     return_pct = _return_pct(target_close, anchor_price)
-    use_open = "OPEN" in str(anchor.get("anchor_price_basis") or "").upper()
     benchmark_return = _index_return(
         indices.get(BENCHMARK_SYMBOL, []),
         anchor_session,
@@ -532,10 +593,14 @@ def _mature_horizon(
         "maximum_adverse_excursion_pct": (
             _return_pct(min(valid_lows), anchor_price) if valid_lows else None
         ),
-        "days_to_2pct": _first_touch(highs, anchor_price, 2.0),
-        "days_to_5pct": _first_touch(highs, anchor_price, 5.0),
+        "days_to_2pct": _first_touch(
+            highs, anchor_price, 2.0, start=0 if use_open else 1
+        ),
+        "days_to_5pct": _first_touch(
+            highs, anchor_price, 5.0, start=0 if use_open else 1
+        ),
         "days_to_stop": _first_stop_touch(
-            lows, _float(anchor.get("invalidation_price"))
+            lows, _float(anchor.get("invalidation_price")), start=0 if use_open else 1
         ),
         "benchmark_return_pct": benchmark_return,
         "benchmark_relative_return_pct": _difference(return_pct, benchmark_return),
@@ -545,7 +610,9 @@ def _mature_horizon(
         "data_quality_reason": ";".join(reasons) or None,
         "outcome_source_hash": _digest(
             {
-                "stock": available,
+                "stock": risk_bars,
+                "calendar_sessions": expected,
+                "performance_policy_version": CONVERGENCE_PERFORMANCE_POLICY_VERSION,
                 "benchmark": benchmark_return,
                 "sector_code": sector_code,
                 "sector_return": sector_return,
@@ -591,22 +658,28 @@ def _upsert_horizons(
 def _build_outputs(
     conn: duckdb.DuckDBPyConnection,
     *,
+    indices: Mapping[str, list[dict[str, Any]]],
     current_observation_ids: set[str],
 ) -> dict[str, list[dict[str, Any]]]:
     observations = _records(
         conn.execute(
             """
             SELECT * FROM opportunity_convergence_observation
+            WHERE convergence_policy_version = ?
             ORDER BY session_date, exchange, symbol_id, observation_id
-            """
+            """,
+            [CONVERGENCE_POLICY_VERSION],
         )
     )
     anchors = _records(
         conn.execute(
             """
-            SELECT * FROM opportunity_convergence_anchor
+            SELECT a.* FROM opportunity_convergence_anchor a
+            JOIN opportunity_convergence_observation o USING (observation_id)
+            WHERE o.convergence_policy_version = ?
             ORDER BY anchor_session_date, observation_id, anchor_type, anchor_id
-            """
+            """,
+            [CONVERGENCE_POLICY_VERSION],
         )
     )
     horizons = _records(
@@ -616,22 +689,43 @@ def _build_outputs(
                    a.anchor_session_date, a.anchor_price, a.anchor_price_basis,
                    o.exchange, o.symbol_id, o.session_date,
                    o.convergence_cohort, o.investigator_member,
-                   o.fundamental_member, o.pattern_member, o.sector_name
+                   o.fundamental_member, o.pattern_member, o.sector_name,
+                   o.policy_snapshot_id, o.convergence_policy_version
             FROM opportunity_convergence_horizon h
             JOIN opportunity_convergence_anchor a USING (anchor_id)
             JOIN opportunity_convergence_observation o USING (observation_id)
+            WHERE o.convergence_policy_version = ?
             ORDER BY o.session_date, a.anchor_type, h.horizon_sessions,
                      o.exchange, o.symbol_id, a.anchor_id
-            """
+            """,
+            [CONVERGENCE_POLICY_VERSION],
         )
     )
-    return _outputs_from_rows(
+    outputs = _outputs_from_rows(
         observations,
         anchors,
         horizons,
         current_observation_ids=current_observation_ids,
         persistence_state="PERSISTED",
+        indices=indices,
     )
+    legacy_count = conn.execute(
+        "SELECT count(*) FROM opportunity_convergence_observation WHERE convergence_policy_version <> ?",
+        [CONVERGENCE_POLICY_VERSION],
+    ).fetchone()[0]
+    outputs["opportunity_convergence_performance_readiness"].append(
+        {
+            "check_id": "OPPORTUNITY_CONVERGENCE_LEGACY_HISTORY_EXCLUDED",
+            "category": "opportunity_convergence_performance",
+            "status": "WARN" if legacy_count else "PASS",
+            "observed": legacy_count,
+            "expected": 0,
+            "production_blocking": False,
+            "policy_version": CONVERGENCE_PERFORMANCE_POLICY_VERSION,
+            "details": "legacy observations remain stored; excluded from v2 maturation and samples",
+        }
+    )
+    return outputs
 
 
 def _outputs_from_rows(
@@ -641,12 +735,17 @@ def _outputs_from_rows(
     *,
     current_observation_ids: set[str],
     persistence_state: str,
+    indices: Mapping[str, list[dict[str, Any]]],
 ) -> dict[str, list[dict[str, Any]]]:
     joined_horizons = (
         horizons
         if not horizons or "convergence_cohort" in horizons[0]
         else _join_preview_rows(observations, anchors, horizons)
     )
+    joined_horizons = [
+        {**row, "performance_policy_version": CONVERGENCE_PERFORMANCE_POLICY_VERSION}
+        for row in joined_horizons
+    ]
     primary = _primary_cohorts(joined_horizons)
     diagnostic = _diagnostic_cohorts(joined_horizons)
     research = [
@@ -654,7 +753,9 @@ def _outputs_from_rows(
         for row in primary
         if int(row["sample_count"]) < 30
     ]
-    windows = _calendar_windows(joined_horizons)
+    windows = _calendar_windows(
+        joined_horizons, indices=indices, observations=observations
+    )
     missing = _missing_reasons(joined_horizons)
     readiness = _readiness_inputs(
         observations,
@@ -705,6 +806,8 @@ def _join_preview_rows(
                 "fundamental_member": observation["fundamental_member"],
                 "pattern_member": observation["pattern_member"],
                 "sector_name": observation.get("sector_name"),
+                "policy_snapshot_id": observation["policy_snapshot_id"],
+                "convergence_policy_version": observation["convergence_policy_version"],
             }
         )
     return joined
@@ -718,7 +821,13 @@ def _primary_cohorts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if row.get("convergence_cohort") != "NONE"
             and row.get("return_pct") is not None
         ],
-        dimensions=("convergence_cohort", "anchor_type", "horizon_sessions"),
+        dimensions=(
+            "policy_snapshot_id",
+            "exchange",
+            "convergence_cohort",
+            "anchor_type",
+            "horizon_sessions",
+        ),
         cohort_scope="PRIMARY_MUTUALLY_EXCLUSIVE",
     )
 
@@ -737,7 +846,13 @@ def _diagnostic_cohorts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 expanded.append({**row, "diagnostic_lane": lane})
     return _aggregate(
         expanded,
-        dimensions=("diagnostic_lane", "anchor_type", "horizon_sessions"),
+        dimensions=(
+            "policy_snapshot_id",
+            "exchange",
+            "diagnostic_lane",
+            "anchor_type",
+            "horizon_sessions",
+        ),
         cohort_scope="OVERLAPPING_DIAGNOSTIC",
     )
 
@@ -772,6 +887,7 @@ def _aggregate(
         output.append(
             {
                 "cohort_scope": cohort_scope,
+                "performance_policy_version": CONVERGENCE_PERFORMANCE_POLICY_VERSION,
                 **dict(zip(dimensions, key, strict=True)),
                 "sample_count": sample_count,
                 "unique_symbol_count": len(
@@ -795,14 +911,12 @@ def _aggregate(
                 "win_rate_pct": _round(100.0 * len(winners) / sample_count),
                 "avg_mfe_pct": _average(group, "maximum_favourable_excursion_pct"),
                 "avg_mae_pct": _average(group, "maximum_adverse_excursion_pct"),
-                "avg_benchmark_relative_return_pct": _round(
-                    sum(benchmark) / len(benchmark)
-                )
-                if benchmark
-                else None,
-                "avg_sector_relative_return_pct": _round(sum(sector) / len(sector))
-                if sector
-                else None,
+                "avg_benchmark_relative_return_pct": (
+                    _round(sum(benchmark) / len(benchmark)) if benchmark else None
+                ),
+                "avg_sector_relative_return_pct": (
+                    _round(sum(sector) / len(sector)) if sector else None
+                ),
                 "payoff_ratio": (
                     _round(avg_win / abs(avg_loss))
                     if avg_win is not None and avg_loss not in {None, 0.0}
@@ -815,65 +929,127 @@ def _aggregate(
     return output
 
 
-def _calendar_windows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    eligible = [
-        row
-        for row in rows
-        if row.get("convergence_cohort") != "NONE" and row.get("return_pct") is not None
-    ]
-    sessions = sorted({_date(row["session_date"]) for row in eligible})
-    window_by_session = {
-        session: index // CONVERGENCE_WINDOW_SESSIONS
-        for index, session in enumerate(sessions)
-    }
-    grouped: dict[tuple[str, str, int, int], list[dict[str, Any]]] = defaultdict(list)
-    for row in eligible:
-        scopes = ["ALL_ACTIVE"]
-        if _bool(row.get("investigator_member")):
-            scopes.append("INVESTIGATOR_ANY")
-        for scope in scopes:
-            grouped[
-                (
-                    scope,
-                    str(row["anchor_type"]),
-                    int(row["horizon_sessions"]),
-                    window_by_session[_date(row["session_date"])],
-                )
+def _calendar_windows(
+    rows: list[dict[str, Any]],
+    *,
+    indices: Mapping[str, list[dict[str, Any]]],
+    observations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    # Boundaries include unanchored observations, pending rows and market sessions without discoveries.
+    strata: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("convergence_cohort") != "NONE":
+            strata[
+                (str(row.get("policy_snapshot_id")), str(row.get("exchange")))
             ].append(row)
     output = []
-    for (window_scope, anchor_type, horizon, window_index), group in sorted(
-        grouped.items()
-    ):
-        returns = [float(row["return_pct"]) for row in group]
-        relative = [
-            float(row["benchmark_relative_return_pct"])
-            for row in group
-            if row.get("benchmark_relative_return_pct") is not None
+    for (snapshot, exchange), population in sorted(strata.items()):
+        source_population = [
+            row
+            for row in observations
+            if str(row.get("policy_snapshot_id")) == snapshot
+            and str(row.get("exchange")) == exchange
+            and row.get("convergence_cohort") != "NONE"
         ]
-        window_sessions = sorted(_date(row["session_date"]) for row in group)
-        avg_return = sum(returns) / len(returns)
-        avg_relative = sum(relative) / len(relative) if relative else None
-        output.append(
-            {
-                "window_scope": window_scope,
-                "anchor_type": anchor_type,
-                "horizon_sessions": horizon,
-                "window_index": window_index,
-                "window_start": window_sessions[0],
-                "window_end": window_sessions[-1],
-                "sample_count": len(group),
-                "investigator_sample_count": sum(
-                    _bool(row.get("investigator_member")) for row in group
-                ),
-                "avg_return_pct": _round(avg_return),
-                "avg_benchmark_relative_return_pct": _round(avg_relative),
-                "positive_expectancy": avg_return > 0,
-                "window_stable": bool(
-                    avg_return > 0 and avg_relative is not None and avg_relative > 0
-                ),
-                "sample_confidence": _confidence_label(len(group)),
-            }
+        first = min(_date(row["session_date"]) for row in source_population)
+        last = max(_date(row["session_date"]) for row in source_population)
+        sessions = [
+            day for day in _market_calendar(indices, exchange) if first <= day <= last
+        ]
+        window_by_session = {
+            day: i // CONVERGENCE_WINDOW_SESSIONS for i, day in enumerate(sessions)
+        }
+        groups: dict[tuple[str, str, int, int], list[dict[str, Any]]] = defaultdict(
+            list
         )
+        for row in population:
+            day = _date(row["session_date"])
+            if day not in window_by_session:
+                continue
+            scopes = ["ALL_ACTIVE"] + (
+                ["INVESTIGATOR_ANY"] if _bool(row.get("investigator_member")) else []
+            )
+            for scope in scopes:
+                groups[
+                    (
+                        scope,
+                        str(row["anchor_type"]),
+                        int(row["horizon_sessions"]),
+                        window_by_session[day],
+                    )
+                ].append(row)
+        for (scope, anchor, horizon, number), group in sorted(groups.items()):
+            expected = sessions[
+                number
+                * CONVERGENCE_WINDOW_SESSIONS : (number + 1)
+                * CONVERGENCE_WINDOW_SESSIONS
+            ]
+            matured = [
+                row
+                for row in group
+                if row.get("data_quality_status") in TERMINAL_HORIZON_STATES
+                and row.get("return_pct") is not None
+            ]
+            returns = [float(row["return_pct"]) for row in matured]
+            relative = [
+                float(row["benchmark_relative_return_pct"])
+                for row in matured
+                if row.get("benchmark_relative_return_pct") is not None
+            ]
+            observed_days = {_date(row["session_date"]) for row in group}
+            expected_ids = {
+                str(row["observation_id"])
+                for row in source_population
+                if _date(row["session_date"]) in expected
+                and (scope == "ALL_ACTIVE" or _bool(row.get("investigator_member")))
+            }
+            missing_anchors = (
+                len(expected_ids - {str(row["observation_id"]) for row in group})
+                if anchor in {"DISCOVERY_CLOSE", "DISCOVERY_NEXT_OPEN_FILL"}
+                else 0
+            )
+            complete = (
+                missing_anchors == 0
+                and len(expected) == CONVERGENCE_WINDOW_SESSIONS
+                and observed_days == set(expected)
+                and len(matured) == len(group)
+                and len(relative) == len(group)
+            )
+            avg_return = sum(returns) / len(returns) if returns else None
+            avg_relative = sum(relative) / len(relative) if relative else None
+            output.append(
+                {
+                    "policy_snapshot_id": snapshot,
+                    "exchange": exchange,
+                    "performance_policy_version": CONVERGENCE_PERFORMANCE_POLICY_VERSION,
+                    "window_scope": scope,
+                    "anchor_type": anchor,
+                    "horizon_sessions": horizon,
+                    "window_index": number,
+                    "window_start": expected[0],
+                    "window_end": expected[-1],
+                    "expected_session_count": CONVERGENCE_WINDOW_SESSIONS,
+                    "observed_session_count": len(observed_days),
+                    "window_complete": complete,
+                    "sample_count": len(matured),
+                    "pending_or_invalid_count": len(group) - len(matured),
+                    "missing_anchor_count": missing_anchors,
+                    "investigator_sample_count": sum(
+                        _bool(row.get("investigator_member")) for row in matured
+                    ),
+                    "avg_return_pct": _round(avg_return),
+                    "avg_benchmark_relative_return_pct": _round(avg_relative),
+                    "positive_expectancy": avg_return is not None and avg_return > 0,
+                    "window_stable": bool(
+                        complete
+                        and avg_return is not None
+                        and avg_return > 0
+                        and avg_relative is not None
+                        and avg_relative > 0
+                    ),
+                    "sample_confidence": _confidence_label(len(matured)),
+                }
+            )
     return output
 
 
@@ -913,6 +1089,35 @@ def _readiness_inputs(
     current_observation_ids: set[str],
     persistence_state: str,
 ) -> list[dict[str, Any]]:
+    strata = {
+        (str(row["policy_snapshot_id"]), str(row["exchange"])) for row in observations
+    }
+    if len(strata) > 1:
+        output = []
+        for snapshot, exchange in sorted(strata):
+            subset = [
+                row
+                for row in observations
+                if str(row["policy_snapshot_id"]) == snapshot
+                and str(row["exchange"]) == exchange
+            ]
+            ids = {str(row["observation_id"]) for row in subset}
+            output.extend(
+                _readiness_inputs(
+                    subset,
+                    [row for row in anchors if str(row["observation_id"]) in ids],
+                    [row for row in horizons if str(row["observation_id"]) in ids],
+                    [
+                        row
+                        for row in windows
+                        if row.get("policy_snapshot_id") == snapshot
+                        and row.get("exchange") == exchange
+                    ],
+                    current_observation_ids=current_observation_ids & ids,
+                    persistence_state=persistence_state,
+                )
+            )
+        return output
     observation_ids = {str(row["observation_id"]) for row in observations}
     current_present = len(current_observation_ids & observation_ids)
     active = [row for row in observations if row.get("convergence_cohort") != "NONE"]
@@ -974,7 +1179,7 @@ def _readiness_inputs(
             len(matured_20),
             len(eligible_20),
             "PASS" if len(matured_20) == len(eligible_20) else "FAIL",
-            "only observations with 20 available future sessions enter this denominator",
+            "only observations with 20 elapsed reference-market sessions enter this denominator",
         ),
         (
             "OPPORTUNITY_CONVERGENCE_DISCOVERY_SESSION_SAMPLE",
@@ -1011,6 +1216,7 @@ def _readiness_inputs(
             "production_blocking": True,
             "policy_version": CONVERGENCE_PERFORMANCE_POLICY_VERSION,
             "policy_snapshot_ids_json": json.dumps(policy_snapshot_ids),
+            "exchange": next(iter(strata))[1] if strata else None,
             "details": details,
         }
         for check_id, observed, expected, status, details in checks
@@ -1034,26 +1240,16 @@ def _load_market_data(
     exchanges = sorted({str(row["exchange"]).upper() for row in active_observations})
     min_date = min(_date(row["session_date"]) for row in active_observations)
     with duckdb.connect(str(path), read_only=True) as conn:
-        tables = {
-            str(row[0])
-            for row in conn.execute(
-                """
+        tables = {str(row[0]) for row in conn.execute("""
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'main'
-                """
-            ).fetchall()
-        }
+                """).fetchall()}
         if "_catalog" not in tables:
             return {}, {}, {}
-        catalog_columns = {
-            str(row[0])
-            for row in conn.execute(
-                """
+        catalog_columns = {str(row[0]) for row in conn.execute("""
                 SELECT column_name FROM information_schema.columns
                 WHERE table_schema = 'main' AND table_name = '_catalog'
-                """
-            ).fetchall()
-        }
+                """).fetchall()}
         required_catalog_columns = {
             "exchange",
             "symbol_id",
@@ -1088,17 +1284,11 @@ def _load_market_data(
                 [*symbols, *exchanges, min_date],
             )
         )
-        sector_rows = (
-            conn.execute(
-                """
+        sector_rows = conn.execute("""
                 SELECT system_sector, index_code FROM sector_to_index
                 WHERE COALESCE(is_primary, FALSE) = TRUE
                 ORDER BY system_sector, index_code
-                """
-            ).fetchall()
-            if "sector_to_index" in tables
-            else []
-        )
+                """).fetchall() if "sector_to_index" in tables else []
         sector_map = {
             _normalize_sector(sector): str(index_code)
             for sector, index_code in sector_rows
@@ -1135,22 +1325,39 @@ def _load_market_data(
 
 
 def _performance_events(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
-    return _records(
-        conn.execute(
-            """
+    return _records(conn.execute("""
             SELECT * FROM investigator_performance_event
             WHERE event_type IN (
                 'CANDIDATE_DISCOVERED', 'ENTRY_CONFIRMED', 'EXECUTABLE_AVAILABLE'
             )
             ORDER BY session_date, exchange, symbol_id, event_type, event_id
-            """
-        )
-    )
+            """))
+
+
+def _market_calendar(
+    indices: Mapping[str, list[dict[str, Any]]], exchange: str
+) -> list[date]:
+    """NSE reference sessions; unsupported exchanges never use symbol-row fallback."""
+    if exchange.upper() != "NSE":
+        return []
+    days = [_date(row["session_date"]) for row in indices.get(BENCHMARK_SYMBOL, [])]
+    return sorted(days) if len(days) == len(set(days)) else []
+
+
+def _valid_bar(row: Mapping[str, Any]) -> bool:
+    values = [_float(row.get(field)) for field in ("open", "high", "low", "close")]
+    if any(value is None or value <= 0 for value in values):
+        return False
+    opening, high, low, close = values
+    return low <= min(opening, close) <= max(opening, close) <= high
 
 
 def _index_return(
     rows: list[dict[str, Any]], start: date, end: date, *, use_open: bool
 ) -> float | None:
+    days = [_date(row["session_date"]) for row in rows]
+    if days.count(start) != 1 or days.count(end) != 1:
+        return None
     by_date = {_date(row["session_date"]): row for row in rows}
     start_row = by_date.get(start)
     end_row = by_date.get(end)
@@ -1161,13 +1368,13 @@ def _index_return(
 
 
 def _first_touch(
-    values: list[float | None], anchor: float, threshold_pct: float
+    values: list[float | None], anchor: float, threshold_pct: float, *, start: int = 1
 ) -> int | None:
     target = anchor * (1.0 + threshold_pct / 100.0)
     return next(
         (
             index
-            for index, value in enumerate(values, start=1)
+            for index, value in enumerate(values, start=start)
             if value is not None and value >= target
         ),
         None,
@@ -1175,14 +1382,14 @@ def _first_touch(
 
 
 def _first_stop_touch(
-    values: list[float | None], stop_price: float | None
+    values: list[float | None], stop_price: float | None, *, start: int = 1
 ) -> int | None:
     if stop_price is None:
         return None
     return next(
         (
             index
-            for index, value in enumerate(values, start=1)
+            for index, value in enumerate(values, start=start)
             if value is not None and value <= stop_price
         ),
         None,
@@ -1225,7 +1432,7 @@ def _median(values: list[float]) -> float:
 
 
 def _return_pct(end: float | None, start: float | None) -> float | None:
-    if end is None or start in {None, 0.0}:
+    if end is None or start is None or start <= 0 or end <= 0:
         return None
     return _round((float(end) / float(start) - 1.0) * 100.0)
 
@@ -1262,7 +1469,7 @@ def _float(value: Any) -> float | None:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    return None if parsed != parsed else parsed
+    return parsed if math.isfinite(parsed) else None
 
 
 def _bool(value: Any) -> bool:

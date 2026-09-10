@@ -122,6 +122,58 @@ else
 fi
 echo "----------------------------------------------------------------"
 
-# 7. Exit with the PRODUCTION pipeline's code. The shadow gate is advisory and
+# 7. Leave a run-specific human review form; never prompt or overwrite notes.
+# Review minutes cannot be inferred from pipeline duration or the session gate.
+if ! "$PY" - "$OUT" "$RUN_ID" "$RUN_DATE" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+out, run_id, run_date = sys.argv[1:]
+key = hashlib.sha256(run_id.encode()).hexdigest()[:16]
+path = Path(out) / f"operator_review_{key}.md"
+path.parent.mkdir(parents=True, exist_ok=True)
+try:
+    with path.open("x", encoding="utf-8") as handle:
+        handle.write(f"""# M1 operator review
+
+Protocol: m1-operator-baseline-v1
+Run ID: {run_id}
+Requested pipeline session: {run_date}
+Review status: NOT RECORDED
+
+Complete after reviewing the results. Blank means unmeasured, not zero.
+Count five completed reviews on distinct market sessions; retries are not extra sessions.
+Pipeline SUCCESS and shadow COUNTED do not complete this form.
+
+- Actual review date:
+- Verified evidence market session:
+- Screens/tools used:
+- Active review minutes (exclude interruptions):
+- Interruption minutes:
+- Unique listings reviewed (exchange + symbol):
+- Unchanged alert repeats (same entity/reason/evidence, including duplicate channels):
+- Unresolved evidence gaps at end (entity + missing field/source):
+- Unique listings requiring further investigation:
+- Notes / unresolved questions:
+
+Review sequence: source health and position exceptions → new/changed opportunities
+→ continuing watches → entry-review evidence.
+
+Set Review status to COMPLETED only after filling the observations above.
+Do not estimate review time from pipeline timestamps. Record any failed/stale
+source evidence in notes; do not treat requested session as verified freshness.
+""")
+    action = "created"
+except FileExistsError:
+    action = "preserved existing notes"
+print(f"Operator baseline: {path.resolve()} ({action})")
+print("After your review, fill this form for one of five distinct market sessions.")
+PY
+then
+  echo "[daily-shadow] warning: operator review form unavailable; record your review manually" >&2
+fi
+
+# 8. Exit with the PRODUCTION pipeline's code. The shadow gate is advisory and
 #    never turns a successful production run into a failure.
 exit "$PIPELINE_RC"

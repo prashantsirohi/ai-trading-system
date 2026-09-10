@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-08-28
+- **Last verified:** 2026-09-09
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -38,6 +38,24 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.healthchec
 ```
 
 ## Operational pipeline
+
+`./scripts/run_daily_shadow.sh` runs the normal pipeline with the fundamental,
+opportunity, routing, and pattern shadow lanes, then scores the advisory shadow
+session gate. Extra pipeline arguments are forwarded, including `--local-publish`.
+It also creates a blank M1 operator-review form at
+`reports/research/shadow_sessions/<RUN_DATE>/operator_review_<run-id-hash>.md`
+and prints its absolute path. The filename uses the first 16 SHA-256 characters
+of the run ID; the form includes the full ID. Retrying the same run preserves
+existing notes; another run gets its own form. This follows the wrapper's
+existing repository-relative session-report directory.
+
+After reviewing the results, fill the form and mark it completed. Five distinct
+market-session reviews make the baseline; repeated runs do not create extra
+review sessions. Review time and observations are manual, never inferred from
+pipeline timing or the separate `COUNTED` verdict. Forms are also offered after
+failed runs so gaps can be recorded. Form creation is non-interactive and
+best-effort; the script still returns the pipeline's exit code. See the
+[baseline protocol](../development/m1_decision_ownership_audit.md#five-session-baseline-protocol).
 
 Default operational run:
 

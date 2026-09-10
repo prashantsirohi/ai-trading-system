@@ -131,6 +131,12 @@ These gaps block declaring G1 passed. They do not require changes to scoring, br
 
 **Protocol version:** `m1-operator-baseline-v1` (documentation-only; not a registered trading policy). **Collection status:** 0/5 sessions measured. The following rows are a blank collection form, not observations.
 
+`./scripts/run_daily_shadow.sh` now creates a blank run-specific Markdown form
+and prints its path after each run. Fill that form after your review; retries
+preserve existing notes. Collection status here changes only when actual
+observations have been reconciled into the table. See
+[commands](../reference/commands.md#operational-pipeline) for output behavior.
+
 Use five completed daily reviews on distinct market sessions. Record the actual review date, evidence session/run, and surfaces used. Start timing when opening the daily review; stop when the defined queues have been reviewed. Subtract interruptions and record them separately. A missed review is missing, never zero minutes. Do not reconstruct human time from pipeline timestamps.
 
 | Session | Review date / evidence session / run | Surfaces used | Active review minutes | Unique listings reviewed | Unchanged alert repeats | Unresolved evidence gaps at end | Unique listings requiring investigation |

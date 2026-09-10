@@ -72,6 +72,16 @@ lane marginals are explicitly overlapping diagnostics and sub-30 active samples
 remain research-only. `NONE` rows retain evidence history but do not create
 performance horizons.
 
+M2 succeeds P2 with `opportunity-convergence-v1.3` and
+`opportunity-convergence-performance-v2`. The successor corrects pattern-date
+freshness, uses NSE reference sessions without a symbol-row fallback, includes
+open-fill entry-session excursions, defers absent-price anchors, and requires
+complete ten-session windows. Legacy rows remain unchanged and are excluded from
+v2 maturation and aggregates. Policy snapshots and exchanges are separate strata;
+BSE remains insufficient-data until its calendar is verified. See the
+[M2 measurement contract](../development/m2_measurement_contract.md) for price,
+recording-time, legacy-calculator, and acceptance limitations.
+
 Weekly stock confidence is converted from `0–1` to `0–100`. A source week is locked only when explicitly locked or already completed, and a source creation/lock timestamp must exist. Same-day weeks remain provisional. Weekly sector artifacts own Weinstein structure; rank sector artifacts own RS percentile and quadrant. Reconciliation combines those fields by ownership, so positive sector rank never implies Stage 2 and missing rank context cannot erase valid weekly structure.
 
 Legacy Stage-1 lifecycle, follow-through, and tracker-health values use the Phase 1 warning-bearing compatibility mappings. Tracker health affects progress only.

@@ -256,6 +256,15 @@ ten-session non-overlapping windows feed the existing readiness evidence. This
 layer remains shadow-only and has no admission, lifecycle, ranking, candidate,
 execution, or broker authority.
 
+M2 introduces `opportunity-convergence-v1.3` and
+`opportunity-convergence-performance-v2`: pattern dates cannot be upgraded by a
+producer freshness label; convergence horizons use NSE reference-market sessions,
+open-fill risk includes entry day, missing anchors defer, and stability requires
+complete windows. Outputs separate policy snapshots/exchanges. Legacy convergence
+history remains stored and is excluded from successor maturation and samples.
+BSE maturation awaits a verified calendar. This changes shadow measurement only;
+see the [M2 contract and open acceptance evidence](development/m2_measurement_contract.md).
+
 Migration 046 adds the independent `near-high-20dma-shadow-v1` evidence lane.
 The opportunities stage records one neutral exchange/symbol/session observation.
 Point-in-time adjusted OHLCV owns the decision-session price, 20-session SMA,
@@ -997,6 +1006,15 @@ duckdb "$DATA_ROOT/ohlcv.duckdb" -cmd \
 ```
 
 Before a repair or migration, follow [backup and restore](runbooks/backup_and_restore.md). The exhaustive command and flag inventory is [commands](reference/commands.md); isolated production-shaped validation is in [copied-data canary](runbooks/copied_data_canary.md), and recovery starts with [troubleshooting](runbooks/troubleshooting.md).
+
+The daily wrapper `./scripts/run_daily_shadow.sh` also leaves a run-specific,
+blank M1 operator-review form and prints its path. After reviewing the output,
+record active review time and observations manually. Existing notes survive
+retries; five distinct market-session reviews form the baseline. Pipeline
+completion and the shadow session gate remain separate from human review.
+See [commands](reference/commands.md#operational-pipeline) for the form location
+and [baseline protocol](development/m1_decision_ownership_audit.md#five-session-baseline-protocol)
+for definitions.
 
 ## Where to go deeper
 

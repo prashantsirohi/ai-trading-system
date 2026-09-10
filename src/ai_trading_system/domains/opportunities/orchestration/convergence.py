@@ -17,8 +17,7 @@ from .contracts import (
     INVESTIGATOR_PRIMARY_TRIGGER,
 )
 
-
-CONVERGENCE_POLICY_VERSION = "opportunity-convergence-v1.2"
+CONVERGENCE_POLICY_VERSION = "opportunity-convergence-v1.3"
 CONVERGENCE_COHORTS: tuple[str, ...] = (
     "I_ONLY",
     "F_ONLY",
@@ -559,9 +558,10 @@ def _pattern_assessment(
     date_freshness = _combined_freshness(
         session_date, [row.get("session_date") or row.get("as_of_date")]
     )
+    # A producer's FRESH label cannot override a stale or missing session.
     freshness = (
-        LaneFreshness.FUTURE
-        if date_freshness is LaneFreshness.FUTURE
+        date_freshness
+        if date_freshness is not LaneFreshness.FRESH
         else _freshness_value(row.get("lane_freshness")) or date_freshness
     )
     if freshness is LaneFreshness.FUTURE:
