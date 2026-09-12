@@ -210,3 +210,49 @@ def test_screen_download_rejects_url_outside_governed_screen() -> None:
             destination="unused.xlsx",
             screen_url="https://example.test/screens/317873/companies-with-capex/",
         )
+
+
+def test_bse_download_uses_numeric_url_and_master_filename(tmp_path, monkeypatch):
+    import sys
+    from contextlib import nullcontext
+    import types
+    from ai_trading_system.domains.fundamentals import screener_client as module
+
+    urls = []
+
+    class Page:
+        def goto(self, url, **kwargs):
+            urls.append(url)
+            return SimpleNamespace(status=200)
+
+        def title(self):
+            return "Vipul Organics"
+
+        def wait_for_selector(self, *args, **kwargs):
+            pass
+
+        def click(self, *args):
+            pass
+
+        def expect_download(self, **kwargs):
+            download = SimpleNamespace(
+                save_as=lambda path: Path(path).write_bytes(b"export")
+            )
+            return nullcontext(SimpleNamespace(value=download))
+
+    api = types.ModuleType("playwright.sync_api")
+    api.sync_playwright = lambda: nullcontext(None)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", api)
+    client = ScreenerClient(username="test", password="test", data_dir=tmp_path)
+    client.company_identifiers = {"VIPULORG": "530627"}
+    monkeypatch.setattr(
+        client,
+        "_authenticated_page",
+        lambda p: (SimpleNamespace(close=lambda: None), None, Page()),
+    )
+    monkeypatch.setattr(
+        module, "_detect_rendered_basis", lambda *a, **kw: "consolidated"
+    )
+    result = client.download_excel("VIPULORG", statement_basis="consolidated")
+    assert urls == ["https://www.screener.in/company/530627/consolidated/"]
+    assert result.path.name == "VIPULORG_consolidated_screener.xlsx"

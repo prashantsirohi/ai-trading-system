@@ -2,7 +2,7 @@
 
 - **Purpose:** Build the canonical ranked-signal artifact set (composite ranking, breakout scan, pattern scan, sector dashboard, dashboard payload) consumed by every downstream stage.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-09-04
+- **Last verified:** 2026-09-11
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/rank.py`
   - `src/ai_trading_system/domains/ranking/service.py` (`RankOrchestrationService`)
@@ -238,3 +238,10 @@ cat data/pipeline_runs/<run_id>/rank/attempt_1/rank_summary.json
 ```
 
 > Live trading / production-readiness disclaimer: rank only emits artifacts; it never places orders. Anything downstream of `execute` should be treated as paper by default until execution guardrails are independently audited.
+
+Operational admission excludes identities pending universe onboarding using
+`domains.ingest.onboarding_gate`. Ranking filters before scoring and when
+consuming reused results; execution independently filters new-entry candidates
+from saved rank artifacts. Completed onboarding lifts the exclusion. Research
+does not consume this mutable operational state; existing-position exits remain
+separate. Corrupt admission state fails closed. No full feature rebuild is needed.

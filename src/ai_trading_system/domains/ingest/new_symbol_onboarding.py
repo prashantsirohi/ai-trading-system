@@ -874,8 +874,10 @@ def run_new_symbol_onboarding(
     technical_runner: Callable[..., dict[str, Any]] | None = None,
     phase1_runner: Callable[..., Any] | None = None,
     fundamentals_runner: Callable[..., dict[str, Any]] = _run_fundamentals,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Run or preview the complete currently supported BSE onboarding workflow."""
+    progress = progress_callback or (lambda detail: None)
     root = Path(project_root).resolve()
     paths = get_domain_paths(project_root=root, data_domain="operational")
     require_data_root_available(paths)
@@ -985,9 +987,11 @@ def run_new_symbol_onboarding(
         ]
         return report
 
+    progress("Backing up BSE onboarding stores")
     checkpoint = create_onboarding_checkpoint(paths, targets=targets, run_id=run_id)
     report["steps"]["checkpoint"] = {"status": "completed", **checkpoint}
 
+    progress("Promoting master identity")
     if discovered_candidates:
         promoted = apply_discovered_master_candidates(paths.master_db_path, discovered_candidates)
         report["steps"]["master_promotion"] = {
@@ -996,6 +1000,7 @@ def run_new_symbol_onboarding(
             "symbols": [target.symbol_id for target in targets],
         }
 
+    progress("Resolving official BSE classification")
     if discovered_classifications:
         classifications, classification_failures = discovered_classifications, {}
     else:
@@ -1010,6 +1015,7 @@ def run_new_symbol_onboarding(
 
     history_ok = False
     try:
+        progress("Backfilling official BSE OHLCV")
         history = history_runner(
             project_root=root,
             from_date=from_date,
@@ -1038,6 +1044,7 @@ def run_new_symbol_onboarding(
 
     if history_ok:
         try:
+            progress("Rebuilding technical indicators")
             technical = technical_runner(
                 project_root=root,
                 data_domain="operational",
@@ -1054,6 +1061,7 @@ def run_new_symbol_onboarding(
                 "error": f"{type(exc).__name__}: {exc}",
             }
         try:
+            progress("Refreshing Phase 1 features")
             phase1 = phase1_runner(ohlcv_db_path=paths.ohlcv_db_path, as_of=to_date, exchange="BSE")
             phase1_payload = phase1.to_dict() if hasattr(phase1, "to_dict") else dict(phase1)
             report["steps"]["phase1_features"] = {"status": "completed", **phase1_payload}
@@ -1069,6 +1077,7 @@ def run_new_symbol_onboarding(
 
     if include_fundamentals:
         try:
+            progress("Syncing fundamental history")
             fundamentals = fundamentals_runner(
                 paths=paths,
                 symbols=[target.symbol_id for target in targets],
@@ -1091,6 +1100,7 @@ def run_new_symbol_onboarding(
 
     after_error: str | None = None
     try:
+        progress("Verifying backfill coverage")
         report["after"] = inspect_onboarding_coverage(paths, targets, as_of=to_date)
     except Exception as exc:  # noqa: BLE001 - persist a failed verification report
         report["after"] = {}

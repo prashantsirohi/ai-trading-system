@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -34,10 +35,25 @@ class IngestOrchestrationService:
             metadata=metadata,
             attempt_number=context.attempt_number,
         )
-        return StageResult(artifacts=[artifact], metadata=metadata)
+        artifacts = [artifact]
+        refresh = metadata.get("universe_refresh", {})
+        if refresh and refresh.get("status") != "skipped":
+            refresh_path = context.write_json("universe_refresh_summary.json", refresh)
+            artifacts.append(
+                StageArtifact.from_file(
+                    "universe_refresh_summary",
+                    refresh_path,
+                    metadata=refresh,
+                    attempt_number=context.attempt_number,
+                )
+            )
+        return StageResult(artifacts=artifacts, metadata=metadata)
 
     def run_default(self, context: StageContext) -> Dict:
-        fallback_enabled, fallback_reason = self.resolve_yfinance_fallback_policy(context)
+        universe_refresh = self.run_universe_refresh(context)
+        fallback_enabled, fallback_reason = self.resolve_yfinance_fallback_policy(
+            context
+        )
         if self.operation is not None:
             result = self.operation(context)
         else:
@@ -78,6 +94,10 @@ class IngestOrchestrationService:
         catalog_rows, symbol_count, latest_ts = fetch_catalog_summary(context.db_path)
 
         payload = dict(result or {})
+        payload["universe_refresh"] = universe_refresh
+        refreshed = universe_refresh.get("updated_symbols", [])
+        if refreshed:
+            payload["updated_symbols"] = sorted(set(payload.get("updated_symbols") or []) | set(refreshed))
         payload["corporate_actions"] = corporate_actions_result
         payload["corporate_actions_status"] = corporate_actions_result.get("status")
         payload["corporate_actions_warning"] = (
@@ -118,6 +138,90 @@ class IngestOrchestrationService:
         payload["downstream_input_fingerprint"] = self.build_downstream_input_fingerprint(payload)
         payload["stale_quarantine_sweep"] = self.run_stale_quarantine_sweep(context)
         return payload
+
+    def run_universe_refresh(self, context: StageContext) -> Dict:
+        """Run due onboarding before any ordinary operational ingest work."""
+        from ai_trading_system.domains.ingest.universe_refresh import run_refresh
+
+        enabled = context.params.get(
+            "universe_refresh_enabled", os.getenv("UNIVERSE_REFRESH_ENABLED", "1")
+        )
+        enabled = str(enabled).strip().lower() not in {"0", "false", "no", "off"}
+        reason = None
+        if not enabled:
+            reason = "disabled"
+        elif context.params.get("data_domain", "operational") != "operational":
+            reason = "research domain"
+        elif context.run_date != date.today().isoformat():
+            reason = "historical run"
+        elif (
+            context.params.get("canary_mode")
+            or context.params.get("symbol_limit") is not None
+            or context.params.get("dry_run")
+        ):
+            reason = "reduced or diagnostic run"
+        elif (
+            self.operation is not None
+            and "universe_refresh_enabled" not in context.params
+        ):
+            reason = "custom ingest operation"
+        if reason:
+            context.report_task(
+                task_name="universe_refresh", status="skip", detail=reason
+            )
+            return {"status": "skipped", "reason": reason}
+
+        def progress(event: dict) -> None:
+            logger.info("universe refresh · %s", event["detail"])
+            metadata = dict(event)
+            # This pre-step occupies the first fifth of ingest, leaving room for
+            # ordinary price refresh, corporate actions, delivery and DQ.
+            metadata["total_steps"] = max(1, int(event.get("total", 1))) * 5
+            metadata["completed_steps"] = int(event.get("completed", 0))
+            context.report_task(
+                task_name="universe_refresh",
+                status=event.get("status", "running"),
+                detail=event["detail"],
+                metadata=metadata,
+            )
+
+        result = None
+        try:
+            result = run_refresh(
+                project_root=context.project_root,
+                as_of=date.fromisoformat(context.run_date),
+                cadence=context.params.get(
+                    "universe_refresh_cadence",
+                    os.getenv("UNIVERSE_REFRESH_CADENCE", "monthly"),
+                ),
+                lookback_years=int(
+                    context.params.get("universe_refresh_lookback_years", 5)
+                ),
+                apply=True,
+                progress_callback=progress,
+            )
+            context.write_json("universe_refresh_summary.json", result)
+            if result.get("status") not in {
+                "completed",
+                "completed_with_gaps",
+                "not_due",
+            }:
+                raise RuntimeError(
+                    "Universe onboarding remains incomplete; see universe_refresh_summary.json"
+                )
+            return result
+        except Exception as exc:
+            if result is None:
+                context.write_json(
+                    "universe_refresh_summary.json",
+                    {"status": "failed", "error": str(exc)},
+                )
+            context.report_task(
+                task_name="universe_refresh", status="failed", detail=str(exc)
+            )
+            raise DataQualityCriticalError(
+                f"Universe refresh failed before daily ingest: {exc}"
+            ) from exc
 
     def run_corporate_action_normalization(
         self,

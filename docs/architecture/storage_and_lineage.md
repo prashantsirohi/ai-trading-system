@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-09-09
+- **Last verified:** 2026-09-11
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -481,3 +481,43 @@ modification time is not a freshness input. Different run IDs or semantic as-of
 values yield `SOURCE_VERSION_MISMATCH` and a partial response.
 
 M2 uses the migration-047 tables without a schema migration. The v2 convergence evaluator only matures observations under `opportunity-convergence-v1.3`; earlier observations, anchors, and horizons are retained unchanged and excluded from successor sample/readiness calculations. New absent-price anchors defer rather than freeze null values. Output strata retain composite policy snapshots and exchanges. See the [M2 contract](../development/m2_measurement_contract.md) for legacy and correction boundaries.
+
+
+## Universe refresh maintenance state
+
+`domains.ingest.universe_refresh` owns
+`$DATA_ROOT/stage_store/universe_refresh/state.json` with last successful
+acquisition date, pending identities, and same-day updated symbols. Atomic replacement under an advisory
+process lock preserves retries after master insertion. Each apply attempt freezes
+`screen.export`, `identity_sources.json`, `plan.json` and `report.json` in a
+unique run directory beside that state. These are maintenance evidence, not
+promoted pipeline artifacts. Preview uses temporary files only.
+
+Before onboarding mutations, a run-scoped checkpoint backs up SQLite master/Screener
+stores, target technical files, the complete existing OHLCV and fundamentals
+DuckDB files (checkpointed and checksum-compared), shared NSE delivery
+feature files, and fundamental score/trend CSVs. BSE delegates to the existing onboarding checkpoints. No new DB
+schema or migration is introduced. Source identity and classification evidence
+remain in run artifacts; current classification lives in the master. Pending
+failures are retained until supported onboarding stages succeed.
+
+Ingest writes a per-attempt `universe_refresh_summary.json` before continuing
+ordinary ingestion. Successful ingest registers it through `StageArtifact`;
+failed-attempt files remain unpromoted. Same-day updated symbols survive a
+retry so downstream change detection includes completed onboarding writes.
+
+`state.json:discovery_quarantine` is a maintenance identity retry queue, separate
+from OHLCV market-data quarantine. It retains source rows, reasons, first/last
+seen and attempt counts. Discovery gaps do not prevent valid additions or daily
+ingest; pending companies are excluded from ranking and new execution candidates; system failures still block ingest.
+
+Reviewed discovery exclusions live in repository configuration
+`configs/universe_refresh_negative_list.json`, not a second runtime store.
+Universe reports retain the matched entries and reasons. Matching saved
+quarantine/pending identities no longer force retries; apply preserves deferred
+pending checkpoints and records quarantine closure as `saved_negative_list`.
+
+Pending identities also own the operational onboarding admission gate. Optional
+`onboarding_failure` stores error, bounded attempt count, last-attempt date,
+transient classification and retry-after date. Ranking and execution read this
+state without mutation; successful onboarding removes an identity atomically.

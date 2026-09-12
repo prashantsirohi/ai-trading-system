@@ -127,6 +127,7 @@ def run_sync(
         valuation_migration_backup_dir=valuation_migration_backup_dir,
     )
     client = ScreenerClient(exports_dir=resolved_exports_dir)
+    client.company_identifiers = _load_company_identifiers(resolved_master_db_path)
     all_symbols = _load_symbols(
         resolved_master_db_path,
         exports_dir=resolved_exports_dir,
@@ -531,6 +532,27 @@ def _load_symbols(master_db_path: Path, *, exports_dir: Path) -> list[str]:
     finally:
         conn.close()
     return [str(row[0]).upper().strip() for row in rows if str(row[0]).strip()]
+
+
+def _load_company_identifiers(master_db_path: Path) -> dict[str, str]:
+    """Use BSE numeric listing codes in URLs, retaining canonical storage symbols."""
+    if not master_db_path.exists():
+        return {}
+    with sqlite3.connect(f"file:{master_db_path}?mode=ro", uri=True) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(symbols)")}
+        if not {"symbol_id", "exchange", "security_id"}.issubset(columns):
+            return {}
+        rows = conn.execute(
+            "SELECT symbol_id, security_id FROM symbols WHERE exchange = ?", ["BSE"]
+        ).fetchall()
+    result = {}
+    for symbol, code in rows:
+        symbol, code = str(symbol or "").strip().upper(), str(code or "").strip()
+        if symbol and len(code) == 6 and code.isdigit():
+            if symbol in result and result[symbol] != code:
+                raise ValueError(f"Ambiguous BSE Screener identity: {symbol}")
+            result[symbol] = code
+    return result
 
 
 def _load_explicit_master_tickers(master_db_path: Path) -> set[str]:

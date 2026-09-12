@@ -76,6 +76,7 @@ class ScreenerClient:
         storage_state_path: str | Path | None = None,
     ):
         paths = get_domain_paths()
+        self.company_identifiers: dict[str, str] = {}
         self.username = username or os.getenv("SCREENER_USERNAME")
         self.password = password or os.getenv("SCREENER_PASSWORD")
         self.data_dir = Path(data_dir) if data_dir is not None else paths.fundamentals_dir
@@ -140,7 +141,7 @@ class ScreenerClient:
         with sync_playwright() as p:
             browser, context, page = self._authenticated_page(p)
             try:
-                company_url = _company_url(ticker, requested_basis)
+                company_url = _company_url(self.company_identifiers.get(ticker, ticker), requested_basis)
                 response = page.goto(company_url, wait_until="domcontentloaded")
                 _validate_company_response(response, company_url)
                 if "Page not found" in page.title() or "404" in page.title():
@@ -150,7 +151,7 @@ class ScreenerClient:
                 except RuntimeError:
                     if requested_basis != "consolidated" or _has_rendered_financial_periods(page):
                         raise
-                    standalone_url = _company_url(ticker, "standalone")
+                    standalone_url = _company_url(self.company_identifiers.get(ticker, ticker), "standalone")
                     response = page.goto(standalone_url, wait_until="domcontentloaded")
                     _validate_company_response(response, standalone_url)
                     if "Page not found" in page.title() or "404" in page.title():

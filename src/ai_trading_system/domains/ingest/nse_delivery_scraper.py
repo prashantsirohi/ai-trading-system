@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable
 
 import pandas as pd
 import requests
@@ -208,29 +208,20 @@ class NseHistoricalDeliveryScraper:
             )
 
         normalized.loc[:, "exchange"] = "NSE"
-        normalized.loc[:, "timestamp"] = pd.to_datetime(
+        normalized["timestamp"] = pd.to_datetime(
             normalized["timestamp"], dayfirst=True, errors="coerce"
         )
         for col in ["delivery_pct", "volume", "delivery_qty"]:
-            if col in normalized.columns:
-                normalized.loc[:, col] = (
-                    normalized[col]
-                    .astype(str)
-                    .str.replace(",", "", regex=False)
-                    .str.strip()
-                )
-        normalized.loc[:, "delivery_pct"] = pd.to_numeric(
-            normalized.get("delivery_pct"), errors="coerce"
-        )
-        normalized.loc[:, "volume"] = pd.to_numeric(normalized.get("volume"), errors="coerce")
-        normalized.loc[:, "delivery_qty"] = pd.to_numeric(
-            normalized.get("delivery_qty"), errors="coerce"
-        )
+            values = normalized.get(col, pd.Series(index=normalized.index, dtype=float))
+            normalized[col] = pd.to_numeric(
+                values.astype(str).str.replace(",", "", regex=False).str.strip(),
+                errors="coerce",
+            )
         normalized = normalized.dropna(subset=["symbol_id", "timestamp", "delivery_pct"])
         volume = pd.to_numeric(normalized["volume"], errors="coerce")
         delivery_qty = pd.to_numeric(normalized["delivery_qty"], errors="coerce")
-        normalized.loc[:, "volume"] = volume.where(volume.notna(), 0).astype("int64")
-        normalized.loc[:, "delivery_qty"] = delivery_qty.where(delivery_qty.notna(), 0).astype("int64")
+        normalized["volume"] = volume.where(volume.notna(), 0).astype("int64")
+        normalized["delivery_qty"] = delivery_qty.where(delivery_qty.notna(), 0).astype("int64")
         normalized.loc[:, "symbol_id"] = normalized["symbol_id"].astype(str).str.strip()
         normalized = normalized.drop_duplicates(subset=["symbol_id", "exchange", "timestamp"])
         return normalized[

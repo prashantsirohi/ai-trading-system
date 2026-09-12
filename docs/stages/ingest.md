@@ -2,7 +2,7 @@
 
 - **Purpose:** Refresh the operational OHLCV catalog (and optional delivery data) for the NSE equity universe, validate it against an independent reference, and emit a stage summary that downstream stages can fingerprint.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-09-11
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/ingest.py`, `src/ai_trading_system/domains/ingest/service.py`, `src/ai_trading_system/domains/ingest/daily_update_runner.py`, `src/ai_trading_system/domains/ingest/{providers/nse.py,providers/dhan.py,providers/yfinance.py,trust.py,validation.py,token_manager.py,delivery.py}`, `src/ai_trading_system/pipeline/dq/engine.py`
 
 ---
@@ -138,3 +138,120 @@ Stage parameters consumed by the service (set via orchestrator `--params` / conf
 Environment variables (verified): `DHAN_API_KEY`, `DHAN_CLIENT_ID`, `DHAN_ACCESS_TOKEN`, `DHAN_REFRESH_TOKEN`, `DHAN_PIN`, `DHAN_TOTP`, `DHAN_TOKEN_EXPIRY` (used by `token_manager.py`); `DATA_DOMAIN` (`platform/db/paths.py`). Full list: [../reference/environment_variables.md](../reference/environment_variables.md).
 
 For the repair runbook (operator-side reset / re-ingest / validate workflow), see [../_legacy/archived_2026-05-16/ohlcv_reset_reingest_runbook.md](../_legacy/archived_2026-05-16/ohlcv_reset_reingest_runbook.md). Current code status of that runbook's commands: unknown — verify each `python -m` invocation against the current module paths before use.
+
+
+## Monthly universe onboarding
+
+`domains.ingest.universe_refresh` runs at the beginning of
+`IngestOrchestrationService.run_default`, before fallback resolution or ordinary
+price ingestion, and also has a standalone maintenance CLI. It adds no logical
+pipeline stage. It uses the Screener client's authenticated screen-export
+method for screen 3553765; the full CSV/XLSX export must contain a listing
+code or valid company ISIN and Market Capitalization in crore. ISIN-only rows
+resolve by exact ISIN against the official exchange lists. Rows with no active
+listing remain in `excluded` with reason `no_active_exchange_listing`; they
+never enter the master or backfill. Ambiguous matches remain quarantined from onboarding. Empty exports, missing identifiers,
+invalid caps and duplicates fail rather than silently reducing coverage. Rows
+at or below INR 500 crore are excluded. Export names never resolve identity.
+Official NSE main-board series EQ/BE/BZ and active BSE non-SME board metadata
+validate discovery. Exact ISIN prevents a renamed or dual-listed company from
+being inserted twice. Identity conflicts are blocked, with no overwrite or
+removal. NSE additions also require a unique Dhan security ID. New companies
+currently require a unique BSE listing for identity-checked sector/industry
+classification; NSE-only or ambiguous identities remain reported blockers.
+Discovery identifies newly mastered companies; it does not infer whether the
+cause was an IPO or market-cap growth.
+
+Preview is the default and creates no persistent state. `--apply` is restricted
+to today's date because the screen and exchange masters are current snapshots.
+It freezes source files and pending identities before master insertion, backs
+up affected existing stores, then onboards supported data. A failed addition
+remains pending even after insertion, so retries finish the backfill. An
+inter-process lock serializes this command. Run it without other database writers.
+NSE history uses the existing official-bhavcopy repair writer, with no yfinance
+fallback. Backfill starts five years ago by default, or at the later NSE listing
+date. History ends at yesterday, matching ordinary daily ingest; exchange calendars
+exclude non-trading dates. Discovery still uses today’s screen. Available NSE
+reports without a target scrip are not missing reports; malformed target bars
+and unavailable reports still fail closed. Repair also resolves earlier tickers
+by exact mastered ISIN. Targeted split/bonus parsing, adjustments, delivery collection, technical
+rebuild, cross-sectional Phase 1 refresh and both Screener statement bases follow.
+Post-write coverage verifies technical, Phase 1 and fundamental presence; it
+does not certify complete historical delivery coverage or sufficient IPO warmup.
+BSE additions reuse `new_symbol_onboarding` and its backed-up promotion/history
+path. Screener downloads use numeric BSE security codes in URLs while retaining
+master symbols in export filenames and stored financials. Failed BSE results
+retain their step report and verification details in the universe report.
+Unsupported BSE delivery and adjusted-price history remain visible as
+`completed_with_gaps`; failures in supported data remain pending.
+
+Ingest checks cadence at startup: calendar month by default, or rolling 28 days. A first-ever invocation is due immediately. A successful
+empty-additions check advances cadence. Unresolved discovery quarantine and
+pending backfills independently bypass that cadence on the next invocation,
+except identities on the saved negative list.
+Discovery identity gaps return `completed_with_gaps`, permitting daily ingest
+after valid additions are processed. Refresh acquisition, infrastructure or unclassified failures raise `DataQualityCriticalError`
+before ordinary ingest. Current-date direct orchestrator runs and ingest retries
+use the same hook; a resumed run that already completed ingest does not rerun it.
+Historical, research, canary, symbol-limited and dry-run contexts skip expansion.
+Custom injected ingest operations skip by default unless explicitly enabled.
+`universe_refresh_enabled`, `universe_refresh_cadence` and
+`universe_refresh_lookback_years` are stage parameters; the first two fall back
+to `UNIVERSE_REFRESH_ENABLED` and `UNIVERSE_REFRESH_CADENCE`.
+
+`StageContext.report_task` emits acquisition, comparison, backup, per-company
+NSE/BSE backfill and verification updates. The existing compact terminal bar
+shows `[i/N] SYMBOL (exchange)` and the active operation; JSON mode retains
+structured counts and verbose mode logs the detail. Refresh progress occupies
+the first fifth of ingest. A not-due invocation reports that explicitly.
+`universe_refresh_summary.json` is written in the ingest attempt and registered
+on successful ingest; failure files remain forensic evidence. The report is
+also nested in `ingest_summary.json`. Onboarded symbols (including same-day
+retries) join `updated_symbols`, preventing downstream no-change shortcuts.
+Technical rebuilds target additions only; no ranking formula changes or global
+feature rebuild are required. The following normal pipeline computes combined
+rank/DQ and downstream artifacts.
+
+Discovery conflicts quarantine only the affected onboarding identities. Valid
+additions continue. `state.json:discovery_quarantine` retains each identity,
+source row, reason, first/last seen and attempt count. The queue is re-evaluated
+against a fresh complete export and official sources on subsequent ingest runs,
+even within the cadence interval. Entries resolved or absent from the latest
+screen are closed explicitly in `quarantine_closed`; prior attempt reports retain
+the evidence. A previously pending company with a new discovery conflict is
+deferred without mutation. This maintenance queue neither edits existing master
+identities nor replaces the market-data DQ/quarantine contract. Backfill failures
+for validated companies and global acquisition errors still block ingest.
+
+The reviewed negative list at `configs/universe_refresh_negative_list.json`
+contains 59 known discovery blockers with identifiers, reasons and review dates.
+SPICEJET is deliberately omitted following its resolver fix. Exact NSE code,
+BSE code and export ISIN matches (ignoring market cap) are removed before
+discovery; changed identifiers receive normal validation. Matching old quarantine
+entries do not trigger a new refresh. Matched pending identities remain saved
+but are deferred. Other pending company failures retry on their recorded schedule and remain excluded from admission.
+Reports expose `negative_list` and `negative_list_count`; not-due summaries show
+the configured count. No listed security is removed from existing daily coverage.
+
+Exclusions do not expire automatically, including during monthly or forced
+refreshes. After resolving a blocker, remove its entry from the JSON file and
+run the normal refresh (use `--force` if the cadence is not due). Existing
+quarantine entries moved into this policy close with reason `saved_negative_list`
+on the next apply attempt; older attempt evidence remains intact.
+
+Company onboarding uses at most three attempts for transport timeouts, connection
+errors, HTTP 429 and HTTP 5xx, with 2- and 4-second backoff. Exhausted transient
+failures retry from the next calendar day; deterministic supported-data gaps
+retry after 28 days. `--force` bypasses this cooldown (not the saved negative
+list). Failed companies remain in `state.json:pending` with `onboarding_failure`
+error, attempts, last-attempt date and retry-after date. Their presence enforces
+a read-only operational admission gate in ranking and execution, even for legacy
+pending entries and reused rank artifacts. Successful verification removes the
+pending identity and lifts the gate. A malformed checkpoint fails closed.
+
+Isolated failures return `completed_with_gaps` with `quarantined_symbols`, so
+ordinary daily ingest can proceed. Infrastructure/unclassified failures stop
+the refresh promptly; acquisition and database failures never become successful
+onboarding. Retry remains per company and can repeat completed internal steps.
+Research does not apply current operational onboarding state. Existing-position
+exit management is unaffected by the new-entry candidate filter.

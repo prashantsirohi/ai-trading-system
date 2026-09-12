@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-09-09
+- **Last verified:** 2026-09-11
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -633,3 +633,19 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.serve_phas
 
 The command opens DuckDB read-only and invokes no migration, pipeline, or
 broker operation.
+
+
+## Monthly universe refresh
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.domains.ingest.universe_refresh
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.domains.ingest.universe_refresh --apply
+```
+
+Preview can use `--screen-export /path/to/export.xlsx` to avoid browser login.
+`--cadence monthly|28-days` defaults to monthly; `--lookback-years 5` accepts
+1–20. `--force` bypasses cadence; `--as-of YYYY-MM-DD` defaults to today and
+apply rejects a historical date. Apply permits authenticated company-fundamentals
+downloads and backs up affected stores. Exit 1 reports pending supported-data
+backfill failures. Discovery-only quarantine returns success with gaps. Current-date operational ingest runs this
+check first, including direct orchestrator and daily shadow runs; see [ingest](../stages/ingest.md#monthly-universe-onboarding).

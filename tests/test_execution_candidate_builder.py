@@ -300,3 +300,20 @@ def test_execution_candidate_builder_stage2_gate_unavailable_without_stage2_colu
     assert bundle.stage2_gate["gate_unavailable"] is True
     assert bundle.stage2_gate["reason"] == "missing_stage2_columns"
     assert bundle.ranked_df["symbol_id"].tolist() == ["AAA", "BBB"]
+
+
+def test_execution_rechecks_pending_onboarding_for_saved_rank_artifact(tmp_path):
+    from ai_trading_system.platform.db.paths import get_domain_paths
+    ranked_path = tmp_path / 'saved_rank.csv'
+    pd.DataFrame({'symbol_id': ['NEWCO', 'HEALTHY'], 'exchange': ['NSE', 'NSE'],
+        'composite_score': [90, 80]}).to_csv(ranked_path, index=False)
+    dashboard_path = tmp_path / 'dashboard.json'
+    dashboard_path.write_text(json.dumps({'summary': {'data_trust_status': 'trusted'}}))
+    context = _stage_context(tmp_path, params={'execution_require_stage2': False}, artifacts={
+        'rank': {'ranked_signals': StageArtifact('ranked_signals', str(ranked_path)),
+                 'dashboard_payload': StageArtifact('dashboard_payload', str(dashboard_path))}})
+    state_path = get_domain_paths(project_root=tmp_path).stage_store_dir / 'universe_refresh/state.json'
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps({'pending': {'NEWCO': {'exchange': 'NSE'}}}))
+    bundle = ExecutionCandidateBuilder().build(context, request=ExecutionRequest.from_context(context))
+    assert bundle.ranked_df['symbol_id'].tolist() == ['HEALTHY']

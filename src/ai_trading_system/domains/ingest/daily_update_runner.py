@@ -734,9 +734,51 @@ def _fetch_nse_bhavcopy_rows(
         out_path = raw_dir / _bhavcopy_filename(trade_date)
         if not out_path.exists():
             df.to_csv(out_path, index=False)
-        normalized = _normalize_bhavcopy_frame(df, trade_date, security_map, isin_map=isin_map)
+        normalized = _normalize_bhavcopy_frame(
+            df, trade_date, security_map, isin_map=isin_map
+        )
         if normalized.empty:
-            missing_dates.append(trade_date)
+            # A complete exchange report can legitimately contain no selected
+            # scrip (pre-listing, no trade, or an earlier ticker). Do not label
+            # that as an unavailable report. Malformed/filtered target rows
+            # still fail closed.
+            source = df.rename(
+                columns=lambda col: str(col)
+                .replace("\ufeff", "")
+                .strip()
+                .replace(" ", "")
+            )
+            required = {"SYMBOL", "SERIES"}
+            prices = (
+                {"OPEN", "HIGH", "LOW", "CLOSE", "TOTTRDQTY"},
+                {
+                    "OPEN_PRICE",
+                    "HIGH_PRICE",
+                    "LOW_PRICE",
+                    "CLOSE_PRICE",
+                    "TTL_TRD_QNTY",
+                },
+            )
+            valid_schema = required.issubset(source.columns) and any(
+                cols.issubset(source.columns) for cols in prices
+            )
+            source_symbols = (
+                set(source["SYMBOL"].astype(str).str.strip().str.upper())
+                if "SYMBOL" in source
+                else set()
+            )
+            source_isins = set()
+            for column in ("ISIN", "ISIN_NUMBER", "ISINCODE"):
+                if column in source:
+                    source_isins.update(source[column].map(_normalize_isin))
+            if (
+                valid_schema
+                and not source_symbols.intersection(security_map)
+                and not source_isins.intersection(isin_map or {})
+            ):
+                archived_dates.append(trade_date)
+            else:
+                missing_dates.append(trade_date)
             continue
         archived_dates.append(trade_date)
         normalized_frames.append(normalized)

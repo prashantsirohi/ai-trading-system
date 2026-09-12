@@ -146,6 +146,10 @@ class ExecutionCandidateBuilder:
         if "exchange" in ranked_df.columns:
             normalized_exchange = ranked_df["exchange"].fillna("NSE").astype(str).str.upper()
             ranked_df = ranked_df.loc[normalized_exchange.isin(request.allowed_exchanges)].copy()
+        from ai_trading_system.domains.ingest.onboarding_gate import pending_identities, exclude_pending
+        ranked_df = exclude_pending(ranked_df, identities=pending_identities(
+            project_root=context.project_root, data_domain=request.data_domain,
+        ))
         ranked_rows_before_linkage = int(len(ranked_df))
         dashboard_payload = self._read_json_artifact(context, "rank", "dashboard_payload")
         data_trust_status = str((dashboard_payload.get("summary", {}) or {}).get("data_trust_status", "unknown"))

@@ -279,3 +279,19 @@ def test_repair_continuity_gate_rejects_broad_boundary_shift_before_write(tmp_pa
         assert conn.execute("SELECT COUNT(*) FROM _catalog").fetchone() == (10,)
     finally:
         conn.close()
+
+
+def test_repair_passes_isin_for_renamed_ticker(tmp_path, monkeypatch):
+    import pandas as pd
+    from types import SimpleNamespace
+    from ai_trading_system.domains.ingest import repair
+    captured = {}
+    monkeypatch.setattr(repair, 'get_domain_paths', lambda **kw: SimpleNamespace(raw_dir=tmp_path))
+    def fetch(**kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame(), [], []
+    monkeypatch.setattr(repair, '_fetch_nse_bhavcopy_rows', fetch)
+    identity = {'symbol_id': 'RENAMED', 'security_id': '123', 'isin': 'INE123A01012'}
+    repair._fetch_symbol_frames(project_root=tmp_path, symbols=[identity],
+        from_date='2026-09-10', to_date='2026-09-10', verified_trade_dates=['2026-09-10'])
+    assert captured['isin_map'] == {'INE123A01012': identity}

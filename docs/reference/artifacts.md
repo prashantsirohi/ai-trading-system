@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-09-09
+- **Last verified:** 2026-09-11
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -429,3 +429,37 @@ The opportunities-owned `position_monitor_reconciliation.csv` has one row per ex
 Duplicate active-position lane bundles remain visible as `position_cycle_reference` in `candidate_reconciliation.csv`, with source lane and referenced cycle/outcome; they do not duplicate position compatibility/recovery artifacts. Router-owned coverage retains its existing meaning. Historical artifacts remain immutable and lack the new fields rather than implying false or true values.
 
 M2 convergence artifacts use `opportunity-convergence-v1.3` / `opportunity-convergence-performance-v2`. Horizon outputs add performance policy, convergence policy, and policy snapshot provenance; cohort/window/readiness outputs separate snapshot and exchange strata. Readiness records legacy-history exclusion counts. Missing prices defer anchors; incomplete windows never mark stability. See the [measurement contract](../development/m2_measurement_contract.md).
+
+
+## Universe refresh maintenance artifacts
+
+`$DATA_ROOT/stage_store/universe_refresh/<run-id>/` contains `screen.export`
+(raw CSV/XLSX bytes), `identity_sources.json` (NSE/BSE/Dhan snapshots),
+`plan.json` (export hash, eligible additions, existing matches and blockers),
+and `report.json` (per-symbol results and overall status). The adjacent
+`state.json` tracks pending identities and the successful cadence date. Reports
+retain BSE capability gaps. These artifacts are outside pipeline promotion and
+never authorize rank, candidates or execution.
+
+The ingest integration additionally writes `universe_refresh_summary.json` in
+its stage attempt and registers it after successful ingest. The same result is
+nested under `ingest_summary.universe_refresh`; completed additions merge into
+`updated_symbols`. An unsuccessful refresh leaves an unpromoted attempt report
+and blocks ordinary ingestion. Skipped safe scopes are recorded in the ingest
+summary without creating a separate refresh artifact.
+
+Universe refresh plans/reports include `excluded` rows with identity, market
+cap and `no_active_exchange_listing` reason for ISIN-only entries absent from
+the active exchange lists. `blocked` remains a row-level discovery disposition.
+`discovery_quarantine` retains rejected identities, source rows, reasons and retry
+timestamps/counts. `quarantine_closed` records resolution or departure from the
+screen. Discovery-only gaps return `completed_with_gaps`; validated additions
+proceed and ordinary ingest can continue.
+
+Universe refresh reports include `negative_list` (matched reviewed exclusions
+with source rows and reasons) and `negative_list_count`. Not-due summaries expose
+the configured exclusion count. These are onboarding exclusions only.
+
+Universe summaries expose `quarantined_symbols` for all incomplete identities,
+including deferred retries. Per-company `quarantined` results include attempts,
+error and retry-after date. Rank metadata records `onboarding_quarantined`.

@@ -2,7 +2,7 @@
 
 - **Purpose:** All env vars actually read by the code, with source module and default.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-28
+- **Last verified:** 2026-09-10
 - **Source of truth:** Grep of `os.environ`, `os.getenv`, `getenv(`, and pydantic `Settings` in `src/`. Cited modules per row.
 
 
@@ -95,3 +95,11 @@ See [phase4a read-only API](../runbooks/phase4a_read_only_api.md).
 ## EXECUTION_MODE
 
 Not an explicit env var. Inferred from Dhan credential presence. Verify in execute stage before stating otherwise.
+
+
+## Universe refresh ingest overrides
+
+`IngestOrchestrationService` accepts `UNIVERSE_REFRESH_ENABLED` (default `1`;
+`0` skips universe refresh) and `UNIVERSE_REFRESH_CADENCE` (`monthly` default or
+`28-days`). Export acquisition reuses `SCREENER_USERNAME` and
+`SCREENER_PASSWORD`. Paths resolve through the normal domain helpers.

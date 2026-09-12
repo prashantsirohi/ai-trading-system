@@ -440,6 +440,16 @@ class RankOrchestrationService:
             dashboard_payload=dashboard_payload,
         )
 
+        from ai_trading_system.domains.ingest.onboarding_gate import pending_identities, exclude_pending
+        onboarding_pending = pending_identities(
+            project_root=context.project_root,
+            data_domain=context.params.get("data_domain", "operational"),
+        )
+        for name, frame in outputs.items():
+            if isinstance(frame, pd.DataFrame) and ({"symbol_id", "symbol"} & set(frame.columns)):
+                outputs[name] = exclude_pending(frame, identities=onboarding_pending)
+        stage_metadata["onboarding_quarantined"] = sorted(onboarding_pending)
+
         # Decision history is the durable source of truth.  Run artifacts are
         # emitted only after this transaction validates and commits.
         decision_persistence = None
@@ -898,6 +908,16 @@ class RankOrchestrationService:
                 coverage_threshold=float(effective_params.get("phase1_feature_coverage_min", 0.80)),
             )
         )
+
+        from ai_trading_system.domains.ingest.onboarding_gate import pending_identities, exclude_pending
+        onboarding_pending = pending_identities(
+            project_root=context.project_root,
+            data_domain=effective_params.get("data_domain", "operational"),
+        )
+        ranked = exclude_pending(ranked, identities=onboarding_pending)
+        ranked_universe = exclude_pending(ranked_universe, identities=onboarding_pending)
+        if onboarding_pending:
+            warnings.append(f"Incomplete onboarding excluded: {sorted(onboarding_pending)}")
 
         daily_turnover = compute_factor_turnover(ranked, previous_df)
         weekly_turnover = compute_factor_turnover(ranked, previous_week_df)

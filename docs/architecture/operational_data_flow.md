@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed execution, handoff, DQ, and retry flow for the current operational pipeline.
 - **Audience:** Operators debugging a run, engineers changing a stage, and reviewers tracing artifacts.
-- **Last verified:** 2026-08-15
+- **Last verified:** 2026-09-11
 - **Source of truth:** `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/pipeline/preflight.py`, `src/ai_trading_system/pipeline/contracts.py`, and `src/ai_trading_system/pipeline/stages/`.
 
 ---
@@ -109,3 +109,16 @@ Same-date runs can auto-resume. `--new-run` creates a fresh run ID, while `--for
 - Never use synthetic data to make a canary pass.
 
 See [daily operations](../runbooks/daily_operations.md), [troubleshooting](../runbooks/troubleshooting.md), and [publish retry](../runbooks/publish_retry.md).
+
+## Universe refresh at ingest startup
+
+Operational current-date ingest first checks monthly (or 28-day) universe
+refresh through `IngestOrchestrationService.run_universe_refresh`. This runs
+inside the existing ingest attempt for direct orchestrator and daily wrapper
+entrypoints. Historical, research, reduced/canary and diagnostic scopes skip
+expansion. Due runs acquire the complete Screener export, compare identities,
+and onboard pending NSE/BSE additions before daily price refresh. Acquisition and system failures block ingest; isolated onboarding failures are excluded from ranking/new execution candidates. Unresolved
+discovery identities are quarantined individually while valid additions proceed. Task events update the existing terminal progress bar;
+completed additions enter the ingest change fingerprint. See the
+[ingest contract](../stages/ingest.md#monthly-universe-onboarding) for settings,
+reports, retry and remaining source limitations.

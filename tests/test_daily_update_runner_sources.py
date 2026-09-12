@@ -1119,3 +1119,42 @@ def test_daily_update_runner_defaults_to_dhan_primary(monkeypatch, tmp_path: Pat
 
     assert called["dhan_primary"] is True
     assert result["symbols_updated"] == 1
+
+
+def test_target_absent_is_not_missing_exchange_report(tmp_path, monkeypatch):
+    good = pd.DataFrame(
+        [
+            dict(
+                SYMBOL="OTHER",
+                SERIES="EQ",
+                OPEN=10,
+                HIGH=12,
+                LOW=9,
+                CLOSE=11,
+                TOTTRDQTY=100,
+            )
+        ]
+    )
+    monkeypatch.setattr(NSECollector, "get_bhavcopy", lambda self, day: good)
+    rows, archived, missing = daily_update_runner._fetch_nse_bhavcopy_rows(
+        raw_dir=tmp_path,
+        trade_dates=["2026-09-10"],
+        security_map={"NEWCO": {"symbol_id": "NEWCO", "security_id": "123"}},
+    )
+    assert rows.empty
+    assert archived == ["2026-09-10"]
+    assert missing == []
+    # A target row with invalid prices must remain a failure.
+    good.loc[0, "SYMBOL"] = "NEWCO"
+    good.loc[0, "CLOSE"] = float("nan")
+    _, _, missing = daily_update_runner._fetch_nse_bhavcopy_rows(
+        raw_dir=tmp_path,
+        trade_dates=["2026-09-10"],
+        security_map={"NEWCO": {"symbol_id": "NEWCO", "security_id": "123"}},
+    )
+    assert missing == ["2026-09-10"]
+    monkeypatch.setattr(NSECollector, "get_bhavcopy", lambda self, day: pd.DataFrame())
+    _, _, missing = daily_update_runner._fetch_nse_bhavcopy_rows(
+        raw_dir=tmp_path, trade_dates=["2026-09-10"], security_map={}
+    )
+    assert missing == ["2026-09-10"]

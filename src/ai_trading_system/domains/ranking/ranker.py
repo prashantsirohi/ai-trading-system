@@ -79,6 +79,7 @@ class StockRanker:
         self.feature_store_dir = feature_store_dir
         self.data_domain = data_domain
         self.master_db_path = str(paths.master_db_path)
+        self.onboarding_state_path = paths.stage_store_dir / "universe_refresh" / "state.json"
         self.input_loader = RankerInputLoader(
             ohlcv_db_path=self.ohlcv_db_path,
             feature_store_dir=self.feature_store_dir,
@@ -137,6 +138,10 @@ class StockRanker:
 
         inputs = RankInputSnapshot(self.input_loader, str(date), tuple(exchanges))
         scores = inputs.market()
+        from ai_trading_system.domains.ingest.onboarding_gate import pending_identities, exclude_pending
+        scores = exclude_pending(scores, identities=pending_identities(
+            data_domain=self.data_domain, state_path=self.onboarding_state_path,
+        ))
         if scores.empty:
             logger.warning("No data available for ranking")
             return pd.DataFrame()

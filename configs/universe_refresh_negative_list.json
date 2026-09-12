@@ -1,0 +1,537 @@
+{
+  "version": 1,
+  "review_policy": "Manual removal after identity repair or support changes; never auto-retry listed identities. SPICEJET is excluded from this list because its resolver is fixed.",
+  "entries": [
+    {
+      "identity": "543225",
+      "nse_symbol": "",
+      "bse_code": "543225",
+      "isin": "INE0BWS23018",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "ANANTAM",
+      "nse_symbol": "ANANTAM",
+      "bse_code": "544579",
+      "isin": "INE1UA823019",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "AHCL",
+      "nse_symbol": "AHCL",
+      "bse_code": "544497",
+      "isin": "INE0Y8W01025",
+      "reason": "Master ISIN differs from export and official NSE",
+      "discovery_error": "master identity collision; manual reconciliation required",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "ANZEN",
+      "nse_symbol": "ANZEN",
+      "bse_code": "543655",
+      "isin": "INE0MIZ23019",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "508929",
+      "nse_symbol": "",
+      "bse_code": "508929",
+      "isin": "INE433O01024",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "511634",
+      "nse_symbol": "",
+      "bse_code": "511634",
+      "isin": "INE919M01026",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "BAGMANE",
+      "nse_symbol": "BAGMANE",
+      "bse_code": "544758",
+      "isin": "INE2OVN25015",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "BIRET",
+      "nse_symbol": "BIRET",
+      "bse_code": "543261",
+      "isin": "INE0FDU25010",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "CAPINVIT",
+      "nse_symbol": "CAPINVIT",
+      "bse_code": "544338",
+      "isin": "INE0Z8Z23013",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "CITIUSINVT",
+      "nse_symbol": "CITIUSINVT",
+      "bse_code": "544753",
+      "isin": "INE2Q7823014",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "506373",
+      "nse_symbol": "",
+      "bse_code": "506373",
+      "isin": "INE795B01031",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "542866",
+      "nse_symbol": "",
+      "bse_code": "542866",
+      "isin": "INE317W01030",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "CUBEINVIT",
+      "nse_symbol": "CUBEINVIT",
+      "bse_code": "543899",
+      "isin": "INE0NR623014",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "543378",
+      "nse_symbol": "",
+      "bse_code": "543378",
+      "isin": "INE0H8H01019",
+      "reason": "Official BSE SME group MS",
+      "discovery_error": "not a verified active BSE non-SME equity",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "E2E",
+      "nse_symbol": "E2E",
+      "bse_code": "544783",
+      "isin": "INE255Z01027",
+      "reason": "Master ISIN differs from export and official NSE",
+      "discovery_error": "master identity collision; manual reconciliation required",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "EMBASSY",
+      "nse_symbol": "EMBASSY",
+      "bse_code": "542602",
+      "isin": "INE041025011",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "542543",
+      "nse_symbol": "",
+      "bse_code": "542543",
+      "isin": "INE05KD23015",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "539984",
+      "nse_symbol": "",
+      "bse_code": "539984",
+      "isin": "INE799B01025",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "INDIGRID",
+      "nse_symbol": "INDIGRID",
+      "bse_code": "540565",
+      "isin": "INE219X23014",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "INDUSINVIT",
+      "nse_symbol": "INDUSINVIT",
+      "bse_code": "544137",
+      "isin": "INE0NHL23019",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "533315",
+      "nse_symbol": "",
+      "bse_code": "533315",
+      "isin": "INE690J01011",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "544005",
+      "nse_symbol": "",
+      "bse_code": "544005",
+      "isin": "INE0QSW23016",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "IRBINVIT",
+      "nse_symbol": "IRBINVIT",
+      "bse_code": "540526",
+      "isin": "INE183W23014",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "512233",
+      "nse_symbol": "",
+      "bse_code": "512233",
+      "isin": "INE091E01039",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "JLHL",
+      "nse_symbol": "JLHL",
+      "bse_code": "543980",
+      "isin": "INE682M01020",
+      "reason": "Master ISIN differs from export and official NSE",
+      "discovery_error": "master identity collision; manual reconciliation required",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "531214",
+      "nse_symbol": "",
+      "bse_code": "531214",
+      "isin": "INE877D01025",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "KIRLPNU",
+      "nse_symbol": "KIRLPNU",
+      "bse_code": "505283",
+      "isin": "INE811A01038",
+      "reason": "Master ISIN differs from export and official NSE",
+      "discovery_error": "master identity collision; manual reconciliation required",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "KRT",
+      "nse_symbol": "KRT",
+      "bse_code": "544481",
+      "isin": "INE1JAR25012",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "KRISHANA",
+      "nse_symbol": "KRISHANA",
+      "bse_code": "",
+      "isin": "INE506W01020",
+      "reason": "Master ISIN differs from export and official NSE",
+      "discovery_error": "master identity collision; manual reconciliation required",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "MBAPL",
+      "nse_symbol": "MBAPL",
+      "bse_code": "",
+      "isin": "INE900L01028",
+      "reason": "Master ISIN differs from export and official NSE",
+      "discovery_error": "master identity collision; manual reconciliation required",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "MWL",
+      "nse_symbol": "MWL",
+      "bse_code": "544764",
+      "isin": "INE0JYY01029",
+      "reason": "Master ISIN differs from export and official NSE",
+      "discovery_error": "master identity collision; manual reconciliation required",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "543925",
+      "nse_symbol": "",
+      "bse_code": "543925",
+      "isin": "INE0M5S23019",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "MINDSPACE",
+      "nse_symbol": "MINDSPACE",
+      "bse_code": "543217",
+      "isin": "INE0CCU25019",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "NHIT",
+      "nse_symbol": "NHIT",
+      "bse_code": "543385",
+      "isin": "INE0H7R23014",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "NDRINVIT",
+      "nse_symbol": "NDRINVIT",
+      "bse_code": "",
+      "isin": "INE0Q7Q23015",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "NXST",
+      "nse_symbol": "NXST",
+      "bse_code": "543913",
+      "isin": "INE0NDH25011",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "NRL",
+      "nse_symbol": "NRL",
+      "bse_code": "",
+      "isin": "INE0JM501013",
+      "reason": "NSE-only listing blocked by BSE classification dependency",
+      "discovery_error": "unique BSE identity required for official sector classification",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "NXT-INFRA",
+      "nse_symbol": "NXT-INFRA",
+      "bse_code": "",
+      "isin": "INE0SF023016",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "PASHUPATI",
+      "nse_symbol": "PASHUPATI",
+      "bse_code": "544448",
+      "isin": "INE124Y01028",
+      "reason": "Master ISIN differs from export and official NSE",
+      "discovery_error": "master identity collision; manual reconciliation required",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "POCL",
+      "nse_symbol": "POCL",
+      "bse_code": "532626",
+      "isin": "INE063E01061",
+      "reason": "Master ISIN differs from export and official NSE",
+      "discovery_error": "master identity collision; manual reconciliation required",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "PGINVIT",
+      "nse_symbol": "PGINVIT",
+      "bse_code": "543290",
+      "isin": "INE0GGX23010",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "531647",
+      "nse_symbol": "",
+      "bse_code": "531647",
+      "isin": "INE265C01025",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "RIIT",
+      "nse_symbol": "RIIT",
+      "bse_code": "544734",
+      "isin": "INE2PB023011",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "ROADSTAR",
+      "nse_symbol": "ROADSTAR",
+      "bse_code": "544374",
+      "isin": "INE0JEI23010",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "530929",
+      "nse_symbol": "",
+      "bse_code": "530929",
+      "isin": "INE535P01015",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "504346",
+      "nse_symbol": "",
+      "bse_code": "504346",
+      "isin": "INE713N01013",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "505703",
+      "nse_symbol": "",
+      "bse_code": "505703",
+      "isin": "INE498D01012",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "SHIVAUM",
+      "nse_symbol": "SHIVAUM",
+      "bse_code": "",
+      "isin": "INE719F01016",
+      "reason": "NSE-only listing blocked by BSE classification dependency",
+      "discovery_error": "unique BSE identity required for official sector classification",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "SHREMINVIT",
+      "nse_symbol": "SHREMINVIT",
+      "bse_code": "",
+      "isin": "INE0GTI23014",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "504398",
+      "nse_symbol": "",
+      "bse_code": "504398",
+      "isin": "INE312B01027",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "SPELS",
+      "nse_symbol": "SPELS",
+      "bse_code": "517166",
+      "isin": "INE252A01019",
+      "reason": "Missing from fetched active equity and Dhan scrip lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "SEITINVIT",
+      "nse_symbol": "SEITINVIT",
+      "bse_code": "",
+      "isin": "INE0R8O23017",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "TCC",
+      "nse_symbol": "TCC",
+      "bse_code": "512038",
+      "isin": "INE887D01024",
+      "reason": "Master ISIN differs from export and official NSE",
+      "discovery_error": "master identity collision; manual reconciliation required",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "TDPOWERSYS",
+      "nse_symbol": "TDPOWERSYS",
+      "bse_code": "533553",
+      "isin": "INE419M01035",
+      "reason": "Master ISIN differs from export and official NSE",
+      "discovery_error": "master identity collision; manual reconciliation required",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "TEMBO",
+      "nse_symbol": "TEMBO",
+      "bse_code": "",
+      "isin": "INE869Y01028",
+      "reason": "Master ISIN differs from export and official NSE",
+      "discovery_error": "master identity collision; manual reconciliation required",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "TVSINVIT",
+      "nse_symbol": "TVSINVIT",
+      "bse_code": "",
+      "isin": "INE1JNC23012",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "UNIVASTU",
+      "nse_symbol": "UNIVASTU",
+      "bse_code": "",
+      "isin": "INE562X01013",
+      "reason": "NSE-only listing blocked by BSE classification dependency",
+      "discovery_error": "unique BSE identity required for official sector classification",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "VERTIS",
+      "nse_symbol": "VERTIS",
+      "bse_code": "",
+      "isin": "INE0KXY23015",
+      "reason": "REIT/InvIT outside fetched company-equity lists",
+      "discovery_error": "official listing missing or ambiguous",
+      "reviewed_on": "2026-09-11"
+    },
+    {
+      "identity": "VIVIANA",
+      "nse_symbol": "VIVIANA",
+      "bse_code": "",
+      "isin": "INE0MEG01014",
+      "reason": "NSE-only listing blocked by BSE classification dependency",
+      "discovery_error": "unique BSE identity required for official sector classification",
+      "reviewed_on": "2026-09-11"
+    }
+  ]
+}

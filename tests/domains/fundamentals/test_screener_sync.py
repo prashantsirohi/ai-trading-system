@@ -697,3 +697,20 @@ def _fetch_result(tmp_path: Path, symbol: str, data: dict, *, basis: str = "stan
         requested_basis=basis,
         detected_basis=basis,
     )
+
+
+def test_bse_company_identifiers_keep_master_symbol(tmp_path):
+    master = tmp_path / "master.db"
+    with sqlite3.connect(master) as conn:
+        conn.execute(
+            "CREATE TABLE symbols (symbol_id TEXT, exchange TEXT, security_id TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO symbols VALUES (?, ?, ?)",
+            [
+                ("VIPULORG", "BSE", "530627"),
+                ("RELIANCE", "NSE", "2885"),
+                ("INVALID", "BSE", "nan"),
+            ],
+        )
+    assert screener_sync._load_company_identifiers(master) == {"VIPULORG": "530627"}

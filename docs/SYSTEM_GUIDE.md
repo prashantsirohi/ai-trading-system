@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-09-09
+- **Last verified:** 2026-09-11
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -408,7 +408,9 @@ The sync command never runs the pipeline or classifies theses. It appends a
 batch receipt and per-symbol source hashes to `fundamentals.duckdb`. Operators
 schedule it daily during results windows (10 Jan–20 Feb, 10 Apr–15 Jun,
 10 Jul–20 Aug, 10 Oct–20 Nov) and weekly otherwise, before the evening shadow
-pipeline. The normal pipeline never invokes external fundamentals providers.
+pipeline. The regular `fundamentals` stage uses local data. Due universe
+refreshes at ingest startup may download Screener history for new companies;
+this is separate from the routine whole-universe fundamentals sync.
 Quarterly missing-results syncs suppress a symbol for 72 hours after a fresh
 export still lacks the expected quarter; operators can override that cooldown.
 A consolidated request already classified as terminal standalone-only is not
@@ -1053,3 +1055,35 @@ After documentation changes, run:
 ```bash
 PYTHONPATH=src ./.venv/bin/python scripts/check_docs.py
 ```
+
+
+### Monthly universe refresh
+
+`domains.ingest.universe_refresh` downloads the complete export of Screener
+screen 3553765 using the existing authenticated Playwright client and retains
+companies strictly above INR 500 crore. Official NSE/BSE identities and board
+classification gate additive master insertion; Dhan supplies NSE security IDs.
+The first current-date operational ingest invocation each calendar month runs
+this module at ingest startup, including direct orchestrator and daily shadow
+runs. Pending failures retry when ingest runs again. Historical, research,
+reduced/canary and diagnostic runs skip expansion. Ingest reports refresh phases
+and company counts on the existing terminal progress bar.
+Existing securities are retained, including companies no longer in the screen.
+The default five-year backfill (bounded by NSE listing date) includes official
+OHLCV through yesterday (today’s EOD is never requested), NSE split/bonus adjustments and delivery, targeted technical features,
+Phase 1, and Screener financial history. BSE Screener URLs use numeric listing
+codes while financials retain master symbols. BSE delivery/action gaps remain explicit.
+See [ingest](stages/ingest.md#monthly-universe-onboarding) for identity blockers,
+backup, cadence and retry details. No full-universe technical rebuild is required.
+
+Screener ISIN-only rows are resolved against active exchange lists; unmatched
+rows are reported as excluded, rather than aborting export parsing. Ambiguous
+identities are quarantined for onboarding, while validated additions continue.
+Discovery-only quarantine returns `completed_with_gaps` and does not block
+daily ingest; acquisition and system failures still block; isolated company failures remain pending and are excluded from ranking/new execution candidates.
+
+Reviewed discovery exclusions are saved in
+`configs/universe_refresh_negative_list.json`. The 59 known unresolved identities
+are skipped before discovery and do not force cadence retries; SPICEJET is not
+excluded because its resolver is fixed. Remove an entry to reconsider it.
+Exclusions affect onboarding only, not existing master or daily price coverage.

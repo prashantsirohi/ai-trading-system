@@ -2,7 +2,7 @@
 
 - **Purpose:** Convert ranked signals into paper (or live-scaffold) orders, persist fills, and update portfolio state.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-07-26
+- **Last verified:** 2026-09-11
 - **Source of truth:** [`src/ai_trading_system/pipeline/stages/execute.py`](../../src/ai_trading_system/pipeline/stages/execute.py), [`src/ai_trading_system/domains/execution/`](../../src/ai_trading_system/domains/execution/), [`src/ai_trading_system/domains/risk/`](../../src/ai_trading_system/domains/risk/)
 
 ---
@@ -127,3 +127,10 @@ duckdb data/execution.duckdb -c "SELECT symbol_id, side, quantity, price, filled
 ```
 
 See [`../risk_engine_runbook.md`](../_legacy/archived_2026-05-16/risk_engine_runbook.md) for the full risk-profile operator guide (profile authoring, smoke checks, troubleshooting).
+
+Operational admission excludes identities pending universe onboarding using
+`domains.ingest.onboarding_gate`. Ranking filters before scoring and when
+consuming reused results; execution independently filters new-entry candidates
+from saved rank artifacts. Completed onboarding lifts the exclusion. Research
+does not consume this mutable operational state; existing-position exits remain
+separate. Corrupt admission state fails closed. No full feature rebuild is needed.

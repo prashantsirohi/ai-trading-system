@@ -404,6 +404,7 @@ def _fetch_symbol_frames(
         raw_dir=raw_dir,
         trade_dates=trade_dates,
         security_map=security_map,
+        isin_map={str(row["isin"]).strip().upper(): row for row in symbols if row.get("isin")},
     )
     if not nse_rows.empty:
         nse_rows["provider"] = "nse_bhavcopy"
