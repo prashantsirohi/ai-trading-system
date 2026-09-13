@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-09-11
+- **Last verified:** 2026-09-12
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -14,6 +14,17 @@ Start with the [System Guide](../SYSTEM_GUIDE.md). This document owns detailed p
 `get_domain_paths()` loads the project environment and resolves `DATA_ROOT`, `REPORTS_ROOT`, `LOGS_ROOT`, and `MODELS_ROOT`. With the operator's `.env`, operational runtime data lives on external storage. When `DATA_ROOT` is set but unavailable, guarded pipeline paths must fail instead of silently recreating the mount path.
 
 Code retains a compatibility fallback to `<repo>/data` when `DATA_ROOT` is unset. That fallback is not the operational deployment contract and must not be hardcoded into application code or documentation commands.
+
+Candidate tracking is domain-scoped: research runs write `$DATA_ROOT/research/candidate_tracker.duckdb` and cannot override that path to the canonical operational tracker ledger. No existing ledger is migrated. Execution stop metadata stores `last_counter_date` alongside holding/streak counters to make same-date counter updates idempotent; preview and disabled execution do not persist these updates.
+
+Performance-tracker schema adds nullable `return_policy_version` and
+`source_lineage_json`. The trusted view requires `adjusted_exchange_sessions_v1`;
+legacy rows are retained but unverified. Operational and historical backfill
+archive replaced rows in `rank_cohort_performance_history` with `archived_at`
+inside the same transaction as replacement. Promoted rank/publish evidence is
+selected from completed producing attempts and verified against registered
+SHA-256 hashes. Back up the live research store before applying schema updates
+or regenerating cohorts; code validation does not mutate or certify live data.
 
 ## Operational stores
 

@@ -28,11 +28,11 @@ def _insert_perf_rows(project_root: Path, rows: list[dict]) -> None:
                 fwd_60d_matured_at,
                 factor_rs, factor_vol, factor_trend, factor_prox, factor_deliv,
                 factor_sector, factor_momentum_accel, factor_above_200dma,
-                factor_liquidity, factor_delivery_trend, sector_name
+                factor_liquidity, factor_delivery_trend, sector_name, return_policy_version
             ) VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'adjusted_exchange_sessions_v1'
             )
             """,
             [

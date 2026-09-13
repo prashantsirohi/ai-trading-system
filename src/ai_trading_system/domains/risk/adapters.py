@@ -72,19 +72,32 @@ def _coerce_optional_bool(value: Any) -> bool | None:
     return None
 
 
+def rank_from_row(row: Mapping[str, Any]) -> int:
+    """Read an ordinal rank; eligible_rank is a Boolean eligibility flag."""
+    for key in ("rank_position", "rank", "technical_rank"):
+        value = row.get(key)
+        if isinstance(value, bool):
+            continue
+        try:
+            rank = int(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if rank > 0:
+            return rank
+    return 0
+
+
 def candidate_from_row(row: Mapping[str, Any]) -> CandidateSignal:
     """Build a ``CandidateSignal`` from one ranked_signals.csv row."""
-    rank = _coerce_int(
-        row.get("eligible_rank") or row.get("rank_position") or row.get("rank") or 0
-    )
+    rank = rank_from_row(row)
+    score = _coerce_float(row.get("composite_score_adjusted"))
+    if score is None:
+        score = _coerce_float(row.get("composite_score"))
     return CandidateSignal(
         symbol_id=str(row.get("symbol_id") or ""),
         exchange=str(row.get("exchange") or "NSE"),
         rank=rank,
-        composite_score=_coerce_float(
-            row.get("composite_score_adjusted") or row.get("composite_score")
-        )
-        or 0.0,
+        composite_score=score if score is not None else 0.0,
         is_stage_2=_coerce_bool(row.get("is_stage2_uptrend") or row.get("is_stage_2")),
         sector=str(row.get("sector_name") or row.get("sector") or ""),
         sector_strength=_coerce_float(

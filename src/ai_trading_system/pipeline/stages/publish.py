@@ -388,7 +388,10 @@ class PublishStage:
             context.artifact_for("narrative", "daily_insight_json")
             or context.artifact_for("narrative", "weekly_insight_json")
         )
-        if telegram_artifact is not None:
+        validation_artifact = context.artifact_for("narrative", "validation_report")
+        validation = self._read_json_artifact_safe(validation_artifact) if validation_artifact else {}
+        narrative_valid = validation.get("status") == "passed"
+        if telegram_artifact is not None and narrative_valid:
             try:
                 text = Path(telegram_artifact.uri).read_text(encoding="utf-8")
                 datasets["insight_telegram_summary"] = text
@@ -400,7 +403,7 @@ class PublishStage:
                 datasets["event_confluence"] = self._read_artifact(confluence_artifact)
             except Exception:
                 datasets["event_confluence"] = pd.DataFrame()
-        if daily_json is not None:
+        if daily_json is not None and narrative_valid:
             datasets["latest_insight"] = self._read_json_artifact_safe(daily_json)
         dashboard_payload = datasets.get("dashboard_payload")
         if isinstance(dashboard_payload, dict):

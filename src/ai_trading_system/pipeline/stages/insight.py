@@ -133,34 +133,12 @@ def _build_technical_packet(
 
 def _dq_summary(context: StageContext) -> dict[str, Any]:
     registry = getattr(context, "registry", None)
-    if registry is None or not hasattr(registry, "connection"):
-        return {}
+    if registry is None:
+        return {"status": "unavailable", "results": []}
     try:
-        with registry.connection() as conn:
-            rows = conn.execute(
-                """
-                SELECT stage_name, rule_id, severity, status, failed_count
-                FROM data_quality_result
-                WHERE run_id = ?
-                ORDER BY evaluated_at DESC
-                LIMIT 50
-                """,
-                [context.run_id],
-            ).fetchall()
-        return {
-            "results": [
-                {
-                    "stage_name": row[0],
-                    "rule_id": row[1],
-                    "severity": row[2],
-                    "status": row[3],
-                    "failed_count": row[4],
-                }
-                for row in rows
-            ]
-        }
-    except Exception:
-        return {}
+        return {"status": "available", "results": registry.get_dq_results(context.run_id)}
+    except Exception as exc:
+        return {"status": "unavailable", "error": type(exc).__name__, "results": []}
 
 
 def _read_csv_artifact(artifact: StageArtifact | None) -> pd.DataFrame:

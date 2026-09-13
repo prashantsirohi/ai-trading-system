@@ -65,6 +65,8 @@ CREATE INDEX IF NOT EXISTS idx_rank_cohort_date ON rank_cohort_performance(run_d
 # DDL statement (ADD COLUMN IF NOT EXISTS). Append-only: existing rows get NULL
 # for new columns, then get populated by the next ingest.
 RANK_COHORT_ALTER_DDLS: tuple[str, ...] = (
+    "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS return_policy_version VARCHAR",
+    "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS source_lineage_json VARCHAR",
     "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS factor_above_200dma DOUBLE",
     "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS factor_liquidity DOUBLE",
     "ALTER TABLE rank_cohort_performance ADD COLUMN IF NOT EXISTS factor_delivery_trend DOUBLE",
@@ -82,6 +84,7 @@ CREATE OR REPLACE VIEW rank_cohort_performance_trusted AS
 SELECT *
 FROM rank_cohort_performance
 WHERE COALESCE(data_quality_status, 'trusted') = 'trusted'
+  AND return_policy_version = 'adjusted_exchange_sessions_v1'
   AND NOT COALESCE(fwd_5d_anomaly, FALSE)
   AND NOT COALESCE(fwd_return_anomaly, FALSE);
 """

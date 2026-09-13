@@ -2,7 +2,7 @@
 
 - **Purpose:** Define Phase 3B full-universe stock/sector structural coverage and light discovery.
 - **Audience:** Operators and engineers validating structural visibility.
-- **Last verified:** 2026-07-16
+- **Last verified:** 2026-09-12
 - **Source of truth:** `domains/opportunities/coverage.py` and `pipeline/stages/weekly_stage.py`.
 
 ---
@@ -11,7 +11,7 @@ Start with the [System Guide](../SYSTEM_GUIDE.md).
 
 ## Purpose
 
-`weekly_stage` is optional and runs only when `--opportunity-scan-routing-mode` is `compare` or `shadow`, or when explicitly named. It reads all eligible as-of NSE cash-equity OHLCV without a rank cap. The current incomplete week is provisional. The final scheduled trading session locks the week; a missed holiday-shortened lock is caught up on the next run.
+`weekly_stage` is optional and runs when `--opportunity-scan-routing-mode` is `compare` or `shadow`, or `--pattern-lane-scan-mode shadow` requires coverage. With both modes off, the stage self-skips even if explicitly named. Pattern-only runs report coverage mode `shadow` without enabling scan routing. It reads all eligible as-of NSE cash-equity OHLCV without a rank cap. The current incomplete week is provisional. The final scheduled trading session locks the week; a missed holiday-shortened lock is caught up on the next run.
 
 The stage writes `weekly_stock_stage_universe`, `weekly_sector_stage_universe`, `weekly_stage_exclusions`, `light_pattern_scan`, `stage_promotion_candidates`, and `weekly_stage_summary`. Append-only stock and sector observations live in `control_plane.duckdb`; the legacy mutable `ohlcv.weekly_stage_snapshot` is unchanged.
 

@@ -56,7 +56,7 @@ SCHEMA_COLUMNS: tuple[str, ...] = (
     "factor_sector", "factor_momentum_accel", "factor_above_200dma",
     "factor_liquidity", "factor_delivery_trend", "sector_name",
     "fwd_5d_anomaly", "fwd_return_anomaly", "source_type", "source_run_id",
-    "source_artifact_path", "data_quality_status", "data_quality_reason",
+    "source_artifact_path", "data_quality_status", "data_quality_reason", "return_policy_version", "source_lineage_json",
 )
 
 VALID_FREQUENCIES = ("daily", "weekly", "quarterly")
@@ -216,8 +216,14 @@ def run_historical_backfill(
 
     dates_to_replace = sorted(enriched["run_date"].astype(str).unique())
     with open_research_db(project_root=project_root) as con:
+        con.execute("BEGIN TRANSACTION")
+        con.execute("CREATE TABLE IF NOT EXISTS rank_cohort_performance_history AS SELECT *, CURRENT_TIMESTAMP AS archived_at FROM rank_cohort_performance WHERE FALSE")
         if dates_to_replace:
             placeholders = ",".join("?" for _ in dates_to_replace)
+            con.execute(
+                f"INSERT INTO rank_cohort_performance_history BY NAME SELECT *, CURRENT_TIMESTAMP AS archived_at FROM rank_cohort_performance WHERE CAST(run_date AS VARCHAR) IN ({placeholders})",
+                list(dates_to_replace),
+            )
             con.execute(
                 f"DELETE FROM rank_cohort_performance WHERE CAST(run_date AS VARCHAR) IN ({placeholders})",
                 list(dates_to_replace),
@@ -233,6 +239,7 @@ def run_historical_backfill(
             f"SELECT {select_list}, CURRENT_TIMESTAMP FROM incoming_rows"
         )
         con.unregister("incoming_rows")
+        con.execute("COMMIT")
         total = con.execute("SELECT COUNT(*) FROM rank_cohort_performance").fetchone()[0]
 
     logger.info(

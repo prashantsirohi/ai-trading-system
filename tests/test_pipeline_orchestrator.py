@@ -576,7 +576,7 @@ def test_progress_json_events_include_feature_substage_fields(capsys: pytest.Cap
     assert events[2]["elapsed_seconds"] == 12.5
 
 
-def test_orchestrator_records_input_hash_and_skips_on_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_orchestrator_records_input_hash_without_cross_run_skipping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify the orchestrator stamps input_hash into stage_run metadata and
     skips a stage when the registry reports a matching prior input_hash."""
     project_root = tmp_path
@@ -675,9 +675,7 @@ def test_orchestrator_records_input_hash_and_skips_on_match(tmp_path: Path, monk
     second_run_id = second["run_id"]
     assert second_run_id != first_run_id
     second_status = {row["stage_name"]: row["status"] for row in registry.get_stage_runs(second_run_id)}
-    assert second_status.get("publish") == "skipped", (
-        f"expected publish to skip via input_hash; got {second_status}"
-    )
+    assert second_status.get("publish") == "completed"
 
 
 def test_build_integrated_stock_scan_view_preserves_discoveries_and_best_context() -> None:
@@ -3146,3 +3144,36 @@ def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyP
     assert task_status["rank_universe"]["status"] == "skipped"
     assert int(task_status["rank_universe"]["resumed_from_attempt"]) == 1
     assert task_status["breakout_scan"]["status"] == "skipped"
+
+
+@pytest.mark.parametrize("error", [ValueError("policy mismatch"), OSError("store unavailable"), RuntimeError("persistence failed")])
+def test_fundamental_discovery_errors_do_not_abort_execution_or_publish(tmp_path, monkeypatch, error):
+    from ai_trading_system.pipeline.stages.fundamental_discovery import FundamentalDiscoveryStage
+    discovery = FundamentalDiscoveryStage()
+    calls = []
+    def fail(_context):
+        raise error
+    monkeypatch.setattr(discovery, "_run", fail)
+    class Successful:
+        def __init__(self, name):
+            self.name = name
+        def run(self, context):
+            calls.append(self.name)
+            return StageResult(metadata={"status": "completed"})
+    orchestrator = PipelineOrchestrator(tmp_path, allow_control_plane_migrations=True,
+        stages={"fundamental_discovery": discovery, "execute": Successful("execute"), "publish": Successful("publish")})
+    result = orchestrator.run_pipeline(stage_names=["fundamental_discovery", "execute", "publish"],
+        run_date="2026-09-12", params={"preflight": False, "local_publish": True, "fundamental_discovery_mode": "shadow"})
+    assert result["status"] == "completed_with_opportunity_errors"
+    assert calls == ["execute", "publish"]
+    with orchestrator.registry._reader() as conn:
+        row = conn.execute("SELECT status, error_class, error_message FROM pipeline_stage_run WHERE stage_name = ?", ["fundamental_discovery"]).fetchone()
+        assert row[0:2] == ("failed", "FundamentalDiscoveryStageError")
+        assert str(error) in row[2]
+
+
+def test_delivery_writes_cannot_reuse_equal_previous_fingerprint(tmp_path):
+    orchestrator = PipelineOrchestrator(tmp_path, allow_control_plane_migrations=True)
+    assert orchestrator._plan_downstream_stage_skips(run_id="new", stage_names=["ingest", "rank"],
+        ingest_metadata={"downstream_skip_eligible": True, "delivery_rows_ingested": 500,
+                         "downstream_input_fingerprint": "same"}) is None

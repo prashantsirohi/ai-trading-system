@@ -87,6 +87,8 @@ def _make_research_ohlcv_db(tmp_path: Path, dates: list[date], symbols: list[str
     ]
     con.register("incoming", pd.DataFrame(rows, columns=["symbol_id","exchange","timestamp","close","volume","high","low","open"]))
     con.execute("INSERT INTO _catalog SELECT * FROM incoming")
+    con.execute("ALTER TABLE _catalog ADD COLUMN adjusted_close DOUBLE")
+    con.execute("UPDATE _catalog SET adjusted_close = close")
     con.unregister("incoming")
     con.close()
     return db_path

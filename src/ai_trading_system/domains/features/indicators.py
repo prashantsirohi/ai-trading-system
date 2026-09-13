@@ -399,39 +399,10 @@ class FeatureEngine:
         period: int = 10,
         multiplier: float = 3.0,
     ):
-        """Calculate Supertrend"""
-        tr = self._calculate_atr(high, low, close, period)
-        atr = tr.rolling(window=period).mean()
+        """Use the same rolling-ATR state machine as persisted features."""
+        from ai_trading_system.domains.features.recursive_indicators import supertrend_series
 
-        upper_band = (high + low) / 2 + multiplier * atr
-        lower_band = (high + low) / 2 - multiplier * atr
-
-        supert = pd.Series(index=close.index, dtype=float)
-        supert_d = pd.Series(1, index=close.index)
-
-        for i in range(1, len(close)):
-            if close.iloc[i] > upper_band.iloc[i - 1]:
-                supert.iloc[i] = lower_band.iloc[i]
-                supert_d.iloc[i] = 1
-            elif close.iloc[i] < lower_band.iloc[i - 1]:
-                supert.iloc[i] = upper_band.iloc[i]
-                supert_d.iloc[i] = -1
-            else:
-                supert.iloc[i] = supert.iloc[i - 1]
-                supert_d.iloc[i] = supert_d.iloc[i - 1]
-
-                if (
-                    supert_d.iloc[i] == 1
-                    and lower_band.iloc[i] < lower_band.iloc[i - 1]
-                ):
-                    lower_band.iloc[i] = lower_band.iloc[i - 1]
-                if (
-                    supert_d.iloc[i] == -1
-                    and upper_band.iloc[i] > upper_band.iloc[i - 1]
-                ):
-                    upper_band.iloc[i] = upper_band.iloc[i - 1]
-
-        return supert, supert_d
+        return supertrend_series(high, low, close, period, multiplier)
 
     def _calculate_custom_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate custom indicators"""

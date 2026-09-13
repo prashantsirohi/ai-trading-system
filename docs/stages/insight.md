@@ -2,7 +2,7 @@
 
 - **Purpose:** Build deterministic technical + event intelligence packets and the analyst brief consumed by the narrative LLM stage.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-09-12
 - **Source of truth:** [`src/ai_trading_system/pipeline/stages/insight.py`](../../src/ai_trading_system/pipeline/stages/insight.py), [`src/ai_trading_system/domains/events/analyst_brief_builder.py`](../../src/ai_trading_system/domains/events/analyst_brief_builder.py), [`src/ai_trading_system/domains/events/event_packet_builder.py`](../../src/ai_trading_system/domains/events/event_packet_builder.py)
 
 ---
@@ -62,6 +62,11 @@ Under `data/pipeline_runs/<run_id>/insight/attempt_<n>/`:
 4. `_build_technical_packet(...)` → market regime, sector strength, top-50 rank/breakout/pattern, positions, DQ summary.
 5. Merge into `combined_packet`, then `build_analyst_brief(combined_packet)` → symbol cards + sector cards.
 6. Persist all five JSON artifacts and two CSVs; return `report_type`, `event_count`, `confluence_count` metadata.
+
+Canonical DQ evidence is read through `RegistryStore.get_dq_results` from
+`dq_result`, ordered by `created_at`. The technical packet preserves failed
+counts, messages, severity, bands, and `relaxed_from`. Missing registry access
+is explicitly `unavailable`, rather than an apparently clean empty summary.
 
 ## DQ / trust gates
 

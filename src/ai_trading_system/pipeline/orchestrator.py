@@ -50,6 +50,7 @@ from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
 from ai_trading_system.pipeline.stages import CandidateTrackerStage, CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalDiscoveryStage, FundamentalsStage, IngestStage, InsightStage, InvestigatorStage, NarrativeStage, OpportunityStage, PatternLaneScanStage, PerfTrackerStage, PublishStage, RankStage, ScanRouterStage, WeeklyStageCoverageStage
 from ai_trading_system.pipeline.stages.opportunities import OpportunityStageError
+from ai_trading_system.pipeline.stages.fundamental_discovery import FundamentalDiscoveryStageError
 from ai_trading_system.pipeline.stages.scan_router import ScanRouterStageError
 from ai_trading_system.pipeline.stages.pattern_lane_scan import PatternLaneScanStageError
 
@@ -638,47 +639,8 @@ class PipelineOrchestrator:
         stage_names: list[str],
         ingest_metadata: Dict[str, object],
     ) -> Dict[str, object] | None:
-        requested_downstream = [
-            stage
-            for stage in stage_names
-            if stage in {*FEATURE_SUBSTAGES, "features", "rank", "execute"}
-            and PIPELINE_ORDER.index(stage if stage != "features" else "features_technical") > PIPELINE_ORDER.index("ingest")
-        ]
-        if not requested_downstream:
-            return None
-
-        fingerprint = self._ingest_fingerprint_from_summary(ingest_metadata)
-        if bool(ingest_metadata.get("downstream_skip_eligible")):
-            return {
-                "stages": requested_downstream,
-                "reason_code": "no_new_ingest_data",
-                "detail": "ingest reported no new catalog updates",
-                "fingerprint": fingerprint or None,
-            }
-
-        if not fingerprint:
-            return None
-
-        previous_artifacts = self.registry.get_latest_artifact(
-            stage_name="ingest",
-            artifact_type="ingest_summary",
-            limit=1,
-            exclude_run_id=run_id,
-            run_status="completed",
-        )
-        if not previous_artifacts:
-            return None
-
-        previous_summary = self._read_json_artifact(previous_artifacts[0].uri)
-        previous_fingerprint = self._ingest_fingerprint_from_summary(previous_summary)
-        if previous_fingerprint and previous_fingerprint == fingerprint:
-            return {
-                "stages": requested_downstream,
-                "reason_code": "unchanged_ingest_inputs",
-                "detail": "ingest inputs unchanged from previous successful run",
-                "fingerprint": fingerprint,
-                "previous_ingest_summary_uri": previous_artifacts[0].uri,
-            }
+        # Ingest does not fingerprint all feature/rank/configuration inputs.
+        # Recompute requested stages in a new run; same-run resume stays intact.
         return None
 
     def _record_skipped_stage(
@@ -907,9 +869,9 @@ class PipelineOrchestrator:
                 self._alias_feature_snapshot_artifact(artifacts)
                 if stage_name in {
                     "scan_router", "pattern_lane_scan", "investigator", "opportunities",
-                    "events", "execute", "insight", "publish",
+                    "events", "execute", "insight", "publish", "fundamentals", "candidates", "fundamental_discovery",
                 }:
-                    self._attach_latest_rank_artifacts(artifacts, run_id=run_id)
+                    self._attach_latest_rank_artifacts(artifacts, run_id=run_id, as_of=run_date)
                     self._alias_feature_snapshot_artifact(artifacts)
 
                 input_hash = compute_stage_input_hash(
@@ -918,23 +880,6 @@ class PipelineOrchestrator:
                     params=params,
                     artifacts=artifacts,
                 )
-                if not bool(params.get("force_rerun", False)) and artifacts:
-                    prior_metadata = self.registry.get_latest_completed_stage_metadata(
-                        stage_name=stage_name, exclude_run_id=run_id,
-                    ) or {}
-                    if prior_metadata.get("input_hash") == input_hash:
-                        self._record_skipped_stage(
-                            run_id=run_id,
-                            stage_name=stage_name,
-                            detail="unchanged_stage_inputs",
-                            metadata={
-                                "source_stage": stage_name,
-                                "reason_code": "unchanged_stage_inputs",
-                                "input_hash": input_hash,
-                            },
-                        )
-                        continue
-
                 self.registry.update_run(run_id, status="running", current_stage=stage_name)
                 attempt_number = self.registry.next_stage_attempt(run_id, stage_name)
                 parent_stage = "features" if stage_name in FEATURE_SUBSTAGES else None
@@ -1124,7 +1069,7 @@ class PipelineOrchestrator:
                                 detail=str(exc),
                             )
                         break
-                    except (OpportunityStageError, ScanRouterStageError, PatternLaneScanStageError) as exc:
+                    except (OpportunityStageError, ScanRouterStageError, PatternLaneScanStageError, FundamentalDiscoveryStageError) as exc:
                         opportunity_stage_failed = True
                         self.alert_manager.emit(
                             run_id=run_id,
@@ -1138,7 +1083,9 @@ class PipelineOrchestrator:
                             status="failed",
                             error_class=exc.__class__.__name__,
                             error_message=str(exc),
-                            metadata={"non_blocking": True, "mode": "shadow"},
+                            metadata={"non_blocking": True, "mode": (
+                                str(params.get("fundamental_discovery_mode", "off"))
+                                if stage_name == "fundamental_discovery" else "shadow")},
                         )
                         if self.progress_renderer is not None:
                             self.progress_renderer.emit_stage(
@@ -1311,37 +1258,25 @@ class PipelineOrchestrator:
         except Exception:
             return False
 
-    def _attach_latest_rank_artifacts(self, artifacts: Dict[str, Dict[str, StageArtifact]], *, run_id: str) -> None:
-        """Let downstream stages reuse the latest completed rank outputs.
-
-        This preserves the independent event-intelligence cadence: a new run can
-        refresh events and reports even when ingest/features/rank were skipped
-        because the OHLCV input fingerprint did not change.
-        """
-        rank_artifacts = artifacts.setdefault("rank", {})
-        for artifact_type in (
-            "ranked_signals",
-            "breakout_scan",
-            "volume_shockers",
-            "early_accumulation_scan",
-            "early_accumulation_summary",
-            "dashboard_payload",
-            "sector_dashboard",
-            "stock_scan",
-            "pattern_scan",
-            "rank_summary",
-        ):
-            if artifact_type in rank_artifacts:
-                continue
-            latest = self.registry.get_latest_artifact(
-                stage_name="rank",
-                artifact_type=artifact_type,
-                limit=1,
-                exclude_run_id=run_id,
-                run_status="completed",
-            )
-            if latest:
-                rank_artifacts[artifact_type] = latest[0]
+    def _attach_latest_rank_artifacts(self, artifacts: Dict[str, Dict[str, StageArtifact]], *, run_id: str, as_of: str) -> None:
+        """Reuse one completed, promoted, date-bounded rank attempt as a unit."""
+        if artifacts.get("rank"):
+            return
+        latest = self.registry.get_latest_artifact(
+            stage_name="rank", artifact_type="ranked_signals", exclude_run_id=run_id,
+            run_status="completed", as_of=as_of)
+        if not latest:
+            return
+        anchor = latest[0]
+        source = self.registry.get_artifact_map(anchor.metadata["source_run_id"]).get("rank", {})
+        bundle = {name: artifact for name, artifact in source.items()
+                  if artifact.attempt_number == anchor.attempt_number}
+        from ai_trading_system.pipeline.contracts import compute_file_hash
+        for artifact in bundle.values():
+            path = Path(artifact.uri)
+            if not path.is_file() or not artifact.content_hash or compute_file_hash(path) != artifact.content_hash:
+                raise ValueError("Cannot reuse missing or changed promoted rank artifact")
+        artifacts["rank"] = bundle
 
 
 def _extract_quarantined_dates(message: str) -> list[str]:

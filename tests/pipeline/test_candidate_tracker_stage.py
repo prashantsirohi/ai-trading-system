@@ -76,3 +76,41 @@ def test_default_stage_lists_include_candidate_tracker_and_keep_perf_tracker_fin
     assert "candidate_tracker" in DEFAULT_CLI_STAGES.split(",")
     assert stages.index("candidate_tracker") < stages.index("events")
     assert stages[-1] == "perf_tracker"
+
+
+def test_research_tracker_preserves_operational_ledger(tmp_path: Path) -> None:
+    from ai_trading_system.platform.db.paths import get_domain_paths
+    context = _context(tmp_path)
+    context.params["data_domain"] = "research"
+    paths = get_domain_paths(project_root=tmp_path, data_domain="research")
+    context.db_path = paths.ohlcv_db_path
+    operational = tmp_path / "data" / "candidate_tracker.duckdb"
+    operational.write_bytes(b"operational ledger sentinel")
+    result = CandidateTrackerStage().run(context)
+    research_db = paths.root_dir / "candidate_tracker.duckdb"
+    assert research_db.exists()
+    assert operational.read_bytes() == b"operational ledger sentinel"
+    current = next(a for a in result.artifacts if a.artifact_type == "candidate_tracker_current")
+    assert Path(current.metadata["db_path"]) == research_db
+
+
+def test_research_tracker_rejects_operational_override(tmp_path: Path) -> None:
+    import pytest
+    context = _context(tmp_path)
+    context.params.update(data_domain="research", candidate_tracker_db_path=str(tmp_path / "data" / "candidate_tracker.duckdb"))
+    with pytest.raises(ValueError, match="operational ledger"):
+        CandidateTrackerStage().run(context)
+    assert not (tmp_path / "data" / "candidate_tracker.duckdb").exists()
+
+
+def test_research_tracker_rejects_symlink_to_operational_ledger(tmp_path: Path) -> None:
+    import pytest
+    context = _context(tmp_path)
+    operational = tmp_path / "data" / "candidate_tracker.duckdb"
+    operational.write_bytes(b"operational sentinel")
+    alias = tmp_path / "tracker-alias.duckdb"
+    alias.symlink_to(operational)
+    context.params.update(data_domain="RESEARCH", candidate_tracker_db_path=str(alias))
+    with pytest.raises(ValueError, match="operational ledger"):
+        CandidateTrackerStage().run(context)
+    assert operational.read_bytes() == b"operational sentinel"

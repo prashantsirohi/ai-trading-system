@@ -2,7 +2,7 @@
 
 - **Purpose:** Refresh the operational OHLCV catalog (and optional delivery data) for the NSE equity universe, validate it against an independent reference, and emit a stage summary that downstream stages can fingerprint.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-09-11
+- **Last verified:** 2026-09-12
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/ingest.py`, `src/ai_trading_system/domains/ingest/service.py`, `src/ai_trading_system/domains/ingest/daily_update_runner.py`, `src/ai_trading_system/domains/ingest/{providers/nse.py,providers/dhan.py,providers/yfinance.py,trust.py,validation.py,token_manager.py,delivery.py}`, `src/ai_trading_system/pipeline/dq/engine.py`
 
 ---
@@ -64,8 +64,8 @@ The pipeline-run governance tables (`pipeline_artifact`, `dq_result`, etc.) live
 6. The service queries `_catalog` via `fetch_catalog_summary` and computes `freshness_status` ∈ {`fresh`, `delayed`, `stale`}.
 7. `run_bhavcopy_validation` (`service.py:197`) runs the close-price reconciliation gate when `validate_bhavcopy_after_ingest=True`: loads catalog closes (`load_catalog_close_frame`), loads reference closes (`load_reference_close_frame` → bhavcopy/yfinance per `bhavcopy_validation_source`), merges by `symbol_id`, computes `coverage_ratio` and `mismatch_ratio`, and raises `DataQualityCriticalError` when `coverage < bhavcopy_min_coverage` (default 0.9) or `mismatch > bhavcopy_max_mismatch_ratio` (default 0.05) with `bhavcopy_validation_required=True` (default).
 8. `run_delivery_collection` (`service.py:541`) determines the delivery date range from the last `_delivery` row (or `delivery_backfill_days`, default 30) and calls `DeliveryCollector.fetch_range`, then optionally `compute_delivery_features` (`service.py:594-595`).
-9. `is_downstream_skip_eligible` (`service.py:146`) marks the stage as no-op-safe when `rows_written == 0`, no `updated_symbols`, no unresolved dates, and freshness is `fresh`.
-10. `build_downstream_input_fingerprint` (`service.py:161`) emits a SHA-256 of the catalog summary + trust summary + validation counts; features and downstream stages key off this fingerprint.
+9. `is_downstream_skip_eligible` (`service.py:146`) marks the stage as no-op-safe only when price, benchmark, and delivery write counts are zero, delivery did not fail, no symbols changed, no dates are unresolved, and freshness is `fresh`.
+10. `build_downstream_input_fingerprint` (`service.py:161`) emits a SHA-256 of the catalog summary + trust summary + validation counts; the fingerprint remains diagnostic rather than a cross-run skip authority.
 11. Unresolved provider gaps are `active` only for recent critical-universe
     symbols within `stale_missing_symbol_grace_days`. Gaps for symbols already
     stale beyond that grace remain `observed`, preserving the evidence without
@@ -73,6 +73,18 @@ The pipeline-run governance tables (`pipeline_artifact`, `dq_result`, etc.) live
     `(symbol_id, exchange, trade_date, reason)` lifecycle row, so retries do not
     accumulate duplicate observations.
 12. `run_stale_quarantine_sweep` (`service.py:89`) calls `trust.sweep_stale_quarantine` to promote long-stuck quarantined symbols to `permanently_unavailable`; failures are logged-only.
+
+## Delivery invalidation
+
+Delivery row writes, delivery-feature writes, failed delivery collection (which
+may have partially written), and benchmark writes invalidate downstream reuse,
+even when an earlier ingest fingerprint happens to match. The fingerprint
+includes delivery status, latest date, row counts, and changed symbols.
+The collector does not return exact changed identities, so delivery writes or
+failure conservatively add every catalogued NSE symbol to
+`delivery_changed_symbols` and merge them into `downstream_changed_symbols`.
+This keeps delivery-only updates visible to incremental feature computation
+without removing already changed BSE or corporate-action symbols.
 
 ## DQ / trust gates
 
@@ -106,8 +118,8 @@ Hard-floor rules are never relaxed by `dq_mode=relaxed`; repairable rules are do
 
 - Each pipeline attempt receives a fresh `attempt_number` and writes its `ingest_summary.json` under a new `attempt_<n>/` directory; the artifact path is built by `context.write_json` and recorded with `attempt_number=context.attempt_number` (`service.py:29-36`).
 - Ingest writes are **idempotent at the symbol/date grain**: the runner upserts into `_catalog` keyed on `(symbol_id, exchange, timestamp)`; delivery upserts go through `DeliveryCollector._upsert_delivery` (`delivery.py:319`). Re-running an attempt with the same target date does not duplicate rows.
-- `downstream_skip_eligible` lets the orchestrator avoid re-running features when the new attempt produced no new rows and freshness is already `fresh` (`service.py:146-158`).
-- `downstream_input_fingerprint` is content-addressed (SHA-256 over the normalized payload, `service.py:161-187`), so downstream stages can cache against it.
+- `downstream_skip_eligible` and `downstream_input_fingerprint` are diagnostic receipts. They do not authorize skipping requested stages in a new run. Same-run resume remains the orchestrator checkpoint boundary.
+- `downstream_input_fingerprint` is content-addressed (SHA-256 over the normalized payload, `service.py:161-187`), but it is not a complete fingerprint of downstream mutable inputs.
 - The stale-quarantine sweep (`service.py:89-118`) is best-effort and never fails the attempt; errors are logged.
 - Manual repair workflows (full reset + re-ingest + validate for a specific date range) exist under `src/ai_trading_system/domains/ingest/{reset_reingest_validate.py,repair.py,archive_nse_bhavcopy.py}`. Current code status of those scripts as user-facing entry points: unknown — verify before use.
 

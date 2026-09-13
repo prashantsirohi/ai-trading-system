@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-09-11
+- **Last verified:** 2026-09-12
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -285,7 +285,25 @@ opportunities, or execution state. Policy and dataset hashes make an exact
 replay verifiable; wall-clock telemetry is observational and excluded from
 equality hashes. See the [rank contract](stages/rank.md#offline-r0-pattern-lane-calibration).
 
+Technical EMA/MACD and Supertrend share recursive calculations across batch and
+per-symbol feature paths. Tail reads retain full seed history. Existing
+partitions require a full technical rebuild after the 2026-09-12 formula
+correction, followed by snapshot/DQ and ranking refresh; see the
+[feature-stage contract](stages/features.md#recursive-technical-indicators).
+
+Cached fundamental discovery re-evaluates admission dates under
+`fundamental-thesis-admission-v1.1`; corrections append versioned projections.
+Fundamental-discovery failures are non-blocking optional-stage failures, while
+core-stage and DQ failure behavior remains unchanged. Pattern-only shadow scans
+also enable their weekly-coverage dependency. Delivery updates/failure and
+benchmark writes invalidate downstream reuse; delivery refresh includes all
+catalogued NSE listings in the feature changed-symbol handoff. See
+[fundamental discovery](stages/fundamental_discovery.md),
+[weekly coverage](stages/weekly_stage.md), and [ingest](stages/ingest.md).
+
 ## Safety and operating invariants
+
+Execution exit counters persist at most once per decision date; previews and disabled execution do not persist counter changes. The candidate tracker resolves its ledger within the selected operational or research data domain, and research runs reject overrides targeting the canonical operational tracker ledger.
 
 - Resolve live data through the existing path helpers and `$DATA_ROOT`; never hardcode a repo-local `data/...` path in application code.
 - The local operator setting is `DATA_ROOT=/Volumes/MacData/Trading/data`. If `DATA_ROOT` is unset, code retains a legacy repo-local fallback; operational work must load `.env` and use the configured external root.
@@ -388,7 +406,9 @@ and textual boolean encodings consistently. A security is blocked as
 `SME_INELIGIBLE` only when the local source explicitly identifies it as SME;
 missing legacy SME evidence is not treated as a confirmed SME classification.
 
-When rank is skipped because its inputs are unchanged, downstream stages that require rank evidence—including `scan_router`—hydrate the latest promoted artifacts from a completed run. A failed rank attempt is never eligible for this reuse.
+New runs execute their requested stages even when ingest or stage input hashes match an earlier run: those hashes do not cover every mutable dependency. Same-run completed-attempt resume remains available, and `force_rerun` creates new attempts. Explicit downstream-only runs may hydrate one completed, promoted rank attempt dated no later than the requested run date, including `ranked_universe`; missing or changed hashes fail reuse rather than mixing attempts.
+
+Performance cohorts now require promoted, hash-verified producer evidence and `adjusted_exchange_sessions_v1` returns. Missing adjusted endpoints are quarantined; legacy return-policy rows remain in the raw table but are excluded from the trusted view. Replacement archives prior rows transactionally. Insight reads canonical DQ including relaxation evidence; publishing suppresses narrative artifacts unless validation passed. Performance backfill, reports, health, feedback, and artifact-output failures remain non-blocking. See [performance tracking](stages/perf_tracker.md), [insight](stages/insight.md), and [narrative](stages/narrative.md).
 
 `fundamentals` is optional in the orchestrator's implicit-stage contract, but the CLI's default stage string names it explicitly. To omit it from a CLI run, pass an explicit `--stages` list without `fundamentals`; the current `--no-enable-fundamentals` flag does not remove it from that default string. `candidate_tracker` is enabled by default and `--no-enable-candidate-tracker` removes it from the default CLI list. Any other explicit `--stages` list runs only the requested stages after expanding the `features` alias.
 
@@ -1024,6 +1044,11 @@ The planned [Decision Ownership and Consolidation Plan](development/decision_own
 defines four gated milestones for decision ownership, shared measurement,
 the operator workspace, and lifecycle migration. It changes no current runtime
 authority, Phase 4 readiness restriction, or execution permission.
+
+The proposed [Stage universe and final review ranking plan](development/stage_universe_final_review_plan.md)
+specifies a shadow Stage 2/late Stage 1 review universe, independent pattern
+and fundamental qualification, and a Sheets-led ordered review list. It is a
+planned M2/M3 workstream; existing rank and execution consumers are unchanged.
 
 | Question | Read next |
 |---|---|

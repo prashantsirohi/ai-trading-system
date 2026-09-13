@@ -2,7 +2,7 @@
 
 - **Purpose:** Deliver pipeline artifacts to external channels (Google Sheets, Telegram, QuantStats, PDF) and write a local publish summary, with per-channel blocking semantics.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-09-04
+- **Last verified:** 2026-09-12
 - **Source of truth:** [`src/ai_trading_system/pipeline/stages/publish.py`](../../src/ai_trading_system/pipeline/stages/publish.py), [`src/ai_trading_system/domains/publish/delivery_manager.py`](../../src/ai_trading_system/domains/publish/delivery_manager.py), [`src/ai_trading_system/domains/publish/channels/`](../../src/ai_trading_system/domains/publish/channels/)
 
 ---
@@ -16,6 +16,8 @@ Take rank/event/insight/narrative artifacts, attach 4-bucket watchlist, build ch
 - Stage wrapper: [`src/ai_trading_system/pipeline/stages/publish.py::PublishStage`](../../src/ai_trading_system/pipeline/stages/publish.py)
 - Runs after `narrative`, before `perf_tracker` (`PIPELINE_ORDER` in [`pipeline/orchestrator.py:41`](../../src/ai_trading_system/pipeline/orchestrator.py))
 - Test CLI: `ai-trading-publish-test` ([`pipeline/publish_test.py`](../../src/ai_trading_system/pipeline/publish_test.py))
+
+Narrative Telegram and daily/weekly insight overlays require a `validation_report` artifact with `status=passed`. Missing or failed validation suppresses both, including artifacts from older narrative code that retained rejected text. Deterministic rank/event publishing remains independent.
 
 ## Input data
 

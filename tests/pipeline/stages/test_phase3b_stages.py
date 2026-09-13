@@ -6,6 +6,7 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
+import pytest
 
 from ai_trading_system.domains.execution.models import FillRecord
 from ai_trading_system.domains.execution.store import ExecutionStore
@@ -15,7 +16,8 @@ from ai_trading_system.pipeline.stages.scan_router import ScanRouterStage
 from ai_trading_system.pipeline.stages.weekly_stage import WeeklyStageCoverageStage
 
 
-def test_weekly_coverage_routes_active_position_and_persists_history(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("pattern_only", [False, True])
+def test_weekly_coverage_routes_active_position_and_persists_history(tmp_path, monkeypatch, pattern_only) -> None:
     data_root = tmp_path / "runtime"
     data_root.mkdir()
     monkeypatch.setenv("DATA_ROOT", str(data_root))
@@ -41,7 +43,8 @@ def test_weekly_coverage_routes_active_position_and_persists_history(tmp_path, m
     run_date = dates[-1].date().isoformat()
     params = {
         "data_domain": "operational",
-        "opportunity_scan_routing_mode": "compare",
+        "opportunity_scan_routing_mode": "off" if pattern_only else "compare",
+        "pattern_lane_scan_mode": "shadow" if pattern_only else "off",
         "minimum_sector_constituents": 1,
     }
     project_root = Path.cwd()
@@ -50,6 +53,12 @@ def test_weekly_coverage_routes_active_position_and_persists_history(tmp_path, m
     assert weekly.metadata["eligible_full_universe"] >= 4
     assert weekly.metadata["sector_mapping_missing"] == 0
     assert weekly.metadata["sector_mapping_coverage_ratio"] == 1.0
+
+    if pattern_only:
+        assert weekly.metadata["mode"] == "shadow"
+        with registry._reader() as reader:
+            assert reader.execute("SELECT COUNT(*) FROM weekly_stock_stage_history").fetchone()[0] >= 4
+        return
 
     rank_path = tmp_path / "ranked_signals.csv"
     pd.DataFrame({"symbol_id": ["AAA", "BBB"], "rank_position": [1, 2]}).to_csv(rank_path, index=False)

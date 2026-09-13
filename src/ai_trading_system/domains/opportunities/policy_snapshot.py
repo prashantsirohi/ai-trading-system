@@ -271,6 +271,8 @@ def policy_content(
         FUNDAMENTAL_THESIS_ADMISSION_VERSION: {
             "allowed_structural_stages": sorted(ALLOWED_ADMISSION_STAGES),
             "requires_daily_context": True,
+            "recheck_cached_source_availability": True,
+            "maximum_source_age_days": 550,
             "execution_eligibility": False,
         },
         TECHNICAL_EVIDENCE_POLICY_VERSION: {

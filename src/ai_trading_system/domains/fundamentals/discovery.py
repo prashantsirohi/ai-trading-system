@@ -252,14 +252,17 @@ def project_cached_classification(
         for value in json.loads(str(cached.get("secondary_theses_json") or "[]"))
     )
     evidence = _evidence(row)
-    status = str(cached["classification_status"])
-    static_blockers = () if status in {"QUALIFIED", "UNCLASSIFIED_FUNDAMENTAL"} else (status,)
-    blockers = list(_daily_blockers(row, primary, evidence, static_blockers))
-    cached_available = _date(cached.get("source_available_at"))
     as_of_date = pd.Timestamp(as_of).date()
-    if cached_available and (as_of_date - cached_available).days > 550:
-        blockers.append("STALE_FUNDAMENTAL_SOURCE")
-        status = "STALE"
+    # Cache accounting evaluations, not the admission decision from another date.
+    source_row = row.copy()
+    source_row["statement_basis"] = cached.get("statement_basis")
+    source_row["source_available_at"] = cached.get("source_available_at")
+    source_row["available_at"] = None
+    status, common_blockers = _classification_status(
+        source_row, as_of_date, [item.family for item in evaluations if item.passed])
+    if str(cached.get("classification_status")) == "QUARANTINED":
+        status, common_blockers = "QUARANTINED", ("CLASSIFICATION_FAILURE",)
+    blockers = list(_daily_blockers(row, primary, evidence, common_blockers))
     blockers = list(dict.fromkeys(blockers))
     return FundamentalThesisSnapshot(
         symbol_id=str(row.get("symbol_id") or row.get("symbol") or "").upper().strip(),
@@ -456,15 +459,41 @@ def persist_discovery(
         projection_payload = {
             **classification_payload,
             "as_of": item.as_of.isoformat(),
+            "admission_version": item.admission_version,
             "eligible": item.admission_eligible,
             "blockers": list(item.admission_blockers),
         }
         projection_hash = _hash(projection_payload)
         projection_id = f"fundamental-projection-{projection_hash[:24]}"
-        before_projection = conn.execute(
-            "SELECT COUNT(*) FROM fundamental_thesis_projection WHERE projection_id = ?",
-            [projection_id],
-        ).fetchone()[0]
+        existing_projection = conn.execute(
+            """
+            SELECT projection_id, semantic_payload_hash
+            FROM fundamental_thesis_projection
+            WHERE symbol_id = ?
+              AND exchange = ?
+              AND as_of = ?
+              AND source_data_hash = ?
+              AND rule_version = ?
+              AND admission_version = ?
+            """,
+            [
+                item.symbol_id,
+                item.exchange,
+                item.as_of,
+                item.source_data_hash,
+                item.rule_version,
+                item.admission_version,
+            ],
+        ).fetchone()
+        if existing_projection is not None:
+            if str(existing_projection[1]) != projection_hash:
+                raise ValueError(
+                    "Conflicting immutable fundamental projection for "
+                    f"{item.exchange}:{item.symbol_id} as_of={item.as_of} "
+                    f"admission_version={item.admission_version}; restore or repair the "
+                    "store before rerunning with different daily context"
+                )
+            continue
         conn.execute(
             """
             INSERT INTO fundamental_thesis_projection VALUES (
@@ -480,7 +509,7 @@ def persist_discovery(
                 item.rule_version, item.admission_version, projection_hash,
             ],
         )
-        created_projections += int(before_projection == 0)
+        created_projections += 1
     return created_classifications, created_projections
 
 

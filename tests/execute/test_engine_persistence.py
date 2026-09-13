@@ -24,7 +24,8 @@ def _ranked_row(symbol_id: str, **overrides) -> dict:
         "exchange": "NSE",
         "close": 100.0,
         "composite_score": 80.0,
-        "eligible_rank": 1,
+        "eligible_rank": True,
+        "rank_position": 1,
         "is_stage2_uptrend": True,
         "sector_name": "TECH",
         "sector_strength_score": 0.7,
@@ -133,7 +134,7 @@ def test_engine_exit_persists_reason_in_fill_and_deactivates_stop(tmp_path: Path
     assert store.get_position_stop("NSE:ACME")["status"] == "INACTIVE"
 
 
-def test_streak_counters_increment_across_ticks(tmp_path: Path) -> None:
+def test_streak_counters_increment_across_decision_dates(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path)
     service = ExecutionService(store, PaperExecutionAdapter(slippage_bps=0))
     portfolio = PortfolioManager(store)
@@ -142,23 +143,25 @@ def test_streak_counters_increment_across_ticks(tmp_path: Path) -> None:
 
     # Day 1: enter ACME at rank 1
     AutoTrader(service, portfolio).run(
-        ranked_df=pd.DataFrame([_ranked_row("ACME", eligible_rank=1)]),
+        ranked_df=pd.DataFrame([_ranked_row("ACME", rank_position=1)]),
         capital=1_000_000.0,
         risk_config=cfg,
         execution_enabled=True,
+        decision_date="2026-06-01",
     )
     # Day 2 + 3: rank slips to 80 (> max_hold_rank=50)
     for day in range(2):
         AutoTrader(service, portfolio).run(
-            ranked_df=pd.DataFrame([_ranked_row("ACME", eligible_rank=80, close=99.0)]),
+            ranked_df=pd.DataFrame([_ranked_row("ACME", rank_position=80, close=99.0)]),
             capital=1_000_000.0,
             risk_config=cfg,
             execution_enabled=True,
+            decision_date=f"2026-06-{day + 2:02d}",
         )
 
     record = store.get_position_stop("NSE:ACME")
     metadata = json.loads(record["metadata_json"])
-    # After 2 bad-rank ticks: streak = 2.
+    # After two distinct bad-rank decision dates: streak = 2.
     assert metadata["rank_above_threshold_streak"] >= 2
     assert metadata["bars_held"] >= 2
 
@@ -193,3 +196,39 @@ def test_legacy_path_unchanged_when_no_risk_config(tmp_path: Path) -> None:
     assert buy_meta.get("intent_kind") is None
     # Legacy diff uses "target_entry" — engine path uses "entry_confirmed".
     assert buy_meta.get("reason") in {None, "target_entry"}
+
+
+def test_preview_disabled_and_retries_preserve_exit_counters(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path)
+    trader = AutoTrader(ExecutionService(store, PaperExecutionAdapter(slippage_bps=0)), PortfolioManager(store))
+    cfg = RiskPolicyConfig(name="test")
+    trader.run(ranked_df=pd.DataFrame([_ranked_row("ACME")]), risk_config=cfg,
+               decision_date="2026-06-01")
+    before = store.get_position_stop("NSE:ACME")
+    fills = store.list_fills()
+    weak = pd.DataFrame([_ranked_row("ACME", rank_position=80)])
+    for flags in ({"preview_only": True}, {"execution_enabled": False}):
+        for _ in range(2):
+            trader.run(ranked_df=weak, risk_config=cfg, decision_date="2026-06-02", **flags)
+            assert store.get_position_stop("NSE:ACME") == before
+            assert store.list_fills() == fills
+    for day in ("2026-06-02", "2026-06-02", "2026-06-01"):
+        trader.run(ranked_df=weak, risk_config=cfg, decision_date=day)
+        metadata = json.loads(store.get_position_stop("NSE:ACME")["metadata_json"])
+        assert metadata["rank_above_threshold_streak"] == 1
+        assert metadata["bars_held"] == 1
+        assert metadata["last_counter_date"] == "2026-06-02"
+
+
+def test_counter_uses_ordinal_rank_and_zero_adjusted_score() -> None:
+    from ai_trading_system.domains.execution.autotrader import _bump_streaks_in_stop_record
+    from ai_trading_system.domains.risk.adapters import candidate_from_row
+    row = _ranked_row("ACME", rank_position=80, composite_score_adjusted=0.0)
+    assert candidate_from_row(row).rank == 80
+    assert candidate_from_row(row).composite_score == 0.0
+    result = _bump_streaks_in_stop_record(stop_record={"metadata_json": "{}"},
+        ranked_row=row, risk_config=RiskPolicyConfig(name="test"), decision_date="2026-06-02")
+    assert result["metadata"]["rank_above_threshold_streak"] == 1
+    assert result["metadata"]["score_below_threshold_streak"] == 1
+    assert candidate_from_row({"eligible_rank": True}).rank == 0
+    assert candidate_from_row({"eligible_rank": True, "rank": 75}).rank == 75

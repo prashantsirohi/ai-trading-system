@@ -169,3 +169,58 @@ def test_cached_classification_reuses_accounts_but_reprojects_daily_context() ->
     assert projected.primary_thesis == snapshots[0].primary_thesis
     assert projected.admission_eligible is False
     assert "STAGE_BLOCKED" in projected.admission_blockers
+
+
+@pytest.mark.parametrize("cached_date,projection_date,expected_status,blocker", [
+    ("2026-08-15", "2026-05-14", "EXCLUDED", "FUTURE_DATED_INPUT"),
+    ("2026-05-14", "2026-05-15", "QUALIFIED", None),
+    ("2028-08-15", "2026-08-15", "QUALIFIED", None),
+    ("2026-08-15", "2028-08-15", "STALE", "STALE_FUNDAMENTAL_SOURCE"),
+])
+def test_cached_admission_matches_fresh_classification_at_requested_date(cached_date, projection_date, expected_status, blocker):
+    row = _row()
+    snapshots, _ = classify_fundamental_universe(pd.DataFrame([row]), as_of=cached_date)
+    with duckdb.connect(":memory:") as conn:
+        persist_discovery(conn, snapshots)
+        cached = conn.execute("SELECT * FROM fundamental_thesis_classification").df().iloc[0].to_dict()
+        projected = project_cached_classification(row, cached, as_of=projection_date)
+        fresh, _ = classify_fundamental_universe(pd.DataFrame([row]), as_of=projection_date)
+        assert projected.classification_status == expected_status == fresh[0].classification_status
+        assert projected.admission_blockers == fresh[0].admission_blockers
+        assert projected.admission_eligible == fresh[0].admission_eligible
+        if blocker:
+            assert blocker in projected.admission_blockers
+        persist_discovery(conn, [projected])
+        assert conn.execute("SELECT COUNT(*) FROM fundamental_thesis_classification").fetchone()[0] == 1
+
+
+def test_corrected_projection_version_coexists_with_old_evidence():
+    from dataclasses import replace
+    snapshot = classify_fundamental_universe(pd.DataFrame([_row()]), as_of="2026-08-15")[0][0]
+    with duckdb.connect(":memory:") as conn:
+        assert persist_discovery(conn, [replace(snapshot, admission_version="fundamental-thesis-admission-v1")]) == (1, 1)
+        assert persist_discovery(conn, [snapshot]) == (0, 1)
+        assert persist_discovery(conn, [snapshot]) == (0, 0)
+        assert conn.execute("SELECT COUNT(*) FROM fundamental_thesis_projection").fetchone()[0] == 2
+
+
+def test_conflicting_same_policy_daily_projection_fails_instead_of_silently_drifting():
+    snapshot = classify_fundamental_universe(
+        pd.DataFrame([_row(structural_stage="unknown", daily_context_complete=False)]),
+        as_of="2026-08-15",
+    )[0][0]
+    corrected = classify_fundamental_universe(
+        pd.DataFrame([_row(structural_stage="stage_2_advancing", daily_context_complete=True)]),
+        as_of="2026-08-15",
+    )[0][0]
+
+    with duckdb.connect(":memory:") as conn:
+        assert persist_discovery(conn, [snapshot]) == (1, 1)
+        with pytest.raises(ValueError, match="Conflicting immutable fundamental projection"):
+            persist_discovery(conn, [corrected])
+        stored = conn.execute(
+            "SELECT admission_eligible, admission_blockers_json FROM fundamental_thesis_projection"
+        ).fetchone()
+
+    assert stored[0] is False
+    assert "DAILY_CONTEXT_INCOMPLETE" in stored[1]

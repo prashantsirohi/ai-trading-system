@@ -134,6 +134,7 @@ class IngestOrchestrationService:
         )
         payload.update(self.run_bhavcopy_validation(context, payload))
         payload.update(self.run_delivery_collection(context, payload))
+        self._include_delivery_changed_symbols(context, payload)
         payload["downstream_skip_eligible"] = self.is_downstream_skip_eligible(payload)
         payload["downstream_input_fingerprint"] = self.build_downstream_input_fingerprint(payload)
         payload["stale_quarantine_sweep"] = self.run_stale_quarantine_sweep(context)
@@ -402,6 +403,25 @@ class IngestOrchestrationService:
         return freshness_status != "fresh", f"catalog_{freshness_status}"
 
     @staticmethod
+    def _include_delivery_changed_symbols(context: StageContext, payload: Dict) -> None:
+        if not (int(payload.get("delivery_rows_ingested") or 0)
+                or int(payload.get("delivery_feature_rows") or 0)
+                or payload.get("delivery_status") == "failed"):
+            return
+        # Delivery feature refresh spans NSE; the collector has no exact changed
+        # identity receipt. Conservatively refresh every catalogued NSE listing.
+        import duckdb
+
+        with duckdb.connect(str(context.db_path), read_only=True) as conn:
+            symbols = [row[0] for row in conn.execute(
+                "SELECT DISTINCT symbol_id FROM _catalog WHERE exchange = ? AND symbol_id IS NOT NULL",
+                ["NSE"],
+            ).fetchall()]
+        payload["delivery_changed_symbols"] = sorted(str(symbol) for symbol in symbols)
+        payload["downstream_changed_symbols"] = sorted(
+            set(payload.get("downstream_changed_symbols") or []) | set(payload["delivery_changed_symbols"]))
+
+    @staticmethod
     def is_downstream_skip_eligible(payload: Dict) -> bool:
         if "rows_written" not in payload and "updated_symbols" not in payload:
             return False
@@ -417,6 +437,10 @@ class IngestOrchestrationService:
             return False
         return (
             rows_written == 0
+            and int(payload.get("benchmark_rows_written") or 0) == 0
+            and int(payload.get("delivery_rows_ingested") or 0) == 0
+            and int(payload.get("delivery_feature_rows") or 0) == 0
+            and payload.get("delivery_status") != "failed"
             and not bool(updated_symbols)
             and unresolved_date_count == 0
             and freshness_status == "fresh"
@@ -444,6 +468,13 @@ class IngestOrchestrationService:
             "rows_written": int(payload.get("rows_written", 0) or 0),
             "benchmark_rows_written": int(payload.get("benchmark_rows_written", 0) or 0),
             "updated_symbols": normalized_symbols,
+            "delivery": {
+                "status": payload.get("delivery_status"),
+                "last_date": payload.get("delivery_last_date"),
+                "rows_ingested": int(payload.get("delivery_rows_ingested") or 0),
+                "feature_rows": int(payload.get("delivery_feature_rows") or 0),
+                "changed_symbols": sorted(set(payload.get("delivery_changed_symbols") or [])),
+            },
             "unresolved_date_count": int(payload.get("unresolved_date_count", 0) or 0),
             "unresolved_symbol_count": int(payload.get("unresolved_symbol_count", 0) or 0),
             "validation_counts": payload.get("validation_counts") if isinstance(payload.get("validation_counts"), dict) else {},

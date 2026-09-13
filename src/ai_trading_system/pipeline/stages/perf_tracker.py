@@ -35,34 +35,38 @@ class PerfTrackerStage:
     name = "perf_tracker"
 
     def run(self, context: StageContext) -> StageResult:
+        progress = {"component": "backfill"}
         try:
-            result = run_backfill(project_root=context.project_root)
-        except Exception as exc:  # pragma: no cover - intentional broad catch
-            # Tracker is observability; never block the pipeline on its failure.
+            return self._run(context, progress)
+        except Exception as exc:
             logger.warning("perf_tracker stage failed: %s", exc, exc_info=True)
-            metadata = {"status": "failed", "error": str(exc)}
-            artifact_path = context.write_json("perf_tracker_summary.json", metadata)
-            return StageResult(
-                artifacts=[StageArtifact.from_file(
-                    "perf_tracker_summary",
-                    artifact_path,
-                    metadata=metadata,
-                    attempt_number=context.attempt_number,
-                )],
-                metadata=metadata,
-            )
+            metadata = {"status": "failed", "error": str(exc), "error_class": type(exc).__name__, "failed_component": progress["component"]}
+            try:
+                path = context.write_json("perf_tracker_summary.json", metadata)
+                artifacts = [StageArtifact.from_file("perf_tracker_summary", path, metadata=metadata,
+                                                    attempt_number=context.attempt_number)]
+            except Exception as artifact_exc:
+                metadata["summary_write_error"] = str(artifact_exc)
+                artifacts = []
+            return StageResult(artifacts=artifacts, metadata=metadata)
 
+    def _run(self, context: StageContext, progress: dict) -> StageResult:
+        result = run_backfill(project_root=context.project_root, current_run_id=context.run_id)
         metadata = {
             "status": "ok",
             "dates_processed": int(result.get("dates_processed", 0)),
             "rows_upserted": int(result.get("rows_upserted", 0)),
         }
+        progress["component"] = "quality_reports"
         reports = build_research_quality_reports(project_root=context.project_root)
+        progress["component"] = "tracker_health"
         health = build_tracker_health(project_root=context.project_root)
         metadata["tracker_health_status"] = health["status"]
         metadata["research_quality_status"] = reports["summary"].get("status", health["status"])
+        progress["component"] = "ranking_feedback"
         ranking_feedback = build_ranking_feedback_summary(project_root=context.project_root)
         metadata["ranking_feedback_status"] = ranking_feedback.get("status", "unknown")
+        progress["component"] = "artifact_export"
         artifact_path = context.write_json("perf_tracker_summary.json", metadata)
         health_path = context.write_json("tracker_health.json", health)
         research_summary_path = context.write_json("perf_tracker_research_quality_summary.json", reports["summary"])

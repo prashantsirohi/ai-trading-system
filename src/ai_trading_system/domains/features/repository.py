@@ -202,3 +202,22 @@ def get_last_feature_date(
         return None
     finally:
         conn.close()
+
+
+def read_recursive_prices(conn, *, symbol_id=None, exchange=None, end_date=None,
+                          source_table="_catalog_feature_source"):
+    """Read full seed history up to the cutoff; source_table is internal only."""
+    conditions = ["timestamp IS NOT NULL"]
+    params = []
+    for column, value in (("symbol_id", symbol_id), ("exchange", exchange)):
+        if value is not None:
+            conditions.append(f"{column} = ?")
+            params.append(value)
+    if end_date is not None:
+        conditions.append("timestamp <= CAST(? AS TIMESTAMP)")
+        params.append(end_date)
+    return conn.execute(
+        f"SELECT symbol_id, exchange, timestamp, high, low, close FROM {source_table} "
+        f"WHERE {' AND '.join(conditions)} ORDER BY symbol_id, exchange, timestamp",
+        params,
+    ).fetchdf()

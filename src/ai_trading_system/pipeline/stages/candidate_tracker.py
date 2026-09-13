@@ -19,8 +19,14 @@ class CandidateTrackerStage:
 
     def run(self, context: StageContext) -> StageResult:
         candidate_artifact = context.require_artifact("candidates", "final_candidates")
-        paths = get_domain_paths(project_root=context.project_root, data_domain="operational")
+        domain = str(context.params.get("data_domain") or "operational")
+        paths = get_domain_paths(project_root=context.project_root, data_domain=domain)
         db_path = Path(context.params.get("candidate_tracker_db_path") or (paths.root_dir / "candidate_tracker.duckdb"))
+
+        if paths.domain == "research":
+            operational = get_domain_paths(project_root=context.project_root, data_domain="operational")
+            if db_path.resolve() == (operational.root_dir / "candidate_tracker.duckdb").resolve():
+                raise ValueError("Research candidate tracking cannot write the operational ledger")
 
         result = run_candidate_tracker(
             config=CandidateTrackerConfig(

@@ -2,7 +2,7 @@
 
 - **Purpose:** Classify cached accounting evidence into versioned fundamental thesis families and project it against current market context.
 - **Audience:** Operators, developers, reviewers.
-- **Last verified:** 2026-08-15
+- **Last verified:** 2026-09-12
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/fundamental_discovery.py` and `src/ai_trading_system/domains/fundamentals/discovery.py`.
 
 ---
@@ -36,6 +36,16 @@ values are not reinterpreted as proof that a security is SME.
 
 The fundamental source hash contains accounting facts, statement basis, source dates, and identity fields. It excludes rank, structural stage, valuation, patterns, and Investigator evidence. An existing `(symbol, exchange, source_data_hash, taxonomy_version, rule_version)` classification is reused; only the daily projection is recalculated.
 
+Admission policy `fundamental-thesis-admission-v1.1` re-evaluates source availability,
+550-day freshness, identity, basis, and common exclusions on every daily
+projection, including cache hits. A classification cached on a later date cannot
+admit future facts into an earlier projection; an earlier future/stale exclusion
+is not frozen when projecting a date on which the facts are usable. Quarantined
+classification failures remain quarantined. The accounting evaluations remain
+immutable and reusable. Projection identity includes admission version, so
+corrected projections append alongside older policy evidence without migration
+or deletion; rerunning a date is required to create corrected evidence.
+
 Daily admission is allowed only for `transition_4_to_1`, `stage_1_basing`, `transition_1_to_2`, and `stage_2_advancing`. Other stages remain visible with `STAGE_BLOCKED`. Missing stage or valuation context produces `DAILY_CONTEXT_INCOMPLETE`.
 
 ## Output artifacts
@@ -66,11 +76,11 @@ The stage fails closed for unresolved identity or statement basis, future-dated 
 
 ## Failure modes
 
-A policy-label/content mismatch fails before stage artifacts or registry writes. Missing stores and per-symbol incomplete evidence produce exclusions. A persistence error rolls back the fundamentals transaction and fails only this optional stage.
+A policy-label/content mismatch fails before stage artifacts or registry writes. Missing stores and per-symbol incomplete evidence produce exclusions. A persistence error rolls back the fundamentals transaction and fails only this optional stage. Input, policy, and persistence exceptions are wrapped as `FundamentalDiscoveryStageError`; the orchestrator records a failed stage and warning, continues execution/publishing, and reports `completed_with_opportunity_errors`. Core ingest/rank/execution failure handling and orchestrator DQ gates are unchanged.
 
 ## Retry behavior
 
-An exact source hash and policy reuses the immutable classification. A same-day projection insert is idempotent. Operators fix or refresh the source and rerun the optional stage; it never performs a fallback download.
+An exact source hash and policy reuses the immutable classification. An identical same-day projection insert is idempotent; a same-key projection with different daily context fails explicitly and rolls back instead of leaving promoted artifacts that disagree with the durable store. Operators restore or repair the store before rerunning changed same-day context. The stage never performs a fallback download.
 
 ## Downstream consumers
 

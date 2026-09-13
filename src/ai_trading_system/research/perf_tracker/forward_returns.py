@@ -4,8 +4,8 @@ Shared between the perf-tracker backfill, the daily perf-tracker stage, and
 (future) Phase 3 forward evaluator.
 
 Math: ``fwd_Nd_return = (close_at_run_date_plus_N - close_at_run_date) / close_at_run_date``
-expressed as a percentage. Uses raw close (no split adjustment) — same caveat
-as everywhere else in the system.
+expressed as a percentage, using adjusted close and exchange-wide catalog
+session dates. Missing adjusted endpoints are quarantined, never raw fallbacks.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
+import numpy as np
 
 from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.research.perf_tracker.constants import (
@@ -71,67 +72,55 @@ def compute_forward_returns(
         resolved_db = paths.ohlcv_db_path
     con = duckdb.connect(str(resolved_db), read_only=True)
     try:
-        # Pull every (symbol, date, close) for symbols we care about, ordered,
-        # then assign each row a per-symbol trading-day index. Forward returns
-        # become a self-join on (symbol, idx + horizon).
+        columns = {r[1] for r in con.execute("PRAGMA table_info('_catalog')").fetchall()}
+        price = "adjusted_close" if "adjusted_close" in columns else "NULL::DOUBLE"
+        exchanges = work["exchange"].dropna().astype(str).unique().tolist()
         symbols = work["symbol_id"].dropna().astype(str).unique().tolist()
-        if not symbols:
-            return work
-        placeholders = ",".join("?" for _ in symbols)
-        ohlcv = con.execute(
-            f"""
-            SELECT symbol_id,
-                   exchange,
-                   CAST(timestamp AS DATE) AS d,
-                   close,
-                   ROW_NUMBER() OVER (PARTITION BY symbol_id, exchange ORDER BY timestamp) AS idx
-            FROM _catalog
-            WHERE symbol_id IN ({placeholders})
-              AND close > 0
-              AND timestamp IS NOT NULL
-            """,
-            symbols,
-        ).fetchdf()
+        sessions = con.execute(
+            "SELECT exchange, CAST(timestamp AS DATE) AS d FROM _catalog "
+            "WHERE exchange IN (SELECT UNNEST(?)) AND timestamp IS NOT NULL "
+            "GROUP BY exchange, d ORDER BY exchange, d", [exchanges]).fetchdf()
+        prices = con.execute(
+            f"SELECT symbol_id, exchange, CAST(timestamp AS DATE) AS d, "
+            f"CASE WHEN COUNT(*) = 1 THEN MAX({price}) ELSE NULL END AS price "
+            "FROM _catalog WHERE symbol_id IN (SELECT UNNEST(?)) AND timestamp IS NOT NULL "
+            "GROUP BY symbol_id, exchange, d", [symbols]).fetchdf()
     finally:
         con.close()
-
-    if ohlcv.empty:
-        for n in horizons:
-            work[f"fwd_{n}d_return"] = pd.NA
-            work[f"fwd_{n}d_matured_at"] = pd.NaT
-        work["fwd_5d_anomaly"] = False
-        work["fwd_return_anomaly"] = False
-        return work
-
-    ohlcv = ohlcv.assign(d=pd.to_datetime(ohlcv["d"]).dt.date)
-
-    # Map (symbol, exchange, run_date) -> idx_at_run_date
-    base_idx = ohlcv.rename(columns={"d": "run_date", "idx": "idx_at_run", "close": "close_at_run"})
-    base_idx = base_idx[["symbol_id", "exchange", "run_date", "idx_at_run", "close_at_run"]]
-    work = work.merge(base_idx, on=["symbol_id", "exchange", "run_date"], how="left")
-
+    sessions["d"] = pd.to_datetime(sessions["d"]).dt.date
+    prices["d"] = pd.to_datetime(prices["d"]).dt.date
+    sessions["session_index"] = sessions.groupby("exchange").cumcount()
+    work = work.drop(columns=[f"fwd_{n}d_{suffix}" for n in horizons for suffix in ("return", "matured_at")], errors="ignore")
+    work = work.merge(sessions.rename(columns={"d": "run_date"}), on=["exchange", "run_date"], how="left")
+    work = work.merge(prices.rename(columns={"d": "run_date", "price": "base_price"}),
+                      on=["symbol_id", "exchange", "run_date"], how="left")
+    reasons = pd.Series("", index=work.index, dtype=object)
+    base = pd.to_numeric(work["base_price"], errors="coerce")
+    invalid_base = ~np.isfinite(base) | base.le(0) | work["session_index"].isna()
+    reasons.loc[invalid_base] = "missing_adjusted_entry_close"
     for n in horizons:
-        target = ohlcv[["symbol_id", "exchange", "idx", "d", "close"]].copy()
-        target.loc[:, "idx_target"] = target["idx"] - n  # so target.idx = idx_at_run + n
-        target = target.drop(columns=["idx"]).rename(
-            columns={
-                "d": f"fwd_{n}d_matured_at",
-                "close": f"close_fwd_{n}d",
-                "idx_target": "idx_at_run",
-            }
-        )
-        work = work.merge(target, on=["symbol_id", "exchange", "idx_at_run"], how="left")
-        close_run = pd.to_numeric(work["close_at_run"], errors="coerce")
-        close_fwd = pd.to_numeric(work[f"close_fwd_{n}d"], errors="coerce")
-        work.loc[:, f"fwd_{n}d_return"] = (close_fwd - close_run) / close_run.replace(0, pd.NA) * 100.0
-        work = work.drop(columns=[f"close_fwd_{n}d"])
+        if int(n) != n or n < 1:
+            raise ValueError("Forward horizons must be positive integers")
+        target = sessions.copy()
+        target["session_index"] -= n
+        target = target.rename(columns={"d": "target_date"})
+        work = work.merge(target, on=["exchange", "session_index"], how="left")
+        work = work.merge(prices.rename(columns={"d": "target_date", "price": "target_price"}),
+                          on=["symbol_id", "exchange", "target_date"], how="left")
+        future = pd.to_numeric(work["target_price"], errors="coerce")
+        missing = work["target_date"].notna() & (~np.isfinite(future) | future.le(0))
+        reasons.loc[missing] = reasons.loc[missing] + f"|missing_adjusted_exit_close_{n}d"
+        valid = ~invalid_base & ~missing & work["target_date"].notna()
+        work[f"fwd_{n}d_return"] = ((future / base - 1) * 100).where(valid)
+        work[f"fwd_{n}d_matured_at"] = pd.to_datetime(work["target_date"]).where(valid)
+        work = work.drop(columns=["target_date", "target_price"])
+    work["return_policy_version"] = "adjusted_exchange_sessions_v1"
+    work["data_quality_reason"] = reasons.str.strip("|").replace("", pd.NA)
+    work["data_quality_status"] = reasons.map(lambda value: "quarantined" if value else "trusted")
+    work = work.drop(columns=["session_index", "base_price"])
 
-    work = work.drop(columns=["idx_at_run", "close_at_run"], errors="ignore")
-
-    # Anomaly flag: a |5-day return| above the threshold is almost certainly
-    # a corporate action (split/bonus) showing up in raw close, not real
-    # alpha. We don't drop these (callers may want to inspect them) but we
-    # surface a boolean column so digest/cohort aggregations can exclude them.
+    # Large adjusted returns still need review. Retain the values for audit
+    # and expose flags so trusted analytics can exclude anomalous outcomes.
     if "fwd_5d_return" in work.columns:
         r5 = pd.to_numeric(work["fwd_5d_return"], errors="coerce")
         work.loc[:, "fwd_5d_anomaly"] = (r5.abs() > FORWARD_RETURN_ANOMALY_5D_PCT).fillna(False)

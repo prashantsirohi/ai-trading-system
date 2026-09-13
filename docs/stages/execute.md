@@ -2,7 +2,7 @@
 
 - **Purpose:** Convert ranked signals into paper (or live-scaffold) orders, persist fills, and update portfolio state.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-09-11
+- **Last verified:** 2026-09-12
 - **Source of truth:** [`src/ai_trading_system/pipeline/stages/execute.py`](../../src/ai_trading_system/pipeline/stages/execute.py), [`src/ai_trading_system/domains/execution/`](../../src/ai_trading_system/domains/execution/), [`src/ai_trading_system/domains/risk/`](../../src/ai_trading_system/domains/risk/)
 
 ---
@@ -65,6 +65,7 @@ Persistent state written to **`data/execution.duckdb`** (default in [`store.py`]
 4. Detect market regime (`RegimeDetector`) — used for sizing multiplier.
 5. Construct `ExecutionStore` → `PortfolioManager` → `ExecutionService(PaperExecutionAdapter)` → `AutoTrader`.
 6. `AutoTrader.run(...)` holds the execution-ledger batch lock while producing `actions`, `executions`, and `positions_before/after`. Defaults: order_type=MARKET, product_type=INTRADAY, validity=DAY. Pipeline-generated correlation IDs are scoped to `run_id`, so a retry of the same run is stable while a later run can legitimately trade the symbol again. Before adapter dispatch, `ExecutionService` durably reserves the intent, replays a completed identical key, rejects conflicting reuse, and leaves unknown outcomes for explicit reconciliation without redispatch.
+   Exit counters use `context.run_date` as the decision date, with `last_counter_date` stored in stop metadata. Entry initializes the marker; only a later date increments holding and deterioration counters. Same-date retries and older dates leave counters unchanged. Preview/disabled runs may calculate prospective decisions but do not persist counter changes. Standalone `AutoTrader.run` callers should supply `decision_date`; omission uses the current UTC date. This counts evaluated decision dates, not elapsed calendar days or reconstructed missing market sessions.
 7. If `execution_enabled` and not preview: refresh trailing stops via `service.maintain_trailing_stops(...)` using current prices + ATR from ranked df.
 8. Compute MTM portfolio value, record intraday drawdown snapshot (and EOD if `is_eod`).
 9. Normalize every action as `EXECUTED`, `REJECTED`, `SUPPRESSED`, `PREVIEW`,

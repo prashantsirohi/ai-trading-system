@@ -2,7 +2,7 @@
 
 - **Purpose:** LLM synthesis of the daily/weekly market report from the deterministic insight packet, with validation and deterministic fallback.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-09-12
 - **Source of truth:** [`src/ai_trading_system/pipeline/stages/narrative.py`](../../src/ai_trading_system/pipeline/stages/narrative.py), [`src/ai_trading_system/domains/events/event_llm_router.py`](../../src/ai_trading_system/domains/events/event_llm_router.py), [`config/llm_brain.yaml`](../../config/llm_brain.yaml)
 
 ---
@@ -60,7 +60,7 @@ Under `data/pipeline_runs/<run_id>/narrative/attempt_<n>/`:
 3. Render markdown via `render_market_report_markdown`.
 4. `validate_report(markdown, packet, model_usage=...)`:
    - Reject raw triple-backtick fences, mid-sentence truncation tied to `possible_truncation`, banned phrases (`guaranteed buy`, `must buy`, `price target` without explicit "no price target", …), invented all-caps symbols not in allowed set, uncited event claims, and missing degraded/market-intel warnings.
-5. If validation fails → rebuild with deterministic synthesis and re-validate. The deterministic path is kept regardless of its validation outcome.
+5. If validation fails → rebuild with deterministic synthesis and re-validate. If the fallback also fails, markdown and normalized synthesis become an explicit unavailable result; validation stays failed and rejected content is never used as the report. Raw diagnostics remain separate.
 6. Build Telegram summary (first 18 markdown lines + event/rank summary).
 7. Persist seven artifacts.
 
@@ -83,7 +83,7 @@ No internal retry of the LLM call (single attempt per stage attempt). Orchestrat
 
 ## Downstream consumers
 
-- [`publish` stage](publish.md): reads `telegram_summary` for the Telegram channel and `daily_insight_json` / `weekly_insight_json` for dashboard overlay.
+- [`publish` stage](publish.md): reads narrative Telegram/dashboard artifacts only when the registered `validation_report` says `passed`. Failed or missing validation suppresses those overlays.
 
 ## Commands
 

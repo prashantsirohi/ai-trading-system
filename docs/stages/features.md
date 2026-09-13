@@ -2,7 +2,7 @@
 
 - **Purpose:** Describe the seven feature substages that compute technical, sector, valuation, earnings, and Phase 1 feature materializations and then register the feature snapshot.
 - **Audience:** Operators, developers, and reviewers diagnosing feature attempts.
-- **Last verified:** 2026-08-10
+- **Last verified:** 2026-09-12
 - **Source of truth:** `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/pipeline/stages/features.py`, `src/ai_trading_system/domains/features/service.py`, and `src/ai_trading_system/pipeline/dq/engine.py`.
 
 ---
@@ -69,6 +69,41 @@ The feature domain owns:
 3. Computational substages update their owned DuckDB/Parquet materializations and emit metadata artifacts.
 4. `features_snapshot` reads the resulting registry/catalog state, appends `_snapshots`, writes `feature_snapshot.json`, and supplies the DQ metadata.
 5. After DQ succeeds, `rank` resolves the feature snapshot and feature materializations.
+
+## Recursive technical indicators
+
+`recursive_indicators.py` owns the shared EMA, MACD, and Supertrend calculations
+used by batch export and `FeatureStore`. `FeatureEngine` also uses the shared
+Supertrend calculation. Inputs retain adjusted-OHLC fallback from
+`_catalog_feature_source` and are ordered independently by `(symbol_id, exchange)`.
+
+- EMA seeds from the first available close and uses `adjust=False` recursion;
+  it never substitutes the previous close for the previous EMA. Batch EMA
+  retains its minimum-period row cutoff; per-symbol EMA includes seed rows.
+- MACD subtracts the fast and slow EMAs, then recursively smooths that difference
+  for the signal. All history seeds the calculation before the slow-period
+  output cutoff. Only final outputs are rounded to four decimals.
+- Supertrend retains the repository's simple rolling mean of true range for ATR
+  (not Wilder smoothing). True range includes previous-close gaps. Final upper
+  and lower bands carry prior state, and direction switches only at the active
+  final band. The first complete ATR window initializes a downtrend (`-1`);
+  uptrend is `+1`. Warmup has null line/direction, and batch export omits it.
+  The band recurrence follows the [Supertrend calculation reference](https://www.tradingview.com/support/solutions/43000634738-supertrend/);
+  the EMA convention follows [pandas recursive EWM](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.ewm.html).
+
+For these three features, `start_date` filters outputs after calculation from
+full available seed history; `end_date` bounds source reads. Incremental Parquet
+updates still replace only the requested tail. This avoids reseeding recursive
+state at a warmup boundary, at the cost of reading and calculating each selected
+listing's full history.
+
+**Rebuild required after the 2026-09-12 formula correction:** existing EMA,
+MACD, and Supertrend partitions contain incompatible values. A full technical
+feature rebuild for all affected symbols/exchanges, followed by snapshot/DQ and
+ranking refresh, is required before relying on corrected persisted results.
+An ordinary incremental run cannot repair untouched symbols or historical rows.
+Code/test validation alone does not certify existing feature, rank, model, or
+backtest artifacts; dependent research results need regeneration as applicable.
 
 ## DQ and trust boundary
 

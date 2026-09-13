@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical reference for every DuckDB table the system reads or writes — file location, owning stage, columns, indexes.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-08-30
+- **Last verified:** 2026-09-12
 - **Source of truth:** `src/ai_trading_system/pipeline/migrations/*.sql`, `src/ai_trading_system/domains/research_screener/migrations/*.sql`, `src/ai_trading_system/research/perf_tracker/schema.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/domains/ingest/repository.py`.
 
 ---
@@ -723,6 +723,16 @@ Schema source: `src/ai_trading_system/domains/execution/store.py::ExecutionStore
 ## `data/research.duckdb` — perf tracker
 
 Schema source: `src/ai_trading_system/research/perf_tracker/schema.py::RANK_COHORT_DDL` (`schema.py:17-47`). Ensured idempotently on every non-read-only connect via `ensure_schema()`.
+
+### Performance correction metadata and archive
+
+`rank_cohort_performance` has additive nullable `return_policy_version` and
+`source_lineage_json` VARCHAR columns. `rank_cohort_performance_trusted` requires
+`return_policy_version = 'adjusted_exchange_sessions_v1'` in addition to existing
+quality/anomaly gates, so historical unversioned rows are not treated as verified.
+`rank_cohort_performance_history` stores the same columns plus `archived_at` and
+preserves pre-replacement evidence transactionally during either backfill path.
+No existing rows are relabelled as corrected by schema initialization.
 
 ### Table: `rank_cohort_performance`
 - **DDL source:** `research/perf_tracker/schema.py:17-47`

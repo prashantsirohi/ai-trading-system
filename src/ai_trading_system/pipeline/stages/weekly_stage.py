@@ -41,7 +41,8 @@ class WeeklyStageCoverageStage:
 
     def run(self, context: StageContext) -> StageResult:
         routing_config = ScanRoutingConfig.from_mapping(context.params)
-        if routing_config.mode is OpportunityScanRoutingMode.OFF:
+        pattern_shadow = str(context.params.get("pattern_lane_scan_mode", "off")).lower() == "shadow"
+        if routing_config.mode is OpportunityScanRoutingMode.OFF and not pattern_shadow:
             return StageResult(metadata={"status": "skipped", "mode": "off"})
         config = StageCoverageConfig.from_mapping(context.params)
         # ADR-0006 A3: verify policy content before any stage-owned write
@@ -154,7 +155,7 @@ class WeeklyStageCoverageStage:
             if context.performance is not None:
                 context.performance.record_artifact(artifact, column_count=len(frame.columns), write_duration_ms=(time.perf_counter_ns() - write_started) / 1_000_000.0)
         summary = {
-            "mode": routing_config.mode.value,
+            "mode": "shadow" if routing_config.mode is OpportunityScanRoutingMode.OFF else routing_config.mode.value,
             "eligible_full_universe": int(len(stock)),
             "stage_classified": int(stock.get("effective_stage", pd.Series(dtype=str)).ne("unknown").sum()),
             "stage_provisional": int(stock.get("stage_status", pd.Series(dtype=str)).eq("provisional").sum()),

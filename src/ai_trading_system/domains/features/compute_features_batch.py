@@ -1,5 +1,6 @@
 """
 Batch feature computation for all symbols using DuckDB parallel export.
+Recursive indicators use shared per-listing calculations; other features use SQL.
 Features are computed into temp tables, then exported as partitioned Parquet
 via DuckDB's COPY command (much faster than per-symbol pandas writes).
 
@@ -36,7 +37,8 @@ project_root = _resolve_project_root(__file__)
 from ai_trading_system.platform.utils.env import load_project_env
 from ai_trading_system.platform.db.paths import get_domain_paths
 from ai_trading_system.platform.logging.logger import logger
-from ai_trading_system.domains.features.repository import ensure_feature_catalog_source
+from ai_trading_system.domains.features.repository import ensure_feature_catalog_source, read_recursive_prices
+from ai_trading_system.domains.features.recursive_indicators import compute_recursive_feature
 
 load_project_env(project_root)
 
@@ -285,25 +287,14 @@ def batch_ema(
     for p in periods:
         conn.execute(f"ALTER TABLE {tbl} ADD COLUMN ema_{int(p)} DOUBLE")
 
-    ema_cols = ",\n                   ".join(
-        f"""ROUND(
-                       CASE
-                           WHEN LAG(close) OVER w IS NULL THEN close
-                           ELSE LAG(close) OVER w + {2.0 / (int(p) + 1)} * (close - LAG(close) OVER w)
-                       END,
-                       4
-                   ) AS ema_{int(p)}"""
-        for p in periods
-    )
-    conn.execute(f"""
-        INSERT INTO {tbl}
-        SELECT symbol_id, exchange, timestamp, close,
-               {ema_cols}
-        FROM {source_table}
-        WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp) >= {min(int(p) for p in periods)}
-        ORDER BY symbol_id, timestamp
-    """)
+    prices = read_recursive_prices(conn, exchange=exchange, source_table=source_table)
+    frame = compute_recursive_feature(prices, "ema", periods=periods)
+    frame = frame[frame.groupby(["symbol_id", "exchange"]).cumcount() >= min(periods) - 1]
+    conn.register("_recursive_feature_result", frame)
+    try:
+        conn.execute(f"INSERT INTO {tbl} SELECT * FROM _recursive_feature_result")
+    finally:
+        conn.unregister("_recursive_feature_result")
 
     conn.commit()
     rows = export_feature(
@@ -339,52 +330,13 @@ def batch_macd(
         f"macd_line DOUBLE, macd_signal_{signal} DOUBLE, macd_histogram DOUBLE",
     )
 
-    conn.execute(f"""
-        WITH prices AS (
-            SELECT symbol_id, exchange, timestamp, close,
-                   LAG(close) OVER w AS prev_close
-            FROM {source_table}
-            WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
-        ),
-        ema_fast AS (
-            SELECT symbol_id, exchange, timestamp, close,
-                   CASE WHEN prev_close IS NULL THEN close
-                        ELSE prev_close + {2.0 / (fast + 1)} * (close - prev_close)
-                   END AS ema_f
-            FROM prices
-        ),
-        ema_slow AS (
-            SELECT symbol_id, exchange, timestamp, close,
-                   CASE WHEN prev_close IS NULL THEN close
-                        ELSE prev_close + {2.0 / (slow + 1)} * (close - prev_close)
-                   END AS ema_s
-            FROM prices
-        ),
-        macd_line AS (
-            SELECT
-                f.symbol_id, f.exchange, f.timestamp, f.close,
-                f.ema_f - s.ema_s AS ml
-            FROM ema_fast f
-            JOIN ema_slow s USING (symbol_id, exchange, timestamp)
-        ),
-        macd_data AS (
-            SELECT symbol_id, exchange, timestamp, close,
-                   ml,
-                   CASE WHEN LAG(ml) OVER w IS NULL THEN ml
-                        ELSE LAG(ml) OVER w + {2.0 / (signal + 1)} * (ml - LAG(ml) OVER w)
-                   END AS sl
-            FROM macd_line
-            WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp) >= {slow}
-        )
-        INSERT INTO {tbl}
-        SELECT symbol_id, exchange, timestamp, close,
-               ROUND(ml, 4) AS macd_line,
-               ROUND(sl, 4) AS macd_signal_{signal},
-               ROUND(ml - sl, 4) AS macd_histogram
-        FROM macd_data
-        ORDER BY symbol_id, timestamp
-    """)
+    prices = read_recursive_prices(conn, exchange=exchange, source_table=source_table)
+    frame = compute_recursive_feature(prices, "macd", fast=fast, slow=slow, signal=signal)
+    conn.register("_recursive_feature_result", frame)
+    try:
+        conn.execute(f"INSERT INTO {tbl} SELECT * FROM _recursive_feature_result")
+    finally:
+        conn.unregister("_recursive_feature_result")
 
     conn.commit()
     rows = export_feature(
@@ -635,34 +587,14 @@ def batch_supertrend(
         f"supertrend_{period}_{int(multiplier)} DOUBLE, supertrend_dir_{period}_{int(multiplier)} INT",
     )
 
-    conn.execute(f"""
-        WITH hlc AS (
-            SELECT symbol_id, exchange, timestamp, high, low, close,
-                   AVG(high - low) OVER w AS avg_tr,
-                   (high + low) / 2 AS hl2
-            FROM {source_table}
-            WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp ROWS BETWEEN {period - 1} PRECEDING AND CURRENT ROW)
-        ),
-        bands AS (
-            SELECT symbol_id, exchange, timestamp, high, low, close, avg_tr,
-                   hl2 + {multiplier} * avg_tr AS ub,
-                   hl2 - {multiplier} * avg_tr AS lb,
-                   ROW_NUMBER() OVER w AS rn
-            FROM hlc WHERE avg_tr IS NOT NULL
-            WINDOW w AS (PARTITION BY symbol_id ORDER BY timestamp)
-        ),
-        st_data AS (
-            SELECT symbol_id, exchange, timestamp, close, avg_tr, ub, lb,
-                   CASE WHEN close <= ub THEN ub ELSE lb END AS final_band
-            FROM bands WHERE rn > {period}
-        )
-        INSERT INTO {tbl}
-        SELECT symbol_id, exchange, timestamp, close,
-               ROUND(final_band, 4) AS supertrend_{period}_{int(multiplier)},
-               CASE WHEN close > final_band THEN 1 ELSE -1 END AS supertrend_dir_{period}_{int(multiplier)}
-        FROM st_data
-        ORDER BY symbol_id, timestamp
-    """)
+    prices = read_recursive_prices(conn, exchange=exchange, source_table=source_table)
+    frame = compute_recursive_feature(prices, "supertrend", period=period, multiplier=multiplier)
+    frame = frame.dropna(subset=[f"supertrend_{period}_{int(multiplier)}"])
+    conn.register("_recursive_feature_result", frame)
+    try:
+        conn.execute(f"INSERT INTO {tbl} SELECT * FROM _recursive_feature_result")
+    finally:
+        conn.unregister("_recursive_feature_result")
 
     conn.commit()
     rows = export_feature(

@@ -66,6 +66,13 @@ class NarrativeStage:
                 report_markdown = fallback_markdown
                 model_usage = fallback_usage
                 validation = fallback_validation
+            else:
+                # Neither rejected representation is publishable.
+                report_markdown = "Report unavailable: narrative validation failed."
+                llm_synthesis = {"status": "unavailable", "reason": "validation_failed"}
+                model_usage = {**fallback_usage, "status": "validation_failed"}
+                validation = {"status": "failed", "issues": fallback_validation.get("issues") or [],
+                              "original_issues": validation.get("issues") or []}
 
         telegram_summary = _build_telegram_summary(report_markdown, combined_packet)
 

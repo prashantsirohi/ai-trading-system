@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-09-11
+- **Last verified:** 2026-09-12
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -43,6 +43,8 @@ immutable replay and audit evidence and have no operational consumer.
 
 Writes `fundamental_thesis_universe.csv`, `fundamental_thesis_evaluations.csv`, `fundamental_thesis_exclusions.csv`, `fundamental_thesis_changes.csv`, and `fundamental_thesis_summary.json`. These are shadow evidence only. Each projected/evaluation row carries source-data hash, statement basis/source dates, and taxonomy/rule lineage. `compare` has no registry consumer; in `shadow`, only the `opportunities` shadow stage may consume the universe artifact.
 
+Performance cohort rows additionally retain `source_lineage_json` (rank/publish run, attempt, path, SHA-256) and `return_policy_version`. The performance summary records `failed_component` on degradation; summary-file failure still returns failed stage metadata. Narrative validation failure suppresses its publish overlays.
+
 ### `ingest`
 
 Writes:
@@ -52,6 +54,7 @@ Authority:
 - authoritative for ingest-stage run output and trust summary snapshot for that attempt
 
 Current meanings include:
+- delivery status/date/write counts and `delivery_changed_symbols`; delivery refresh/failure merges the NSE catalog universe into `downstream_changed_symbols` for conservative recomputation
 - updated symbol list
 - provider coverage by date
 - unresolved dates

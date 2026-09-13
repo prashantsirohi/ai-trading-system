@@ -16,14 +16,14 @@ def annotate_return_quality(rows: pd.DataFrame) -> pd.DataFrame:
     """Attach anomaly flags, status, and explainable reasons to tracker rows.
 
     The tracker keeps raw rows in the table for auditability. Rows with
-    implausibly large raw-close forward returns are quarantined from trusted
+    implausibly large adjusted forward returns are quarantined from trusted
     research views and tagged with a compact pipe-delimited reason taxonomy.
     """
     if rows is None or rows.empty:
         return rows
 
     out = rows.copy()
-    reasons = pd.Series("", index=out.index, dtype="object")
+    reasons = out.get("data_quality_reason", pd.Series("", index=out.index)).fillna("").astype(object)
     any_anomaly = pd.Series(False, index=out.index, dtype="bool")
 
     for horizon in FORWARD_HORIZONS:
@@ -47,7 +47,7 @@ def annotate_return_quality(rows: pd.DataFrame) -> pd.DataFrame:
         out.loc[:, "fwd_5d_anomaly"] = False
 
     out.loc[:, "fwd_return_anomaly"] = any_anomaly
-    out.loc[:, "data_quality_status"] = "trusted"
+    out.loc[:, "data_quality_status"] = out.get("data_quality_status", pd.Series("trusted", index=out.index)).fillna("trusted")
     out.loc[any_anomaly, "data_quality_status"] = "quarantined"
     out.loc[:, "data_quality_reason"] = reasons.replace("", pd.NA)
     return out

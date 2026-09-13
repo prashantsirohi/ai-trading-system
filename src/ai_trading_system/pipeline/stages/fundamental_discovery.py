@@ -48,6 +48,14 @@ class FundamentalDiscoveryStage:
     name = "fundamental_discovery"
 
     def run(self, context: StageContext) -> StageResult:
+        try:
+            return self._run(context)
+        except FundamentalDiscoveryStageError:
+            raise
+        except Exception as exc:
+            raise FundamentalDiscoveryStageError(f"{type(exc).__name__}: {exc}") from exc
+
+    def _run(self, context: StageContext) -> StageResult:
         mode = FundamentalDiscoveryMode(
             str(context.params.get("fundamental_discovery_mode", "off")).lower()
         )

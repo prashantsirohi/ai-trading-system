@@ -15,7 +15,7 @@ def test_perf_tracker_stage_writes_research_quality_artifacts(
     monkeypatch.setattr(
         perf_tracker_stage,
         "run_backfill",
-        lambda *, project_root: {"dates_processed": 1, "rows_upserted": 2},
+        lambda *, project_root, current_run_id: {"dates_processed": 1, "rows_upserted": 2},
     )
     monkeypatch.setattr(
         perf_tracker_stage,

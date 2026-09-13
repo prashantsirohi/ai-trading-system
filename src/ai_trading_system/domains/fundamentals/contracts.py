@@ -16,7 +16,7 @@ SUPPORTED_STATEMENT_POLICIES = (*SUPPORTED_STATEMENT_BASES, PREFERRED_AVAILABLE_
 
 FUNDAMENTAL_DISCOVERY_TAXONOMY_VERSION = "fundamental-discovery-taxonomy-v1"
 FUNDAMENTAL_THESIS_RULE_VERSION = "fundamental-thesis-rules-v1.1"
-FUNDAMENTAL_THESIS_ADMISSION_VERSION = "fundamental-thesis-admission-v1"
+FUNDAMENTAL_THESIS_ADMISSION_VERSION = "fundamental-thesis-admission-v1.1"
 
 
 class FundamentalDiscoveryMode(str, Enum):

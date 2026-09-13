@@ -299,3 +299,26 @@ def test_downstream_fingerprint_changes_with_corporate_action_hash() -> None:
     }
     changed = {**base, "corporate_actions": {"status": "success", "action_set_hash": "after"}}
     assert service.build_downstream_input_fingerprint(base) != service.build_downstream_input_fingerprint(changed)
+
+
+def test_delivery_and_benchmark_changes_invalidate_downstream_reuse():
+    baseline = {"rows_written": 0, "updated_symbols": [], "freshness_status": "fresh"}
+    assert IngestOrchestrationService.is_downstream_skip_eligible(baseline)
+    fingerprint = IngestOrchestrationService.build_downstream_input_fingerprint(baseline)
+    for change in ({"delivery_rows_ingested": 500}, {"delivery_feature_rows": 500},
+                   {"delivery_status": "failed"}, {"benchmark_rows_written": 1}):
+        payload = {**baseline, **change}
+        assert not IngestOrchestrationService.is_downstream_skip_eligible(payload)
+        assert IngestOrchestrationService.build_downstream_input_fingerprint(payload) != fingerprint
+
+
+def test_delivery_only_refresh_includes_nse_symbols_in_feature_handoff(tmp_path):
+    db = tmp_path / "ohlcv.duckdb"
+    with duckdb.connect(str(db)) as conn:
+        conn.execute("CREATE TABLE _catalog(symbol_id VARCHAR, exchange VARCHAR)")
+        conn.execute("INSERT INTO _catalog VALUES ('AAA', 'NSE'), ('BBB', 'NSE'), ('CCC', 'BSE')")
+    context = StageContext(tmp_path, db, "delivery-test", "2026-09-12", "ingest", 1)
+    payload = {"delivery_feature_rows": 500, "downstream_changed_symbols": ["CCC"]}
+    IngestOrchestrationService._include_delivery_changed_symbols(context, payload)
+    assert payload["delivery_changed_symbols"] == ["AAA", "BBB"]
+    assert payload["downstream_changed_symbols"] == ["AAA", "BBB", "CCC"]

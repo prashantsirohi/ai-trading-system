@@ -2,7 +2,7 @@
 
 - **Purpose:** Describe how the execute stage turns ranked signals into orders, which risk gates run, and where the paper / live boundary sits.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-07-26
+- **Last verified:** 2026-09-12
 - **Source of truth:** `src/ai_trading_system/domains/execution/`, `src/ai_trading_system/domains/risk/`, `config/risk_profiles/`.
 
 > **Disclaimer — live trading is NOT verified.** Paper trading is the only execution path that has been smoke-tested end-to-end. The live Dhan adapter is disabled at the adapter level: `src/ai_trading_system/domains/execution/adapters/dhan.py:63-65` raises `RuntimeError("Live Dhan execution is intentionally disabled...")` unless the adapter is constructed with `dry_run=True`. Production guardrails for live execution (margin checks, kill-switch, broker error handling, sandbox parity) have not been audited. **Do not enable live execution from these docs.**
@@ -36,7 +36,7 @@ Per cycle, the autotrader:
 | 4 | `score_deterioration_streak` | `score_below_threshold_streak >= exit.score_deterioration_bars` |
 | 5 | `time_stop` | `bars_held >= exit.time_stop_days` |
 
-Streak counters are stored in the active stop record's `metadata_json` and bumped each bar by `_bump_streaks_in_stop_record` (`autotrader.py:333-382`).
+Streak counters and `last_counter_date` are stored in the active stop record's `metadata_json`. `_bump_streaks_in_stop_record` advances counters once per later decision date; entry stamps that date, and same-date retries or older dates do not advance counters. Preview and disabled execution calculate prospective decisions without persisting counters. The pipeline supplies `context.run_date`; standalone callers can supply `decision_date` (default: current UTC date). Missing evaluated dates are not backfilled. Rank comparisons use ordinal `rank_position`, `rank`, or `technical_rank`; `eligible_rank` is an eligibility flag. A zero adjusted score remains zero.
 
 ---
 

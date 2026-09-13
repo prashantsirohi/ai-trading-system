@@ -1362,6 +1362,7 @@ class RegistryStore:
         limit: int = 1,
         exclude_run_id: str | None = None,
         run_status: str | None = "completed",
+        as_of: str | None = None,
     ) -> List[StageArtifact]:
         clauses = [
             "a.stage_name = ?",
@@ -1375,12 +1376,15 @@ class RegistryStore:
         if run_status is not None:
             clauses.append("r.status = ?")
             params.append(run_status)
+        if as_of is not None:
+            clauses.append("CAST(r.run_date AS DATE) <= CAST(? AS DATE)")
+            params.append(as_of)
         where_sql = " AND ".join(clauses)
 
         with self._reader() as conn:
             rows = conn.execute(
                 f"""
-                SELECT a.uri, a.row_count, a.content_hash, a.metadata_json, a.attempt_number
+                SELECT a.uri, a.row_count, a.content_hash, a.metadata_json, a.attempt_number, a.run_id
                 FROM pipeline_artifact a
                 JOIN pipeline_run r ON r.run_id = a.run_id
                 JOIN pipeline_stage_run s
@@ -1389,7 +1393,7 @@ class RegistryStore:
                  AND s.attempt_number = a.attempt_number
                  AND s.status = 'completed'
                 WHERE {where_sql}
-                ORDER BY r.started_at DESC, a.created_at DESC
+                ORDER BY r.run_date DESC, r.started_at DESC, a.created_at DESC
                 LIMIT ?
                 """,
                 [*params, int(limit)],
@@ -1401,11 +1405,20 @@ class RegistryStore:
                 uri=str(resolve_artifact_path(row[0], project_root=self.project_root)),
                 row_count=row[1],
                 content_hash=row[2],
-                metadata=self._loads(row[3]),
+                metadata={**self._loads(row[3]), "source_run_id": row[5]},
                 attempt_number=row[4],
             )
             for row in rows
         ]
+
+    def get_dq_results(self, run_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+        """Read canonical DQ evidence, including relaxed failures."""
+        with self._reader() as conn:
+            frame = conn.execute(
+                "SELECT stage_name, rule_id, severity, status, failed_count, message, "
+                "band, relaxed_from, created_at FROM dq_result WHERE run_id = ? "
+                "ORDER BY created_at DESC LIMIT ?", [run_id, int(limit)]).fetchdf()
+        return frame.where(frame.notna(), None).to_dict(orient="records")
 
     def record_dq_result(
         self,

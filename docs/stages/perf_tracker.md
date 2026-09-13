@@ -1,121 +1,129 @@
 # Stage: perf_tracker
 
-- **Purpose:** Observability stage. Appends today's rank cohort to `rank_cohort_performance` and recomputes forward 5/10/20/60-day returns for rows whose horizons just matured. **Non-blocking** — failures never fail the pipeline.
-- **Audience:** Operator, developer, research.
-- **Last verified:** 2026-08-28
-- **Source of truth:**
-  - [`src/ai_trading_system/pipeline/stages/perf_tracker.py`](../../src/ai_trading_system/pipeline/stages/perf_tracker.py)
-  - [`src/ai_trading_system/research/perf_tracker/backfill.py`](../../src/ai_trading_system/research/perf_tracker/backfill.py)
-  - [`src/ai_trading_system/research/perf_tracker/forward_returns.py`](../../src/ai_trading_system/research/perf_tracker/forward_returns.py)
-  - [`src/ai_trading_system/research/perf_tracker/schema.py`](../../src/ai_trading_system/research/perf_tracker/schema.py)
-  - [`src/ai_trading_system/research/perf_tracker/digest.py`](../../src/ai_trading_system/research/perf_tracker/digest.py)
-
----
+- **Purpose:** Record provenance-backed rank cohorts and adjusted forward returns without blocking the operational pipeline.
+- **Audience:** Operators, developers, and research reviewers.
+- **Last verified:** 2026-09-12
+- **Source of truth:** `pipeline/stages/perf_tracker.py` and `research/perf_tracker/{backfill,forward_returns,quality,schema,historical_backfill}.py`.
 
 ## Purpose
 
-Phase 0 of the rank feedback loop. After `publish` succeeds, this stage:
-
-1. Picks up today's `ranked_signals.csv` and joins with `watchlist_buckets.csv` (from publish).
-2. Computes forward 5/10/20/60-day returns from OHLCV close-on-close.
-3. Upserts into `rank_cohort_performance` (DELETE+INSERT keyed on `run_date+symbol_id+exchange`).
-4. Re-matures any historical rows whose forward horizons hit today.
-5. Writes a small `perf_tracker_summary.json` artifact.
-
-This stage is **observability**, not a hard dependency. Any failure is a tracking gap, not a pipeline blocker — see the docstring in `perf_tracker.py`: *"Failures here must NOT block the pipeline — measurement is observability, not a hard dependency."*
+The optional measurement stage runs after publish. Backfill, quality reports,
+health, ranking feedback, and artifact writes share a non-blocking exception
+boundary. Failure produces `status=failed`, `error_class`, `error`, and
+`failed_component`. If the summary itself cannot be written, the stage returns
+that metadata without artifacts; registry stage metadata still records degradation.
 
 ## Entrypoints
 
-- **Stage wrapper:** [`pipeline/stages/perf_tracker.py`](../../src/ai_trading_system/pipeline/stages/perf_tracker.py) — class `PerfTrackerStage`, `name = "perf_tracker"`.
-- **Worker:** `research.perf_tracker.backfill.run_backfill(project_root=...)` — no date filter; processes everything available.
+`PerfTrackerStage.run` invokes `run_backfill` after publish. Historical research
+uses `run_historical_backfill` with an explicit research OHLCV source.
 
 ## Input data
 
-- All historical `data/pipeline_runs/<run_id>/rank/attempt_*/ranked_signals.csv` files (most-recent attempt per calendar date wins — see `backfill._latest_attempt_per_date`).
-- Same-run `data/pipeline_runs/<run_id>/publish/attempt_*/watchlist_buckets.csv` for bucket attribution.
-- `_catalog` table in `data/ohlcv.duckdb` for close-on-close return math (read-only).
+The operational backfill reads the domain control-plane DB read-only. It accepts
+only promoted `ranked_signals` and `watchlist_buckets` artifacts whose producing
+attempt completed. Parent runs must have completed (including completed with
+DQ/opportunity warnings), except the explicitly supplied current running run.
+For each run date it chooses the latest registered rank run/attempt; optional
+buckets come from a completed promoted publish attempt in that same run, even
+when rank and publish attempt numbers differ. Modification times and unregistered
+files have no authority. Missing files or SHA-256 mismatches fail the backfill.
+
+Each written row retains `source_run_id`, `source_artifact_path`, and
+`source_lineage_json` containing exact rank/publish paths, attempts, and hashes.
+Bucket joins preserve exchange identity; exchange-less bucket rows attach only
+when the ranked symbol resolves unambiguously to one exchange.
+
+## Return calculations
+
+`adjusted_exchange_sessions_v1` computes percentage close-to-close returns at
+5/10/20/60 exchange sessions. Session dates are the distinct dates observed
+across the exchange's OHLCV catalog, including special weekend sessions. This
+is not a separately verified exchange calendar: a date missing from the entire
+exchange catalog cannot be inferred by the calculator.
+
+Both endpoints must have a positive finite `adjusted_close`. There is no raw
+price fallback. Duplicate symbol/date rows, missing entry prices, and missing
+matured exit prices produce null returns and quarantine reasons. A missing
+symbol bar cannot shift the target to a later date. Horizons beyond the observed
+calendar remain pending. Existing anomaly guards still apply after calculation;
+quality annotation preserves pre-existing quarantine reasons/status.
+
+## Persistence and trusted reads
+
+Paths resolve through `get_domain_paths`; operational performance lives in
+`$DATA_ROOT/research.duckdb`, separate from research OHLCV under
+`$DATA_ROOT/research/research_ohlcv.duckdb`.
+
+`rank_cohort_performance` is keyed by `(run_date, symbol_id, exchange)`. Schema
+initialization adds nullable `return_policy_version` and `source_lineage_json`.
+The trusted view requires the current return policy plus existing quality and
+anomaly checks. Legacy rows remain in the raw table and are excluded, not silently
+relabeled. Both backfill paths archive replaced rows to
+`rank_cohort_performance_history` with `archived_at`, then replace the selected
+date cohorts in one transaction. Current row counts remain idempotent; the
+archive retains each replacement's prior evidence.
 
 ## Output artifacts
 
-| Artifact | Path | Notes |
-|---|---|---|
-| `perf_tracker_summary` | `data/pipeline_runs/<run_id>/perf_tracker/attempt_<n>/perf_tracker_summary.json` | Status + `dates_processed` + `rows_upserted`. On failure: status=`failed` with error message. |
-| `tracker_health` | `data/pipeline_runs/<run_id>/perf_tracker/attempt_<n>/tracker_health.json` | Raw/trusted/excluded rows, fixture and duplicate checks, artifact lag, and recent cohort-size regression warning. |
-
-**DuckDB writes:**
-
-- Database: `data/research.duckdb` (resolved by [`schema.py::research_db_path`](../../src/ai_trading_system/research/perf_tracker/schema.py) as `operational paths.root_dir / "research.duckdb"`). **This is NOT `data/research_ohlcv.duckdb`** (that's the OHLCV isolation store).
-- Table: `rank_cohort_performance` — DDL in `schema.py::RANK_COHORT_DDL`. Primary key `(run_date, symbol_id, exchange)`. Columns: rank_position, composite_score (+adjusted), rank_mode, watchlist_bucket, config_id, `fwd_<N>d_return`/`fwd_<N>d_matured_at` for N∈{5,10,20,60}, factor scores (`factor_rs`, `factor_vol`, `factor_trend`, `factor_prox`, `factor_deliv`, `factor_sector`, `factor_momentum_accel`), sector_name, inserted_at.
-- Trusted analytics view: `rank_cohort_performance_trusted`. API diagnostics, digests, and the optimizer fast path read this view so rows with `data_quality_status != 'trusted'` or a persisted forward-return anomaly remain inspectable but do not influence strategy metrics.
-- Provenance columns: `source_type`, `source_run_id`, and `source_artifact_path`. New writes identify whether rows came from operational pipeline artifacts or historical research scoring.
-- Index: `idx_rank_cohort_date` on `run_date`.
-
-Schema is idempotent (`CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`), ensured on every connection via `open_research_db()`.
-
-## Main modules
-
-| Module | Role |
-|---|---|
-| `pipeline/stages/perf_tracker.py` | Stage wrapper; broad `except Exception` to keep pipeline alive. |
-| `research/perf_tracker/backfill.py::run_backfill` | Discovers ranked_signals + watchlist_buckets per date, computes returns, upserts. |
-| `research/perf_tracker/forward_returns.py::compute_forward_returns` | Joins (symbol, run_date) against `_catalog`, computes `fwd_<N>d_return` for horizons `(5,10,20,60)`. Pending horizons return NaN. |
-| `research/perf_tracker/schema.py` | DDL + `open_research_db()` context manager. |
-| `research/perf_tracker/digest.py` | Weekly markdown digest. Run separately, not part of the pipeline stage. |
-
-## Process flow
-
-1. `PerfTrackerStage.run(context)` calls `run_backfill(project_root=context.project_root)`.
-2. `_latest_attempt_per_date` walks `data/pipeline_runs/*/rank/attempt_*/ranked_signals.csv`, picks the freshest-mtime attempt per calendar date, pairs with `publish/attempt_*/watchlist_buckets.csv`.
-3. Columns mapped from ranked_signals → tracker via `RANKED_TO_TRACKER` (e.g. `rel_strength_score` → `factor_rs`). Unknown columns silently dropped.
-4. `compute_forward_returns` opens `data/ohlcv.duckdb` read-only, builds per-symbol row indices, self-joins to read `close_at_run_date + N` for each horizon.
-5. Rows upserted via DELETE+INSERT on `(run_date, symbol_id, exchange)`.
-6. Stage writes `perf_tracker_summary.json` with `dates_processed` and `rows_upserted`.
-
-## DQ / trust gates
-
-None — by design. See "Purpose" above.
-
-## Failure modes
-
-| Symptom | Likely cause |
-|---|---|
-| `status: failed` in summary, pipeline still green | Any exception during backfill: missing OHLCV, locked DuckDB, malformed ranked_signals CSV. Error captured in metadata. |
-| `rows_upserted: 0` | No new dates to process, or no `_catalog` data for any symbol. |
-| Forward-return columns all NaN | Horizon hasn't matured yet (expected for latest run_date). |
-| Tracker missing a new factor column | `RANKED_TO_TRACKER` not updated after rank stage added it. |
-| Raw row count exceeds trusted row count | Rows were quarantined or excluded by the persisted 5-day anomaly guardrail. Inspect the raw table before changing weights. |
+The attempt emits `perf_tracker_summary.json`, `tracker_health.json`, quality
+and ranking-feedback summaries, and rank-bucket, sector, repeated-symbol, and
+excluded-row CSV reports. An unsuccessful attempt returns an explicit failure
+summary when writable. Artifacts are registered through the normal orchestrator.
 
 ## Retry behavior
 
-Fully idempotent — DELETE+INSERT keyed on `(run_date, symbol_id, exchange)`. Safe to re-run. Re-running on the same `run_id` creates `attempt_<n+1>/perf_tracker_summary.json` but leaves no duplicate database rows.
+Back up the live research store before applying schema changes or regeneration.
+Existing cohorts require recomputation from verified promoted inputs and adjusted
+OHLCV. Raw-price historical results are not certified by installing the code.
+No market-data or feature rebuild is performed by this stage; the earlier
+technical-indicator correction separately requires a full technical rebuild,
+followed by snapshot/DQ and rank refresh before generating new rank evidence.
+
+A rerun rebuilds the selected operational cohorts and re-matures pending outcomes.
+Historical research backfill uses the same return calculation with its explicit
+research OHLCV path. Failed/degraded measurement does not authorize changes to
+strategy weights or execution.
+
+## Main modules
+
+`backfill.py` owns promoted-artifact selection and operational writes;
+`historical_backfill.py` owns research cohort construction; `forward_returns.py`
+owns adjusted session returns; `quality.py` preserves exclusions; `schema.py`
+owns the current table and trusted view. The stage wrapper owns failure isolation.
+
+## Process flow
+
+Resolve and verify producer receipts, build cohort rows, compute returns,
+preserve quality exclusions, archive/replace cohorts transactionally, and emit
+health/quality/feedback artifacts.
+
+## DQ
+
+Missing adjusted endpoints and return anomalies exclude rows from trusted
+analytics. Producer failure, missing promotion, and mismatched artifact hashes
+cannot establish trusted lineage. These measurement checks do not relax core
+pipeline DQ or execution gates.
+
+## Failure modes
+
+A component failure is visible in summary/registry metadata and stops this
+measurement attempt while allowing the operational pipeline to complete.
+A missing registry yields no eligible artifact cohorts. Invalid/missing hashes
+fail rather than falling back to arbitrary files. Unmatured horizons remain null.
 
 ## Downstream consumers
 
-- **Weekly digest** — `research/perf_tracker/digest.py::build_digest` queries `rank_cohort_performance` for cohort returns, bucket attribution, factor IC (rolling 30/90-day), and drift flags (IC drop >30% vs 6-month baseline). Output: `data/research/perf_digests/digest_<YYYY-WW>.md`. Currently out-of-pipeline; wire into weekly runbook if desired.
-- **Research / ML training** — `rank_cohort_performance` is the labelled dataset for factor IC analysis and any future supervised model predicting forward returns from rank-stage factors.
-- **API** — `ui/execution_api/routes/perf_tracker.py` reads this table. See [`docs/reference/api_reference.md`](../reference/api_reference.md).
-- **MCP** — the read-only performance tools open `research.duckdb` directly
-  with `read_only=True` and read only `rank_cohort_performance_trusted`. They do
-  not call `open_research_db()` because its schema-ensure path is writable.
+Performance API diagnostics, digests, MCP reads, and optimization consumers use
+the trusted view. Installing this code does not certify existing runtime data;
+consumers see no legacy rows through the updated trusted view until recomputation.
 
 ## Commands
 
-```bash
-# Part of the canonical pipeline
-ai-trading-pipeline
+The daily pipeline includes this stage. A separately authorized operational
+backfill can call `run_backfill(project_root=..., only_dates=[...])`; the pipeline
+supplies `current_run_id` so today's completed rank/publish attempts are eligible
+while the parent run is still running. The weekly digest is a separate consumer.
 
-# Backfill from scratch (e.g., after schema change)
-python -c "from ai_trading_system.research.perf_tracker.backfill import run_backfill; print(run_backfill())"
-
-# Weekly digest manually
-python -c "from ai_trading_system.research.perf_tracker.digest import build_digest; print(build_digest().output_path)"
-```
-
-`ai-trading-daily` (legacy 5-stage wrapper) does **not** include this stage.
-
-## See also
-
-- [`docs/stages/rank.md`](rank.md) — produces `ranked_signals.csv`.
-- [`docs/stages/publish.md`](publish.md) — produces `watchlist_buckets.csv`.
-- [`docs/architecture/storage_and_lineage.md`](../architecture/storage_and_lineage.md)
-- [`docs/reference/database_schema.md`](../reference/database_schema.md) — `rank_cohort_performance` schema.
+See [storage and lineage](../architecture/storage_and_lineage.md),
+[database schema](../reference/database_schema.md), and [rank](rank.md).

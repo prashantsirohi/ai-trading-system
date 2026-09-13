@@ -17,7 +17,8 @@ def _ranked_row(symbol_id: str, **overrides) -> dict:
         "exchange": "NSE",
         "close": 100.0,
         "composite_score": 80.0,
-        "eligible_rank": 1,
+        "eligible_rank": True,
+        "rank_position": 1,
         "is_stage2_uptrend": True,
         "sector_name": "TECH",
         "sector_strength_score": 0.7,
@@ -79,7 +80,7 @@ def test_engine_path_emits_close_below_20dma_exit_for_held_position():
     ranked = pd.DataFrame(
         [
             _ranked_row("HELD", close=90.0, sma_20=100.0, sma_50=95.0, sma_200=80.0),
-            _ranked_row("NEW", eligible_rank=2),
+            _ranked_row("NEW", rank_position=2),
         ]
     )
     actions = build_trade_actions(
@@ -133,7 +134,7 @@ def test_engine_path_skips_held_symbol_for_entry():
     held = PositionSnapshot(
         symbol_id="ACME", exchange="NSE", quantity=100, avg_entry_price=95.0, last_fill_price=100.0
     )
-    ranked = pd.DataFrame([_ranked_row("ACME"), _ranked_row("NEW", eligible_rank=2)])
+    ranked = pd.DataFrame([_ranked_row("ACME"), _ranked_row("NEW", rank_position=2)])
     actions = build_trade_actions(
         ranked_df=ranked,
         positions={"ACME": held},

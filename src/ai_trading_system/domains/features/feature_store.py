@@ -6,6 +6,7 @@ import numpy as np
 from ai_trading_system.domains.features import repository as features_repository
 from ai_trading_system.domains.features import snapshot as features_snapshot
 from ai_trading_system.domains.features.indicators import add_stage2_features
+from ai_trading_system.domains.features.recursive_indicators import compute_recursive_feature
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Callable
 from ai_trading_system.platform.db.paths import ensure_domain_layout
@@ -945,75 +946,8 @@ class FeatureStore:
         start_date: str = None,
         end_date: str = None,
     ) -> pd.DataFrame:
-        """
-        Exponential Moving Average using DuckDB's EMA via exponential smoothing.
-        """
-        if windows is None:
-            windows = [12, 26, 50, 200]
-
-        # Build date filter
-        date_filter = ""
-        if start_date or end_date:
-            conditions = []
-            if start_date:
-                conditions.append(f"timestamp > '{start_date}'")
-            if end_date:
-                conditions.append(f"timestamp <= '{end_date}'")
-            date_filter = " AND " + " AND ".join(conditions)
-
-        conn = self._get_conn()
-        try:
-            base_sql = f"""
-                SELECT
-                    symbol_id, exchange, timestamp, close,
-                    LAG(close) OVER w AS prev_close
-                FROM _catalog_feature_source
-                WHERE {"symbol_id = ?" if symbol_id else "TRUE"}
-                  AND {"exchange = ?" if exchange else "TRUE"}
-                  AND timestamp IS NOT NULL
-                  {date_filter}
-                WINDOW w AS (ORDER BY timestamp)
-            """
-            result_dfs = []
-            for w in windows:
-                alpha = 2.0 / (w + 1)
-                query = f"""
-                    WITH prices AS ({base_sql}),
-                    ema AS (
-                        SELECT
-                            symbol_id, exchange, timestamp, close, prev_close,
-                            CASE
-                                WHEN prev_close IS NULL THEN close
-                                ELSE prev_close + {alpha} * (close - prev_close)
-                            END AS ema_{w}
-                        FROM prices
-                    )
-                    SELECT symbol_id, exchange, timestamp, close,
-                           ROUND(ema_{w}, 4) AS ema_{w}
-                    FROM ema
-                    ORDER BY timestamp
-                """
-                params: list[Any] = []
-                if symbol_id:
-                    params.append(symbol_id)
-                if exchange:
-                    params.append(exchange)
-                df = conn.execute(query, params).fetchdf()
-                result_dfs.append(df)
-
-            if not result_dfs:
-                return pd.DataFrame()
-
-            df = result_dfs[0]
-            for other in result_dfs[1:]:
-                cols = [c for c in other.columns if c not in df.columns]
-                df = df.merge(
-                    other[cols + ["symbol_id", "exchange", "timestamp"]], how="left"
-                )
-
-            return df
-        finally:
-            conn.close()
+        return self._compute_recursive_feature(
+            "ema", symbol_id, exchange, start_date, end_date, periods=windows if windows is not None else [12, 26, 50, 200])
 
     def compute_macd(
         self,
@@ -1025,92 +959,8 @@ class FeatureStore:
         start_date: str = None,
         end_date: str = None,
     ) -> pd.DataFrame:
-        """
-        MACD (Moving Average Convergence Divergence).
-        MACD_line = EMA_fast - EMA_slow
-        Signal_line = EMA(MACD_line, signal)
-        Histogram = MACD_line - Signal_line
-        """
-        conn = self._get_conn()
-        try:
-            date_filter = ""
-            if start_date:
-                date_filter += f" AND timestamp > '{start_date}'"
-            if end_date:
-                date_filter += f" AND timestamp <= '{end_date}'"
-
-            base = f"""
-                SELECT
-                    symbol_id, exchange, timestamp, close
-                FROM _catalog_feature_source
-                WHERE {"symbol_id = ?" if symbol_id else "TRUE"}
-                  AND {"exchange = ?" if exchange else "TRUE"}
-                  AND timestamp IS NOT NULL
-                  {date_filter}
-                QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp) >= {slow}
-                ORDER BY timestamp
-            """
-            fast_alpha = 2.0 / (fast + 1)
-            slow_alpha = 2.0 / (slow + 1)
-            sig_alpha = 2.0 / (signal + 1)
-
-            query = f"""
-                WITH prices AS ({base}),
-                ema_fast AS (
-                    SELECT
-                        symbol_id, exchange, timestamp, close,
-                        LAG(close) OVER w AS prev,
-                        CASE WHEN LAG(close) OVER w IS NULL THEN close
-                             ELSE LAG(close) OVER w + {fast_alpha} * (close - LAG(close) OVER w)
-                        END AS ema_f
-                    FROM prices
-                    WINDOW w AS (ORDER BY timestamp)
-                ),
-                ema_slow AS (
-                    SELECT
-                        symbol_id, exchange, timestamp, close,
-                        LAG(close) OVER w AS prev,
-                        CASE WHEN LAG(close) OVER w IS NULL THEN close
-                             ELSE LAG(close) OVER w + {slow_alpha} * (close - LAG(close) OVER w)
-                        END AS ema_s
-                    FROM prices
-                    WINDOW w AS (ORDER BY timestamp)
-                ),
-                macd_line AS (
-                    SELECT
-                        f.symbol_id, f.exchange, f.timestamp, f.close,
-                        f.ema_f, s.ema_s,
-                        f.ema_f - s.ema_s AS macd_line
-                    FROM ema_fast f
-                    JOIN ema_slow s USING (symbol_id, exchange, timestamp)
-                ),
-                signal_line AS (
-                    SELECT
-                        symbol_id, exchange, timestamp, close, macd_line,
-                        LAG(macd_line) OVER w AS prev_macd,
-                        CASE WHEN LAG(macd_line) OVER w IS NULL THEN macd_line
-                             ELSE LAG(macd_line) OVER w + {sig_alpha} * (macd_line - LAG(macd_line) OVER w)
-                        END AS signal_line
-                    FROM macd_line
-                    WINDOW w AS (ORDER BY timestamp)
-                )
-                SELECT
-                    symbol_id, exchange, timestamp, close,
-                    ROUND(macd_line, 4) AS macd_line,
-                    ROUND(signal_line, 4) AS macd_signal_{signal},
-                    ROUND(macd_line - signal_line, 4) AS macd_histogram
-                FROM signal_line
-                WHERE macd_line IS NOT NULL
-                ORDER BY timestamp
-            """
-            params: list[Any] = []
-            if symbol_id:
-                params.append(symbol_id)
-            if exchange:
-                params.append(exchange)
-            return conn.execute(query, params).fetchdf()
-        finally:
-            conn.close()
+        return self._compute_recursive_feature(
+            "macd", symbol_id, exchange, start_date, end_date, fast=fast, slow=slow, signal=signal)
 
     def compute_atr(
         self,
@@ -2132,6 +1982,19 @@ class FeatureStore:
     #  Supertrend (hybrid: DuckDB fetch + pandas stateful compute)         #
     # ------------------------------------------------------------------ #
 
+    def _compute_recursive_feature(self, feature, symbol_id, exchange, start_date, end_date, **params):
+        conn = self._get_conn()
+        try:
+            prices = features_repository.read_recursive_prices(
+                conn, symbol_id=symbol_id, exchange=exchange, end_date=end_date)
+        finally:
+            conn.close()
+        result = compute_recursive_feature(prices, feature, **params)
+        # Recursive state must be seeded from history before the requested tail.
+        if start_date is not None and not result.empty:
+            result = result[result["timestamp"] > pd.Timestamp(start_date)].copy()
+        return result.reset_index(drop=True)
+
     def compute_supertrend(
         self,
         symbol_id: str = None,
@@ -2141,89 +2004,9 @@ class FeatureStore:
         start_date: str = None,
         end_date: str = None,
     ) -> pd.DataFrame:
-        """
-        Supertrend indicator using hybrid approach:
-        - OHLCV fetched from DuckDB (vectorized)
-        - Stateful Supertrend logic computed in pandas (requires row-by-row state)
-        - Result returned as DataFrame with: symbol_id, exchange, timestamp, close,
-          supertrend_<p>_<m>, supertrend_dir_<p>_<m>
-        """
-        conn = self._get_conn()
-        try:
-            ohlcv = conn.execute(
-                """
-                SELECT symbol_id, exchange, timestamp, high, low, close
-                FROM _catalog_feature_source
-                WHERE symbol_id = ? AND exchange = ?
-                  AND timestamp IS NOT NULL
-                  AND (? IS NULL OR timestamp > CAST(? AS TIMESTAMP))
-                  AND (? IS NULL OR timestamp <= CAST(? AS TIMESTAMP))
-                ORDER BY timestamp
-            """,
-                (symbol_id, exchange, start_date, start_date, end_date, end_date),
-            ).fetchdf()
-        finally:
-            conn.close()
-
-        if ohlcv.empty:
-            return pd.DataFrame()
-
-        high = ohlcv["high"]
-        low = ohlcv["low"]
-        close = ohlcv["close"]
-
-        tr1 = high - low
-        tr2 = (high - close.shift(1)).abs()
-        tr3 = (low - close.shift(1)).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
-        atr = tr.rolling(window=period, min_periods=period).mean()
-
-        upper_band = (high + low) / 2 + multiplier * atr
-        lower_band = (high + low) / 2 - multiplier * atr
-
-        supertrend = pd.Series(index=ohlcv.index, dtype=float)
-        direction = pd.Series(1, index=ohlcv.index, dtype=int)
-
-        for i in range(len(close)):
-            if i == 0:
-                supertrend.iloc[i] = lower_band.iloc[i]
-                direction.iloc[i] = 1
-                continue
-
-            prev_supert = supertrend.iloc[i - 1]
-            prev_dir = direction.iloc[i - 1]
-            prev_upper = upper_band.iloc[i - 1]
-            prev_lower = lower_band.iloc[i - 1]
-            curr_close = close.iloc[i]
-            curr_upper = upper_band.iloc[i]
-            curr_lower = lower_band.iloc[i]
-
-            if curr_close > prev_upper:
-                direction.iloc[i] = 1
-                supertrend.iloc[i] = curr_lower
-            elif curr_close < prev_lower:
-                direction.iloc[i] = -1
-                supertrend.iloc[i] = curr_upper
-            else:
-                direction.iloc[i] = prev_dir
-                supertrend.iloc[i] = prev_supert
-
-                if prev_dir == 1 and curr_lower < prev_lower:
-                    supertrend.iloc[i] = prev_lower
-                if prev_dir == -1 and curr_upper > prev_upper:
-                    supertrend.iloc[i] = prev_upper
-
-        suffix = f"_{period}_{int(multiplier)}"
-        result = ohlcv[["symbol_id", "exchange", "timestamp"]].copy(deep=True)
-        result.loc[:, "close"] = close.values
-        result.loc[:, f"supertrend{suffix}"] = supertrend.values
-        result.loc[:, f"supertrend_dir{suffix}"] = direction.values
-
-        logger.info(
-            f"Supertrend{period}x{multiplier}: {len(result)} rows for {symbol_id}"
-        )
-        return result
+        return self._compute_recursive_feature(
+            "supertrend", symbol_id, exchange, start_date, end_date,
+            period=period, multiplier=multiplier)
 
     # ------------------------------------------------------------------ #
     #  Fundamental features from stock_details                            #

@@ -18,6 +18,7 @@ from ai_trading_system.domains.execution.service import ExecutionService
 from ai_trading_system.domains.execution.entry_policy import select_entry_policy
 from ai_trading_system.domains.execution.exit_policy import build_exit_plan
 from ai_trading_system.domains.risk import RiskPolicyConfig
+from ai_trading_system.domains.risk.adapters import rank_from_row
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ class AutoTrader:
         market_extras: dict[str, dict] | None = None,
         risk_per_trade_pct: float | None = None,
         submission_scope: str | None = None,
+        decision_date: str | None = None,
     ) -> Dict[str, Any]:
         # Phase 6: when the caller supplies risk_per_trade_pct (typically
         # from a regime profile), it overrides anything carried on the
@@ -76,6 +78,9 @@ class AutoTrader:
         profile_risk_per_trade = (
             float(risk_per_trade_pct) if risk_per_trade_pct is not None else None
         )
+        decision_date = datetime.fromisoformat(
+            decision_date or datetime.now(timezone.utc).date().isoformat()
+        ).date().isoformat()
         positions_before = self.portfolio.open_positions()
         current_prices = {
             str(symbol_id).strip().upper(): float(price)
@@ -133,18 +138,20 @@ class AutoTrader:
                         stop_record=stop_row,
                         ranked_row=ranked_lookup_pre.get(pos_symbol),
                         risk_config=risk_config,
+                        decision_date=decision_date,
                     )
-                    self.service.store.upsert_position_stop(
-                        position_key=position_key,
-                        symbol_id=stop_row["symbol_id"],
-                        exchange=stop_row["exchange"],
-                        quantity=int(stop_row["quantity"]),
-                        entry_price=float(stop_row["entry_price"]),
-                        stop_price=float(stop_row["stop_price"]),
-                        atr_multiplier=float(stop_row.get("atr_multiplier") or 0.0),
-                        status=str(stop_row.get("status") or "ACTIVE"),
-                        metadata=stop_row.get("metadata"),
-                    )
+                    if execution_enabled and not preview_only:
+                        self.service.store.upsert_position_stop(
+                            position_key=position_key,
+                            symbol_id=stop_row["symbol_id"],
+                            exchange=stop_row["exchange"],
+                            quantity=int(stop_row["quantity"]),
+                            entry_price=float(stop_row["entry_price"]),
+                            stop_price=float(stop_row["stop_price"]),
+                            atr_multiplier=float(stop_row.get("atr_multiplier") or 0.0),
+                            status=str(stop_row.get("status") or "ACTIVE"),
+                            metadata=stop_row.get("metadata"),
+                        )
                     stop_records[pos_symbol] = stop_row
 
         actions = build_trade_actions(
@@ -263,6 +270,7 @@ class AutoTrader:
                 action_meta = action.metadata or {}
                 signal.update(
                     {
+                        "last_counter_date": decision_date,
                         "symbol_id": action.symbol_id,
                         "exchange": action.exchange,
                         "side": "BUY",
@@ -502,6 +510,7 @@ def _bump_streaks_in_stop_record(
     stop_record: dict,
     ranked_row: dict | None,
     risk_config: RiskPolicyConfig,
+    decision_date: str,
 ) -> dict:
     """Increment / reset rank+score streaks based on today's ranked row.
 
@@ -520,6 +529,9 @@ def _bump_streaks_in_stop_record(
     elif isinstance(raw_meta, dict):
         metadata = dict(raw_meta)
 
+    if (metadata.get("last_counter_date") or "") >= decision_date:
+        return dict(stop_record, metadata=metadata)
+
     rank_threshold = int(risk_config.exit.max_hold_rank)
     score_threshold = float(risk_config.exit.min_hold_score)
     rank_streak = int(metadata.get("rank_above_threshold_streak") or 0)
@@ -530,18 +542,18 @@ def _bump_streaks_in_stop_record(
         rank_streak += 1
         score_streak += 1
     else:
-        rank_val = int(ranked_row.get("eligible_rank") or ranked_row.get("rank") or 0)
-        score_val = float(
-            ranked_row.get("composite_score_adjusted")
-            or ranked_row.get("composite_score")
-            or 0.0
-        )
+        rank_val = rank_from_row(ranked_row)
+        score = ranked_row.get("composite_score_adjusted")
+        if score is None or pd.isna(score):
+            score = ranked_row.get("composite_score", 0.0)
+        score_val = float(score) if score is not None and not pd.isna(score) else 0.0
         rank_streak = rank_streak + 1 if rank_val > rank_threshold else 0
         score_streak = score_streak + 1 if score_val < score_threshold else 0
 
     metadata["rank_above_threshold_streak"] = rank_streak
     metadata["score_below_threshold_streak"] = score_streak
     metadata["bars_held"] = bars_held
+    metadata["last_counter_date"] = decision_date
 
     updated = dict(stop_record)
     updated["metadata"] = metadata

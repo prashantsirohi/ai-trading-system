@@ -335,6 +335,7 @@ class ExecuteStage:
             # preserves the legacy "signal payload sets it" behavior.
             risk_per_trade_pct=effective_risk_per_trade_pct,
             submission_scope=context.run_id,
+            decision_date=context.run_date,
         )
         trailing_summary = {"updated_count": 0, "evaluated_count": 0}
         if request.execution_enabled and not request.preview_only:

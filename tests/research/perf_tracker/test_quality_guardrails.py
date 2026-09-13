@@ -161,7 +161,7 @@ def test_read_only_open_creates_trusted_view_for_existing_db(project: Path) -> N
     assert count == 0
 
 
-def test_latest_attempt_accepts_custom_pipeline_run_suffix(tmp_path: Path) -> None:
+def test_unregistered_pipeline_files_are_not_performance_evidence(tmp_path: Path) -> None:
     for run_id in ("pipeline-2026-05-08-aaaaaaaa", "pipeline-2026-05-09-manual-retry"):
         attempt = tmp_path / run_id / "rank" / "attempt_1"
         attempt.mkdir(parents=True)
@@ -172,10 +172,8 @@ def test_latest_attempt_accepts_custom_pipeline_run_suffix(tmp_path: Path) -> No
 
     by_date = _latest_attempt_per_date(tmp_path)
 
-    assert set(by_date) == {"2026-05-08", "2026-05-09"}
-    assert by_date["2026-05-09"]["ranked"].as_posix().endswith(
-        "pipeline-2026-05-09-manual-retry/rank/attempt_1/ranked_signals.csv"
-    )
+    assert by_date == {}  # Files without promoted registry receipts are not evidence.
+
 
 
 def test_research_quality_reports_emit_segments_and_excluded_rows(project: Path) -> None:

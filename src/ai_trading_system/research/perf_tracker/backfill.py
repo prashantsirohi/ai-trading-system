@@ -1,6 +1,6 @@
 """Backfill rank_cohort_performance from historical pipeline_runs.
 
-Walks every ``data/pipeline_runs/<run-id>/rank/attempt_*/ranked_signals.csv``,
+Resolves promoted, hash-verified rank artifacts from completed attempts,
 extracts (date, symbol, rank, composite, factor scores, sector), joins
 ``watchlist_buckets.csv`` from the publish stage when present, computes forward
 5/10/20/60-day returns, and upserts into the tracker table.
@@ -13,8 +13,8 @@ attempt's data).
 from __future__ import annotations
 
 import logging
+import json
 import re
-from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
@@ -34,42 +34,44 @@ PIPELINE_RUN_RE = re.compile(r"^pipeline-(\d{4}-\d{2}-\d{2})-.+$")
 FIXTURE_SYMBOL_RE = re.compile(r"^(?:BASE|DRIFT|REC|OLD|R|T|SYM)\d+$|^(?:AAA|BBB|CCC)$")
 
 
-def _latest_attempt_per_date(
-    pipeline_runs_dir: Path,
-) -> dict[str, dict[str, Path | None]]:
-    """For each calendar date with a ranked_signals.csv, pick the freshest run.
+def _latest_attempt_per_date(pipeline_runs_dir: Path, *, project_root=None, current_run_id=None):
+    """Resolve promoted evidence from completed producers; never scan files."""
+    import duckdb
+    from ai_trading_system.platform.db.paths import resolve_artifact_path
+    from ai_trading_system.pipeline.contracts import compute_file_hash
 
-    Returns ``{date_str: {"ranked": Path, "buckets": Path | None}}``. We pick
-    the run whose ranked_signals.csv was modified last on disk — that's the
-    canonical attempt the publish stage would have shipped that day.
-    """
-    if not pipeline_runs_dir.exists():
+    registry_path = pipeline_runs_dir.parent / "control_plane.duckdb"
+    if not registry_path.is_file():
         return {}
-    by_date: dict[str, list[tuple[float, Path]]] = defaultdict(list)
-    for run_dir in sorted(pipeline_runs_dir.iterdir()):
-        if not run_dir.is_dir():
-            continue
-        match = PIPELINE_RUN_RE.fullmatch(run_dir.name)
-        if not match:
-            continue
-        d = match.group(1)
-        for attempt_dir in run_dir.glob("rank/attempt_*"):
-            ranked = attempt_dir / "ranked_signals.csv"
-            if ranked.exists():
-                by_date[d].append((ranked.stat().st_mtime, ranked))
-
-    result: dict[str, dict[str, Path | None]] = {}
-    for d, candidates in by_date.items():
-        latest = max(candidates)[1]  # mtime tiebreak
-        run_dir = latest.parent.parent.parent  # ranked_signals -> attempt -> rank -> run
-        attempt_num = latest.parent.name
-        bucket_csv = run_dir / "publish" / attempt_num / "watchlist_buckets.csv"
-        if not bucket_csv.exists():
-            # Phase 5 may have shipped under a different attempt number; fall
-            # back to any publish/attempt_*/watchlist_buckets.csv in same run.
-            buckets_glob = list(run_dir.glob("publish/attempt_*/watchlist_buckets.csv"))
-            bucket_csv = buckets_glob[0] if buckets_glob else None
-        result[d] = {"ranked": latest, "buckets": bucket_csv}
+    with duckdb.connect(str(registry_path), read_only=True) as conn:
+        rows = conn.execute(
+            """SELECT CAST(r.run_date AS VARCHAR), a.run_id, a.stage_name,
+                      a.attempt_number, a.uri, a.content_hash
+               FROM pipeline_artifact a JOIN pipeline_run r ON r.run_id = a.run_id
+               JOIN pipeline_stage_run s ON s.run_id = a.run_id
+                    AND s.stage_name = a.stage_name AND s.attempt_number = a.attempt_number
+               WHERE a.lifecycle_status = 'promoted' AND s.status = 'completed'
+                 AND ((a.stage_name = 'rank' AND a.artifact_type = 'ranked_signals')
+                   OR (a.stage_name = 'publish' AND a.artifact_type = 'watchlist_buckets'))
+                 AND (r.status IN ('completed', 'completed_with_dq_relaxations', 'completed_with_opportunity_errors')
+                      OR (r.run_id = ? AND r.status = 'running'))
+               ORDER BY r.run_date DESC, r.started_at DESC, a.attempt_number DESC, a.created_at DESC""",
+            [current_run_id],
+        ).fetchall()
+    result, buckets = {}, {}
+    for run_date, run_id, stage, attempt, uri, digest in rows:
+        path = Path(resolve_artifact_path(uri, project_root=project_root))
+        receipt = {"run_id": run_id, "attempt": attempt, "path": str(path), "sha256": digest}
+        if not path.is_file() or not digest or compute_file_hash(path) != digest:
+            raise ValueError(f"Changed or missing promoted performance artifact: {path}")
+        if stage == "publish":
+            buckets.setdefault(run_id, (path, receipt))
+        elif run_date not in result:
+            result[run_date] = {"ranked": path, "buckets": None, "lineage": {"rank": receipt}}
+    for files in result.values():
+        run_id = files["lineage"]["rank"]["run_id"]
+        if run_id in buckets:
+            files["buckets"], files["lineage"]["publish"] = buckets[run_id]
     return result
 
 
@@ -86,7 +88,6 @@ def _operational_trading_dates(ohlcv_db_path: Path) -> set[str]:
             WHERE timestamp IS NOT NULL
               AND close IS NOT NULL
               AND close > 0
-              AND DAYOFWEEK(CAST(timestamp AS DATE)) NOT IN (0, 6)
             """
         ).fetchall()
     finally:
@@ -139,11 +140,20 @@ def build_rows_from_ranked_frame(
     if "watchlist_bucket" in ranked.columns:
         out.loc[:, "watchlist_bucket"] = ranked["watchlist_bucket"].reset_index(drop=True)
     if buckets is not None and not buckets.empty and "symbol_id" in buckets.columns:
-        bucket_col = (
-            buckets[["symbol_id", "watchlist_bucket"]]
-            .drop_duplicates("symbol_id", keep="first")
-        )
-        out = out.merge(bucket_col, on="symbol_id", how="left")
+        bucket_cols = ["symbol_id", "watchlist_bucket"]
+        if "exchange" in buckets.columns:
+            bucket_cols.append("exchange")
+        bucket_col = buckets[bucket_cols].copy()
+        if "exchange" not in bucket_col:
+            identities = out[["symbol_id", "exchange"]].drop_duplicates()
+            identities = identities[~identities.duplicated("symbol_id", keep=False)]
+            bucket_col = bucket_col.merge(identities, on="symbol_id", how="inner")
+        bucket_col = bucket_col.drop_duplicates(["symbol_id", "exchange"], keep="first")
+        bucket_col = bucket_col.rename(columns={"watchlist_bucket": "_published_bucket"})
+        out = out.merge(bucket_col, on=["symbol_id", "exchange"], how="left")
+        out["watchlist_bucket"] = out["_published_bucket"].combine_first(
+            out.get("watchlist_bucket", pd.Series(pd.NA, index=out.index)))
+        out = out.drop(columns="_published_bucket")
     if "watchlist_bucket" not in out.columns:
         out.loc[:, "watchlist_bucket"] = pd.NA
 
@@ -224,6 +234,7 @@ def run_backfill(
     *,
     project_root: str | Path | None = None,
     only_dates: list[str] | None = None,
+    current_run_id: str | None = None,
 ) -> dict[str, int]:
     """Walk all pipeline_runs and upsert rank cohort rows.
 
@@ -236,7 +247,7 @@ def run_backfill(
     Returns ``{"dates_processed": N, "rows_upserted": M}``.
     """
     paths = get_domain_paths(project_root=project_root, data_domain="operational")
-    by_date = _latest_attempt_per_date(paths.pipeline_runs_dir)
+    by_date = _latest_attempt_per_date(paths.pipeline_runs_dir, project_root=project_root, current_run_id=current_run_id)
     trading_dates = _operational_trading_dates(paths.ohlcv_db_path)
     skipped_dates = sorted(set(by_date) - trading_dates)
     if skipped_dates:
@@ -259,6 +270,8 @@ def run_backfill(
         )
         if rows is None or rows.empty:
             continue
+        rows["source_run_id"] = files["lineage"]["rank"]["run_id"]
+        rows["source_lineage_json"] = json.dumps(files["lineage"], sort_keys=True)
         frames.append(rows)
 
     if not frames:
@@ -283,7 +296,7 @@ def run_backfill(
         *FACTOR_COLUMNS,
         "sector_name",
         "fwd_5d_anomaly", "fwd_return_anomaly", "source_type", "source_run_id", "source_artifact_path",
-        "data_quality_status", "data_quality_reason",
+        "data_quality_status", "data_quality_reason", "return_policy_version", "source_lineage_json",
     ]
     missing_cols = {col: pd.NA for col in schema_cols if col not in enriched.columns}
     if missing_cols:
@@ -294,8 +307,14 @@ def run_backfill(
     # DuckDB's pandas registration.
     dates_to_replace = sorted(enriched["run_date"].astype(str).unique())
     with open_research_db(project_root=project_root) as con:
+        con.execute("BEGIN TRANSACTION")
+        con.execute("CREATE TABLE IF NOT EXISTS rank_cohort_performance_history AS SELECT *, CURRENT_TIMESTAMP AS archived_at FROM rank_cohort_performance WHERE FALSE")
         if dates_to_replace:
             placeholders = ",".join("?" for _ in dates_to_replace)
+            con.execute(
+                f"INSERT INTO rank_cohort_performance_history BY NAME SELECT *, CURRENT_TIMESTAMP AS archived_at FROM rank_cohort_performance WHERE CAST(run_date AS VARCHAR) IN ({placeholders})",
+                list(dates_to_replace),
+            )
             con.execute(
                 f"DELETE FROM rank_cohort_performance WHERE CAST(run_date AS VARCHAR) IN ({placeholders})",
                 list(dates_to_replace),
@@ -309,6 +328,7 @@ def run_backfill(
             "SELECT *, CURRENT_TIMESTAMP AS inserted_at FROM incoming_rows"
         )
         con.unregister("incoming_rows")
+        con.execute("COMMIT")
         total = con.execute("SELECT COUNT(*) FROM rank_cohort_performance").fetchone()[0]
 
     logger.info("perf_tracker backfill complete: %d dates, %d rows in table", len(dates_to_replace), total)

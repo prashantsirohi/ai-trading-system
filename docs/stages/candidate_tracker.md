@@ -2,7 +2,7 @@
 
 - **Purpose:** Maintain durable lifecycle state for selected candidates independently of research performance tracking.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-07-13
+- **Last verified:** 2026-09-12
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, `src/ai_trading_system/domains/candidate_tracker/service.py`, and the candidate-tracker CLI flags in `src/ai_trading_system/pipeline/orchestrator.py`.
 
 ---
@@ -47,7 +47,7 @@ Artifacts are written beneath `$DATA_ROOT/pipeline_runs/<run_id>/candidate_track
 ## Process flow
 
 1. Require `final_candidates` and load all available enrichment artifacts.
-2. Resolve `$DATA_ROOT/candidate_tracker.duckdb` unless an explicit stage parameter overrides it.
+2. Resolve the ledger through the selected data domain: `$DATA_ROOT/candidate_tracker.duckdb` for operational runs or `$DATA_ROOT/research/candidate_tracker.duckdb` for research runs. An explicit `candidate_tracker_db_path` can override this, but research runs reject a path resolving to the canonical operational tracker ledger (including symlink aliases). Existing operational episodes are not copied or migrated.
 3. Reconcile selected candidates with active and historical episodes.
 4. Refresh lifecycle state from OHLCV and fundamental evidence.
 5. Persist current state, snapshots, reviews, transitions, and alerts.
