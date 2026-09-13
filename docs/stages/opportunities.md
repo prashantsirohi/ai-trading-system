@@ -2,7 +2,7 @@
 
 - **Purpose:** Operate the optional canonical opportunity-registry shadow stage.
 - **Audience:** Operators and engineers debugging opportunity reconciliation.
-- **Last verified:** 2026-09-09
+- **Last verified:** 2026-09-13
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/opportunities.py`.
 
 ---
@@ -159,3 +159,7 @@ are unchanged.
 `position_monitor_reconciliation` now contains one row for every observed cycle, including compatible attachments. It separates `position_monitor_present`, `market_data_complete`, `route_data_covered`, `investigator_evidence_complete`, and `episode_attached`, with run/session and preview provenance. Route/data coverage requires cycle identity, opened time, a position-monitor route and complete market data. Recovery previews do not claim a persisted attachment. Existing compatibility and recovery policies retain their versions and rules; v2 identifies the additive reconciliation schema, not a new trading policy.
 
 Summary counters use distinct cycles: `active_positions_route_data_covered`, `active_positions_with_compatible_episode`, and `active_positions_recovered`; `position_lane_references` counts repeated lane bundles separately. The legacy `active_positions_fully_monitored` aggregate requires route/data coverage plus a compatible attachment or allowed recovery; dry-run aggregate counts remain preview evidence. Old immutable run artifacts are not rewritten.
+
+## Optional final-review projection
+
+`--final-review-mode shadow` adds `final_review_universe`, `final_review_list` and `final_review_summary` after existing opportunity work. The CLI defaults to `off` and requires registry shadow when enabled; the daily shadow wrapper enables it. `pipeline/stages/final_review.py` materializes `domains/opportunities/review_projection.py` decisions from verified broad rank, governed stage, both lane artifacts and read-only market/master/DQ context. This projection has no lifecycle, execution or publishing consumer. A failure emits fresh empty CSVs and an explicit failed summary; it does not reuse yesterday's list or turn a sidecar failure into an operational decision. See [source, ordering and validation details](../development/u2_u3_final_review_validation.md).

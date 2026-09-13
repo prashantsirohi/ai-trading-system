@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-09-11
+- **Last verified:** 2026-09-13
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -649,3 +649,19 @@ apply rejects a historical date. Apply permits authenticated company-fundamental
 downloads and backs up affected stores. Exit 1 reports pending supported-data
 backfill failures. Discovery-only quarantine returns success with gaps. Current-date operational ingest runs this
 check first, including direct orchestrator and daily shadow runs; see [ingest](../stages/ingest.md#monthly-universe-onboarding).
+
+## Local final-review evidence
+
+`./scripts/run_daily_shadow.sh` now enables the shadow review sidecar. Append `--final-review-mode off` to disable it. Use `--local-publish` for local publisher outputs; that switch alone does not isolate database writes.
+
+Replay from a separately captured runtime copy, keeping `.env` pointed at the real operational root so the isolation guard can reject it:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.replay_final_review \
+  --copied-data-root /path/to/isolated-copy/data \
+  --run-id <completed-source-run> --session YYYY-MM-DD \
+  --decision-at <capture-time-with-UTC-offset> \
+  --output-dir /path/to/new/local-review-output
+```
+
+This command opens copied stores read-only, verifies copied registered artifacts and only creates the new output directory. It never publishes externally. A current captured store is retrospective evidence, not reconstruction of an overwritten historical vintage. See [validation and remaining gates](../development/u2_u3_final_review_validation.md).

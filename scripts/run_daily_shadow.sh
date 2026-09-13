@@ -84,6 +84,7 @@ echo "[daily-shadow] run_id=$RUN_ID  run_date=$RUN_DATE  workers=$WORKERS  ($RES
   --run-id "$RUN_ID" --run-date "$RUN_DATE" \
   --fundamental-discovery-mode shadow \
   --opportunity-registry-mode shadow \
+  --final-review-mode shadow \
   --opportunity-scan-routing-mode shadow \
   --pattern-lane-scan-mode shadow \
   --pattern-lane-scan-workers "$WORKERS" \

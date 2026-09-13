@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-09-12
+- **Last verified:** 2026-09-13
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -532,3 +532,7 @@ Pending identities also own the operational onboarding admission gate. Optional
 `onboarding_failure` stores error, bounded attempt count, last-attempt date,
 transient classification and retry-after date. Ranking and execution read this
 state without mutation; successful onboarding removes an identity atomically.
+
+## Optional final-review lineage
+
+The opportunity sidecar uses existing attempt-scoped CSV/JSON storage and registers independent `stage-universe-review-v1` and `final-review-adapter-v1` policy content through the existing policy registry. No migration or business store is added. Source reads require completed, promoted attempts and byte/row-count agreement; selection retains original producer run/attempt identity. Market/master/calendar/DQ snapshots carry content hashes and a current-store-vintage limitation. The replay CLI forces source paths into the explicit copied root and opens its databases read-only. See [integration evidence](../development/u2_u3_final_review_validation.md).

@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-09-12
+- **Last verified:** 2026-09-13
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -466,3 +466,15 @@ the configured exclusion count. These are onboarding exclusions only.
 Universe summaries expose `quarantined_symbols` for all incomplete identities,
 including deferred retries. Per-company `quarantined` results include attempts,
 error and retry-after date. Rank metadata records `onboarding_quarantined`.
+
+## Final-review shadow artifacts
+
+With `--final-review-mode shadow`, `opportunities` registers these attempt-scoped artifacts under the existing configured pipeline artifact root:
+
+| Artifact type / file | Content |
+|---|---|
+| `final_review_universe` / `final_review_universe.csv` | Full union of mastered, market and source listings, exclusions/exceptions, independent P/F states, selected setup, position-cycle references and lineage |
+| `final_review_list` / `final_review_list.csv` | Qualified rows with resolved readiness and deterministic ordinal review priority; no top-N fill |
+| `final_review_summary` / `final_review_summary.json` | Status, denominators, source hashes/attempts, policy snapshot, calendar/DQ checks, scoped position coverage and decision-content hash |
+
+CSV schema is the fixed `REVIEW_FIELDS` tuple in `domains/opportunities/review_projection.py`, including when empty. JSON uses `final-review-artifacts-v1`. Failed generation writes empty CSVs and a failed summary with null decision hash. Existing publishers do not consume these files. See [integration contract](../development/u2_u3_final_review_validation.md).

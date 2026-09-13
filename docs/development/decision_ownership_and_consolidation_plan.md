@@ -2,7 +2,7 @@
 
 - **Purpose:** Define the proposed decision owners, delivery sequence, and acceptance gates for consolidating Phase 3.5 into a coherent operator workflow.
 - **Audience:** Operator, implementing engineers, and reviewers.
-- **Last verified:** 2026-09-09
+- **Last verified:** 2026-09-13
 - **Source of truth:** Current boundaries in [System Guide](../SYSTEM_GUIDE.md), [opportunity registry](../architecture/opportunity_registry.md), [candidate tracker](../stages/candidate_tracker.md), and [decision read-model migration](../architecture/decision_read_model_migration.md). This document owns the proposed consolidation backlog only.
 - **Status:** M1 repository audit prepared; G1 remains open. This document does not change runtime authority, deployment readiness, or execution permissions.
 
@@ -28,7 +28,7 @@ Module paths below are relative to `src/ai_trading_system/`. Proposed ownership 
 | Actual positions, orders, fills, and stops | `domains/execution/` owns the execution ledger; `domains/trade_journal/` owns the separate actual-trading journal | Preserve both scopes. Pin account, source, and paper/actual mode on every position projection; never combine their balances implicitly. |
 | Permission to submit an order | `pipeline/stages/execute.py`, `ExecutionService`, and risk/portfolio gates | Retain execution authority and paper default. The consolidated view cannot grant broker permission. |
 | Performance facts | Investigator and convergence evaluators, technical cohorts, research performance, and the journal answer different questions | Share calculation contracts and reusable primitives while retaining separate discovery, strategy, and actual-trade populations. |
-| Operator presentation | Existing API/read models, React console, and publish consumers | One primary read-only opportunity workspace using governed projections. Secondary views remain for source detail, research, and audit. |
+| Operator presentation | Existing API/read models, React console, and publish consumers | Google Sheets is the primary daily workspace; Telegram supplies summaries; the dashboard supports mostly weekend/research use (operator confirmed 2026-09-12). Consolidate governed projections around these roles. |
 
 ## M1 — Freeze the operating decision contract
 
@@ -81,15 +81,15 @@ Choose one primary comparison and material improvement threshold with the operat
 
 ## M3 — Consolidate the operator view
 
-**Dependency:** G1 for design; G2 before performance comparisons are presented as validated. **Implementation owner:** Existing operator API/read-model and React console modules.
+**Dependency:** G1 for design; G2 before performance comparisons are presented as validated. **Implementation owner:** Existing publish/Google Sheets and Telegram channel owners, with API/read-model and React console owners for shared evidence and research views.
 
-Build a read-only projection through the existing API service boundaries. Follow the [Phase 4A](../runbooks/phase4a_read_only_api.md) and [Phase 4B](../runbooks/phase4b_operator_dashboard.md) restrictions; passing this milestone does not lift their production-readiness limitations.
+Prioritize the existing Google Sheets daily workflow and Telegram summary, following the operator's September 12 clarification. Reuse governed projections through existing publish/read-model boundaries; map the actual workbook tabs before choosing layout changes. Retain the dashboard for weekend/research detail. For dashboard/API changes, follow the [Phase 4A](../runbooks/phase4a_read_only_api.md) and [Phase 4B](../runbooks/phase4b_operator_dashboard.md) restrictions; passing this milestone does not lift their production-readiness limitations.
 
 Each security has one visible listing identity with separate episodes/theses underneath. Show source-specific I/F/P states, rank context when available, lifecycle authority, eligibility/blockers, changes since the previous session, source dates, policy versions, and evidence links. Missing data and disagreement must remain visible. Distinguish structural new-long blocks from monitoring an already open position.
 
 Queue membership is presentation over authoritative facts. It creates no lifecycle transitions, new admission policy, order intents, or persistent parallel watchlist. Multiple applicable queues may reference the same episode; show unique-security counts and explain overlap.
 
-Pilot for five completed operator sessions. Before the trial, set a review-time/workload target using the M1 baseline. Check every mapped open position remains discoverable, every queue item has a traceable reason, missing evidence is visible, and no task requires manual reconciliation between conflicting lifecycle authorities. Keep immutable artifact downloads and specialist research views accessible.
+Pilot the Sheets-led daily workflow and Telegram summary for five completed operator sessions; record dashboard research use separately when applicable. Before the trial, set a review-time/workload target using the M1 baseline. Check every mapped open position remains discoverable, every queue item has a traceable reason, missing evidence is visible, and no task requires manual reconciliation between conflicting lifecycle authorities. Keep immutable artifact downloads and specialist research views accessible.
 
 **Deliverables:** Read-only workspace, source/authority labels, walkthrough evidence, and trial results against the frozen usability target.
 
@@ -178,3 +178,24 @@ and calculator reconciliation, and the copied-market replay remain required.
 No comparative economic result or forward maturity is claimed.
 
 Final M2 verification: 61 targeted convergence/source/policy-snapshot tests passed after the last calendar regression; Ruff, whitespace checks, and documentation validation (127 current documents) passed. Earlier wrapper changes remain preserved in the uncommitted worktree.
+
+## M1 surface clarification — 2026-09-12
+
+Operator confirmed Google Sheets for practical daily work, Telegram for summaries,
+and the dashboard mostly for weekends/research. The [M1 audit](m1_decision_ownership_audit.md#operator-surface-usage--confirmed-2026-09-12)
+records these roles. M3 now prioritizes that workflow rather than assuming daily
+React-console use. Exact Sheets tabs, review-session measurements, queue-sequence
+acceptance, and external schedules remain outstanding. This documentation update
+changes no publisher, API, workbook, or runtime authority.
+
+## Proposed stage universe and final review list — 2026-09-12
+
+The [stage universe and final review ranking plan](stage_universe_final_review_plan.md)
+defines U1–U5 as a bounded M2/M3 workstream: freeze Stage 2/late Stage 1
+eligibility, independent P-or-F qualification and review ordering; build and
+validate local shadow artifacts; pilot a Sheets tab; then evaluate adoption.
+U1 pure policy implementation is recorded in the
+[review contract](u1_review_policy_contract.md). U2 source integration is implemented;
+[U3 copied-real validation](u2_u3_final_review_validation.md) passed engineering
+checks while real-case acceptance remains open for calendar and source coverage. This proposal preserves upstream rank,
+operational selection and lifecycle ownership; G1/G2 remain open.

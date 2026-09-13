@@ -288,7 +288,11 @@ class OpportunityStage:
             status="degraded" if result.status == "degraded" else "completed",
             metadata=dict(result.summary),
         )
-        return StageResult(artifacts=artifacts, metadata=dict(result.summary))
+        from ai_trading_system.pipeline.stages.final_review import materialize_final_review
+
+        review = materialize_final_review(context)
+        artifacts.extend(review.artifacts)
+        return StageResult(artifacts=artifacts, metadata={**dict(result.summary), **review.metadata})
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:

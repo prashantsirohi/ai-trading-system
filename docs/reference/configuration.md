@@ -2,7 +2,7 @@
 
 - **Purpose:** Configuration sources, CLI flags, and mode selectors. For env vars see [`environment_variables.md`](environment_variables.md). For commands see [`commands.md`](commands.md).
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-09-11
+- **Last verified:** 2026-09-13
 - **Source of truth:** `argparse` parsers in `pipeline/orchestrator.py` and `pipeline/daily_pipeline.py`; env loading in `platform/`; config files under `config/`.
 
 ---
@@ -340,3 +340,7 @@ acquisition and system errors remain blocking; company-specific failures are qua
 policy (version 1). Entries contain exact NSE/BSE/export-ISIN identifiers and
 a reason. Matching entries do not retry automatically; remove an entry after
 resolving its blocker. `--force` overrides cadence, not this list.
+
+## Final-review shadow switch
+
+`--final-review-mode {off,shadow}` defaults to `off` in the orchestrator. `shadow` requires `--opportunity-registry-mode shadow` and an included `opportunities` stage. `scripts/run_daily_shadow.sh` explicitly enables it; trailing `--final-review-mode off` disables it. It adds local registered review artifacts, with no rank, execution or publisher cutover. Details: [U2/U3](../development/u2_u3_final_review_validation.md).

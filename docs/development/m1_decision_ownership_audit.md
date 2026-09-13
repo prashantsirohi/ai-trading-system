@@ -2,7 +2,7 @@
 
 - **Purpose:** Record verified decision ownership, consumer paths, real-case walkthroughs, and the remaining G1 acceptance work.
 - **Audience:** Operator and consolidation implementers.
-- **Last verified:** 2026-09-09
+- **Last verified:** 2026-09-12
 - **Source of truth:** Source modules linked below and read-only observations of configured operational stores on 2026-09-09; governed by the [consolidation plan](decision_ownership_and_consolidation_plan.md).
 - **Status:** Repository audit and baseline protocol prepared. G1 remains open: recorded confirmation/terminal lifecycle evidence, operator acceptance, and five operator-session measurements are incomplete.
 
@@ -14,7 +14,7 @@ Audited checkout `8b10f58` on `main`, preserving the existing uncommitted consol
 
 The current system has two selection paths and two lifecycle vocabularies. Execution selects from rank directly; `final_candidates` seeds the operational tracker. The canonical registry is a separate shadow lifecycle, already exposed through the read-only Phase 4 API and market MCP. Consolidation must make these authorities visible before transferring any responsibility.
 
-The consumer inventory below covers direct source references in `src/ai_trading_system/`, related report builders, and repository `scripts/`/`tools/`. Host-level scheduled jobs, deployed UI behavior, and actual operator habits were not observed. Those are explicit remaining inventory items; this is not an assertion that every external consumer has been found.
+The consumer inventory below covers direct source references in `src/ai_trading_system/`, related report builders, and repository `scripts/`/`tools/`. Host-level scheduled jobs and deployed UI behavior were not observed. Operator surface usage was subsequently supplied on 2026-09-12 as recorded below; schedules and detailed tab/task mapping remain inventory items; this is not an assertion that every external consumer has been found.
 
 ## Verified ownership and consumer inventory
 
@@ -40,6 +40,28 @@ Source links resolve beneath `src/ai_trading_system/`. **Retain/migrate/retire**
 | C16 | Pipeline/CLI scheduling | [orchestrator](../../src/ai_trading_system/pipeline/orchestrator.py) and [daily_pipeline](../../src/ai_trading_system/pipeline/daily_pipeline.py) configure tracker stages/parameters; report CLI supplies another writer entrypoint | **Retain** until all invoked writer paths are mapped. Deployed host schedules remain unverified |
 
 No implementation is approved for deletion by this audit. Retirement candidates are duplicated presentation transformations and obsolete tracker writer entrypoints **after** replacement parity, external-consumer inventory, and rollback verification.
+
+## Operator surface usage — confirmed 2026-09-12
+
+The operator reports Google Sheets for all practical daily work, Telegram for
+summaries, and the dashboard mostly on weekends or for research.
+
+| Surface | Confirmed role | M1 baseline treatment |
+|---|---|---|
+| Google Sheets | Primary daily operational workspace | Record the workbook tabs actually reviewed and time spent examining their evidence |
+| Telegram | Summary channel | Record summaries/alerts actually read and unchanged repeats encountered |
+| Dashboard | Mostly weekend or research use | Record only when used; identify research/weekend sessions separately from routine daily reviews |
+
+The baseline should observe this existing workflow. Daily dashboard use is not a
+requirement, and reading a Sheets row plus its Telegram summary counts as one
+reviewed listing. A Telegram summary is not automatically a repeated alert:
+count a repeat only when its entity, reason, and underlying evidence are unchanged
+from an alert already reviewed. No exact workbook/tab names, review durations,
+or session counts were supplied by this clarification.
+
+This closes the surface-preference question. It does not establish acceptance of
+the proposed queue sequence or complete G1. M3 planning prioritizes the Sheets
+workflow and Telegram summary, with the dashboard supporting research and detail.
 
 ## Decision contracts and recommended workflow
 
@@ -123,7 +145,7 @@ Artifacts were selected by run/stage/attempt joined to a completed `pipeline_sta
 | G1-E: UI fallback differs from governed artifact resolution | Tracker loader sorts attempts by file mtime | Read-model owner changes this under a separate verified patch; M3 must expose current limitations until then |
 | G1-F: Position coverage has multiple denominators | [Reconciled](m1_position_coverage_reconciliation.md): 5 unique pre-execution cycles, 9 duplicated lane bundles, 4 post-execution positions after 3 exits and 2 entries; 0/5 canonical attachments | Cycle-level accounting and separate artifact/API/UI coverage fields implemented in the working tree. Historical artifacts remain unchanged; attachment rules and coverage gates are not relaxed |
 | G1-G: Pipeline completion is not semantic readiness | Completed attempt with degraded opportunity summary and failed performance readiness | UI/publish owners show execution, semantic data health, and shadow readiness separately |
-| G1-H: Human workflow and external consumers unverified | Repository evidence cannot measure review time or prove deployed channel use | Operator identifies actual daily surfaces/schedules and records five-session baseline before acceptance |
+| G1-H: Human measurements and external consumers incomplete | Operator confirmed Sheets for daily work, Telegram summaries, and dashboard for weekends/research on September 12 | Map actual Sheets tabs and schedules; record five-session baseline. Surface preference is resolved; timing and detailed consumer verification remain open |
 
 These gaps block declaring G1 passed. They do not require changes to scoring, broker mode, or live stores during M1.
 
@@ -153,12 +175,13 @@ After five sessions, report all observations plus median review time, review/inv
 
 ## G1 acceptance record
 
-| Requirement | Status on 2026-09-09 |
+| Requirement | Status updated 2026-09-12 |
 |---|---|
 | Source-grounded repository owner/consumer matrix | Prepared; external scheduling and runtime UI checks remain open |
 | Decision inputs, authority, cutoff, missingness, permitted outputs | Prepared for operator acceptance; current gaps explicitly retained |
 | Six real walkthrough categories | Discovery/watch/position/missing-evidence inspected; adverse tracker case inspected; canonical confirmation and terminal closure unavailable |
-| Queue/workflow acceptance | Pending operator response |
+| Surface roles | Confirmed: Sheets primary daily, Telegram summary, dashboard mostly weekends/research |
+| Queue/workflow acceptance | Surface preference recorded; proposed queue sequence still pending acceptance |
 | Five-session baseline | Protocol ready; 0/5 measured |
 | Gate G1 | **OPEN — not passed** |
 

@@ -1414,6 +1414,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable the non-authoritative canonical opportunity registry shadow stage.",
     )
     parser.add_argument(
+        "--final-review-mode", choices=("off", "shadow"), default="off",
+        help="Write the artifact-only Stage 2/late Stage 1 P/F review list; requires registry shadow mode.",
+    )
+    parser.add_argument(
         "--fundamental-discovery-mode",
         choices=("off", "compare", "shadow"),
         default="off",
@@ -1965,6 +1969,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.final_review_mode == "shadow" and args.opportunity_registry_mode != "shadow":
+        parser.error("--final-review-mode shadow requires --opportunity-registry-mode shadow")
     if args.smoke:
         raise RuntimeError("Smoke mode has been removed because synthetic pipeline data is no longer allowed.")
 
@@ -2037,6 +2043,7 @@ def main() -> None:
         "enable_fundamentals": bool(args.enable_fundamentals),
         "enable_candidate_tracker": bool(args.enable_candidate_tracker),
         "opportunity_registry_mode": args.opportunity_registry_mode,
+        "final_review_mode": args.final_review_mode,
         "fundamental_discovery_mode": args.fundamental_discovery_mode,
         "opportunity_registry_dry_run": bool(args.opportunity_registry_dry_run),
         "opportunity_scan_routing_mode": args.opportunity_scan_routing_mode,

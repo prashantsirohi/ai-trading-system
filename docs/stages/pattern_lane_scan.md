@@ -2,7 +2,7 @@
 
 - **Purpose:** Define the ADR-0007 R1a shadow-only, non-actionable lane-aware pattern scan stage.
 - **Audience:** Operators and engineers running or reviewing the R1a shadow period.
-- **Last verified:** 2026-09-04
+- **Last verified:** 2026-09-13
 - **Source of truth:** `pipeline/stages/pattern_lane_scan.py` and `research/pattern_lane_calibration/shadow.py`.
 
 ---
@@ -129,3 +129,7 @@ The stage records durations for `load_daily_universe`, `load_weekly_stage`,
 `run_scan`, and `write_artifacts`, plus a combined `load_scan_inputs` database
 metric (query counts, read milliseconds, rows read) and per-artifact write
 timings. Timings are also summarized in `pattern_lane_runtime.json`.
+
+## Additional shadow review consumer
+
+U2 explicitly permits `opportunities` final-review projection to read completed, promoted `pattern_lane_assessments` and their exact linked `pattern_lane_scan` signals when `--final-review-mode shadow` is enabled. This adds review presentation only; operational rank, admission, execution and current publishers remain unchanged. Full receipt/link validation and price-basis rejection are defined in the [review integration contract](../development/u2_u3_final_review_validation.md).

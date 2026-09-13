@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-09-12
+- **Last verified:** 2026-09-13
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -1049,6 +1049,16 @@ The proposed [Stage universe and final review ranking plan](development/stage_un
 specifies a shadow Stage 2/late Stage 1 review universe, independent pattern
 and fundamental qualification, and a Sheets-led ordered review list. It is a
 planned M2/M3 workstream; existing rank and execution consumers are unchanged.
+Its [U1 review policy](development/u1_review_policy_contract.md) now has a pure,
+versioned evaluator and contract tests. U2 now materializes three local shadow
+review artifacts in `opportunities`, after both lanes, under
+`--final-review-mode shadow` (CLI default `off`, requires registry shadow).
+`run_daily_shadow.sh` enables it; append `--final-review-mode off` to disable it.
+Existing rank, lifecycle, execution and publisher consumers remain unchanged.
+[U2/U3 validation](development/u2_u3_final_review_validation.md) records copied-run
+parity and deterministic replay; real-case acceptance remains blocked by
+calendar coverage and incomplete same-run lane evidence. U4 Sheets publishing
+has not started.
 
 | Question | Read next |
 |---|---|

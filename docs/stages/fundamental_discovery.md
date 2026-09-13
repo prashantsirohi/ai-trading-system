@@ -2,7 +2,7 @@
 
 - **Purpose:** Classify cached accounting evidence into versioned fundamental thesis families and project it against current market context.
 - **Audience:** Operators, developers, reviewers.
-- **Last verified:** 2026-09-12
+- **Last verified:** 2026-09-13
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/fundamental_discovery.py` and `src/ai_trading_system/domains/fundamentals/discovery.py`.
 
 ---
@@ -102,3 +102,7 @@ ai-trading-migrate-control-plane --backup-dir /path/to/verified-backup --from-mi
 ai-trading-pipeline --run-date 2026-08-15 --fundamental-discovery-mode compare
 ai-trading-pipeline --run-date 2026-08-15 --fundamental-discovery-mode shadow --opportunity-registry-mode shadow --local-publish
 ```
+
+## Shadow final-review consumer
+
+The optional opportunity final-review projection reads the promoted full `fundamental_thesis_universe`. It requires admission v1.1 and preserves missing, unsupported and non-qualified states independently of pattern membership. It does not change this producer or splice later-run repairs into an earlier run. See [U2/U3 validation](../development/u2_u3_final_review_validation.md).

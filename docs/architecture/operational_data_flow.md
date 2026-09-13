@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed execution, handoff, DQ, and retry flow for the current operational pipeline.
 - **Audience:** Operators debugging a run, engineers changing a stage, and reviewers tracing artifacts.
-- **Last verified:** 2026-09-11
+- **Last verified:** 2026-09-13
 - **Source of truth:** `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/pipeline/preflight.py`, `src/ai_trading_system/pipeline/contracts.py`, and `src/ai_trading_system/pipeline/stages/`.
 
 ---
@@ -122,3 +122,7 @@ discovery identities are quarantined individually while valid additions proceed.
 completed additions enter the ingest change fingerprint. See the
 [ingest contract](../stages/ingest.md#monthly-universe-onboarding) for settings,
 reports, retry and remaining source limitations.
+
+## Optional final-review sidecar
+
+After both lane stages, `opportunities` may append three final-review shadow artifacts to its existing outputs under `--final-review-mode shadow`. Pipeline order is unchanged. Existing publishing and execution continue to use their existing inputs. See the [opportunities contract](../stages/opportunities.md#optional-final-review-projection).

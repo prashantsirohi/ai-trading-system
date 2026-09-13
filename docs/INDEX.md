@@ -2,7 +2,7 @@
 
 - **Purpose:** Complete map of all documentation under `docs/`.
 - **Audience:** Anyone navigating the docs.
-- **Last verified:** 2026-09-09
+- **Last verified:** 2026-09-13
 - **Source of truth:** This file is the source of truth for the doc inventory; `SYSTEM_GUIDE.md` is the source of truth for system orientation.
 
 > Each document records its own verification date. See [`development/legacy_cleanup_plan.md`](development/legacy_cleanup_plan.md) for the cleanup history.
@@ -94,6 +94,8 @@
 
 ## Development
 - [m1_position_coverage_reconciliation](development/m1_position_coverage_reconciliation.md) — recorded 5/9/4 position reconciliation, per-cycle attachment causes, and bounded repair plan
+- [u1_review_policy_contract](development/u1_review_policy_contract.md) — pure review-policy rules, source mapping, real source walkthrough and integration gaps
+- [stage_universe_final_review_plan](development/stage_universe_final_review_plan.md) — proposed Stage 2/late Stage 1 universe, P/F review ordering, and shadow rollout gates
 - [m2_measurement_contract](development/m2_measurement_contract.md)
 - [m1_decision_ownership_audit](development/m1_decision_ownership_audit.md) — verified consumers, recorded walkthroughs, proposed decision contracts, and open G1 acceptance evidence
 - [decision_ownership_and_consolidation_plan](development/decision_ownership_and_consolidation_plan.md) — planned Phase 3.5 decision ownership, measurement, operator workflow, and gated lifecycle consolidation
@@ -163,3 +165,5 @@
 
 ## Legacy / archive
 - [_legacy/](_legacy/README.md)
+
+- [U2/U3 final review validation](development/u2_u3_final_review_validation.md) — shadow integration contract, copied-real evidence and acceptance blockers
