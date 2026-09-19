@@ -116,7 +116,7 @@ Do not fabricate pre-cutover lifecycle events. Use an explicit legacy reference 
 
 ## Delivery order and evidence of completion
 
-M1 audit work, queue/workflow acceptance, M2 correctness implementation, and the frozen primary comparison are recorded below. The M1 human baseline remains 0/5, so G1 is open; G2 also remains open pending matured and reconciled market evidence. M3/M4 remain **NOT STARTED** as formal milestones, although the U4 local Sheets-pilot workbook is prepared. No acceptance gate has passed.
+M1 audit work, queue/workflow acceptance, M2 correctness implementation, and the frozen primary comparison are recorded below. The M1 human baseline remains 0/5, so G1 is open; G2 also remains open pending matured and reconciled market evidence. M3/M4 remain **NOT STARTED** as formal milestones. The 52-row U4 shadow pilot is now published in Sheets for the five-session trial. No acceptance gate has passed.
 
 | Work item | Dependency | Completion evidence |
 |---|---|---|
@@ -210,6 +210,7 @@ U1 pure policy implementation is recorded in the
 [review contract](u1_review_policy_contract.md). U2 source integration is implemented;
 [U3 copied-real validation](u2_u3_final_review_validation.md) is accepted for an
 NSE shadow pilot after official-source calendar repair and a complete same-run
-lane rebuild; BSE calendar support remains explicit and unsupported. U4 has a
-prepared local workbook and awaits the authorized external Sheets write. This proposal preserves upstream rank,
+lane rebuild; BSE calendar support remains explicit and unsupported. U4's
+`09_Final_Review_Pilot` tab was added to the external `Stock_Analysis` workbook
+on 2026-09-19 and awaits five operator sessions. This proposal preserves upstream rank,
 operational selection and lifecycle ownership; G1/G2 remain open.

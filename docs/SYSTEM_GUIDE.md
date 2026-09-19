@@ -1058,8 +1058,10 @@ Existing rank, lifecycle, execution and publisher consumers remain unchanged.
 [U2/U3 validation](development/u2_u3_final_review_validation.md) records the
 official-source calendar repair, a complete same-run lane rebuild, and byte-identical
 copied replays. U3 is accepted for an NSE shadow pilot with BSE calendar support
-still explicit and unsupported. A local U4 workbook is prepared; the external
-Sheets tab remains pending an authorized workbook write.
+still explicit and unsupported. On 2026-09-19 the 52-row U4 pilot was added as
+`09_Final_Review_Pilot` in the operator's `Stock_Analysis` workbook. It is a
+manually published shadow view with research handoff and operator-decision
+fields; no recurring publisher or Telegram consumer was added.
 The operator accepted the M1 risk-first queue meanings and froze the M2 primary
 comparison on 2026-09-19. G1 remains open because all generated human-review forms
 are blank; G2 remains open pending reconciled, matured market evidence.
