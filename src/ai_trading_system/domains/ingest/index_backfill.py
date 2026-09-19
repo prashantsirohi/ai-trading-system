@@ -56,19 +56,18 @@ def run_index_backfill(from_date: str, to_date: str, batch_size: int = 50) -> di
     for idx, date in enumerate(dates):
         date_str = date.strftime('%Y-%m-%d')
         
-        for index_name, _, _, _ in collector.config.indices:
-            try:
-                df = collector.fetch_index_ohlc(index_name, date_str, date_str)
-                if not df.empty:
-                    all_data.append(df)
-                    total_fetched += 1
-            except Exception as e:
-                errors.append(f"{index_name}:{date_str}: {e}")
+        try:
+            df = collector.fetch_index_archive(date_str)
+            if not df.empty:
+                all_data.append(df)
+                total_fetched += len(df)
+        except Exception as e:
+            errors.append(f"index_archive:{date_str}: {e}")
         
         # Batch insert
         if len(all_data) >= batch_size or (idx == total_dates - 1 and all_data):
             result = pd.concat(all_data, ignore_index=True)
-            result['provider'] = 'nseindia'
+            result['provider'] = result.get('provider', 'nse_index_archive')
             result['ingest_run_id'] = 'backfill'
             
             count = collector.ingest(result)

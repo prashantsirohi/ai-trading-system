@@ -34,7 +34,7 @@ from ai_trading_system.domains.opportunities.review_sources import (
 )
 from ai_trading_system.domains.opportunities.policy_snapshot import PolicySnapshot
 
-ADAPTER_VERSION = "final-review-adapter-v1"
+ADAPTER_VERSION = "final-review-adapter-v2"
 REVIEW_FIELDS = (
     "review_priority",
     "exchange",
@@ -82,7 +82,7 @@ ADAPTER_POLICY = {
     "setup_selection": "confirmed_then_priority_then_score_then_signal_id",
     "market_window_bars": 220,
     "price_basis": "complete_adjusted_ohlc_else_raw_only_if_no_adjustment",
-    "calendar": "NIFTY_50_plus_broad_NSE_sessions_and_available_master_holiday_years",
+    "calendar": "trusted_broad_NSE_sessions_with_holidays_and_NIFTY_50_diagnostics",
     "source_vintage": "captured_current_store_not_historical_vintage",
     "pattern_basis": "reject_nonunit_adjustments_inside_signal_window",
     "rank_field": "composite_score_adjusted_else_composite_score",
@@ -180,13 +180,13 @@ def _stamp(
 
 
 def calendar_context(bundle: ReviewSourceBundle) -> tuple[tuple[date, ...], dict]:
-    dates = tuple(_date(v) for v in bundle.indices.get("date", []))
-    if not dates or None in dates or len(set(dates)) != len(dates):
-        return (), {
-            "status": "FAILED",
-            "reason": "MISSING_OR_DUPLICATE_REFERENCE_SESSIONS",
-        }
-    dates = tuple(sorted(dates))
+    reference_dates = tuple(_date(v) for v in bundle.indices.get("date", []))
+    reference_valid = (
+        bool(reference_dates)
+        and None not in reference_dates
+        and len(set(reference_dates)) == len(reference_dates)
+    )
+    reference_dates = tuple(sorted(reference_dates)) if reference_valid else ()
     recent_start = bundle.session - timedelta(days=45)
     years = {d.year for d in bundle.holidays}
     recent_expected = {
@@ -194,15 +194,22 @@ def calendar_context(bundle: ReviewSourceBundle) -> tuple[tuple[date, ...], dict
         for d in pd.bdate_range(recent_start, bundle.session)
         if d.date() not in bundle.holidays
     }
-    recent_actual = {d for d in dates if d >= recent_start}
     stock_dates = bundle.market.loc[bundle.market.exchange.eq("NSE")].copy()
     stock_dates["day"] = pd.to_datetime(stock_dates.timestamp).dt.date
-    broad = set(
-        stock_dates.groupby("day").symbol_id.nunique().loc[lambda s: s >= 100].index
-    )
+    broad = {
+        _date(day)
+        for day in stock_dates.groupby("day")
+        .symbol_id.nunique()
+        .loc[lambda s: s >= 100]
+        .index
+    }
+    broad.discard(None)
+    recent_actual = {d for d in broad if d >= recent_start}
+    recent_reference = {d for d in reference_dates if d >= recent_start}
     missing = sorted(recent_expected - recent_actual)
-    # Special weekend sessions require both independent observed series.
-    extra = sorted((recent_actual - recent_expected) - broad)
+    # A special weekend session needs independent NIFTY corroboration.
+    extra = sorted((recent_actual - recent_expected) - recent_reference)
+    reference_missing = sorted(recent_expected - recent_reference)
     valid = (
         bundle.session in recent_actual
         and not missing
@@ -210,37 +217,46 @@ def calendar_context(bundle: ReviewSourceBundle) -> tuple[tuple[date, ...], dict
         and recent_start.year in years
         and bundle.session.year in years
     )
-    known_window = [d for d in dates[-220:] if d.year in years]
-    historical_start = dates[-220] if len(dates) >= 220 else dates[0]
-    history_covered = all(
-        y in years for y in range(historical_start.year, bundle.session.year + 1)
+    market_dates = tuple(sorted(d for d in broad if d <= bundle.session))
+    historical_start = market_dates[-220] if len(market_dates) >= 220 else None
+    history_covered = (
+        all(y in years for y in range(historical_start.year, bundle.session.year + 1))
+        if historical_start
+        else False
     )
     historical_expected = {
         d.date()
-        for d in pd.bdate_range(historical_start, bundle.session)
+        for d in pd.bdate_range(historical_start or bundle.session, bundle.session)
         if d.date() not in bundle.holidays
     }
     history_complete = (
-        history_covered
-        and historical_expected.issubset(dates)
-        and set(dates[-220:]).issubset(broad)
+        len(market_dates) >= 220
+        and history_covered
+        and historical_expected.issubset(broad)
     )
+    reference_future = False
     if "validated_at" in bundle.indices:
         versions = pd.to_datetime(
             bundle.indices.validated_at, errors="coerce", utc=True
         )
         if versions.gt(bundle.decision_at).any():
-            valid = False
-    return dates if valid else (), {
-        "status": "PASS" if valid else "FAILED",
-        "reference": "NIFTY_50",
+            reference_future = True
+    degraded = bool(reference_missing or not reference_valid or reference_future)
+    return market_dates if valid else (), {
+        "status": "DEGRADED" if valid and degraded else "PASS" if valid else "FAILED",
+        "calendar_authority": "trusted_broad_NSE_bhavcopy_population",
+        "diagnostic_reference": "NIFTY_50",
         "exchange": "NSE",
         "recent_schedule_days": 45,
         "missing_sessions": [str(d) for d in missing],
+        "diagnostic_reference_missing_sessions": [str(d) for d in reference_missing],
+        "diagnostic_reference_valid": reference_valid,
+        "diagnostic_reference_future_version": reference_future,
         "unsupported_extra_sessions": [str(d) for d in extra],
         "full_metric_window_calendar_verified": history_complete,
-        "metric_window_sessions_with_holiday_year": len(known_window),
-        "limitation": "BSE calendar unsupported; unrepresented holiday years cannot certify long-window continuity",
+        "metric_window_sessions": min(len(market_dates), 220),
+        "holiday_years": sorted(years),
+        "limitation": "BSE calendar unsupported",
     }
 
 
@@ -641,15 +657,17 @@ def build_review_projection(bundle: ReviewSourceBundle) -> ReviewProjection:
             quarantines.get(key, bundle.quarantine.iloc[:0]),
         )
         stage_rows = grouped["stage"].get(key, [])
-        stage = stage_rows[0] if len(stage_rows) == 1 else {}
         governed = bundle.governed.get(key, {})
         governance_ok = bool(
-            stage
+            len(stage_rows) == 1
             and governed
             and not bundle.governance_issue
-            and stage.get("source_artifact_hash")
-            == governed.get("source_artifact_hash")
         )
+        # The correction-aware terminal payload owns stage semantics. The
+        # promoted producer row proves the listing was in the declared source
+        # population, but its pre-correction hash need not equal the terminal
+        # governed observation hash.
+        stage = governed if governance_ok else {}
         if not governance_ok:
             issues.append("STAGE_GOVERNANCE_MISSING_OR_MISMATCH")
         stage_date = _date(stage.get("source_week_end"))

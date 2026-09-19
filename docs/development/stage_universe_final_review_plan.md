@@ -2,9 +2,9 @@
 
 - **Purpose:** Plan a Stage 2 plus late Stage 1 review universe, independent pattern/fundamental qualification, and one ordered daily review list.
 - **Audience:** Operator, ranking/opportunity engineers, and publish maintainers.
-- **Last verified:** 2026-09-13
+- **Last verified:** 2026-09-19
 - **Source of truth:** This document owns the proposed delivery backlog only. Current behavior remains in the [System Guide](../SYSTEM_GUIDE.md), [pattern lane contract](../stages/pattern_lane_scan.md), and [fundamental discovery contract](../stages/fundamental_discovery.md).
-- **Status:** U1 pure review policy and contract tests implemented; source adapters and complete real-case acceptance remain open. U2–U5 are not implemented. No ranking, lifecycle or execution authority transferred.
+- **Status:** U1/U2 implemented; U3 accepted for an NSE shadow pilot; U4 local workbook prepared and external pilot pending; U5 not started. No ranking, lifecycle or execution authority transferred.
 
 ## Intended result and scope
 
@@ -92,9 +92,19 @@ Use the existing artifact registry and configured roots; add no parallel watchli
 
 Sheets columns: review priority, exchange/symbol, stage/transition, readiness, P/F combination, pattern state/setup, fundamental state/thesis, upstream rank score, extension, blocker/next check, evidence dates and links. Add the policy/run identifier and coverage warning at tab level. Keep detailed exceptions reachable. Telegram reports new/changed/removed items and meaningful exceptions from the same artifact, with unchanged-alert suppression consistent with M1.
 
+The 2026-09-19 operator interview adds a research-handoff requirement to U4.
+The Sheets row should support the path from setup review into custom ChatGPT
+research, Screener.in fundamentals, and TradingView/Chartink chart review, then
+record the operator's manual Zerodha-watchlist disposition. Watchlist membership
+must remain an operator note rather than a system lifecycle state. Entry remains
+a discretionary combination of technical setup, valuation comfort, and forward
+EPS; failed price action/breakdown remains a review/removal reason. Breadth-driven
+trimming and avoidance of new entries must be displayed as operator posture until
+numeric thresholds receive a separate policy contract.
+
 ## Delivery sequence and acceptance gates
 
-U1 and U2 are implemented. U3 copied-real validation has run; engineering checks pass, but real-case acceptance remains **OPEN** for calendar and complete same-run lane evidence. U4–U5 remain **NOT STARTED**. See the [U2/U3 evidence record](u2_u3_final_review_validation.md). U-prefix steps are subordinate to the existing M1–M4 program, not replacement milestones.
+U1 and U2 are implemented. U3 copied-real validation is **ACCEPTED FOR THE NSE SHADOW PILOT** after official-source calendar repair and a complete same-run rebuild; BSE calendar support remains explicit and unsupported. U4 is **IN PROGRESS**: the 52-row local pilot workbook is prepared, while the external Sheets tab awaits authorization. U5 remains **NOT STARTED**. See the [U2/U3 evidence record](u2_u3_final_review_validation.md). U-prefix steps are subordinate to the existing M1–M4 program, not replacement milestones.
 
 | Step | Work and responsible module | Completion evidence |
 |---|---|---|
@@ -124,7 +134,7 @@ Local artifacts come first, followed by a shadow Sheets tab, followed by an expl
 
 No feature rebuild is required for this documentation change. The proposed first implementation should reuse existing features and scores; U1 must identify any absent inputs. If new formulas or factor weights become necessary, record their rebuild scope separately before implementation. Do not claim a full rebuild is unnecessary for an as-yet-undefined ranking change.
 
-The next implementation task is the U2 source adapter/projection work, including the remaining U1 real-case acceptance checks. No runtime defaults, policy registrations, Sheets tabs or Telegram messages have changed.
+The next work is the authorized U4 external Sheets pilot after the M1 baseline is usable. No runtime default, lifecycle authority, execution permission, or Telegram delivery has changed.
 
 ## U1 implementation — 2026-09-13
 

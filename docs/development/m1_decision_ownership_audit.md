@@ -2,9 +2,9 @@
 
 - **Purpose:** Record verified decision ownership, consumer paths, real-case walkthroughs, and the remaining G1 acceptance work.
 - **Audience:** Operator and consolidation implementers.
-- **Last verified:** 2026-09-12
+- **Last verified:** 2026-09-19
 - **Source of truth:** Source modules linked below and read-only observations of configured operational stores on 2026-09-09; governed by the [consolidation plan](decision_ownership_and_consolidation_plan.md).
-- **Status:** Repository audit and baseline protocol prepared. G1 remains open: recorded confirmation/terminal lifecycle evidence, operator acceptance, and five operator-session measurements are incomplete.
+- **Status:** Repository audit, queue meanings, and risk-first daily workflow accepted by the operator on 2026-09-19. G1 remains open: recorded confirmation/terminal lifecycle evidence and five operator-session measurements are incomplete.
 
 ## Scope and conclusion
 
@@ -59,13 +59,48 @@ count a repeat only when its entity, reason, and underlying evidence are unchang
 from an alert already reviewed. No exact workbook/tab names, review durations,
 or session counts were supplied by this clarification.
 
-This closes the surface-preference question. It does not establish acceptance of
-the proposed queue sequence or complete G1. M3 planning prioritizes the Sheets
-workflow and Telegram summary, with the dashboard supporting research and detail.
+This closes the surface-preference question. On 2026-09-19 the operator also
+accepted the queue meanings and risk-first sequence below. M3 planning prioritizes
+the Sheets workflow and Telegram summary, with the dashboard supporting research
+and detail. Acceptance does not complete G1 without the human baseline and missing
+recorded lifecycle examples.
 
 ## Decision contracts and recommended workflow
 
-The daily sequence proposed for acceptance is **source health and position exceptions → new/changed opportunities → continuing watches → entry review**. These are attention queues, not new lifecycle states. Paper/actual scope and source session must be visible before interpreting any position or candidate.
+The accepted daily sequence is **source health and position exceptions → new/changed opportunities → continuing watches → entry review**. These are attention queues, not new lifecycle states. Paper/actual scope and source session must be visible before interpreting any position or candidate.
+
+The accepted queue meanings are:
+
+- **Investigate:** evidence is incomplete, conflicting, newly discovered, or requires research; it grants no entry authority.
+- **Watch:** an existing operational or shadow thesis remains observable, with its owning source and next review condition visible; it is not a canonical transition.
+- **Entry review:** a shadow setup has sufficient recorded trigger, invalidation, freshness, and policy evidence for operator review; execution gates still own order permission.
+- **Position attention:** an existing paper/actual position has a monitoring, coverage, deterioration, or episode-linkage issue; it is not an automatic sell or recovery action.
+
+## Operator decision workflow — confirmed 2026-09-19
+
+The operator described the actual daily path in a structured interview rather
+than reconstructing old timing metrics:
+
+1. Open Google Sheets and inspect market breadth first.
+2. Review Top Ranked, then the Investigator tab, then Shadow Setups.
+3. Research promising listings through custom ChatGPT prompts, Screener.in, and
+   charts in TradingView or Chartink.
+4. Add a promising listing to the operator's Zerodha watchlist for manual
+   monitoring.
+5. Consider entry only when chart pattern or technical evidence, valuation
+   comfort, and forward-EPS expectations align.
+6. Reject or remove a listing when price action fails to sustain or breaks down.
+7. When breadth resembles the 2024 market top—described as an elevated high/low
+   ratio together with index P/E near its upper historical ceiling—use a cautious
+   posture: trim existing exposure and avoid adding new positions.
+
+These are operator decisions and qualitative heuristics. Zerodha watchlist
+membership is not a canonical system lifecycle state, confirmation, or order
+permission. The breadth/valuation condition has no accepted numeric threshold
+and must not be automated from this interview. M3 should make the research
+handoff easy by carrying symbol, thesis, pattern/setup, trigger, invalidation,
+valuation context, forward-EPS context, evidence gaps, and source dates. Existing
+execution and portfolio-risk owners retain order, sizing, and broker authority.
 
 | Decision | Authority and required evidence | Time/version and missing-input behavior | Allowed output |
 |---|---|---|---|
@@ -151,13 +186,32 @@ These gaps block declaring G1 passed. They do not require changes to scoring, br
 
 ## Five-session baseline protocol
 
-**Protocol version:** `m1-operator-baseline-v1` (documentation-only; not a registered trading policy). **Collection status:** 0/5 sessions measured. The following rows are a blank collection form, not observations.
+**Protocol version:** `m1-operator-baseline-v1` (documentation-only; not a registered trading policy). **Collection status checked 2026-09-19: 0/5 sessions measured.** Six run-specific forms exist for evidence sessions 2026-09-09, 10, 11, 16, 17, and 18; all remain `NOT RECORDED` with blank human observations. Pipeline runs are not substituted for reviews. The following rows are a blank collection form, not observations.
 
 `./scripts/run_daily_shadow.sh` now creates a blank run-specific Markdown form
 and prints its path after each run. Fill that form after your review; retries
 preserve existing notes. Collection status here changes only when actual
 observations have been reconciled into the table. See
 [commands](../reference/commands.md#operational-pipeline) for output behavior.
+
+The operator prefers a short structured interview over filling the form. After
+each prospective review, collect these questions conversationally and then write
+the answers into the run-specific record:
+
+1. Was the breadth → Top Ranked → Investigator → Shadow Setups sequence completed,
+   and did breadth change the exposure stance?
+2. Which listings moved to external research, and which source was used?
+3. Which listings were added to the Zerodha watchlist, and what technical,
+   valuation, or forward-EPS evidence supported that choice?
+4. Which listings were rejected or removed because price action failed to
+   sustain or broke down?
+5. Approximately how many unique listings were reviewed, repeated unchanged,
+   left with evidence gaps, or required further investigation? Active review
+   minutes may be supplied when remembered; they are never inferred.
+
+The generated form remains the durable session record; the operator does not
+need to edit it directly. The assistant may populate it only from explicit
+answers and must leave unknown fields blank.
 
 Use five completed daily reviews on distinct market sessions. Record the actual review date, evidence session/run, and surfaces used. Start timing when opening the daily review; stop when the defined queues have been reviewed. Subtract interruptions and record them separately. A missed review is missing, never zero minutes. Do not reconstruct human time from pipeline timestamps.
 
@@ -175,13 +229,14 @@ After five sessions, report all observations plus median review time, review/inv
 
 ## G1 acceptance record
 
-| Requirement | Status updated 2026-09-12 |
+| Requirement | Status updated 2026-09-19 |
 |---|---|
 | Source-grounded repository owner/consumer matrix | Prepared; external scheduling and runtime UI checks remain open |
 | Decision inputs, authority, cutoff, missingness, permitted outputs | Prepared for operator acceptance; current gaps explicitly retained |
 | Six real walkthrough categories | Discovery/watch/position/missing-evidence inspected; adverse tracker case inspected; canonical confirmation and terminal closure unavailable |
 | Surface roles | Confirmed: Sheets primary daily, Telegram summary, dashboard mostly weekends/research |
-| Queue/workflow acceptance | Surface preference recorded; proposed queue sequence still pending acceptance |
+| Queue/workflow acceptance | **Accepted 2026-09-19:** risk-first sequence and Investigate/Watch/Entry review/Position attention meanings above |
+| Actual operator decision path | **Confirmed 2026-09-19:** breadth → ranked/investigator/setup review → external research → manual Zerodha watchlist → multi-factor entry consideration or price-action rejection |
 | Five-session baseline | Protocol ready; 0/5 measured |
 | Gate G1 | **OPEN — not passed** |
 

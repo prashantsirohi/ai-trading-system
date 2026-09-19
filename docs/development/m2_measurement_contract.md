@@ -2,12 +2,12 @@
 
 - **Purpose:** Define the corrected convergence measurement semantics, calculator boundaries, and outstanding M2 acceptance evidence.
 - **Audience:** Operator, performance-evaluator maintainers, and reviewers.
-- **Last verified:** 2026-09-09
+- **Last verified:** 2026-09-19
 - **Source of truth:** `src/ai_trading_system/domains/opportunities/convergence_performance.py`, `src/ai_trading_system/domains/opportunities/orchestration/convergence.py`, `src/ai_trading_system/domains/opportunities/policy_snapshot.py`, and the linked regression tests.
 
 ## Status and scope
 
-M2 correctness repairs are implemented for the unified convergence path. **G2 remains open.** The five findings have regression coverage, but a complete copied-market replay, broader calculator/source reconciliation, operator-selected comparison, and forward collection remain outstanding. This document implements part of [M2](decision_ownership_and_consolidation_plan.md#m2--establish-comparable-performance-evidence); it does not transfer lifecycle or execution authority.
+M2 correctness repairs are implemented for the unified convergence path. The operator froze the primary comparison on 2026-09-19. **G2 remains open.** A complete copied-market replay, broader calculator/source reconciliation, matured forward collection, and the point-in-time source audit remain outstanding. This document implements part of [M2](decision_ownership_and_consolidation_plan.md#m2--establish-comparable-performance-evidence); it does not transfer lifecycle or execution authority.
 
 The active successors are `opportunity-convergence-v1.3` for source interpretation and `opportunity-convergence-performance-v2` for measurement. `policy_snapshot.py` fingerprints their semantics. Existing policy labels are not reused. No table migration, live-store repair, historical backfill, or feature rebuild is required by this patch.
 
@@ -65,19 +65,27 @@ Regression evidence is in `tests/domains/opportunities/test_convergence_performa
 
 Additional tests cover nonfinite/negative/missing OHLC, policy-stratum separation, unsupported exchanges, terminal-result preservation, and common-input parity. Unit fixtures are isolated test data and are not forward market evidence.
 
-## Planned comparative evaluation — not yet frozen
+## Frozen primary comparative evaluation — accepted 2026-09-19
 
-No comparative performance result has been inspected to choose thresholds. The primary question was requested from the operator and is pending. Before comparative evaluation, record and accept all of:
+The comparison was frozen before inspecting comparative outcomes. It asks whether the Stage 2/late Stage 1 P-or-F final-review policy improves selection over the current daily operational review list at the same decision cutoff. Review efficiency is evaluated separately under M3 against the M1 baseline; it is not combined with market outcome into one score.
 
-| Design field | Status |
+| Design field | Frozen rule |
 |---|---|
-| Primary question: convergence selection, within-lane rank discrimination, or confirmation benefit | Operator selection pending |
-| Primary anchor, horizon, eligible universe and control cohort | Pending selected question |
-| Material improvement threshold and cost assumptions | Pending operator agreement; do not infer from sample outcomes |
-| Independent-sample unit and confidence method | Pending; must handle repeated listings and overlapping holding periods |
-| Minimum independent sample, observation period and stopping rule | Pending; existing 30/120/three-window gates are not substitutes |
-| Sector/regime stratification, unranked group, non-confirmers and missingness | Required in the frozen specification |
-| Point-in-time data-vintage and corporate-action/quarantine audit | Required before economic acceptance |
+| Primary population | NSE listings selected by `stage-universe-review-v1` and the current final-review adapter/policy snapshot. BSE remains excluded until an approved calendar exists |
+| Control | The completed/promoted `rank.ranked_signals` artifact captured at the same cutoff and policy snapshot. Report a second comparison inside the common eligible Stage 2/late Stage 1 universe to separate universe filtering from ordering. The broader Sheets/Telegram display population is workload evidence under M3, not the economic control |
+| Primary anchor | Exact next NSE reference-session open after the decision session, with the existing 5 bps entry slippage. A missing exact open remains insufficient data; no later-bar substitution |
+| Primary horizon and outcome | 20th NSE reference-session close; benchmark-relative return versus NIFTY_50 is primary. Raw return, MFE, MAE, 5-session and 10-session outcomes are secondary |
+| Material-improvement threshold | Mean 20-session benchmark-relative return must exceed control by at least 2.0 percentage points, and its 95% block-bootstrap interval must exclude zero |
+| Risk guardrails | Median 20-session MAE may be no more than 1.5 percentage points worse than control; matured/partial/invalid coverage may be no more than 5 percentage points worse; position coverage permits zero unexplained omissions |
+| Costs | Existing 5 bps entry slippage only. Brokerage, taxes, exit costs, market impact, and execution latency remain unmodelled, so results are selection evidence rather than net strategy P&L |
+| Independent sample | First qualifying observation per `(exchange, symbol, governed episode, policy snapshot)`. Later daily appearances of that episode are workload observations, not additional economic samples; a later episode retains the listing cluster identity |
+| Confidence method | 95% moving-block bootstrap over 20 consecutive NSE anchor sessions. All observations from a listing cluster inside a sampled time block stay together. Report raw rows, unique listings, episodes, anchor sessions, and effective block counts |
+| Minimum evidence | At least 120 independent episodes, 60 distinct anchor sessions, 20 matured observations in each compared cohort, and two represented market-regime labels. Every primary outcome must have the full 20-session window |
+| Stratification | Preserve policy snapshot, sector, regime, lane combination, rank availability, non-selection reason, and missingness. P+F, P-only, and F-only remain mutually exclusive cohorts; lane marginals are secondary |
+| Stopping rule | First month-end after all minimum-evidence conditions and 20-session maturation are satisfied. If they are not satisfied after 120 anchor sessions, report insufficient evidence and review the design without tuning thresholds to observed returns |
+| Source audit | Point-in-time availability, corporate-action basis, quarantine state, exact calendar coverage, and artifact hashes must pass before a sample is accepted |
+
+The primary acceptance result requires the improvement threshold and every guardrail. Failure to meet a minimum or source requirement yields `INSUFFICIENT_EVIDENCE`; it does not become a negative return or authorize a threshold change. Secondary horizons and cohorts explain the result but cannot override the primary decision.
 
 ## Forward collection and G2 evidence log
 

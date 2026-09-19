@@ -2,9 +2,9 @@
 
 - **Purpose:** Define the proposed decision owners, delivery sequence, and acceptance gates for consolidating Phase 3.5 into a coherent operator workflow.
 - **Audience:** Operator, implementing engineers, and reviewers.
-- **Last verified:** 2026-09-13
+- **Last verified:** 2026-09-19
 - **Source of truth:** Current boundaries in [System Guide](../SYSTEM_GUIDE.md), [opportunity registry](../architecture/opportunity_registry.md), [candidate tracker](../stages/candidate_tracker.md), and [decision read-model migration](../architecture/decision_read_model_migration.md). This document owns the proposed consolidation backlog only.
-- **Status:** M1 repository audit prepared; G1 remains open. This document does not change runtime authority, deployment readiness, or execution permissions.
+- **Status:** M1 queue meanings/workflow and the M2 primary comparison were accepted on 2026-09-19. G1 and G2 remain open pending human baseline and market evidence. This document does not change runtime authority, deployment readiness, or execution permissions.
 
 ## Objective and scope
 
@@ -116,7 +116,7 @@ Do not fabricate pre-cutover lifecycle events. Use an explicit legacy reference 
 
 ## Delivery order and evidence of completion
 
-M1 audit work and M2 correctness implementation are recorded below; M3/M4 remain **NOT STARTED**. No acceptance gate has passed.
+M1 audit work, queue/workflow acceptance, M2 correctness implementation, and the frozen primary comparison are recorded below. The M1 human baseline remains 0/5, so G1 is open; G2 also remains open pending matured and reconciled market evidence. M3/M4 remain **NOT STARTED** as formal milestones, although the U4 local Sheets-pilot workbook is prepared. No acceptance gate has passed.
 
 | Work item | Dependency | Completion evidence |
 |---|---|---|
@@ -138,6 +138,18 @@ Record progress here using date, work item, implementation reference, verificati
 ## Deferred scope and exit criteria
 
 M1 follow-up on 2026-09-09: [Position coverage reconciliation](m1_position_coverage_reconciliation.md) resolves the 5/9/4 denominator discrepancy and records a bounded R1–R5 repair sequence. Five cycles were counted as nine lane bundles; three paper exits and two entries explain four post-execution positions. No repair or recovery was applied. The five-session operator baseline remains 0/5 measured.
+
+M1/M2 operator decision on 2026-09-19: accepted the risk-first queue sequence and the meanings of Investigate, Watch, Entry review, and Position attention. The primary M2 comparison is the NSE Stage 2/late Stage 1 P-or-F final-review list versus the current daily operational review list at the same cutoff, using next-session open and 20-session NIFTY-relative return under the frozen thresholds, sample rules, guardrails, and stopping rule in the [M2 contract](m2_measurement_contract.md). Six generated M1 forms remain blank; no human observation was inferred from a run.
+
+The same interview confirmed the real operator path: Google Sheets market breadth,
+Top Ranked, Investigator, and Shadow Setups; external research through ChatGPT,
+Screener.in, TradingView, or Chartink; manual addition to a Zerodha watchlist;
+entry consideration only when technical setup, valuation comfort, and forward
+EPS align; and removal when price action fails to sustain or breaks down. A
+2024-top-like combination of elevated high/low ratio and index P/E near its
+historical ceiling leads to trimming and avoiding new positions. These remain
+discretionary operator actions with no automated threshold or transferred
+execution authority.
 
 Defer new discovery lanes, a combined I/F/P super-score, automatic strategy promotion, new stores for operator projections, portfolio optimization, and live broker enablement. Research screener/J-curve work remains isolated unless a separate integration contract is accepted. Existing independent work is not disabled by this plan.
 
@@ -196,6 +208,8 @@ eligibility, independent P-or-F qualification and review ordering; build and
 validate local shadow artifacts; pilot a Sheets tab; then evaluate adoption.
 U1 pure policy implementation is recorded in the
 [review contract](u1_review_policy_contract.md). U2 source integration is implemented;
-[U3 copied-real validation](u2_u3_final_review_validation.md) passed engineering
-checks while real-case acceptance remains open for calendar and source coverage. This proposal preserves upstream rank,
+[U3 copied-real validation](u2_u3_final_review_validation.md) is accepted for an
+NSE shadow pilot after official-source calendar repair and a complete same-run
+lane rebuild; BSE calendar support remains explicit and unsupported. U4 has a
+prepared local workbook and awaits the authorized external Sheets write. This proposal preserves upstream rank,
 operational selection and lifecycle ownership; G1/G2 remain open.

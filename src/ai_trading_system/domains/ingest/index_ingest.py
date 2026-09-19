@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import date
+from io import StringIO
 from typing import List, Optional
 import pandas as pd
 import duckdb
@@ -73,8 +74,6 @@ class IndexCollector:
     """Collector for NSE sectoral index OHLCV data."""
 
     def __init__(self, config: Optional[IndexIngestConfig] = None):
-        from ai_trading_system.domains.ingest.trust import ensure_index_schema
-        
         if config is None:
             ohlcv_db_path = str(get_domain_paths(data_domain="operational").ohlcv_db_path)
             config = IndexIngestConfig(ohlcv_db_path=ohlcv_db_path)
@@ -193,21 +192,29 @@ class IndexCollector:
             return pd.DataFrame()
 
     def fetch_latest(self, dates: List[str]) -> pd.DataFrame:
-        """Fetch latest index data for given dates."""
+        """Fetch each requested session without relabelling a current tick."""
         all_data = []
         unique_dates = list(dict.fromkeys(str(date_str) for date_str in dates))
-        
-        for index_name, _, _, _ in self.config.indices:
-            if not unique_dates:
+
+        for date_str in unique_dates:
+            archive = self.fetch_index_archive(date_str)
+            if not archive.empty:
+                all_data.append(archive)
                 continue
-            date_str = unique_dates[-1]
-            try:
-                df = self.fetch_index_ohlc(index_name, date_str, date_str)
-                if not df.empty:
-                    all_data.append(df)
-            except Exception as e:
-                logger.debug(f"Error fetching {index_name} for {date_str}: {e}")
+            # Only today's session may use the live tick endpoint. A past
+            # archive miss remains missing rather than receiving today's price
+            # under a historical date, even when it is the newest requested
+            # date in a repair window.
+            if date_str != date.today().isoformat():
                 continue
+            for index_name, _, _, _ in self.config.indices:
+                try:
+                    df = self.fetch_index_ohlc(index_name, date_str, date_str)
+                    if not df.empty:
+                        all_data.append(df)
+                except Exception as e:
+                    logger.debug(f"Error fetching {index_name} for {date_str}: {e}")
+                    continue
         
         if not all_data:
             return pd.DataFrame()
@@ -215,6 +222,80 @@ class IndexCollector:
         result = pd.concat(all_data, ignore_index=True)
         logger.info(f"Fetched {len(result)} index records for {len(dates)} dates")
         return result
+
+    def fetch_index_archive(self, trade_date: str) -> pd.DataFrame:
+        """Read one official NSE all-index close report for an exact session."""
+        parsed_date = date.fromisoformat(trade_date)
+        url = (
+            "https://nsearchives.nseindia.com/content/indices/"
+            f"ind_close_all_{parsed_date.strftime('%d%m%Y')}.csv"
+        )
+        try:
+            response = requests.get(
+                url,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=20,
+            )
+            if response.status_code != 200:
+                logger.warning(
+                    "NSE index archive unavailable for %s (status=%s)",
+                    trade_date,
+                    response.status_code,
+                )
+                return pd.DataFrame()
+            frame = pd.read_csv(StringIO(response.text))
+        except Exception as exc:
+            logger.warning("NSE index archive failed for %s: %s", trade_date, exc)
+            return pd.DataFrame()
+
+        required = {
+            "Index Name",
+            "Index Date",
+            "Open Index Value",
+            "High Index Value",
+            "Low Index Value",
+            "Closing Index Value",
+        }
+        if not required.issubset(frame.columns):
+            logger.warning("NSE index archive schema mismatch for %s", trade_date)
+            return pd.DataFrame()
+        codes = {
+            display_name.casefold(): index_code
+            for display_name, index_code, _, _ in self.config.indices
+        }
+        frame["index_code"] = frame["Index Name"].astype(str).str.casefold().map(codes)
+        frame = frame.loc[frame["index_code"].notna()].copy()
+        observed_dates = pd.to_datetime(
+            frame["Index Date"], format="%d-%m-%Y", errors="coerce"
+        ).dt.date
+        frame = frame.loc[observed_dates.eq(parsed_date)].copy()
+        if frame.empty:
+            return pd.DataFrame()
+        frame["date"] = trade_date
+        mapping = {
+            "Open Index Value": "open",
+            "High Index Value": "high",
+            "Low Index Value": "low",
+            "Closing Index Value": "close",
+            "Volume": "volume",
+            "Turnover (Rs. Cr.)": "value",
+        }
+        for source, target in mapping.items():
+            frame[target] = pd.to_numeric(frame.get(source), errors="coerce")
+        frame["provider"] = "nse_index_archive"
+        return frame[
+            [
+                "index_code",
+                "date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "value",
+                "provider",
+            ]
+        ].reset_index(drop=True)
 
     def ingest(self, df: pd.DataFrame, run_id: Optional[str] = None) -> int:
         """Upsert index data to _index_catalog."""
@@ -325,23 +406,21 @@ class IndexCollector:
         
         logger.info(f"Starting index backfill: {len(self.config.indices)} indices × {total_dates} dates")
         
-        for idx, date in enumerate(dates):
-            date_str = date.strftime('%Y-%m-%d')
-            
-            for index_name, _, _, _ in self.config.indices:
-                try:
-                    df = self.fetch_index_ohlc(index_name, date_str, date_str)
-                    if not df.empty:
-                        all_data.append(df)
-                        total_fetched += 1
-                except Exception as e:
-                    logger.debug(f"Error fetching {index_name} for {date_str}: {e}")
-                    continue
+        for idx, trade_day in enumerate(dates):
+            date_str = trade_day.strftime('%Y-%m-%d')
+            try:
+                df = self.fetch_index_archive(date_str)
+                if not df.empty:
+                    all_data.append(df)
+                    total_fetched += len(df)
+            except Exception as e:
+                logger.debug(f"Error fetching index archive for {date_str}: {e}")
+                continue
             
             # Batch insert every batch_size dates
             if len(all_data) >= batch_size or (idx == total_dates - 1 and all_data):
                 result = pd.concat(all_data, ignore_index=True)
-                result['provider'] = 'nseindia'
+                result['provider'] = result.get('provider', 'nse_index_archive')
                 result['ingest_run_id'] = 'backfill'
                 
                 count = self.ingest(result)

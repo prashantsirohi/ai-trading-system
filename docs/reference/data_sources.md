@@ -2,7 +2,7 @@
 
 - **Purpose:** Catalogue every external data source the operational pipeline reads, with its role, endpoint, auth, and failure mode.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-09-10
+- **Last verified:** 2026-09-14
 - **Source of truth:** `src/ai_trading_system/domains/ingest/`, `src/ai_trading_system/domains/fundamentals/import_screener.py`, `src/ai_trading_system/domains/catalysts/collector.py`, `src/ai_trading_system/integrations/market_intel_client.py`.
 
 > **Source-of-record order.** NSE bhavcopy is the source-of-record for OHLCV. Dhan is the fallback provider for prices and is also mandatory for live execution and (via the NSE MTO/security-wise scrapers in `domains/ingest/delivery.py`) for delivery data. yfinance is last-resort fill. The older "Dhan-first ingest" claim in legacy docs is **wrong** — confirm by reading `domains/ingest/service.py` before changing this ordering.
@@ -40,6 +40,15 @@
 - **Rate limits:** None in code. Per-file retry: up to 3 attempts with `time.sleep(min(2**attempt, 5))` backoff; refreshes the NSE session on 401/403 (`delivery.py:95-118`).
 - **Failure behavior:** 404 breaks the retry loop (date not available). Other request failures bubble up to the caller after retries. If `source="mto"` yields nothing for a date, the `fallback_source` (`nse_securitywise` by default) is tried.
 - **Used by stage(s):** `ingest` (writes `ohlcv.duckdb::_delivery` and partitioned parquet under `feature_store/delivery/NSE/`).
+
+## Source: NSE all-index close archive
+
+- **Module:** `src/ai_trading_system/domains/ingest/index_ingest.py` (`IndexCollector`)
+- **Role:** exact-session historical OHLC, volume and turnover for configured NSE indices.
+- **Endpoint or input:** `https://nsearchives.nseindia.com/content/indices/ind_close_all_<DDMMYYYY>.csv`.
+- **Auth:** None; requests use a browser-like `User-Agent`.
+- **Failure behavior:** non-200, schema mismatch, or a report whose `Index Date` does not equal the requested date returns no rows. Historical gaps never use current index ticks; only today's requested session can use the live NSE index endpoint.
+- **Used by stage(s):** daily index refresh and historical index backfill within `ingest`, writing `_index_catalog` with provider `nse_index_archive`.
 
 ## Source: Dhan (fallback OHLC + live execution)
 

@@ -4,7 +4,7 @@
 - **Audience:** Opportunity, ranking and publishing maintainers; operator reviewing the shadow policy.
 - **Last verified:** 2026-09-13
 - **Source of truth:** `src/ai_trading_system/domains/opportunities/review_policy.py` and `tests/domains/opportunities/test_review_policy.py`. Source producers are identified below.
-- **Status:** Pure policy and U2 shadow pipeline adapters implemented; no publisher or execution consumer. U3 copied-real checks completed; full real-case acceptance remains open. See [integration and validation](u2_u3_final_review_validation.md).
+- **Status:** Pure policy and U2 shadow pipeline adapters implemented; no publisher or execution consumer. U3 is accepted for an NSE shadow pilot, with BSE calendar support and future real F-qualified cohorts still open. See [integration and validation](u2_u3_final_review_validation.md).
 
 ## Boundary and version
 
@@ -123,7 +123,7 @@ This run's F projections use admission v1, so they cannot qualify under the new 
 
 ## Verification and open acceptance evidence
 
-The isolated contract tests cover stage/transition precedence, every late-base bound, failed trust/history/liquidity, stale/future and cross-listing sources, suppression vs positive secondary signals, F basis/version/freshness/admission, F-only readiness, invalidation, extension, deterministic ordering, duplicate sessions/listings, missing rank and preserved position attention. Fixtures are synthetic unit inputs only; they are never written to operational stores.
+The isolated contract tests cover stage/transition precedence, every late-base bound, failed trust/history/liquidity, stale/future and cross-listing sources, suppression vs positive secondary signals, F basis/version/freshness/admission, F-only readiness, invalidation, extension, deterministic ordering, duplicate sessions/listings, missing rank and preserved position attention. Adapter v2 also covers correction-aware governed terminal-stage ownership and separates trusted broad NSE session authority from NIFTY_50 diagnostic continuity. Fixtures are synthetic unit inputs only; they are never written to operational stores.
 
 U1 acceptance still needs fully sourced late-versus-early Stage 1 and extended/setup-ready walkthroughs after the normalized adapters exist. U2 must freeze deterministic setup selection, confirm extension-source coverage, certify daily metric/calendar inputs and produce the full population/exception summary. Unit tests cannot supply those missing market facts. M1/G1 and M2/G2 remain open.
 

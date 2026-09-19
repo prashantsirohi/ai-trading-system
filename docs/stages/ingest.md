@@ -2,7 +2,7 @@
 
 - **Purpose:** Refresh the operational OHLCV catalog (and optional delivery data) for the NSE equity universe, validate it against an independent reference, and emit a stage summary that downstream stages can fingerprint.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-09-12
+- **Last verified:** 2026-09-14
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/ingest.py`, `src/ai_trading_system/domains/ingest/service.py`, `src/ai_trading_system/domains/ingest/daily_update_runner.py`, `src/ai_trading_system/domains/ingest/{providers/nse.py,providers/dhan.py,providers/yfinance.py,trust.py,validation.py,token_manager.py,delivery.py}`, `src/ai_trading_system/pipeline/dq/engine.py`
 
 ---
@@ -34,7 +34,7 @@ DuckDB tables written / mutated (in `data/ohlcv.duckdb` unless noted):
 
 - `_catalog` — canonical OHLCV catalog (written by `daily_update_runner.run` via `DhanCollector` / NSE-primary path; queried throughout `service.py` and DQ engine `_rule_ingest_*`).
 - Provider/trust tables maintained by `domains/ingest/trust.py` — `ensure_data_trust_schema` (`trust.py:188`), provenance rows via `record_provenance_rows` (`trust.py:581`), quarantine via `quarantine_symbol_dates` (`trust.py:750`), `_symbol_state_overrides` updates via `sweep_stale_quarantine` (`trust.py:424`).
-- Index/universe support tables via `ensure_index_schema` (`trust.py:508`).
+- Index/universe support tables via `ensure_index_schema` (`trust.py:508`). Historical index sessions come from the exact-date official NSE all-index close archive through `IndexCollector.fetch_index_archive`; a missing historical archive remains missing. Only today's requested session may fall back to the current tick endpoint, and the archive provider identity is retained during ingest.
 - Delivery rows via `DeliveryCollector._ensure_delivery_table` + `_upsert_delivery` (`delivery.py:120`, `delivery.py:319`); delivery-derived features via `compute_delivery_features` (`delivery.py:346`).
 
 The pipeline-run governance tables (`pipeline_artifact`, `dq_result`, etc.) live in `data/control_plane.duckdb` and are written by the orchestrator/DQ engine, not by the ingest service itself.

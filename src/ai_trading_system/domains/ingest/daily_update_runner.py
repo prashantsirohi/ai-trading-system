@@ -331,7 +331,7 @@ def _build_index_rows(
         if index_rows.empty:
             return pd.DataFrame()
         # Add run_id and provider
-        index_rows["provider"] = "nseindia"
+        index_rows["provider"] = index_rows.get("provider", "nseindia")
         index_rows["ingest_run_id"] = run_id
         return index_rows
     except Exception as e:
@@ -1165,7 +1165,7 @@ def _run_nse_yfinance_daily_update(
         index_collector._register_indices()
         index_rows = index_collector.fetch_latest(nse_dates)
         if not index_rows.empty:
-            index_rows["provider"] = "nseindia"
+            index_rows["provider"] = index_rows.get("provider", "nseindia")
             index_rows["ingest_run_id"] = run_id
             index_rows_written = index_collector.ingest(index_rows, run_id=run_id)
 

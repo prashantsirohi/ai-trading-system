@@ -2,19 +2,19 @@
 
 - **Purpose:** Record the final-review adapter contract, reproducible validation and remaining acceptance evidence.
 - **Audience:** Opportunity and publishing maintainers; operator.
-- **Last verified:** 2026-09-13
+- **Last verified:** 2026-09-14
 - **Source of truth:** `domains/opportunities/review_sources.py`, `review_projection.py`, `pipeline/stages/final_review.py`, `interfaces/cli/replay_final_review.py` under `src/ai_trading_system/`, their targeted tests, and the captured validation bundle described below.
-- **Status:** U2 implemented; U3 engineering validation passed, real-case acceptance OPEN. U4/U5 not started. M1/G1 and M2/G2 remain open.
+- **Status:** U2 implemented; U3 accepted for the NSE shadow pilot. U4 local workbook prepared and external Sheets write pending authorization. U5 not started. M1/G1 and M2/G2 remain open.
 
 ## Implemented boundary
 
-The [U1 policy](u1_review_policy_contract.md) now has a read-only source adapter and an optional artifact materializer inside `opportunities`, after both lanes. The orchestrator's `--final-review-mode shadow` requires registry shadow; its default is `off`. The daily shadow wrapper enables it. Existing ranking, candidate lifecycle, position management and publisher ownership are unchanged. There is no Sheets or Telegram consumer yet.
+The [U1 policy](u1_review_policy_contract.md) now has a read-only source adapter and an optional artifact materializer inside `opportunities`, after both lanes. The orchestrator's `--final-review-mode shadow` requires registry shadow; its default is `off`. The daily shadow wrapper enables it. Existing ranking, candidate lifecycle, position management and publisher ownership are unchanged. A local Sheets-pilot workbook exists, but no runtime Sheets or Telegram consumer has been added.
 
 The source adapter requires completed, promoted producer attempts, verifies SHA-256 and registered row counts, preserves producer run/attempt identity and rejects availability after the explicit cutoff. It uses full `ranked_universe`, governed weekly stages, pattern assessments plus exact signal links, fundamental thesis projections and registered router position coverage. Stage reconciliation uses correction-aware history. Missing or invalid evidence remains visible; a later run's fundamental repair is not silently joined to an earlier run's pattern output.
 
-The union of market, master and every source listing is assessed before ordering. Liquidity percentiles use the broad current-session market denominator. The reader opens configured market/control-plane stores read-only and master SQLite with `mode=ro`; it checks DQ, quarantine, provider/trust state, price basis and availability. Late-base calculations require complete 220-bar windows. Recent calendar validation compares NIFTY_50 with local holidays and broad NSE coverage; the full metric window also requires holiday-year coverage. BSE calendar support is absent and remains an explicit exception.
+The union of market, master and every source listing is assessed before ordering. Liquidity percentiles use the broad current-session market denominator. The reader opens configured market/control-plane stores read-only and master SQLite with `mode=ro`; it checks DQ, quarantine, provider/trust state, price basis and availability. Late-base calculations require complete 220-bar windows. Trusted broad NSE bhavcopy population is the calendar authority; local holidays define expected weekdays, and NIFTY_50 is diagnostic corroboration. A broad-market hole fails the review, while a missing NIFTY diagnostic session degrades it. The full metric window requires holiday-year coverage. BSE calendar support is absent and remains an explicit exception.
 
-`final-review-adapter-v1` separately fingerprints setup choice, metric window and `review-setup-extension-v1`. The selected bullish allowed setup is ordered by confirmed status, descending priority, descending pattern score, then signal ID. Trigger, invalidation and extension refer to that same setup. Extension is max(0, close/trigger − 1) × 100: LOW ≤5%, MEDIUM ≤10%, HIGH >10%. This review-specific rule does not rewrite operational extension. Raw pattern levels affected by a nonunit adjustment inside the signal window are rejected. Technical S2 contradiction uses the adapter's 220-bar high, not the scanner's longer high window.
+`final-review-adapter-v2` separately fingerprints setup choice, metric window and `review-setup-extension-v1`. It also makes the correction-aware governed terminal payload the owner of review-stage semantics; a hash difference from the pre-correction promoted row is expected after a governed correction and is not itself an exception. The selected bullish allowed setup is ordered by confirmed status, descending priority, descending pattern score, then signal ID. Trigger, invalidation and extension refer to that same setup. Extension is max(0, close/trigger − 1) × 100: LOW ≤5%, MEDIUM ≤10%, HIGH >10%. This review-specific rule does not rewrite operational extension. Raw pattern levels affected by a nonunit adjustment inside the signal window are rejected. Technical S2 contradiction uses the adapter's 220-bar high, not the scanner's longer high window.
 
 `final_review_universe.csv` retains exclusions, lane outcomes and exceptions. `final_review_list.csv` contains only selected listings with resolved readiness, sorted by readiness, upstream rank and identity, without truncation or backfill. `final_review_summary.json` carries denominators, source metadata, snapshot hashes, policy snapshot and deterministic decision-content hash. Empty CSVs retain the complete schema. Generation failure emits fresh empty files and a failed summary rather than retaining a previous list. Existing opportunity failure/status semantics are otherwise unchanged.
 
@@ -42,14 +42,22 @@ The actual source rank artifacts were loaded and hash/row-count checked, and rec
 
 A copied-store `OpportunityStage` canary ran with identical inputs in off/shadow mode, `local_publish=True`, `dry_run=True`, and recovery `report_only`. All existing artifact bytes matched except the summary's `adapter_seconds`, `persistence_seconds`, `total_seconds`, and convergence horizons' `updated_at`. Parsed comparisons confirmed those were the only differing fields. Exactly three final-review artifacts were added. Candidate/Investigator/opportunity business-table row counts were unchanged, and the copied execution database hash was unchanged. This verifies semantic output parity; it is not a full-pipeline canary or proof that every business-table byte was unchanged. Policy registration may write the copied control plane during the stage canary. No live repair, publisher or broker operation ran.
 
-## Acceptance blockers and next work
+## Source repair and accepted U3 replay — 2026-09-14
 
-1. The captured NIFTY_50 series lacks **2026-08-21** and **2026-09-08**, both scheduled sessions according to the local holiday calendar. Recent-session verification fails. Investigate the source/calendar discrepancy before any evidence-backed repair; no dates were fabricated or gates relaxed.
-2. The local holiday table covers 2026 only. The full 220-bar late-base window crosses an uncovered year, so long-window continuity cannot be certified. BSE calendar validation also remains unsupported.
-3. The original run has old F admission v1; the repaired v1.1 run lacks pattern and router artifacts. A complete same-run source set is needed for sourced P-only/F-only/P+F and readiness walkthroughs.
-4. After those source issues are resolved, rerun copied validation and inspect real late/early S1, S2, setup-ready, developing, extended and evidence-exception cases. Unit fixtures cover policy branches but cannot replace these real acceptance examples.
+The two disputed sessions each had a complete trusted NSE equity population: 1,781 listings on 2026-08-21 and 1,797 on 2026-09-08. Official NSE all-index close reports supplied exact NIFTY_50 rows for both dates. The master calendar lacked 2025, so all 14 equity-market holidays from the official 2025 NSE circular were added. Before either live-store repair, `masterdata.db` and `ohlcv.duckdb` were backed up under `/Volumes/MacData/Trading/data/backups/final-review-calendar-repair-20260914/`; SQLite integrity was `ok`, and the OHLCV source/copy SHA-256 was `6c4db0c6eed713dc5b12441f36a1175fdd119fb1e0de43dfe5c52be8ecedb977`. The repair added only the 14 holiday rows and two `_index_catalog` rows. No candidate, execution, broker or publisher state changed.
 
-These are U3 acceptance prerequisites, not approval for live database repairs. U4's Sheets pilot remains pending the accepted queue meanings and usable M1 comparison baseline. No persisted feature rebuild or database migration is required by U2; source/calendar corrections may require regenerating affected producer artifacts. Existing primary rank and publishers remain in place.
+Run `u3-rerun-2026-09-11-1554` rebuilt rank, weekly stage, pattern lane, scan router, fundamental discovery and opportunities on `/private/tmp/review-u3-rerun-KPBjF6`. All six stages completed; opportunity shadow remained degraded because BSE calendar support is intentionally absent. Sources were same-run: rank/fundamental 508 rows each, stage 1,308, pattern assessments 1,808, pattern signals 436 and five position cycles. The review assessed 1,918 listings and ordered 52: 3 `SETUP_REVIEW`, 34 `DEVELOPING_WATCH`, and 15 `DEFER`. All selected rows were `P_ONLY`; the fundamental lane supplied context but no qualifying v1.1 row in this session. This absence is a measured outcome rather than missing same-run evidence.
+
+After inserting the two official index rows into the isolated copy, the calendar result was `PASS`: 220 trusted sessions, holiday coverage for 2025 and 2026, no missing broad or NIFTY diagnostic session, and no future diagnostic version. Two explicit read-only replays produced byte-identical list, universe and summary files with decision-content hash `ae30d985ccd1512e5d10a8723a5024db61beedce4d9d1dcb19ca831aea0bbbaf`. The three copied databases retained their pre-replay hashes. U3 is therefore accepted for an NSE shadow pilot. This is workflow evidence, not a profitability or primary-ranking claim.
+
+## Remaining limits and next work
+
+1. BSE calendar validation remains unsupported, so the combined-exchange summary remains degraded and BSE exceptions must stay visible.
+2. The real selected cohort contains no F-only or P+F rows. Those policy paths remain covered by contract tests but need future real cohorts before adoption claims.
+3. The U4 local workbook `Final_Review_Pilot_2026-09-11.xlsx` contains the 52 verified rows and operator-status fields. Adding its `09_Final_Review_Pilot` tab to the external workbook requires the authorized Sheets write.
+4. U4 still requires five completed operator reviews against the M1 baseline. U5 adoption remains gated by M2/G2 measurement.
+
+No persisted feature rebuild or database migration is required. The full copied run regenerated affected producer artifacts; future daily runs use adapter v2 and exact-date index archive ingest. Existing primary rank and publishers remain in place.
 
 ## Verification commands
 
@@ -65,4 +73,4 @@ PYTHONPATH=src ./.venv/bin/python scripts/check_docs.py
 bash -n scripts/run_daily_shadow.sh
 ```
 
-The targeted suite passed 104 tests. Replay usage is in the [command reference](../reference/commands.md#local-final-review-evidence). The validation helper retained at `/private/tmp/validate_review_u3.py` captures the copied-stage parity procedure; it is not an operator repair command.
+The final-review targeted suite and index-ingest source tests are recorded with the implementation run. Replay usage is in the [command reference](../reference/commands.md#local-final-review-evidence). Temporary validation helpers under `/private/tmp` are evidence tools, not operator repair commands.

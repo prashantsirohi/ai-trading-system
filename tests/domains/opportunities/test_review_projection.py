@@ -290,25 +290,49 @@ def test_unknown_fundamental_blockers_and_old_policy_do_not_qualify(bundle):
         assert p.ordered[0]["combination"] == "P_ONLY"
 
 
-def test_governance_conflict_cannot_be_upgraded_by_pattern(bundle):
+def test_terminal_governed_stage_overlays_promoted_source_row(bundle):
     b = replace(
-        bundle, governed={("NSE", "TEST0"): {"source_artifact_hash": "different"}}
+        bundle,
+        governed={
+            ("NSE", "TEST0"): {
+                **bundle.governed[("NSE", "TEST0")],
+                "source_artifact_hash": "corrected",
+                "effective_stage": "stage_4_declining",
+            }
+        },
     )
     p = build_review_projection(b)
     assert not p.ordered
-    assert (
-        "GOVERNANCE_NOT_VERIFIED"
-        in next(r for r in p.universe if r["symbol"] == "TEST0")["reasons_json"]
-    )
+    row = next(r for r in p.universe if r["symbol"] == "TEST0")
+    assert row["stage"] == "S4" and row["universe_state"] == "EXCLUDED"
 
 
-def test_calendar_holes_are_not_skipped(bundle):
+def test_missing_terminal_governance_cannot_be_upgraded_by_pattern(bundle):
+    p = build_review_projection(replace(bundle, governed={}))
+    assert not p.ordered
+    assert "GOVERNANCE_NOT_VERIFIED" in next(
+        r for r in p.universe if r["symbol"] == "TEST0"
+    )["reasons_json"]
+
+
+def test_nifty_reference_hole_is_degraded_but_trusted_broad_calendar_remains(bundle):
     b = replace(
         bundle,
         indices=bundle.indices.loc[
             ~pd.to_datetime(bundle.indices.date).dt.date.eq(date(2026, 9, 8))
         ],
     )
+    calendar, report = calendar_context(b)
+    assert calendar and report["status"] == "DEGRADED"
+    assert "2026-09-08" in report["diagnostic_reference_missing_sessions"]
+    assert build_review_projection(b).ordered
+
+
+def test_broad_market_calendar_holes_are_not_skipped(bundle):
+    market = bundle.market.loc[
+        ~pd.to_datetime(bundle.market.timestamp).dt.date.eq(date(2026, 9, 8))
+    ]
+    b = replace(bundle, market=market)
     calendar, report = calendar_context(b)
     assert calendar == () and report["status"] == "FAILED"
     assert "2026-09-08" in report["missing_sessions"]
